@@ -1,0 +1,49 @@
+{
+  "name": "@makaio/ai-adapters-github-copilot-sdk",
+  "description": "GitHub Copilot SDK adapter for the Makaio AI framework.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsx build.ts",
+    "dev": "tsx src/agent.ts",
+    "test": "echo 'ERROR: Tests must be run via `yarn test` from repository root!' && exit 1",
+    "test:watch": "vitest",
+    "runner": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "p-defer": "^4.0.1",
+    "p-queue": "^9.0.0",
+    "quick-lru": "^7.3.0",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@github/copilot-sdk": ">=0.1.25"
+  },
+  "devDependencies": {
+    "@github/copilot-sdk": "0.2.2",
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "openai": "^6.34.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0",
+    "vitest": "*"
+  }
+}

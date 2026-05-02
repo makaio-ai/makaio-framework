@@ -1,0 +1,23 @@
+{
+  "name": "@makaio/extension-pr-entity",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "source": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0"
+  }
+}

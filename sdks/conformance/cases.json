@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "protocol": "makaio-bus",
+  "fixtures": "./fixtures/messages.json",
+  "cases": [
+    {
+      "id": "event-delivery-agent-complete",
+      "title": "Event delivery",
+      "description": "A concrete subscription receives an event on the same subject.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.agent.complete.initial"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "event.agent.complete"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "delivers",
+          "targets": ["client"]
+        },
+        {
+          "kind": "matches",
+          "subject": "agent.complete"
+        }
+      ]
+    },
+    {
+      "id": "request-response-correlation-approval-request",
+      "title": "Request/response correlation",
+      "description": "A request and its response are bound by the same correlationId.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "request.approval.request"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "response.approval.request"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "correlates",
+          "correlationId": "corr-approval-001"
+        }
+      ]
+    },
+    {
+      "id": "no-handler-response-tool-execute",
+      "title": "No-handler response",
+      "description": "A request with no available handler returns a structured NO_HANDLER error.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "request.tool.execute.no-handler"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "response.tool.execute.no-handler"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "error",
+          "code": "NO_HANDLER",
+          "subject": "tool.execute"
+        }
+      ]
+    },
+    {
+      "id": "subscribe-replace-and-unsubscribe-approval-request",
+      "title": "Request handler subscribe replace semantics",
+      "description": "A second subscribe call replaces the current priority snapshot, closing one registration republishes the remaining priorities, and the final unsubscribe removes the subject.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.approval.request.initial"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.approval.request.updated"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.approval.request.remaining"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "unsubscribe.approval.request"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "replaces",
+          "subject": "approval.request",
+          "priorities": [250, 100]
+        },
+        {
+          "kind": "unsubscribes-when-empty",
+          "subject": "approval.request"
+        }
+      ]
+    },
+    {
+      "id": "wildcard-subscriptions-agent-wildcard",
+      "title": "Wildcard subscriptions",
+      "description": "A wildcard subject pattern receives matching concrete subjects in the same namespace.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.agent.wildcard"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "event.agent.complete"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "matches",
+          "subject": "agent.complete",
+          "pattern": "agent.*"
+        }
+      ]
+    },
+    {
+      "id": "reconnect-subscription-replay",
+      "title": "Reconnect subscription replay",
+      "description": "Local subscriptions are replayed after reconnect, then the transport-level sync handshake completes.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.agent.wildcard",
+          "phase": "initial"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.approval.request",
+          "phase": "initial"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.agent.wildcard",
+          "phase": "replay"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "subscribe.approval.request",
+          "phase": "replay"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "subscribe-sync-complete"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "replays",
+          "messages": ["subscribe.agent.wildcard", "subscribe.approval.request"]
+        },
+        {
+          "kind": "handshake",
+          "messageRef": "subscribe-sync-complete"
+        }
+      ]
+    },
+    {
+      "id": "heartbeat-handling",
+      "title": "Heartbeat handling",
+      "description": "Heartbeat frames are transport-level keep-alives and are ignored by application dispatch.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "heartbeat"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "heartbeat"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "ignored",
+          "messageRef": "heartbeat"
+        }
+      ]
+    },
+    {
+      "id": "broadcast-response-tool-execute",
+      "title": "Broadcast frames are transport-level and ignored",
+      "description": "Phase 1 SDKs deserialize broadcast and broadcast-response frames but do not expose a broadcast API, so these frames are ignored by application dispatch.",
+      "wire": [
+        {
+          "direction": "client->server",
+          "messageRef": "broadcast.tool.execute"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "broadcast-response.tool.execute"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "ignored",
+          "messageRef": "broadcast.tool.execute"
+        },
+        {
+          "kind": "ignored",
+          "messageRef": "broadcast-response.tool.execute"
+        }
+      ]
+    }
+  ]
+}

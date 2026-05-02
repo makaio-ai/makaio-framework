@@ -1,0 +1,36 @@
+{
+  "name": "@makaio-community/client-hooks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./cli": "./dist/cli/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

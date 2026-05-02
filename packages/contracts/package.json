@@ -1,0 +1,71 @@
+{
+  "name": "@makaio/contracts",
+  "description": "Shared type contracts, Zod schemas, and bus subject namespaces.",
+  "version": "0.1.0",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapter": "./src/adapter/index.ts",
+    "./adapter/schemas/session-lineage": "./src/adapter/schemas/session-lineage.ts",
+    "./client": "./src/client/index.ts",
+    "./common": "./src/common/index.ts",
+    "./config": "./src/config/index.ts",
+    "./harness": "./src/harness/index.ts",
+    "./extension": "./src/extension/index.ts",
+    "./provider": "./src/provider/index.ts",
+    "./session": "./src/session/index.ts",
+    "./shared": "./src/shared/index.ts",
+    "./native-session-supervisor": "./src/native-session-supervisor/index.ts",
+    "./skill": "./src/skill/index.ts",
+    "./toast": "./src/toast/index.ts",
+    "./variant": "./src/variant/index.ts",
+    "./platform": "./src/platform/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/storage-core": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "hono": "^4.10.4",
+    "merge-anything": "^6.0.6",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.2.2",
+    "tsx": "^4.20.5"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./adapter": "./dist/adapter/index.mjs",
+      "./adapter/schemas/session-lineage": "./dist/adapter/schemas/session-lineage.mjs",
+      "./client": "./dist/client/index.mjs",
+      "./common": "./dist/common/index.mjs",
+      "./config": "./dist/config/index.mjs",
+      "./harness": "./dist/harness/index.mjs",
+      "./extension": "./dist/extension/index.mjs",
+      "./provider": "./dist/provider/index.mjs",
+      "./session": "./dist/session/index.mjs",
+      "./shared": "./dist/shared/index.mjs",
+      "./native-session-supervisor": "./dist/native-session-supervisor/index.mjs",
+      "./skill": "./dist/skill/index.mjs",
+      "./toast": "./dist/toast/index.mjs",
+      "./variant": "./dist/variant/index.mjs",
+      "./platform": "./dist/platform/index.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@makaio/extension-review",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/storage-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "nanoid": "^5.0.9",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "drizzle-kit": "^0.31.8",
+    "tsx": "^4.20.5"
+  },
+  "scripts": {
+    "db:generate": "tsx $(yarn bin drizzle-kit) generate",
+    "db:generate:fresh": "rm -rf drizzle && tsx $(yarn bin drizzle-kit) generate"
+  }
+}

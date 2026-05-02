@@ -1,0 +1,117 @@
+.grid {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+
+  :global(.react-grid-layout) {
+    min-height: 100% !important;
+  }
+}
+
+.gridEditing {
+  border-radius: var(--radius-lg);
+}
+
+:global(.react-grid-placeholder) {
+  background: color-mix(in srgb, var(--color-accent-primary) 18%, transparent) !important;
+  border: 1px dashed var(--color-accent-primary) !important;
+  border-radius: var(--radius-lg) !important;
+  opacity: 1 !important;
+  z-index: 0 !important;
+}
+
+.widgetWrapper {
+  backdrop-filter: blur(8px);
+  background: var(--glass-bg);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.removeButton {
+  align-items: center;
+  background: var(--color-danger);
+  border: none;
+  border-radius: 999px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: flex;
+  font-size: 1rem;
+  height: 1.5rem;
+  justify-content: center;
+  line-height: 1;
+  opacity: 0.9;
+  padding: 0;
+  position: absolute;
+  right: 0.35rem;
+  top: 0.35rem;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+  width: 1.5rem;
+  z-index: 20;
+
+  &:hover {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+.dragHandle {
+  background: transparent;
+  cursor: move;
+  inset: 0;
+  position: absolute;
+  z-index: 10;
+}
+
+.missingWidget {
+  align-items: center;
+  background: var(--glass-bg);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-lg);
+  color: var(--color-danger);
+  display: flex;
+  font-size: var(--font-size-sm);
+  height: 100%;
+  justify-content: center;
+  padding: 0.75rem;
+}
+
+.widgetWrapper :global(.react-resizable-handle) {
+  background-image: none;
+  bottom: 4px;
+  height: 12px;
+  right: 4px;
+  width: 12px;
+  z-index: 15;
+
+  &::after {
+    border-bottom: 2px solid var(--color-text-muted);
+    border-right: 2px solid var(--color-text-muted);
+    bottom: 2px;
+    content: '';
+    height: 8px;
+    position: absolute;
+    right: 2px;
+    width: 8px;
+  }
+}
+
+.widgetContent {
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+  width: 100%;
+}
+
+.widgetContentEditing {
+  pointer-events: none;
+}

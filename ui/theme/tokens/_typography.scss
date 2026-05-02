@@ -1,0 +1,41 @@
+@use '../_internal/aura-palette' as palette;
+
+// =============================================================================
+// FONT FAMILIES (themeable)
+// =============================================================================
+$font-display: palette.$font-display;
+$font-body: palette.$font-body;
+$font-ui: palette.$font-ui;
+$font-nav: palette.$font-nav;
+$font-mono: palette.$font-mono;
+
+// Font weights
+$font-weight-light: 300;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-semibold: 600;
+$font-weight-bold: 700;
+
+// Font sizes (scale)
+$font-size-2xs: 0.625rem; // 10px - compact badges, dense UI labels
+$font-size-xs: 0.75rem; // 12px
+$font-size-xs-dense: 0.6875rem; // 11px - tight variant between 2xs and xs
+$font-size-sm: 0.875rem; // 14px
+$font-size-base: 1rem; // 16px
+$font-size-lg: 1.125rem; // 18px
+$font-size-xl: 1.25rem; // 20px
+$font-size-2xl: 1.5rem; // 24px
+$font-size-3xl: 1.875rem; // 30px
+$font-size-4xl: 2.25rem; // 36px
+
+// Line heights
+$line-height-tight: 1.25;
+$line-height-normal: 1.5;
+$line-height-relaxed: 1.75;
+
+// Letter spacing
+$letter-spacing-tight: -0.025em;
+$letter-spacing-normal: 0;
+$letter-spacing-wide: 0.025em;
+$letter-spacing-wider: 0.05em;
+$letter-spacing-widest: 0.1em;

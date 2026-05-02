@@ -1,0 +1,181 @@
+// Panel - Aura Theme Styling
+// Based on design-concept/prototype.html glass-panel styles
+
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.panel {
+  // Base layout
+  display: flex;
+  flex-direction: column;
+  font-family: typography.$font-ui;
+
+  // Aura glass morphism effect - from prototype .glass-panel
+  background: rgba(colors.$bg-secondary, opacity.$glass-panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(colors.$text-primary, opacity.$surface);
+
+  // Organic shadow - from prototype shadow-organic
+  box-shadow: 0 4px 20px -2px rgba(colors.$bg-primary, opacity.$opacity-50);
+
+  // Rounded corners - from prototype rounded-2xl
+  border-radius: spacing.$radius-xl;
+
+  // Smooth transitions
+  @include transitions.transition(border-color, box-shadow);
+}
+
+// Variants
+.default {
+  // Inherits all glass panel styles from .panel — no overrides needed.
+}
+
+.elevated {
+  // Elevated with stronger shadow
+  background: rgba(colors.$bg-secondary, opacity.$glass-elevated);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(colors.$text-primary, opacity.$surface-hover);
+  box-shadow: 0 8px 32px -4px rgba(colors.$bg-primary, opacity.$opacity-60);
+}
+
+.bordered {
+  // Bordered with more visible border
+  background: rgba(colors.$bg-secondary, opacity.$opacity-60);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(colors.$text-primary, opacity.$tint);
+  box-shadow: 0 4px 20px -2px rgba(colors.$bg-primary, opacity.$opacity-50);
+}
+
+.ghost {
+  // Transparent background
+  background: transparent;
+  backdrop-filter: none;
+  border: 1px solid rgba(colors.$text-primary, opacity.$surface);
+  box-shadow: none;
+}
+
+// Full height modifier
+.fullHeight {
+  height: 100%;
+}
+
+// Header
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: spacing.$spacing-4;
+  padding: spacing.$spacing-4 spacing.$spacing-5;
+
+  // Subtle bottom border from prototype
+  border-bottom: 1px solid rgba(colors.$text-primary, opacity.$surface);
+
+  // Slight background tint for header
+  background: rgba(colors.$bg-primary, opacity.$tint);
+}
+
+.headerMain {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-3;
+  flex: 1;
+  min-width: 0;
+}
+
+.titlePrefix {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  // Icon sizing from prototype
+  svg {
+    width: spacing.$spacing-4;
+    height: spacing.$spacing-4;
+  }
+}
+
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: typography.$font-size-xs; // xs font from prototype
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-primary);
+
+  // Uppercase tracking from prototype headers
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-wider;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: typography.$font-size-xs;
+  font-weight: typography.$font-weight-normal;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+  flex-shrink: 0;
+}
+
+// Body
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+
+  // Custom scrollbar from prototype
+  &::-webkit-scrollbar {
+    width: spacing.$spacing-1_5;
+    height: spacing.$spacing-1_5;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(colors.$text-primary, opacity.$tint);
+    border-radius: spacing.$spacing-0_75;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: rgba(colors.$text-primary, opacity.$opacity-20);
+  }
+}
+
+// Padding presets
+.padding-none {
+  padding: 0;
+}
+
+.padding-sm {
+  padding: spacing.$spacing-3;
+}
+
+.padding-md {
+  padding: spacing.$spacing-5;
+}
+
+.padding-lg {
+  padding: spacing.$spacing-8;
+}

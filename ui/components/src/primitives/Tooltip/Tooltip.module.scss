@@ -1,0 +1,93 @@
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+
+.triggerWrapper {
+  display: inline-block;
+  position: relative;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: shadows.$z-tooltip;
+  max-width: spacing.$spacing-session-sidebar-width;
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-xs;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: spacing.$radius-md;
+  box-shadow: 0 4px 20px -2px color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
+  pointer-events: none;
+  animation: tooltipFadeIn 0.15s ease-out;
+  word-wrap: break-word;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+}
+
+// Arrow positioning
+.arrow {
+  position: absolute;
+  width: spacing.$spacing-2;
+  height: spacing.$spacing-2;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  transform: rotate(45deg);
+}
+
+// Position-specific arrow placement
+.top {
+  .arrow {
+    bottom: -5px;
+    left: 50%;
+    margin-left: -4px;
+    border-top: none;
+    border-left: none;
+  }
+}
+
+.bottom {
+  .arrow {
+    top: -5px;
+    left: 50%;
+    margin-left: -4px;
+    border-bottom: none;
+    border-right: none;
+  }
+}
+
+.left {
+  .arrow {
+    right: -5px;
+    top: 50%;
+    margin-top: -4px;
+    border-top: none;
+    border-right: none;
+  }
+}
+
+.right {
+  .arrow {
+    left: -5px;
+    top: 50%;
+    margin-top: -4px;
+    border-bottom: none;
+    border-left: none;
+  }
+}

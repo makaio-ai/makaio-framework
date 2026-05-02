@@ -1,0 +1,20 @@
+name: Zhipu AI
+models:
+  - name: glm-4.7
+    friendlyName: GLM-4.7
+    contextWindowSize: 200000
+  - name: glm-4.6
+    friendlyName: GLM-4.6
+    contextWindowSize: 200000
+  - name: glm-4.5
+    friendlyName: GLM-4.5
+    contextWindowSize: 128000
+  - name: glm-4.5-air
+    friendlyName: GLM-4.5 Air
+    contextWindowSize: 128000
+  - name: glm-5
+    friendlyName: GLM-5
+    contextWindowSize: 131072
+  - name: glm-5.1
+    friendlyName: GLM-5.1
+    contextWindowSize: 131072

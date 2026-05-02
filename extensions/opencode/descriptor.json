@@ -1,0 +1,21 @@
+{
+  "name": "opencode",
+  "displayName": "OpenCode",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true,
+    "browser": true
+  },
+  "contributions": {
+    "logImporters": [
+      {
+        "adapterName": "extension:opencode",
+        "displayName": "OpenCode",
+        "logFilePattern": "**/storage/session/*/*.json"
+      }
+    ]
+  }
+}

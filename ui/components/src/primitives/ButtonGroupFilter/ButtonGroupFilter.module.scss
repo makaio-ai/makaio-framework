@@ -1,0 +1,73 @@
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+
+.buttonGroupFilter {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: var(--color-text-secondary);
+}
+
+.buttons {
+  display: flex;
+  gap: spacing.$spacing-2;
+  flex-wrap: wrap;
+}
+
+@mixin button-base {
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+  background-color: transparent;
+  border: 1px solid var(--color-border-default);
+  border-radius: spacing.$radius-md;
+  color: var(--color-text-secondary);
+  font-size: typography.$font-size-xs;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.button {
+  @include button-base;
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+  color: var(--color-text-primary);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button:focus-visible,
+.buttonActive:focus-visible {
+  outline: 2px solid var(--color-accent-primary);
+  outline-offset: 2px;
+}
+
+.buttonActive {
+  @include button-base;
+  background-color: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+  color: var(--color-text-white);
+}
+
+.buttonActive:hover:not(:disabled) {
+  // Slightly lighten the active accent on hover to provide visual feedback
+  // without switching away from the active-state color scheme.
+  filter: brightness(1.1);
+}
+
+.buttonActive:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

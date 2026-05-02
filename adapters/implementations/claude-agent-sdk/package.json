@@ -1,0 +1,43 @@
+{
+  "name": "@makaio/ai-adapters-claude-agent-sdk",
+  "description": "Claude Agent SDK adapter using the three-layer architecture.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsx build.ts",
+    "dev": "tsx src/test-run.ts"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-claude-shared": "workspace:*",
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "p-defer": "^4.0.1",
+    "p-queue": "^9.0.0",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.2.50"
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.2.117",
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0"
+  }
+}

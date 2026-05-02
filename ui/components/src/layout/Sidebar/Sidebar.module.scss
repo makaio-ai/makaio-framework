@@ -1,0 +1,254 @@
+/**
+ * NavSidebar Styles
+ *
+ * Root navigation sidebar for the application.
+ * Supports flat item lists and grouped sections with collapse.
+ * Uses Aura theme tokens for consistent styling.
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/shadows';
+@use '@makaio/ui-theme/mixins/transitions';
+@use '@makaio/ui-theme/mixins/nav';
+
+.toggleButton {
+  position: absolute;
+  bottom: spacing.$spacing-4;
+  right: spacing.$spacing-4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-6;
+  height: spacing.$spacing-6;
+  border-radius: spacing.$radius-md;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 150ms ease;
+  z-index: 10;
+
+  &:hover {
+    color: var(--color-text-primary);
+    background-color: var(--color-bg-tertiary);
+  }
+}
+
+.sidebar {
+  position: relative; // For absolute pos toggle
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: spacing.$spacing-sidebar-width;
+  min-width: spacing.$spacing-sidebar-min-width;
+  background: var(--color-bg-primary);
+  border-right: 1px solid var(--color-border-subtle);
+  box-shadow: shadows.$shadow-sidebar;
+  z-index: shadows.$z-fixed;
+  transition: width 0.3s ease;
+
+  &.collapsed {
+    width: spacing.$spacing-16; // Collapsed width (icon size + padding)
+    min-width: spacing.$spacing-16;
+
+    .title,
+    .logo,
+    .shortcut,
+    .sectionTitle {
+      display: none;
+    }
+
+    .navLabel {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .navIcon {
+      margin: 0;
+    }
+
+    // Center icons in collapsed mode
+    .navLink {
+      justify-content: center;
+      padding: spacing.$spacing-2;
+    }
+
+    // Hide footer content but keep toggle button adjustments relative to minimal footer
+    .footer {
+      display: none;
+    }
+
+    // Remove section separators in collapsed mode
+    .section + .section {
+      margin-top: spacing.$spacing-1;
+      padding-top: spacing.$spacing-1;
+      border-top: none;
+    }
+
+    // Centered toggle button in collapsed mode
+    .toggleButton {
+      right: 50%;
+      transform: translateX(50%);
+      bottom: spacing.$spacing-4;
+    }
+  }
+}
+
+.header {
+  padding: spacing.$spacing-0;
+  border-bottom: 1px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: spacing.$spacing-20;
+}
+
+.logo {
+  height: spacing.$spacing-24;
+  width: auto;
+  color: var(--color-accent-primary);
+}
+
+.title {
+  font-family: typography.$font-nav;
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-muted);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-wider;
+}
+
+.nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: spacing.$spacing-4 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.navList {
+  list-style: none;
+  padding: 0 spacing.$spacing-4;
+  margin: 0;
+  width: 100%;
+}
+
+.navItem {
+  margin-bottom: spacing.$spacing-2;
+}
+
+.navLink {
+  @include nav.nav-link-base;
+
+  // Reset button defaults for action-based items
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+/**
+ * Non-interactive label items (rendered as span).
+ * Overrides the cursor: pointer inherited from .navLink so non-interactive
+ * items do not suggest clickability to sighted users.
+ */
+.staticItem {
+  cursor: default;
+}
+
+/**
+ * Active State
+ */
+.navLink.active {
+  @include nav.nav-link-active;
+
+  .navIcon {
+    color: var(--color-accent-primary);
+  }
+}
+
+.navIcon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-5;
+  height: spacing.$spacing-5;
+  flex-shrink: 0;
+}
+
+.badge {
+  position: absolute;
+  top: spacing.$spacing-0_5;
+  right: spacing.$spacing-0_5;
+  transform: translate(50%, -50%);
+  min-width: spacing.$spacing-3;
+  height: spacing.$spacing-3;
+  padding: 0 spacing.$spacing-0_75;
+  background: colors.$danger;
+  color: colors.$text-primary;
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-2xs;
+  font-weight: typography.$font-weight-semibold;
+  line-height: spacing.$spacing-3;
+  border-radius: spacing.$radius-full;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.navLabel {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut {
+  font-size: typography.$font-size-xs;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+/* Section grouping */
+.section {
+  width: 100%;
+  padding: 0;
+  margin: 0;
+
+  & + & {
+    margin-top: spacing.$spacing-4;
+    padding-top: spacing.$spacing-4;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+}
+
+.sectionTitle {
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-xs;
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-wider;
+  padding: spacing.$spacing-1 spacing.$spacing-4;
+  margin: 0 0 spacing.$spacing-1 0;
+}
+
+.footer {
+  padding: spacing.$spacing-4;
+  margin-top: auto;
+  border-top: 1px solid var(--color-border-subtle);
+}

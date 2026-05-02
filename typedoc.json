@@ -1,0 +1,26 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "Makaio Framework",
+  "plugin": ["typedoc-plugin-markdown"],
+  "entryPoints": [
+    "packages/bus-core",
+    "packages/contracts",
+    "packages/kernel",
+    "packages/hooks",
+    "packages/utils",
+    "tools/core",
+    "adapters/core",
+    "packages/services/core"
+  ],
+  "entryPointStrategy": "packages",
+  "entryFileName": "index",
+  "excludeScopesInPaths": true,
+  "readme": "none",
+  "packageOptions": {
+    "entryPoints": ["src/index.ts"],
+    "skipErrorChecking": true,
+    "excludeExternals": true,
+    "excludeReferences": true
+  },
+  "skipErrorChecking": true
+}

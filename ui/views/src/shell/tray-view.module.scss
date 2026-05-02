@@ -1,0 +1,49 @@
+.root {
+  /**
+   * Tray popover surface root.
+   *
+   * Transparent background so the BrowserWindow's `transparent: true` flag
+   * produces the glass/rounded-corner effect. The canvas itself applies
+   * var(--color-bg-primary) via its own class when the background should be
+   * opaque.
+   *
+   * Height fills the full popover viewport (500 px, set in tray-popover.ts).
+   * Overflow is hidden to clip rounded corners correctly.
+   */
+  background: transparent;
+  border-radius: var(--radius-lg, 12px);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+
+  /**
+   * `-webkit-app-region: no-drag` prevents the frameless window from being
+   * accidentally dragged via the popover content area.
+   */
+  -webkit-app-region: no-drag;
+}
+
+.canvas {
+  /**
+   * Opaque dark background for the canvas area so widget content is readable
+   * on any desktop wallpaper. Uses the same primary background token as the
+   * dashboard shell.
+   */
+  background-color: var(--color-bg-primary);
+  border-radius: var(--radius-lg, 12px);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.loadingState {
+  bottom: 0.5rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  left: 0.75rem;
+  pointer-events: none;
+  position: absolute;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "codex-app-server",
+  "displayName": "Codex App-Server",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "codex-app-server",
+        "displayName": "Codex App-Server",
+        "description": "Direct integration with codex app-server via stdio subprocess using JSON-RPC 2.0 over JSONL",
+        "clients": [
+          {
+            "id": "codex",
+            "version": "^0.1.0"
+          }
+        ],
+        "protocols": ["openai"]
+      }
+    ]
+  }
+}

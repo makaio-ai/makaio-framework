@@ -1,0 +1,50 @@
+{
+  "name": "account-manager",
+  "displayName": "Makaio Account Manager",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "browser": "browser/index",
+    "server": true,
+    "cli": true
+  },
+  "config": {
+    "defaults": {
+      "makaioCommand": "makaio"
+    }
+  },
+  "cli": {
+    "name": "account-manager",
+    "description": "Manage AI tool credentials",
+    "hasInteractive": true,
+    "subcommands": [
+      {
+        "name": "list",
+        "description": "List configured accounts"
+      },
+      {
+        "name": "switch",
+        "description": "Switch active account"
+      },
+      {
+        "name": "label",
+        "description": "Set account label"
+      },
+      {
+        "name": "remove",
+        "description": "Remove an account"
+      },
+      {
+        "name": "sources",
+        "description": "Show detected credential sources"
+      },
+      {
+        "name": "watch",
+        "description": "Watch account and usage changes in real-time"
+      }
+    ]
+  },
+  "execution": "embedded"
+}

@@ -1,0 +1,104 @@
+@use '@makaio/ui-theme/tokens/colors' as colors;
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: spacing.$spacing-1;
+  border-radius: spacing.$radius-sm;
+  font-weight: typography.$font-weight-medium;
+  white-space: nowrap;
+  vertical-align: middle;
+  line-height: 1;
+  font-family: typography.$font-ui;
+  border-style: solid;
+  border-width: spacing.$spacing-px;
+}
+
+// Size variants
+.size-sm {
+  height: spacing.$spacing-5;
+  padding: spacing.$spacing-0_5 spacing.$spacing-2;
+  font-size: typography.$font-size-xs;
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-wider;
+
+  .icon {
+    width: spacing.$spacing-3;
+    height: spacing.$spacing-3;
+
+    svg {
+      width: spacing.$spacing-3;
+      height: spacing.$spacing-3;
+    }
+  }
+}
+
+.size-md {
+  height: spacing.$spacing-6;
+  padding: 0 spacing.$spacing-2_5;
+  font-size: typography.$font-size-xs;
+
+  .icon {
+    width: spacing.$spacing-3_5;
+    height: spacing.$spacing-3_5;
+
+    svg {
+      width: spacing.$spacing-3_5;
+      height: spacing.$spacing-3_5;
+    }
+  }
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.content {
+  display: inline-flex;
+  align-items: center;
+}
+
+// Variant styles using Aura theme colors
+// Pattern: bg with 10% opacity, border with 20% opacity
+
+.variant-default {
+  background: rgba(colors.$bg-tertiary, opacity.$opacity-50);
+  color: colors.$text-secondary;
+  border-color: rgba(colors.$text-primary, opacity.$tint);
+}
+
+.variant-primary {
+  background: rgba(colors.$accent-primary, opacity.$tint);
+  color: colors.$accent-primary;
+  border-color: rgba(colors.$accent-primary, opacity.$border);
+}
+
+.variant-success {
+  background: rgba(colors.$success, opacity.$tint);
+  color: colors.$success;
+  border-color: rgba(colors.$success, opacity.$border);
+}
+
+.variant-warning {
+  background: rgba(colors.$warning, opacity.$tint);
+  color: colors.$warning;
+  border-color: rgba(colors.$warning, opacity.$border);
+}
+
+.variant-danger {
+  background: rgba(colors.$danger, opacity.$tint);
+  color: colors.$danger;
+  border-color: rgba(colors.$danger, opacity.$border);
+}
+
+.variant-info {
+  background: rgba(colors.$info, opacity.$tint);
+  color: colors.$info;
+  border-color: rgba(colors.$info, opacity.$border);
+}

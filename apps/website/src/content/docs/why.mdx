@@ -1,0 +1,107 @@
+---
+title: Why Makaio
+description: What Makaio is, where it fits, and why it exists.
+---
+
+## The Problem
+
+If you build software with AI today, you probably use more than one tool. Claude for architecture,
+Codex for implementation, Copilot for in-editor completions, Gemini for research. Each tool has its
+own session history, its own context, its own API. Nothing connects.
+
+And if you're building AI-powered software — an agent, an integration, a workflow — you're writing
+the same plumbing everyone else writes: provider adapters, streaming logic, tool execution, session
+management, storage. When a provider changes its API, thousands of projects fix the same breakage
+independently.
+
+Makaio exists because this work is infrastructure, and infrastructure belongs in a shared layer.
+
+## The Makaio Ecosystem
+
+Makaio is an ecosystem of open-source projects for AI-tool orchestration. At its core is the
+**Makaio Framework** — a typed, bus-centric runtime that connects providers, tools, and sessions.
+Around it sit **SDKs** that bring the bus protocol to any language, and a growing set of
+community-contributed adapters and extensions.
+
+This documentation covers the Makaio Framework — referred to simply as "Makaio" throughout these
+docs.
+
+## The Makaio Framework
+
+Makaio is a typed, bus-centric framework for orchestrating AI agents, tools, and sessions. It is
+not a provider SDK (there are [good ones](https://ai-sdk.dev/)). It is not an agent-building
+framework (there are [good ones](https://langchain-ai.github.io/langgraph/) too). It sits above
+both:
+
+- **Provider SDKs** solve "call any model through one API"
+- **Agent frameworks** solve "build a new AI agent system from scratch"
+- **Makaio** solves "connect the AI tools you already use, share session context across them, and
+  stop rebuilding the same plumbing"
+
+These layers are complementary. A Makaio adapter can use a provider SDK internally. An agent
+framework could participate in the Makaio bus as an extension. The layers compose — they don't
+compete.
+
+## Shared Infrastructure, Not Reinvented Wheels
+
+Every project that integrates an AI provider maintains its own adapter code, its own streaming
+pipeline, its own tool execution, its own session storage. When an API changes, when a new model
+ships, when a streaming format evolves — that maintenance burden hits every project independently.
+
+Makaio's adapter layer ships conformance-tested integrations for major providers. When an API
+changes, one adapter update propagates to every project using the framework. When a new provider
+appears, one adapter makes it available everywhere. Shared infrastructure reduces duplicated effort.
+
+The same applies to tools, storage, transport, and session management. The bus is the backbone
+that makes sharing possible without coupling: services communicate through typed messages, not
+direct imports, so any piece can evolve independently.
+
+## How It Works
+
+Everything in Makaio communicates through a single **typed message bus**. Events, RPC calls,
+storage operations, tool invocations — all are bus messages with Zod-validated schemas. The bus is
+what makes everything else possible:
+
+- **Adapters** bridge AI providers through a three-layer contract (Adapter > Agent > Connector)
+  with shared conformance tests. Each adapter participates in the bus and inherits session
+  lifecycle, streaming, and tool execution for free.
+
+- **Sessions** unify conversation history across providers. Start a conversation with one model,
+  continue with another. Import sessions from external tools. Fork, branch, and hand off context.
+
+- **Tools** are typed function definitions that register on the bus once and become available to
+  every agent. No per-adapter wiring.
+
+- **Extensions** contribute services, tools, CLI commands, HTTP routes, windows, and browser UI.
+  The extension model is the primary way to add functionality — from a single tool to a full
+  application.
+
+- **Transport** spans process boundaries. The bus protocol is WebSocket + JSON — any application,
+  in any language, can participate. VS Code extensions, mobile apps, CI pipelines, external
+  tools — connect to the bus and you're a first-class participant.
+
+## Use Your Existing Subscriptions
+
+Most AI tools charge per-seat or per-subscription: Claude Pro, ChatGPT Plus, GitHub Copilot.
+You already pay for them. Makaio's adapter model wraps these tools as they are — CLI interfaces,
+existing subscriptions, established workflows. You don't need separate API keys and usage-based
+billing to get orchestration. Use what you already have.
+
+## Open Framework
+
+The framework is open source under MIT. The [bus](/guides/bus/), [adapters](/guides/creating-adapters/),
+[tools](/guides/getting-started/#writing-a-tool), [extensions](/guides/extensions/),
+[transport](/guides/transport/), storage, CLI, and desktop host shells — all open, all MIT.
+
+This is deliberate. The bus protocol and extension model are more valuable as shared infrastructure
+than as proprietary lock-in. The more tools, adapters, and extensions the community contributes,
+the more useful the framework becomes for everyone.
+
+Makaio is developed by Makaio GmbH. The framework is and will remain MIT; commercial products
+built on it are in development.
+
+## Where to Start
+
+import { LinkCard } from '@astrojs/starlight/components';
+
+<LinkCard title="Getting Started" href="/guides/getting-started/" description="Install, run the server, write your first bus interaction, tool, and extension." />

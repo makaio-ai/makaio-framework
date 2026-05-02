@@ -1,0 +1,114 @@
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/typography';
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: spacing.$spacing-4 spacing.$spacing-6;
+  min-height: spacing.$spacing-16;
+}
+
+.titleSection {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-1;
+}
+
+.title {
+  margin: 0;
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-2xl;
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-primary);
+}
+
+.subtitle {
+  margin: 0;
+  font-size: typography.$font-size-sm;
+  color: var(--color-text-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+}
+
+// HeaderTextAction - mirrors NavSidebar navItem hover behavior
+.textAction {
+  display: flex;
+  align-items: center;
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+  border-radius: spacing.$radius-md;
+  border: 1px solid transparent;
+
+  font-family: typography.$font-nav;
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: var(--color-text-secondary);
+
+  background: transparent;
+  cursor: pointer;
+  transition: all 200ms ease-out;
+
+  &:hover {
+    background: linear-gradient(
+      90deg,
+      rgba(colors.$text-primary, opacity.$surface-hover),
+      rgba(colors.$text-primary, opacity.$whisper)
+    );
+    color: var(--color-text-primary);
+    border-color: var(--color-border-subtle);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  &:disabled {
+    opacity: opacity.$disabled;
+    cursor: not-allowed;
+  }
+}
+
+// HeaderIconAction - circular icon button
+.iconAction {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: spacing.$spacing-9;
+  height: spacing.$spacing-9;
+  border-radius: 50%;
+  border: 1px solid transparent;
+
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  transition: all 200ms ease-out;
+
+  &:hover {
+    background: rgba(colors.$text-primary, opacity.$surface);
+    color: var(--color-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  &.active {
+    background: var(--color-info-bg);
+    color: var(--color-info);
+    border-color: rgba(colors.$info, opacity.$border-strong);
+  }
+
+  &:disabled {
+    opacity: opacity.$disabled;
+    cursor: not-allowed;
+  }
+}

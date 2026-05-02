@@ -1,0 +1,99 @@
+/**
+ * PromptDialog component styles
+ *
+ * Glass panel modal with backdrop blur and theme-aware styling.
+ * Uses Aura theme color tokens via CSS custom properties.
+ */
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+
+.dialog {
+  // Reset native dialog styles
+  border-radius: spacing.$radius-xl;
+  padding: 0;
+  max-width: spacing.$spacing-modal-max-width-sm;
+  width: calc(100% - #{spacing.$spacing-8});
+
+  // Glass panel effect
+  background: var(--glass-bg);
+  backdrop-filter: blur(spacing.$spacing-3);
+  -webkit-backdrop-filter: blur(spacing.$spacing-3);
+  border: spacing.$spacing-px solid var(--glass-border-subtle);
+  box-shadow: var(--shadow-modal);
+
+  // Backdrop styling
+  &::backdrop {
+    background-color: var(--glass-bg-hover);
+    backdrop-filter: blur(spacing.$spacing-1);
+    -webkit-backdrop-filter: blur(spacing.$spacing-1);
+  }
+
+  // Centered positioning
+  margin: auto;
+}
+
+.content {
+  padding: spacing.$spacing-6;
+}
+
+.title {
+  margin: 0 0 spacing.$spacing-3;
+  font-size: typography.$font-size-xl;
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-primary);
+  font-family: typography.$font-ui;
+}
+
+.message {
+  margin: 0 0 spacing.$spacing-4;
+  color: var(--color-text-secondary);
+  line-height: typography.$line-height-normal;
+  font-family: typography.$font-ui;
+}
+
+.inputContainer {
+  margin-bottom: spacing.$spacing-6;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  padding: spacing.$spacing-3;
+  border-radius: spacing.$radius-md;
+  border: spacing.$spacing-px solid var(--glass-border-subtle);
+  background: var(--glass-bg);
+  color: var(--color-text-primary);
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-sm;
+  line-height: typography.$line-height-normal;
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent-primary);
+    box-shadow: 0 0 0 spacing.$spacing-0_5 var(--color-accent-primary-glow);
+  }
+}
+
+.textarea {
+  resize: vertical;
+  min-height: spacing.$spacing-24;
+}
+
+.hint {
+  display: block;
+  margin-top: spacing.$spacing-2;
+  font-size: typography.$font-size-xs;
+  color: var(--color-text-muted);
+  font-family: typography.$font-ui;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: spacing.$spacing-3;
+}

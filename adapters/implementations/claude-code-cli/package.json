@@ -1,0 +1,36 @@
+{
+  "name": "@makaio/ai-adapters-claude-code-cli",
+  "description": "Claude Code CLI adapter for the Makaio framework.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsx build.ts"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-claude-shared": "workspace:*",
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0"
+  }
+}

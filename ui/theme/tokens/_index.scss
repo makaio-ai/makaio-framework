@@ -1,0 +1,13 @@
+/**
+ * Design Tokens
+ *
+ * Aggregates all design token categories.
+ * Import this file to access all SCSS variables.
+ */
+
+@forward './colors';
+@forward './graph-colors';
+@forward './opacity';
+@forward './typography';
+@forward './spacing';
+@forward './shadows';

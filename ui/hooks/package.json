@@ -1,0 +1,39 @@
+{
+  "name": "@makaio/ui-hooks",
+  "description": "React hooks, Zustand stores, and bus-aware orchestration for framework UI.",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "license": "CC-BY-NC-4.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/ui-kernel": "workspace:*",
+    "zustand": "^5.0.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/react": "^19.0.0"
+  },
+  "inlinedDependencies": {
+    "zod": "4.3.5"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "@makaio/runtime-node",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./extension-discovery": "./src/extension-discovery.ts",
+    "./extension-validation": "./src/extension-validation.ts",
+    "./makaio-config": "./src/makaio-config.ts",
+    "./runtime/schemas": "./src/bus/runtime/schemas.ts",
+    "./runtime/register": "./src/bus/runtime/namespace.ts"
+  },
+  "sideEffects": [
+    "./src/bus/runtime/namespace.ts"
+  ],
+  "devDependencies": {
+    "@types/semver": "^7.7.0"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@makaio/adapter-subsystem": "workspace:*",
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/bus-server": "workspace:*",
+    "@makaio/bus-transport-websocket": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/machine-identity": "workspace:*",
+    "@makaio/platform-macos": "workspace:*",
+    "@makaio/preferences": "workspace:*",
+    "@makaio/providers": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/services-log-import": "workspace:*",
+    "@makaio/services-package-manager": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/storage-migrations": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "glob": "^11.0.0",
+    "hono": "^4.10.7",
+    "minimatch": "^10.0.3",
+    "semver": "^7.7.0",
+    "ws": "^8.18.0",
+    "zod": "^4.1.13"
+  }
+}

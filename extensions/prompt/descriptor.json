@@ -1,0 +1,22 @@
+{
+  "name": "prompt",
+  "displayName": "Makaio Prompt",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "cli": "cli"
+  },
+  "cli": {
+    "name": "prompt",
+    "description": "Send prompts to any AI provider via the Makaio bus",
+    "subcommands": [
+      {
+        "name": "send",
+        "description": "Send a prompt to any AI provider"
+      }
+    ]
+  },
+  "execution": "embedded"
+}

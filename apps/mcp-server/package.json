@@ -1,0 +1,20 @@
+{
+  "name": "@makaio/app-mcp-server",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "MCP stdio bridge — connects to a running Makaio server as a bus client",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/mcp-http-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@makaio/test-utils": "workspace:*"
+  }
+}

@@ -1,0 +1,82 @@
+/**
+ * Spacing Tokens
+ *
+ * Consistent spacing scale based on 4px base unit.
+ */
+
+$spacing-0: 0;
+$spacing-px: 1px;
+$spacing-0_5: 0.125rem; // 2px
+$spacing-0_75: 0.1875rem; // 3px
+$spacing-1: 0.25rem; // 4px
+$spacing-1_5: 0.375rem; // 6px
+$spacing-2: 0.5rem; // 8px
+$spacing-2_25: 0.5625rem; // 9px
+$spacing-2_5: 0.625rem; // 10px
+$spacing-3: 0.75rem; // 12px
+$spacing-3_5: 0.875rem; // 14px
+$spacing-4: 1rem; // 16px
+$spacing-4_5: 1.125rem; // 18px
+$spacing-5: 1.25rem; // 20px
+$spacing-6: 1.5rem; // 24px
+$spacing-7: 1.75rem; // 28px
+$spacing-8: 2rem; // 32px
+$spacing-9: 2.25rem; // 36px
+$spacing-10: 2.5rem; // 40px
+$spacing-11: 2.75rem; // 44px
+$spacing-12: 3rem; // 48px
+$spacing-14: 3.5rem; // 56px
+$spacing-16: 4rem; // 64px
+$spacing-20: 5rem; // 80px
+$spacing-24: 6rem; // 96px
+$spacing-32: 8rem; // 128px
+
+/**
+ * Layout Sizes
+ */
+$spacing-sidebar-width: $spacing-32 * 2; // 256px
+$spacing-sidebar-min-width: $spacing-32 + $spacing-16 + $spacing-2; // 200px
+$spacing-session-sidebar-width: 18.75rem; // 300px
+$spacing-session-sidebar-min-width: 17.5rem; // 280px
+$spacing-session-sidebar-max-width: 25rem; // 400px
+$spacing-list-max-height: 25rem; // 400px
+
+/**
+ * Slide Panel Widths
+ */
+$spacing-slide-panel-sm: 20rem; // 320px
+$spacing-slide-panel-md: 30rem; // 480px
+$spacing-slide-panel-lg: 40rem; // 640px
+$spacing-context-menu-min-width: 12.5rem; // 200px
+$spacing-context-menu-max-width: 17.5rem; // 280px
+$spacing-content-max-width: 37.5rem; // 600px – general-purpose content column cap
+$spacing-error-details-max-width: 37.5rem; // 600px
+$spacing-error-message-max-width: 30rem; // 480px
+$spacing-modal-max-width-sm: 31.25rem; // 500px
+$spacing-modal-max-width-md: 35rem; // 560px
+$spacing-modal-max-width-lg: 50rem; // 800px
+$spacing-input-width-lg: 18.75rem; // 300px
+$spacing-card-min-width-md: 18.75rem; // 300px
+$spacing-card-min-width-lg: 20rem; // 320px
+$spacing-select-width-sm: 8.75rem; // 140px
+
+/**
+ * Widget sizing
+ */
+$spacing-widget-min-height-sm: 12.5rem; // 200px
+$spacing-widget-min-height-md: 25rem; // 400px
+$spacing-widget-min-height-lg: 37.5rem; // 600px
+
+/**
+ * Border Radius Tokens
+ *
+ * Consistent border radius scale for rounded corners.
+ */
+
+$radius-xs: 0.25rem; // 4px
+$radius-sm: 0.375rem; // 6px
+$radius-md: 0.5rem; // 8px
+$radius-lg: 0.75rem; // 12px
+$radius-xl: 1rem; // 16px
+$radius-2xl: 1.25rem; // 20px
+$radius-full: 9999px;

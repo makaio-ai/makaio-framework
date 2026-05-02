@@ -1,0 +1,59 @@
+{
+  "name": "@makaio/services-log-import",
+  "description": "Central registry for log importers from adapters and extensions.",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "makaio": {
+    "drizzleSchema": "./src/storage/schema.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts",
+    "./log-import": "./src/log-import.ts",
+    "./namespace": "./src/namespace.ts",
+    "./schemas": "./src/schemas.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./src/namespace.ts",
+    "./src/log-import.ts",
+    "./dist/namespace.mjs",
+    "./dist/log-import.mjs"
+  ],
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "type-fest": "^4.31.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@libsql/client": "^0.15.0",
+    "@makaio/ai-adapters-claude-shared": "workspace:*",
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/extension-opencode": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./browser": "./dist/browser.mjs",
+      "./log-import": "./dist/log-import.mjs",
+      "./namespace": "./dist/namespace.mjs",
+      "./schemas": "./dist/schemas.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

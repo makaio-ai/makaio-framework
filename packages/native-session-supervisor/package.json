@@ -1,0 +1,31 @@
+{
+  "name": "@makaio/native-session-supervisor",
+  "version": "0.0.1",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./package": "./src/package.ts",
+    "./package.json": "./package.json"
+  },
+  "makaio": {
+    "drizzleSchema": [
+      "./src/storage/schema.ts"
+    ]
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/storage-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "node-pty": "^1.2.0-beta.8"
+  },
+  "devDependencies": {
+    "@makaio/test-utils": "workspace:*",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.0"
+  }
+}

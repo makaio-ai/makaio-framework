@@ -1,0 +1,88 @@
+/**
+ * Styles for the AccountRow component.
+ *
+ * All colour, spacing, and font values derive from @makaio/web-theme
+ * Aura token CSS custom properties.
+ * No hex literals or hard-coded values.
+ */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: background-color 150ms ease;
+
+  &:hover {
+    background-color: var(--glass-hover);
+  }
+
+  &:hover .switchButton {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  &:focus-within .switchButton {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.active {
+  border-left: 2px solid var(--color-accent-primary);
+
+  .marker {
+    color: var(--color-success);
+  }
+}
+
+.inactive {
+  border-left: 2px solid transparent;
+
+  .marker {
+    color: var(--color-text-muted);
+  }
+}
+
+.marker {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.accountLabel {
+  flex: 1;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.switchButton {
+  flex-shrink: 0;
+  opacity: 0;
+  pointer-events: none;
+  font-size: var(--font-size-xs);
+  color: var(--color-accent-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition:
+    opacity 150ms ease,
+    background-color 150ms ease;
+
+  &:hover {
+    background-color: var(--glass-bg-hover);
+  }
+
+  &:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+}

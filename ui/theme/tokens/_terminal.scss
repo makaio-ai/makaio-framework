@@ -1,0 +1,35 @@
+@use '../_internal/aura-palette' as palette;
+
+// =============================================================================
+// TERMINAL COLOR TOKENS
+// =============================================================================
+// Terminal colors for xterm.js integration
+// These values align with the Aura dark theme palette
+
+// Background and foreground
+$terminal-background: palette.$bg-secondary; // #15181d
+$terminal-foreground: palette.$text-primary; // #e9eaed
+
+// Cursor and selection
+$terminal-cursor: palette.$amber; // #f59e0b
+$terminal-selection-background: rgba(245, 158, 11, 0.3);
+
+// Standard ANSI colors (0-7)
+$terminal-black: #1a1d23;
+$terminal-red: #f87171;
+$terminal-green: #34d399;
+$terminal-yellow: #fbbf24;
+$terminal-blue: #60a5fa;
+$terminal-magenta: #c084fc;
+$terminal-cyan: #22d3ee;
+$terminal-white: palette.$text-primary; // #e9eaed
+
+// Bright ANSI colors (8-15)
+$terminal-bright-black: palette.$text-muted; // #6b7280
+$terminal-bright-red: #fca5a5;
+$terminal-bright-green: #6ee7b7;
+$terminal-bright-yellow: #fde047;
+$terminal-bright-blue: #93c5fd;
+$terminal-bright-magenta: #d8b4fe;
+$terminal-bright-cyan: #67e8f9;
+$terminal-bright-white: #fff;

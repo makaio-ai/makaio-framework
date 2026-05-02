@@ -1,0 +1,14 @@
+{
+  "name": "@makaio/provider-alibaba",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "dependencies": {
+    "@makaio/contracts": "workspace:*"
+  }
+}

@@ -1,0 +1,5 @@
+# Build output
+dist/
+
+# Electrobun CLI build output
+/build/

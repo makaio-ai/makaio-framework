@@ -1,0 +1,8 @@
+name: MiniMax
+models:
+  - name: minimax-m2.5
+    friendlyName: MiniMax M2.5
+    contextWindowSize: 131072
+  - name: minimax-m2.7
+    friendlyName: MiniMax M2.7
+    contextWindowSize: 131072

@@ -1,0 +1,142 @@
+# electron-builder configuration for Makaio.
+#
+# Packages the existing build output (dist/main.mjs + dist/renderer/)
+# into a signed macOS .app bundle. Does NOT own the build — the existing
+# esbuild + Vite pipeline produces the output, electron-builder just packages it.
+#
+# Reference: https://www.electron.build/configuration
+
+appId: ai.makaio.app
+productName: Makaio
+copyright: Copyright © 2026 Makaio AI
+
+# ── Source layout ──────────────────────────────────────────────────────────
+# electron-builder looks for `package.json` in the app directory and uses
+# its `main` field as the Electron entry point. Our package.json already
+# declares `"main": "dist/main.mjs"`.
+#
+# The `files` array controls what goes into the asar archive. We include
+# only the built output — no source code, no node_modules except for native
+# modules which are explicitly mapped below via from/to.
+
+directories:
+  output: release
+  buildResources: icons
+
+# Native modules externalized by esbuild. The JS wrappers go into the asar
+# (for ESM resolution), while .node binaries are unpacked to disk by asarUnpack.
+# Note: better-sqlite3 is externalized in esbuild as a precaution but is not
+# installed. The packaged runtime native set here is @libsql, libsql,
+# cpu-features, and node-pty.
+files:
+  - dist/**/*
+  - icons/**/*
+  - package.json
+  - from: ../../../node_modules/cpu-features
+    to: node_modules/cpu-features
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  - from: ../../../node_modules/@libsql
+    to: node_modules/@libsql
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  - from: ../../../node_modules/libsql
+    to: node_modules/libsql
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  # Transitive deps of libsql (required at runtime, zero sub-deps)
+  - from: ../../../node_modules/@neon-rs
+    to: node_modules/@neon-rs
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  - from: ../../../node_modules/detect-libc
+    to: node_modules/detect-libc
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  - from: ../../../node_modules/node-pty
+    to: node_modules/node-pty
+    filter:
+      - "**/*"
+      - "!**/*.d.ts"
+      - "!**/*.d.ts.map"
+      - "!**/*.js.map"
+  - "!node_modules"
+  - "!src"
+  - "!e2e"
+  - "!__tests__"
+  - "!*.config.*"
+  - "!*.html"
+  - "!tsconfig.json"
+
+# ── asar ───────────────────────────────────────────────────────────────────
+asar: true
+
+# Native .node binaries must be on real disk for dlopen(). electron-builder
+# transparently redirects reads from app.asar to app.asar.unpacked/ for
+# these files, so Node.js ESM resolution still works.
+asarUnpack:
+  - "node_modules/**"
+
+extraResources:
+  - from: resources/install-cli.sh
+    to: install-cli.sh
+  - from: resources/makaio-launcher.sh
+    to: makaio-launcher.sh
+  - from: ../../../static/model-registry.yaml
+    to: static/model-registry.yaml
+
+# In a yarn workspace all deps are hoisted to the workspace root — skip
+# electron-builder's own install/rebuild step to avoid it failing to find
+# yarn.lock when run from the package directory.
+npmRebuild: false
+
+# ── macOS ──────────────────────────────────────────────────────────────────
+mac:
+  category: public.app-category.developer-tools
+  icon: icons/icon.icns
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  # Code signing — uses the Apple Developer ID Application certificate
+  # found in Keychain. Set CSC_IDENTITY_AUTO_DISCOVERY=false to skip.
+  identity: null
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.plist
+  # Notarization via Apple's notarytool. Requires APPLE_ID,
+  # APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID env vars.
+  notarize: false
+
+# ── Windows (future) ──────────────────────────────────────────────────────
+# win:
+#   icon: icons/icon.ico
+#   target:
+#     - nsis
+#   azureSignOptions:
+#     endpoint: https://<region>.codesigning.azure.net
+#     certificateProfileName: <profile>
+#     codeSigningAccountName: <account>
+
+# ── Linux (future) ────────────────────────────────────────────────────────
+# linux:
+#   icon: icons/icon.png
+#   target:
+#     - AppImage
+#     - deb

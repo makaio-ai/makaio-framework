@@ -1,0 +1,20 @@
+{
+  "name": "provider-openai",
+  "displayName": "OpenAI",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "openai",
+        "name": "OpenAI",
+        "description": "Official OpenAI API"
+      }
+    ]
+  }
+}

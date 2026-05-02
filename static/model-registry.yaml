@@ -1,0 +1,348 @@
+$schema: makaio/model-registry/v2
+updatedAt: 2026-05-04T08:21:47.762Z
+labs:
+  anthropic:
+    name: Anthropic
+    models:
+      - name: claude-sonnet-4-6
+        friendlyName: Sonnet 4.6
+        contextWindowSize: 200000
+        supportedReasoningLevels:
+          none: 0
+          low: 4000
+          medium: 8000
+          high: 16000
+          extra-high: 32000
+        labId: anthropic
+        family: sonnet
+      - name: claude-haiku-4-5
+        friendlyName: Haiku 4.5
+        contextWindowSize: 200000
+        supportedReasoningLevels:
+          none: 0
+          low: 4000
+          medium: 8000
+          high: 16000
+          extra-high: 32000
+        labId: anthropic
+        family: haiku
+      - name: claude-opus-4-7
+        friendlyName: Opus 4.7
+        contextWindowSize: 200000
+        supportedReasoningLevels:
+          none: 0
+          low: 4000
+          medium: 8000
+          high: 16000
+          extra-high: 32000
+        labId: anthropic
+        family: opus
+  google:
+    name: Google
+    models:
+      - name: gemini-3-pro
+        friendlyName: Gemini 3 Pro
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+      - name: gemini-3-flash
+        friendlyName: Gemini 3 Flash
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+      - name: gemini-3-pro-preview
+        friendlyName: Gemini 3 Pro (Preview)
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+      - name: gemini-3-flash-preview
+        friendlyName: Gemini 3 Flash (Preview)
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+      - name: gemini-2.5-pro
+        friendlyName: Gemini 2.5 Pro
+        contextWindowSize: 2097152
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-2.5
+      - name: gemini-2.5-flash
+        friendlyName: Gemini 2.5 Flash
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-2.5
+      - name: gemini-2.5-flash-lite
+        friendlyName: Gemini 2.5 Flash Lite
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-2.5
+      - name: gemini-3.1-pro-preview
+        friendlyName: Gemini 3.1 Pro (Preview)
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+      - name: gemini-3.1-flash-lite-preview
+        friendlyName: Gemini 3.1 Flash Lite (Preview)
+        contextWindowSize: 1048576
+        supportedReasoningLevels:
+          none: 0
+          low: 512
+          medium: 2048
+          high: 8192
+          extra-high: 16384
+        labId: google
+        family: gemini-3
+  minimax:
+    name: MiniMax
+    models:
+      - name: minimax-m2.5
+        friendlyName: MiniMax M2.5
+        contextWindowSize: 131072
+        labId: minimax
+      - name: minimax-m2.7
+        friendlyName: MiniMax M2.7
+        contextWindowSize: 131072
+        labId: minimax
+  moonshot:
+    name: Moonshot AI
+    models:
+      - name: kimi-k2.5
+        friendlyName: Kimi K2.5
+        contextWindowSize: 262144
+        labId: moonshot
+  openai:
+    name: OpenAI
+    models:
+      - name: gpt-5.2-codex
+        friendlyName: GPT-5.2 Codex
+        contextWindowSize: 128000
+        supportedReasoningLevels:
+          low: low
+          medium: medium
+          high: high
+        labId: openai
+        family: gpt-5
+      - name: gpt-5.1-codex-max
+        friendlyName: GPT-5.1 Codex Max
+        contextWindowSize: 128000
+        supportedReasoningLevels:
+          low: low
+          medium: medium
+          high: high
+        labId: openai
+        family: gpt-5
+      - name: gpt-5.1-codex-mini
+        friendlyName: GPT-5.1 Codex Mini
+        contextWindowSize: 128000
+        supportedReasoningLevels:
+          low: low
+          medium: medium
+          high: high
+        labId: openai
+        family: gpt-5
+      - name: gpt-5.2
+        friendlyName: GPT-5.2
+        contextWindowSize: 128000
+        supportedReasoningLevels:
+          low: low
+          medium: medium
+          high: high
+        labId: openai
+        family: gpt-5
+      - name: gpt-5.4-mini
+        friendlyName: GPT-5.4 Mini
+        contextWindowSize: 128000
+        supportedReasoningLevels:
+          low: low
+          medium: medium
+          high: high
+        labId: openai
+        family: gpt-5
+  qwen:
+    name: Qwen
+    models:
+      - name: qwen3.5-plus
+        friendlyName: Qwen 3.5 Plus
+        contextWindowSize: 1000000
+        labId: qwen
+      - name: qwen3.6-plus
+        friendlyName: Qwen 3.6 Plus
+        contextWindowSize: 131072
+        labId: qwen
+      - name: qwen3-max-2026-01-23
+        friendlyName: Qwen 3 Max
+        contextWindowSize: 262144
+        labId: qwen
+      - name: qwen3-coder-next
+        friendlyName: Qwen 3 Coder Next
+        contextWindowSize: 262144
+        labId: qwen
+      - name: qwen3-coder-plus
+        friendlyName: Qwen 3 Coder Plus
+        contextWindowSize: 1000000
+        labId: qwen
+      - name: coder-model(qwen-oauth)
+        friendlyName: Qwen 3.5 Plus (Coding Plan)
+        contextWindowSize: 1000000
+        metadata:
+          description: Qwen 3.5 Plus — efficient hybrid model with leading coding performance
+        labId: qwen
+      - name: qwen3.5-plus(openai)
+        friendlyName: Qwen 3.5 Plus
+        contextWindowSize: 1000000
+        labId: qwen
+      - name: qwen3-coder-plus(openai)
+        friendlyName: Qwen 3 Coder Plus
+        contextWindowSize: 1000000
+        labId: qwen
+      - name: qwen3-coder-next(openai)
+        friendlyName: Qwen 3 Coder Next
+        contextWindowSize: 262144
+        labId: qwen
+      - name: qwen3-max-2026-01-23(openai)
+        friendlyName: Qwen 3 Max
+        contextWindowSize: 262144
+        labId: qwen
+  xiaomi:
+    name: Xiaomi
+    models:
+      - name: mimo-v2-pro
+        friendlyName: MiMo-V2-Pro
+        contextWindowSize: 131072
+        labId: xiaomi
+      - name: mimo-v2-omni
+        friendlyName: MiMo-V2-Omni
+        contextWindowSize: 131072
+        labId: xiaomi
+  zhipu:
+    name: Zhipu AI
+    models:
+      - name: glm-4.7
+        friendlyName: GLM-4.7
+        contextWindowSize: 200000
+        labId: zhipu
+      - name: glm-4.6
+        friendlyName: GLM-4.6
+        contextWindowSize: 200000
+        labId: zhipu
+      - name: glm-4.5
+        friendlyName: GLM-4.5
+        contextWindowSize: 128000
+        labId: zhipu
+      - name: glm-4.5-air
+        friendlyName: GLM-4.5 Air
+        contextWindowSize: 128000
+        labId: zhipu
+      - name: glm-5
+        friendlyName: GLM-5
+        contextWindowSize: 131072
+        labId: zhipu
+      - name: glm-5.1
+        friendlyName: GLM-5.1
+        contextWindowSize: 131072
+        labId: zhipu
+providers:
+  alibaba:
+    name: Alibaba Model Studio
+    models:
+      glm-4.7:
+        contextWindowSize: 131072
+      glm-5: {}
+      kimi-k2.5:
+        contextWindowSize: 131072
+      minimax-m2.5: {}
+      qwen3-coder-next:
+        contextWindowSize: 131072
+      qwen3-coder-plus:
+        contextWindowSize: 131072
+      qwen3-max-2026-01-23:
+        contextWindowSize: 131072
+      qwen3.5-plus:
+        contextWindowSize: 131072
+  github-copilot:
+    name: GitHub Copilot
+    models:
+      gpt-5.1-codex-mini: {}
+      gpt-5.4-mini: {}
+  google:
+    name: Google AI
+    models:
+      gemini-2.5-flash: {}
+      gemini-2.5-flash-lite: {}
+      gemini-2.5-pro: {}
+      gemini-3-flash: {}
+      gemini-3-flash-preview: {}
+      gemini-3-pro: {}
+      gemini-3-pro-preview: {}
+      gemini-3.1-flash-lite-preview: {}
+      gemini-3.1-pro-preview: {}
+  google-oauth:
+    name: Google AI (Subscription)
+    models:
+      gemini-2.5-flash: {}
+      gemini-2.5-flash-lite: {}
+      gemini-2.5-pro: {}
+      gemini-3-flash: {}
+      gemini-3-flash-preview: {}
+      gemini-3-pro: {}
+      gemini-3-pro-preview: {}
+      gemini-3.1-flash-lite-preview: {}
+      gemini-3.1-pro-preview: {}
+  nanogpt:
+    name: NanoGPT
+    models: {}
+  openai:
+    name: OpenAI
+    models:
+      gpt-5.2: {}
+      gpt-5.4-mini: {}
+  openrouter:
+    name: OpenRouter
+    models: {}

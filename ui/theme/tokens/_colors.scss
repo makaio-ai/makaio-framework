@@ -1,0 +1,73 @@
+@use '../_internal/aura-palette' as palette;
+@use './opacity';
+
+// =============================================================================
+// SEMANTIC COLOR ALIASES (Public API)
+// =============================================================================
+
+// Primary accent (amber in Aura theme)
+$accent-primary: palette.$amber;
+$accent-primary-hover: palette.$amber-hover;
+$accent-primary-dim: palette.$amber-dim;
+$accent-primary-glow: palette.$amber-glow;
+
+// Semantic colors
+$success: palette.$green;
+$danger: palette.$red;
+$warning: palette.$amber;
+$info: palette.$blue;
+$special: palette.$purple;
+
+// Brand colors (Kai mascot ring)
+$kai-ring-violet: palette.$kai-ring-violet;
+$kai-ring-cyan: palette.$kai-ring-cyan;
+$kai-ring-gold: palette.$kai-ring-gold;
+$kai-ring-orange: palette.$kai-ring-orange;
+$kai-ring-pink: palette.$kai-ring-pink;
+
+// =============================================================================
+// BACKGROUND COLORS
+// =============================================================================
+$bg-primary: palette.$bg-primary;
+$bg-secondary: palette.$bg-secondary;
+$bg-tertiary: palette.$bg-tertiary;
+
+// =============================================================================
+// TEXT COLORS
+// =============================================================================
+$text-primary: palette.$text-primary;
+$text-secondary: palette.$text-secondary;
+$text-muted: palette.$text-muted;
+$text-on-accent: palette.$bg-primary;
+
+// =============================================================================
+// BORDER COLORS
+// =============================================================================
+$border-subtle: palette.$border-subtle;
+$border-default: palette.$border-default;
+$border-muted: palette.$border-muted;
+
+// =============================================================================
+// SEMANTIC BACKGROUNDS (Opacity variants)
+// =============================================================================
+// Note: We use the palette values directly but wrap in rgba if needed,
+// though palette already has explicit colors.
+// For bg-opacity, we might need manual rgba here if palette doesn't provided it.
+// Assuming we can derive or keep them consistent with old logic but using palette vars.
+$color-success-bg: rgba(palette.$green, opacity.$tint);
+$color-error-bg: rgba(palette.$red, opacity.$tint);
+$color-warning-bg: rgba(palette.$amber, opacity.$tint);
+$color-info-bg: rgba(palette.$blue, opacity.$tint);
+$color-purple-bg: rgba(palette.$purple, opacity.$tint);
+
+// =============================================================================
+// UTILITY TOKENS
+// =============================================================================
+// We'll keep these if they are widely used, but map to internal utilities
+$white-5: palette.$white-5;
+$white-10: palette.$white-10;
+
+// =============================================================================
+// OVERLAY
+// =============================================================================
+$overlay: palette.$overlay;

@@ -1,0 +1,45 @@
+{
+  "name": "@makaio/ai-adapters-openai-node",
+  "description": "OpenAI adapter using the official OpenAI Node SDK for agentic chat completions.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsx build.ts"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/provider-alibaba": "workspace:*",
+    "@makaio/provider-nanogpt": "workspace:*",
+    "@makaio/provider-openai": "workspace:*",
+    "@makaio/provider-opencode-go": "workspace:*",
+    "@makaio/provider-openrouter": "workspace:*",
+    "@makaio/provider-z-ai": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "openai": ">=6.22.0"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "openai": "6.22.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@makaio/storage-drizzle",
+  "description": "Drizzle ORM extension for storage namespaces with a runtime SQLite client.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client.ts",
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.0",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/storage-core": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "drizzle-orm": "^0.44.2"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./client": "./dist/client.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1",
+    "zod": "4.3.5"
+  }
+}

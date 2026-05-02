@@ -1,0 +1,190 @@
+/**
+ * Aura Theme
+ *
+ * CSS custom properties for the Aura dark theme.
+ * Import this file at the app root to inject the theme.
+ *
+ * All components should use these CSS custom properties
+ * for runtime theming support.
+ *
+ * @example
+ *   @use '@makaio/ui-theme/themes/aura';
+ */
+
+@use '../_internal/aura-palette' as palette;
+@use '../tokens/graph-colors' as graph;
+@use '../tokens/opacity';
+@use '../tokens/shadows' as *;
+@use '../tokens/spacing' as *;
+@use '../tokens/typography' as *;
+@use '../tokens/terminal' as *;
+
+.aura-theme {
+  // =========================================================================
+  // ACCENT COLORS (semantic only — no legacy aliases)
+  // =========================================================================
+  --color-accent-primary: #{palette.$amber};
+  --color-accent-primary-hover: #{palette.$amber-hover};
+  --color-accent-primary-dim: #{palette.$amber-dim};
+  --color-accent-primary-glow: #{palette.$amber-glow};
+
+  // =========================================================================
+  // BRAND COLORS (Kai mascot ring)
+  // =========================================================================
+  --color-kai-ring-violet: #{palette.$kai-ring-violet};
+  --color-kai-ring-cyan: #{palette.$kai-ring-cyan};
+  --color-kai-ring-gold: #{palette.$kai-ring-gold};
+  --color-kai-ring-orange: #{palette.$kai-ring-orange};
+  --color-kai-ring-pink: #{palette.$kai-ring-pink};
+
+  // =========================================================================
+  // SEMANTIC COLORS
+  // =========================================================================
+  --color-success: #{palette.$green};
+  --color-danger: #{palette.$red};
+  --color-error: #{palette.$red};
+  --color-warning: #{palette.$amber};
+  --color-info: #{palette.$blue};
+  --color-special: #{palette.$purple};
+  --color-purple: #{palette.$purple};
+
+  // =========================================================================
+  // BACKGROUND COLORS
+  // =========================================================================
+  --color-bg-primary: #{palette.$bg-primary};
+  --color-bg-secondary: #{palette.$bg-secondary};
+  --color-bg-tertiary: #{palette.$bg-tertiary};
+
+  // =========================================================================
+  // TEXT COLORS
+  // =========================================================================
+  --color-text-primary: #{palette.$text-primary};
+  --color-text-secondary: #{palette.$text-secondary};
+  --color-text-muted: #{palette.$text-muted};
+  --color-text-on-accent: #{palette.$bg-primary};
+  --color-text-white: #fff;
+  --color-logo-white: #fff;
+
+  // Semantic background colors with opacity
+  // Interpolate the full rgba() call so Sass evaluates it before emitting
+  // the custom property value — bare rgba(#{...}, #{...}) emits raw text.
+  --color-success-bg: #{rgba(palette.$green, opacity.$tint)};
+  --color-error-bg: #{rgba(palette.$red, opacity.$tint)};
+  --color-warning-bg: #{rgba(palette.$amber, opacity.$tint)};
+  --color-info-bg: #{rgba(palette.$blue, opacity.$tint)};
+  --color-purple-bg: #{rgba(palette.$purple, opacity.$tint)};
+
+  // Glass morphism effects
+  --glass-bg: rgba(21, 24, 29, 0.9);
+  --glass-bg-hover: rgba(29, 33, 40, 0.5);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-border-subtle: rgba(255, 255, 255, 0.05);
+  --glass-hover: rgba(255, 255, 255, 0.1);
+  --glass-active: rgba(255, 255, 255, 0.2);
+  --glass-text-hover: rgba(233, 234, 237, 0.7);
+
+  // Border colors
+  --color-border-subtle: #{palette.$border-subtle};
+  --color-border-default: #{palette.$border-default};
+  --color-border-muted: #{palette.$border-muted};
+  --color-border-hover: rgba(255, 255, 255, 0.15);
+
+  // Input and disabled backgrounds
+  --color-bg-input: #{palette.$bg-secondary};
+  --color-bg-disabled: rgba(29, 33, 40, 0.5);
+
+  // Accent background (semi-transparent)
+  --color-accent-bg: #{palette.$amber-glow};
+
+  // Font families
+  --font-display: #{palette.$font-display};
+  --font-body: #{palette.$font-body};
+  --font-ui: #{palette.$font-ui};
+  --font-nav: #{palette.$font-nav};
+  --font-mono: #{palette.$font-mono};
+
+  // Font sizes
+  --font-size-xs: #{$font-size-xs};
+  --font-size-sm: #{$font-size-sm};
+  --font-size-base: #{$font-size-base};
+  --font-size-lg: #{$font-size-lg};
+  --font-size-xl: #{$font-size-xl};
+  --font-size-2xl: #{$font-size-2xl};
+  --font-size-3xl: #{$font-size-3xl};
+  --font-size-4xl: #{$font-size-4xl};
+
+  // Font weights
+  --font-weight-light: #{$font-weight-light};
+  --font-weight-normal: #{$font-weight-normal};
+  --font-weight-medium: #{$font-weight-medium};
+  --font-weight-semibold: #{$font-weight-semibold};
+  --font-weight-bold: #{$font-weight-bold};
+
+  // Shadows
+  --shadow-organic: #{$shadow-organic};
+  --shadow-glow: #{$shadow-glow};
+  --shadow-inner-light: #{$shadow-inner-light};
+  --shadow-context-menu: #{$shadow-context-menu};
+  --shadow-sidebar: #{$shadow-sidebar};
+  --shadow-modal: #{$shadow-modal};
+
+  // Focus ring shadows
+  --ring-width: #{$ring-width};
+  --shadow-ring-focus: #{$shadow-ring-focus};
+  --shadow-ring-error: #{$shadow-ring-error};
+  --shadow-ring-success: #{$shadow-ring-success};
+  --shadow-ring-warning: #{$shadow-ring-warning};
+
+  // Border radius
+  --radius-xs: #{$radius-xs};
+  --radius-sm: #{$radius-sm};
+  --radius-md: #{$radius-md};
+  --radius-lg: #{$radius-lg};
+  --radius-xl: #{$radius-xl};
+  --radius-2xl: #{$radius-2xl};
+  --radius-full: #{$radius-full};
+
+  // Z-index scale
+  --z-base: #{$z-base};
+  --z-dropdown: #{$z-dropdown};
+  --z-sticky: #{$z-sticky};
+  --z-fixed: #{$z-fixed};
+  --z-modal-backdrop: #{$z-modal-backdrop};
+  --z-cover: #{$z-cover};
+  --z-modal: #{$z-modal};
+  --z-popover: #{$z-popover};
+  --z-tooltip: #{$z-tooltip};
+
+  // =========================================================================
+  // BRANCH COLORS (session graph / session container indentation)
+  // =========================================================================
+  --branch-color-1: #{graph.$graph-branch-blue};
+  --branch-color-2: #{graph.$graph-branch-purple};
+  --branch-color-3: #{graph.$graph-branch-amber};
+  --branch-color-4: #{graph.$graph-branch-rose};
+  --branch-color-5: #{graph.$graph-branch-emerald};
+
+  // =========================================================================
+  // TERMINAL COLORS
+  // =========================================================================
+  --terminal-background: #{$terminal-background};
+  --terminal-foreground: #{$terminal-foreground};
+  --terminal-cursor: #{$terminal-cursor};
+  --terminal-selection-background: #{$terminal-selection-background};
+  --terminal-black: #{$terminal-black};
+  --terminal-red: #{$terminal-red};
+  --terminal-green: #{$terminal-green};
+  --terminal-yellow: #{$terminal-yellow};
+  --terminal-blue: #{$terminal-blue};
+  --terminal-magenta: #{$terminal-magenta};
+  --terminal-cyan: #{$terminal-cyan};
+  --terminal-white: #{$terminal-white};
+  --terminal-bright-black: #{$terminal-bright-black};
+  --terminal-bright-red: #{$terminal-bright-red};
+  --terminal-bright-green: #{$terminal-bright-green};
+  --terminal-bright-yellow: #{$terminal-bright-yellow};
+  --terminal-bright-blue: #{$terminal-bright-blue};
+  --terminal-bright-magenta: #{$terminal-bright-magenta};
+  --terminal-bright-cyan: #{$terminal-bright-cyan};
+  --terminal-bright-white: #{$terminal-bright-white};
+}

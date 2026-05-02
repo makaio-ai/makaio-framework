@@ -1,0 +1,304 @@
+import type { Server as HttpServer } from 'node:http';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
+import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
+import type { AdapterSubsystemService } from '@makaio/adapter-subsystem';
+import type { PostInstallHandler, StrategyDependencies } from '@makaio/clients-core';
+import type {
+  ContributionProcessor,
+  ExtensionCoordinator,
+  ExtensionRuntimeSurface,
+  TransportProvider,
+  WindowRegistry,
+} from '@makaio/kernel';
+import type { ShutdownStep } from './boot-phase.js';
+import type { ExtensionDiscovery } from './extension-discovery.js';
+import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
+
+/**
+ * Bound address info passed to {@link BootMakaioRuntimeOptions.onTransportReady}.
+ */
+export interface TransportReadyInfo {
+  /** Bound TCP port. */
+  port: number;
+  /** Bound host address (e.g. `'127.0.0.1'` or `'0.0.0.0'`). */
+  host: string;
+}
+
+/**
+ * Extension of {@link TransportProvider} that exposes an optional
+ * {@link DispatchingAuth} handle for E2E auth hot-swap.
+ *
+ * Both Node and Bun transport providers implement this interface so the core
+ * boot sequence can install E2E auth without depending on a concrete provider
+ * class.
+ */
+export interface ServerTransportProvider extends TransportProvider {
+  /**
+   * The {@link DispatchingAuth} instance if the caller passed one.
+   *
+   * Exposed so boot can hot-swap E2E auth after machine identity becomes
+   * available. Returns `undefined` when auth was not provided or is not a
+   * {@link DispatchingAuth}.
+   */
+  readonly dispatchingAuth?: DispatchingAuth;
+}
+
+/**
+ * Platform-agnostic boot options shared by all runtime platforms.
+ *
+ * The Node-specific {@link BootMakaioRuntimeOptions} adds `httpServer` on top
+ * of this base. Alternative platform boots (e.g. Bun) construct their own
+ * transport and pass it alongside these options to `bootMakaioRuntimeCore`.
+ */
+export interface CoreBootOptions {
+  /**
+   * Optional route graph builder for dynamic HTTP route management.
+   *
+   * When provided, an {@link HttpContributionProcessor} is registered that
+   * adds/removes extension HTTP routes on enable/disable, triggering a
+   * Hono app rebuild via {@link HonoRouteGraph.replaceApp}. When absent
+   * (e.g. Vite dev mode), extension HTTP routes are not mounted by boot.
+   */
+  routeGraphBuilder?: HttpRouteGraphBuilder;
+
+  /**
+   * Pre-built auth strategy (HMAC, DispatchingAuth, or undefined for dev).
+   *
+   * When `undefined` the bus server runs with no authentication — safe only
+   * in dev mode (loopback-only binding).
+   */
+  auth?: TransportAuth;
+
+  /**
+   * Loopback transport registry name for in-process cross-client relay.
+   *
+   * Defaults to `'node'`.
+   */
+  loopbackName?: string;
+
+  /**
+   * Enable E2E auth hot-swap after machine identity loads.
+   *
+   * When `true` and `auth` is a {@link DispatchingAuth}, the E2E strategy is
+   * installed into the dispatching auth instance after machine identity
+   * becomes available. Set this when binding on all interfaces (LAN mode).
+   */
+  lanBind?: boolean;
+
+  /**
+   * Resolve a peer device's signing public key for E2E relay authentication.
+   *
+   * Required when `lanBind` is enabled — boot fails fast if missing. The
+   * resolver is invoked during E2E handshakes to verify the identity of a
+   * connecting peer. Returning `null` rejects the peer as unknown or revoked.
+   *
+   * Providing this at the composition root keeps the boot layer free of any
+   * host device-registry dependency.
+   * @param peerId - Device ID of the connecting peer.
+   * @returns CryptoKey for signature verification, or `null` for unknown/revoked peers.
+   */
+  peerSigningKeyResolver?: (peerId: string) => Promise<CryptoKey | null>;
+
+  /**
+   * Hosted surface category for extension gating.
+   *
+   * Defaults to `'headless'`. Interactive surfaces like Vite dev server or
+   * Electron should pass `'interactive'` so UI-bound extensions can load.
+   */
+  surface?: ExtensionRuntimeSurface;
+
+  /**
+   * Host launcher command embedded into client wiring installed from warning actions.
+   *
+   * Defaults to `'makaio'`. Prefer `makaio.config.*` when a user/workspace
+   * needs a different launcher identity.
+   */
+  readonly launcherCommand?: string;
+
+  /**
+   * Called when the bus WebSocket transport is attached and accepting
+   * connections, before service boot begins.
+   *
+   * This is the earliest safe moment for external clients to connect to
+   * the bus. Composition roots use this to announce the bound address
+   * (e.g. `MAKAIO_PORT=<n>` on stdout) or to unblock dependent processes.
+   * @param info - Bound host and port from the server.
+   */
+  onTransportReady?: (info: TransportReadyInfo) => void;
+
+  /**
+   * Custom extension discovery strategy.
+   *
+   * When provided, replaces the default `FilesystemDescriptorDiscovery`
+   * instance. Use `ExplicitDescriptorDiscovery` to supply pre-scanned
+   * extension descriptors in tests or host-owned discovery flows.
+   */
+  discovery?: ExtensionDiscovery;
+
+  /**
+   * Framework version used for extension `minVersion` gating.
+   *
+   * When omitted, the version is read from `@makaio/runtime-node`'s
+   * `package.json` at boot time. Pass an explicit value in tests or host
+   * builds where the package.json may not be on disk.
+   */
+  frameworkVersion?: string;
+
+  /**
+   * Capability tokens declared by the host composition root.
+   *
+   * Passed directly to the coordinator as the full capability set (merged with
+   * the current OS platform token). Runtime tokens such as `'node'` must be
+   * included here by Node-based hosts; the boot layer no longer injects them
+   * automatically so that Bun and future platforms can declare their own tokens.
+   * @example ['node', 'workspace-host']
+   */
+  readonly hostCapabilities?: readonly string[];
+
+  /**
+   * Host-provided package config defaults keyed by package name.
+   *
+   * Merged with descriptor defaults before stored config is loaded. Prefer
+   * `makaio.config.*` for user/workspace runtime defaults; this seam remains
+   * for composition roots that need to inject process-local defaults.
+   */
+  readonly packageConfigDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+
+  /**
+   * Host-provided handlers for client binary post-install descriptors.
+   *
+   * Client packages declare declarative `postInstall.kind` values; composition
+   * roots provide the concrete handler map here so `@makaio/runtime-node` stays free
+   * of host-specific post-install logic.
+   */
+  readonly clientBinaryPostInstallHandlers?: ReadonlyMap<string, PostInstallHandler>;
+
+  /**
+   * Runtime data home for config, database, machine identity, and installed
+   * extensions. Defaults to the `MAKAIO_HOME` environment override when set,
+   * otherwise `~/.makaio`.
+   */
+  readonly makaioHome?: string;
+
+  /**
+   * Host-provided fallback model-registry seed candidates.
+   *
+   * These are tried after the CDN cache source and before the runtime's
+   * boot-relative seed path. Desktop package surfaces use this to pass
+   * resource directories that are known only to the app shell, keeping
+   * runtime-node free of Electron/Electrobun globals while preserving CDN
+   * freshness whenever the network source is available.
+   */
+  readonly modelRegistryFallbackSeedPaths?: readonly string[];
+
+  /**
+   * Host-provided managed-binary I/O implementation.
+   *
+   * The shared boot core only wires the seam through. Concrete hosts supply
+   * their own filesystem, network, archive, and subprocess implementation so
+   * Node, Bun, and future runtimes do not inherit Node-shaped I/O implicitly.
+   */
+  readonly clientBinaryStrategyDependencies?: StrategyDependencies;
+
+  /**
+   * Optional provider for persisted extension configuration and enablement state.
+   *
+   * When present, the coordinator consults this provider during {@link ExtensionCoordinator.startAll}
+   * and `ExtensionCoordinator.enableExtension` to load stored configuration and
+   * skip packages that were previously disabled. When absent, all extensions
+   * start enabled with default (Zod-schema) configuration only.
+   */
+  readonly extensionConfigProvider?: ExtensionConfigProvider;
+
+  /**
+   * Host-owned coordinator wiring invoked after framework processors are registered
+   * and before {@link ExtensionCoordinator.startAll}.
+   *
+   * Concrete hosts use this seam for contribution processors and bus services
+   * that must observe active extension contributions without importing
+   * host-owned packages into the framework boot layer.
+   * @param context - Coordinator setup context.
+   * @returns Optional cleanup callbacks collected into runtime shutdown.
+   */
+  readonly configureCoordinator?: (
+    context: BootCoordinatorSetupContext,
+  ) => void | ShutdownStep | readonly ShutdownStep[];
+}
+
+/** Context passed to host-owned coordinator setup. */
+export interface BootCoordinatorSetupContext {
+  /** Runtime bus. */
+  readonly bus: IMakaioBus;
+  /** Extension coordinator being configured before startup. */
+  readonly coordinator: ExtensionCoordinator;
+  /** Register an awaited contribution processor. */
+  readonly registerContributionProcessor: (processor: ContributionProcessor) => void;
+  /** Read the active adapter subsystem service when it exists. */
+  readonly getAdapterSubsystemService: () => AdapterSubsystemService | undefined;
+}
+
+/**
+ * Options for `bootMakaioRuntime` (Node.js platform).
+ *
+ * Extends the platform-agnostic {@link CoreBootOptions} with the Node HTTP
+ * server required for transport attachment.
+ */
+export interface BootMakaioRuntimeOptions extends CoreBootOptions {
+  /**
+   * HTTP server, already listening.
+   *
+   * The bus transport attaches its WebSocket upgrade handler to this server.
+   */
+  httpServer: HttpServer;
+}
+
+/**
+ * Handle returned by `bootMakaioRuntime` on successful startup.
+ */
+export interface MakaioRuntime {
+  /**
+   * Bound TCP port (read from httpServer).
+   */
+  port: number;
+
+  /**
+   * Bound host address (e.g. `'127.0.0.1'` or `'0.0.0.0'`).
+   */
+  host: string;
+
+  /**
+   * Machine identifier (UUID).
+   */
+  machineId: string;
+
+  /**
+   * Tray manifest entries collected from all loaded packages.
+   *
+   * Each entry includes the owning `packageName` so the Electron shell can
+   * resolve the fully-qualified window registration ID
+   * (`{packageName}:{opensWindow}`) when building the tray menu.
+   *
+   * Populated during the extension coordinator's {@link ExtensionCoordinator.load}
+   * phase, before services start. Available immediately after `bootMakaioRuntime`
+   * resolves.
+   */
+  trayEntries: ReadonlyArray<TrayManifest & { readonly packageName: string }>;
+
+  /**
+   * Window registry populated from package manifests during the extension
+   * coordinator {@link ExtensionCoordinator.load} phase.
+   *
+   * The Electron shell passes this to `WindowManager` so window
+   * creation uses the registry that was actually populated during boot,
+   * rather than an independent empty instance.
+   *
+   * Available immediately after `bootMakaioRuntime` resolves.
+   */
+  windowRegistry: WindowRegistry;
+
+  /**
+   * Shut down all services in reverse startup order.
+   */
+  shutdown(): Promise<void>;
+}

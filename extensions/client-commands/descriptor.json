@@ -1,0 +1,80 @@
+{
+  "name": "client-commands",
+  "displayName": "Client Commands",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "cli": true
+  },
+  "cli": {
+    "name": "client",
+    "description": "Manage AI client integrations",
+    "subcommands": [
+      {
+        "name": "wire",
+        "description": "Install Makaio hooks into a client's native config",
+        "args": [
+          {
+            "name": "client",
+            "description": "Client identifier (e.g. claude-code, codex)",
+            "required": true,
+            "positional": true
+          },
+          {
+            "name": "scope",
+            "description": "Scope at which to install hooks (e.g. user, global)",
+            "required": true,
+            "positional": true
+          },
+          {
+            "name": "projectDir",
+            "description": "Absolute path to the project directory (required for project/local scopes)",
+            "short": "-d"
+          }
+        ]
+      },
+      {
+        "name": "unwire",
+        "description": "Remove Makaio hooks from a client's native config",
+        "args": [
+          {
+            "name": "client",
+            "description": "Client identifier (e.g. claude-code, codex)",
+            "required": true,
+            "positional": true
+          },
+          {
+            "name": "scope",
+            "description": "Scope from which to remove hooks (e.g. user, global)",
+            "required": true,
+            "positional": true
+          },
+          {
+            "name": "projectDir",
+            "description": "Absolute path to the project directory (required for project/local scopes)",
+            "short": "-d"
+          }
+        ]
+      },
+      {
+        "name": "wiring",
+        "description": "Show hook wiring status for all or a specific client",
+        "args": [
+          {
+            "name": "client",
+            "description": "Optional client identifier to filter results",
+            "short": "-c"
+          },
+          {
+            "name": "projectDir",
+            "description": "Absolute path to the project directory",
+            "short": "-d"
+          }
+        ]
+      }
+    ]
+  },
+  "execution": "embedded"
+}

@@ -1,0 +1,28 @@
+---
+title: Makaio Framework
+description: Typed, bus-centric framework for building and orchestrating AI agents with tools, sessions, and events.
+template: splash
+hero:
+  tagline: A typed, bus-centric framework for building and orchestrating AI agents with tools, sessions, and events.
+  actions:
+    - text: Get Started
+      link: /guides/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: Why Makaio
+      link: /why/
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/makaio-ai/makaio-framework
+      icon: external
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <LinkCard title="Typed Message Bus" href="/guides/bus/" description="Every service, adapter, tool, and storage handler communicates through a single typed bus with schema-validated subjects." />
+  <LinkCard title="AI Adapters" href="/guides/creating-adapters/" description="Connect AI providers like Claude, Codex, and Gemini through a unified adapter layer with capability negotiation — or write your own." />
+  <LinkCard title="Extension System" href="/guides/extensions/" description="Add functionality through declarative extensions that register namespaces, handlers, tools, and UI components." />
+  <LinkCard title="Multi-Language SDKs" href="/sdks/" description="Build extensions and integrations in TypeScript, Python, or Rust with generated, conformance-tested SDKs." />
+</CardGrid>

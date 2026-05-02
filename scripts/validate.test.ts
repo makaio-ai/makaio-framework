@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { parseCliArgs } from './validate.js';
+
+describe('parseCliArgs', () => {
+  it('defaults to fix mode', () => {
+    expect(parseCliArgs([]).flags.fix).toBe(true);
+  });
+
+  it('supports opting out of fixes explicitly', () => {
+    expect(parseCliArgs(['--no-fix']).flags.fix).toBe(false);
+  });
+
+  it('accepts both profile syntaxes for valid values', () => {
+    expect(parseCliArgs(['--profile', 'full-workspace']).profile).toBe('full-workspace');
+    expect(parseCliArgs(['--profile=standalone']).profile).toBe('standalone');
+  });
+
+  it('accepts a single validation tool', () => {
+    expect(parseCliArgs(['--tool', 'typescript']).tools).toEqual(['typescript']);
+    expect(parseCliArgs(['--tool=eslint']).tools).toEqual(['eslint']);
+  });
+
+  it('accepts comma-separated validation tools', () => {
+    expect(parseCliArgs(['--tools', 'prettier,stylelint']).tools).toEqual(['prettier', 'stylelint']);
+    expect(parseCliArgs(['--tools=eslint,typescript']).tools).toEqual(['eslint', 'typescript']);
+  });
+
+  it('fails fast for invalid profile values', () => {
+    expect(() => parseCliArgs(['--profile', 'invalid'])).toThrow(
+      'Invalid value for --profile. Use "standalone" or "full-workspace".',
+    );
+    expect(() => parseCliArgs(['--profile=invalid'])).toThrow(
+      'Invalid value for --profile. Use "standalone" or "full-workspace".',
+    );
+  });
+
+  it('fails fast for invalid tool values', () => {
+    expect(() => parseCliArgs(['--tool', 'unknown'])).toThrow(
+      'Invalid value for --tool. Use one of: prettier, eslint, stylelint, typescript.',
+    );
+    expect(() => parseCliArgs(['--tools=eslint,unknown'])).toThrow(
+      'Invalid value for --tool. Use one of: prettier, eslint, stylelint, typescript.',
+    );
+  });
+});

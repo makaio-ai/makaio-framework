@@ -1,0 +1,42 @@
+{
+  "name": "@makaio/ui-kernel",
+  "description": "TypeScript contracts, registries, and schemas for framework UI packages.",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "license": "CC-BY-NC-4.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pages/namespace": "./src/pages/namespace.ts",
+    "./pages/schemas": "./src/pages/schemas.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./src/pages/namespace.ts",
+    "./dist/pages/namespace.mjs"
+  ],
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*"
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./pages/namespace": "./dist/pages/namespace.mjs",
+      "./pages/schemas": "./dist/pages/schemas.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

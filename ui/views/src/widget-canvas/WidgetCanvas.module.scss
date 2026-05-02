@@ -1,0 +1,60 @@
+.canvas {
+  background-color: var(--color-bg-primary);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+/**
+ * Non-responsive (fixed-column) mode, used for constrained surfaces such as
+ * the tray popover. Reduces padding for compact display.
+ */
+.fixed {
+  .gridArea {
+    // 8px matches TRAY_CANVAS_HORIZONTAL_PADDING_PX from @makaio/ui-kernel.
+    // Kept as px (not rem) so grid width math stays font-size-independent.
+    padding: 8px;
+  }
+}
+
+.gridArea {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 1rem;
+  position: relative;
+}
+
+.emptyState,
+.messageState,
+.errorState {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.emptyState {
+  flex-direction: column;
+  inset: 0;
+  opacity: 0.55;
+  pointer-events: none;
+  position: absolute;
+
+  p:first-child {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: 1rem;
+  }
+}
+
+.errorState {
+  color: var(--color-danger);
+}

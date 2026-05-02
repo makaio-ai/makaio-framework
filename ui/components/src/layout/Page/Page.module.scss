@@ -1,0 +1,27 @@
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/colors';
+
+.page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  background-color: var(--color-bg-primary);
+  overflow: hidden;
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  position: relative; // For positioning children
+  padding: spacing.$spacing-6;
+
+  &.noPadding {
+    padding: 0;
+  }
+}

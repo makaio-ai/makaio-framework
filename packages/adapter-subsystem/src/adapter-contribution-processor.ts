@@ -1,0 +1,505 @@
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type {
+  AdapterContribution,
+  AdapterProviderDefinitionContract,
+  AdapterProviderRef,
+  ExtensionContext,
+  MakaioExtension,
+  ProviderAIModel,
+  ProviderDefinitionInput,
+} from '@makaio/contracts';
+import { ExtensionSubjects } from '@makaio/kernel';
+import type { ContributionProcessor, ExtensionCoordinator } from '@makaio/kernel';
+import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
+import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
+import type { z } from 'zod';
+import type { AdapterConfigStore } from './adapter-config-store.js';
+import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
+import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
+import type { LoadedAdapter } from './adapter-runtime-types.js';
+import { cloneAdapterClientRefs, resolveDefaultClientId } from './adapter-client-refs.js';
+
+/**
+ * Clone model descriptors before injecting them into loaded adapter metadata.
+ * @param models - Source models from either the registry or static provider definition.
+ * @returns Defensive clone safe for runtime mutation by downstream consumers.
+ */
+function cloneProviderModels(models: readonly ProviderAIModel[]): ProviderAIModel[] {
+  return models.map((model) => ({ ...model }));
+}
+
+/**
+ * Detect a registry miss through the bus request wrapper.
+ * @param error - Error thrown by the model-registry request.
+ * @returns True when the registry handled the request but does not own the provider.
+ */
+function isRegistryProviderMiss(error: unknown): boolean {
+  if (error instanceof ModelRegistryProviderNotFoundError) return true;
+  if (typeof error !== 'object' || error === null) return false;
+
+  const record = error as { readonly name?: unknown; readonly providerId?: unknown; readonly cause?: unknown };
+  if (record.name === 'ModelRegistryProviderNotFoundError' && typeof record.providerId === 'string') return true;
+  if (
+    error instanceof Error &&
+    /^Request to "getProviderModels" failed: Provider ".+" is not present in the model registry$/.test(error.message)
+  ) {
+    return true;
+  }
+  if (error instanceof Error && /^Provider ".+" is not present in the model registry$/.test(error.message)) return true;
+  return isRegistryProviderMiss(record.cause);
+}
+
+/**
+ * Constructor options for {@link AdapterContributionProcessor}.
+ */
+export interface AdapterContributionProcessorOptions {
+  /**
+   * Store used for file-backed adapter config reads and writes.
+   */
+  readonly configStore: AdapterConfigStore;
+  /**
+   * Registry that owns loaded-adapter definitions and live instances.
+   */
+  readonly registry: AdapterRuntimeRegistry;
+  /**
+   * Extension coordinator with which the contribution processor is registered.
+   */
+  readonly coordinator: ExtensionCoordinator;
+  /**
+   * Stable machine identifier used for deterministic adapter ID derivation.
+   */
+  readonly machineId: string;
+  /**
+   * Platform-provided defaults forwarded to adapter factories.
+   */
+  readonly platformDefaults: PlatformDefaults;
+}
+
+/**
+ * Handles the full activation and deactivation lifecycle for adapter
+ * contributions declared by extension packages.
+ *
+ * Registers a {@link ContributionProcessor} with the {@link ExtensionCoordinator}
+ * so that adapter initialization is awaited before the coordinator advances to
+ * subsequent boot phases, preventing races between adapter setup and later boot
+ * phases.
+ *
+ * **Error semantics (Q2):** Hard failures during activation throw. If the Nth
+ * adapter in a package fails, every adapter registered so far, including the
+ * current adapter when failure happens after registration, is rolled back in
+ * reverse order before re-throwing. The coordinator catches the error and
+ * transitions the extension to `failed`.
+ */
+export class AdapterContributionProcessor {
+  private readonly configStore: AdapterConfigStore;
+  private readonly registry: AdapterRuntimeRegistry;
+  private readonly coordinator: ExtensionCoordinator;
+  private readonly machineId: string;
+  private readonly platformDefaults: PlatformDefaults;
+
+  /**
+   * Create a new adapter contribution processor.
+   * @param options - Dependencies and configuration for the processor.
+   */
+  public constructor(options: AdapterContributionProcessorOptions) {
+    this.configStore = options.configStore;
+    this.registry = options.registry;
+    this.coordinator = options.coordinator;
+    this.machineId = options.machineId;
+    this.platformDefaults = options.platformDefaults;
+  }
+
+  /**
+   * Create a {@link ContributionProcessor} and register it with the coordinator.
+   *
+   * The cleanup function returned by `registerContributionProcessor` is passed
+   * to `addCleanup` so the owning service can unregister the processor during
+   * teardown.
+   * @param addCleanup - Callback that registers a teardown function with the owning lifecycle.
+   */
+  public register(addCleanup: (fn: () => void) => void): void {
+    const processor: ContributionProcessor = {
+      filter: (pkg: MakaioExtension): boolean => !!pkg.adapters?.length,
+      processActivated: async (name: string, pkg: MakaioExtension, ctx: ExtensionContext): Promise<void> => {
+        await this.onPackageActivated(name, pkg, ctx);
+      },
+      processStopped: async (name: string): Promise<void> => {
+        await this.onPackageStopped(name);
+      },
+    };
+    addCleanup(this.coordinator.registerContributionProcessor(processor));
+  }
+
+  /**
+   * Process all adapters declared by a package that just became `active`.
+   *
+   * Processes each contribution sequentially to maintain the publication chain
+   * serialization invariant.
+   *
+   * **Error semantics (Q2):** Hard failures throw. If the Nth adapter fails,
+   * every adapter registered so far is rolled back in reverse order using
+   * {@link AdapterRuntimeRegistry.deregisterAdapter} before re-throwing. The
+   * coordinator catches the error and transitions the extension to `failed`.
+   *
+   * `adapter.registered` events are published only after all contributions in
+   * the package have activated successfully, so rollback cannot leave
+   * observers with a false live-registration event.
+   * @param packageName - Name of the package that transitioned to `active`.
+   * @param pkg - Extension manifest with `adapters` contributions.
+   * @param ctx - Per-extension context containing the boot bus.
+   */
+  public async onPackageActivated(packageName: string, pkg: MakaioExtension, ctx: ExtensionContext): Promise<void> {
+    const contributions = pkg.adapters ?? [];
+    const activated: string[] = [];
+    const completed: LoadedAdapter[] = [];
+    const providerModelCache = new Map<string, ProviderAIModel[]>();
+
+    const catalog = await ctx.bus.request(ExtensionSubjects.contributions.catalog, {});
+    const providerDefinitionCache = new Map<string, ProviderDefinitionInput>();
+    for (const entry of catalog.providers) {
+      providerDefinitionCache.set(entry.definition.id, entry.definition);
+    }
+    for (const definition of pkg.providers ?? []) {
+      providerDefinitionCache.set(definition.id, definition);
+    }
+
+    try {
+      for (const contribution of contributions) {
+        const loadedAdapter = await this.activateAdapterContribution(
+          packageName,
+          contribution,
+          ctx.bus,
+          providerModelCache,
+          providerDefinitionCache,
+        );
+        activated.push(contribution.definition.name);
+        completed.push(loadedAdapter);
+      }
+    } catch (err) {
+      for (const adapterName of activated.reverse()) {
+        try {
+          await this.registry.deregisterAdapter(adapterName);
+        } catch (rollbackErr) {
+          console.error(`[AdapterContributionProcessor] Rollback error for adapter "${adapterName}":`, rollbackErr);
+        }
+      }
+      this.registry.removePackageTracking(packageName);
+      throw err;
+    }
+
+    await this.publishActivatedAdapters(completed);
+  }
+
+  /**
+   * Process a single adapter contribution from an active package.
+   *
+   * Steps:
+   * 1. Build a `LoadedAdapter` from the manifest and definition
+   * 2. Ensure the file-backed config exists
+   * 3. Register in the in-memory registry and update package tracking
+   * 4. Initialize the instance when enabled
+   * 5. Publish `adapter.registered` through the serialized publication chain
+   * @param packageName - Owning package name.
+   * @param contribution - Adapter contribution from the package manifest.
+   * @param bus - Bus used to resolve registry-populated provider models.
+   */
+  public async processAdapterContribution(
+    packageName: string,
+    contribution: AdapterContribution,
+    bus: IMakaioBus = MakaioBus,
+  ): Promise<void> {
+    const loadedAdapter = await this.activateAdapterContribution(
+      packageName,
+      contribution,
+      bus,
+      new Map<string, ProviderAIModel[]>(),
+    );
+    await this.publishActivatedAdapters([loadedAdapter]);
+  }
+
+  /**
+   * Register and initialize one adapter contribution without publishing its
+   * `adapter.registered` event.
+   *
+   * Publication is intentionally deferred until the package has fully
+   * activated. If registration succeeds and a later step fails, this method
+   * deregisters the current adapter before re-throwing.
+   * @param packageName - Owning package name.
+   * @param contribution - Adapter contribution from the package manifest.
+   * @param bus - Bus used to resolve registry-populated provider models.
+   * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
+   * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
+   * @returns Loaded adapter after successful registration and optional initialization.
+   */
+  private async activateAdapterContribution(
+    packageName: string,
+    contribution: AdapterContribution,
+    bus: IMakaioBus,
+    providerModelCache: Map<string, ProviderAIModel[]>,
+    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+  ): Promise<LoadedAdapter> {
+    const loadedAdapter = await this.buildLoadedAdapter(
+      packageName,
+      contribution,
+      bus,
+      providerModelCache,
+      providerDefinitionCache,
+    );
+    let registered = false;
+
+    try {
+      await this.ensureAdapterConfig(loadedAdapter);
+
+      this.registry.registerAdapter(loadedAdapter, packageName);
+      registered = true;
+
+      if (this.configStore.isAdapterEnabled(loadedAdapter.name)) {
+        await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
+        console.info(
+          `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
+        );
+      }
+    } catch (err) {
+      if (registered) {
+        try {
+          await this.registry.deregisterAdapter(loadedAdapter.name);
+        } catch (rollbackErr) {
+          console.error(
+            `[AdapterContributionProcessor] Rollback error for adapter "${loadedAdapter.name}":`,
+            rollbackErr,
+          );
+        }
+      }
+      throw err;
+    }
+
+    return loadedAdapter;
+  }
+
+  /**
+   * Resolve adapter-declared provider IDs to full provider definitions.
+   *
+   * Queries the coordinator's contributions catalog for all provider definitions
+   * registered by active extensions, then matches each adapter-declared ID.
+   * @param bus - Bus used to query the contributions catalog.
+   * @param providerRefs - Adapter-declared provider references to resolve.
+   * @param adapterName - Adapter name used for error messages.
+   * @param adapterConfigSchema - Adapter-level default config schema applied to
+   *   providers that do not declare a per-provider override.
+   * @param adapterCredentialSchema - Adapter-level default credential schema
+   *   applied to providers that do not declare a per-provider override.
+   * @param providerDefinitionCache - Pre-built definition map from a batch caller.
+   *   When supplied, the catalog RPC is skipped entirely.
+   * @returns Resolved provider definitions with schemas applied.
+   */
+  private async resolveProviderDefinitions(
+    bus: IMakaioBus,
+    providerRefs: readonly AdapterProviderRef[],
+    adapterName: string,
+    adapterConfigSchema?: z.ZodObject<z.ZodRawShape>,
+    adapterCredentialSchema?: z.ZodObject<z.ZodRawShape>,
+    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+  ): Promise<AdapterProviderDefinitionContract[]> {
+    let definitionMap = providerDefinitionCache;
+    if (!definitionMap) {
+      definitionMap = new Map<string, ProviderDefinitionInput>();
+      const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
+      for (const entry of catalog.providers) {
+        definitionMap.set(entry.definition.id, entry.definition);
+      }
+    }
+
+    const resolved: AdapterProviderDefinitionContract[] = [];
+    const missing: string[] = [];
+
+    for (const ref of providerRefs) {
+      const definition = definitionMap.get(ref.definitionId);
+      if (!definition) {
+        missing.push(ref.definitionId);
+        continue;
+      }
+      resolved.push({
+        definition,
+        configSchema: ref.configSchema ?? adapterConfigSchema,
+        credentialSchema: ref.credentialSchema ?? adapterCredentialSchema,
+      });
+    }
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
+          `but no active extension registers them. Ensure provider extensions ` +
+          `are listed in the adapter's dependencies.`,
+      );
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Build a `LoadedAdapter` from an `AdapterContribution` declared by a package.
+   *
+   * Maps the typed `AdapterDefinitionContract` on the contribution to the
+   * runtime `LoadedAdapter` shape used by the adapter subsystem internals.
+   *
+   * When `providerModelCache` is supplied, the result of each
+   * `getProviderModels` bus request is cached by provider ID so that the same
+   * provider queried by multiple adapters in the same boot batch only triggers
+   * one RPC call.
+   * @param packageName - Package that declared this contribution.
+   * @param contribution - Adapter manifest and definition pair.
+   * @param bus - Bus used to resolve provider model catalogs from the model registry.
+   * @param providerModelCache - Optional per-batch cache deduplicating provider model bus calls.
+   * @param providerDefinitionCache - Optional per-batch cache deduplicating catalog bus calls.
+   *   When supplied, the catalog RPC is skipped and provider definitions are resolved from this map.
+   * @returns Constructed loaded adapter ready for registration.
+   */
+  public async buildLoadedAdapter(
+    packageName: string,
+    contribution: AdapterContribution,
+    bus: IMakaioBus = MakaioBus,
+    providerModelCache: Map<string, ProviderAIModel[]> = new Map(),
+    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+  ): Promise<LoadedAdapter> {
+    const def = contribution.definition;
+    const manifest = contribution.manifest;
+    const adapterName = def.name;
+    const resolvedProviders = await this.resolveProviderDefinitions(
+      bus,
+      def.providers,
+      adapterName,
+      def.providerConfigSchema,
+      def.providerCredentialSchema,
+      providerDefinitionCache,
+    );
+    const providers = await Promise.all(
+      resolvedProviders.map(async (provider) => {
+        const providerId = provider.definition.id;
+        try {
+          let models = providerModelCache.get(providerId);
+          if (models === undefined) {
+            const result = await bus.requestOptional(ModelRegistrySubjects.getProviderModels, { providerId });
+            models = result.handled ? result.data.models : (provider.definition.availableModels ?? []);
+            providerModelCache.set(providerId, models);
+          }
+          return {
+            ...provider,
+            definition: {
+              ...provider.definition,
+              availableModels: cloneProviderModels(models),
+            },
+          };
+        } catch (error) {
+          if (isRegistryProviderMiss(error)) {
+            // Adapter-contributed providers may intentionally live outside the
+            // framework registry. Keep their declared models so activation does
+            // not depend on registry authorship.
+            return {
+              ...provider,
+              definition: {
+                ...provider.definition,
+                availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
+              },
+            };
+          }
+          throw new Error(
+            `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}"`,
+            { cause: error },
+          );
+        }
+      }),
+    );
+
+    return {
+      name: adapterName,
+      displayName: def.displayName ?? manifest.displayName,
+      description: def.description,
+      packageName,
+      factory: def.createAdapter as LoadedAdapter['factory'],
+      options: {
+        adapterId: buildDeterministicAdapterId(this.machineId, adapterName),
+      },
+      adapterConfigSchema: def.adapterConfigSchema as LoadedAdapter['adapterConfigSchema'],
+      providers: providers as LoadedAdapter['providers'],
+      helpLinks: def.helpLinks as LoadedAdapter['helpLinks'],
+      instructions: def.instructions,
+      defaultPresetId: def.defaultPresetId,
+      clients: cloneAdapterClientRefs(manifest.clients),
+      protocol: def.protocol,
+    };
+  }
+
+  /**
+   * Ensure a file-backed adapter config exists for one loaded adapter.
+   *
+   * When no config file exists yet, creates one with `enabled: false` so that
+   * newly discovered adapters are not silently activated on first boot.
+   * @param adapter - Loaded adapter definition to register or update.
+   */
+  public async ensureAdapterConfig(adapter: LoadedAdapter): Promise<void> {
+    const existing = this.configStore.getAdapterConfig(adapter.name);
+    if (existing) return;
+
+    await this.configStore.setAdapterConfig(adapter.name, {
+      displayName: adapter.displayName,
+      description: adapter.description,
+      helpLinks: adapter.helpLinks?.map((link) => ({ ...link })),
+      instructions: adapter.instructions,
+      clientId: resolveDefaultClientId(adapter.options, adapter.clients),
+      protocol: adapter.protocol,
+      providerDefinitionIds: adapter.providers.map((provider) => provider.definition.id),
+      enabled: false,
+    });
+  }
+
+  /**
+   * Shut down all adapters contributed by a package that has stopped.
+   *
+   * Delegates to {@link AdapterRuntimeRegistry.deregisterPackage}.
+   * Best-effort: errors are logged but never thrown — shutdown must not be
+   * blocked.
+   * @param packageName - Name of the package that transitioned to `stopped`.
+   */
+  public async onPackageStopped(packageName: string): Promise<void> {
+    await this.registry.deregisterPackage(packageName);
+  }
+
+  /**
+   * Publish an `adapterSubsystem.adapter.registered` event through the
+   * serialized publication chain to prevent concurrent dynamic-load races.
+   * @param adapter - Loaded adapter to announce.
+   * @returns Promise that resolves after the event has been emitted.
+   */
+  private publishAdapterRegistered(adapter: LoadedAdapter): Promise<void> {
+    const enabled = this.configStore.isAdapterEnabled(adapter.name);
+    const adapterId = adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapter.name);
+    const providerDefinitionIds = adapter.providers.map((p) => p.definition.id);
+
+    return this.registry.publishAdapterRegistered({
+      adapterName: adapter.name,
+      displayName: adapter.displayName,
+      packageName: adapter.packageName,
+      enabled,
+      adapterId,
+      providerDefinitionIds,
+    });
+  }
+
+  /**
+   * Publish registration events for adapters that have fully activated.
+   *
+   * Registration events are observational and have no replay guarantee. Handler
+   * failures are logged instead of rolling back already-live adapters, keeping
+   * event failures from creating false live-registration notifications.
+   * @param adapters - Activated adapters to announce.
+   */
+  private async publishActivatedAdapters(adapters: readonly LoadedAdapter[]): Promise<void> {
+    for (const adapter of adapters) {
+      try {
+        await this.publishAdapterRegistered(adapter);
+      } catch (err) {
+        console.error(`[AdapterContributionProcessor] Failed to publish adapter "${adapter.name}" registration:`, err);
+      }
+    }
+  }
+}

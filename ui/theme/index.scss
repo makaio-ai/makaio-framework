@@ -1,0 +1,17 @@
+/**
+ * Makaio Web Theme
+ *
+ * Design tokens and mixins for Makaio web applications.
+ * Import this file to access tokens and mixins without injecting global CSS.
+ * App roots should import concrete theme files from `themes/`.
+ *
+ * @example
+ *   @use '@makaio/ui-theme';
+ *   @use '@makaio/ui-theme/themes/aura';
+ */
+
+// Forward all design tokens
+@forward './tokens';
+
+// Forward all mixins
+@forward './mixins';

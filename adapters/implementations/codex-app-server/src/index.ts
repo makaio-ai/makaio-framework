@@ -1,0 +1,371 @@
+/**
+ * Codex App-Server Adapter
+ *
+ * Package: \@makaio/ai-adapters-codex-app-server
+ *
+ * Provides standardized interface for Codex app-server protocol interactions
+ * via stdio subprocess using JSON-RPC 2.0 over JSONL in the Makaio AI framework.
+ * @remarks
+ * This adapter communicates directly with the codex app-server subprocess,
+ * not via HTTP/WebSocket. It uses stdin/stdout for bidirectional JSON-RPC
+ * communication following the Thread/Turn/Item protocol hierarchy.
+ */
+
+// Export adapter class and factory
+export { createCodexAppServerAdapter, CodexAppServerAdapter, CodexAppServerAdapterName } from './adapter.js';
+
+// Export agent class
+export { CodexAppServerAgent } from './agent.js';
+
+// Export connector class
+export { CodexAppServerConnector } from './connector.js';
+
+// Export thread and turn classes
+export { CodexAppServerThread } from './thread.js';
+export { CodexAppServerTurn } from './turn.js';
+
+// Export namespace and subjects
+export { CodexAppServerNamespace, CodexAppServerSubjects } from './namespaces/index.js';
+import type { CodexAppServerBus } from './namespaces/index.js';
+import type { CodexAppServerAgent } from './agent.js';
+import { CodexAppServerConnector } from './connector.js';
+
+// Re-export all namespace types
+export {
+  AgentMessageDeltaSchema,
+  AgentMessageSchema,
+  CodexAppServerTurnStateSchema,
+  DynamicToolCallApprovalRequestSchema,
+  DynamicToolCallBeginSchema,
+  DynamicToolCallEndSchema,
+  ExecApprovalRequestSchema,
+  ExecCommandBeginSchema,
+  ExecCommandEndSchema,
+  ExecCommandOutputDeltaSchema,
+  FileChangeApprovalRequestSchema,
+  FileChangeOutputDeltaSchema,
+  ItemCompletedSchema,
+  ItemStartedSchema,
+  ReasoningDeltaSchema,
+  ReasoningSchema,
+  ThreadCompletedSchema,
+  ThreadStartedSchema,
+  TokenUsageSchema,
+  TurnCompletedSchema,
+  TurnStartedSchema,
+  TurnStateChangedSchema,
+  TurnStepFinishedSchema,
+  TurnStepStartedSchema,
+} from './namespaces/index.js';
+export type {
+  AgentMessage,
+  AgentMessageDelta,
+  CodexAppServerBus,
+  CodexAppServerTurnState,
+  DynamicToolCallApprovalRequest,
+  DynamicToolCallApprovalResponse,
+  DynamicToolCallBegin,
+  DynamicToolCallEnd,
+  ExecApprovalRequest,
+  ExecApprovalResponse,
+  ExecCommandBegin,
+  ExecCommandEnd,
+  ExecCommandOutputDelta,
+  FileChangeApprovalRequest,
+  FileChangeApprovalResponse,
+  FileChangeOutputDelta,
+  ItemCompleted,
+  ItemStarted,
+  Reasoning,
+  ReasoningDelta,
+  ThreadCompleted,
+  ThreadStarted,
+  TokenUsageEvent,
+  TurnCompleted,
+  TurnStarted,
+  TurnStateChanged,
+  TurnStepFinished,
+  TurnStepStarted,
+} from './namespaces/index.js';
+
+// Tool handling utilities
+export {
+  toGlobalToolApproval,
+  toGlobalFileApproval,
+  fromGlobalToolApproval,
+  registerToolApprovalHandler,
+  type ToolApprovalContext,
+  type CodexToolApprovalDecision,
+  type CodexToolApprovalResponse,
+} from './tool-handling.js';
+
+// Export event normalizers
+export { normalizeAppServerEvent } from './event-normalizers.js';
+export type { NormalizationContext } from './event-normalizers.js';
+
+// Export utilities (stdio transport, JSON-RPC client)
+export { createJsonRpcClient, createStdioTransport, formatMessageHistory } from './utils/index.js';
+export type { JsonRpcClient, StdioMessage, StdioTransport } from './utils/index.js';
+
+// Export generated protocol types (Thread/Turn/Item hierarchy)
+export { v2 } from './protocol/generated/index.js';
+export type {
+  AbsolutePathBuf,
+  AddConversationListenerParams,
+  AddConversationSubscriptionResponse,
+  AgentMessageContent,
+  AgentMessageContentDeltaEvent,
+  AgentMessageDeltaEvent,
+  AgentMessageEvent,
+  AgentMessageItem,
+  AgentReasoningDeltaEvent,
+  AgentReasoningEvent,
+  AgentReasoningRawContentDeltaEvent,
+  AgentReasoningRawContentEvent,
+  AgentReasoningSectionBreakEvent,
+  Annotations,
+  ApplyPatchApprovalParams,
+  ApplyPatchApprovalRequestEvent,
+  ApplyPatchApprovalResponse,
+  ArchiveConversationParams,
+  ArchiveConversationResponse,
+  AskForApproval,
+  AudioContent,
+  AuthMode,
+  AuthStatusChangeNotification,
+  BackgroundEventEvent,
+  BlobResourceContents,
+  CallToolResult,
+  CancelLoginChatGptParams,
+  CancelLoginChatGptResponse,
+  ClientInfo,
+  ClientNotification,
+  ClientRequest,
+  CodexErrorInfo,
+  ContentBlock,
+  ContentItem,
+  ContextCompactedEvent,
+  ConversationGitInfo,
+  ConversationSummary,
+  CreditsSnapshot,
+  CustomPrompt,
+  DeprecationNoticeEvent,
+  ElicitationRequestEvent,
+  EmbeddedResource,
+  EmbeddedResourceResource,
+  ErrorEvent,
+  EventMsg,
+  ExecApprovalRequestEvent,
+  ExecCommandApprovalParams,
+  ExecCommandApprovalResponse,
+  ExecCommandBeginEvent,
+  ExecCommandEndEvent,
+  ExecCommandOutputDeltaEvent,
+  ExecCommandSource,
+  ExecOneOffCommandParams,
+  ExecOneOffCommandResponse,
+  ExecOutputStream,
+  ExecPolicyAmendment,
+  ExitedReviewModeEvent,
+  FileChange,
+  ForcedLoginMethod,
+  ForkConversationParams,
+  ForkConversationResponse,
+  FunctionCallOutputContentItem,
+  FunctionCallOutputPayload,
+  FuzzyFileSearchParams,
+  FuzzyFileSearchResponse,
+  FuzzyFileSearchResult,
+  GetAuthStatusParams,
+  GetAuthStatusResponse,
+  GetConversationSummaryParams,
+  GetConversationSummaryResponse,
+  GetHistoryEntryResponseEvent,
+  GetUserAgentResponse,
+  GetUserSavedConfigResponse,
+  GhostCommit,
+  GitDiffToRemoteParams,
+  GitDiffToRemoteResponse,
+  GitSha,
+  HistoryEntry,
+  ImageContent,
+  InitializeParams,
+  InitializeResponse,
+  InputItem,
+  InterruptConversationParams,
+  InterruptConversationResponse,
+  ItemCompletedEvent,
+  ItemStartedEvent,
+  ListConversationsParams,
+  ListConversationsResponse,
+  ListCustomPromptsResponseEvent,
+  ListSkillsResponseEvent,
+  LocalShellAction,
+  LocalShellExecAction,
+  LocalShellStatus,
+  LoginApiKeyParams,
+  LoginApiKeyResponse,
+  LoginChatGptCompleteNotification,
+  LoginChatGptResponse,
+  LogoutChatGptResponse,
+  McpAuthStatus,
+  McpInvocation,
+  McpListToolsResponseEvent,
+  McpStartupCompleteEvent,
+  McpStartupFailure,
+  McpStartupStatus,
+  McpStartupUpdateEvent,
+  McpToolCallBeginEvent,
+  McpToolCallEndEvent,
+  NetworkAccess,
+  NewConversationParams,
+  NewConversationResponse,
+  ParsedCommand,
+  PatchApplyBeginEvent,
+  PatchApplyEndEvent,
+  PlanItemArg,
+  PlanType,
+  Profile,
+  RateLimitSnapshot,
+  RateLimitWindow,
+  RawResponseItemEvent,
+  ReasoningContentDeltaEvent,
+  ReasoningEffort,
+  ReasoningItem,
+  ReasoningItemContent,
+  ReasoningItemReasoningSummary,
+  ReasoningRawContentDeltaEvent,
+  ReasoningSummary,
+  RemoveConversationListenerParams,
+  RemoveConversationSubscriptionResponse,
+  RequestId,
+  Resource,
+  ResourceLink,
+  ResourceTemplate,
+  ResponseItem,
+  ResumeConversationParams,
+  ResumeConversationResponse,
+  ReviewCodeLocation,
+  ReviewDecision,
+  ReviewFinding,
+  ReviewLineRange,
+  ReviewOutputEvent,
+  ReviewRequest,
+  ReviewTarget,
+  Role,
+  SandboxMode,
+  SandboxPolicy,
+  SandboxSettings,
+  SendUserMessageParams,
+  SendUserMessageResponse,
+  SendUserTurnParams,
+  SendUserTurnResponse,
+  ServerNotification,
+  ServerRequest,
+  SessionConfiguredEvent,
+  SessionConfiguredNotification,
+  SessionSource,
+  SetDefaultModelParams,
+  SetDefaultModelResponse,
+  SkillErrorInfo,
+  SkillMetadata,
+  SkillScope,
+  SkillsListEntry,
+  StepStatus,
+  StreamErrorEvent,
+  SubAgentSource,
+  TaskCompleteEvent,
+  TaskStartedEvent,
+  TerminalInteractionEvent,
+  TextContent,
+  TextResourceContents,
+  ThreadId,
+  ThreadRolledBackEvent,
+  TokenCountEvent,
+  TokenUsage,
+  TokenUsageInfo,
+  Tool,
+  ToolAnnotations,
+  ToolInputSchema,
+  ToolOutputSchema,
+  Tools,
+  TurnAbortedEvent,
+  TurnAbortReason,
+  TurnDiffEvent,
+  TurnItem,
+  UndoCompletedEvent,
+  UndoStartedEvent,
+  UpdatePlanArgs,
+  UserInfoResponse,
+  UserInput,
+  UserMessageEvent,
+  UserMessageItem,
+  UserSavedConfig,
+  Verbosity,
+  ViewImageToolCallEvent,
+  WarningEvent,
+  WebSearchAction,
+  WebSearchBeginEvent,
+  WebSearchEndEvent,
+  WebSearchItem,
+} from './protocol/generated/index.js';
+
+// Export schemas
+export { CodexAppServerProviderConfigSchema, type CodexAppServerProviderConfig } from './schemas.js';
+
+// Export config factory
+export { CodexAppServerConfig } from './config.js';
+
+import { resolveTestConfig, createTestProviderContext } from '@makaio/ai-adapters-core';
+import type { ConformanceTestConfig } from '@makaio/ai-adapters-core';
+
+// Export test config for conformance tests
+import { CodexAppServerNamespace } from './namespaces/index.js';
+import { createCodexAppServerAdapter, CodexAppServerAdapterName } from './adapter.js';
+import { registerToolApprovalHandler } from './tool-handling.js';
+import { CodexAppServerConfig } from './config.js';
+// Test-only import — not part of the distributable adapter
+import { providerDefinition as testProviderDef } from '@makaio/provider-openai-codex';
+export const createTestConfig = async (): Promise<
+  ConformanceTestConfig<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent>
+> => {
+  const { scopedBus } = CodexAppServerNamespace;
+  const bus = await scopedBus();
+
+  if (!testProviderDef.defaultModel) {
+    throw new Error(
+      `[codex-app-server] Invalid test provider definition '${testProviderDef.id}': missing defaultModel`,
+    );
+  }
+  const primaryModelName = testProviderDef.fastModel ?? testProviderDef.defaultModel;
+
+  return {
+    createConnector: async (options) =>
+      new CodexAppServerConnector(
+        await CodexAppServerConfig.getConfig(resolveTestConfig(options, bus, testProviderDef)),
+      ),
+    bus,
+    registerToolApprovalHandler,
+    capabilities: {
+      supportsReplace: true,
+      supportsInterrupt: true,
+      supportsUsageMetrics: true,
+    },
+    options: {
+      defaultTimeout: 45_000,
+      primaryModel: {
+        definitionId: testProviderDef.id,
+        modelName: primaryModelName,
+        reasoningEffort: 'low',
+      },
+      secondaryModel: {
+        definitionId: testProviderDef.id,
+        modelName: testProviderDef.defaultModel,
+        reasoningEffort: 'low',
+      },
+    },
+    createAdapter: async (options) => createCodexAppServerAdapter(options),
+    adapterName: CodexAppServerAdapterName,
+    testProviderContext: createTestProviderContext(testProviderDef),
+  };
+};

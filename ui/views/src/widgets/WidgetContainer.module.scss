@@ -1,0 +1,111 @@
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+
+// WidgetContainer styles
+
+.container {
+  display: flex;
+  flex-direction: column;
+  background: colors.$bg-secondary;
+  border: 1px solid colors.$border-default;
+  border-radius: spacing.$radius-md;
+  overflow: hidden;
+
+  &.small {
+    min-height: spacing.$spacing-widget-min-height-sm;
+  }
+
+  &.medium {
+    min-height: spacing.$spacing-widget-min-height-md;
+  }
+
+  &.large {
+    min-height: spacing.$spacing-widget-min-height-lg;
+  }
+
+  &.flexible {
+    min-height: spacing.$spacing-widget-min-height-sm;
+    height: 100%;
+  }
+
+  &.error {
+    border-color: colors.$danger;
+  }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: spacing.$spacing-3 spacing.$spacing-4;
+  background: colors.$bg-primary;
+  border-bottom: 1px solid colors.$border-subtle;
+}
+
+.title {
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-semibold;
+  color: colors.$text-primary;
+}
+
+.removeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-6;
+  height: spacing.$spacing-6;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: spacing.$radius-sm;
+  color: colors.$text-muted;
+  font-size: typography.$font-size-xl;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+
+  &:hover {
+    background: colors.$bg-tertiary;
+    color: colors.$text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid colors.$accent-primary;
+    outline-offset: 2px;
+  }
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: spacing.$spacing-4;
+}
+
+.errorMessage {
+  margin: 0 0 spacing.$spacing-4 0;
+  color: colors.$danger;
+  font-size: typography.$font-size-sm;
+}
+
+.retryButton {
+  padding: spacing.$spacing-2 spacing.$spacing-4;
+  background: colors.$accent-primary;
+  border: none;
+  border-radius: spacing.$radius-sm;
+  color: colors.$bg-primary;
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.9;
+  }
+
+  &:focus-visible {
+    outline: 2px solid colors.$accent-primary;
+    outline-offset: 2px;
+  }
+}

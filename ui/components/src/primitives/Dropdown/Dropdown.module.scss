@@ -1,0 +1,189 @@
+/**
+ * Dropdown component styles
+ *
+ * Glass panel styling matching Aura theme context menu design.
+ * Features backdrop blur, semi-transparent background, subtle border,
+ * and context menu shadow.
+ */
+
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+
+.dropdownContainer {
+  position: relative;
+  display: inline-block;
+}
+
+.triggerWrapper {
+  display: inline-block;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+    border-radius: spacing.$radius-sm;
+  }
+}
+
+/**
+ * Floating menu panel
+ * Glass panel with context menu shadow
+ */
+.dropdownMenu {
+  position: absolute;
+  top: calc(100% + #{spacing.$spacing-2});
+  z-index: shadows.$z-dropdown;
+  min-width: spacing.$spacing-context-menu-min-width;
+  max-width: spacing.$spacing-context-menu-max-width;
+
+  // Glass panel styling
+  background: color-mix(in srgb, var(--color-bg-secondary) 95%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+
+  // Border and radius
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  border-radius: spacing.$radius-lg;
+
+  // Context menu shadow
+  box-shadow: 0 10px 40px -5px color-mix(in srgb, var(--color-bg-primary) 60%, transparent);
+
+  // Animation
+  animation: dropdownFadeIn 0.15s ease-out;
+
+  // Overflow handling
+  overflow: hidden;
+
+  // Prevent text selection
+  user-select: none;
+
+  // Alignment variants
+  &.start {
+    left: 0;
+  }
+
+  &.end {
+    right: 0;
+  }
+}
+
+/**
+ * Menu item styling
+ */
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-3;
+  width: 100%;
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+
+  // Reset button defaults
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+
+  // Typography
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-normal;
+  color: var(--color-text-secondary);
+
+  // Transition
+  transition:
+    background-color 0.1s ease-out,
+    color 0.1s ease-out;
+
+  // Hover state
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  // Selected state (keyboard navigation)
+  &.selected:not(:disabled) {
+    background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  // Focus state
+  &:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  // Disabled state
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+
+    &:hover {
+      background: transparent;
+      color: var(--color-text-secondary);
+    }
+  }
+
+  // Icon styling
+  .itemIcon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: spacing.$spacing-4;
+    height: spacing.$spacing-4;
+    opacity: 0.7;
+    transition: opacity 0.1s ease-out;
+  }
+
+  &:hover:not(:disabled) .itemIcon,
+  &.selected:not(:disabled) .itemIcon {
+    opacity: 1;
+  }
+
+  // Label styling
+  .itemLabel {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  // Shortcut styling
+  .itemShortcut {
+    font-family: var(--font-mono);
+    font-size: typography.$font-size-xs;
+    color: var(--color-text-muted);
+    margin-left: auto;
+    opacity: 0.8;
+  }
+
+  &:hover:not(:disabled) .itemShortcut,
+  &.selected:not(:disabled) .itemShortcut {
+    opacity: 1;
+  }
+}
+
+/**
+ * Divider styling
+ */
+.divider {
+  height: spacing.$spacing-px;
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  margin: spacing.$spacing-1 0;
+}
+
+/**
+ * Animation
+ */
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

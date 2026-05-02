@@ -1,0 +1,33 @@
+{
+  "name": "@makaio/bus-core",
+  "description": "Type-safe, distributed event bus for the Makaio framework.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
+  },
+  "dependencies": {
+    "@makaio/core": "workspace:*",
+    "nanoid": "3.3.6",
+    "p-timeout": "6.1.2",
+    "type-fest": "^5.2.0",
+    "zod": "^4.1.13"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+dist/
+node_modules/
+.astro/
+.api-symbol-manifest.json
+src/content/docs/packages/
+src/content/docs/reference/api/
+src/content/docs/reference/subjects/
+.tsconfigs/
+.typedoc-entrypoints/

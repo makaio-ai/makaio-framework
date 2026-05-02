@@ -1,0 +1,128 @@
+/**
+ * ContextMenu component styles
+ *
+ * Glass morphism context menu with backdrop blur, semi-transparent background,
+ * subtle border, and context menu shadow. Generic styling shared by all
+ * context menu instances (commit, file, branch, etc.).
+ */
+
+@use '@makaio/ui-theme/mixins/glass';
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/shadows';
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+
+.contextMenu {
+  // Fixed positioning for context menu
+  position: fixed;
+  z-index: shadows.$z-popover;
+  min-width: spacing.$spacing-context-menu-min-width;
+  max-width: spacing.$spacing-context-menu-max-width;
+
+  // Glass panel effect
+  @include glass.glass-card;
+  border-radius: spacing.$radius-lg;
+
+  // Hide overflow for rounded corners
+  overflow: hidden;
+
+  // Font
+  font-family: typography.$font-ui;
+}
+
+.header {
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+  background-color: rgba(colors.$bg-secondary, opacity.$opacity-70);
+  border-bottom: 1px solid colors.$border-subtle;
+}
+
+.emptyState {
+  padding: spacing.$spacing-4;
+  text-align: center;
+  color: colors.$text-muted;
+  font-size: typography.$font-size-sm;
+}
+
+.actionGroups {
+  padding: spacing.$spacing-1 0;
+}
+
+.group {
+  &:not(:last-child) {
+    border-bottom: 1px solid colors.$border-subtle;
+  }
+}
+
+.groupLabel {
+  padding: spacing.$spacing-1_5 spacing.$spacing-3;
+  font-size: typography.$font-size-xs;
+  font-weight: typography.$font-weight-semibold;
+  color: colors.$text-muted;
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-wider;
+}
+
+.actionItem {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+  width: 100%;
+  padding: spacing.$spacing-2 spacing.$spacing-3;
+  background: none;
+  border: none;
+  color: colors.$text-secondary;
+  font-size: typography.$font-size-sm;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease;
+  border-radius: spacing.$radius-sm;
+  margin: 0 spacing.$spacing-1;
+
+  &:hover {
+    background-color: colors.$white-10;
+    color: colors.$text-primary;
+
+    .shortcut {
+      color: colors.$text-primary;
+    }
+  }
+
+  &:focus-visible {
+    outline: none;
+    background-color: colors.$white-10;
+    color: colors.$text-primary;
+
+    .shortcut {
+      color: colors.$text-primary;
+    }
+  }
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-4;
+  font-size: typography.$font-size-sm;
+  color: colors.$text-muted;
+  flex-shrink: 0;
+
+  .actionItem:hover &,
+  .actionItem:focus-visible & {
+    color: inherit;
+  }
+}
+
+.label {
+  flex: 1;
+}
+
+.shortcut {
+  font-size: typography.$font-size-xs;
+  color: colors.$text-muted;
+  font-family: typography.$font-mono;
+  margin-left: auto;
+}

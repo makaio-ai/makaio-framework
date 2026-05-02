@@ -1,0 +1,33 @@
+/**
+ * GlassPanel component styles
+ *
+ * Glass morphism effect with backdrop blur, semi-transparent background,
+ * subtle border, and organic shadow.
+ */
+
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/mixins/glass';
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.glassPanel {
+  @include glass.glass-panel;
+
+  // Border radius (1rem)
+  border-radius: spacing.$radius-xl;
+}
+
+/**
+ * Hoverable variant
+ * On hover: background brightens to bg-tertiary/80,
+ * border becomes more visible (white/10%)
+ */
+.hoverable {
+  @include transitions.transition-all;
+
+  &:hover {
+    background: rgba(colors.$bg-tertiary, opacity.$glass-panel);
+    border: 1px solid rgba(colors.$text-primary, opacity.$tint);
+  }
+}

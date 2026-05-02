@@ -1,0 +1,136 @@
+/**
+ * AppShell Layout Component Styles
+ *
+ * CSS Grid-based layout matching design-concept/prototype.html structure.
+ * Uses Aura theme CSS custom properties injected by ThemeProvider.
+ */
+
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+
+.appShell {
+  // Full viewport height, no overflow on shell
+  min-height: 100vh;
+  width: 100%;
+  overflow: hidden;
+
+  // Theme colors from prototype
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+
+  // CSS Grid layout: sidebar | main content wrapper
+  // Sidebar width is auto to allow content (IconSidebar=64px, NavSidebar=200px) to define
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 1fr;
+  grid-template-areas: 'sidebar main';
+
+  font-family: var(--font-ui);
+
+  // Collapsed state (for responsive behavior)
+  &.sidebarCollapsed {
+    grid-template-columns: 0 1fr;
+
+    .sidebar {
+      display: none;
+    }
+  }
+}
+
+// Left sidebar slot - width determined by content (IconSidebar=64px, NavSidebar=200px)
+.sidebar {
+  grid-area: sidebar;
+  height: 100vh;
+
+  // From prototype aside styles
+  background: var(--color-bg-primary);
+  border-right: 1px solid var(--color-border-subtle);
+
+  // Subtle shadow from prototype
+  box-shadow: spacing.$spacing-1 0 spacing.$spacing-6 rgba(colors.$bg-primary, opacity.$glass-subtle);
+
+  // Ensure proper stacking context
+  z-index: shadows.$z-sticky;
+
+  // Prevent overflow
+  overflow: hidden;
+}
+
+// Main wrapper contains topbar, main content, and optional footer
+.mainWrapper {
+  grid-area: main;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+
+  // Subtle gradient from prototype
+  background: radial-gradient(
+    circle at top right,
+    var(--color-bg-tertiary),
+    var(--color-bg-primary) 50%,
+    var(--color-bg-primary)
+  );
+}
+
+// Top navigation bar
+.topbar {
+  flex-shrink: 0;
+  height: spacing.$spacing-14; // 3.5rem / 56px from prototype (h-14)
+
+  // From prototype header styles
+  background: rgba(colors.$bg-primary, opacity.$opacity-30); // bg-bg-primary/30
+  backdrop-filter: blur(spacing.$spacing-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+
+  display: flex;
+  align-items: center;
+  padding: 0 spacing.$spacing-6;
+
+  // Ensure proper stacking
+  z-index: shadows.$z-sticky;
+}
+
+// Main content area - flexible, scrollable
+// Uses flex column so children can use flex: 1 to fill available space
+.main {
+  flex: 1;
+  min-height: 0; // Required for flex children to properly calculate height
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+
+  // Custom scrollbar from prototype
+  &::-webkit-scrollbar {
+    width: spacing.$spacing-1_5;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--color-border-default);
+    border-radius: spacing.$spacing-0_75;
+
+    &:hover {
+      background: rgba(colors.$text-primary, opacity.$opacity-20);
+    }
+  }
+}
+
+// Bottom panel slot
+.bottomPanel {
+  flex-shrink: 0;
+  z-index: shadows.$z-sticky; // Ensure it stacks correctly
+}
+
+// Optional footer slot
+.footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  padding: spacing.$spacing-4 spacing.$spacing-6;
+}

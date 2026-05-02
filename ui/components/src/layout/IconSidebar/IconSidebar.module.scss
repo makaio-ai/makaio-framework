@@ -1,0 +1,108 @@
+/**
+ * IconSidebar Component Styles
+ *
+ * Based on design-concept/prototype.html lines 122-195
+ * Width: 64px (w-16 in Tailwind)
+ */
+
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.sidebar {
+  width: spacing.$spacing-16;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: spacing.$spacing-6 0;
+  border-right: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-primary);
+  box-shadow: spacing.$spacing-1 0 spacing.$spacing-6 rgba(colors.$bg-primary, opacity.$glass-subtle);
+  z-index: shadows.$z-sticky;
+}
+
+.navSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-4;
+  width: 100%;
+  align-items: center;
+}
+
+.bottomSection {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-4;
+  align-items: center;
+}
+
+/**
+ * Nav Item
+ *
+ * 40x40px rounded square with icon centered
+ * Hover: white/5% background
+ * Active: amber color with left border indicator
+ */
+.navItem {
+  position: relative;
+  width: spacing.$spacing-10;
+  height: spacing.$spacing-10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: spacing.$radius-lg;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  @include transitions.transition(background-color, color);
+
+  &:hover {
+    background: rgba(colors.$text-primary, opacity.$surface);
+    color: var(--color-text-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+}
+
+/**
+ * Active State
+ *
+ * - Text color: accent-amber
+ * - Background: accent tint
+ * - Left border: 4px wide, 16px tall, rounded-r-full
+ */
+.navItem.active {
+  color: var(--color-accent-primary);
+  background: rgba(colors.$accent-primary, opacity.$tint);
+
+  .activeIndicator {
+    position: absolute;
+    left: 0;
+    width: spacing.$spacing-1;
+    height: spacing.$spacing-4;
+    background: var(--color-accent-primary);
+    border-radius: 0 spacing.$radius-xs spacing.$radius-xs 0;
+    box-shadow: shadows.$shadow-glow;
+  }
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-5;
+  height: spacing.$spacing-5;
+
+  svg {
+    width: 100%;
+    height: 100%;
+  }
+}

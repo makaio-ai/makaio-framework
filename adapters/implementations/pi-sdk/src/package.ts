@@ -1,0 +1,38 @@
+/**
+ * MakaioExtension descriptor for the Pi SDK adapter.
+ *
+ * Wraps the existing {@link adapterDefinition} in the standard
+ * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * register this adapter through the unified adapter contribution surface.
+ */
+import type { MakaioExtension } from '@makaio/contracts';
+import { adapterDefinition } from './definition.js';
+import { PiSdkAdapterName } from './constants.js';
+import { providerIds } from './provider.js';
+
+/**
+ * Package descriptor for the Pi SDK adapter.
+ *
+ * Communicates with multiple upstream AI providers (Anthropic, OpenAI, etc.)
+ * via the Pi coding agent SDK, which manages its own agentic loop internally.
+ * Declares both `anthropic` and `openai` wire protocols because Pi routes
+ * internally to either Anthropic Messages or OpenAI Completions endpoints.
+ */
+export const piSdkPackage: MakaioExtension = {
+  name: PiSdkAdapterName,
+  displayName: 'Pi SDK',
+  dependencies: providerIds.map((definitionId) => `provider-${definitionId}`),
+  adapters: [
+    {
+      manifest: {
+        name: PiSdkAdapterName,
+        displayName: 'Pi SDK',
+        description: 'Pi coding agent SDK wrapper',
+        protocols: ['anthropic', 'openai'],
+      },
+      definition: adapterDefinition,
+    },
+  ],
+};
+
+export default piSdkPackage;

@@ -1,0 +1,112 @@
+@use '@makaio/ui-theme/tokens/colors' as colors;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/tokens/opacity' as opacity;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+@use '@makaio/ui-theme/mixins/scrollbar' as scrollbar;
+
+.container {
+  display: flex;
+  height: 100%;
+  position: relative;
+
+  &.vertical {
+    flex-direction: column;
+    width: 100%;
+  }
+}
+
+.handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: spacing.$spacing-1;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: shadows.$z-tooltip;
+
+  @include transitions.transition(background-color, 150ms);
+
+  &:hover,
+  &.dragging {
+    background: colors.$accent-primary;
+  }
+
+  .vertical & {
+    left: 0;
+    right: 0;
+    top: 0;
+    width: auto;
+    height: spacing.$spacing-1;
+    cursor: ns-resize;
+  }
+}
+
+.content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: colors.$bg-secondary;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: spacing.$spacing-3 spacing.$spacing-4;
+  border-bottom: 1px solid colors.$border-subtle;
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: colors.$text-secondary;
+  font-family: typography.$font-ui;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-1;
+}
+
+.iconButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: spacing.$spacing-7;
+  height: spacing.$spacing-7;
+  border: none;
+  border-radius: spacing.$radius-sm;
+  background: transparent;
+  color: colors.$text-muted;
+  cursor: pointer;
+
+  @include transitions.transition-color(150ms);
+
+  &:hover {
+    background: colors.$bg-tertiary;
+    color: colors.$text-secondary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid colors.$accent-primary;
+    outline-offset: 2px;
+  }
+
+  &.active {
+    color: colors.$accent-primary;
+  }
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: spacing.$spacing-3;
+
+  @include scrollbar.custom-scrollbar(spacing.$spacing-1_5, rgba(colors.$text-primary, opacity.$tint));
+}

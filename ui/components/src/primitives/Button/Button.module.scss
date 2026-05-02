@@ -1,0 +1,231 @@
+/**
+ * Button - Aura Theme Styles
+ *
+ * Design tokens from: /design-concept/prototype.html
+ * Primary accent: theme accent color
+ */
+
+@use '@makaio/ui-theme/mixins/animations';
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: spacing.$spacing-2;
+  border: none;
+  border-radius: spacing.$radius-md;
+  font-family: typography.$font-ui;
+  font-weight: typography.$font-weight-medium;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s ease,
+    opacity 0.2s ease,
+    transform 0.1s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+
+  // Focus visible state for accessibility
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  // Disabled state
+  &:disabled {
+    opacity: opacity.$disabled;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  // Active state - subtle press animation
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+// ============================================================================
+// Sizes (sm: 28px, md: 36px, lg: 44px)
+// ============================================================================
+
+.sm {
+  height: spacing.$spacing-7;
+  padding: 0 spacing.$spacing-3;
+  font-size: typography.$font-size-xs;
+
+  &.iconOnly {
+    width: spacing.$spacing-7;
+    padding: 0;
+  }
+
+  .spinner {
+    width: spacing.$spacing-3;
+    height: spacing.$spacing-3;
+  }
+}
+
+.md {
+  height: spacing.$spacing-9;
+  padding: 0 spacing.$spacing-4;
+  font-size: typography.$font-size-sm;
+
+  &.iconOnly {
+    width: spacing.$spacing-9;
+    padding: 0;
+  }
+
+  .spinner {
+    width: spacing.$spacing-4;
+    height: spacing.$spacing-4;
+  }
+}
+
+.lg {
+  height: spacing.$spacing-11;
+  padding: 0 spacing.$spacing-6;
+  font-size: typography.$font-size-base;
+
+  &.iconOnly {
+    width: spacing.$spacing-11;
+    padding: 0;
+  }
+
+  .spinner {
+    width: spacing.$spacing-4 + spacing.$spacing-0_5;
+    height: spacing.$spacing-4 + spacing.$spacing-0_5;
+  }
+}
+
+// ============================================================================
+// Variants
+// ============================================================================
+
+/**
+ * Primary variant - accent color
+ * Main call-to-action button with glow effect
+ */
+.primary {
+  background: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+  box-shadow: 0 0 15px rgba(colors.$accent-primary, opacity.$glow);
+
+  &:hover:not(:disabled) {
+    background: var(--color-accent-primary-hover);
+    box-shadow: 0 0 20px rgba(colors.$accent-primary, opacity.$opacity-25);
+  }
+}
+
+/**
+ * Secondary variant - Subtle background with border
+ * Secondary actions, form controls
+ */
+.secondary {
+  background: rgba(colors.$text-primary, opacity.$surface);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-default);
+
+  &:hover:not(:disabled) {
+    background: rgba(colors.$text-primary, opacity.$tint);
+    border-color: var(--color-border-default);
+  }
+}
+
+/**
+ * Ghost variant - Transparent background
+ * Low-emphasis actions, icon buttons
+ */
+.ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+
+  &:hover:not(:disabled) {
+    background: rgba(colors.$text-primary, opacity.$surface);
+    color: var(--color-text-primary);
+  }
+}
+
+/**
+ * Danger variant - Red accent
+ * Destructive actions (delete, cancel, etc.)
+ */
+.danger {
+  background: var(--color-danger);
+  color: var(--color-text-white);
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-danger) 85%, var(--color-bg-primary));
+  }
+}
+
+// ============================================================================
+// Modifiers
+// ============================================================================
+
+.fullWidth {
+  width: 100%;
+}
+
+.iconOnly {
+  // Width is set per size variant above
+}
+
+/**
+ * Loading state
+ * Shows spinner and hides content visually while preserving accessible name in
+ * the accessibility tree. opacity: 0 keeps the text/icon in layout and in the
+ * a11y tree, unlike visibility: hidden which removes it from the a11y tree.
+ */
+.loading {
+  .label,
+  .icon {
+    opacity: 0;
+  }
+}
+
+// ============================================================================
+// Internal Elements
+// ============================================================================
+
+/**
+ * Icon wrapper
+ * Ensures proper sizing and alignment for icons
+ */
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  svg {
+    width: 1em;
+    height: 1em;
+  }
+}
+
+/**
+ * Label wrapper
+ * Handles text content visibility during loading
+ */
+.label {
+  flex: 1;
+  text-align: center;
+}
+
+/**
+ * Loading spinner
+ * Rotating border animation
+ */
+.spinner {
+  position: absolute;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  @include animations.spin-animation(0.6s);
+}
+
+@include animations.spin-keyframes;

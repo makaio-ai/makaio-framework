@@ -1,0 +1,75 @@
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: spacing.$spacing-4;
+  height: spacing.$spacing-14;
+  padding: 0 spacing.$spacing-6;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-family: var(--font-nav);
+  z-index: 20;
+}
+
+// Breadcrumbs (left side)
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-3;
+  flex: 1;
+  min-width: 0;
+}
+
+.crumbWrapper {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-3;
+}
+
+.crumbLink {
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  @include transitions.transition(color);
+
+  &:hover {
+    color: var(--color-text-primary);
+  }
+}
+
+.crumb {
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: var(--color-text-primary);
+  cursor: default;
+
+  &:is(button) {
+    cursor: pointer;
+    @include transitions.transition(color);
+
+    &:hover {
+      color: var(--color-text-primary);
+    }
+  }
+}
+
+.separator {
+  font-size: typography.$font-size-sm;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+
+// Actions (right side)
+.actions {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+  flex-shrink: 0;
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@makaio/service-base",
+  "description": "Abstract base class for Makaio bus services.",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "src/index.ts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*"
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

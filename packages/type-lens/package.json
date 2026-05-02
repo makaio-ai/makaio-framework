@@ -1,0 +1,32 @@
+{
+  "name": "@makaio/type-lens",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas.ts",
+    "./index-engine": "./src/index-engine.ts",
+    "./index-query": "./src/index-query.ts",
+    "./index-types": "./src/index-types.ts",
+    "./index-utils": "./src/index-utils.ts",
+    "./member-extractor": "./src/member-extractor.ts",
+    "./source-filter": "./src/source-filter.ts",
+    "./symbol-extractor": "./src/symbol-extractor.ts",
+    "./type-analysis": "./src/type-analysis.ts",
+    "./tsci-analyzer": "./src/tsci-analyzer.ts",
+    "./storage/vector-math": "./src/storage/vector-math.ts"
+  },
+  "dependencies": {
+    "quick-lru": "^7.3.0",
+    "ts-morph": "^24.0.0",
+    "typescript": "^6.0.3",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "vitest": "^4.1.0"
+  }
+}

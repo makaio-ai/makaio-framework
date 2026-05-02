@@ -1,0 +1,43 @@
+/**
+ * Transition Mixins
+ *
+ * Common transition patterns for consistent motion design.
+ */
+
+// Standard transition for all properties
+@mixin transition-all($duration: 200ms) {
+  transition: all $duration ease-out;
+}
+
+// Transition specific properties
+@mixin transition($properties: all, $duration: 200ms, $easing: ease-out) {
+  transition: $properties $duration $easing;
+}
+
+// Transform transition (for scale, translate, rotate)
+@mixin transition-transform($duration: 200ms) {
+  transition: transform $duration ease-out;
+}
+
+// Opacity transition
+@mixin transition-opacity($duration: 200ms) {
+  transition: opacity $duration ease-out;
+}
+
+// Color transition (for background, color, border-color)
+@mixin transition-color($duration: 200ms) {
+  transition:
+    background-color $duration ease-out,
+    color $duration ease-out,
+    border-color $duration ease-out;
+}
+
+// Alias for transition-color (common naming convention)
+@mixin transition-colors($duration: 200ms) {
+  @include transition-color($duration);
+}
+
+// No transition (utility)
+@mixin no-transition {
+  transition: none !important;
+}

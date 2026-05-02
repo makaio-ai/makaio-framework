@@ -1,0 +1,20 @@
+{
+  "name": "@makaio/client-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./runtime": "./src/runtime/package.ts",
+    "./server": "./src/server.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "zod": "^4.1.13"
+  }
+}

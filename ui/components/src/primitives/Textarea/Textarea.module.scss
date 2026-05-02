@@ -1,0 +1,100 @@
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-1_5;
+}
+
+.label {
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-sm;
+  font-weight: 500;
+  color: var(--color-text-primary);
+  margin-bottom: spacing.$spacing-0_5;
+}
+
+.textarea {
+  width: 100%;
+  min-height: calc(var(--min-rows, 3) * 1.5rem + spacing.$spacing-4);
+  padding: spacing.$spacing-2_5 spacing.$spacing-3;
+  border: 1px solid var(--color-border-default);
+  border-radius: spacing.$radius-sm;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-sm;
+  line-height: 1.5;
+  resize: vertical;
+  @include transitions.transition(border-color box-shadow background-color);
+
+  &::placeholder {
+    color: var(--color-text-muted);
+  }
+
+  &:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-accent-primary);
+    box-shadow: shadows.$shadow-glow;
+    background: var(--color-bg-tertiary);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: var(--color-bg-primary);
+    resize: none;
+  }
+
+  // Styled scrollbar
+  &::-webkit-scrollbar {
+    width: spacing.$spacing-1_5;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+    border-radius: 9999px;
+
+    &:hover {
+      background-color: color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+    }
+  }
+}
+
+// States
+.error {
+  border-color: var(--color-danger);
+
+  &:focus {
+    border-color: var(--color-danger);
+    box-shadow: shadows.$shadow-ring-error;
+  }
+}
+
+.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+// Helper/Error text
+.helperText {
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-xs;
+  color: var(--color-text-secondary);
+  margin-top: spacing.$spacing-0_5;
+}
+
+.errorText {
+  color: var(--color-danger);
+}

@@ -1,0 +1,5 @@
+name: Moonshot AI
+models:
+  - name: kimi-k2.5
+    friendlyName: Kimi K2.5
+    contextWindowSize: 262144

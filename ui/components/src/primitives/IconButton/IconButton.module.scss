@@ -1,0 +1,129 @@
+/**
+ * IconButton Component Styles
+ *
+ * Based on prototype nav-item pattern:
+ * - Square button for icons
+ * - Hover: white/5% background
+ * - Active: amber background
+ * - Uses Aura theme CSS custom properties
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: spacing.$radius-md;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    transform 0.1s ease;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+}
+
+/**
+ * Size Variants
+ * - sm: 28px (small icons, tight spaces)
+ * - md: 36px (default, nav-item size)
+ * - lg: 44px (larger touch targets)
+ */
+.sm {
+  width: spacing.$spacing-7;
+  height: spacing.$spacing-7;
+}
+
+.md {
+  width: spacing.$spacing-9;
+  height: spacing.$spacing-9;
+}
+
+.lg {
+  width: spacing.$spacing-11;
+  height: spacing.$spacing-11;
+}
+
+/**
+ * Variant Styles
+ */
+
+/**
+ * Ghost variant (default)
+ * - Transparent background
+ * - Hover: white/5% background (from prototype)
+ * - Active: amber background (from prototype nav-item.active)
+ */
+.ghost {
+  background: transparent;
+  color: var(--color-text-secondary);
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    color: var(--color-text-primary);
+  }
+
+  &:active:not(:disabled) {
+    background: var(--color-accent-primary);
+    color: var(--color-bg-primary);
+  }
+}
+
+/**
+ * Filled variant
+ * - Solid accent background
+ * - For primary icon actions
+ */
+.filled {
+  background: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+
+  &:hover:not(:disabled) {
+    background: var(--color-accent-primary-hover);
+  }
+
+  &:active:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
+/**
+ * Icon Wrapper
+ * Ensures icons are centered and properly sized
+ */
+.iconWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  // Size icons appropriately for each button size
+  .sm & {
+    width: spacing.$spacing-4;
+    height: spacing.$spacing-4;
+  }
+
+  .md & {
+    width: spacing.$spacing-5;
+    height: spacing.$spacing-5;
+  }
+
+  .lg & {
+    width: spacing.$spacing-6;
+    height: spacing.$spacing-6;
+  }
+
+  // Ensure SVG icons scale correctly
+  svg {
+    width: 100%;
+    height: 100%;
+  }
+}

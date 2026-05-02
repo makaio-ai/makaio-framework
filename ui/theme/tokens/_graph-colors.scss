@@ -1,0 +1,41 @@
+/**
+ * Session Graph Branch Colors
+ *
+ * Custom colors for graph visualization, NOT semantic colors.
+ * These match the POC implementation exactly.
+ *
+ * NOTE: These values are also defined in
+ * web/components/src/sessions/SessionGraph/constants.ts for TypeScript consumers.
+ * Keep both files in sync when updating the color palette.
+ */
+
+$graph-branch-blue: #3b82f6;
+$graph-branch-purple: #8b5cf6;
+$graph-branch-amber: #f59e0b;
+$graph-branch-rose: #f43f5e;
+$graph-branch-emerald: #10b981;
+
+/**
+ * Branch Color Palette
+ *
+ * Used for cycling through tree branches in the session graph.
+ */
+$graph-branch-colors: (
+  $graph-branch-blue,
+  $graph-branch-purple,
+  $graph-branch-amber,
+  $graph-branch-rose,
+  $graph-branch-emerald
+);
+
+/**
+ * Get branch color by index (cycles through palette)
+ *
+ * @param {Number} $index - Branch index (0-based)
+ * @returns {Color} Branch color from the palette
+ */
+@function get-branch-color($index) {
+  $colors: $graph-branch-colors;
+  $len: length($colors);
+  @return nth($colors, ($index % $len) + 1);
+}

@@ -1,0 +1,18 @@
+{
+  "id": "prt_bbc796e5a002StepFinish",
+  "sessionID": "ses_43d462e9cffexz6719QK96K7Ei",
+  "messageID": "msg_bbc7965ee0013MiAht130lgpXk",
+  "type": "step-finish",
+  "metrics": {
+    "tokens": {
+      "input": 1500,
+      "output": 250,
+      "total": 1750
+    },
+    "cost": {
+      "input": 0.015,
+      "output": 0.0025,
+      "total": 0.0175
+    }
+  }
+}

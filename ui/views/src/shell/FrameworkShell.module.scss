@@ -1,0 +1,82 @@
+.shell {
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.header {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-default);
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+}
+
+.branding {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.brandName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+}
+
+.brandSubtitle {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.headerActions {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.editButton {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  gap: 0.35rem;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  padding: 0.35rem 0.65rem;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+
+  &:hover {
+    background: var(--color-border-subtle);
+    border-color: var(--color-border-hover);
+    color: var(--color-text-primary);
+  }
+}
+
+.editButtonActive {
+  background: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+
+  &:hover {
+    background: var(--color-accent-primary);
+    border-color: var(--color-accent-primary);
+    color: var(--color-bg-primary);
+    opacity: 0.9;
+  }
+}
+
+.main {
+  flex: 1;
+  min-height: 0;
+}

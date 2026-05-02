@@ -1,0 +1,50 @@
+{
+  "name": "@makaio/ai-adapters-stream-session",
+  "description": "Shared infrastructure for stream-based AI adapter implementations.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./testing": "./dist/testing/index.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "inlinedDependencies": {
+    "@jridgewell/sourcemap-codec": "1.5.5",
+    "@vitest/expect": "4.1.0",
+    "@vitest/pretty-format": "4.1.0",
+    "@vitest/runner": "4.1.0",
+    "@vitest/snapshot": "4.1.0",
+    "@vitest/spy": "4.1.0",
+    "@vitest/utils": "4.1.0",
+    "chai": "6.2.2",
+    "drizzle-orm": "0.44.7",
+    "emittery": "1.2.0",
+    "magic-string": "0.30.21",
+    "p-defer": "4.0.1",
+    "tinyrainbow": "3.0.3",
+    "type-fest": "5.3.1",
+    "vitest": "4.1.0"
+  }
+}

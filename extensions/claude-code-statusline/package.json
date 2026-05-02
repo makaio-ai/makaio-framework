@@ -1,0 +1,38 @@
+{
+  "name": "@makaio-community/claude-code-statusline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts",
+    "./server": "./src/server.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./cli": "./dist/cli.mjs",
+      "./server": "./dist/server.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

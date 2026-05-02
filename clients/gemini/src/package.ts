@@ -1,0 +1,22 @@
+/**
+ * MakaioExtension descriptor for the Gemini client.
+ *
+ * Wraps the existing {@link clientDefinition} in the standard
+ * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * register this client through the unified client contribution surface.
+ */
+import type { MakaioExtension } from '@makaio/contracts';
+import { clientDefinition } from './definition.js';
+
+/**
+ * Package descriptor for the Gemini client.
+ *
+ * Declares the Google Gemini CLI binary (`gemini`) as an AI assistant client
+ * with dynamically discovered native tools and an `always-ask` default
+ * approval policy.
+ */
+export const geminiPackage: MakaioExtension = {
+  name: 'gemini',
+  displayName: 'Gemini',
+  clients: [clientDefinition],
+};

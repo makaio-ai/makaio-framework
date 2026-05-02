@@ -1,0 +1,25 @@
+{
+  "name": "provider-opencode-go",
+  "displayName": "OpenCode Go",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "opencode-go",
+        "name": "OpenCode Go",
+        "description": "OpenCode Go gateway \u2014 OpenAI compatible API"
+      },
+      {
+        "id": "opencode-go-anthropic",
+        "name": "OpenCode Go (Anthropic)",
+        "description": "OpenCode Go gateway \u2014 Anthropic compatible API"
+      }
+    ]
+  }
+}

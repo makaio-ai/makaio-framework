@@ -1,0 +1,57 @@
+/**
+ * PageErrorBoundary styles
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+@use '@makaio/ui-theme/mixins/transitions';
+
+.errorContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: spacing.$spacing-2;
+  padding: spacing.$spacing-6;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: spacing.$radius-lg;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.title {
+  font-size: typography.$font-size-lg;
+  margin: 0;
+}
+
+.subtitle {
+  font-size: typography.$font-size-sm;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.errorMessage {
+  width: 100%;
+  padding: spacing.$spacing-3;
+  background: var(--color-bg-tertiary);
+  border-radius: spacing.$radius-md;
+  color: var(--color-danger);
+  font-size: typography.$font-size-xs;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.retryButton {
+  padding: spacing.$spacing-2 spacing.$spacing-4;
+  border-radius: spacing.$radius-md;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+
+  @include transitions.transition-color(150ms);
+
+  &:hover {
+    border-color: var(--color-accent-primary);
+    color: var(--color-accent-primary);
+  }
+}

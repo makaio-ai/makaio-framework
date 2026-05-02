@@ -1,0 +1,21 @@
+{
+  "name": "anthropic-sdk",
+  "displayName": "Anthropic SDK",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "anthropic-sdk",
+        "displayName": "Anthropic SDK",
+        "description": "Anthropic Messages API with streaming, tool calling, and extended thinking",
+        "protocols": ["anthropic"]
+      }
+    ]
+  }
+}

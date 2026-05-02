@@ -1,0 +1,16 @@
+name: Alibaba Model Studio
+models:
+  qwen3.5-plus:
+    contextWindowSize: 131072
+  kimi-k2.5:
+    contextWindowSize: 131072
+  glm-5: {}
+  minimax-m2.5: {}
+  qwen3-max-2026-01-23:
+    contextWindowSize: 131072
+  qwen3-coder-next:
+    contextWindowSize: 131072
+  qwen3-coder-plus:
+    contextWindowSize: 131072
+  glm-4.7:
+    contextWindowSize: 131072

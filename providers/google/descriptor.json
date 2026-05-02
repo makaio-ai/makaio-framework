@@ -1,0 +1,25 @@
+{
+  "name": "provider-google",
+  "displayName": "Google AI",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "google",
+        "name": "Google AI",
+        "description": "Official Google AI API"
+      },
+      {
+        "id": "google-oauth",
+        "name": "Google AI (Subscription)",
+        "description": "Google Gemini via OAuth subscription"
+      }
+    ]
+  }
+}

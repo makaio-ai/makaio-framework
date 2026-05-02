@@ -1,0 +1,131 @@
+/**
+ * Navigation Mixins
+ *
+ * Reusable navigation patterns for sidebars, rails, and tree views.
+ * Based on the Aura design system from design-concept/git.html.
+ */
+
+@use '../tokens/colors';
+@use '../tokens/opacity';
+@use '../tokens/spacing';
+@use '../tokens/typography';
+@use './transitions';
+
+/// Base navigation row styles.
+/// Provides consistent padding, gap, border radius, and hover effects.
+/// @example
+///   .treeRow { @include nav-row-base; }
+@mixin nav-row-base {
+  display: flex;
+  align-items: center;
+  padding: spacing.$spacing-1_5 spacing.$spacing-2;
+  cursor: pointer;
+  border-radius: spacing.$radius-sm;
+  gap: spacing.$spacing-2;
+  color: colors.$text-secondary;
+  font-family: typography.$font-nav;
+  font-size: typography.$font-size-xs;
+  @include transitions.transition-all;
+  border: 1px solid transparent;
+  background-color: transparent;
+
+  &:hover {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+    color: colors.$text-primary;
+    border-color: colors.$border-subtle;
+  }
+}
+
+/// Active/selected navigation row state.
+/// Applies amber gradient background with accent border.
+/// @example
+///   .treeRow.selected { @include nav-row-active; }
+@mixin nav-row-active {
+  background: linear-gradient(
+    90deg,
+    rgba(colors.$accent-primary, opacity.$glow) 0%,
+    rgba(colors.$accent-primary, opacity.$surface) 100%
+  );
+  border-color: rgba(colors.$accent-primary, opacity.$opacity-30);
+  color: colors.$text-primary;
+  font-weight: typography.$font-weight-medium;
+}
+
+/// Accent glow bar for active navigation items.
+/// Creates a vertical bar on the left side with glow effect.
+/// @example
+///   .navLink.active::after { @include nav-glow-bar; }
+@mixin nav-glow-bar {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 16px;
+  background-color: colors.$accent-primary;
+  border-top-right-radius: spacing.$radius-xs;
+  border-bottom-right-radius: spacing.$radius-xs;
+  box-shadow: 0 0 15px colors.$accent-primary-glow;
+}
+
+/// Current worktree indicator dot.
+/// Small glowing dot to indicate the currently checked-out worktree.
+@mixin worktree-indicator-current {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: colors.$accent-primary;
+  box-shadow: 0 0 15px colors.$accent-primary-glow;
+}
+
+/// Base navigation link styles for root sidebar.
+/// Larger padding than nav-row-base, with gradient hover effect.
+/// @example
+///   .navLink { @include nav-link-base; }
+@mixin nav-link-base {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-3;
+  padding: spacing.$spacing-2_5 spacing.$spacing-3;
+  color: colors.$text-secondary;
+  text-decoration: none;
+  border-radius: spacing.$radius-lg;
+  font-family: typography.$font-nav;
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  background: transparent;
+  border: 1px solid transparent;
+  @include transitions.transition-all;
+  position: relative;
+
+  &:hover {
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
+    color: colors.$text-primary;
+    border-color: colors.$border-subtle;
+  }
+
+  &:focus-visible {
+    outline: 2px solid colors.$accent-primary;
+    outline-offset: 2px;
+  }
+}
+
+/// Active navigation link state with amber gradient and glow bar.
+/// Combines nav-row-active styling with nav-glow-bar indicator.
+/// @example
+///   .navLink.active { @include nav-link-active; }
+@mixin nav-link-active {
+  background: linear-gradient(
+    90deg,
+    rgba(colors.$accent-primary, opacity.$glow) 0%,
+    rgba(colors.$accent-primary, opacity.$surface) 100%
+  );
+  border-color: rgba(colors.$accent-primary, opacity.$opacity-30);
+  color: colors.$accent-primary;
+
+  // Glow bar indicator
+  &::after {
+    @include nav-glow-bar;
+  }
+}

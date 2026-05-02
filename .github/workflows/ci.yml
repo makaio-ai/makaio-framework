@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  ci:
+    name: Validate, Test, Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Validate (typecheck + lint + format)
+        run: yarn validate
+
+      - name: Test
+        run: yarn test
+
+      - name: Build framework packages
+        # Intentional: this workspace includes helper/apps packages that are
+        # source-only in the standalone repo. CI builds every package that
+        # declares a build script instead of turning missing optional scripts
+        # into hard failures.
+        run: yarn workspaces foreach -A --topological --parallel --if-present run build

@@ -1,0 +1,36 @@
+import type { MakaioExtension } from '@makaio/contracts';
+import { ClaudeCodeClientService } from './claude-code-client-service.js';
+export { ClaudeCodeClientSubjects } from './namespace.js';
+export { ClaudeCodeClientService } from './claude-code-client-service.js';
+export {
+  CLAUDE_CODE_HOOK_SESSION_START,
+  CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT,
+  CLAUDE_CODE_HOOK_PRE_TOOL_USE,
+  CLAUDE_CODE_HOOK_POST_TOOL_USE,
+  CLAUDE_CODE_HOOK_STOP,
+  CLAUDE_CODE_HOOK_SUBAGENT_STOP,
+  CLAUDE_CODE_HOOK_NOTIFICATION,
+  CLAUDE_CODE_HOOK_MCP_SERVER_START,
+  CLAUDE_CODE_HOOK_MCP_SERVER_STOP,
+} from './schemas.js';
+export { normalizeClaudeCodeHook } from './hook-normalizer.js';
+export type { ClaudeCodeNormalizedEvent, ClaudeCodeNormalizedSubject } from './hook-normalizer.js';
+export { resolveClaudeCodeSettingsPaths } from './settings-paths.js';
+export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } from './settings-paths.js';
+
+/**
+ * Runtime package that registers Claude Code client-native namespaces and
+ * creates the {@link ClaudeCodeClientService} that bridges raw hook events
+ * into normalized `client.session.*` observations.
+ */
+export const claudeCodeClientRuntimePackage: MakaioExtension = {
+  name: 'claude-code.runtime',
+  displayName: 'Claude Code Client Runtime',
+  dependencies: ['makaio.clients-core'],
+  /**
+   * Create the Claude Code client service bound to the runtime bus.
+   * @param ctx - Runtime package context
+   * @returns Uninitialized Claude Code client service
+   */
+  create: (ctx) => new ClaudeCodeClientService(ctx.bus),
+};

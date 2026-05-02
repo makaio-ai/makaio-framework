@@ -1,0 +1,139 @@
+/**
+ * Analytics heatmap widget styles.
+ *
+ * 7-row × 24-column CSS Grid. Intensity tiers map to Aura accent-opacity
+ * via data-intensity attribute. All colours use Aura CSS custom properties.
+ */
+
+// Intensity tier opacities — shared between heatmap cells and legend swatches.
+$default-intensity-opacity: 0.08;
+$intensity-by-tier: (
+  0: $default-intensity-opacity,
+  1: 0.25,
+  2: 0.45,
+  3: 0.65,
+  4: 0.9,
+);
+
+@mixin intensity-opacity {
+  @each $tier, $opacity in $intensity-by-tier {
+    &[data-intensity='#{$tier}'] {
+      opacity: $opacity;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Widget root
+// ---------------------------------------------------------------------------
+
+.widget {
+  padding: 0.75rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+}
+
+.title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+// ---------------------------------------------------------------------------
+// Status line (loading / error) — shown above the grid only when active
+// ---------------------------------------------------------------------------
+
+.statusLine {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout
+// ---------------------------------------------------------------------------
+
+.gridWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.gridRow {
+  display: grid;
+  grid-template-columns: 3rem repeat(24, 1fr);
+  gap: 2px;
+  align-items: center;
+}
+
+.dayLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-align: right;
+  padding-right: 0.25rem;
+}
+
+// ---------------------------------------------------------------------------
+// Hour-axis labels row
+// ---------------------------------------------------------------------------
+
+.axisRow {
+  display: grid;
+  grid-template-columns: 3rem repeat(24, 1fr);
+  gap: 2px;
+}
+
+.axisLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+// ---------------------------------------------------------------------------
+// Heatmap cells
+// ---------------------------------------------------------------------------
+
+.cell {
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-primary);
+  opacity: $default-intensity-opacity; // tier 0 — no data (default)
+  transition: opacity 0.1s ease;
+  @include intensity-opacity;
+}
+
+// ---------------------------------------------------------------------------
+// Legend
+// ---------------------------------------------------------------------------
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.legendLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.legendSwatch {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.legendCell {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-primary);
+  opacity: $default-intensity-opacity;
+  @include intensity-opacity;
+}

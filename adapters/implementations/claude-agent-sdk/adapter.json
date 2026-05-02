@@ -1,0 +1,4 @@
+{
+  "name": "claude-code",
+  "capabilities": ["systemPrompt", "vision", "tools", "systemPrompt:override", "session:resume", "session:fork"]
+}
