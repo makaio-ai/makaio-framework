@@ -1,0 +1,152 @@
+---
+title: "kernel:boot"
+editUrl: false
+prev: false
+next: false
+---
+
+# `kernel:boot`
+
+| Field | Value |
+|-------|-------|
+| Prefix | `kernel:boot` |
+| Namespace constant | `BootNamespace` |
+| Subjects constant | `BootSubjects` |
+| Kind | bus |
+| Schema record | `BootSchemas` |
+| Tier | framework |
+| Package | `@makaio/kernel` |
+| Defined in | [`packages/kernel/src/boot-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/kernel/src/boot-namespace.ts) |
+
+## Subjects
+
+| Key | Wire | Type | Schema |
+|-----|------|------|--------|
+| `complete` | [`kernel:boot.complete`](#kernel:boot.complete) | event | — |
+| `getState` | [`kernel:boot.getState`](#kernel:boot.getState) | rpc | — |
+| `progress` | [`kernel:boot.progress`](#kernel:boot.progress) | event | — |
+| `service.failed` | [`kernel:boot.service.failed`](#kernel:boot.service.failed) | event | — |
+| `service.ready` | [`kernel:boot.service.ready`](#kernel:boot.service.ready) | event | — |
+| `service.skipped` | [`kernel:boot.service.skipped`](#kernel:boot.service.skipped) | event | — |
+| `service.starting` | [`kernel:boot.service.starting`](#kernel:boot.service.starting) | event | — |
+
+## Subject Details
+
+### <a id="kernel:boot.complete"></a>`kernel:boot.complete` (event)
+
+Signal that all services have completed their startup attempts.
+
+Subject: `kernel:boot.complete`
+Type: Event (fire-and-forget)
+Purpose: Emitted once all registered services have resolved or rejected.
+Carries the total boot duration and names of any failed services.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `failedServices` | `string[]` | yes |
+| `totalDurationMs` | `number` | yes |
+
+### <a id="kernel:boot.getState"></a>`kernel:boot.getState` (rpc)
+
+Request the current boot state for late subscribers.
+
+Subject: `kernel:boot.getState`
+Type: RPC (request/response)
+Purpose: Allows clients that connect after boot has started (or completed)
+to retrieve the current boot state. Returns the same shape as `progress`
+plus additional fields indicating whether boot is complete and any failures.
+
+**Request:**
+
+_Empty object._
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `complete` | `boolean` | yes |
+| `completedCount` | `number` | yes |
+| `currentService` | `string \| undefined` | no |
+| `failedServices` | `string[]` | yes |
+| `skippedServices` | `string[]` | yes |
+| `totalCount` | `number` | yes |
+| `totalDurationMs` | `number \| undefined` | no |
+
+### <a id="kernel:boot.progress"></a>`kernel:boot.progress` (event)
+
+Signal the current boot progress across all services.
+
+Subject: `kernel:boot.progress`
+Type: Event (fire-and-forget)
+Purpose: Emitted after each service completes (successfully or not).
+Used by progress indicators to show startup completion percentage.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completedCount` | `number` | yes |
+| `currentService` | `string \| undefined` | no |
+| `totalCount` | `number` | yes |
+
+### <a id="kernel:boot.service.failed"></a>`kernel:boot.service.failed` (event)
+
+Signal that a service failed to start.
+
+Subject: `kernel:boot.service.failed`
+Type: Event (fire-and-forget)
+Purpose: Emitted when a service's `create()` method throws or rejects.
+Carries the error message for diagnostics and UI error display.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `displayName` | `string` | yes |
+| `errorMessage` | `string` | yes |
+| `name` | `string` | yes |
+
+### <a id="kernel:boot.service.ready"></a>`kernel:boot.service.ready` (event)
+
+Signal that a service has successfully completed startup.
+
+Subject: `kernel:boot.service.ready`
+Type: Event (fire-and-forget)
+Purpose: Emitted after a service's `create()` method resolves successfully.
+Includes elapsed startup duration for performance monitoring.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `displayName` | `string` | yes |
+| `durationMs` | `number` | yes |
+| `name` | `string` | yes |
+
+### <a id="kernel:boot.service.skipped"></a>`kernel:boot.service.skipped` (event)
+
+Signal that a service intentionally skipped startup.
+
+Subject: `kernel:boot.service.skipped`
+Type: Event (fire-and-forget)
+Purpose: Emitted when a service's `create()` throws a `ServiceSkipError`,
+indicating the service opted out due to role, feature flag, or environment
+mismatch — not an error condition.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `displayName` | `string` | yes |
+| `name` | `string` | yes |
+| `reason` | `string` | yes |
+
+### <a id="kernel:boot.service.starting"></a>`kernel:boot.service.starting` (event)
+
+Signal that a service has begun its startup sequence.
+
+Subject: `kernel:boot.service.starting`
+Type: Event (fire-and-forget)
+Purpose: Emitted immediately before a service's `create()` method is invoked.
+Allows observers to track which services are actively starting.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `displayName` | `string` | yes |
+| `name` | `string` | yes |
+
+---
+
+*Auto-generated by `yarn docs:bus`. Do not edit manually.*

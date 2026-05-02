@@ -1,0 +1,5 @@
+# Build output
+dist/
+
+# electron-builder output
+release/

@@ -1,0 +1,184 @@
+export { BrowserEntrypointSchema } from './browser-entrypoint.js';
+export {
+  AdapterClientRefSchema,
+  AdapterManifestSchema,
+  ClientManifestSchema,
+  ContributionManifestSchema,
+  LogImporterManifestSchema,
+  ProtocolConfigSchema,
+  ProtocolRefSchema,
+  ProviderManifestSchema,
+  SessionEventActionManifestSchema,
+  TriggerManifestSchema,
+  UiSurfaceFlagsSchema,
+} from './contribution-manifest.js';
+export type {
+  AdapterClientRef,
+  AdapterManifest,
+  ClientManifest,
+  ContributionManifest,
+  LogImporterManifest,
+  ProtocolConfig,
+  ProtocolRef,
+  ProviderManifest,
+  SessionEventActionManifest,
+  TriggerManifest,
+  TriggerStage,
+  UiSurfaceFlags,
+} from './contribution-manifest.js';
+export {
+  CliArgManifestSchema,
+  CliManifestSchema,
+  CliSubcommandManifestSchema,
+  ExtensionManifestSchema,
+  StorageManifestSchema,
+  TrayManifestSchema,
+  WindowParamSpecSchema,
+  WindowManifestSchema,
+} from './manifest.js';
+export type {
+  CliArgManifest,
+  CliManifest,
+  CliSubcommandManifest,
+  ExtensionManifest,
+  StorageManifest,
+  TrayManifest,
+  WindowManifest,
+  WindowParamSpec,
+  WindowStyle,
+} from './manifest.js';
+export type { BrowserEntrypoint } from './browser-entrypoint.js';
+export { extensionToken } from './extension-token.js';
+export type { ExtensionToken } from './extension-token.js';
+export type {
+  AdapterDefinitionContract,
+  AdapterProviderDefinitionContract,
+  AdapterProviderRef,
+} from './adapter-definition.js';
+export type { ExtensionIdentity, ExtensionService, ExtensionServiceLifecycle } from './extension-lifecycle.js';
+export type { ExtensionContext, NodeExtensionContext } from './extension-context.js';
+export type {
+  ExtensionCliContribution,
+  ExtensionCliHandlerContext,
+  ExtensionCliInteractiveContext,
+  ExtensionCliOutputWriter,
+  ExtensionCliSubcommandEntry,
+} from './extension-cli.js';
+export type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
+export type {
+  AdapterContribution,
+  ExtensionNamespaceContribution,
+  ExtensionSessionEventActionsContribution,
+  ExtensionToolsContribution,
+  ExtensionTriggersContribution,
+  ExtensionUiContribution,
+  LogImportContribution,
+} from './extension-contributions.js';
+export type {
+  ExtensionContributionProcessor,
+  ExtensionRuntimeBootContext,
+  ExtensionRuntimeBootContribution,
+  MakaioExtension,
+} from './makaio-extension.js';
+export type { EntityUIConfig } from '../shared/ui-config.js';
+export { ExtensionDescriptorSchema, ExtensionEntrypointsSchema } from './extension-descriptor.js';
+export type { ExtensionDescriptor, ExtensionEntrypoints } from './extension-descriptor.js';
+export {
+  ExtensionWarningActionSchema,
+  ExtensionWarningEntrySchema,
+  ExtensionWarningSeveritySchema,
+  ExtensionWarningSchema,
+  getExtensionWarningActionLabel,
+} from './extension-warning.js';
+export type {
+  ExtensionWarning,
+  ExtensionWarningAction,
+  ExtensionWarningEntry,
+  ExtensionWarningSeverity,
+} from './extension-warning.js';
+export { parseExtensionConfig } from './parse-extension-config.js';
+export { CapabilityTokenSchema } from './capability-token.js';
+export type { CapabilityToken, CapabilityTokenMap } from './capability-token.js';
+export type { ExtensionConfigProvider } from './extension-config-provider.js';
+export { getBootstrapAssetKey } from './contributions/index.js';
+export type {
+  ActionCategory,
+  ActionCategoryMap,
+  ActionShortcut,
+  ActionShortcutModifiers,
+  BootstrapAsset,
+  BootstrapAssetKey,
+  BootstrapChoice,
+  BootstrapDiscoverContext,
+  BootstrapExportContext,
+  BootstrapExportResult,
+  BootstrapImportContext,
+  BootstrapImportResult,
+  BootstrapResult,
+  CreateSessionEventActionResult,
+  EntrypointConfig,
+  EventFilter,
+  ExecuteContext,
+  ExecuteResult,
+  ExtensionBootstrap,
+  ExtensionConfigComponentLoader,
+  ExtensionConfigComponentProps,
+  ExtensionFieldTypeLoader,
+  GatheredContext,
+  GatheredEntry,
+  HashSuggestion,
+  HashTrigger,
+  HashTriggerContext,
+  HashTriggerMetadata,
+  HashTriggerStage,
+  HashTriggerSuggestResult,
+  LoaderContext,
+  MakaioWebUiAction,
+  MakaioWebUiActions,
+  MakaioWebUiComponentProps,
+  MakaioWebUiLoader,
+  MakaioWebUiRoute,
+  MessageEventFilter,
+  MessageRole,
+  PageComponentProps,
+  PageDeclaration,
+  PageMode,
+  PageWidgetSize,
+  PickerConfig,
+  PickerOpenContext,
+  PluginFormattedToolCallOutput,
+  PluginToolCallFormatterInput,
+  PluginTransformedContent,
+  PluginTransformedContentType,
+  PromisifiedActions,
+  SelectionChangeContext,
+  SelectionFeedback,
+  SessionEventActionContext,
+  SessionEventActionDeclaration,
+  SessionEventActionOptions,
+  SlotContentDeclaration,
+  SlotDeclaration,
+  SlotId,
+  SlotPlacementDeclaration,
+  StructuralEventFilter,
+  TileCapabilities,
+  TileDeclaration,
+  TileIconLoader,
+  TileProps,
+  TileRenderers,
+  ToolCallFormatterDeclaration,
+  UiContextDimension,
+  UiContextSnapshot,
+  UiContextValueMap,
+  UiNavigationLevel,
+  UiNavigationLevelMap,
+  UiRuntimeNavigationLevel,
+  UiScope,
+  UiScopeMap,
+  WhenContext,
+  WidgetDeclaration,
+  WidgetDefinition,
+  WidgetProps,
+  WidgetRenderers,
+  WidgetSize,
+} from './contributions/index.js';

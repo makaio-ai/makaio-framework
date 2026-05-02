@@ -1,0 +1,75 @@
+{
+  "name": "@makaio/build-tooling",
+  "version": "0.1.0",
+  "description": "Shared Vite build configuration for extensions and adapters",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./base": {
+      "source": "./vite.base.ts",
+      "default": "./vite.base.ts"
+    },
+    "./plugin": {
+      "source": "./vite.plugin.ts",
+      "default": "./vite.plugin.ts"
+    },
+    "./adapter": {
+      "source": "./vite.adapter.ts",
+      "default": "./vite.adapter.ts"
+    },
+    "./browser-shared-externals": {
+      "source": "./browser-shared-externals.ts",
+      "default": "./browser-shared-externals.ts"
+    },
+    "./rolldown-plugin-framework-externals": {
+      "source": "./tsdown-framework-preset.ts",
+      "default": "./tsdown-framework-preset.ts"
+    },
+    "./tsdown-framework-preset": {
+      "source": "./tsdown-framework-preset.ts",
+      "default": "./tsdown-framework-preset.ts"
+    },
+    "./tsdown-extension-preset": {
+      "source": "./tsdown-extension-preset.ts",
+      "default": "./tsdown-extension-preset.ts"
+    },
+    "./framework-public-surface": {
+      "source": "./framework-public-surface.ts",
+      "default": "./framework-public-surface.ts"
+    },
+    "./framework-import-map": {
+      "source": "./framework-import-map.ts",
+      "default": "./framework-import-map.ts"
+    },
+    "./framework-import-rewrite-plugin": {
+      "source": "./framework-import-rewrite-plugin.ts",
+      "default": "./framework-import-rewrite-plugin.ts"
+    },
+    "./portable-package": {
+      "source": "./portable-package.ts",
+      "default": "./portable-package.ts"
+    },
+    "./tsdown-scss": {
+      "source": "./tsdown-scss.ts",
+      "default": "./tsdown-scss.ts"
+    }
+  },
+  "dependencies": {
+    "tsdown": "^0.21.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.0",
+    "vite-plugin-dts": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "sass": "^1.97.3"
+  },
+  "peerDependencies": {
+    "@vitejs/plugin-react": "^4.4.1"
+  },
+  "peerDependenciesMeta": {
+    "@vitejs/plugin-react": {
+      "optional": true
+    }
+  }
+}

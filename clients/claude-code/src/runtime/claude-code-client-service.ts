@@ -1,0 +1,491 @@
+/**
+ * Claude Code client runtime service.
+ *
+ * Subscribes to `client:claude-code.hook.received` events and translates them
+ * into normalized `client.session.*` observed-semantics emissions.  Raw events
+ * that do not map to the v1 set (Notification, MCPServerStart, etc.) are
+ * silently ignored — they remain observable in `client:claude-code.*` for
+ * consumers that care about Claude-specific extras.
+ *
+ * Also subscribes to `client:claude-code.statusline.received` events.  For
+ * each payload that carries a `session_id`, the service looks up the session
+ * via {@link SessionStorageSubjects.getByAdapterSessionId} and reads the
+ * linked `clientAccountId` and stored identifiers.  When both are present, the
+ * payload is passed to {@link normalizeClaudeCodeStatusline} together with the
+ * resolved identity context and the resulting request is forwarded to
+ * `client.usage.ingest`.  Payloads without a `session_id`, sessions that have
+ * not yet been linked to a client account, or sessions without stored identity
+ * evidence are silently skipped — the raw event remains observable on
+ * `client:claude-code.statusline.received`.
+ *
+ * Also registers request handlers for all six `config.*` subjects, delegating
+ * to a per-request {@link ClaudeCodeClientSettings} instance scoped to the
+ * `projectDir` carried in each request payload.  Before constructing each
+ * settings instance, the service resolves the active config directory via
+ * `client.resolveBinary` (using `requestOptional` for graceful fallback in
+ * framework-only boot) and passes it as `configDir` so that hooks and config
+ * reads/writes land in the correct isolated directory.  The resolved value is
+ * cached for the lifetime of the active binary and invalidated when
+ * `client.version.changed` fires for `clientId === 'claude-code'`.
+ *
+ * ## Ingress invariant
+ *
+ * The subscription listens to the **catch-all** `hook.received` subject without
+ * any event-name pre-filtering.  Filtering happens inside
+ * {@link normalizeClaudeCodeHook}, which returns `null` for unknown events.
+ * This guarantees that raw hook ingress reaches the bus before any semantic
+ * narrowing — preventing the adapter-level subtype filtering anti-pattern.
+ *
+ * ## Adapter-managed session gate
+ *
+ * When both the native-hook ingress and the adapter-derived path are active for
+ * the same Claude process, `client.session.started` would otherwise be emitted
+ * twice.  The service listens to `client.runtime.started` events: when an event
+ * arrives with `clientId === CLIENT_ID`, `source.layer === 'adapter'`, and a
+ * non-empty `adapterSessionId`, that session ID is recorded as adapter-managed.
+ * A subsequent `SessionStart` hook for the same `adapterSessionId` is then
+ * silently dropped — the adapter path already owns the canonical emission.
+ * Sessions whose `adapterSessionId` is absent or not yet registered emit as
+ * before (fail-open).  Events from other clients (e.g. `'codex'`, `'gemini'`)
+ * are ignored unconditionally — their adapter sessions must not suppress Claude
+ * Code hook emissions.
+ *
+ * The managed-session set is bounded at {@link MANAGED_SESSION_CAP} entries to
+ * prevent unbounded growth in long-lived processes.  When the cap is reached,
+ * the oldest recorded session ID is evicted before inserting the new one
+ * (FIFO).  In practice, concurrent active Claude Code sessions are measured in
+ * single digits, so the cap is purely a safety net.
+ * @packageDocumentation
+ */
+
+import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
+import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
+import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
+import { SessionStorageSubjects } from '@makaio/contracts/session';
+import { BaseService } from '@makaio/service-base';
+import { z } from 'zod';
+import { ClaudeCodeClientSettings } from './client-settings.js';
+import { normalizeClaudeCodeHook } from './hook-normalizer.js';
+import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
+import { ClaudeCodeClientSubjects } from './namespace.js';
+import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
+
+/** Stable client ID for Claude Code — used to filter `client.runtime.started` events. */
+const CLIENT_ID = 'claude-code';
+
+/**
+ * Maximum number of adapter-managed session IDs retained in
+ * {@link ClaudeCodeClientService.managedAdapterSessionIds}.
+ *
+ * Concurrent active Claude Code sessions are typically single-digit, so this
+ * cap is a safety net against unbounded growth in long-lived processes.  When
+ * the cap is reached, the oldest recorded ID is evicted (FIFO) before the new
+ * one is inserted.
+ */
+const MANAGED_SESSION_CAP = 10_000;
+
+/**
+ * Runtime service for the Claude Code client.
+ *
+ * Listens to the raw hook catch-all ingress subject
+ * (`client:claude-code.hook.received`) and forwards normalized lifecycle
+ * observations onto the global `client.session.*` contract.
+ *
+ * Also listens to `client:claude-code.statusline.received` and, for payloads
+ * whose `session_id` maps to a session with a linked `clientAccountId`, passes
+ * the payload through {@link normalizeClaudeCodeStatusline} and forwards the
+ * result to `client.usage.ingest`.
+ *
+ * Handles all six `config.*` request subjects for reading and writing
+ * Claude Code native settings files across user, project, and local scopes.
+ *
+ * Also handles the three `wiring.*` request subjects for listing, applying,
+ * and removing the Makaio hook wiring entries.
+ *
+ * Instantiate via the runtime package and call `init()` once per process.
+ */
+export class ClaudeCodeClientService extends BaseService {
+  /**
+   * Set of `adapterSessionId` values known to be owned by an adapter-managed
+   * Claude Code runtime.  Populated by {@link handleRuntimeStarted} when a
+   * `client.runtime.started` event arrives with `clientId === CLIENT_ID` and
+   * `source.layer === 'adapter'`.
+   *
+   * Bounded at {@link MANAGED_SESSION_CAP} entries — the oldest ID is evicted
+   * (FIFO) when the cap is reached.
+   *
+   * Used by {@link handleHookReceived} to gate duplicate `client.session.started`
+   * emissions for sessions that the adapter path already covers.
+   */
+  private readonly managedAdapterSessionIds = new Set<string>();
+
+  /**
+   * Cached promise for the resolved config directory.
+   *
+   * A concrete config directory is stable within a process lifetime — it can
+   * only change when the active binary changes (i.e.
+   * `client.version.changed` fires for `clientId === 'claude-code'`).  Caching
+   * the promise avoids a bus round-trip on every config handler invocation.
+   * Missing handlers, absent global binaries, and failures are not cached
+   * because the binary subsystem may register later or recover independently.
+   *
+   * Set lazily by the first call to {@link resolveConfigDir} and invalidated
+   * by the `client.version.changed` subscription registered in {@link onInit}.
+   */
+  private cachedConfigDir: Promise<string | undefined> | undefined;
+
+  /**
+   * Creates a new Claude Code client service.
+   * @param bus - Bus instance used for hook subscription and semantic emission.
+   *   Defaults to the global {@link MakaioBus} singleton.
+   */
+  public constructor(bus: IMakaioBus = MakaioBus) {
+    super(bus);
+  }
+
+  /**
+   * Register the hook ingress subscription, all config request handlers, and
+   * all wiring request handlers on the bus.
+   *
+   * Also subscribes to `client.runtime.started` to track adapter-managed
+   * sessions for the {@link handleHookReceived} suppression gate.
+   *
+   * Called once by `BaseService.init()`.  All subsequent calls are no-ops.
+   */
+  protected override onInit(): void {
+    this.registerHandler(ClientSubjects.runtime.started, ({ payload }) => {
+      this.handleRuntimeStarted(payload);
+    });
+
+    // Invalidate the cached config dir whenever the active binary changes for
+    // this client.  The next handler invocation will re-resolve and re-cache.
+    this.registerHandler(ClientSubjects.version.changed, ({ payload }) => {
+      if (payload.clientId === CLIENT_ID) {
+        this.cachedConfigDir = undefined;
+      }
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.hook.received, async ({ payload }) => {
+      await this.handleHookReceived(payload);
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.statusline.received, async ({ payload }) => {
+      await this.handleStatuslineReceived(payload);
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.list, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.listStatusline());
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.set, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.setStatusline(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.list, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.listHooks(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.add, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.addHook(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.remove, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.removeHook(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.plugins.list, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.listPlugins());
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
+        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
+      }
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
+        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
+      }
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await removeClaudeCodeWiring(settings, ctx.payload.scope));
+    });
+  }
+
+  /**
+   * Clear the adapter-managed session ID set and config dir cache on teardown.
+   */
+  protected override onDestroy(): void {
+    this.managedAdapterSessionIds.clear();
+    this.cachedConfigDir = undefined;
+  }
+
+  /**
+   * Return the cached config directory promise, resolving it on first access.
+   *
+   * Only concrete config directories are cached. Missing resolution is a
+   * graceful fallback, not a stable state: the binary manager may register
+   * later in the same process.
+   * @returns Absolute path to the isolated config directory, or `undefined`
+   *   when no binary resolution handler is registered or the resolved context
+   *   carries no config dir.
+   */
+  private resolveConfigDir(): Promise<string | undefined> {
+    if (this.cachedConfigDir === undefined) {
+      const pendingConfigDir = this.doResolveConfigDir().then(
+        (configDir) => {
+          if (configDir === undefined && this.cachedConfigDir === pendingConfigDir) {
+            this.cachedConfigDir = undefined;
+          }
+          return configDir;
+        },
+        (error: unknown) => {
+          if (this.cachedConfigDir === pendingConfigDir) {
+            this.cachedConfigDir = undefined;
+          }
+          throw error;
+        },
+      );
+      this.cachedConfigDir = pendingConfigDir;
+    }
+    return this.cachedConfigDir;
+  }
+
+  /**
+   * Execute the `client.resolveBinary` bus request and extract the config dir.
+   *
+   * Uses `requestOptional` so that the call is safe in framework-only boot
+   * (i.e. when no `resolveBinary` handler is registered) — in that case
+   * `undefined` is returned and settings construction falls back to the default
+   * `~/.claude/settings.json` path.
+   * @returns Absolute path to the isolated config directory, or `undefined`
+   *   when no binary resolution handler is registered or the resolved context
+   *   carries no config dir.
+   */
+  private async doResolveConfigDir(): Promise<string | undefined> {
+    let result;
+    try {
+      result = await this.bus.requestOptional(ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
+    } catch (error) {
+      if (isResolveBinaryMissingGlobalBinary(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (!result.handled) {
+      return undefined;
+    }
+    return result.data.configDir ?? undefined;
+  }
+
+  /**
+   * Record a runtime as adapter-managed when the evidence source is an adapter.
+   *
+   * Called for every `client.runtime.started` event.  Only events whose
+   * `clientId` equals `'claude-code'`, whose `source.layer` is `'adapter'`, and
+   * that carry a non-empty `adapterSessionId` update the managed-sessions gate.
+   * Events from other clients (e.g. `'codex'`, `'gemini'`) are ignored
+   * unconditionally — their adapter sessions must not suppress Claude Code hook
+   * emissions.  Non-adapter sources (e.g. `'supervisor'`, `'statusline'`) are
+   * also ignored to prevent accidental suppression of native hook paths.
+   *
+   * When the set reaches {@link MANAGED_SESSION_CAP}, the oldest entry is
+   * evicted before the new ID is inserted.
+   * @param payload - `client.runtime.started` payload
+   */
+  private handleRuntimeStarted(payload: ClientRuntimeStarted): void {
+    if (payload.clientId !== CLIENT_ID) {
+      return;
+    }
+    if (payload.source.layer === 'adapter' && payload.adapterSessionId) {
+      if (this.managedAdapterSessionIds.has(payload.adapterSessionId)) {
+        return;
+      }
+      if (this.managedAdapterSessionIds.size >= MANAGED_SESSION_CAP) {
+        const oldest = this.managedAdapterSessionIds.values().next().value;
+        if (oldest !== undefined) {
+          this.managedAdapterSessionIds.delete(oldest);
+        }
+      }
+      this.managedAdapterSessionIds.add(payload.adapterSessionId);
+    }
+  }
+
+  /**
+   * Receive a raw statusline payload and forward it to `client.usage.ingest`
+   * when a linked session account is available.
+   *
+   * The method resolves identity in three steps:
+   * 1. Extract `session_id` from the raw payload; return early when absent.
+   * 2. Look up the session via {@link SessionStorageSubjects.getByAdapterSessionId}
+   *    using `requestOptional` so a missing storage handler (e.g. in early boot
+   *    or test isolation) is treated as a skip rather than an error.
+   * 3. Read `clientAccountId` and the stored identifiers from the session; return
+   *    early when either is absent.
+   *
+   * When all three steps succeed, the resolved identity context is passed to
+   * {@link normalizeClaudeCodeStatusline} together with the raw payload, and the
+   * result is forwarded to `client.usage.ingest` via `bus.requestOptional`
+   * (no-op when no handler is registered, e.g. during early boot).
+   * @param raw - Raw statusline payload delivered on
+   *   `client:claude-code.statusline.received`
+   */
+  private async handleStatuslineReceived(raw: Parameters<typeof normalizeClaudeCodeStatusline>[0]): Promise<void> {
+    const adapterSessionId = raw.session_id;
+    if (!adapterSessionId) return;
+
+    const sessionResult = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId,
+    });
+    if (!sessionResult.handled || !sessionResult.data.session) return;
+
+    const session = sessionResult.data.session;
+    if (!session.clientAccountId) return;
+
+    const identity = resolveIdentityFromSession(session);
+    if (!identity) return;
+
+    const normalized = normalizeClaudeCodeStatusline(raw, identity);
+    if (!normalized) return;
+
+    await this.bus.requestOptional(ClientSubjects.usage.ingest, normalized);
+  }
+
+  /**
+   * Translate a raw hook event into a normalized `client.session.*` emission.
+   *
+   * Unknown / Claude-specific events produce no emission and are silently
+   * ignored. The raw event is always available on `client:claude-code.*` for
+   * consumers that need Claude-native detail.
+   *
+   * `client.session.started` is suppressed when the `adapterSessionId` from
+   * the hook payload is already known to be owned by an adapter-managed runtime
+   * (see {@link handleRuntimeStarted}).  All other events are forwarded
+   * unconditionally — tool events have no adapter-path equivalent.
+   * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
+   */
+  private async handleHookReceived(raw: Parameters<typeof normalizeClaudeCodeHook>[0]): Promise<void> {
+    const normalized = normalizeClaudeCodeHook(raw);
+    if (normalized === null) return;
+
+    switch (normalized.subject) {
+      case ClientSubjects.session.started:
+        if (
+          normalized.payload.adapterSessionId !== undefined &&
+          this.managedAdapterSessionIds.has(normalized.payload.adapterSessionId)
+        ) {
+          // The adapter path already owns this session's client.session.started
+          // emission.  Suppress the native-hook duplicate so downstream
+          // consumers receive exactly one started event per session.
+          break;
+        }
+        await this.bus.emit(ClientSubjects.session.started, normalized.payload);
+        break;
+      case ClientSubjects.session.userPrompt.submitted:
+        await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
+        break;
+      case ClientSubjects.session.turn.completed:
+        await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);
+        break;
+      case ClientSubjects.session.tool.pre:
+        await this.bus.emit(ClientSubjects.session.tool.pre, normalized.payload);
+        break;
+      case ClientSubjects.session.tool.post:
+        await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
+        break;
+      default:
+        throwUnhandledNormalizedEvent(normalized);
+    }
+  }
+}
+
+/**
+ * Fail fast when the normalizer grows a new subject but service emission has
+ * not been updated to preserve the normalized-event contract.
+ * @param event - Normalized event whose subject is not emitted above
+ */
+function throwUnhandledNormalizedEvent(event: { readonly subject: { readonly subject: string } }): never {
+  const subject = event.subject.subject;
+  throw new Error(`Unhandled normalized Claude Code hook subject: ${subject}`);
+}
+
+/**
+ * Return true when `client.resolveBinary` only failed because no Claude Code
+ * executable was found. Config/wiring reads can still use Claude Code's default
+ * settings path in that case; other resolution failures indicate corrupted
+ * managed state or service errors and should propagate.
+ * @param error - Error thrown by the bus request
+ * @returns True when the error is the global-binary fallback miss
+ */
+function isResolveBinaryMissingGlobalBinary(error: unknown): boolean {
+  if (!(error instanceof RequestError)) {
+    return false;
+  }
+  return error.subject?.endsWith('resolveBinary') === true && error.cause instanceof BinaryNotFoundError;
+}
+
+/**
+ * Extract a {@link StatuslineIdentityContext} from a session record.
+ *
+ * Reads the `clientAccountId` field and parses the `identifiers` array from
+ * `lastClientIdentityObservation.payload.identifiers`.  Returns `null` when
+ * either is absent or when the stored identifiers cannot be parsed.
+ * @param session - Session record returned by the storage layer
+ * @returns Resolved identity context, or `null` when insufficient evidence
+ */
+// Structural param type is intentional — this private helper accepts the
+// subset of session fields it needs rather than coupling to a storage entity.
+function resolveIdentityFromSession(session: {
+  clientAccountId?: string;
+  lastClientIdentityObservation?: { payload: Record<string, unknown> };
+}): StatuslineIdentityContext | null {
+  const clientAccountId = session.clientAccountId;
+  if (!clientAccountId) {
+    return null;
+  }
+
+  const rawIdentifiers = session.lastClientIdentityObservation?.payload['identifiers'];
+  if (!Array.isArray(rawIdentifiers) || rawIdentifiers.length === 0) {
+    return null;
+  }
+
+  let identifiers;
+  try {
+    identifiers = z.array(ClientAccountIdentifierSchema).min(1).parse(rawIdentifiers);
+  } catch {
+    return null;
+  }
+
+  const displayLabel = session.lastClientIdentityObservation?.payload['displayLabel'];
+
+  return {
+    clientAccountId,
+    identifiers,
+    displayLabel: typeof displayLabel === 'string' && displayLabel.trim().length > 0 ? displayLabel.trim() : undefined,
+  };
+}

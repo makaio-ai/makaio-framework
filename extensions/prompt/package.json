@@ -1,0 +1,38 @@
+{
+  "name": "@makaio/extension-prompt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./cli": "./src/cli.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
+    "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts"
+  },
+  "peerDependencies": {
+    "@makaio/bus-core": "*"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "tsdown": "^0.21.7",
+    "tsx": "^4.20.4",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.5"
+  },
+  "publishConfig": {
+    "exports": {
+      "./cli": "./dist/cli.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

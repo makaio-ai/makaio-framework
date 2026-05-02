@@ -1,0 +1,25 @@
+{
+  "name": "provider-anthropic",
+  "displayName": "Anthropic",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "description": "Official Anthropic API"
+      },
+      {
+        "id": "anthropic-oauth",
+        "name": "Anthropic (Subscription)",
+        "description": "Anthropic Claude via OAuth subscription"
+      }
+    ]
+  }
+}

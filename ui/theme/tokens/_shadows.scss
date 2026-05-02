@@ -1,0 +1,57 @@
+/**
+ * Shadow Tokens
+ *
+ * Box shadow definitions for depth and elevation.
+ * All shadows use the dark theme aesthetic.
+ */
+
+// Subtle elevation for small interactive elements (toggle buttons, chips)
+$shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1);
+
+// Organic shadow for cards and panels
+$shadow-organic: 0 4px 20px -2px rgba(0, 0, 0, 0.5);
+
+// Glow effect for accent elements
+$shadow-glow: 0 0 15px rgba(245, 158, 11, 0.15);
+
+// Inner light effect for inset borders
+$shadow-inner-light: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+
+// Context menu / dropdown shadow
+$shadow-context-menu:
+  0 10px 40px -5px rgba(0, 0, 0, 0.6),
+  0 0 0 1px rgba(255, 255, 255, 0.05);
+
+// Sidebar shadow
+$shadow-sidebar: 4px 0 24px rgba(0, 0, 0, 0.4);
+
+// Modal overlay shadow
+$shadow-modal: 0 0 100px rgba(0, 0, 0, 0.8);
+
+/**
+ * Focus Ring Shadows
+ *
+ * Used for form validation states and focus indicators.
+ * Width is consistent; color varies by semantic state.
+ */
+$ring-width: 3px;
+$shadow-ring-focus: 0 0 0 $ring-width var(--color-accent-primary-glow);
+$shadow-ring-error: 0 0 0 $ring-width var(--color-error-bg);
+$shadow-ring-success: 0 0 0 $ring-width var(--color-success-bg);
+$shadow-ring-warning: 0 0 0 $ring-width var(--color-warning-bg);
+
+/**
+ * Z-Index Scale
+ *
+ * Consistent z-index values for layering elements.
+ */
+
+$z-base: 0;
+$z-dropdown: 10;
+$z-sticky: 20;
+$z-fixed: 30;
+$z-modal-backdrop: 40;
+$z-cover: 45;
+$z-modal: 50;
+$z-popover: 60;
+$z-tooltip: 70;

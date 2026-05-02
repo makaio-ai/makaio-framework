@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "messages": {
+    "broadcast-response.tool.execute": {
+      "type": "broadcast-response",
+      "correlationId": "corr-tool-broadcast-001",
+      "results": [
+        {
+          "nodeId": "node-a",
+          "payload": {
+            "data": {
+              "exitCode": 0
+            },
+            "success": true
+          }
+        },
+        {
+          "nodeId": "node-b",
+          "payload": {
+            "data": {
+              "exitCode": 1
+            },
+            "success": false
+          }
+        }
+      ]
+    },
+    "broadcast.tool.execute": {
+      "type": "broadcast",
+      "namespace": "tool",
+      "subject": "execute",
+      "correlationId": "corr-tool-broadcast-001",
+      "messageId": "bcast-tool-execute-001",
+      "timeout": 10000,
+      "payload": {
+        "input": {
+          "command": "git status --short"
+        },
+        "toolName": "shell.execute"
+      }
+    },
+    "event.agent.complete": {
+      "type": "event",
+      "namespace": "agent",
+      "subject": "complete",
+      "messageId": "evt-agent-complete-001",
+      "payload": {
+        "adapterId": "adapter-claude",
+        "adapterName": "Claude Code",
+        "adapterSessionId": "adapter-session-001",
+        "agentId": "agent-001",
+        "messageId": "agent-message-001",
+        "outcome": "completed",
+        "sessionId": "session-001",
+        "turnId": "turn-001"
+      }
+    },
+    "event.agent.contextWindow.updated": {
+      "type": "event",
+      "namespace": "agent",
+      "subject": "contextWindow.updated",
+      "messageId": "evt-agent-window-001",
+      "payload": {
+        "adapterId": "adapter-claude",
+        "adapterName": "Claude Code",
+        "adapterSessionId": "adapter-session-001",
+        "agentId": "agent-001",
+        "cachedTokens": 3000,
+        "currentTokens": 12000,
+        "level": "warn",
+        "maxTokens": 20000,
+        "percentage": 60,
+        "sessionId": "session-001",
+        "turnId": "turn-001"
+      }
+    },
+    "heartbeat": {
+      "type": "heartbeat",
+      "timestamp": 1000
+    },
+    "request.approval.request": {
+      "type": "request",
+      "namespace": "approval",
+      "subject": "request",
+      "correlationId": "corr-approval-001",
+      "messageId": "req-approval-001",
+      "timeout": 5000,
+      "priority": 250,
+      "deadline": 6000,
+      "payload": {
+        "adapterName": "Claude Code",
+        "agentId": "agent-001",
+        "args": {
+          "command": "git status --short"
+        },
+        "capabilities": ["shell.execute"],
+        "createdAt": 1000,
+        "personaName": "default",
+        "profileName": "workspace-default",
+        "reasoning": "Need approval before running shell.",
+        "requestId": "approval-request-001",
+        "riskLevel": "neutral",
+        "sessionId": "session-001",
+        "toolCallId": "tool-call-001",
+        "toolName": "shell.execute"
+      }
+    },
+    "request.tool.execute.no-handler": {
+      "type": "request",
+      "namespace": "tool",
+      "subject": "execute",
+      "correlationId": "corr-tool-execute-001",
+      "messageId": "req-tool-execute-001",
+      "timeout": 5000,
+      "priority": 100,
+      "deadline": 6000,
+      "payload": {
+        "input": {
+          "command": "git status --short"
+        },
+        "toolName": "shell.execute"
+      }
+    },
+    "response.approval.request": {
+      "type": "response",
+      "correlationId": "corr-approval-001",
+      "result": {
+        "action": "allow"
+      }
+    },
+    "response.tool.execute.no-handler": {
+      "type": "response",
+      "correlationId": "corr-tool-execute-001",
+      "error": {
+        "code": "NO_HANDLER",
+        "message": "No handler registered for request subject \"tool.execute\"",
+        "subject": "tool.execute"
+      }
+    },
+    "subscribe.agent.complete.initial": {
+      "type": "subscribe",
+      "subjects": {
+        "agent.complete": []
+      }
+    },
+    "subscribe.agent.complete.updated": {
+      "type": "subscribe",
+      "subjects": {
+        "agent.complete": []
+      }
+    },
+    "subscribe.agent.wildcard": {
+      "type": "subscribe",
+      "subjects": {
+        "agent.*": []
+      }
+    },
+    "subscribe.approval.request": {
+      "type": "subscribe",
+      "subjects": {
+        "approval.request": [250]
+      }
+    },
+    "subscribe.approval.request.initial": {
+      "type": "subscribe",
+      "subjects": {
+        "approval.request": [100]
+      }
+    },
+    "subscribe.approval.request.updated": {
+      "type": "subscribe",
+      "subjects": {
+        "approval.request": [250, 100]
+      }
+    },
+    "subscribe.approval.request.remaining": {
+      "type": "subscribe",
+      "subjects": {
+        "approval.request": [250]
+      }
+    },
+    "subscribe-sync-complete": {
+      "type": "subscribe-sync-complete"
+    },
+    "unsubscribe.agent.complete": {
+      "type": "unsubscribe",
+      "subjects": {
+        "agent.complete": []
+      }
+    },
+    "unsubscribe.approval.request": {
+      "type": "unsubscribe",
+      "subjects": {
+        "approval.request": [250]
+      }
+    }
+  }
+}

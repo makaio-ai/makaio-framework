@@ -1,0 +1,21 @@
+{
+  "name": "qwen",
+  "displayName": "Qwen Code",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "clients": [
+      {
+        "id": "qwen",
+        "name": "Qwen Code",
+        "description": "Qwen Code CLI \u2014 an agentic coding assistant via ACP",
+        "binaryName": "qwen"
+      }
+    ]
+  }
+}

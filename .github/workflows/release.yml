@@ -1,0 +1,261 @@
+name: Stable Release
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: 1.3.12
+
+jobs:
+  prepare:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.author_association == 'OWNER' &&
+      startsWith(github.event.comment.body, '/release ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      bump_type: ${{ steps.parse.outputs.bump_type }}
+
+    steps:
+      - name: Parse release command
+        id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          case "$COMMENT_BODY" in
+            "/release patch"|"/release minor"|"/release major")
+              BUMP_TYPE="${COMMENT_BODY#/release }"
+              ;;
+            *)
+              echo "::error::Invalid release command. Use: /release patch|minor|major"
+              exit 1
+              ;;
+          esac
+          echo "bump_type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
+
+      - name: React with rocket
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket',
+            });
+
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Read base version
+        id: base
+        run: |
+          BASE_VERSION=$(node -p "require('./apps/electrobun/package.json').version")
+          echo "version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify PR canary release
+        uses: actions/github-script@v7
+        env:
+          BASE_VERSION: ${{ steps.base.outputs.version }}
+        with:
+          script: |
+            const baseVersion = process.env.BASE_VERSION;
+            const prNumber = context.payload.issue.number;
+            const expectedTagPrefix = `v${baseVersion}-canary.`;
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const match = releases.find((release) =>
+              release.prerelease &&
+              release.tag_name.startsWith(expectedTagPrefix) &&
+              release.body?.includes(`PR #${prNumber}:`)
+            );
+            if (!match) {
+              core.setFailed(
+                `No canary release for PR #${prNumber} and base version ${baseVersion}. Add the canary label and wait for the canary release first.`,
+              );
+              return;
+            }
+            core.info(`Verified canary release ${match.tag_name} for PR #${prNumber}.`);
+
+      - name: Bump version
+        id: bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          cd apps/electrobun
+          npm version ${{ steps.parse.outputs.bump_type }} --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          cd ../..
+
+          git add apps/electrobun/package.json
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Fast-forward main
+        run: |
+          git fetch origin main:main 2>/dev/null || git checkout -b main
+          git checkout main
+          DEVELOP_SHA=$(git rev-parse develop)
+          if ! git merge --ff-only "$DEVELOP_SHA"; then
+            echo "::error::Cannot fast-forward main to develop. Has main diverged?"
+            exit 1
+          fi
+
+      - name: Push branches and tag
+        run: |
+          git push origin develop main "${{ steps.bump.outputs.tag }}"
+
+  build:
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 60
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, cef]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: '**/node_modules'
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Save Yarn cache
+        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Save node_modules
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: '**/node_modules'
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERT }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm cert.p12
+
+      - name: Write App Store Connect API key
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          echo "$API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/keys/AuthKey.p8"
+
+      - name: Build ${{ matrix.variant }} variant
+        env:
+          MAKAIO_VARIANT: ${{ matrix.variant }}
+          ELECTROBUN_DEVELOPER_ID: ${{ vars.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ vars.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEAPIKEYPATH: ${{ runner.temp }}/keys/AuthKey.p8
+          ELECTROBUN_APPLEAPIKEY: ${{ vars.ELECTROBUN_APPLEAPIKEY }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ vars.ELECTROBUN_APPLEAPIISSUER }}
+        run: yarn workspace @makaio/electrobun package:${{ matrix.variant }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-macos-${{ matrix.variant }}
+          path: apps/electrobun/artifacts/
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Verify artifacts
+        run: |
+          test -f stable-macos-base/stable-macos-arm64-update.json
+          test -f stable-macos-cef/cef-macos-arm64-update.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.version }}
+          prerelease: true
+          files: |
+            stable-macos-base/*
+            stable-macos-cef/*
+          generate_release_notes: true
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ needs.prepare.outputs.tag }}';
+            const version = '${{ needs.prepare.outputs.version }}';
+            const releaseUrl = `${context.payload.repository.html_url}/releases/tag/${tag}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `🚀 Stable release **${version}** created as [pre-release](${releaseUrl}).\n\nPromote to full release in the GitHub UI to update Homebrew.`,
+            });

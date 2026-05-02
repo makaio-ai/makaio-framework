@@ -1,0 +1,35 @@
+{
+  "name": "@makaio/utils",
+  "description": "Utility primitives for the Makaio framework. Zero internal dependencies.",
+  "version": "0.1.0",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./health-probe": "./src/health-probe.ts",
+    "./package-root": "./src/resolve-package-root.ts",
+    "./workspace-root": "./src/workspace-root.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
+  },
+  "dependencies": {
+    "p-defer": "^4.0.1"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./health-probe": "./dist/health-probe.mjs",
+      "./package-root": "./dist/resolve-package-root.mjs",
+      "./workspace-root": "./dist/workspace-root.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

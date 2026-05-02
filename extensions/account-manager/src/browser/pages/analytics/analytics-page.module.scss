@@ -1,0 +1,115 @@
+/**
+ * Analytics page layout.
+ *
+ * All colours, spacing, and typography use Aura CSS custom properties.
+ * No hex literals, no hard-coded numeric values outside the token scale.
+ */
+
+// ---------------------------------------------------------------------------
+// Page root
+// ---------------------------------------------------------------------------
+
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+// ---------------------------------------------------------------------------
+// Header bar
+// ---------------------------------------------------------------------------
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.headerTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin-right: 0.5rem;
+}
+
+// ---------------------------------------------------------------------------
+// Range selector
+// ---------------------------------------------------------------------------
+
+.rangeGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.25rem;
+}
+
+.rangeButton {
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+
+  &:hover {
+    background: var(--glass-hover);
+    color: var(--color-text-primary);
+  }
+
+  &.rangeButtonActive {
+    background: var(--color-accent-primary);
+    color: var(--color-text-on-accent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Account selector
+// ---------------------------------------------------------------------------
+
+.accountSelect {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  min-width: 12rem;
+
+  &:focus {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 1px;
+  }
+}
+
+.accountSelectLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-right: 0.25rem;
+}
+
+// ---------------------------------------------------------------------------
+// Canvas region
+// ---------------------------------------------------------------------------
+
+.canvas {
+  flex: 1;
+  overflow: auto;
+  padding: 1rem;
+}

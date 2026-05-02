@@ -1,0 +1,20 @@
+{
+  "name": "provider-openai-codex",
+  "displayName": "OpenAI Codex",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "openai-codex",
+        "name": "OpenAI Codex",
+        "description": "OpenAI Codex App-Server"
+      }
+    ]
+  }
+}

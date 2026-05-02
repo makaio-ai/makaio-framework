@@ -1,0 +1,17 @@
+/**
+ * Theme Helper Functions
+ */
+
+/// Returns a CSS custom property for themed colors.
+/// @param {String} $name - The semantic color name (e.g., 'accent-primary')
+/// @return {String} CSS var() reference
+@function theme-color($name) {
+  @return var(--color-#{$name});
+}
+
+/// Returns a CSS custom property for themed fonts.
+/// @param {String} $name - The font name ('ui' or 'mono')
+/// @return {String} CSS var() reference
+@function theme-font($name) {
+  @return var(--font-#{$name});
+}

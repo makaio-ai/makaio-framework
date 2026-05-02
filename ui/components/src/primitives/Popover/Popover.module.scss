@@ -1,0 +1,66 @@
+/**
+ * Popover component styles
+ *
+ * Floating panel anchored below a trigger element.
+ * Uses theme tokens for colors, spacing, shadows, and z-index.
+ */
+
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+
+.popoverContainer {
+  position: relative;
+  display: inline-block;
+}
+
+.triggerWrapper {
+  display: inline-block;
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+    border-radius: spacing.$radius-sm;
+  }
+}
+
+/**
+ * Floating popover panel
+ * Positioned below trigger with start/end alignment variants.
+ */
+.popoverPanel {
+  position: absolute;
+  top: calc(100% + #{spacing.$spacing-2});
+  z-index: shadows.$z-popover;
+
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-default);
+  border-radius: spacing.$radius-md;
+  box-shadow: shadows.$shadow-context-menu;
+
+  // Animation
+  animation: popoverFadeIn 0.15s ease-out;
+
+  // Alignment variants
+  &.start {
+    left: 0;
+  }
+
+  &.end {
+    right: 0;
+  }
+}
+
+/**
+ * Entrance animation
+ */
+@keyframes popoverFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * #{spacing.$spacing-2})) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}

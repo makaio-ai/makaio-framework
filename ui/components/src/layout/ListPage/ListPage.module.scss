@@ -1,0 +1,14 @@
+/**
+ * ListPage styles
+ *
+ * Minimal styles - most layout is handled by Page, ContentHeader, and Panel.
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: spacing.$spacing-4;
+}

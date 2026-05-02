@@ -1,0 +1,4 @@
+name: OpenAI
+models:
+  gpt-5.2: {}
+  gpt-5.4-mini: {}

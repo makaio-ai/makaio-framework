@@ -1,0 +1,53 @@
+{
+  "name": "@makaio/kernel",
+  "description": "Runtime extension orchestration for the Makaio framework.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "./src/cli/register.ts",
+    "./dist/cli/register.mjs"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli/index.ts",
+    "./cli/register": "./src/cli/register.ts",
+    "./cli/schemas": "./src/cli/schemas.ts",
+    "./extension": "./src/extension/index.ts",
+    "./namespace": "./src/namespace/index.ts",
+    "./observability": "./src/observability/index.ts",
+    "./providers": "./src/providers/index.ts",
+    "./window": "./src/window/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/service-base": "workspace:*"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./cli": "./dist/cli/index.mjs",
+      "./cli/register": "./dist/cli/register.mjs",
+      "./cli/schemas": "./dist/cli/schemas.mjs",
+      "./extension": "./dist/extension/index.mjs",
+      "./namespace": "./dist/namespace/index.mjs",
+      "./observability": "./dist/observability/index.mjs",
+      "./providers": "./dist/providers/index.mjs",
+      "./window": "./dist/window/index.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1"
+  }
+}

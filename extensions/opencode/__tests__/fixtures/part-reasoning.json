@@ -1,0 +1,16 @@
+{
+  "id": "prt_bbc7965ee003ReasoningXYZ",
+  "sessionID": "ses_43d462e9cffexz6719QK96K7Ei",
+  "messageID": "msg_bbc7965ee0013MiAht130lgpXk",
+  "type": "reasoning",
+  "text": "**Analyzing the request**\n\nThe user wants to install the opencode-antigravity-auth plugin. I should first check if there's a package manager configuration file to understand how packages are managed in this project.",
+  "metadata": {
+    "openai": {
+      "itemId": "rs_04cbf7ba2df222da01696780117abc123"
+    }
+  },
+  "time": {
+    "start": 1768320007100,
+    "end": 1768320007500
+  }
+}

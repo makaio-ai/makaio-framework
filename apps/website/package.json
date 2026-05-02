@@ -1,0 +1,26 @@
+{
+  "name": "@makaio/website",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Makaio Framework documentation and marketing website",
+  "author": "Makaio AI",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.38.4",
+    "@fontsource-variable/jetbrains-mono": "^5.2.5",
+    "@fontsource/outfit": "^5.2.5",
+    "@makaio/type-lens": "workspace:*",
+    "astro": "^6.2.1",
+    "rehype-mermaid": "^3.0.0",
+    "sharp": "^0.34.3",
+    "starlight-llms-txt": "^0.8.1",
+    "typedoc": "^0.28.19",
+    "typedoc-plugin-markdown": "^4.11.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "outDir": "./dist",
+    "types": ["node", "vite/client"]
+  },
+  "include": ["src/**/*", "vite.renderer.config.ts", "electrobun.config.ts", "build.ts"]
+}

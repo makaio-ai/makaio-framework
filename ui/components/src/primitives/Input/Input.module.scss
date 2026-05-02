@@ -1,0 +1,185 @@
+@use '@makaio/ui-theme';
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+@use '@makaio/ui-theme/tokens/typography' as typography;
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/mixins/transitions' as transitions;
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: spacing.$spacing-1_5;
+}
+
+.label {
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-medium;
+  color: var(--color-text-primary);
+  margin-bottom: spacing.$spacing-0_5;
+}
+
+.inputContainer {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+  @include transitions.transition(border-color, box-shadow, background-color);
+
+  &::placeholder {
+    color: var(--color-text-muted);
+    opacity: 0.7;
+  }
+
+  &:hover:not(:disabled):not(.error) {
+    border-color: color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+    background: var(--color-bg-secondary);
+  }
+
+  // Focus state with amber glow - matching Aura design system
+  &:focus:not(:disabled):not(.error) {
+    outline: none;
+    border-color: var(--color-accent-primary);
+    box-shadow: shadows.$shadow-glow;
+    background: var(--color-bg-secondary);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: var(--color-bg-primary);
+  }
+}
+
+// Sizes
+.sm {
+  height: spacing.$spacing-9;
+  padding: 0 spacing.$spacing-3;
+  font-size: typography.$font-size-xs;
+
+  &.hasLeftIcon {
+    padding-left: spacing.$spacing-9;
+  }
+
+  &.hasRightIcon {
+    padding-right: spacing.$spacing-9;
+  }
+}
+
+.md {
+  height: spacing.$spacing-11;
+  padding: 0 spacing.$spacing-3_5;
+  font-size: typography.$font-size-sm;
+
+  &.hasLeftIcon {
+    padding-left: spacing.$spacing-10;
+  }
+
+  &.hasRightIcon {
+    padding-right: spacing.$spacing-10;
+  }
+}
+
+.lg {
+  height: 3.25rem;
+  padding: 0 1.125rem;
+  font-size: typography.$font-size-base;
+
+  &.hasLeftIcon {
+    padding-left: 3rem;
+  }
+
+  &.hasRightIcon {
+    padding-right: 3rem;
+  }
+}
+
+// Error state
+.error {
+  border-color: var(--color-error);
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-error);
+    box-shadow: shadows.$shadow-ring-error;
+    background: var(--color-bg-secondary);
+  }
+
+  &:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--color-error) 60%, transparent);
+  }
+}
+
+// Icons
+.leftIcon,
+.rightIcon {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  pointer-events: none;
+  @include transitions.transition(color);
+
+  svg {
+    width: 1em;
+    height: 1em;
+  }
+}
+
+.leftIcon {
+  left: spacing.$spacing-3_5;
+
+  .sm & {
+    left: spacing.$spacing-3;
+  }
+
+  .lg & {
+    left: 1.125rem;
+  }
+}
+
+.rightIcon {
+  right: spacing.$spacing-3_5;
+
+  .sm & {
+    right: spacing.$spacing-3;
+  }
+
+  .lg & {
+    right: 1.125rem;
+  }
+}
+
+// Input focus should change icon color.
+// leftIcon is a preceding sibling of input, so ~ cannot reach it;
+// use :focus-within on the container instead.
+.inputContainer:focus-within .leftIcon,
+.input:focus ~ .rightIcon {
+  color: var(--color-accent-primary);
+}
+
+.inputContainer:has(.error:focus) .leftIcon,
+.error:focus ~ .rightIcon {
+  color: var(--color-error);
+}
+
+// Helper/Error text
+.helperText {
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-xs;
+  color: var(--color-text-secondary);
+  margin-top: spacing.$spacing-0_5;
+  line-height: 1.4;
+}
+
+.errorText {
+  color: var(--color-error);
+}

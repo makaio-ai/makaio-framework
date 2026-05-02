@@ -1,0 +1,216 @@
+name: Canary Release
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: canary-release
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: 1.3.12
+
+jobs:
+  prepare:
+    if: github.event.label.name == 'canary' && github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Calculate canary version
+        id: version
+        run: |
+          BASE_VERSION=$(node -p "require('./apps/electrobun/package.json').version")
+          LATEST_TAG=$(git tag -l "v${BASE_VERSION}-canary.*" --sort=-v:refname | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEXT_N=1
+          else
+            CURRENT_N=$(echo "$LATEST_TAG" | sed "s/v${BASE_VERSION}-canary\.\([0-9]*\)/\1/")
+            NEXT_N=$((CURRENT_N + 1))
+          fi
+          CANARY_VERSION="${BASE_VERSION}-canary.${NEXT_N}"
+          echo "version=$CANARY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$CANARY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Canary version: $CANARY_VERSION"
+
+      - name: Bump version and merge to canary
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          cd apps/electrobun
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+          cd ../..
+
+          git add apps/electrobun/package.json
+          COMMIT_MSG="canary ${{ steps.version.outputs.version }} - ${PR_TITLE}"
+          git commit -m "$COMMIT_MSG"
+
+          CANARY_SHA=$(git rev-parse HEAD)
+          git tag "${{ steps.version.outputs.tag }}" "$CANARY_SHA"
+
+          git fetch origin canary:canary 2>/dev/null || git checkout -b canary
+          git checkout canary
+          if ! git merge --ff-only "$CANARY_SHA"; then
+            echo "::error::Cannot fast-forward canary branch. Has it diverged from develop?"
+            exit 1
+          fi
+
+          git push origin canary "${{ steps.version.outputs.tag }}"
+
+  build:
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 60
+    environment: canary
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, cef]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: '**/node_modules'
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Save Yarn cache
+        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Save node_modules
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: '**/node_modules'
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERT }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import cert.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm cert.p12
+
+      - name: Write App Store Connect API key
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          echo "$API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/keys/AuthKey.p8"
+
+      - name: Build ${{ matrix.variant }} variant
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ vars.ELECTROBUN_DEVELOPER_ID }}
+          ELECTROBUN_TEAMID: ${{ vars.ELECTROBUN_TEAMID }}
+          ELECTROBUN_APPLEAPIKEYPATH: ${{ runner.temp }}/keys/AuthKey.p8
+          ELECTROBUN_APPLEAPIKEY: ${{ vars.ELECTROBUN_APPLEAPIKEY }}
+          ELECTROBUN_APPLEAPIISSUER: ${{ vars.ELECTROBUN_APPLEAPIISSUER }}
+        run: yarn workspace @makaio/electrobun package:canary:${{ matrix.variant }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canary-macos-${{ matrix.variant }}
+          path: apps/electrobun/artifacts/
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Verify artifacts
+        run: |
+          test -f canary-macos-base/canary-macos-arm64-update.json
+          test -f canary-macos-cef/cef-canary-macos-arm64-update.json
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.version }}
+          prerelease: true
+          files: |
+            canary-macos-base/*
+            canary-macos-cef/*
+          body: |
+            Canary release from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+
+      - name: Remove canary label
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.removeLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              name: 'canary',
+            });
+
+      - name: React with rocket
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              content: 'rocket',
+            });

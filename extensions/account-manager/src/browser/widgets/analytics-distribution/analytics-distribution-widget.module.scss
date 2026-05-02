@@ -1,0 +1,114 @@
+/**
+ * Analytics distribution widget styles.
+ *
+ * Stacked horizontal bar + legend. Pure flexbox. Aura CSS custom properties.
+ */
+
+// Shared palette — index matches segment and legend swatch position.
+$palette-by-index: (
+  0: var(--color-accent-primary),
+  1: var(--branch-color-2),
+  2: var(--branch-color-5),
+  3: var(--branch-color-3),
+  4: var(--branch-color-4),
+  5: var(--branch-color-1),
+);
+
+// ---------------------------------------------------------------------------
+// Widget root
+// ---------------------------------------------------------------------------
+
+.widget {
+  padding: 0.75rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+}
+
+.title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+// ---------------------------------------------------------------------------
+// Stacked bar
+// ---------------------------------------------------------------------------
+
+.barWrapper {
+  height: 1.5rem;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  background: var(--color-bg-secondary);
+}
+
+.barSegment {
+  height: 100%;
+  transition: flex-basis 0.25s ease;
+  min-width: 0;
+
+  &:first-child {
+    border-top-left-radius: var(--radius-md);
+    border-bottom-left-radius: var(--radius-md);
+  }
+
+  &:last-child {
+    border-top-right-radius: var(--radius-md);
+    border-bottom-right-radius: var(--radius-md);
+  }
+}
+
+// Segment colours — index-based, matching the legend swatches.
+@each $index, $color in $palette-by-index {
+  .segment#{$index},
+  .legendSwatch#{$index} {
+    background: $color;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Legend
+// ---------------------------------------------------------------------------
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.legendSwatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.legendLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.legendPct {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
+
+.empty {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}

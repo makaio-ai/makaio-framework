@@ -1,0 +1,122 @@
+/**
+ * Opacity Tokens
+ *
+ * Semantic and scale-based opacity values for use with rgba() or the
+ * alpha() helper function from `\@makaio/ui-theme/functions`.
+ *
+ * Usage:
+ *   @use '\@makaio/ui-theme/tokens/opacity';
+ *
+ *   background: rgba(colors.$accent-primary, opacity.$surface);
+ */
+
+// =============================================================================
+// SEMANTIC INTERACTION TOKENS
+//
+// Named for the UI state or role they represent.
+// Prefer these over scale tokens when the intent is clear.
+// Values intentionally duplicate scale tokens — the semantic name IS the value-add.
+// =============================================================================
+
+/// Barely-there surface tint — the faintest possible background wash.
+/// Used for alternating rows or ultra-subtle depth cues.
+$whisper: 0.02;
+
+/// Minimal presence — used for very subtle separators or faint tints.
+/// Example: panel header gradient terminus.
+$faint: 0.03;
+
+/// Ghost/transparent button default state, subtle hover surface.
+/// The most common low-emphasis background tint.
+$surface: 0.05;
+
+/// Slightly stronger tint — used for hover states on secondary elements.
+/// Example: scrollbar thumb, list item hover.
+$surface-hover: 0.08;
+
+/// Standard background tint for semantic color chips and badge fills.
+/// Example: `rgba(colors.$success, opacity.$tint)`.
+$tint: 0.1;
+
+/// Hover and glow effects for accented elements.
+/// Example: primary button box-shadow, collapsible header hover gradient.
+$glow: 0.15;
+
+/// Visible interactive border, e.g. badge border-color.
+$border: 0.2;
+
+/// Stronger border — active or focused interactive element borders.
+$border-strong: 0.3;
+
+/// Disabled element opacity — applied to the element itself, not a color channel.
+/// Example: `opacity: opacity.$disabled` (not rgba).
+$disabled: 0.5;
+
+// =============================================================================
+// GLASS / PANEL OPACITY TOKENS
+//
+// For glassmorphism background-color values where the base color is a
+// solid background token (colors.$bg-secondary, etc.) and partial
+// transparency is required.
+// =============================================================================
+
+/// Translucent glass — ghost panel, sidebar at rest.
+$glass-subtle: 0.4;
+
+/// Mid-weight glass — secondary glass panels, bg-hover states.
+$glass: 0.5;
+
+/// Standard glass panel background.
+/// Matches the default glass-panel mixin parameter.
+$glass-panel: 0.8;
+
+/// Elevated glass panel — increased depth.
+$glass-elevated: 0.9;
+
+/// Near-opaque glass — used for dropdown/context menu backdrops.
+$glass-solid: 0.95;
+
+// =============================================================================
+// NUMERIC SCALE TOKENS
+//
+// For cases where semantic names do not fit. Named by their percentage value.
+// =============================================================================
+
+/// 5% opacity.
+$opacity-5: 0.05;
+
+/// 10% opacity.
+$opacity-10: 0.1;
+
+/// 15% opacity.
+$opacity-15: 0.15;
+
+/// 20% opacity.
+$opacity-20: 0.2;
+
+/// 25% opacity.
+$opacity-25: 0.25;
+
+/// 30% opacity.
+$opacity-30: 0.3;
+
+/// 40% opacity.
+$opacity-40: 0.4;
+
+/// 50% opacity.
+$opacity-50: 0.5;
+
+/// 60% opacity.
+$opacity-60: 0.6;
+
+/// 70% opacity.
+$opacity-70: 0.7;
+
+/// 80% opacity.
+$opacity-80: 0.8;
+
+/// 90% opacity.
+$opacity-90: 0.9;
+
+/// 95% opacity.
+$opacity-95: 0.95;

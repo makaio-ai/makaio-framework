@@ -1,0 +1,22 @@
+.indicator {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  gap: 0.5rem;
+}
+
+.dot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 0.5rem;
+  width: 0.5rem;
+}
+
+.dotConnected {
+  background-color: var(--color-success);
+}
+
+.dotDisconnected {
+  background-color: var(--color-danger);
+}

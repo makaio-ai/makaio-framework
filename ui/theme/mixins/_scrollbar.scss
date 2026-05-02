@@ -1,0 +1,44 @@
+/**
+ * Scrollbar Mixins
+ *
+ * Custom scrollbar styling for webkit browsers.
+ * Provides consistent, minimal scrollbars across the application.
+ */
+
+@use '../tokens/spacing';
+
+// Base scrollbar styles
+@mixin custom-scrollbar($width: 6px, $thumb-color: rgba(255, 255, 255, 0.1)) {
+  &::-webkit-scrollbar {
+    width: $width;
+    height: $width;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: $thumb-color;
+    border-radius: spacing.$radius-full;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  }
+}
+
+// Thin scrollbar (for compact UI)
+@mixin thin-scrollbar {
+  @include custom-scrollbar(4px, rgba(255, 255, 255, 0.08));
+}
+
+// Standard scrollbar (default)
+@mixin standard-scrollbar {
+  @include custom-scrollbar(6px, rgba(255, 255, 255, 0.1));
+}
+
+// Thick scrollbar (for better accessibility)
+@mixin thick-scrollbar {
+  @include custom-scrollbar(8px, rgba(255, 255, 255, 0.12));
+}

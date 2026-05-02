@@ -1,0 +1,27 @@
+{
+  "name": "claude-agent-sdk",
+  "displayName": "Claude Agent SDK",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "claude-code",
+        "displayName": "Claude Code",
+        "description": "Official Claude Code Agent SDK integration",
+        "clients": [
+          {
+            "id": "claude-code",
+            "version": "^0.1.0"
+          }
+        ],
+        "protocols": ["anthropic"]
+      }
+    ]
+  }
+}

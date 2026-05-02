@@ -1,0 +1,8 @@
+name: Xiaomi
+models:
+  - name: mimo-v2-pro
+    friendlyName: MiMo-V2-Pro
+    contextWindowSize: 131072
+  - name: mimo-v2-omni
+    friendlyName: MiMo-V2-Omni
+    contextWindowSize: 131072

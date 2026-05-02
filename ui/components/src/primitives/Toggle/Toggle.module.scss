@@ -1,0 +1,90 @@
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+@use '@makaio/ui-theme/tokens/spacing' as spacing;
+
+// Track (the outer pill-shaped container)
+.track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-default);
+  border-radius: spacing.$radius-full;
+  background: var(--color-bg-tertiary);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  &:active:not(:disabled) {
+    opacity: 0.85;
+  }
+}
+
+// Checked state: accent fill with matching border so the pill reads as one solid shape
+.checked {
+  background: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+}
+
+// Disabled state
+.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+// ============================================================================
+// Size variants
+// ============================================================================
+
+// sm: 32x18px track, 12px knob
+.size-sm {
+  width: spacing.$spacing-8; // 32px
+  height: spacing.$spacing-4_5; // 18px
+
+  .knob {
+    width: spacing.$spacing-3; // 12px
+    height: spacing.$spacing-3; // 12px
+    left: spacing.$spacing-0_75; // 3px from left when unchecked
+  }
+
+  &.checked .knob {
+    // translate right: track width - knob width - (2 * left offset) = 32 - 12 - 6 = 14px
+    transform: translateY(-50%) translateX(spacing.$spacing-3_5); // 14px
+  }
+}
+
+// md: 40x24px track (nearest token above 22px), 16px knob
+.size-md {
+  width: spacing.$spacing-10; // 40px
+  height: spacing.$spacing-6; // 24px — nearest token to the intended 22px
+
+  .knob {
+    width: spacing.$spacing-4; // 16px
+    height: spacing.$spacing-4; // 16px
+    left: spacing.$spacing-1; // 4px from left when unchecked
+  }
+
+  &.checked .knob {
+    // translate right: track width - knob width - (2 * left offset) = 40 - 16 - 8 = 16px
+    transform: translateY(-50%) translateX(spacing.$spacing-4); // 16px
+  }
+}
+
+// Sliding knob
+.knob {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  border-radius: spacing.$radius-full;
+  background: var(--color-text-white);
+  box-shadow: shadows.$shadow-sm;
+  transition: transform 0.15s ease;
+}

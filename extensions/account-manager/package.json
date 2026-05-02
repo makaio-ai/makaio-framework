@@ -1,0 +1,77 @@
+{
+  "name": "@makaio-community/account-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/bus/schemas.ts",
+    "./register": "./src/bus/namespace.ts",
+    "./browser": "./src/browser/index.ts",
+    "./utils": "./src/utils/index.ts",
+    "./cli": "./src/cli.ts",
+    "./server": "./src/server.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./src/bus/namespace.ts"
+  ],
+  "scripts": {
+    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
+    "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
+    "prepare:portable-package": "tsx ./scripts/prepare-portable-package.ts",
+    "db:generate": "tsx $(yarn bin drizzle-kit) generate",
+    "db:generate:fresh": "rm -rf src/drizzle && tsx $(yarn bin drizzle-kit) generate",
+    "db:push": "tsx $(yarn bin drizzle-kit) push",
+    "db:studio": "tsx $(yarn bin drizzle-kit) studio"
+  },
+  "peerDependencies": {
+    "@makaio/bus-core": "*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "@napi-rs/keyring": "^1.0.0",
+    "d3-shape": "^3.2.0",
+    "drizzle-orm": "0.45.2",
+    "ink": "^6.0.0",
+    "smol-toml": "^1.3.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/runtime-node": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "@makaio/ui-hooks": "workspace:*",
+    "@makaio/ui-kernel": "workspace:*",
+    "@makaio/ui-theme": "workspace:*",
+    "@makaio/ui-views": "workspace:*",
+    "@types/d3-shape": "^3.1.7",
+    "@types/react": "^19.2.2",
+    "drizzle-kit": "^0.31.8",
+    "ink-testing-library": "^3.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tsdown": "^0.21.7",
+    "tsx": "^4.20.4",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.5"
+  },
+  "publishConfig": {
+    "exports": {
+      "./browser": "./dist/browser.mjs",
+      "./schemas": "./dist/bus/schemas.mjs",
+      "./register": "./dist/bus/namespace.mjs",
+      "./cli": "./dist/cli.mjs",
+      "./server": "./dist/server.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

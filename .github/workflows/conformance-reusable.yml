@@ -1,0 +1,440 @@
+name: Conformance Tests Reusable
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      comment_id:
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: conformance-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Resolve PR metadata before checking out code that will receive provider
+      # API keys.
+      - name: Reject fork pull requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ inputs.pr_number }},
+            });
+
+            const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
+            const headRepository = pullRequest.head.repo?.full_name;
+
+            if (headRepository !== baseRepository) {
+              core.setFailed(
+                'Conformance tests require provider API keys and only run for pull requests from this repository.',
+              );
+            }
+
+      - name: React to comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: ${{ inputs.comment_id }},
+              content: 'rocket',
+            });
+
+  reference-smoke:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Save Yarn cache
+        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+
+      - name: Save node_modules
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Run openai-node reference smoke
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a openai-node \
+            agents.simple.test.ts \
+            orchestration/sendMessage.test.ts \
+            --workers 1 \
+            --phase reference-smoke \
+            --result-output conformance-artifacts/conformance-result-openai-node-reference-smoke.json \
+            --schema-violations-output conformance-artifacts/schema-violations-openai-node-reference-smoke.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-artifacts-openai-node-reference-smoke
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
+
+  reference-rest:
+    needs: reference-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run openai-node reference rest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a openai-node \
+            --exclude agents.simple.test.ts \
+            --exclude orchestration/sendMessage.test.ts \
+            --phase reference-rest \
+            --result-output conformance-artifacts/conformance-result-openai-node-reference-rest.json \
+            --schema-violations-output conformance-artifacts/schema-violations-openai-node-reference-rest.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-artifacts-openai-node-reference-rest
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
+
+  adapter-conformance:
+    needs: reference-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: anthropic-sdk
+            provider_secret_name: ANTHROPIC_API_KEY
+          - adapter: claude-agent-sdk
+            conformance_provider: opencode-go-anthropic
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: claude-code-cli
+            conformance_provider: opencode-go-anthropic
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: codex-app-server
+            provider_secret_name: OPENAI_API_KEY
+          - adapter: gemini-sdk
+            provider_secret_name: GEMINI_API_KEY
+          - adapter: pi-sdk
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: qwen-acp
+            provider_secret_name: OPENAI_API_KEY
+    name: conformance (${{ matrix.adapter }})
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Export provider secret
+        env:
+          PROVIDER_SECRET_NAME: ${{ matrix.provider_secret_name }}
+          PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}
+        run: |
+          if [ -z "${PROVIDER_SECRET_VALUE}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for adapter '${{ matrix.adapter }}'"
+            exit 1
+          fi
+          echo "${PROVIDER_SECRET_NAME}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
+
+      - name: Run adapter smoke
+        env:
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a ${{ matrix.adapter }} \
+            agents.simple.test.ts \
+            orchestration/sendMessage.test.ts \
+            --workers 1 \
+            --phase adapter-smoke \
+            --result-output conformance-artifacts/conformance-result-${{ matrix.adapter }}-adapter-smoke.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ matrix.adapter }}-adapter-smoke.json
+
+      - name: Run adapter rest
+        env:
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+        run: |
+          yarn test:conformance \
+            -a ${{ matrix.adapter }} \
+            --exclude agents.simple.test.ts \
+            --exclude orchestration/sendMessage.test.ts \
+            --phase adapter-rest \
+            --result-output conformance-artifacts/conformance-result-${{ matrix.adapter }}-adapter-rest.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ matrix.adapter }}-adapter-rest.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-artifacts-${{ matrix.adapter }}
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
+
+  conformance-report:
+    needs:
+      - preflight
+      - reference-smoke
+      - reference-rest
+      - adapter-conformance
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.preflight.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download conformance artifacts
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: conformance-artifacts-*
+          path: conformance-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+
+      - name: Publish conformance report
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const marker = '<!-- makaio-conformance-report -->';
+            const dir = 'conformance-artifacts';
+            const escapeCell = (value) => String(value).replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+            const formatDuration = (ms) => ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+
+            const files = fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+            const resultFiles = files.filter((file) => file.startsWith('conformance-result-') && file.endsWith('.json'));
+            const artifacts = resultFiles.flatMap((file) => {
+              const artifact = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+              return artifact.runs.map((run) => ({ ...run, phase: artifact.phase ?? run.phase ?? 'unknown' }));
+            });
+
+            artifacts.sort((a, b) => `${a.adapter}:${a.phase}`.localeCompare(`${b.adapter}:${b.phase}`));
+
+            const totalPassed = artifacts.reduce((sum, run) => sum + run.passed, 0);
+            const totalFailed = artifacts.reduce((sum, run) => sum + run.failed, 0);
+            const failedRuns = artifacts.filter((run) => run.status === 'failed');
+            const totalSkipped = artifacts.reduce((sum, run) => sum + run.skipped, 0);
+            const totalViolations = artifacts.reduce((sum, run) => sum + (run.schemaViolations?.length ?? 0), 0);
+            const hasArtifacts = artifacts.length > 0;
+
+            const lines = [
+              marker,
+              '## Conformance Report',
+              '',
+              hasArtifacts
+                ? `**Summary:** ${totalPassed} passed, ${totalFailed} failed, ${totalSkipped} skipped, ${totalViolations} schema violation(s), ${failedRuns.length} failed run(s).`
+                : '**Summary:** no conformance artifacts were produced.',
+              '',
+              '| Adapter | Phase | Status | Pass | Fail | Skip | Duration | Schema Violations |',
+              '|---------|-------|--------|------|------|------|----------|-------------------|',
+            ];
+
+            for (const run of artifacts) {
+              lines.push(
+                [
+                  `| ${escapeCell(run.adapter)}`,
+                  escapeCell(run.phase),
+                  escapeCell(run.status),
+                  run.passed,
+                  run.failed,
+                  run.skipped,
+                  formatDuration(run.duration),
+                  `${run.schemaViolations?.length ?? 0} |`,
+                ].join(' | '),
+              );
+            }
+
+            const failures = artifacts.flatMap((run) =>
+              [...(run.errors ?? []), ...(run.unhandledErrors ?? [])].map((error) => ({ run, error })),
+            );
+            if (failures.length > 0) {
+              lines.push('', '### Failures');
+              for (const { run, error } of failures) {
+                const location = error.file ? ` (${error.file}${error.line ? `:${error.line}` : ''})` : '';
+                lines.push(`- **${run.adapter} / ${run.phase}** ${error.test ?? error.name ?? 'error'}: ${error.message}${location}`);
+              }
+            }
+
+            const violationRuns = artifacts.filter((run) => (run.schemaViolations?.length ?? 0) > 0);
+            if (violationRuns.length > 0) {
+              lines.push('', '### Schema Violations');
+              for (const run of violationRuns) {
+                const grouped = new Map();
+                for (const violation of run.schemaViolations ?? []) {
+                  grouped.set(violation.subject, (grouped.get(violation.subject) ?? 0) + 1);
+                }
+                for (const [subject, count] of grouped) {
+                  lines.push(`- **${run.adapter} / ${run.phase}** \`${subject}\`: ${count}`);
+                }
+              }
+              lines.push('', 'Full violation samples are attached as `schema-violations-*` artifacts.');
+            }
+
+            const body = `${lines.join('\n')}\n`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ inputs.pr_number }},
+              per_page: 100,
+            });
+
+            const existing = comments.find(
+              (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ inputs.pr_number }},
+                body,
+              });
+            }
+
+            const hasFailedRuns = failedRuns.length > 0;
+
+            if (!hasArtifacts) {
+              core.setFailed('No conformance artifacts were produced');
+            } else if (totalFailed > 0 || hasFailedRuns) {
+              core.setFailed('Conformance tests failed');
+            } else if (totalViolations > 0) {
+              core.setFailed('Schema drift detected');
+            }

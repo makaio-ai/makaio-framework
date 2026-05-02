@@ -1,0 +1,88 @@
+name: Google
+families:
+  - name: gemini-3
+    pattern: "^gemini-3(?:[.-]|$)"
+  - name: gemini-2.5
+    pattern: "^gemini-2\\.5(?:[.-]|$)"
+models:
+  - name: gemini-3-pro
+    friendlyName: Gemini 3 Pro
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-3-flash
+    friendlyName: Gemini 3 Flash
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-3-pro-preview
+    friendlyName: Gemini 3 Pro (Preview)
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-3-flash-preview
+    friendlyName: Gemini 3 Flash (Preview)
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-2.5-pro
+    friendlyName: Gemini 2.5 Pro
+    contextWindowSize: 2097152
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-2.5-flash
+    friendlyName: Gemini 2.5 Flash
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-2.5-flash-lite
+    friendlyName: Gemini 2.5 Flash Lite
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-3.1-pro-preview
+    friendlyName: Gemini 3.1 Pro (Preview)
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384
+  - name: gemini-3.1-flash-lite-preview
+    friendlyName: Gemini 3.1 Flash Lite (Preview)
+    contextWindowSize: 1048576
+    supportedReasoningLevels:
+      none: 0
+      low: 512
+      medium: 2048
+      high: 8192
+      extra-high: 16384

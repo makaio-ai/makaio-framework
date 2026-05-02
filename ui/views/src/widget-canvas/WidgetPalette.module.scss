@@ -1,0 +1,164 @@
+@use '@makaio/ui-theme/tokens/shadows' as shadows;
+
+.palette {
+  background: var(--glass-bg);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: shadows.$shadow-context-menu;
+  overflow: hidden;
+  position: absolute;
+  width: 17.5rem;
+  z-index: 40;
+
+  &:not(.dragging) {
+    transition: transform 50ms ease-out;
+  }
+}
+
+.dragging {
+  box-shadow: shadows.$shadow-context-menu;
+  cursor: grabbing;
+}
+
+.header {
+  align-items: center;
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem;
+  user-select: none;
+}
+
+.dragHandle {
+  align-items: center;
+  cursor: grab;
+  display: flex;
+  flex: 1;
+  gap: 0.5rem;
+}
+
+.dragIcon {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  letter-spacing: -0.1em;
+  opacity: 0.5;
+}
+
+.title {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.controls {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.controlButton {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-size-base);
+  height: 1.5rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.5rem;
+
+  &:hover {
+    background: var(--color-border-subtle);
+    color: var(--color-text-primary);
+  }
+}
+
+.minimized {
+  min-width: 8rem;
+  width: auto;
+}
+
+.content {
+  max-height: 24rem;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.searchInput {
+  appearance: none;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  margin: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  width: calc(100% - 1.5rem);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+
+.widgetItem {
+  background: var(--color-border-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  cursor: grab;
+  padding: 0.75rem;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease;
+
+  &:hover {
+    background: var(--color-border-default);
+    border-color: var(--color-border-hover);
+  }
+}
+
+.disabled {
+  cursor: not-allowed;
+  filter: grayscale(1);
+  opacity: 0.45;
+
+  &:hover {
+    background: var(--color-border-subtle);
+    border-color: var(--color-border-default);
+  }
+}
+
+.itemHeader {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.itemDot {
+  background: color-mix(in srgb, var(--color-info) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-info) 45%, transparent);
+  border-radius: 999px;
+  flex-shrink: 0;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+.itemName {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.itemDesc {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+}

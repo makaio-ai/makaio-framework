@@ -1,0 +1,166 @@
+/**
+ * Analytics history widget styles.
+ *
+ * Inline SVG + tooltip. Series colours assigned via CSS classes using branch
+ * colour tokens to avoid CSS-variable-in-SVG-attribute limitations.
+ * All tokens from Aura CSS custom properties.
+ */
+
+// ---------------------------------------------------------------------------
+// Widget root
+// ---------------------------------------------------------------------------
+
+.widget {
+  padding: 0.75rem;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
+
+.emptyState {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+// ---------------------------------------------------------------------------
+// Chart
+// ---------------------------------------------------------------------------
+
+.chartWrapper {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+// Grid lines
+.gridLine {
+  stroke: var(--color-border-subtle);
+  stroke-width: 1;
+}
+
+// Axis ticks
+.axisTick {
+  fill: var(--color-text-muted);
+  font-size: 10px;
+}
+
+// Series paths — one class per series (cycling through branch colours)
+.series0,
+.series1,
+.series2,
+.series3,
+.series4,
+.series5 {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.series0 {
+  stroke: var(--color-accent-primary);
+}
+.series1 {
+  stroke: var(--branch-color-2);
+}
+.series2 {
+  stroke: var(--branch-color-5);
+}
+.series3 {
+  stroke: var(--branch-color-3);
+}
+.series4 {
+  stroke: var(--branch-color-4);
+}
+.series5 {
+  stroke: var(--branch-color-1);
+}
+
+// ---------------------------------------------------------------------------
+// Tooltip
+// ---------------------------------------------------------------------------
+
+.tooltip {
+  position: absolute;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.375rem 0.625rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: var(--shadow-modal);
+  transform: translateX(-50%);
+}
+
+// ---------------------------------------------------------------------------
+// Legend
+// ---------------------------------------------------------------------------
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.legendSwatch {
+  width: 1rem;
+  height: 2px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+
+.legendLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+// Match legend swatches to series colours
+.legendSwatch0 {
+  background: var(--color-accent-primary);
+}
+.legendSwatch1 {
+  background: var(--branch-color-2);
+}
+.legendSwatch2 {
+  background: var(--branch-color-5);
+}
+.legendSwatch3 {
+  background: var(--branch-color-3);
+}
+.legendSwatch4 {
+  background: var(--branch-color-4);
+}
+.legendSwatch5 {
+  background: var(--branch-color-1);
+}

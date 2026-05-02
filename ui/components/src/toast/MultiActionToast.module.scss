@@ -1,0 +1,88 @@
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+@use '@makaio/ui-theme/tokens/shadows';
+@use '@makaio/ui-theme/mixins/glass';
+@use '@makaio/ui-theme/mixins/transitions';
+
+.root {
+  @include glass.glass-panel;
+  min-width: spacing.$spacing-slide-panel-sm;
+  max-width: spacing.$spacing-slide-panel-md;
+  padding: spacing.$spacing-3;
+  border-radius: var(--radius-lg);
+  box-shadow: shadows.$shadow-organic;
+}
+
+.content {
+  margin-bottom: spacing.$spacing-2;
+}
+
+.title {
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-sm;
+  font-weight: typography.$font-weight-semibold;
+  color: colors.$text-primary;
+  margin-bottom: spacing.$spacing-1;
+}
+
+.message {
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-xs;
+  color: colors.$text-secondary;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  gap: spacing.$spacing-2;
+  flex-wrap: wrap;
+}
+
+.action {
+  @include transitions.transition-all;
+  font-family: typography.$font-ui;
+  font-size: typography.$font-size-xs;
+  font-weight: typography.$font-weight-medium;
+  padding: spacing.$spacing-1 spacing.$spacing-2;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  color: colors.$text-primary;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+
+  &:hover {
+    background: colors.$bg-secondary;
+  }
+
+  &.default {
+    border-color: colors.$border-default;
+  }
+
+  &.destructive {
+    border-color: colors.$danger;
+    color: colors.$danger;
+
+    &:hover {
+      background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+    }
+  }
+
+  &.outline {
+    border-color: colors.$border-subtle;
+  }
+
+  &.dismiss {
+    color: colors.$text-muted;
+    border-color: colors.$border-subtle;
+
+    &:hover {
+      color: colors.$text-secondary;
+    }
+  }
+}

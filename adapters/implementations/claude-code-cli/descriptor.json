@@ -1,0 +1,27 @@
+{
+  "name": "claude-code-cli",
+  "displayName": "Claude Code (CLI)",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "claude-code-cli",
+        "displayName": "Claude Code (CLI)",
+        "description": "Claude Code integration via the `claude` CLI binary using stdio JSON streaming",
+        "clients": [
+          {
+            "id": "claude-code",
+            "version": "^0.1.0"
+          }
+        ],
+        "protocols": ["anthropic"]
+      }
+    ]
+  }
+}

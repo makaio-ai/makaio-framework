@@ -1,0 +1,47 @@
+---
+import DefaultFooter from '@astrojs/starlight/components/Footer.astro';
+import CookieNotice from './CookieNotice.astro';
+---
+
+<DefaultFooter />
+<CookieNotice />
+
+<div class="legal-footer">
+  <nav aria-label="Legal">
+    <a href="/legal/legal-notice/">Legal Notice</a>
+    <span aria-hidden="true">·</span>
+    <a href="/legal/privacy-policy/">Privacy Policy</a>
+  </nav>
+</div>
+
+<style>
+  .legal-footer {
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 1.25rem var(--sl-content-pad-x);
+    text-align: center;
+  }
+
+  .legal-footer nav {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .legal-footer a {
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .legal-footer a:hover {
+    color: var(--sl-color-gray-1);
+  }
+
+  .legal-footer span {
+    color: var(--sl-color-gray-4);
+    font-size: var(--sl-text-xs);
+  }
+</style>

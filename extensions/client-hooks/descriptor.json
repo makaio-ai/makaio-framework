@@ -1,0 +1,36 @@
+{
+  "name": "client-hooks",
+  "displayName": "Client Hook Bridge",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "cli": "cli/index"
+  },
+  "cli": {
+    "name": "hook",
+    "description": "Bridge client hook events to the Makaio bus",
+    "subcommands": [
+      {
+        "name": "received",
+        "description": "Ingest a raw client hook event from stdin and emit it on the bus",
+        "args": [
+          {
+            "name": "client",
+            "description": "Client identifier (e.g. codex, claude-code)"
+          },
+          {
+            "name": "eventName",
+            "description": "Hook event name as reported by the native client"
+          },
+          {
+            "name": "metadataJson",
+            "description": "Optional JSON object for pass-through metadata (e.g. process PID)"
+          }
+        ]
+      }
+    ]
+  },
+  "execution": "embedded"
+}

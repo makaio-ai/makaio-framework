@@ -1,0 +1,100 @@
+/**
+ * Internal Aura Palette (Private)
+ *
+ * DO NOT use the private $_* values outside this module.
+ * Use the public aliases below from tokens/themes only.
+ */
+
+// Theme-specific color palette
+$_amber: #f59e0b;
+$_amber-hover: #fbbf24;
+$_amber-dim: #b45309;
+$_amber-glow: rgba(245, 158, 11, 0.15);
+$_green: #22c55e;
+$_red: #ef4444;
+$_blue: #3b82f6;
+$_purple: #a855f7;
+$_kai-ring-violet: #8a2be2;
+$_kai-ring-cyan: #00bfff;
+$_kai-ring-gold: #ffd700;
+$_kai-ring-orange: #ff8c00;
+$_kai-ring-pink: #ff1493;
+
+// Theme-specific typography
+$_font-display:
+  'Outfit',
+  system-ui,
+  -apple-system,
+  sans-serif;
+$_font-body:
+  'Outfit',
+  system-ui,
+  -apple-system,
+  sans-serif;
+$_font-ui:
+  'Inter',
+  system-ui,
+  -apple-system,
+  sans-serif;
+$_font-nav:
+  'Quicksand',
+  system-ui,
+  -apple-system,
+  sans-serif;
+$_font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+
+// Background colors
+$_bg-primary: #0d0f12;
+$_bg-secondary: #15181d;
+$_bg-tertiary: #1d2128;
+
+// Text colors
+$_text-primary: #e9eaed;
+$_text-secondary: #9ca3af;
+$_text-muted: #6b7280;
+
+// Border colors
+$_border-subtle: rgba(255, 255, 255, 0.05);
+$_border-default: rgba(255, 255, 255, 0.1);
+$_border-muted: rgba(255, 255, 255, 0.08);
+
+// Utility
+$_white-5: rgba(255, 255, 255, 0.05);
+$_white-8: rgba(255, 255, 255, 0.08);
+$_white-10: rgba(255, 255, 255, 0.1);
+
+// Overlay
+$_overlay: rgba(0, 0, 0, 0.5);
+
+// Public aliases (for tokens/themes only)
+$amber: $_amber;
+$amber-hover: $_amber-hover;
+$amber-dim: $_amber-dim;
+$amber-glow: $_amber-glow;
+$green: $_green;
+$red: $_red;
+$blue: $_blue;
+$purple: $_purple;
+$kai-ring-violet: $_kai-ring-violet;
+$kai-ring-cyan: $_kai-ring-cyan;
+$kai-ring-gold: $_kai-ring-gold;
+$kai-ring-orange: $_kai-ring-orange;
+$kai-ring-pink: $_kai-ring-pink;
+$font-display: $_font-display;
+$font-body: $_font-body;
+$font-ui: $_font-ui;
+$font-nav: $_font-nav;
+$font-mono: $_font-mono;
+$bg-primary: $_bg-primary;
+$bg-secondary: $_bg-secondary;
+$bg-tertiary: $_bg-tertiary;
+$text-primary: $_text-primary;
+$text-secondary: $_text-secondary;
+$text-muted: $_text-muted;
+$border-subtle: $_border-subtle;
+$border-default: $_border-default;
+$border-muted: $_border-muted;
+$white-5: $_white-5;
+$white-8: $_white-8;
+$white-10: $_white-10;
+$overlay: $_overlay;

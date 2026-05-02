@@ -1,0 +1,21 @@
+{
+  "name": "github-copilot",
+  "displayName": "GitHub Copilot",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "clients": [
+      {
+        "id": "github-copilot",
+        "name": "GitHub Copilot",
+        "description": "GitHub Copilot \u2014 AI pair programming assistant",
+        "binaryName": "copilot"
+      }
+    ]
+  }
+}

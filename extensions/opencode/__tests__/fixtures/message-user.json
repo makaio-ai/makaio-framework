@@ -1,0 +1,18 @@
+{
+  "id": "msg_bb815fae3001NfwSfS3QMC3yzU",
+  "sessionID": "ses_43d462e9cffexz6719QK96K7Ei",
+  "role": "user",
+  "time": {
+    "created": 1768320006889
+  },
+  "summary": {
+    "title": "Request: install opencode-antigravity-auth plugin",
+    "diffs": []
+  },
+  "agent": "build",
+  "model": {
+    "providerID": "openai",
+    "modelID": "gpt-5.2-chat-latest"
+  },
+  "variant": "medium"
+}

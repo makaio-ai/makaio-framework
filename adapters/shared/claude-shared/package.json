@@ -1,0 +1,29 @@
+{
+  "name": "@makaio/ai-adapters-claude-shared",
+  "description": "Internal shared infrastructure for Claude protocol AI adapter implementations.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./testing": {
+      "source": "./src/testing.ts",
+      "default": "./src/testing.ts"
+    }
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/services-log-import": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "zod": "^4.1.13"
+  }
+}

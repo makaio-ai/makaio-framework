@@ -1,0 +1,30 @@
+{
+  "name": "pin-message",
+  "displayName": "Pin Message",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "sessionEventActions": [
+      {
+        "id": "pin-message:pin",
+        "label": "Pin message",
+        "icon": "pin",
+        "selectionMode": "single",
+        "messageRoles": ["user", "assistant"]
+      },
+      {
+        "id": "pin-message:summarize",
+        "label": "Summarize messages",
+        "icon": "file-text",
+        "selectionMode": "multi",
+        "messageRoles": ["assistant"]
+      }
+    ],
+    "create": true
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "name": "@makaio/adapter-codex-app-server",
+  "description": "OpenAI Codex App-Server adapter for the Makaio AI framework.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "adapters/implementations/codex-app-server"
+  },
+  "bugs": {
+    "url": "https://github.com/makaio-ai/makaio-framework/issues"
+  },
+  "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "package.json",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsx build.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "p-queue": "^9.0.0",
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
+  },
+  "devDependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0",
+    "vitest": "*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

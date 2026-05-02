@@ -1,0 +1,21 @@
+{
+  "name": "codex",
+  "displayName": "Codex",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "clients": [
+      {
+        "id": "codex",
+        "name": "Codex",
+        "description": "OpenAI Codex CLI \u2014 an agentic coding assistant",
+        "binaryName": "codex"
+      }
+    ]
+  }
+}

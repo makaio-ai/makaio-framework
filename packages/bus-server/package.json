@@ -1,0 +1,39 @@
+{
+  "name": "@makaio/bus-server",
+  "description": "WebSocket server for MakaioBus message routing.",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "src/index.ts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./server-lifecycle": "./src/server-lifecycle.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/bus-transport-websocket": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/ws": "^8.5.10"
+  },
+  "peerDependencies": {
+    "ws": "^8.16.0"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./server-lifecycle": "./dist/server-lifecycle.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "inlinedDependencies": {
+    "zod": "4.3.5"
+  }
+}

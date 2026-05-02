@@ -1,0 +1,12 @@
+{
+  "name": "@makaio/ui-theme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Design tokens and Aura theme for Makaio UI (SCSS-only package)",
+  "license": "CC-BY-NC-4.0",
+  "main": "./index.scss",
+  "type": "module",
+  "sideEffects": [
+    "**/*.scss"
+  ]
+}

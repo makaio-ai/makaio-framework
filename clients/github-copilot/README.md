@@ -1,0 +1,48 @@
+# @makaio/client-github-copilot
+
+Static client definition for GitHub Copilot. This package declares the user-facing identity of the `copilot` binary within the framework. GitHub Copilot is an SDK-only integration — the `copilot` binary is used for CLI detection during onboarding but no native tools are exposed by the client itself. All tool invocations default to `always-ask` to ensure explicit user approval. This is a minimal definition-first package with no runtime entrypoint.
+
+## Client Identity
+
+| Field | Value |
+|-------|-------|
+| `id` | `github-copilot` |
+| `name` | `GitHub Copilot` |
+| `description` | GitHub Copilot — AI pair programming assistant |
+| `binaryName` | `copilot` |
+| `minimumVersion` | _(none declared)_ |
+| `defaultApprovalPolicy` | `always-ask` |
+| `defaultProviderId` | `github-copilot` |
+| `configIsolation.envVar` | `COPILOT_HOME` |
+| `configIsolation.defaultPath` | `~/.copilot` |
+
+## Native Tools
+
+None. GitHub Copilot is an SDK-only integration. The `copilot` binary is only used for detection; all tool invocations flow through the adapter layer and require explicit approval.
+
+## Served By (Adapters)
+
+| Adapter ID | Package |
+|-----------|---------|
+| `github-copilot-sdk` | `@makaio/ai-adapters-github-copilot-sdk` — GitHub Copilot SDK integration |
+
+## Exports
+
+### Main entrypoint (`.`)
+
+| Export | Kind | Description |
+|--------|------|-------------|
+| `clientDefinition` | `ClientDefinition` | Static client definition (identity, approval policy) |
+| `githubCopilotPackage` | `MakaioExtension` | Package descriptor for framework extension discovery |
+
+### Server entrypoint (`./server`)
+
+Default export is `githubCopilotPackage` — the single package registered when this client is activated as a server entry.
+
+## Installation
+
+`@makaio/client-github-copilot` is a private workspace package used internally by the framework.
+
+---
+
+*Part of the [Makaio AI Framework](../../README.md)*

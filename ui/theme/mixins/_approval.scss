@@ -1,0 +1,61 @@
+/**
+ * Approval UI Mixins
+ *
+ * Shared button styles for approval actions across views/widgets.
+ */
+
+@use '../tokens/spacing';
+@use '../tokens/typography';
+
+/// Base approval action button styling.
+/// @param {Number|null} $flex - Optional flex value (e.g. 1)
+/// @param {Number} $padding-y - Vertical padding token
+/// @param {Number} $padding-x - Horizontal padding token
+/// @param {Number} $font-size - Typography token for font size
+/// @param {Number} $radius - Radius token
+@mixin approval-button-base(
+  $flex: null,
+  $padding-y: spacing.$spacing-1,
+  $padding-x: spacing.$spacing-2_5,
+  $font-size: typography.$font-size-xs,
+  $radius: spacing.$radius-sm
+) {
+  @if $flex != null {
+    flex: $flex;
+  }
+
+  padding: $padding-y $padding-x;
+  font-family: var(--font-ui);
+  font-size: $font-size;
+  font-weight: typography.$font-weight-medium;
+  border-radius: $radius;
+  cursor: pointer;
+}
+
+/// Variant styling for allow/approve actions.
+@mixin approval-allow-variant {
+  background-color: var(--color-success);
+  color: var(--color-bg-primary);
+  border: none;
+  transition: opacity 120ms ease;
+
+  &:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+}
+
+/// Variant styling for deny actions.
+@mixin approval-deny-variant {
+  background-color: transparent;
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning);
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+
+  &:hover:not(:disabled) {
+    background-color: var(--color-warning);
+    color: var(--color-bg-primary);
+    opacity: 1;
+  }
+}

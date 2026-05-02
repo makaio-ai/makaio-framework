@@ -1,0 +1,20 @@
+{
+  "name": "provider-openrouter",
+  "displayName": "OpenRouter",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "name": "OpenRouter",
+        "description": "OpenRouter — unified API for 300+ AI models across providers."
+      }
+    ]
+  }
+}

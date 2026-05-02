@@ -1,0 +1,48 @@
+{
+  "name": "@makaio/services-package-manager",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas.ts",
+    "./namespace": "./src/namespace.ts",
+    "./register": "./src/namespace.ts",
+    "./package": "./src/package.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": [
+    "./src/namespace.ts",
+    "./dist/namespace.mjs"
+  ],
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@yarnpkg/cli": "^4.12.0",
+    "@yarnpkg/core": "^4.7.0",
+    "@yarnpkg/fslib": "^3.1.4",
+    "semver": "^7.7.0",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "@types/node": "^24.3.0",
+    "@types/semver": "^7.5.8"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./schemas": "./dist/schemas.mjs",
+      "./namespace": "./dist/namespace.mjs",
+      "./register": "./dist/namespace.mjs",
+      "./package": "./dist/package.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

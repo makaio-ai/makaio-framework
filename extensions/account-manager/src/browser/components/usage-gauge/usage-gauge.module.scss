@@ -1,0 +1,70 @@
+/**
+ * Styles for the UsageGauge component.
+ *
+ * Colours derive from @makaio/web-theme Aura token CSS custom properties.
+ * Local spacing, size, and timing values are used where the shared theme does
+ * not yet expose a dedicated token.
+ */
+
+.gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.percentage {
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+
+.track {
+  position: relative;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  border-radius: inherit;
+  transition: width 300ms ease;
+}
+
+/* Semantic state colour tiers — bound to Aura token CSS custom properties. */
+.normal .fill {
+  background-color: var(--color-success);
+}
+
+.warning .fill {
+  background-color: var(--color-warning);
+}
+
+.critical .fill {
+  background-color: var(--color-error);
+}
+
+.countdown {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}

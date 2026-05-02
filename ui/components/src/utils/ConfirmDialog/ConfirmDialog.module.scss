@@ -1,0 +1,89 @@
+/**
+ * ConfirmDialog component styles
+ *
+ * Glass panel modal with backdrop blur and theme-aware styling.
+ * Uses Aura theme color tokens via CSS custom properties.
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/typography';
+
+.dialog {
+  // Reset native dialog styles
+  border-radius: spacing.$radius-lg;
+  padding: 0;
+  max-width: spacing.$spacing-modal-max-width-sm;
+  width: 90%;
+
+  // Glass panel effect
+  background: var(--glass-bg);
+  backdrop-filter: blur(spacing.$spacing-3);
+  -webkit-backdrop-filter: blur(spacing.$spacing-3);
+  border: 1px solid var(--glass-border-subtle);
+  box-shadow: var(--shadow-modal);
+
+  // Backdrop styling
+  &::backdrop {
+    background-color: var(--glass-bg-hover);
+    backdrop-filter: blur(spacing.$spacing-1);
+    -webkit-backdrop-filter: blur(spacing.$spacing-1);
+  }
+
+  // Positioning
+  &.position-center {
+    margin: auto;
+  }
+
+  &.position-top-center {
+    margin: spacing.$spacing-8 auto auto;
+  }
+
+  &.position-bottom-center {
+    margin: auto auto spacing.$spacing-8;
+  }
+}
+
+.content {
+  padding: spacing.$spacing-6;
+}
+
+.title {
+  margin: 0 0 spacing.$spacing-3;
+  font-size: typography.$font-size-xl;
+  font-weight: typography.$font-weight-semibold;
+  color: var(--color-text-primary);
+  font-family: var(--font-ui);
+}
+
+.message {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: typography.$line-height-normal;
+  font-family: var(--font-ui);
+}
+
+.details {
+  margin: spacing.$spacing-3 0 0;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  font-size: typography.$font-size-sm;
+  line-height: typography.$line-height-normal;
+  font-family: var(--font-ui);
+}
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: spacing.$spacing-2;
+  margin: spacing.$spacing-4 0 0;
+  color: var(--color-text-secondary);
+  font-family: var(--font-ui);
+  font-size: typography.$font-size-sm;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: spacing.$spacing-6;
+  gap: spacing.$spacing-3;
+}

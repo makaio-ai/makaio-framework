@@ -1,0 +1,27 @@
+{
+  "name": "github-copilot-sdk",
+  "displayName": "GitHub Copilot",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "github-copilot-sdk",
+        "displayName": "GitHub Copilot",
+        "description": "GitHub Copilot SDK integration",
+        "clients": [
+          {
+            "id": "github-copilot",
+            "version": "^0.1.0"
+          }
+        ],
+        "protocols": ["openai"]
+      }
+    ]
+  }
+}

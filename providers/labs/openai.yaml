@@ -1,0 +1,48 @@
+name: OpenAI
+families:
+  - name: gpt-5
+    pattern: "^gpt-5"
+  - name: gpt-4o
+    pattern: "^gpt-4o"
+  - name: gpt-4.1
+    pattern: "^gpt-4\\.1"
+  - name: o4
+    pattern: "^o4"
+  - name: o3
+    pattern: "^o3"
+models:
+  - name: gpt-5.2-codex
+    friendlyName: GPT-5.2 Codex
+    contextWindowSize: 128000
+    supportedReasoningLevels:
+      low: "low"
+      medium: "medium"
+      high: "high"
+  - name: gpt-5.1-codex-max
+    friendlyName: GPT-5.1 Codex Max
+    contextWindowSize: 128000
+    supportedReasoningLevels:
+      low: "low"
+      medium: "medium"
+      high: "high"
+  - name: gpt-5.1-codex-mini
+    friendlyName: GPT-5.1 Codex Mini
+    contextWindowSize: 128000
+    supportedReasoningLevels:
+      low: "low"
+      medium: "medium"
+      high: "high"
+  - name: gpt-5.2
+    friendlyName: GPT-5.2
+    contextWindowSize: 128000
+    supportedReasoningLevels:
+      low: "low"
+      medium: "medium"
+      high: "high"
+  - name: gpt-5.4-mini
+    friendlyName: GPT-5.4 Mini
+    contextWindowSize: 128000
+    supportedReasoningLevels:
+      low: "low"
+      medium: "medium"
+      high: "high"

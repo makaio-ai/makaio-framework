@@ -1,0 +1,36 @@
+{
+  "name": "@makaio/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Makaio bus protocol",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/bus-transport-websocket": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "tsdown": "0.21.10",
+    "typescript": "^6.0.3",
+    "vitest": "4.0.16"
+  }
+}

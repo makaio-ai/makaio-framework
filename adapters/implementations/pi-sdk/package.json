@@ -1,0 +1,71 @@
+{
+  "name": "@makaio/adapter-pi-sdk",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "adapters/implementations/pi-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/makaio-ai/makaio-framework/issues"
+  },
+  "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "package.json",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsx build.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0",
+    "@mariozechner/pi-agent-core": ">=0.72.0 <0.73.0",
+    "@mariozechner/pi-ai": ">=0.72.0 <0.73.0",
+    "@mariozechner/pi-coding-agent": ">=0.72.0 <0.73.0"
+  },
+  "devDependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/provider-opencode-go": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "@mariozechner/pi-agent-core": "0.72.1",
+    "@mariozechner/pi-ai": "0.72.1",
+    "@mariozechner/pi-coding-agent": "0.72.1",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0",
+    "vitest": "*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

@@ -1,0 +1,167 @@
+/**
+ * Form Control Mixins
+ *
+ * Reusable styles for inputs, selects, buttons, and form elements.
+ * Based on the Aura design system.
+ */
+
+@use 'sass:string';
+@use '../tokens/colors';
+@use '../tokens/opacity';
+@use '../tokens/spacing';
+@use '../tokens/typography';
+@use './transitions';
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+/// URL-encodes a hex color for embedding in SVG data URIs.
+/// Strips the leading `#` and prepends the percent-encoded equivalent `%23`.
+///
+/// @param {Color} $color - A compile-time SCSS hex color token (e.g. `#6b7280`).
+/// @return {String} The color in `%23rrggbb` form, safe for use inside `url(…)`.
+/// @access private
+@function _url-encode-color($color) {
+  // Interpolation produces `#rrggbb`; slice off the `#` and prepend `%23`
+  $hex: string.slice(#{$color}, 2);
+  @return '%23' + $hex;
+}
+
+/// Base input/select styles.
+/// Provides consistent padding, borders, focus states.
+/// @example
+///   input { @include input-base; }
+@mixin input-base {
+  padding: spacing.$spacing-1_5 spacing.$spacing-2_5;
+  background-color: rgba(255, 255, 255, 0.03);
+  border: 1px solid colors.$border-subtle;
+  border-radius: spacing.$radius-sm;
+  color: colors.$text-primary;
+  font-size: typography.$font-size-xs;
+  font-family: typography.$font-ui;
+  width: 100%;
+  @include transitions.transition-all;
+
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  &:focus {
+    outline: none;
+    border-color: colors.$accent-primary;
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
+  &::placeholder {
+    color: colors.$text-muted;
+  }
+
+  &:disabled,
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/// Ghost button (transparent background).
+/// Used for icon buttons and minimal actions.
+/// @example
+///   .iconBtn { @include button-ghost; }
+@mixin button-ghost {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: colors.$text-secondary;
+  @include transitions.transition-all;
+
+  &:hover {
+    color: colors.$text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid colors.$accent-primary;
+    outline-offset: 2px;
+  }
+}
+
+/// Pill/chip style for tags and filters.
+/// @example
+///   .tag { @include pill; }
+@mixin pill {
+  display: inline-flex;
+  align-items: center;
+  gap: spacing.$spacing-1;
+  padding: spacing.$spacing-0_5 spacing.$spacing-2;
+  background-color: colors.$accent-primary-glow;
+  border: 1px solid rgba(colors.$accent-primary, opacity.$border);
+  border-radius: spacing.$radius-xs;
+  font-size: typography.$font-size-xs;
+  color: colors.$accent-primary;
+}
+
+/// Toggle button group container.
+/// @example
+///   .modeToggle { @include toggle-group; }
+@mixin toggle-group {
+  display: flex;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: spacing.$radius-sm;
+  padding: 2px;
+  gap: 2px;
+}
+
+/// Toggle button within a group.
+/// @example
+///   .modeBtn { @include toggle-button; }
+@mixin toggle-button {
+  border: none;
+  background: none;
+  font-size: typography.$font-size-2xs;
+  padding: 2px 6px;
+  border-radius: spacing.$radius-xs;
+  cursor: pointer;
+  color: colors.$text-muted;
+  text-transform: uppercase;
+  font-weight: typography.$font-weight-semibold;
+  @include transitions.transition-all;
+
+  &:hover {
+    color: colors.$text-primary;
+  }
+
+  &.active {
+    background-color: colors.$bg-tertiary;
+    color: colors.$text-primary;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+}
+
+/// Custom dropdown chevron for `<select>` elements.
+///
+/// Injects a 12 × 12 px chevron-down icon as a `background-image` using a
+/// URL-encoded inline SVG. The stroke color is derived from the compile-time
+/// `colors.$text-muted` token so the icon respects the design system palette
+/// rather than using a hardcoded RGBA value.
+///
+/// Combine with `appearance: none` on the `<select>` to hide the native arrow.
+///
+/// @param {Length} $right-inset [$spacing-2] - Distance from the right edge.
+/// @param {Length} $padding-right [$spacing-6] - Right padding to clear the icon.
+/// @example
+///   select {
+///     appearance: none;
+///     @include select-chevron;
+///   }
+@mixin select-chevron($right-inset: spacing.$spacing-2, $padding-right: spacing.$spacing-6) {
+  // $stroke is already %23rrggbb (URL-encoded); #{$stroke} below is Sass
+  // interpolation syntax that substitutes the value — it does NOT prepend a
+  // literal '#' character.
+  $stroke: _url-encode-color(colors.$text-muted);
+  // stylelint-disable-next-line function-url-quotes
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='#{$stroke}' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C%2Fsvg%3E");
+  background-repeat: no-repeat;
+  background-position: right #{$right-inset} center;
+  padding-right: $padding-right;
+}

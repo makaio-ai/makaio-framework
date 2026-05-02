@@ -1,0 +1,219 @@
+/**
+ * SlidePanel Component Styles
+ *
+ * Slide-in panel with theme token integration.
+ * Supports right (desktop) and bottom (mobile) positions.
+ */
+
+@use '@makaio/ui-theme' as theme;
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/spacing';
+
+.container {
+  position: fixed;
+  inset: 0;
+  z-index: theme.$z-modal;
+  pointer-events: none;
+  // Delayed visibility collapse ensures the transform exit transition plays
+  // before the container becomes invisible. `transition-delay: 0` on `.open`
+  // makes it visible instantly on open so the enter transition is visible too.
+  visibility: hidden;
+  transition: visibility 0s linear 350ms;
+
+  &.open {
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+
+    .overlay {
+      opacity: 1;
+    }
+
+    .panel {
+      transform: translateX(0);
+    }
+  }
+}
+
+// Position variants
+.left {
+  .panel {
+    left: 0;
+    top: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    border-left: none;
+    border-right: 1px solid theme.$border-default;
+  }
+
+  &.open .panel {
+    transform: translateX(0);
+  }
+}
+
+.right {
+  .panel {
+    right: 0;
+    top: 0;
+    bottom: 0;
+    transform: translateX(100%);
+  }
+
+  &.open .panel {
+    transform: translateX(0);
+  }
+}
+
+.bottom {
+  .panel {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 80vh;
+    transform: translateY(100%);
+    width: 100% !important;
+    border-radius: spacing.$radius-lg spacing.$radius-lg 0 0;
+  }
+
+  &.open .panel {
+    transform: translateY(0);
+  }
+}
+
+.overlay {
+  // Reset <button> defaults so it renders as a transparent full-size backdrop.
+  appearance: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+
+  position: absolute;
+  inset: 0;
+  background: rgba(theme.$bg-primary, opacity.$opacity-60);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 300ms ease-out;
+  cursor: pointer;
+}
+
+.panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: theme.$bg-secondary;
+  border-left: 1px solid theme.$border-default;
+  box-shadow: theme.$shadow-context-menu;
+  transition: transform 350ms cubic-bezier(0.4, 0, 0.2, 1);
+  max-height: 100vh;
+  overflow: hidden;
+  backdrop-filter: blur(20px);
+}
+
+// Width variants (for right position)
+.width-sm {
+  width: theme.$spacing-slide-panel-sm;
+}
+
+.width-md {
+  width: theme.$spacing-slide-panel-md;
+}
+
+.width-lg {
+  width: theme.$spacing-slide-panel-lg;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: theme.$spacing-4;
+  padding: theme.$spacing-5;
+  border-bottom: 1px solid theme.$border-subtle;
+  flex-shrink: 0;
+}
+
+.titleGroup {
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  margin: 0;
+  font-family: theme.$font-ui;
+  font-size: theme.$font-size-lg;
+  font-weight: theme.$font-weight-semibold;
+  color: theme.$text-primary;
+  line-height: theme.$line-height-tight;
+}
+
+.subtitle {
+  margin: theme.$spacing-1 0 0;
+  font-family: theme.$font-ui;
+  font-size: theme.$font-size-sm;
+  font-weight: theme.$font-weight-normal;
+  color: theme.$text-secondary;
+  line-height: theme.$line-height-normal;
+}
+
+.closeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: theme.$spacing-8;
+  height: theme.$spacing-8;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: spacing.$radius-md;
+  color: theme.$text-secondary;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease-out,
+    color 200ms ease-out;
+
+  &:hover {
+    background: theme.$bg-tertiary;
+    color: theme.$text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid theme.$accent-primary;
+    outline-offset: 2px;
+  }
+
+  &:active {
+    background: rgba(theme.$text-primary, opacity.$surface);
+  }
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: theme.$spacing-5;
+  font-family: theme.$font-ui;
+  color: theme.$text-primary;
+
+  @include theme.custom-scrollbar;
+}
+
+// Responsive: switch to bottom on mobile
+@media (max-width: 768px) {
+  .right {
+    .panel {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      top: auto;
+      max-height: 85vh;
+      width: 100% !important;
+      border-radius: spacing.$radius-lg spacing.$radius-lg 0 0;
+      border-left: none;
+      border-top: 1px solid theme.$border-default;
+      transform: translateY(100%);
+    }
+
+    &.open .panel {
+      transform: translateY(0);
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@makaio/tools-core",
+  "description": "Tool execution primitives: contracts, typed results, and toolset abstractions.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@makaio/core": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "inlinedDependencies": {
+    "@jridgewell/sourcemap-codec": "1.5.5",
+    "@vitest/expect": "4.1.0",
+    "@vitest/pretty-format": "4.1.0",
+    "@vitest/runner": "4.1.0",
+    "@vitest/snapshot": "4.1.0",
+    "@vitest/spy": "4.1.0",
+    "@vitest/utils": "4.1.0",
+    "chai": "6.2.2",
+    "magic-string": "0.30.21",
+    "tinyrainbow": "3.0.3",
+    "vitest": "4.1.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./testing": "./dist/testing/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

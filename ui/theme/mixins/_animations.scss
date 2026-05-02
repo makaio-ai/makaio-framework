@@ -1,0 +1,34 @@
+/**
+ * Animation Mixins
+ *
+ * Common animation patterns for consistent motion design.
+ * Centralizes keyframe definitions to avoid duplication across components.
+ */
+
+/**
+ * Spin animation for loading indicators.
+ * @param $duration - Animation duration (default: 0.8s)
+ * @example
+ *   .spinner {
+ *     @include spin-animation;
+ *   }
+ */
+@mixin spin-animation($duration: 0.8s) {
+  animation: makaio-spin $duration linear infinite;
+}
+
+/**
+ * Keyframes for spin animation.
+ * Include once per stylesheet that uses spin-animation mixin.
+ * Uses namespaced name to avoid conflicts with other libraries.
+ */
+@mixin spin-keyframes {
+  @keyframes makaio-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+}

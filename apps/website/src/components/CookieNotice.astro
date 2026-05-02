@@ -1,0 +1,153 @@
+---
+---
+
+<div class="cookie-notice" id="cookie-notice" role="dialog" aria-label="Cookie notice" hidden>
+  <div class="cookie-notice-inner">
+    <p class="cookie-notice-text" id="cookie-notice-text"></p>
+    <div class="cookie-notice-actions">
+      <button class="cookie-notice-lang" id="cookie-notice-lang" type="button"></button>
+      <button class="cookie-notice-dismiss" id="cookie-notice-dismiss" type="button"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const COOKIE_NAME = 'cookie_notice';
+  const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+
+  const i18n = {
+    en: {
+      text: 'This site uses technically necessary cookies only (Cloudflare security, cookie notice preference). No tracking or marketing cookies.',
+      dismiss: 'Got it',
+      toggle: 'DE',
+    },
+    de: {
+      text: 'Diese Website verwendet ausschließlich technisch notwendige Cookies (Cloudflare-Sicherheit, Cookie-Hinweis-Präferenz). Kein Tracking, kein Marketing.',
+      dismiss: 'Verstanden',
+      toggle: 'EN',
+    },
+  };
+
+  function getCookie(name: string): string | null {
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+
+  function setCookie(name: string, value: string, maxAge: number): void {
+    document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAge};SameSite=Lax;Secure`;
+  }
+
+  function init(): void {
+    if (getCookie(COOKIE_NAME)) return;
+
+    const el = document.getElementById('cookie-notice')!;
+    if (el.dataset.init) return;
+    el.dataset.init = '1';
+
+    let lang: 'en' | 'de' = 'en';
+    const textEl = document.getElementById('cookie-notice-text')!;
+    const langBtn = document.getElementById('cookie-notice-lang')!;
+    const dismissBtn = document.getElementById('cookie-notice-dismiss')!;
+
+    function render(): void {
+      const t = i18n[lang];
+      textEl.textContent = t.text;
+      dismissBtn.textContent = t.dismiss;
+      langBtn.textContent = t.toggle;
+      el.setAttribute('aria-label', lang === 'en' ? 'Cookie notice' : 'Cookie-Hinweis');
+    }
+
+    langBtn.addEventListener('click', () => {
+      lang = lang === 'en' ? 'de' : 'en';
+      render();
+    });
+
+    dismissBtn.addEventListener('click', () => {
+      setCookie(COOKIE_NAME, 'dismissed', COOKIE_MAX_AGE);
+      el.setAttribute('hidden', '');
+    });
+
+    render();
+    el.removeAttribute('hidden');
+  }
+
+  init();
+  document.addEventListener('astro:page-load', init);
+</script>
+
+<style>
+  .cookie-notice {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    z-index: 9999;
+    padding: 1rem 1.5rem;
+    background: rgba(13, 15, 18, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .cookie-notice[hidden] {
+    display: none;
+  }
+
+  .cookie-notice-inner {
+    max-width: 64rem;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 1rem;
+    min-height: 3rem;
+  }
+
+  .cookie-notice-text {
+    margin: 0;
+    font-size: var(--sl-text-xs);
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+  }
+
+  .cookie-notice-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .cookie-notice-lang {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 0.375rem;
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-xs);
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    font-family: var(--sl-font);
+  }
+
+  .cookie-notice-lang:hover {
+    border-color: rgba(255, 255, 255, 0.25);
+    color: var(--sl-color-gray-1);
+  }
+
+  .cookie-notice-dismiss {
+    background: var(--sl-color-accent);
+    border: none;
+    border-radius: 0.375rem;
+    color: var(--sl-color-black);
+    font-size: var(--sl-text-xs);
+    font-weight: 600;
+    padding: 0.375rem 0.75rem;
+    min-width: 6.5rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-family: var(--sl-font);
+  }
+
+  .cookie-notice-dismiss:hover {
+    background: var(--sl-color-accent-high);
+  }
+</style>

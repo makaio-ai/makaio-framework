@@ -1,0 +1,33 @@
+name: Anthropic
+families:
+  - opus
+  - sonnet
+  - haiku
+models:
+  - name: claude-sonnet-4-6
+    friendlyName: Sonnet 4.6
+    contextWindowSize: 200000
+    supportedReasoningLevels:
+      none: 0
+      low: 4000
+      medium: 8000
+      high: 16000
+      extra-high: 32000
+  - name: claude-haiku-4-5
+    friendlyName: Haiku 4.5
+    contextWindowSize: 200000
+    supportedReasoningLevels:
+      none: 0
+      low: 4000
+      medium: 8000
+      high: 16000
+      extra-high: 32000
+  - name: claude-opus-4-7
+    friendlyName: Opus 4.7
+    contextWindowSize: 200000
+    supportedReasoningLevels:
+      none: 0
+      low: 4000
+      medium: 8000
+      high: 16000
+      extra-high: 32000

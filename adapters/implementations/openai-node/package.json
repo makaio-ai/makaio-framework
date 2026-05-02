@@ -1,0 +1,71 @@
+{
+  "name": "@makaio/adapter-openai-node",
+  "description": "OpenAI adapter using the official OpenAI Node SDK for agentic chat completions.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "adapters/implementations/openai-node"
+  },
+  "bugs": {
+    "url": "https://github.com/makaio-ai/makaio-framework/issues"
+  },
+  "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "package.json",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsx build.ts"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0",
+    "openai": ">=6.22.0 <7.0.0"
+  },
+  "devDependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/provider-alibaba": "workspace:*",
+    "@makaio/provider-nanogpt": "workspace:*",
+    "@makaio/provider-openai": "workspace:*",
+    "@makaio/provider-opencode-go": "workspace:*",
+    "@makaio/provider-openrouter": "workspace:*",
+    "@makaio/provider-z-ai": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "@types/node": "^24.3.0",
+    "openai": "6.22.0",
+    "tsx": "^4.20.5",
+    "vite": "^8.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

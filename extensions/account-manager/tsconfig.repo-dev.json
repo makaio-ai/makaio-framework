@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@makaio/bus-core": ["../../packages/bus-core/src"],
+      "@makaio/contracts": ["../../packages/contracts/src"],
+      "@makaio/contracts/*": ["../../packages/contracts/src/*"],
+      "@makaio/runtime-node": ["../../runtimes/node/src"],
+      "@makaio/service-base": ["../../packages/services/base/src"]
+    }
+  }
+}

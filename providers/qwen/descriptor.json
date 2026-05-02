@@ -1,0 +1,20 @@
+{
+  "name": "provider-qwen-acp",
+  "displayName": "Qwen OAuth",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "providers": [
+      {
+        "id": "qwen-oauth",
+        "name": "Qwen OAuth",
+        "description": "Qwen Code CLI via Agent Client Protocol"
+      }
+    ]
+  }
+}

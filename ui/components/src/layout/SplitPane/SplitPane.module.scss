@@ -1,0 +1,100 @@
+/**
+ * SplitPane component styles
+ *
+ * Provides styling for the recursive split pane layout with resizable panels.
+ */
+
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/mixins/transitions';
+
+/**
+ * Root container for the split pane layout.
+ */
+.splitPane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/**
+ * Panel styles - override react-resizable-panels flex behavior.
+ */
+.panel {
+  // Override inline flex from react-resizable-panels to ensure proper height
+  min-height: 0;
+  overflow: hidden;
+}
+
+/**
+ * Leaf pane container - holds the actual content.
+ */
+.leafPane {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/**
+ * Resize handle (Separator) between panels.
+ *
+ * Provides visual feedback and interaction area for resizing.
+ * The Separator component detects orientation from parent Group.
+ */
+.resizeHandle {
+  position: relative;
+  background: transparent;
+  @include transitions.transition-color;
+
+  &:hover,
+  &:active {
+    background: colors.$accent-primary;
+  }
+
+  // Horizontal resize handle (for vertical splits)
+  // When parent Group orientation is "vertical", separator is horizontal
+  &[data-orientation='vertical'] {
+    height: spacing.$spacing-px;
+    cursor: row-resize;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: calc(-1 * spacing.$spacing-1);
+      left: 0;
+      right: 0;
+      height: spacing.$spacing-2_25; // 9px: 1px visible + 4px padding on each side
+      background: transparent;
+    }
+
+    &:hover::before,
+    &:active::before {
+      background: colors.$accent-primary;
+      opacity: 0.3;
+    }
+  }
+
+  // Vertical resize handle (for horizontal splits)
+  // When parent Group orientation is "horizontal", separator is vertical
+  &[data-orientation='horizontal'] {
+    width: spacing.$spacing-px;
+    cursor: col-resize;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: calc(-1 * spacing.$spacing-1);
+      top: 0;
+      bottom: 0;
+      width: spacing.$spacing-2_25; // 9px: 1px visible + 4px padding on each side
+      background: transparent;
+    }
+
+    &:hover::before,
+    &:active::before {
+      background: colors.$accent-primary;
+      opacity: 0.3;
+    }
+  }
+}

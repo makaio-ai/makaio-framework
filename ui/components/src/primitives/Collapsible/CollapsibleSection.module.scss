@@ -1,0 +1,124 @@
+/**
+ * CollapsibleSection Styles
+ *
+ * Animated collapsible section using CSS Grid for smooth height transitions.
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/tokens/colors';
+@use '@makaio/ui-theme/tokens/opacity';
+@use '@makaio/ui-theme/tokens/typography';
+@use '@makaio/ui-theme/mixins/transitions';
+@use '@makaio/ui-theme/mixins/glass';
+
+.section {
+  display: flex;
+  flex-direction: column;
+  margin: spacing.$spacing-2;
+  border-radius: spacing.$radius-sm;
+  @include glass.glass-section(0.4, spacing.$radius-md);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  border-radius: spacing.$radius-sm;
+}
+
+.headerToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  min-width: 0;
+  padding: spacing.$spacing-3 spacing.$spacing-4;
+  cursor: pointer;
+  user-select: none;
+  // Default state: subtle gradient
+  background: linear-gradient(
+    90deg,
+    rgba(colors.$text-primary, opacity.$surface) 0%,
+    rgba(colors.$text-primary, opacity.$whisper) 100%
+  );
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  border-radius: spacing.$radius-sm;
+  @include transitions.transition-all;
+
+  &:hover {
+    // Amber glow on hover (like sidebar active state)
+    background: linear-gradient(
+      90deg,
+      rgba(colors.$accent-primary, opacity.$glow) 0%,
+      rgba(colors.$accent-primary, opacity.$surface) 100%
+    );
+    box-shadow: inset 2px 0 0 var(--color-accent-primary);
+  }
+
+  &:hover .chevron {
+    color: var(--color-accent-primary);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: -2px;
+  }
+}
+
+.headerAction {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding-right: spacing.$spacing-2;
+}
+
+.title {
+  font-size: typography.$font-size-2xs;
+  font-weight: typography.$font-weight-bold;
+  text-transform: uppercase;
+  letter-spacing: typography.$letter-spacing-widest;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  @include transitions.transition-all;
+  transform: rotate(0deg);
+
+  &.collapsed {
+    transform: rotate(-90deg);
+  }
+
+  svg {
+    width: spacing.$spacing-3_5;
+    height: spacing.$spacing-3_5;
+  }
+}
+
+.content {
+  display: grid;
+  grid-template-rows: 0fr;
+  @include transitions.transition-all;
+  transition-duration: 200ms;
+
+  &.expanded {
+    grid-template-rows: 1fr;
+  }
+}
+
+.contentInner {
+  overflow: hidden;
+  padding: 0 spacing.$spacing-4;
+  padding-bottom: 0;
+
+  .expanded > & {
+    padding-bottom: spacing.$spacing-2;
+  }
+}

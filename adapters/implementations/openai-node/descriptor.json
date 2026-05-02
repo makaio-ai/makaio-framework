@@ -1,0 +1,21 @@
+{
+  "name": "openai-node",
+  "displayName": "OpenAI",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "openai-node",
+        "displayName": "OpenAI",
+        "description": "OpenAI chat completions with streaming and tool calling",
+        "protocols": ["openai"]
+      }
+    ]
+  }
+}

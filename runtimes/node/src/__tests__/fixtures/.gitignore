@@ -1,0 +1,4 @@
+# Test fixtures intentionally include pre-built dist/ directories to simulate
+# installed extensions. Negate the framework-level dist/ ignore rule here.
+!dist/
+!dist/**

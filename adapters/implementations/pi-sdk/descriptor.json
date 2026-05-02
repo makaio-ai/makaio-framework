@@ -1,0 +1,21 @@
+{
+  "name": "pi-sdk",
+  "displayName": "Pi (SDK)",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "pi-sdk",
+        "displayName": "Pi (SDK)",
+        "description": "Pi coding agent via its TypeScript SDK, routing internally to Anthropic/OpenAI APIs",
+        "protocols": ["anthropic", "openai"]
+      }
+    ]
+  }
+}

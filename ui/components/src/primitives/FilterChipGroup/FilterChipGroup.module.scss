@@ -1,0 +1,32 @@
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/mixins/transitions';
+
+.chipGroup {
+  display: flex;
+  gap: spacing.$spacing-2;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chip {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.6;
+  @include transitions.transition-opacity;
+
+  &:hover {
+    opacity: 0.8;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  &.selected {
+    opacity: 1;
+  }
+}

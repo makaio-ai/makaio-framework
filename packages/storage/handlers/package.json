@@ -1,0 +1,36 @@
+{
+  "name": "@makaio/storage-handlers",
+  "description": "Factory functions for Drizzle-backed bus storage handlers.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./drizzle": "./src/drizzle/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0"
+  },
+  "peerDependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "drizzle-orm": "^0.45.2",
+    "zod": "^4.1.13"
+  },
+  "inlinedDependencies": {
+    "type-fest": "5.3.1"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./drizzle": "./dist/drizzle/index.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

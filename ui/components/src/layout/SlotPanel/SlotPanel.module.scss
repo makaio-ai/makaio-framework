@@ -1,0 +1,33 @@
+/**
+ * SlotPanel component styles
+ */
+
+@use '@makaio/ui-theme/tokens/spacing';
+@use '@makaio/ui-theme/mixins/glass';
+
+.slotPanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  border-radius: spacing.$radius-lg;
+  overflow: hidden;
+
+  @include glass.glass-panel(0.6, spacing.$radius-lg);
+}
+
+.padding-none {
+  padding: 0;
+}
+
+.padding-sm {
+  padding: spacing.$spacing-2;
+}
+
+.padding-md {
+  padding: spacing.$spacing-3;
+}
+
+.padding-lg {
+  padding: spacing.$spacing-4;
+}

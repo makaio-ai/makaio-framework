@@ -1,0 +1,48 @@
+/**
+ * Glass Mixins
+ *
+ * Glassmorphism effects for panels and containers.
+ * Based on the Aura design system from design-concept/git.html.
+ */
+
+@use '../tokens/colors';
+@use '../tokens/shadows';
+
+/// Glass panel with backdrop blur and organic shadow.
+/// Used for elevated panels like sidebars, modals, detail panels.
+/// @param {Number} $opacity [0.8] - Background opacity (0-1)
+/// @param {Length} $blur [12px] - Backdrop blur amount
+@mixin glass-panel($opacity: 0.8, $blur: 12px) {
+  background-color: rgba(colors.$bg-secondary, $opacity);
+  backdrop-filter: blur($blur);
+  border: 1px solid colors.$border-subtle;
+  box-shadow: shadows.$shadow-organic;
+}
+
+/// Subtle glass effect for secondary containers.
+/// Used for left rails, sub-panels with less elevation.
+/// @param {Number} $opacity [0.5] - Background opacity (0-1)
+/// @param {Length} $blur [10px] - Backdrop blur amount
+@mixin glass-subtle($opacity: 0.5, $blur: 10px) {
+  background-color: rgba(colors.$bg-primary, $opacity);
+  backdrop-filter: blur($blur);
+}
+
+/// Glass card with inner highlight for depth.
+/// Used for floating cards and context menus.
+/// @param {Number} $opacity [0.9] - Background opacity
+@mixin glass-card($opacity: 0.9) {
+  background-color: rgba(colors.$bg-secondary, $opacity);
+  backdrop-filter: blur(16px);
+  border: 1px solid colors.$border-subtle;
+  box-shadow: shadows.$shadow-context-menu, shadows.$shadow-inner-light;
+}
+
+/// Glass section for collapsible widgets inside panels.
+/// Uses bg-secondary base for consistency with parent panels.
+/// @param {Number} $opacity [0.4] - Background opacity (0-1)
+/// @param {Length} $blur [8px] - Backdrop blur amount
+@mixin glass-section($opacity: 0.4, $blur: 8px) {
+  background-color: rgba(colors.$bg-secondary, $opacity);
+  backdrop-filter: blur($blur);
+}

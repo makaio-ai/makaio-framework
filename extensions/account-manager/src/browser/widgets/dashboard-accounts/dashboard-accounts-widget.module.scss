@@ -1,0 +1,154 @@
+/**
+ * Styles for DashboardAccountsWidget.
+ *
+ * All colour, spacing, radius, and font values derive from @makaio/web-theme
+ * Aura token CSS custom properties. No hex literals.
+ */
+
+.widget {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  height: 100%;
+  overflow: auto;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.title {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.sourceCount {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.providerList {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.providerPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.providerHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.providerGlyph {
+  font-size: var(--font-size-base);
+  color: var(--color-accent-primary);
+  flex-shrink: 0;
+}
+
+.providerName {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.unavailableBadge {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm);
+  padding: 0.125rem 0.375rem;
+}
+
+.accountCount {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.accountList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.accountRow {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* AccountRow occupies the available space; last-seen is right-aligned. */
+.accountRow > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.lastSeen {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.emptyAccounts,
+.emptyProviders {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  padding: 0.25rem 0;
+}
+
+.loadingPlaceholder,
+.errorPlaceholder {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  padding: 1rem;
+  text-align: center;
+}
+
+.errorPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.retryButton {
+  appearance: none;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  padding: 0.25rem 0.625rem;
+
+  &:focus-visible {
+    outline: 2px solid var(--color-accent-primary);
+    outline-offset: 2px;
+  }
+}

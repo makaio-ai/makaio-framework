@@ -1,0 +1,29 @@
+dist/
+node_modules/
+.yarn/cache/
+.yarn/install-state.gz
+
+*.log
+.eslintcache
+coverage/
+test-results/
+__screenshots__/
+.vitest-attachments/
+
+.idea/
+.DS_Store
+.tmp/
+
+.env
+.env.*.local
+
+# SDK local outputs
+sdks/python/.venv/
+sdks/python/.pytest_cache/
+sdks/python/.ruff_cache/
+sdks/python/.mypy_cache/
+sdks/python/**/__pycache__/
+sdks/rust/target/
+
+# Bus subject analysis intermediate (generated Markdown is committed)
+docs/subjects/data/
