@@ -2,15 +2,64 @@
  * Pure filtering and normalization functions for PR review entry bodies.
  */
 
+const HTML_COMMENT_OPEN = '<!--';
+const HTML_COMMENT_CLOSE = '-->';
+const SUGGESTION_START_MARKER = 'suggestion_start';
+const SUGGESTION_END_MARKER = 'suggestion_end';
+
+/**
+ * Remove HTML comment nodes and CodeRabbit suggestion blocks from review text.
+ *
+ * This is intentionally a delimiter scanner instead of a replacement regex:
+ * the output is terminal text, but review comments can contain arbitrary
+ * markdown/HTML fragments and incomplete comment delimiters should not leak
+ * half-normalized bot markup into the actionable finding output.
+ * @param body - Raw review body
+ * @returns Body without HTML comments or suggestion block content
+ */
+function stripHtmlCommentsAndSuggestionBlocks(body: string): string {
+  let output = '';
+  let cursor = 0;
+  let insideSuggestionBlock = false;
+
+  while (cursor < body.length) {
+    const commentStart = body.indexOf(HTML_COMMENT_OPEN, cursor);
+    if (commentStart === -1) {
+      if (!insideSuggestionBlock) {
+        output += body.slice(cursor);
+      }
+      break;
+    }
+
+    if (!insideSuggestionBlock) {
+      output += body.slice(cursor, commentStart);
+    }
+
+    const commentEnd = body.indexOf(HTML_COMMENT_CLOSE, commentStart + HTML_COMMENT_OPEN.length);
+    if (commentEnd === -1) {
+      break;
+    }
+
+    const marker = body.slice(commentStart + HTML_COMMENT_OPEN.length, commentEnd).trim();
+    if (marker === SUGGESTION_START_MARKER) {
+      insideSuggestionBlock = true;
+    } else if (marker === SUGGESTION_END_MARKER) {
+      insideSuggestionBlock = false;
+    }
+
+    cursor = commentEnd + HTML_COMMENT_CLOSE.length;
+  }
+
+  return output;
+}
+
 /**
  * Strip common bot markup and low-signal wrapper text from a review body.
  * @param body - Raw comment or review body
  * @returns Cleaned body with trailing whitespace trimmed
  */
 function stripBotNoise(body: string): string {
-  return body
-    .replace(/<!--\s*suggestion_start\s*-->[\s\S]*?<!--\s*suggestion_end\s*-->/g, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
+  return stripHtmlCommentsAndSuggestionBlocks(body)
     .replace(/\[!CAUTION\][\s\S]*?(?=<details>|$)/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
