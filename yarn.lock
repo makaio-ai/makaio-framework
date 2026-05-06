@@ -4622,7 +4622,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@makaio/tools-core": "workspace:*"
-    "@modelcontextprotocol/sdk": "npm:^1.0.4"
+    "@modelcontextprotocol/sdk": "npm:^1.29.0"
     "@types/node": "npm:^24.3.0"
     quick-lru: "npm:^7.3.0"
     tsx: "npm:^4.20.5"
@@ -5545,7 +5545,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@modelcontextprotocol/sdk@npm:^1.0.4, @modelcontextprotocol/sdk@npm:^1.23.0, @modelcontextprotocol/sdk@npm:^1.29.0":
+"@modelcontextprotocol/sdk@npm:^1.23.0, @modelcontextprotocol/sdk@npm:^1.29.0":
   version: 1.29.0
   resolution: "@modelcontextprotocol/sdk@npm:1.29.0"
   dependencies:
