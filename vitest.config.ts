@@ -3,9 +3,8 @@ import { defineConfig } from 'vitest/config';
 /**
  * Vitest configuration for the Makaio Framework standalone repo.
  *
- * Covers all unit tests for packages, adapters (core only), tools,
- * transports, and apps — excluding browser/e2e tests and adapter
- * integration tests that make real API calls.
+ * Covers standalone framework unit tests across source areas. Browser tests,
+ * E2E smoke tests, and live SDK tests run through explicit package scripts.
  */
 export default defineConfig({
   test: {
@@ -17,24 +16,69 @@ export default defineConfig({
     fileParallelism: true,
     maxWorkers: '50%',
     onConsoleLog: () => (process.env.MAKAIO_DEBUG ? undefined : false),
-    include: [
-      'packages/**/*.test.ts',
-      'adapters/core/**/*.test.ts',
-      'tools/**/*.test.ts',
-      'transports/**/*.test.ts',
-      'runtimes/**/*.test.ts',
-      'apps/**/*.test.ts',
-      'apps/**/*.test.tsx',
-    ],
-    exclude: [
-      '**/node_modules/**',
-      '**/dist/**',
-      '**/*.spec.ts',
-      '**/.tmp/**',
-      'apps/electron/e2e/**',
-      // References an out-of-tree log importer package. Excluded from the
-      // standalone framework test suite and covered where that package is available.
-      'packages/services/log-import/src/__tests__/import-from-file-content.integration.test.ts',
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: [
+            'build-tooling/**/*.test.ts',
+            'scripts/**/*.test.ts',
+            'packages/**/*.test.ts',
+            'adapters/core/**/*.test.ts',
+            'clients/**/*.test.ts',
+            'extensions/**/*.test.ts',
+            'platforms/**/*.test.ts',
+            'runtimes/**/*.test.ts',
+            'tools/**/*.test.ts',
+            'transports/**/*.test.ts',
+            'ui/**/*.test.ts',
+            'apps/**/*.test.ts',
+          ],
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/*.spec.ts',
+            '**/.tmp/**',
+            '**/*.browser.test.ts',
+            '**/*.browser.test.tsx',
+            '**/*.e2e.test.ts',
+            'apps/cli/e2e/**',
+            'apps/electron/e2e/**',
+            'e2e/**',
+            'sdks/e2e/**',
+            'extensions/**/load-pipeline.test.ts',
+            // References an out-of-tree log importer package. Excluded from the
+            // standalone framework test suite and covered where that package is available.
+            'packages/services/log-import/src/__tests__/import-from-file-content.integration.test.ts',
+          ],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'ui-jsdom',
+          environment: 'jsdom',
+          include: ['packages/**/*.test.tsx', 'extensions/**/*.test.tsx', 'ui/**/*.test.tsx', 'apps/**/*.test.tsx'],
+          exclude: ['**/node_modules/**', '**/dist/**', '**/*.browser.test.ts', '**/*.browser.test.tsx'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'adapters',
+          include: ['adapters/implementations/**/*.test.ts', 'adapters/shared/**/*.test.ts'],
+          exclude: ['**/node_modules/**', 'adapters/implementations/__tests__/**', '**/*.integration.test.ts'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'adapters-integration',
+          include: ['adapters/implementations/**/*.integration.test.ts', 'adapters/shared/**/*.integration.test.ts'],
+          exclude: ['**/node_modules/**', 'adapters/implementations/__tests__/**'],
+        },
+      },
     ],
   },
   resolve: {

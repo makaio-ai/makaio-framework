@@ -17,7 +17,7 @@ export default defineConfig({
   },
   test: {
     name: 'cli-e2e',
-    root: 'framework/apps/cli',
+    root: 'apps/cli',
     include: ['e2e/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     pool: 'forks',

@@ -5,7 +5,15 @@
  * Order is intentional and stable so downstream consumers can produce
  * deterministic import-map JSON and warning sequences.
  */
-export const SHARED_BROWSER_EXTERNALS = ['react', 'react-dom', 'react/jsx-runtime', '@makaio/web-framework'] as const;
+export const SHARED_BROWSER_EXTERNALS = [
+  'react',
+  'react-dom',
+  'react/jsx-runtime',
+  '@makaio/ui-kernel',
+  '@makaio/ui-hooks',
+  '@makaio/ui-components',
+  '@makaio/ui-views',
+] as const;
 
 /**
  * Union of all supported shared browser dependency specifiers.

@@ -3,9 +3,9 @@ import path from 'node:path';
 import { globby } from 'globby';
 import { describe, expect, it } from 'vitest';
 
-const THEME_FILE = path.join(process.cwd(), 'framework/ui/theme/themes/aura.scss');
+const THEME_FILE = path.join(process.cwd(), 'ui/theme/themes/aura.scss');
 const THEME_VAR_PREFIXES = ['--color-', '--glass-', '--font-', '--shadow-', '--radius-', '--z-'] as const;
-const IGNORE_DIRS = ['framework/ui/theme', 'node_modules', 'dist'] as const;
+const IGNORE_DIRS = ['ui/theme', 'node_modules', 'dist'] as const;
 
 /**
  * Strip line and block comments from SCSS content.
@@ -90,7 +90,7 @@ describe('style rules', () => {
   it('ensures theme CSS vars referenced in modules exist in aura theme', async () => {
     const themeContent = await readFile(THEME_FILE, 'utf8');
     const themeVars = collectThemeVars(themeContent);
-    const scssFiles = (await globby(['framework/ui/**/*.module.scss'])).filter((file) => !shouldIgnoreFile(file));
+    const scssFiles = (await globby(['ui/**/*.module.scss'])).filter((file) => !shouldIgnoreFile(file));
 
     const missing: Array<{ file: string; vars: string[] }> = [];
 
@@ -111,7 +111,7 @@ describe('style rules', () => {
   });
 
   it('rejects literal rgba/hex colors outside theme packages', async () => {
-    const scssFiles = (await globby(['framework/ui/**/*.scss'])).filter((file) => !shouldIgnoreFile(file));
+    const scssFiles = (await globby(['ui/**/*.scss'])).filter((file) => !shouldIgnoreFile(file));
     const offenders: Array<{ file: string; matches: string[] }> = [];
 
     for (const file of scssFiles) {

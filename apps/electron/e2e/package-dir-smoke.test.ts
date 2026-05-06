@@ -15,7 +15,7 @@ import getPort from 'get-port';
 import { describe, expect, it } from 'vitest';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, '../../../..');
+const REPO_ROOT = path.resolve(__dirname, '../../..');
 const APP_ROOT = path.resolve(__dirname, '..');
 const PACKAGED_APP = path.join(APP_ROOT, 'release', 'mac-arm64', 'Makaio.app', 'Contents', 'MacOS', 'Makaio');
 const PACKAGED_RESOURCES = path.join(APP_ROOT, 'release', 'mac-arm64', 'Makaio.app', 'Contents', 'Resources');

@@ -18,6 +18,7 @@ import { normalizeBusSecret } from '@makaio/utils';
 const DEFAULT_BUS_URL = 'ws://127.0.0.1:6252/bus';
 const CONNECT_TIMEOUT_MS = 5_000;
 const HEALTH_PROBE_TIMEOUT_MS = 3_000;
+const SDK_CLIENT_TRANSPORT_NAME = 'sdk-client';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -117,7 +118,7 @@ export class BusClient {
 
     const transport = new WebSocketClientTransport({
       url: this.url,
-      name: 'sdk-client',
+      name: SDK_CLIENT_TRANSPORT_NAME,
       autoReconnect: reconnect,
       auth,
       createWebSocket: options?.createWebSocket,
@@ -192,7 +193,10 @@ export class BusClient {
     payload: TReq,
     options?: { timeout?: number },
   ): Promise<TRes> {
-    return this.getBus().request(subject as never, payload as never, options) as Promise<TRes>;
+    return this.getBus().request(subject as never, payload as never, {
+      ...options,
+      transports: [SDK_CLIENT_TRANSPORT_NAME],
+    }) as Promise<TRes>;
   }
 
   /**

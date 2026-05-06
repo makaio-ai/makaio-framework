@@ -124,7 +124,10 @@ describe('viteImportMapPlugin', () => {
     expect(input.__makaio_shared_react).toBe('react');
     expect(input.__makaio_shared_react_dom).toBe('react-dom');
     expect(input.__makaio_shared_react_jsx_runtime).toBe('react/jsx-runtime');
-    expect(input.__makaio_shared_makaio_web_framework).toBe('@makaio/web-framework');
+    expect(input.__makaio_shared_makaio_ui_kernel).toBe('@makaio/ui-kernel');
+    expect(input.__makaio_shared_makaio_ui_hooks).toBe('@makaio/ui-hooks');
+    expect(input.__makaio_shared_makaio_ui_components).toBe('@makaio/ui-components');
+    expect(input.__makaio_shared_makaio_ui_views).toBe('@makaio/ui-views');
   });
 
   it('returns a tag descriptor with importmap type and head-prepend injection', () => {
@@ -210,7 +213,7 @@ describe('viteImportMapPlugin', () => {
     try {
       const plugin = viteImportMapPlugin();
 
-      // Only react is present - react-dom, react/jsx-runtime, @makaio/web-framework are absent.
+      // Only react is present - the rest of the shared browser externals are absent.
       const bundle = makeBundle([
         { fileName: 'assets/react-abc123.js', facadeModuleId: '/root/node_modules/react/index.js' },
       ]);
@@ -230,13 +233,19 @@ describe('viteImportMapPlugin', () => {
       // Missing deps must not appear in the import map
       expect(importMap.imports['react-dom']).toBeUndefined();
       expect(importMap.imports['react/jsx-runtime']).toBeUndefined();
-      expect(importMap.imports['@makaio/web-framework']).toBeUndefined();
+      expect(importMap.imports['@makaio/ui-kernel']).toBeUndefined();
+      expect(importMap.imports['@makaio/ui-hooks']).toBeUndefined();
+      expect(importMap.imports['@makaio/ui-components']).toBeUndefined();
+      expect(importMap.imports['@makaio/ui-views']).toBeUndefined();
 
       // A warning must be emitted for each missing shared dep.
       expect(warnSpy).toHaveBeenCalledTimes(SHARED_BROWSER_EXTERNALS.length - 1);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('react-dom'));
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('react/jsx-runtime'));
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('@makaio/web-framework'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('@makaio/ui-kernel'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('@makaio/ui-hooks'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('@makaio/ui-components'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('@makaio/ui-views'));
 
       // react was found - no warning for it
       const reactWarns = warnSpy.mock.calls.filter((args) => {

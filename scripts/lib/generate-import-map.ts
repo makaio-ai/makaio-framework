@@ -65,8 +65,8 @@ interface ImportMap {
  * `'react-dom'`). A match is only accepted when the character immediately
  * following the specifier is a recognised boundary character or the end of
  * the string. `/` is intentionally a valid right boundary so that scoped
- * packages like `@makaio/web-framework` are matched correctly when they
- * appear as path segments (e.g. `node_modules/@makaio/web-framework/index.js`).
+ * packages like `@makaio/ui-kernel` are matched correctly when they
+ * appear as path segments (e.g. `node_modules/@makaio/ui-kernel/index.js`).
  *
  * Note: because `/` is a valid right boundary, `'react'` technically matches
  * a path like `react/jsx-runtime`. Callers that need the closest match should

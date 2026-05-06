@@ -7,7 +7,15 @@ import {
 
 describe('SHARED_BROWSER_EXTERNALS', () => {
   it('defines the canonical shared browser dependency contract in stable order', () => {
-    expect(SHARED_BROWSER_EXTERNALS).toEqual(['react', 'react-dom', 'react/jsx-runtime', '@makaio/web-framework']);
+    expect(SHARED_BROWSER_EXTERNALS).toEqual([
+      'react',
+      'react-dom',
+      'react/jsx-runtime',
+      '@makaio/ui-kernel',
+      '@makaio/ui-hooks',
+      '@makaio/ui-components',
+      '@makaio/ui-views',
+    ]);
   });
 });
 
@@ -20,7 +28,8 @@ describe('isSharedBrowserExternal', () => {
 
   it('rejects unsupported bare specifiers and subpaths', () => {
     expect(isSharedBrowserExternal('react-dom/client')).toBe(false);
-    expect(isSharedBrowserExternal('@makaio/web-framework/testing')).toBe(false);
+    expect(isSharedBrowserExternal('@makaio/ui-kernel/testing')).toBe(false);
+    expect(isSharedBrowserExternal('@makaio/web-framework')).toBe(false);
     expect(isSharedBrowserExternal('zod')).toBe(false);
   });
 });
@@ -30,6 +39,9 @@ describe('toSharedBrowserExternalEntryName', () => {
     expect(toSharedBrowserExternalEntryName('react')).toBe('__makaio_shared_react');
     expect(toSharedBrowserExternalEntryName('react-dom')).toBe('__makaio_shared_react_dom');
     expect(toSharedBrowserExternalEntryName('react/jsx-runtime')).toBe('__makaio_shared_react_jsx_runtime');
-    expect(toSharedBrowserExternalEntryName('@makaio/web-framework')).toBe('__makaio_shared_makaio_web_framework');
+    expect(toSharedBrowserExternalEntryName('@makaio/ui-kernel')).toBe('__makaio_shared_makaio_ui_kernel');
+    expect(toSharedBrowserExternalEntryName('@makaio/ui-hooks')).toBe('__makaio_shared_makaio_ui_hooks');
+    expect(toSharedBrowserExternalEntryName('@makaio/ui-components')).toBe('__makaio_shared_makaio_ui_components');
+    expect(toSharedBrowserExternalEntryName('@makaio/ui-views')).toBe('__makaio_shared_makaio_ui_views');
   });
 });

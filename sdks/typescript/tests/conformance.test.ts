@@ -700,6 +700,7 @@ describe(conformanceCase('heartbeat-handling').title, () => {
     const unsubscribe = client.subscribe(ToolSubjects.$all, () => {
       receivedCount += 1;
     });
+    await fake.waitSent(1);
 
     const frameCountBefore = fake.sent.length;
 

@@ -16,7 +16,7 @@ export default defineConfig({
   },
   test: {
     name: 'sdk-e2e',
-    root: 'framework/sdks',
+    root: 'sdks',
     include: ['e2e/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     pool: 'forks',

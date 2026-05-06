@@ -350,7 +350,7 @@ export interface MakaioExtension<
    * Browser UI contributions for this extension.
    *
    * Groups all UI-layer contribution surfaces. Absent for headless-only
-   * extensions. The coordinator passes this bag to the web-framework loader
+   * extensions. The coordinator passes this bag to the UI loader
    * which bridges each surface to the appropriate client-side registry.
    */
   readonly ui?: ExtensionUiContribution;

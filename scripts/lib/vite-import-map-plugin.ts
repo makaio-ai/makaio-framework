@@ -2,7 +2,7 @@
  * Vite plugin that injects an ES import map into the shell HTML at build time.
  *
  * Extension browser bundles contain bare specifiers (`react`,
- * `@makaio/web-framework`) that the browser cannot resolve from a dynamic
+ * `@makaio/ui-kernel`) that the browser cannot resolve from a dynamic
  * `import()` without an import map. This plugin generates the map from the
  * shell's Rollup bundle and injects it as a `<script type="importmap">` tag
  * into the shell HTML.
@@ -49,7 +49,7 @@ function mergeSharedBrowserInputs(input: RollupInput | undefined): Record<string
  * Vite plugin that injects an ES import map into the shell HTML at build time.
  *
  * Required for extension browser bundles that contain bare specifiers
- * (`react`, `@makaio/web-framework`) which the browser cannot resolve from a
+ * (`react`, `@makaio/ui-kernel`) which the browser cannot resolve from a
  * dynamic `import()`. The import map maps these to the shell's bundled chunks.
  *
  * No-op in dev mode - Vite resolves bare specifiers natively.

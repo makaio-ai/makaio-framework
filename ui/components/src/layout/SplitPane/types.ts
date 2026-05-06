@@ -1,8 +1,8 @@
 /**
  * Type definitions for SplitPane component.
  *
- * These types mirror the layout types from the web-framework package
- * to avoid circular dependencies between components and framework packages.
+ * These types mirror shared layout contracts to avoid circular dependencies
+ * between components and higher-level UI packages.
  * @packageDocumentation
  */
 

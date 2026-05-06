@@ -36,8 +36,8 @@ describe('generateImportMap', () => {
         'assets/react-dom/index.js': {
           file: 'assets/react-dom.js',
         },
-        'assets/node_modules/@makaio/web-framework/index.js': {
-          file: 'assets/web-framework.js',
+        'assets/node_modules/@makaio/ui-kernel/index.js': {
+          file: 'assets/ui-kernel.js',
         },
       }),
     );
@@ -62,7 +62,7 @@ describe('generateImportMap', () => {
     //   - 'react': left=/ right=/ -> node_modules/react/index.js
     //   - 'react-dom': left=/ right=/ -> node_modules/react-dom/index.js
     //   - 'react/jsx-runtime': left=/ right=/ -> node_modules/react/jsx-runtime/index.js
-    //   - '@makaio/web-framework': left=/ right=/ -> node_modules/@makaio/web-framework/index.js
+    //   - '@makaio/ui-kernel': left=/ right=/ -> node_modules/@makaio/ui-kernel/index.js
     //
     // 'react/jsx-runtime' CANNOT use a key ending in 'jsx-runtime.js' because '.'
     // is not a recognised right-boundary character in matchesDep; it must use a
@@ -79,8 +79,17 @@ describe('generateImportMap', () => {
         'node_modules/react/jsx-runtime/index.js': {
           file: 'assets/react-jsx-runtime-abc123.js',
         },
-        'node_modules/@makaio/web-framework/index.js': {
-          file: 'assets/web-framework-abc123.js',
+        'node_modules/@makaio/ui-kernel/index.js': {
+          file: 'assets/ui-kernel-abc123.js',
+        },
+        'node_modules/@makaio/ui-hooks/index.js': {
+          file: 'assets/ui-hooks-abc123.js',
+        },
+        'node_modules/@makaio/ui-components/index.js': {
+          file: 'assets/ui-components-abc123.js',
+        },
+        'node_modules/@makaio/ui-views/index.js': {
+          file: 'assets/ui-views-abc123.js',
         },
       }),
     );
@@ -94,7 +103,10 @@ describe('generateImportMap', () => {
     expect(importMap.imports['react']).toBe('/static/assets/react-abc123.js');
     expect(importMap.imports['react-dom']).toBe('/static/assets/react-dom-abc123.js');
     expect(importMap.imports['react/jsx-runtime']).toBe('/static/assets/react-jsx-runtime-abc123.js');
-    expect(importMap.imports['@makaio/web-framework']).toBe('/static/assets/web-framework-abc123.js');
+    expect(importMap.imports['@makaio/ui-kernel']).toBe('/static/assets/ui-kernel-abc123.js');
+    expect(importMap.imports['@makaio/ui-hooks']).toBe('/static/assets/ui-hooks-abc123.js');
+    expect(importMap.imports['@makaio/ui-components']).toBe('/static/assets/ui-components-abc123.js');
+    expect(importMap.imports['@makaio/ui-views']).toBe('/static/assets/ui-views-abc123.js');
     expect(Object.keys(importMap.imports)).toEqual([...SHARED_BROWSER_EXTERNALS]);
   });
 
@@ -116,8 +128,8 @@ describe('generateImportMap', () => {
         'node_modules/react/jsx-runtime/index.js': {
           file: 'assets/react-jsx-runtime-abc123.js',
         },
-        'node_modules/@makaio/web-framework/index.js': {
-          file: 'assets/web-framework-abc123.js',
+        'node_modules/@makaio/ui-kernel/index.js': {
+          file: 'assets/ui-kernel-abc123.js',
         },
       }),
     );
@@ -138,7 +150,7 @@ describe('generateImportMap', () => {
     const manifestPath = join(dir, 'manifest.json');
     const outputPath = join(dir, 'import-map.json');
 
-    // Only preact present - no react, react-dom, react/jsx-runtime, or @makaio/web-framework.
+    // Only preact present - no canonical shared browser external.
     writeFileSync(
       manifestPath,
       JSON.stringify({
@@ -183,8 +195,17 @@ describe('generateImportMap', () => {
         'node_modules/react/jsx-runtime/index.js': {
           file: 'react-jsx-runtime-chunk.js',
         },
-        'node_modules/@makaio/web-framework/index.js': {
-          file: 'web-framework-chunk.js',
+        'node_modules/@makaio/ui-kernel/index.js': {
+          file: 'ui-kernel-chunk.js',
+        },
+        'node_modules/@makaio/ui-hooks/index.js': {
+          file: 'ui-hooks-chunk.js',
+        },
+        'node_modules/@makaio/ui-components/index.js': {
+          file: 'ui-components-chunk.js',
+        },
+        'node_modules/@makaio/ui-views/index.js': {
+          file: 'ui-views-chunk.js',
         },
       }),
     );
@@ -231,10 +252,13 @@ describe('generateImportMapFromBundle', () => {
         'assets/jsx-runtime-abc.js',
         '/root/node_modules/react/jsx-runtime/index.js',
       ),
-      'assets/web-framework-abc.js': makeChunk(
-        'assets/web-framework-abc.js',
-        '/root/node_modules/@makaio/web-framework/index.js',
+      'assets/ui-kernel-abc.js': makeChunk('assets/ui-kernel-abc.js', '/root/node_modules/@makaio/ui-kernel/index.js'),
+      'assets/ui-hooks-abc.js': makeChunk('assets/ui-hooks-abc.js', '/root/node_modules/@makaio/ui-hooks/index.js'),
+      'assets/ui-components-abc.js': makeChunk(
+        'assets/ui-components-abc.js',
+        '/root/node_modules/@makaio/ui-components/index.js',
       ),
+      'assets/ui-views-abc.js': makeChunk('assets/ui-views-abc.js', '/root/node_modules/@makaio/ui-views/index.js'),
     };
 
     const { imports } = generateImportMapFromBundle(bundle, '/');
@@ -242,7 +266,10 @@ describe('generateImportMapFromBundle', () => {
     expect(imports['react']).toBe('/assets/react-abc.js');
     expect(imports['react-dom']).toBe('/assets/react-dom-abc.js');
     expect(imports['react/jsx-runtime']).toBe('/assets/jsx-runtime-abc.js');
-    expect(imports['@makaio/web-framework']).toBe('/assets/web-framework-abc.js');
+    expect(imports['@makaio/ui-kernel']).toBe('/assets/ui-kernel-abc.js');
+    expect(imports['@makaio/ui-hooks']).toBe('/assets/ui-hooks-abc.js');
+    expect(imports['@makaio/ui-components']).toBe('/assets/ui-components-abc.js');
+    expect(imports['@makaio/ui-views']).toBe('/assets/ui-views-abc.js');
     expect(Object.keys(imports)).toEqual([...SHARED_BROWSER_EXTERNALS]);
   });
 
@@ -275,8 +302,8 @@ describe('generateImportMapFromBundle', () => {
         'assets/__makaio_shared_react_jsx_runtime-abc.js',
         null,
       ),
-      'assets/__makaio_shared_makaio_web_framework-def.js': makeChunk(
-        'assets/__makaio_shared_makaio_web_framework-def.js',
+      'assets/__makaio_shared_makaio_ui_kernel-def.js': makeChunk(
+        'assets/__makaio_shared_makaio_ui_kernel-def.js',
         null,
       ),
     };
@@ -284,7 +311,7 @@ describe('generateImportMapFromBundle', () => {
     const { imports } = generateImportMapFromBundle(bundle, '/');
 
     expect(imports['react/jsx-runtime']).toBe('/assets/__makaio_shared_react_jsx_runtime-abc.js');
-    expect(imports['@makaio/web-framework']).toBe('/assets/__makaio_shared_makaio_web_framework-def.js');
+    expect(imports['@makaio/ui-kernel']).toBe('/assets/__makaio_shared_makaio_ui_kernel-def.js');
   });
 
   it('does not resolve react from the react-dom generated shared facade', () => {

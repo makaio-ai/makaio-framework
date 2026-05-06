@@ -17,7 +17,7 @@ export default defineConfig({
   },
   test: {
     name: 'electron-e2e',
-    root: 'framework/apps/electron',
+    root: 'apps/electron',
     include: ['e2e/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/*.e2e.test.ts'],
     pool: 'forks',

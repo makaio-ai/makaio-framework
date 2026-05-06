@@ -2,7 +2,7 @@
  * Tool call formatter types for package declarations.
  *
  * Defines the formatter declaration shape that packages use to contribute tool
- * call formatters. The web-framework bridges these declarations to the
+ * call formatters. The UI layer bridges these declarations to the
  * `ToolCallFormatterRegistry`.
  * @packageDocumentation
  */
@@ -49,8 +49,8 @@ export interface PluginToolCallFormatterInput {
 /**
  * A tool call formatter declaration contributed by a package.
  *
- * Structurally compatible with `ToolCallFormatterDefinition` in the
- * web-framework, so the package loader can register declarations directly
+ * Structurally compatible with `ToolCallFormatterDefinition` used by the
+ * UI registry, so the package loader can register declarations directly
  * without bridging.
  */
 export interface ToolCallFormatterDeclaration {

@@ -16,7 +16,7 @@ export default defineConfig({
   },
   test: {
     name: 'framework-desktop-e2e',
-    root: 'framework',
+    root: '.',
     include: ['e2e/desktop/**/*.test.ts'],
     pool: 'forks',
     fileParallelism: false,

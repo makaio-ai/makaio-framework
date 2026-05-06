@@ -21,22 +21,22 @@ const browserApiPort = await resolveBrowserApiPort();
 const repoNodeModules = fileURLToPath(new URL('../../node_modules', import.meta.url));
 
 /**
- * Vitest browser configuration for `framework/ui/views/` browser-specific tests.
+ * Vitest browser configuration for `ui/views/` browser-specific tests.
  *
  * Uses Playwright/Chromium to run tests that require real browser APIs
  * (e.g., layout measurement, canvas, drag-and-drop).
  *
- * Test files must be named `*.browser.test.{ts,tsx}` under `framework/ui/views/src/`
+ * Test files must be named `*.browser.test.{ts,tsx}` under `ui/views/src/`
  * to be picked up.
  *
- * Run standalone via `yarn test:e2e:framework-browser`.
+ * Run standalone via `yarn test:e2e:browser`.
  * @example
  * ```bash
  * # Standalone
- * yarn test:e2e:framework-browser
+ * yarn test:e2e:browser
  *
  * # Specific file
- * yarn test:e2e:framework-browser framework/ui/views/src/...browser.test.tsx
+ * yarn test:e2e:browser ui/views/src/...browser.test.tsx
  * ```
  */
 export default defineConfig({
@@ -65,8 +65,9 @@ export default defineConfig({
       provider: playwright(),
       instances: [{ browser: 'chromium', headless: true }],
     },
-    include: ['framework/ui/views/src/**/*.browser.test.{ts,tsx}'],
+    include: ['ui/views/src/**/*.browser.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     globals: true,
+    passWithNoTests: true,
   },
 });
