@@ -32,6 +32,10 @@
     "./tsdown-extension-preset": {
       "source": "./tsdown-extension-preset.ts",
       "default": "./tsdown-extension-preset.ts"
+    },
+    "./tsdown-scss": {
+      "source": "./tsdown-scss.ts",
+      "default": "./tsdown-scss.ts"
     }
   },
   "dependencies": {

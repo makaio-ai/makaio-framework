@@ -17,7 +17,7 @@
     "./src/bus/namespace.ts"
   ],
   "scripts": {
-    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown",
+    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
     "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
     "prepare:portable-package": "tsx ./scripts/prepare-portable-package.ts",
     "db:generate": "tsx $(yarn bin drizzle-kit) generate",

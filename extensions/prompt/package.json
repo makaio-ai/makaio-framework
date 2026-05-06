@@ -8,7 +8,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown",
+    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
     "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts"
   },
   "peerDependencies": {

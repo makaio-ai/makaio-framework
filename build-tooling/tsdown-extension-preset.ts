@@ -1,12 +1,12 @@
 import type { Plugin } from 'rolldown';
 import type { UserConfig } from 'tsdown';
 import { defineConfig } from 'tsdown';
-import { SHARED_BROWSER_EXTERNALS } from './browser-shared-externals.js';
+import { SHARED_BROWSER_EXTERNALS } from '@makaio/build-tooling/browser-shared-externals';
 import {
   dependencyDiagnosticPolicy,
   MAKAIO_BUNDLE_PATTERN,
   packageManifestSourcePolicy,
-} from './tsdown-framework-preset.js';
+} from '@makaio/build-tooling/tsdown-framework-preset';
 
 /**
  * Options for {@link defineExtensionConfig}.

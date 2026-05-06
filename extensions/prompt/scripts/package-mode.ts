@@ -12,18 +12,19 @@ export const REPO_DEV_MODE = 'repo-dev';
 export const PORTABLE_SOURCE_DIRECTORY = 'build/portable-source';
 
 const FRAMEWORK_PACKAGE_PATHS = {
-  '@makaio/build-tooling': 'framework/build-tooling',
-  '@makaio/bus-core': 'framework/packages/bus-core',
-  '@makaio/contracts': 'framework/packages/contracts',
-  '@makaio/core': 'framework/packages/makaio-core',
-  '@makaio/kernel': 'framework/packages/kernel',
-  '@makaio/test-utils': 'framework/packages/test-utils',
+  '@makaio/build-tooling': 'build-tooling',
+  '@makaio/bus-core': 'packages/bus-core',
+  '@makaio/contracts': 'packages/contracts',
+  '@makaio/core': 'packages/makaio-core',
+  '@makaio/kernel': 'packages/kernel',
+  '@makaio/test-utils': 'packages/test-utils',
 } as const;
 
 const REPO_DEV_ALIAS_PATHS = {
-  '@makaio/bus-core': 'framework/packages/bus-core/src',
-  '@makaio/contracts': 'framework/packages/contracts/src',
-  '@makaio/kernel': 'framework/packages/kernel/src',
+  '@makaio/bus-core': 'packages/bus-core/src',
+  '@makaio/contracts': 'packages/contracts/src',
+  '@makaio/kernel': 'packages/kernel/src',
+  '@makaio/kernel/cli': 'packages/kernel/src/cli/index.ts',
 } as const;
 
 type FrameworkPackageName = keyof typeof FRAMEWORK_PACKAGE_PATHS;
@@ -56,12 +57,12 @@ export function isRepoDevMode(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Resolve the Makaio repo root from an extension root inside `extensions/`.
+ * Resolve the framework root from an extension root inside `extensions/`.
  * @param extensionRoot - Absolute extension root directory.
- * @returns Absolute repo root directory.
+ * @returns Absolute framework root directory.
  */
 export function resolveRepoRoot(extensionRoot: string): string {
-  return path.resolve(extensionRoot, '../../..');
+  return path.resolve(extensionRoot, '../..');
 }
 
 /**
@@ -83,7 +84,7 @@ export function createRepoDevAliases(extensionRoot: string): Record<string, stri
 /**
  * Read version numbers for the internal framework packages used by the staged
  * portable source package.
- * @param repoRoot - Absolute Makaio repo root.
+ * @param repoRoot - Absolute framework workspace root.
  * @returns Published-version map keyed by package name.
  */
 export async function readFrameworkPackageVersions(repoRoot: string): Promise<Record<FrameworkPackageName, string>> {
