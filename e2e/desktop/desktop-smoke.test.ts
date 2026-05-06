@@ -102,6 +102,9 @@ describe('framework Electron desktop smoke test', { timeout: 200_000 }, () => {
       const openedWindow = await waitForWindowRegistration(bus, EXPECTED_FRAMEWORK_WINDOW, STARTUP_TIMEOUT_MS);
       expect(openedWindow.registrationId).toBe(EXPECTED_FRAMEWORK_WINDOW);
       expect(openedWindow.windowId).toBeGreaterThan(0);
+      await electron.waitForOutput('[WindowManager] Loaded URL:', STARTUP_TIMEOUT_MS);
+      expect(electron.getOutput()).not.toContain('[WindowManager] Failed to load');
+      expect(electron.getOutput()).not.toContain('[WindowManager] Renderer crashed:');
 
       const { windows } = await bus.request(HostSubjects.window.list, {});
       const shellWindow = windows.find((window) => window.registrationId === EXPECTED_FRAMEWORK_WINDOW);

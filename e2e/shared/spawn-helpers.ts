@@ -3,10 +3,9 @@
  *
  * Encapsulates the MAKAIO_PORT stdout-discovery loop, the SIGKILL escalation
  * helper, and the already-exited-child guard used by E2E test harnesses:
- * - `framework/e2e/desktop/spawn-electron.ts`
- * - `framework/apps/electron/e2e/harness/spawn-runtime.ts`
- * - `framework/apps/cli/e2e/harness/spawn-serve.ts`
  * - `e2e/desktop/spawn-electron.ts`
+ * - `apps/electron/e2e/harness/spawn-runtime.ts`
+ * - `apps/cli/e2e/harness/spawn-serve.ts`
  */
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 
@@ -68,6 +67,21 @@ export interface SpawnedProcess {
   /** PID of the spawned process. */
   pid: number;
   /**
+   * Return output captured from stdout and stderr.
+   *
+   * The buffer is bounded to recent output so long-running processes do not
+   * retain unbounded logs.
+   * @returns Captured child-process output.
+   */
+  getOutput(): string;
+  /**
+   * Wait until the child process emits matching stdout or stderr.
+   * @param matcher - String or regular expression to match against captured output.
+   * @param timeoutMs - Milliseconds to wait before rejecting.
+   * @returns Captured output at the time the matcher is observed.
+   */
+  waitForOutput(matcher: string | RegExp, timeoutMs: number): Promise<string>;
+  /**
    * Send a signal to the process and wait for it to exit.
    *
    * Resolves with the exit code (or `null` when the process was killed by a
@@ -112,6 +126,242 @@ export interface SpawnAndDiscoverPortOptions {
   label: string;
 }
 
+interface OutputWaiter {
+  readonly matcher: string | RegExp;
+  readonly resolve: (output: string) => void;
+  readonly reject: (error: Error) => void;
+  readonly timer: NodeJS.Timeout;
+}
+
+interface OutputCapture {
+  append(chunk: Buffer): string;
+  get(): string;
+  waitFor(matcher: string | RegExp, timeoutMs: number): Promise<string>;
+  rejectPending(createError: (matcher: string | RegExp, output: string) => Error): void;
+}
+
+const MAX_CAPTURED_OUTPUT_LENGTH = 128_000;
+
+/**
+ * Check whether captured output satisfies a waiter matcher.
+ * @param output - Captured child-process output.
+ * @param matcher - String or regular expression matcher.
+ * @returns True when the matcher is present.
+ */
+function outputMatches(output: string, matcher: string | RegExp): boolean {
+  if (typeof matcher === 'string') {
+    return output.includes(matcher);
+  }
+  matcher.lastIndex = 0;
+  return matcher.test(output);
+}
+
+/**
+ * Create a bounded child-process output buffer with waiter support.
+ * @param label - Process label used in timeout errors.
+ * @returns Output capture helper for spawn harnesses.
+ */
+function createOutputCapture(label: string): OutputCapture {
+  let output = '';
+  const waiters: OutputWaiter[] = [];
+
+  const removeWaiter = (waiter: OutputWaiter): void => {
+    const index = waiters.indexOf(waiter);
+    if (index >= 0) {
+      waiters.splice(index, 1);
+    }
+  };
+
+  const get = (): string => output;
+
+  const append = (chunk: Buffer): string => {
+    const text = chunk.toString();
+    output += text;
+    if (output.length > MAX_CAPTURED_OUTPUT_LENGTH) {
+      output = output.slice(-MAX_CAPTURED_OUTPUT_LENGTH);
+    }
+
+    for (const waiter of [...waiters]) {
+      if (outputMatches(output, waiter.matcher)) {
+        clearTimeout(waiter.timer);
+        removeWaiter(waiter);
+        waiter.resolve(output);
+      }
+    }
+    return text;
+  };
+
+  const waitFor = (matcher: string | RegExp, timeoutMs: number): Promise<string> => {
+    if (outputMatches(output, matcher)) {
+      return Promise.resolve(output);
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      const waiter: OutputWaiter = {
+        matcher,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          removeWaiter(waiter);
+          reject(
+            new Error(`[${label}] Timed out after ${timeoutMs}ms waiting for output ${String(matcher)}\n${output}`),
+          );
+        }, timeoutMs),
+      };
+      waiters.push(waiter);
+    });
+  };
+
+  const rejectPending = (createError: (matcher: string | RegExp, capturedOutput: string) => Error): void => {
+    for (const waiter of waiters.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reject(createError(waiter.matcher, output));
+    }
+  };
+
+  return { append, get, waitFor, rejectPending };
+}
+
+/**
+ * Parse a port announcement from accumulated stdout.
+ * @param stdout - Accumulated stdout before port discovery settles.
+ * @param label - Process label used in validation errors.
+ * @returns Parsed port, or undefined when no announcement is present yet.
+ */
+function parsePortAnnouncement(stdout: string, label: string): number | undefined {
+  const match = PORT_PATTERN.exec(stdout);
+  if (!match) return undefined;
+
+  const parsedPort = parseInt(match[1] ?? '', 10);
+  if (!isValidPort(parsedPort)) {
+    throw new Error(`[${label}] Invalid port in MAKAIO_PORT announcement: ${match[1]}`);
+  }
+  return parsedPort;
+}
+
+/**
+ * Build the public spawned-process handle once port discovery succeeds.
+ * @param child - Spawned child process.
+ * @param port - Discovered bus port.
+ * @param label - Process label used in signal warnings.
+ * @param outputCapture - Output capture attached to the child process.
+ * @returns Public process handle used by E2E tests.
+ */
+function createSpawnedProcessHandle(
+  child: ChildProcess,
+  port: number,
+  label: string,
+  outputCapture: OutputCapture,
+): SpawnedProcess {
+  const pid = child.pid;
+  if (pid === undefined) {
+    throw new Error(`[${label}] Child process has no PID`);
+  }
+
+  const sendSignal = (sig: NodeJS.Signals): Promise<number | null> => sendSignalToChild(child, sig, label);
+  const kill = (): Promise<void> => sendSignal('SIGTERM').then(() => undefined);
+
+  return {
+    port,
+    pid,
+    getOutput: outputCapture.get,
+    waitForOutput: outputCapture.waitFor,
+    sendSignal,
+    kill,
+  };
+}
+
+/**
+ * Kill a child process and reject once it has exited.
+ * @param child - Spawned child process.
+ * @param reject - Promise rejection callback.
+ * @param reason - Error message for rejection.
+ */
+function killAndRejectChild(child: ChildProcess, reject: (error: Error) => void, reason: string): void {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    reject(new Error(reason));
+    return;
+  }
+  const onExit = (): void => reject(new Error(reason));
+  child.once('exit', onExit);
+  const killed = child.kill('SIGKILL');
+  if (!killed) {
+    child.removeListener('exit', onExit);
+    reject(new Error(reason));
+  }
+}
+
+/**
+ * Wait until a spawned process announces MAKAIO_PORT.
+ * @param child - Spawned child process.
+ * @param options - Spawn options containing timeout and label.
+ * @param outputCapture - Output capture attached to the child process.
+ * @returns Process handle with the discovered port.
+ */
+function waitForDiscoveredPort(
+  child: ChildProcess,
+  options: Pick<SpawnAndDiscoverPortOptions, 'timeoutMs' | 'label'>,
+  outputCapture: OutputCapture,
+): Promise<SpawnedProcess> {
+  const { timeoutMs, label } = options;
+
+  return new Promise<SpawnedProcess>((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+
+    const rejectBeforeSettle = (reason: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(reason));
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      killAndRejectChild(child, reject, `[${label}] Timed out after ${timeoutMs}ms waiting for MAKAIO_PORT`);
+    }, timeoutMs);
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      const text = outputCapture.append(chunk);
+      if (!settled) stderr += text;
+    });
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      process.stdout.write(chunk);
+      const text = outputCapture.append(chunk);
+      if (settled) return;
+
+      try {
+        stdout += text;
+        const port = parsePortAnnouncement(stdout, label);
+        if (port === undefined) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(createSpawnedProcessHandle(child, port, label, outputCapture));
+      } catch (error) {
+        killAndRejectChild(child, reject, error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    child.on('error', (err) => {
+      rejectBeforeSettle(`[${label}] Failed to spawn process: ${err.message}`);
+    });
+
+    child.on('exit', (code, signal) => {
+      const exitSummary = `code ${String(code)} signal ${String(signal)}`;
+      outputCapture.rejectPending((matcher, output) => {
+        return new Error(
+          `[${label}] Process exited with ${exitSummary} before output matched ${String(matcher)}\n${output}`,
+        );
+      });
+      rejectBeforeSettle(`[${label}] Process exited with ${exitSummary} before announcing port\n${stderr}`);
+    });
+  });
+}
+
 /**
  * Spawn a child process and wait for it to announce its port on stdout.
  *
@@ -122,108 +372,12 @@ export interface SpawnAndDiscoverPortOptions {
  */
 export function spawnAndDiscoverPort(options: SpawnAndDiscoverPortOptions): Promise<SpawnedProcess> {
   const { cmd, args, spawnOptions, timeoutMs, label } = options;
+  const outputCapture = createOutputCapture(label);
 
   const child = spawn(cmd, args as string[], {
     ...spawnOptions,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  return new Promise<SpawnedProcess>((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-
-    /**
-     * Kill the child and reject only after it has exited, so the process
-     * does not leak into the next test.
-     *
-     * Guards against an already-exited child: if the process exited between
-     * the `settled` check and this call, `kill()` would return `false` and
-     * the `'exit'` event would never fire, leaving the promise hanging.
-     * @param reason - Error message for the rejection.
-     */
-    const killAndReject = (reason: string): void => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        reject(new Error(reason));
-        return;
-      }
-      const onExit = (): void => reject(new Error(reason));
-      child.once('exit', onExit);
-      const killed = child.kill('SIGKILL');
-      if (!killed) {
-        child.removeListener('exit', onExit);
-        reject(new Error(reason));
-      }
-    };
-
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      killAndReject(`[${label}] Timed out after ${timeoutMs}ms waiting for MAKAIO_PORT`);
-    }, timeoutMs);
-
-    // Forward child output so test failures are debuggable.
-    child.stderr?.on('data', (chunk: Buffer) => {
-      process.stderr.write(chunk);
-      // Buffer only pre-settlement; after that, stderr is unneeded and
-      // continuing to accumulate would leak memory in long E2E runs.
-      if (!settled) stderr += chunk.toString();
-    });
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      process.stdout.write(chunk);
-
-      // Once port discovery has settled, stop accumulating; just forward output.
-      if (settled) return;
-
-      stdout += chunk.toString();
-
-      const match = PORT_PATTERN.exec(stdout);
-      if (match) {
-        const parsedPort = parseInt(match[1] ?? '', 10);
-        if (!isValidPort(parsedPort)) {
-          settled = true;
-          stdout = '';
-          clearTimeout(timer);
-          killAndReject(`[${label}] Invalid port in MAKAIO_PORT announcement: ${match[1]}`);
-          return;
-        }
-
-        settled = true;
-        stdout = '';
-        clearTimeout(timer);
-
-        const pid = child.pid;
-        if (pid === undefined) {
-          killAndReject(`[${label}] Child process has no PID`);
-          return;
-        }
-
-        const sendSignal = (sig: NodeJS.Signals): Promise<number | null> => sendSignalToChild(child, sig, label);
-        const kill = (): Promise<void> => sendSignal('SIGTERM').then(() => undefined);
-
-        resolve({ port: parsedPort, pid, sendSignal, kill });
-      }
-    });
-
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`[${label}] Failed to spawn process: ${err.message}`));
-    });
-
-    child.on('exit', (code, signal) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(
-        new Error(
-          `[${label}] Process exited with code ${String(code)} signal ${String(
-            signal,
-          )} before announcing port\n${stderr}`,
-        ),
-      );
-    });
-  });
+  return waitForDiscoveredPort(child, { timeoutMs, label }, outputCapture);
 }
