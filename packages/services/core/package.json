@@ -120,7 +120,7 @@
   },
   "inlinedDependencies": {
     "@libsql/core": "0.15.15",
-    "drizzle-orm": "0.44.7",
+    "drizzle-orm": "0.45.2",
     "ignore": "7.0.5",
     "type-fest": "5.3.1"
   },

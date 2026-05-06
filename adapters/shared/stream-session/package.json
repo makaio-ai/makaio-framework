@@ -39,7 +39,7 @@
     "@vitest/spy": "4.1.0",
     "@vitest/utils": "4.1.0",
     "chai": "6.2.2",
-    "drizzle-orm": "0.44.7",
+    "drizzle-orm": "0.45.2",
     "emittery": "1.2.0",
     "magic-string": "0.30.21",
     "p-defer": "4.0.1",

@@ -17,8 +17,8 @@
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "drizzle-orm": "^0.44.2",
-    "nanoid": "^5.0.9",
+    "drizzle-orm": "0.45.2",
+    "nanoid": "3.3.8",
     "zod": "^4.1.13"
   },
   "devDependencies": {

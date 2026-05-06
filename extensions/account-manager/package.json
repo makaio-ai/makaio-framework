@@ -36,7 +36,7 @@
     "@makaio/storage-drizzle": "workspace:*",
     "@napi-rs/keyring": "^1.0.0",
     "d3-shape": "^3.2.0",
-    "drizzle-orm": "^0.44.2",
+    "drizzle-orm": "0.45.2",
     "ink": "^6.0.0",
     "smol-toml": "^1.3.0",
     "zod": "^4.1.13"
@@ -62,7 +62,7 @@
     "tsdown": "^0.21.7",
     "tsx": "^4.20.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.0"
+    "vitest": "4.1.5"
   },
   "publishConfig": {
     "exports": {

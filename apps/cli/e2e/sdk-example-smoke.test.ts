@@ -99,6 +99,12 @@ async function createPythonSdkRuntime(python: PythonRuntime, tempRoot: string): 
   const venvPython =
     process.platform === 'win32' ? path.join(venvDir, 'Scripts', 'python.exe') : path.join(venvDir, 'bin', 'python');
 
+  await execFileAsync(venvPython, ['-m', 'pip', 'install', '--disable-pip-version-check', '--upgrade', 'pip'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout: PYTHON_SDK_INSTALL_TIMEOUT_MS,
+  });
+
   await execFileAsync(
     venvPython,
     ['-m', 'pip', 'install', '--disable-pip-version-check', '-r', PYTHON_REQUIREMENTS_PATH],

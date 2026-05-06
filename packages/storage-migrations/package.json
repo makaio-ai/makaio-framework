@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@makaio/storage-drizzle": "workspace:*",
-    "drizzle-orm": "^0.44.2"
+    "drizzle-orm": "0.45.2"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

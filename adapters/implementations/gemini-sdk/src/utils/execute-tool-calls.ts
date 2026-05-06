@@ -200,7 +200,7 @@ export async function executeToolCalls(
         let toolResult;
         try {
           invocation = nativeTool.build(approvedArgs);
-          toolResult = await invocation.execute(abortSignal);
+          toolResult = await invocation.execute({ abortSignal });
         } catch (execError) {
           // Emit terminal failure event before propagating so downstream consumers
           // always see a paired agent.tool.updated after agent.tool.started.

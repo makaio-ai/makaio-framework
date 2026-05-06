@@ -41,6 +41,6 @@
     "@mariozechner/pi-ai": "0.72.1",
     "@mariozechner/pi-coding-agent": "0.72.1",
     "@types/node": "^24.3.0",
-    "vitest": "*"
+    "vitest": "4.1.5"
   }
 }

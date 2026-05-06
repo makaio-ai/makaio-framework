@@ -20,12 +20,12 @@
     "@makaio/service-base": "workspace:*",
     "@makaio/storage-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
-    "drizzle-orm": "^0.44.2",
+    "drizzle-orm": "0.45.2",
     "node-pty": "^1.2.0-beta.8"
   },
   "devDependencies": {
     "@makaio/test-utils": "workspace:*",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.0"
+    "vitest": "4.1.5"
   }
 }
