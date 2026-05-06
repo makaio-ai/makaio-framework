@@ -118,13 +118,13 @@ describe('readFrameworkPackageVersions', () => {
 
   it('throws when a configured package manifest has the wrong name', async () => {
     const repoRoot = await createPackageFixture(FRAMEWORK_VERSIONS);
-    await writeFile(
-      join(repoRoot, 'packages/kernel/package.json'),
-      JSON.stringify({ name: '@makaio/not-kernel', version: FRAMEWORK_VERSIONS['@makaio/kernel'] }),
-      'utf8',
-    );
 
     try {
+      await writeFile(
+        join(repoRoot, 'packages/kernel/package.json'),
+        JSON.stringify({ name: '@makaio/not-kernel', version: FRAMEWORK_VERSIONS['@makaio/kernel'] }),
+        'utf8',
+      );
       await expect(readFrameworkPackageVersions(repoRoot)).rejects.toThrow('Expected package @makaio/kernel');
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
