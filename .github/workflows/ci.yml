@@ -57,7 +57,7 @@ jobs:
             setup_bun: true
             setup_playwright: true
           - name: Framework Build
-            command: yarn workspaces foreach -A --topological --parallel run build
+            command: yarn build:workspaces
             setup_bun: true
     name: ${{ matrix.name }}
 
