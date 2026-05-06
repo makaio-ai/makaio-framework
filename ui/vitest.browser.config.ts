@@ -30,7 +30,7 @@ const repoNodeModules = fileURLToPath(new URL('../../node_modules', import.meta.
  * to be picked up.
  *
  * Run standalone via `yarn test:e2e:browser`.
- * @example
+ * Example:
  * ```bash
  * # Standalone
  * yarn test:e2e:browser
@@ -68,6 +68,5 @@ export default defineConfig({
     include: ['ui/views/src/**/*.browser.test.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**'],
     globals: true,
-    passWithNoTests: true,
   },
 });

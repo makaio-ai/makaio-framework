@@ -32,7 +32,7 @@
     "dev": "yarn workspace @makaio/electron dev:renderer",
     "dev:electron": "yarn workspace @makaio/electron dev",
     "test": "vitest run",
-    "test:e2e": "yarn test:e2e:browser && yarn test:e2e:cli && yarn test:e2e:electron && yarn test:e2e:electron-pw",
+    "test:e2e": "yarn test:e2e:browser && yarn test:e2e:desktop && yarn test:e2e:cli && yarn test:e2e:electron && yarn test:e2e:electron-pw",
     "test:e2e:browser": "vitest run --config ui/vitest.browser.config.ts",
     "test:e2e:desktop": "vitest run --config e2e/desktop/vitest.config.ts",
     "test:e2e:cli": "vitest run --config apps/cli/vitest.e2e.config.ts",

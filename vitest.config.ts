@@ -68,7 +68,15 @@ export default defineConfig({
         test: {
           name: 'adapters',
           include: ['adapters/implementations/**/*.test.ts', 'adapters/shared/**/*.test.ts'],
-          exclude: ['**/node_modules/**', 'adapters/implementations/__tests__/**', '**/*.integration.test.ts'],
+          exclude: [
+            '**/node_modules/**',
+            '**/*.integration.test.ts',
+            // These are adapter-conformance templates: importing them directly
+            // requires MAKAIO_TEST_ADAPTER and a provider-backed test config.
+            // Keep the default suite deterministic; run them through the
+            // credentialed adapter harness instead.
+            'adapters/implementations/__tests__/**',
+          ],
         },
       },
       {
@@ -76,7 +84,12 @@ export default defineConfig({
         test: {
           name: 'adapters-integration',
           include: ['adapters/implementations/**/*.integration.test.ts', 'adapters/shared/**/*.integration.test.ts'],
-          exclude: ['**/node_modules/**', 'adapters/implementations/__tests__/**'],
+          exclude: [
+            '**/node_modules/**',
+            // See the adapters project above: these files are not standalone
+            // integration specs and need the adapter harness environment.
+            'adapters/implementations/__tests__/**',
+          ],
         },
       },
     ],

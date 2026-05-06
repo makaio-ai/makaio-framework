@@ -1,6 +1,14 @@
 import * as path from 'node:path';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createPortablePackageJson, createRepoDevAliases, type ExtensionPackageJson } from './package-mode.js';
+import {
+  createPortablePackageJson,
+  createRepoDevAliases,
+  readFrameworkPackageVersions,
+  type ExtensionPackageJson,
+} from './package-mode.js';
 
 const FRAMEWORK_VERSIONS = {
   '@makaio/build-tooling': '0.1.0',
@@ -36,7 +44,7 @@ describe('createPortablePackageJson', () => {
         test: 'tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
       },
       peerDependencies: {
-        '@makaio/bus-core': '*',
+        '@makaio/bus-core': 'workspace:*',
       },
       devDependencies: {
         '@makaio/build-tooling': 'workspace:*',
@@ -56,7 +64,7 @@ describe('createPortablePackageJson', () => {
       verify: 'vitest run test/verify.test.ts --config vitest.config.ts',
     });
     expect(portablePackageJson.peerDependencies).toEqual({
-      '@makaio/bus-core': '*',
+      '@makaio/bus-core': '^0.1.0',
     });
     expect(portablePackageJson.devDependencies).toMatchObject({
       '@makaio/build-tooling': '^0.1.0',
@@ -83,3 +91,81 @@ describe('createPortablePackageJson', () => {
     });
   });
 });
+
+describe('readFrameworkPackageVersions', () => {
+  it('reads framework package versions from package manifests', async () => {
+    const repoRoot = await createPackageFixture(FRAMEWORK_VERSIONS);
+
+    try {
+      await expect(readFrameworkPackageVersions(repoRoot)).resolves.toEqual(FRAMEWORK_VERSIONS);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when a configured package manifest has no version', async () => {
+    const repoRoot = await createPackageFixture({
+      ...FRAMEWORK_VERSIONS,
+      '@makaio/kernel': undefined,
+    });
+
+    try {
+      await expect(readFrameworkPackageVersions(repoRoot)).rejects.toThrow('Missing package version');
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when a configured package manifest has the wrong name', async () => {
+    const repoRoot = await createPackageFixture(FRAMEWORK_VERSIONS);
+    await writeFile(
+      join(repoRoot, 'packages/kernel/package.json'),
+      JSON.stringify({ name: '@makaio/not-kernel', version: FRAMEWORK_VERSIONS['@makaio/kernel'] }),
+      'utf8',
+    );
+
+    try {
+      await expect(readFrameworkPackageVersions(repoRoot)).rejects.toThrow('Expected package @makaio/kernel');
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Create package.json files for the prompt extension package-mode map.
+ * @param versions - Package versions keyed by framework package name.
+ * @returns Temporary repository root.
+ */
+async function createPackageFixture(
+  versions: Partial<Record<keyof typeof FRAMEWORK_VERSIONS, string | undefined>>,
+): Promise<string> {
+  const repoRoot = await mkdtemp(join(tmpdir(), 'makaio-prompt-package-mode-'));
+  const packagePaths = {
+    '@makaio/build-tooling': 'build-tooling',
+    '@makaio/bus-core': 'packages/bus-core',
+    '@makaio/contracts': 'packages/contracts',
+    '@makaio/core': 'packages/makaio-core',
+    '@makaio/kernel': 'packages/kernel',
+    '@makaio/test-utils': 'packages/test-utils',
+  } as const;
+
+  try {
+    await Promise.all(
+      Object.entries(packagePaths).map(async ([packageName, packagePath]) => {
+        const directory = join(repoRoot, packagePath);
+        await mkdir(directory, { recursive: true });
+        await writeFile(
+          join(directory, 'package.json'),
+          JSON.stringify({ name: packageName, version: versions[packageName as keyof typeof FRAMEWORK_VERSIONS] }),
+          'utf8',
+        );
+      }),
+    );
+  } catch (error) {
+    await rm(repoRoot, { recursive: true, force: true });
+    throw error;
+  }
+
+  return repoRoot;
+}

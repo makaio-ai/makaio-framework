@@ -24,6 +24,7 @@ export interface CliOptions {
 
 /** Default path for persistent PR comment state. */
 const DEFAULT_STATE_FILE = '.tmp/pr-comments-state.json';
+const BOOLEAN_FLAGS = new Set(['--raw', '--resolved', '--outdated', '--new', '--watch']);
 const VALUE_FLAGS = ['--since', '--timeout', '--state-file'] as const;
 const STATE_FILE_FLAG = VALUE_FLAGS[2];
 
@@ -57,10 +58,11 @@ function resolveStateFilePath(args: string[]): string {
   if (optionIndex === -1) {
     return resolve(DEFAULT_STATE_FILE);
   }
-  if (!args[optionIndex + 1]) {
+  const value = args[optionIndex + 1];
+  if (!value || value.startsWith('--') || /^-[A-Za-z]/.test(value)) {
     throw new Error('--state-file requires a file path.');
   }
-  return resolve(args[optionIndex + 1]);
+  return resolve(value);
 }
 
 /**
@@ -100,6 +102,18 @@ function parsePullRequestUrl(args: string[]): string {
  * @throws If required flags are missing or invalid
  */
 export function parseCliOptions(args: string[]): CliOptions {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith('--') || BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.includes(arg as (typeof VALUE_FLAGS)[number])) {
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown option: ${arg}`);
+  }
+
   const raw = args.includes('--raw');
   const includeResolved = args.includes('--resolved');
   const includeOutdated = args.includes('--outdated');

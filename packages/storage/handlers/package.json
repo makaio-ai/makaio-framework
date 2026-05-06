@@ -20,7 +20,7 @@
   "peerDependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
-    "drizzle-orm": "0.45.2",
+    "drizzle-orm": "^0.45.2",
     "zod": "^4.1.13"
   },
   "inlinedDependencies": {

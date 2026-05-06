@@ -43,7 +43,13 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Octokit } from '@octokit/rest';
-import { filterNewEntries, loadReviewState, recordSeenEntries, saveReviewState } from './lib/pr-comment-state.js';
+import {
+  filterNewEntries,
+  loadReviewState,
+  recordSeenEntries,
+  saveReviewState,
+  type ReviewStateFile,
+} from './lib/pr-comment-state.js';
 import { parseCliOptions } from './lib/pr-comment-options.js';
 import {
   isActionableFileComment,
@@ -65,6 +71,11 @@ import { fetchReviewEntries, getGhToken, parsePrUrl, pullRequestStateKey } from 
 
 /** Polling cadence for timed `--new` checks. */
 const POLL_INTERVAL_MS = 30_000;
+
+interface ResolvedVisibleEntries {
+  readonly entries: ReviewEntry[];
+  readonly markRendered: () => Promise<void>;
+}
 
 /**
  * Resolve the GitHub token used by Octokit.
@@ -132,20 +143,20 @@ async function collectActionableEntries(
 
   if (!options.raw) {
     comments = comments
+      .map<CommentEntry>((entry) => ({
+        ...entry,
+        body: normalizeReviewBody(entry.body),
+      }))
       .filter((entry) => {
         switch (entry.kind) {
           case 'file':
-            return isActionableFileComment(normalizeReviewBody(entry.body));
+            return isActionableFileComment(entry.body);
           case 'review':
             return isActionableReviewBody(entry.body);
           case 'comment':
             return isActionableIssueComment(entry.body);
         }
-      })
-      .map<CommentEntry>((entry) => ({
-        ...entry,
-        body: normalizeReviewBody(entry.body),
-      }));
+      });
   }
 
   return [...comments, ...filteredCiEntries];
@@ -162,7 +173,7 @@ async function resolveVisibleEntries(
   octokit: Octokit,
   coords: PrCoordinates,
   options: ReturnType<typeof parseCliOptions>,
-): Promise<ReviewEntry[]> {
+): Promise<ResolvedVisibleEntries> {
   const state = options.onlyNew ? await loadReviewState(options.stateFilePath) : null;
   const prKey = pullRequestStateKey(coords);
   const deadline = options.timeoutMinutes === null ? null : Date.now() + options.timeoutMinutes * 60_000;
@@ -171,17 +182,37 @@ async function resolveVisibleEntries(
     const entries = await collectActionableEntries(octokit, coords, options);
     const visibleEntries = options.onlyNew && state ? filterNewEntries(entries, state, prKey) : entries;
 
-    if (options.onlyNew && state) {
-      recordSeenEntries(entries, state, prKey);
-      await saveReviewState(options.stateFilePath, state);
-    }
-
     if (visibleEntries.length > 0 || deadline === null || Date.now() >= deadline) {
-      return visibleEntries;
+      return {
+        entries: visibleEntries,
+        markRendered: async () => {
+          if (options.onlyNew && state) {
+            recordSeenEntries(entries, state, prKey);
+            await saveReviewState(options.stateFilePath, state);
+          }
+        },
+      };
     }
 
     await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
   }
+}
+
+/**
+ * Record entries as seen after their output has been emitted successfully.
+ * @param entries - Entries to mark as seen
+ * @param state - Mutable persistent review state
+ * @param prKey - Stable PR state key
+ * @param stateFilePath - State file path to persist
+ */
+async function markRenderedEntries(
+  entries: ReviewEntry[],
+  state: ReviewStateFile,
+  prKey: string,
+  stateFilePath: string,
+): Promise<void> {
+  recordSeenEntries(entries, state, prKey);
+  await saveReviewState(stateFilePath, state);
 }
 
 /**
@@ -223,12 +254,10 @@ async function runWatchMode(
     const entries = await collectActionableEntries(octokit, coords, options);
     const newEntries = filterNewEntries(entries, state, prKey);
 
-    recordSeenEntries(entries, state, prKey);
-    await saveReviewState(options.stateFilePath, state);
-
     if (newEntries.length > 0) {
       renderWatchBatchHeader(newEntries.length);
       renderEntries(newEntries);
+      await markRenderedEntries(entries, state, prKey, options.stateFilePath);
     }
 
     await sleep(POLL_INTERVAL_MS);
@@ -250,7 +279,7 @@ async function main(): Promise<void> {
 
   const visibleEntries = await resolveVisibleEntries(octokit, coords, options);
 
-  if (visibleEntries.length === 0) {
+  if (visibleEntries.entries.length === 0) {
     console.info(
       options.onlyNew ? 'No new actionable PR review feedback found.' : 'No actionable PR review feedback found.',
     );
@@ -264,7 +293,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  renderEntries(visibleEntries);
+  renderEntries(visibleEntries.entries);
   renderWorkflowReminder(
     {
       onlyNew: options.onlyNew,
@@ -272,6 +301,7 @@ async function main(): Promise<void> {
     },
     true,
   );
+  await visibleEntries.markRendered();
 }
 
 /**

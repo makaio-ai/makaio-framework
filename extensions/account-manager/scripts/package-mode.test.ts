@@ -50,7 +50,7 @@ describe('createPortablePackageJson', () => {
         'prepare:portable-package': 'tsx ./scripts/prepare-portable-package.ts',
       },
       peerDependencies: {
-        '@makaio/bus-core': '*',
+        '@makaio/bus-core': 'link:../../framework/packages/bus-core',
         ink: '^6.3.1',
       },
       devDependencies: {
@@ -71,7 +71,7 @@ describe('createPortablePackageJson', () => {
       verify: 'vitest run test/verify.test.ts --config vitest.config.ts',
     });
     expect(portablePackageJson.peerDependencies).toEqual({
-      '@makaio/bus-core': '*',
+      '@makaio/bus-core': '^0.1.0',
       ink: '^6.3.1',
     });
     const uiExpected = Object.fromEntries(

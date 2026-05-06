@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL, type URL } from 'node:url';
 import type { FileImporter } from 'sass';
@@ -13,12 +13,12 @@ import type { FileImporter } from 'sass';
  * @returns Sass file importer for framework SCSS package imports.
  */
 export function createMakaioScssImporter(workspaceRoot: string): FileImporter<'async'> {
-  const uiThemeRoot = path.join(workspaceRoot, 'ui/theme');
+  const uiThemeRoot = path.resolve(workspaceRoot, 'ui/theme');
 
   return {
     findFileUrl(url): URL | null {
       if (url === '@makaio/ui-theme') {
-        return pathToFileURL(path.join(uiThemeRoot, 'index.scss'));
+        return findSassModule(path.join(uiThemeRoot, 'index'));
       }
 
       const prefix = '@makaio/ui-theme/';
@@ -26,7 +26,12 @@ export function createMakaioScssImporter(workspaceRoot: string): FileImporter<'a
         return null;
       }
 
-      return findSassModule(path.join(uiThemeRoot, url.slice(prefix.length)));
+      const modulePath = path.resolve(uiThemeRoot, url.slice(prefix.length));
+      if (modulePath !== uiThemeRoot && !modulePath.startsWith(`${uiThemeRoot}${path.sep}`)) {
+        return null;
+      }
+
+      return findSassModule(modulePath);
     },
   };
 }
@@ -47,6 +52,19 @@ function findSassModule(modulePath: string): URL | null {
     path.join(modulePath, '_index.scss'),
   ];
 
-  const match = candidates.find((candidate) => existsSync(candidate));
+  const match = candidates.find((candidate) => isFile(candidate));
   return match ? pathToFileURL(match) : null;
+}
+
+/**
+ * Check whether a Sass candidate exists as a regular file.
+ * @param candidate - Absolute candidate path.
+ * @returns True when the candidate is a file.
+ */
+function isFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
 }
