@@ -1,0 +1,15 @@
+---
+/**
+ * Custom Head override that preloads critical font files to break the
+ * HTML → CSS → font dependency chain flagged by PageSpeed Insights.
+ */
+
+import outfit400 from '@fontsource/outfit/files/outfit-latin-400-normal.woff2?url';
+import outfit600 from '@fontsource/outfit/files/outfit-latin-600-normal.woff2?url';
+
+const { head } = Astro.locals.starlightRoute;
+---
+
+{head.map(({ tag: Tag, attrs, content }) => <Tag {...attrs} set:html={content} />)}
+<link rel="preload" href={outfit400} as="font" type="font/woff2" crossorigin />
+<link rel="preload" href={outfit600} as="font" type="font/woff2" crossorigin />

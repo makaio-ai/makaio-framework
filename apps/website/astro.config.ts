@@ -51,6 +51,7 @@ export default defineConfig({
         './src/styles/aura.css',
       ],
       components: {
+        Head: './src/components/Head.astro',
         Header: './src/components/Header.astro',
         SiteTitle: './src/components/SiteTitle.astro',
         Hero: './src/components/Hero.astro',
