@@ -12,13 +12,35 @@ import CookieNotice from './CookieNotice.astro';
     <span aria-hidden="true">·</span>
     <a href="/legal/privacy-policy/">Privacy Policy</a>
   </nav>
+  <p class="built-by">Built with 🤯 in Germany by <a href="/legal/legal-notice/">Makaio GmbH</a></p>
 </div>
 
 <style>
   .legal-footer {
     border-top: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 1.25rem var(--sl-content-pad-x);
+    padding: 1.25rem var(--sl-content-pad-x) 0.5rem;
     text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .built-by {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+    margin: 0;
+  }
+
+  .built-by a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.15s;
+  }
+
+  .built-by a:hover {
+    color: var(--sl-color-white);
   }
 
   .legal-footer nav {

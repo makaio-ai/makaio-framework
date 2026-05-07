@@ -7,7 +7,12 @@ export const collections = {
   docs: defineCollection({
     loader: glob({
       base: '../..',
-      pattern: ['docs/**/*.{md,mdx}', '!docs/subjects/**', 'apps/website/src/content/docs/**/*.{md,mdx}'],
+      pattern: [
+        'docs/**/*.{md,mdx}',
+        '!docs/subjects/**',
+        'apps/website/src/content/docs/**/*.{md,mdx}',
+        '!apps/website/.astro/**',
+      ],
       generateId: generateWebsiteDocsId,
     }),
     schema: docsSchema(),
