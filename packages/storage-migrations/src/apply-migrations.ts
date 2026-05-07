@@ -17,6 +17,20 @@ import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { MigrationMeta } from './read-migrations.js';
 
 /**
+ * Walk the error cause chain looking for an "already exists" SQLite error.
+ * @param error - Error thrown by a DDL statement.
+ * @returns `true` when the root cause is a schema-object-already-exists conflict.
+ */
+function isAlreadyExistsError(error: unknown): boolean {
+  let current: unknown = error;
+  while (current instanceof Error) {
+    if (/already exists/i.test(current.message)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
  * Apply pre-resolved migrations to a database.
  *
  * Creates the `__drizzle_migrations` tracking table if absent, reads all
@@ -74,6 +88,18 @@ export async function applyMigrations(
           try {
             await db.run(sql.raw(stmt));
           } catch (error) {
+            if (statementIndex === 0 && /^\s*CREATE\s/i.test(stmt) && isAlreadyExistsError(error)) {
+              console.warn('[storage-migrations] Schema object already exists, adopting into ledger', {
+                hash: migration.hash,
+                folderMillis: migration.folderMillis,
+                statementIndex,
+              });
+              // Adoption means this migration's schema changes are already present
+              // outside the ledger. Stop this migration's SQL body here so later
+              // non-idempotent statements cannot mutate an already-adopted schema,
+              // then record this same migration hash below.
+              break;
+            }
             console.error('[storage-migrations] Failed to apply migration statement', {
               hash: migration.hash,
               folderMillis: migration.folderMillis,

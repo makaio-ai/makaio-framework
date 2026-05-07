@@ -47,6 +47,41 @@ describe('applyMigrations', () => {
     }
   });
 
+  it('rejects a later CREATE conflict without recording the migration hash', async () => {
+    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+
+    try {
+      await expect(
+        applyMigrations(db, [
+          {
+            tag: '0001_later_create_conflict',
+            folderMillis: 2,
+            hash: 'hash-later-create-conflict',
+            bps: false,
+            sql: [
+              'CREATE TABLE committed_before_conflict (id INTEGER PRIMARY KEY)',
+              'CREATE TABLE committed_before_conflict (id INTEGER PRIMARY KEY)',
+            ],
+          },
+        ]),
+      ).rejects.toThrow();
+
+      const createdTables = await db.all<{ name: string }>(sql`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'committed_before_conflict'
+      `);
+      expect(createdTables).toEqual([]);
+
+      const migrationRows = await db.all<{ hash: string; created_at: number }>(
+        sql`SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC`,
+      );
+      expect(migrationRows).toEqual([]);
+    } finally {
+      close();
+    }
+  });
+
   it('applies a migration, creates the tracking row, and executes the DDL', async () => {
     const { db, close } = await createDatabaseClient({ url: ':memory:' });
 
@@ -101,6 +136,37 @@ describe('applyMigrations', () => {
       );
       expect(migrationRows).toHaveLength(1);
       expect(migrationRows[0]).toEqual({ hash: 'hash-idempotent-1', created_at: 2000 });
+    } finally {
+      close();
+    }
+  });
+
+  it('adopts an existing CREATE target without executing later statements from that migration', async () => {
+    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+
+    try {
+      await db.run(sql`CREATE TABLE adopted_test (id INTEGER PRIMARY KEY)`);
+
+      await applyMigrations(db, [
+        {
+          tag: '0001_adopt_existing_schema',
+          folderMillis: 2500,
+          hash: 'hash-adopt-existing',
+          bps: false,
+          sql: [
+            'CREATE TABLE adopted_test (id INTEGER PRIMARY KEY)',
+            'ALTER TABLE adopted_test ADD COLUMN unsafe_after_adoption TEXT',
+          ],
+        },
+      ]);
+
+      const columns = await db.all<{ name: string }>(sql`PRAGMA table_info(adopted_test)`);
+      expect(columns.map((column) => column.name)).toEqual(['id']);
+
+      const migrationRows = await db.all<{ hash: string; created_at: number }>(
+        sql`SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC`,
+      );
+      expect(migrationRows).toEqual([{ hash: 'hash-adopt-existing', created_at: 2500 }]);
     } finally {
       close();
     }
