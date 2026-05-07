@@ -5047,6 +5047,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/website@workspace:apps/website"
   dependencies:
+    "@astrojs/sitemap": "npm:^3.7.2"
     "@astrojs/starlight": "npm:^0.38.4"
     "@fontsource-variable/jetbrains-mono": "npm:^5.2.5"
     "@fontsource/outfit": "npm:^5.2.5"

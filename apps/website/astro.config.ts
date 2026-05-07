@@ -1,4 +1,5 @@
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 import rehypeMermaid from 'rehype-mermaid';
@@ -195,5 +196,6 @@ export default defineConfig({
     generateApiReference(),
     generatePackagePages(),
     composeLlmsFullIntegration(),
+    sitemap({ filter: (page) => !page.includes('/reference/') }),
   ],
 });
