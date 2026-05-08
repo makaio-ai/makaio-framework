@@ -64,4 +64,73 @@ describe('SlidePanel', () => {
     expect(document.activeElement).toBe(trigger);
     trigger.remove();
   });
+
+  it('returns escaped focus to the panel on Tab and Shift+Tab', () => {
+    const outsideButton = document.createElement('button');
+    outsideButton.textContent = 'Outside action';
+    document.body.appendChild(outsideButton);
+
+    render(
+      <SlidePanel isOpen={true} onClose={() => undefined} title="Panel Title">
+        <button type="button">Secondary action</button>
+      </SlidePanel>,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Panel Title' });
+    const closeButton = within(dialog).getByRole('button', { name: 'Close panel' });
+    const secondaryButton = screen.getByRole('button', { name: 'Secondary action' });
+
+    outsideButton.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(closeButton);
+
+    outsideButton.focus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(secondaryButton);
+
+    outsideButton.remove();
+  });
+
+  it('keeps body scroll locked until all open panels close', () => {
+    document.body.style.overflow = 'scroll';
+
+    const { rerender } = render(
+      <>
+        <SlidePanel isOpen={true} onClose={() => undefined} title="First Panel">
+          First
+        </SlidePanel>
+        <SlidePanel isOpen={true} onClose={() => undefined} title="Second Panel">
+          Second
+        </SlidePanel>
+      </>,
+    );
+
+    expect(document.body.style.overflow).toBe('hidden');
+
+    rerender(
+      <>
+        <SlidePanel isOpen={false} onClose={() => undefined} title="First Panel">
+          First
+        </SlidePanel>
+        <SlidePanel isOpen={true} onClose={() => undefined} title="Second Panel">
+          Second
+        </SlidePanel>
+      </>,
+    );
+
+    expect(document.body.style.overflow).toBe('hidden');
+
+    rerender(
+      <>
+        <SlidePanel isOpen={false} onClose={() => undefined} title="First Panel">
+          First
+        </SlidePanel>
+        <SlidePanel isOpen={false} onClose={() => undefined} title="Second Panel">
+          Second
+        </SlidePanel>
+      </>,
+    );
+
+    expect(document.body.style.overflow).toBe('scroll');
+  });
 });

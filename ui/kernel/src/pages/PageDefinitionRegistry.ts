@@ -114,7 +114,7 @@ function cloneSurfaceConfig(surface: PageDefinition['surface']): PageDefinition[
  *
  * Checks:
  * - Non-empty id and name
- * - Valid mode ('switch' | 'peek' | 'cover')
+ * - Valid mode ('switch' | 'peek' | 'cover' | 'sheet')
  * - Non-empty level
  * - Component is a function
  * - `surface`, when present, specifies exactly one of `surfaces` or `requiredCapabilities`
@@ -129,8 +129,8 @@ function validatePageDefinition(def: PageDefinition): void {
   if (!def.name || typeof def.name !== 'string') {
     throw new Error(`PageDefinition "${def.id}" must have a non-empty name`);
   }
-  if (def.mode !== 'switch' && def.mode !== 'peek' && def.mode !== 'cover') {
-    throw new Error(`PageDefinition "${def.id}" must have mode 'switch', 'peek', or 'cover'`);
+  if (def.mode !== 'switch' && def.mode !== 'peek' && def.mode !== 'cover' && def.mode !== 'sheet') {
+    throw new Error(`PageDefinition "${def.id}" must have mode 'switch', 'peek', 'cover', or 'sheet'`);
   }
   if (typeof def.level !== 'string' || def.level.trim().length === 0) {
     throw new Error(`PageDefinition "${def.id}" must have a non-empty level`);

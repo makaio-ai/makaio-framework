@@ -30,6 +30,7 @@ export function registerWidget(bus: IMakaioBus, definition: WidgetDefinition): b
       component: definition.component,
       defaultConfig: definition.defaultConfig,
       allowMultiple: definition.allowMultiple,
+      activate: definition.activate,
     })
     .catch((error) => {
       console.error(`[widget-register] Failed to emit register for "${definition.id}":`, error);

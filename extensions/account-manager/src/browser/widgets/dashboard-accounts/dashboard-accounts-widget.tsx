@@ -16,6 +16,7 @@ import { useOptionalBus } from '@makaio/ui-hooks';
 import { eraseWidgetConfig } from '@makaio/ui-kernel';
 import type { Account, SourceInfo } from '@makaio-community/account-manager/schemas';
 import type { WidgetDefinition, WidgetProps } from '@makaio/ui-kernel';
+import { ACCOUNTS_PAGE_ID } from '../../pages/accounts/declaration.js';
 import { useAccounts } from '../../data/use-accounts.js';
 import { useSwitchAccount } from '../../hooks/use-switch-account.js';
 import { AccountRow } from '../../components/account-row/account-row.js';
@@ -200,9 +201,15 @@ function DashboardAccountsWidget(_props: WidgetProps<DashboardAccountsWidgetConf
  *
  * Scope: `'global'` — appears on the main dashboard.
  * Shows a rich, full-width overview of all configured providers and accounts.
+ *
+ * Clicking the widget opens the `account-manager:accounts` sheet page via
+ * `usePageOverlayStore` (handled by `WidgetGrid`).
  */
 export const dashboardAccountsWidgetDefinition: WidgetDefinition<DashboardAccountsWidgetConfig> = {
   allowMultiple: false,
+  activate: {
+    pageId: ACCOUNTS_PAGE_ID,
+  },
   component: DashboardAccountsWidget,
   defaultSize: 'medium',
   description: 'All credential providers and accounts with last-used timestamps.',

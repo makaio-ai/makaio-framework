@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { WidgetRawSchemas } from './schemas.js';
 import type { WidgetScope } from './scope-registry.js';
 
+const TEST_ACTIVATION_PAGE_ID = 'test:activation-page';
+const TEST_ACTIVATION_WINDOW_ID = 'test:activation-window';
+
 declare module '@makaio/contracts' {
   interface UiScopeMap {
     // Test-only host augmentation; framework-owned built-ins remain `global` and `any`.
@@ -25,6 +28,38 @@ describe('Widget Schemas', () => {
     it('accepts valid widget definition with all fields', () => {
       const result = WidgetRawSchemas.register.safeParse(validWidget);
       expect(result.success).toBe(true);
+    });
+
+    it('preserves local activation definitions on registered widgets', () => {
+      const onActivate = async () => undefined;
+      const result = WidgetRawSchemas.register.safeParse({
+        ...validWidget,
+        activate: {
+          pageId: TEST_ACTIVATION_PAGE_ID,
+          windowId: TEST_ACTIVATION_WINDOW_ID,
+          onActivate,
+        },
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.activate).toEqual({
+          pageId: TEST_ACTIVATION_PAGE_ID,
+          windowId: TEST_ACTIVATION_WINDOW_ID,
+          onActivate,
+        });
+      }
+    });
+
+    it('rejects non-function custom activation handlers', () => {
+      const result = WidgetRawSchemas.register.safeParse({
+        ...validWidget,
+        activate: {
+          onActivate: 'not-a-function',
+        },
+      });
+
+      expect(result.success).toBe(false);
     });
 
     it('accepts valid widget definition without optional fields', () => {
@@ -185,6 +220,22 @@ describe('Widget Schemas', () => {
       it('accepts valid response with widgets', () => {
         const result = WidgetRawSchemas.list.response.safeParse({ widgets: validWidgets });
         expect(result.success).toBe(true);
+      });
+
+      it('preserves activation definitions in list responses', () => {
+        const result = WidgetRawSchemas.list.response.safeParse({
+          widgets: [
+            {
+              ...validWidgets[0],
+              activate: { pageId: 'settings' },
+            },
+          ],
+        });
+
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.data.widgets[0]?.activate).toEqual({ pageId: 'settings' });
+        }
       });
 
       it('accepts valid response with empty widgets array', () => {

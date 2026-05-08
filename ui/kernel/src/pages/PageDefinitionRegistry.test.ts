@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PageDefinitionRegistry } from './PageDefinitionRegistry.js';
-import type { PageDefinition } from './page-definition-types.js';
+import { isOverlayMode, type PageDefinition } from './page-definition-types.js';
 
 declare module '@makaio/contracts' {
   interface UiNavigationLevelMap {
@@ -38,6 +38,20 @@ describe('PageDefinitionRegistry', () => {
       group: 'navigate',
     });
     expect(registry.has(page.id)).toBe(true);
+  });
+
+  it('accepts sheet-mode pages and classifies them as overlays', () => {
+    const page = buildPage({ id: 'sheet-page', mode: 'sheet' });
+    const peekPage = buildPage({ id: 'peek-page', mode: 'peek' });
+
+    registry.register(page);
+    registry.register(peekPage);
+
+    const sheetIds = registry.query({ mode: 'sheet' }).map((result) => result.id);
+    expect(sheetIds).toEqual(['sheet-page']);
+    expect(sheetIds).not.toContain('peek-page');
+    expect(isOverlayMode('sheet')).toBe(true);
+    expect(isOverlayMode('switch')).toBe(false);
   });
 
   it('throws on duplicate registration', () => {

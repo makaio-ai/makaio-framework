@@ -3,6 +3,7 @@
  * @packageDocumentation
  */
 
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { UiContextSnapshot } from '@makaio/contracts';
 import type { WidgetScope } from './scope-registry.js';
 import type { ComponentLike } from '../utils/component-types.js';
@@ -31,6 +32,64 @@ export interface WidgetProps<TConfig = Record<string, unknown>> {
   updateConfig: (config: Partial<TConfig>) => void;
   /** Active host UI context for this widget surface. */
   uiContext: UiContextSnapshot;
+}
+
+/**
+ * Context passed to a widget's custom activation handler.
+ *
+ * Provides everything the handler needs to perform side-effects: the bus for
+ * further RPCs and the identity of the widget instance that was activated.
+ */
+export interface WidgetActivationContext {
+  /** The MakaioBus instance for emitting events or issuing RPCs. */
+  bus: IMakaioBus;
+  /** Widget definition ID (same as `WidgetDefinition.id`). */
+  widgetId: string;
+  /** Widget instance ID within the current layout. */
+  instanceId: string;
+}
+
+/**
+ * Declarative activation behaviour for a widget.
+ *
+ * When a user clicks an activatable widget tile, the `WidgetGrid` evaluates
+ * these fields in order:
+ *
+ * 1. `pageId` — Opens the named Page in the current window via
+ *    `usePageOverlayStore.openPage`.
+ * 2. `windowId` — Creates or focuses a named window via the
+ *    `host.window.create` RPC.
+ * 3. `onActivate` — Runs a custom async handler with full bus access.
+ *
+ * All three may be present; all will execute. Omit fields that are not needed.
+ */
+export interface WidgetActivation {
+  /**
+   * Page ID to open in the current window when the widget is activated.
+   *
+   * The Page's `mode` field determines how it is presented (e.g. `'sheet'`
+   * for a fullscreen overlay). The `WidgetGrid` calls
+   * `usePageOverlayStore.getState().openPage(pageId)`.
+   */
+  pageId?: string;
+  /**
+   * Window registration ID (format: `packageName:windowId`) to create or
+   * focus when the widget is activated.
+   *
+   * The `WidgetGrid` issues a `host.window.create` RPC with this value as
+   * the `registrationId`.
+   */
+  windowId?: string;
+  /**
+   * Custom activation handler called after declarative activation (if any).
+   *
+   * Receives a {@link WidgetActivationContext} with the bus, widgetId, and
+   * instanceId. Runs after `pageId`/`windowId` activation so it can react to
+   * the side-effects they produce.
+   * @param ctx - Activation context with bus access and widget identity.
+   * @returns A promise that resolves when the handler is complete.
+   */
+  onActivate?: (ctx: WidgetActivationContext) => Promise<void>;
 }
 
 /**
@@ -82,6 +141,15 @@ export interface WidgetDefinition<TConfig = Record<string, unknown>> {
    * Whether multiple instances of this widget are allowed
    */
   allowMultiple?: boolean;
+
+  /**
+   * Optional activation behaviour when the user clicks the widget tile.
+   *
+   * When present, the `WidgetGrid` renders the tile with a pointer cursor and
+   * executes the declarative steps defined here on click (outside edit mode).
+   * See {@link WidgetActivation} for the full dispatch sequence.
+   */
+  activate?: WidgetActivation;
 }
 
 /**

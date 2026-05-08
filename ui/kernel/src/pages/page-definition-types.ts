@@ -31,22 +31,25 @@ export type PageLevel = UiNavigationLevel;
  * - `peek`: Opens as a constrained overlay that preserves workspace state underneath.
  *   Small modal (~800px). Example: Future pickers, quick-reference lookups.
  *
- * - `cover`: Opens as a full-viewport overlay that preserves workspace state underneath.
- *   Takes over the entire viewport including app shell. Example: Settings, Projects, Sessions.
+ * - `cover`: Legacy full-viewport overlay mode. Kept during the transition
+ *   for existing registered pages.
+ *
+ * - `sheet`: Opens as a full-viewport sheet overlay that preserves workspace
+ *   state underneath. New fullscreen overlays should use this mode.
  */
-export type PageMode = 'switch' | 'peek' | 'cover';
+export type PageMode = 'switch' | 'peek' | 'cover' | 'sheet';
 
 /**
  * Check if a page mode uses the overlay system (pageOverlayStore).
  *
- * Both `peek` and `cover` modes open via the overlay store, while `switch`
- * changes workspace focus. This helper centralizes the mode classification
- * to avoid duplicating `mode === 'peek' || mode === 'cover'` checks.
+ * `peek`, `cover`, and `sheet` modes open via the overlay store, while
+ * `switch` changes workspace focus. This helper centralizes the mode
+ * classification to avoid duplicating mode checks.
  * @param mode - The page mode to check
- * @returns True if the mode opens an overlay (peek or cover)
+ * @returns True if the mode opens an overlay (peek, cover, or sheet)
  */
 export function isOverlayMode(mode: PageMode): boolean {
-  return mode === 'peek' || mode === 'cover';
+  return mode === 'peek' || mode === 'cover' || mode === 'sheet';
 }
 
 /**
@@ -150,7 +153,8 @@ export interface PageDefinition {
    *
    * - `switch`: Takes over workspace, shows in "Navigate" section
    * - `peek`: Small overlay preserving state, shows in "Quick Access" section
-   * - `cover`: Full-viewport overlay preserving state, shows in "Quick Access" section
+   * - `cover`: Legacy full-viewport overlay mode
+   * - `sheet`: Full-viewport sheet overlay preserving workspace state
    */
   mode: PageMode;
 

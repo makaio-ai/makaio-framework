@@ -2,8 +2,8 @@
  * SlidePanel - A slide-in panel from the right (with seam for bottom on mobile)
  */
 
-import { useEffect, useId, useRef, type ReactNode } from 'react';
-import { useKey } from 'react-use';
+import { useId, useRef, type ReactNode } from 'react';
+import { useEscapeKey, useBodyScrollLock, useFocusOnOpen, useFocusTrap } from '../dom-hooks.js';
 import { CloseIcon } from '../../icons/index.js';
 import styles from './SlidePanel.module.scss';
 
@@ -49,69 +49,10 @@ export function SlidePanel({
   const panelRef = useRef<HTMLDivElement>(null);
   // TODO(backlog): make SlidePanel stack-safe for overlapping modals so only
   // the topmost panel owns Escape handling, scroll locking, and focus restore.
-  // Close on Escape key
-  useKey('Escape', () => isOpen && onClose(), { event: 'keydown' }, [isOpen, onClose]);
-
-  // Prevent body scroll when panel is open.
-  // Restore the previous inline overflow value on cleanup so an existing body
-  // overflow policy is not lost when the panel closes.
-  useEffect(() => {
-    if (!isOpen) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const panel = panelRef.current;
-    if (!panel) {
-      return;
-    }
-
-    const previousActiveElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const selector = 'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])';
-    const getFocusableElements = () => Array.from(panel.querySelectorAll<HTMLElement>(selector));
-    const [firstFocusable] = getFocusableElements();
-
-    (firstFocusable ?? panel).focus();
-
-    const handleTabKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Tab') {
-        return;
-      }
-
-      const focusableElements = getFocusableElements();
-      if (focusableElements.length === 0) {
-        event.preventDefault();
-        panel.focus();
-        return;
-      }
-
-      const first = focusableElements[0];
-      const last = focusableElements[focusableElements.length - 1];
-      const activeElement = document.activeElement;
-
-      if (event.shiftKey && activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener('keydown', handleTabKey);
-    return () => {
-      document.removeEventListener('keydown', handleTabKey);
-      previousActiveElement?.focus();
-    };
-  }, [isOpen]);
+  useEscapeKey(onClose, isOpen);
+  useBodyScrollLock(isOpen);
+  useFocusOnOpen(panelRef, isOpen);
+  useFocusTrap(panelRef, isOpen);
 
   const containerClassNames = [styles.container, isOpen && styles.open, styles[position]].filter(Boolean).join(' ');
 

@@ -14,6 +14,7 @@
  *
  * Pages contributed:
  * - `account-manager:analytics` — analytics page with range + account selectors.
+ * - `account-manager:accounts` — full-screen accounts management page (sheet mode).
  *
  * Side-effect imports run at module evaluation time to register extension
  * scopes before the factory is called.
@@ -32,19 +33,20 @@ import {
   analyticsDistributionWidgetDefinitionErased,
 } from './widgets/index.js';
 import { analyticsPageDeclaration, analyticsPageDefinition } from './pages/analytics/declaration.js';
+import { accountsPageDefinition } from './pages/accounts/declaration.js';
 
 /**
  * Account Manager browser contribution factory.
  *
  * Returns the complete account-manager UI contribution including the tray
  * provider widget, two dashboard widgets, three analytics widgets, the
- * analytics page layout declaration, and the analytics page navigation
- * definition.
+ * analytics page layout declaration, the analytics page navigation
+ * definition, and the accounts management page definition.
  * @returns Account Manager browser contribution.
  */
 const contribution: ExtensionBrowserFactory = (): ExtensionBrowserContribution => ({
   pages: [analyticsPageDeclaration],
-  pageDefinitions: [analyticsPageDefinition],
+  pageDefinitions: [analyticsPageDefinition, accountsPageDefinition],
   widgets: [
     trayProviderWidgetDefinitionErased,
     dashboardAccountsWidgetDefinitionErased,

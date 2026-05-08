@@ -1,18 +1,21 @@
 /* eslint max-lines-per-function: ["error", { max: 500 }] */
-import { useMemo, type FC, type JSX } from 'react';
+import { useMemo, useRef, type FC, type JSX, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import GridLayout, { Responsive, WidthProvider, type Layout } from 'react-grid-layout';
 import 'react-grid-layout/css/styles.css';
 import 'react-resizable/css/styles.css';
 import styles from './WidgetGrid.module.scss';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary.js';
+import { HostSubjects } from '@makaio/contracts';
 import type { UiContextSnapshot } from '@makaio/contracts';
 import {
   DEFAULT_WIDGET_UI_CONTEXT,
+  WidgetSubjects,
   type WidgetDefinition,
   type WidgetLayout,
   type WidgetPlacement,
   type WidgetSize,
 } from '@makaio/ui-kernel';
+import { useOptionalBus, usePageOverlayStore } from '@makaio/ui-hooks';
 
 const ResponsiveGridLayoutWithWidth = WidthProvider(Responsive);
 
@@ -356,6 +359,19 @@ function WidgetGridItemContent(props: {
 }
 
 /**
+ * Minimum pointer travel distance squared (px²) that counts as a drag, not a
+ * click. Using squared distance avoids the `Math.sqrt` call on every click.
+ */
+const DRAG_THRESHOLD_SQ = 25; // 5px * 5px
+
+/**
+ * Selector for interactive elements that should not propagate their click up
+ * to the activatable tile container. Clicking a button inside a widget should
+ * perform the button's action, not open the overlay.
+ */
+const INTERACTIVE_ELEMENT_SELECTOR = 'button, a, input, select, textarea';
+
+/**
  * Responsive grid that renders widget placements using react-grid-layout.
  * @param props - Grid configuration including layout, widgets, and edit-mode callbacks.
  * @returns Responsive grid with drag/resize support in edit mode.
@@ -377,6 +393,15 @@ export const WidgetGrid: FC<WidgetGridProps> = ({
   // responsive branch needs per-breakpoint layouts; the fixed branch needs a
   // single flat array. Computing both on every render was dead work.
   const isFixed = gridConfig?.responsive === false;
+
+  const bus = useOptionalBus();
+
+  /**
+   * Tracks the pointer-down position so we can suppress click events that
+   * resulted from a drag gesture. A single ref is sufficient because only one
+   * pointer is active at a time on a desktop grid.
+   */
+  const pointerDownRef = useRef<{ x: number; y: number } | null>(null);
 
   const rglLayouts = useMemo(
     () => (isFixed ? null : toResponsiveLayouts(toResponsiveLayout(layout, isEditing, widgets))),
@@ -402,6 +427,95 @@ export const WidgetGrid: FC<WidgetGridProps> = ({
     });
   };
 
+  /**
+   * Execute all declarative and custom activation side-effects for a widget.
+   *
+   * Called by both the click handler and the keyboard handler once it has been
+   * determined that activation should proceed.
+   * @param definition - Widget definition containing the `activate` spec.
+   * @param placement - Widget instance being activated.
+   */
+  const executeActivation = (definition: WidgetDefinition, placement: WidgetPlacement): void => {
+    const { activate } = definition;
+    if (!activate) return;
+
+    // Emit the activation event for observability.
+    if (bus) {
+      bus
+        .emit(WidgetSubjects.activated, {
+          instanceId: placement.instanceId,
+          widgetId: placement.widgetId,
+        })
+        .catch((error: unknown) => {
+          console.error('[WidgetGrid] Failed to emit widget.activated:', error);
+        });
+    }
+
+    // Declarative: open a page in the current window.
+    if (activate.pageId) {
+      usePageOverlayStore.getState().openPage(activate.pageId);
+    }
+
+    void (async () => {
+      if (activate.windowId && bus) {
+        try {
+          await bus.request(HostSubjects.window.create, { registrationId: activate.windowId });
+        } catch (error: unknown) {
+          console.error('[WidgetGrid] Failed to create window:', error);
+        }
+      }
+
+      // Custom handler — runs after declarative steps.
+      if (activate.onActivate && bus) {
+        try {
+          await activate.onActivate({
+            bus,
+            instanceId: placement.instanceId,
+            widgetId: placement.widgetId,
+          });
+        } catch (error: unknown) {
+          console.error('[WidgetGrid] Widget onActivate handler failed:', error);
+        }
+      }
+    })();
+  };
+
+  /**
+   * Build the click handler for an activatable widget tile.
+   *
+   * The handler is only created when the widget has an `activate` field and
+   * the grid is not in edit mode. It guards against drag-generated clicks by
+   * comparing the pointer-down and click positions.
+   * @param definition - The widget definition containing the `activate` spec.
+   * @param placement - The widget instance being clicked.
+   * @returns A mouse-event handler, or undefined when activation is not applicable.
+   */
+  const buildActivationHandler = (
+    definition: WidgetDefinition,
+    placement: WidgetPlacement,
+  ): ((event: MouseEvent<HTMLDivElement>) => void) | undefined => {
+    if (isEditing || !definition.activate) {
+      return undefined;
+    }
+
+    return (event: MouseEvent<HTMLDivElement>): void => {
+      if ((event.target as Element).closest(INTERACTIVE_ELEMENT_SELECTOR)) {
+        return;
+      }
+
+      // Suppress clicks that were generated by a drag gesture.
+      if (pointerDownRef.current !== null) {
+        const dx = event.clientX - pointerDownRef.current.x;
+        const dy = event.clientY - pointerDownRef.current.y;
+        if (dx * dx + dy * dy > DRAG_THRESHOLD_SQ) {
+          return;
+        }
+      }
+
+      executeActivation(definition, placement);
+    };
+  };
+
   /** Shared widget tile renderer for both responsive and fixed layouts. */
   const widgetTiles = layout.placements.map((placement) => {
     // Linear scan is fine here — dashboard widget count is O(10), not worth a Map.
@@ -415,8 +529,34 @@ export const WidgetGrid: FC<WidgetGridProps> = ({
       );
     }
 
+    const isActivatable = !isEditing && Boolean(definition.activate);
+    const handleActivation = buildActivationHandler(definition, placement);
+
     return (
-      <div className={styles.widgetWrapper} key={placement.instanceId}>
+      <div
+        className={`${styles.widgetWrapper}${isActivatable ? ` ${styles.activatable}` : ''}`}
+        key={placement.instanceId}
+        onClick={handleActivation}
+        onKeyDown={
+          isActivatable
+            ? (event: KeyboardEvent<HTMLDivElement>): void => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  executeActivation(definition, placement);
+                }
+              }
+            : undefined
+        }
+        onPointerDown={
+          isActivatable
+            ? (event: PointerEvent<HTMLDivElement>) => {
+                pointerDownRef.current = { x: event.clientX, y: event.clientY };
+              }
+            : undefined
+        }
+        role={isActivatable ? 'button' : undefined}
+        tabIndex={isActivatable ? 0 : undefined}
+      >
         <WidgetGridItemContent
           definition={definition}
           isEditing={isEditing}
