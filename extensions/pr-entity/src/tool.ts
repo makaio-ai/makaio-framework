@@ -19,7 +19,7 @@ const PrStatusInputSchema = z.discriminatedUnion('op', [
     repoPath: z.string().optional().describe('Repository path (auto-detected from cwd if omitted)'),
   }),
   z.object({
-    op: z.literal('sync'),
+    op: z.literal('refresh'),
     pr: z.number().describe('Pull request number'),
     repoPath: z.string().optional().describe('Repository path (auto-detected from cwd if omitted)'),
   }),
@@ -41,7 +41,7 @@ const PrStatusOutputSchema = z.object({
  *
  * Delegates to the VCS:PR aggregation service via bus subjects. Supports three
  * operations: `get` (single PR), `list` (all PRs, optional branch filter),
- * and `sync` (force re-fetch bypassing the cache).
+ * and `refresh` (force re-fetch bypassing the cache).
  */
 export const prStatusTool = defineTool({
   name: 'pr_status',
@@ -50,7 +50,7 @@ export const prStatusTool = defineTool({
 Operations:
 - get: Get enriched state for a specific PR
 - list: List enriched states for PRs (optionally filtered by branch)
-- sync: Force re-sync of PR state`,
+- refresh: Force refresh of PR state (bypasses cache)`,
 
   annotations: { readOnly: true },
   inputSchema: PrStatusInputSchema,
@@ -82,8 +82,8 @@ Operations:
           return toolSuccess({ success: true, prs });
         }
 
-        case 'sync': {
-          const { pr } = await bus.request(VCSPRSubjects.sync, {
+        case 'refresh': {
+          const { pr } = await bus.request(VCSPRSubjects.refresh, {
             repoPath,
             prNumber: input.pr,
           });
