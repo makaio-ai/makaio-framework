@@ -4738,6 +4738,7 @@ __metadata:
     minimatch: "npm:^10.0.3"
     semver: "npm:^7.7.0"
     ws: "npm:^8.18.0"
+    yaml: "npm:^2.8.3"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft

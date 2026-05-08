@@ -1,7 +1,13 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { glob } from 'glob';
-import { type ExtensionDescriptor, ExtensionDescriptorSchema } from '@makaio/contracts';
+import { type ExtensionDescriptor, ExtensionDescriptorSchema, type MakaioExtension } from '@makaio/contracts';
+
+/** Preloaded server entry module used by bundled hosts. */
+export interface ExtensionEntrypointModule {
+  /** Server entry default export. */
+  readonly default: MakaioExtension | ReadonlyArray<MakaioExtension>;
+}
 
 /**
  * An extension discovered on the filesystem.
@@ -19,6 +25,13 @@ export interface DiscoveredExtension {
    * which takes priority over `'global-npm'` (global npm install).
    */
   readonly source: 'local' | 'installed' | 'global-npm';
+  /**
+   * Pre-loaded server entry module. When present, the extension loader skips
+   * filesystem-based entry resolution and uses this module directly. Enables
+   * bundled deployments where extension code is statically imported at build
+   * time rather than dynamically discovered on disk.
+   */
+  readonly preloadedModule?: ExtensionEntrypointModule;
 }
 
 /**
@@ -196,15 +209,7 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
    * @returns Merged list with no duplicate names.
    */
   private deduplicate(...tiers: DiscoveredExtension[][]): DiscoveredExtension[] {
-    const byName = new Map<string, DiscoveredExtension>();
-    for (const tier of tiers) {
-      for (const ext of tier) {
-        if (!byName.has(ext.descriptor.name)) {
-          byName.set(ext.descriptor.name, ext);
-        }
-      }
-    }
-    return [...byName.values()];
+    return deduplicateByDescriptorName(tiers);
   }
 }
 
@@ -249,16 +254,23 @@ export class MergedDescriptorDiscovery implements ExtensionDiscovery {
    */
   public async discover(): Promise<DiscoveredExtension[]> {
     const discoveredTiers = await Promise.all(this.discoveries.map((discovery) => discovery.discover()));
-    const byName = new Map<string, DiscoveredExtension>();
+    return deduplicateByDescriptorName(discoveredTiers);
+  }
+}
 
-    for (const tier of discoveredTiers) {
-      for (const ext of tier) {
-        if (!byName.has(ext.descriptor.name)) {
-          byName.set(ext.descriptor.name, ext);
-        }
+/**
+ * Deduplicate discoveries by descriptor name while preserving tier priority.
+ * @param tiers - Discovery tiers ordered from highest to lowest priority.
+ * @returns Merged discoveries with the first descriptor name occurrence kept.
+ */
+function deduplicateByDescriptorName(tiers: ReadonlyArray<ReadonlyArray<DiscoveredExtension>>): DiscoveredExtension[] {
+  const byName = new Map<string, DiscoveredExtension>();
+  for (const tier of tiers) {
+    for (const ext of tier) {
+      if (!byName.has(ext.descriptor.name)) {
+        byName.set(ext.descriptor.name, ext);
       }
     }
-
-    return [...byName.values()];
   }
+  return [...byName.values()];
 }

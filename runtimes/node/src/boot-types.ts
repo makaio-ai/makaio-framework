@@ -110,12 +110,31 @@ export interface CoreBootOptions {
   surface?: ExtensionRuntimeSurface;
 
   /**
+   * Filesystem path to the framework central Drizzle migrations directory.
+   *
+   * Normal source builds omit this and use the package-local
+   * `@makaio/storage-migrations/drizzle` folder. Bundled hosts pass the copied
+   * runtime asset path explicitly because the original package directory may
+   * not exist in the deployed image.
+   */
+  readonly centralMigrationsDir?: string;
+
+  /**
    * Host launcher command embedded into client wiring installed from warning actions.
    *
    * Defaults to `'makaio'`. Prefer `makaio.config.*` when a user/workspace
    * needs a different launcher identity.
    */
   readonly launcherCommand?: string;
+
+  /**
+   * Enable the extension package-manager service.
+   *
+   * Defaults to `true` for interactive/dev hosts. Bundled cloud hosts can set
+   * this to `false` because their extension set is fixed at image build time
+   * and the Yarn package-management service is not part of the runtime surface.
+   */
+  readonly enablePackageManager?: boolean;
 
   /**
    * Called when the bus WebSocket transport is attached and accepting

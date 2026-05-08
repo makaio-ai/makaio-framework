@@ -127,16 +127,20 @@ export async function loadExtensions(
     }
 
     let mod: { default: unknown };
-    try {
-      const entryPath = resolveConventionEntrypoint('server', descriptor.entrypoints.server, extensionPath);
-      if (!entryPath) {
-        console.warn(`${label}: server entrypoint could not be resolved within extension directory, skipping`);
+    if (ext.preloadedModule) {
+      mod = ext.preloadedModule;
+    } else {
+      try {
+        const entryPath = resolveConventionEntrypoint('server', descriptor.entrypoints.server, extensionPath);
+        if (!entryPath) {
+          console.warn(`${label}: server entrypoint could not be resolved within extension directory, skipping`);
+          continue;
+        }
+        mod = await importModule(entryPath);
+      } catch (err) {
+        console.warn(`${label}: failed to import server entry:`, err instanceof Error ? err.message : err);
         continue;
       }
-      mod = await importModule(entryPath);
-    } catch (err) {
-      console.warn(`${label}: failed to import server entry:`, err instanceof Error ? err.message : err);
-      continue;
     }
 
     const loadedPackages = normalizePackageExport(mod.default, descriptor.name, label);
@@ -480,14 +484,15 @@ export function resolveConventionEntrypoint(
 ): string | undefined {
   if (!path.isAbsolute(extensionPath)) return undefined;
   const stem = entrypointStem(surface, entrypointValue);
+  const normalizedExtensionRoot = normalizeForContainment(extensionPath);
 
   const devPath = path.resolve(extensionPath, 'src', `${stem}.ts`);
-  if (fs.existsSync(devPath) && isWithinDirectory(devPath, extensionPath)) {
+  if (isExistingPathWithinDirectory(devPath, normalizedExtensionRoot)) {
     return devPath;
   }
 
   const prodPath = path.resolve(extensionPath, 'dist', `${stem}.mjs`);
-  if (fs.existsSync(prodPath) && isWithinDirectory(prodPath, extensionPath)) {
+  if (isExistingPathWithinDirectory(prodPath, normalizedExtensionRoot)) {
     return prodPath;
   }
 
@@ -504,9 +509,33 @@ export function resolveConventionEntrypoint(
  * @returns Whether `resolved` is a descendant of `baseDir`.
  */
 export function isWithinDirectory(resolved: string, baseDir: string): boolean {
-  const normalizedBase = normalizeForContainment(baseDir) + path.sep;
+  const normalizedBase = normalizeForContainment(baseDir);
   const normalizedResolved = normalizeForContainment(resolved);
-  return normalizedResolved.startsWith(normalizedBase);
+  return isWithinNormalizedDirectory(normalizedResolved, normalizedBase);
+}
+
+/**
+ * Check whether an existing candidate path resolves inside a normalized base directory.
+ * @param candidatePath - Candidate entrypoint path.
+ * @param normalizedBaseDir - Normalized extension root.
+ * @returns Whether the candidate exists and stays within the extension root.
+ */
+function isExistingPathWithinDirectory(candidatePath: string, normalizedBaseDir: string): boolean {
+  try {
+    return isWithinNormalizedDirectory(fs.realpathSync(candidatePath), normalizedBaseDir);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether two normalized paths have a parent-child relationship.
+ * @param normalizedResolved - Normalized candidate path.
+ * @param normalizedBaseDir - Normalized base directory path.
+ * @returns Whether the candidate is a descendant of the base directory.
+ */
+function isWithinNormalizedDirectory(normalizedResolved: string, normalizedBaseDir: string): boolean {
+  return normalizedResolved.startsWith(normalizedBaseDir + path.sep);
 }
 
 /**

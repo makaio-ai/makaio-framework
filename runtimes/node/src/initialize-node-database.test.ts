@@ -50,6 +50,14 @@ describe('initializeNodeDatabase', () => {
     expect(result.dbPath).toBe(dbPath);
   });
 
+  it('passes bundled migration directories to the migration runner', async () => {
+    const migrationsDir = path.join(tempDir, 'drizzle');
+
+    await initializeNodeDatabase({ dbPath, makaioHome: tempDir, migrationsDir });
+
+    expect(runMigrationsMock).toHaveBeenCalledWith(expect.anything(), { migrationsDir });
+  });
+
   it('closes the created database client when migrations fail', async () => {
     runMigrationsMock.mockRejectedValueOnce(new Error('migration failed'));
 
