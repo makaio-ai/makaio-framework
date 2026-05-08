@@ -74,6 +74,10 @@ export async function generateSchema(options: GenerateSchemaOptions = {}): Promi
 
 /**
  * Determine whether this file is being executed directly.
+ *
+ * Kept local to this CLI entrypoint rather than promoted to `@makaio/utils`:
+ * sharing it would add a package dependency for two generator call sites
+ * without changing the schema generation contract.
  * @returns True when invoked as the entrypoint via tsx/node
  */
 function isMainModule(): boolean {

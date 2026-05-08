@@ -11,6 +11,14 @@ export interface InitializeNodeDatabaseOptions {
   /** Override database file path. Defaults to MAKAIO_DATABASE_PATH env var, then `<makaioHome>/makaio.db`. */
   dbPath?: string;
   /**
+   * Override framework central migrations directory.
+   *
+   * Bundled hosts copy migrations next to their entrypoint and pass that
+   * runtime asset path explicitly because package-local source paths are not
+   * available in the final image.
+   */
+  migrationsDir?: string;
+  /**
    * Makaio home directory used to derive the default database path.
    * Superseded by `dbPath` and `MAKAIO_DATABASE_PATH`.
    */
@@ -61,7 +69,7 @@ export async function initializeNodeDatabase(
 
   const databaseClient = await createDatabaseClient({ url: pathToFileURL(dbPath).href });
   try {
-    await runMigrations(databaseClient.db);
+    await runMigrations(databaseClient.db, { migrationsDir: options.migrationsDir });
     // Best-effort hardening: some platforms/filesystems may not support POSIX modes.
     try {
       await fs.promises.chmod(dbPath, 0o600);

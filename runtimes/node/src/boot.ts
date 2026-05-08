@@ -180,6 +180,7 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     const { databaseClient } = await initializeNodeDatabase({
       makaioHome,
+      migrationsDir: options.centralMigrationsDir,
     });
     const db = databaseClient.db;
     console.info('[boot] Database initialized');
@@ -317,7 +318,13 @@ export async function bootMakaioRuntimeCore(
         strategyDependencies: options.clientBinaryStrategyDependencies,
         postInstallHandlers: options.clientBinaryPostInstallHandlers,
       }),
-      createPackageManagerPackage({ frameworkPeerRange: `^${runtimeFrameworkVersion}` }),
+    ];
+
+    if (options.enablePackageManager !== false) {
+      frameworkPackages.push(createPackageManagerPackage({ frameworkPeerRange: `^${runtimeFrameworkVersion}` }));
+    }
+
+    frameworkPackages.push(
       createAdapterSubsystemPackage({
         configRepository: adapterConfigRepository,
         coordinator,
@@ -326,7 +333,7 @@ export async function bootMakaioRuntimeCore(
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
-    ];
+    );
 
     if (process.platform === 'darwin') {
       const { platformMacOSPackage } = await import('@makaio/platform-macos');

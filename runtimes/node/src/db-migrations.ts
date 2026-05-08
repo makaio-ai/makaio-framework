@@ -9,16 +9,22 @@ import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
 
+/** Options for applying framework central migrations. */
+export interface RunMigrationsOptions {
+  /** Optional filesystem path to a bundled framework `drizzle/` migrations directory. */
+  readonly migrationsDir?: string;
+}
+
 /**
  * Run all database migrations.
  *
  * 1. Runs Drizzle-generated migrations for all framework tables
  * 2. Creates FTS5 virtual tables and triggers (not supported by Drizzle)
  * @param db - Drizzle database instance
+ * @param options - Optional migration source overrides for bundled hosts.
  */
-export async function runMigrations(db: MakaioDatabase): Promise<void> {
-  // Run Drizzle migrations from @makaio/storage-migrations
-  const migrations = readMigrations();
+export async function runMigrations(db: MakaioDatabase, options: RunMigrationsOptions = {}): Promise<void> {
+  const migrations = readMigrations(options.migrationsDir);
   await applyMigrations(db, migrations);
 
   // FTS5 virtual tables (Drizzle doesn't support virtual tables)
@@ -69,8 +75,9 @@ export async function createMessagesFts5Tables(db: MakaioDatabase): Promise<void
     END
   `);
 
-  // Rebuild unconditionally so pre-existing rows are indexed and any drift is
-  // repaired if startup ever ran without the sync triggers installed.
+  // Unconditional by design: rebuilding repairs drift from older boots that
+  // ran before the sync triggers existed. A count-based skip would preserve a
+  // stale or corrupted FTS index.
   await db.run(sql`INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')`);
 }
 

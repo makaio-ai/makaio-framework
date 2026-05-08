@@ -79,3 +79,21 @@ export {
 } from './bun-route-graph-fetch.js';
 export { resolveListeningPort, type BunServer, type BunServerAddress } from './http-server-utils.js';
 export { bootMakaioRuntime, type BunBootMakaioRuntimeOptions } from './boot.js';
+export {
+  collectActiveBunHostPackages,
+  composeBunHostFetch,
+  composeBunHostWebSocket,
+  createBunHostRouter,
+  normalizeBunHostPackages,
+  type ActiveBunHostExtensionIterator,
+  type BunHostContribution,
+  type BunHostExtensionPackage,
+  type BunHostRouter,
+} from './bun-host-contributions.js';
+export { createGracefulShutdown, type BunGracefulShutdownOptions } from './graceful-shutdown.js';
+export {
+  readBunServerEnv,
+  type BunServerEnvConfig,
+  type InvalidBunServerEnvPolicy,
+  type ReadBunServerEnvOptions,
+} from './server-env.js';

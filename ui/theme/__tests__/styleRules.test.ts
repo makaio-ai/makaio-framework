@@ -7,7 +7,8 @@ const THEME_DIR = path.resolve(import.meta.dirname, '..');
 const UI_ROOT = path.resolve(THEME_DIR, '..');
 const THEME_FILE = path.join(THEME_DIR, 'themes/aura.scss');
 const THEME_VAR_PREFIXES = ['--color-', '--glass-', '--font-', '--shadow-', '--radius-', '--z-'] as const;
-const IGNORE_DIRS = ['theme', 'node_modules', 'dist'] as const;
+const IGNORE_ROOT_DIRS = ['theme', 'dist'] as const;
+const IGNORE_SEGMENT_DIRS = ['node_modules'] as const;
 
 /**
  * Strip line and block comments from SCSS content.
@@ -85,7 +86,13 @@ function findLiteralColors(content: string): string[] {
  */
 function shouldIgnoreFile(file: string): boolean {
   const normalized = file.replaceAll(/[\\/]+/g, '/');
-  return IGNORE_DIRS.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`));
+  const segments = normalized.split('/');
+  // Theme and dist are ignored only at framework/ui root boundaries; nested
+  // node_modules directories are ignored wherever workspace symlinks place them.
+  return (
+    IGNORE_ROOT_DIRS.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`)) ||
+    IGNORE_SEGMENT_DIRS.some((dir) => segments.includes(dir))
+  );
 }
 
 describe('style rules', () => {

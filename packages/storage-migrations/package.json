@@ -6,7 +6,8 @@
   "private": true,
   "exports": {
     ".": "./src/index.ts",
-    "./apply-migrations": "./src/apply-migrations.ts"
+    "./apply-migrations": "./src/apply-migrations.ts",
+    "./generate-schema": "./src/generate-schema.ts"
   },
   "scripts": {
     "db:generate": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) generate",
