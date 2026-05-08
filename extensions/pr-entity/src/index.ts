@@ -18,7 +18,7 @@ import { VCSPRAggregationService } from './aggregation-service.js';
  * PR entity extension package.
  *
  * Registers the VCS:PR aggregation service and exposes the `pr_status` tool.
- * The service handles `vcs:pr.get`, `vcs:pr.list`, and `vcs:pr.sync` subjects.
+ * The service handles `vcs:pr.get`, `vcs:pr.list`, and `vcs:pr.refresh` subjects.
  */
 export const prEntityPackage: MakaioExtension = {
   name: 'pr-entity',
