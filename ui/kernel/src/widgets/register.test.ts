@@ -20,6 +20,26 @@ function createDefinition(id: string): WidgetDefinition {
 }
 
 describe('widget register helpers', () => {
+  it('emits activation metadata when registering an activatable widget', () => {
+    const bus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMakaioBus;
+    const definition = {
+      ...createDefinition('activatable'),
+      activate: { pageId: 'settings' },
+    };
+
+    expect(registerWidget(bus, definition)).toBe(true);
+
+    expect(bus.emit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        activate: { pageId: 'settings' },
+      }),
+    );
+    widgetRegistry.clear();
+  });
+
   it('logs register emit failures instead of leaving unhandled rejections', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const bus = {

@@ -112,6 +112,10 @@
   width: 100%;
 }
 
+.activatable {
+  cursor: pointer;
+}
+
 .widgetContentEditing {
   pointer-events: none;
 }

@@ -146,3 +146,4 @@ export type {
 } from './utils/index.js';
 export { MultiActionToast } from './toast/index.js';
 export type { MultiActionToastProps } from './toast/index.js';
+export { useEscapeKey, useBodyScrollLock, useFocusOnOpen, useFocusTrap } from './utils/dom-hooks.js';

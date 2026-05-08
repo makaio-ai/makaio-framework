@@ -28,6 +28,28 @@ const WidgetScopeSchema = z.string();
 const WidgetSizeSchema = z.enum(['small', 'medium', 'large', 'full-width']);
 
 /**
+ * Widget activation schema.
+ *
+ * Function fields such as `onActivate` and React component fields are
+ * same-process only. The widget subjects are local, so preserving callable
+ * values through the register/list seam is valid and required for renderer
+ * activation to keep working after bus-backed registration.
+ */
+const WidgetActivationSchema = z.object({
+  /** Page ID to open in the current window. */
+  pageId: z.string().optional(),
+  /** Host window registration ID to create or focus. */
+  windowId: z.string().optional(),
+  /** Optional same-process custom activation handler. */
+  onActivate: z
+    .unknown()
+    .refine((value) => typeof value === 'function', {
+      message: 'onActivate must be a function',
+    })
+    .optional(),
+});
+
+/**
  * Widget definition schema.
  *
  * Note: `component` is `z.unknown()` because React components are not
@@ -64,6 +86,8 @@ const WidgetDefinitionSchema = z.object({
   defaultConfig: z.unknown().optional(),
   /** Whether multiple instances are allowed */
   allowMultiple: z.boolean().optional(),
+  /** Optional activation behaviour for widget clicks. */
+  activate: WidgetActivationSchema.optional(),
 });
 
 /**
@@ -72,6 +96,22 @@ const WidgetDefinitionSchema = z.object({
 const UnregisterSchema = z.object({
   /** Widget ID to unregister */
   widgetId: z.string(),
+});
+
+/**
+ * Widget activated payload schema.
+ *
+ * Emitted when a user clicks an activatable widget (one that has an `activate`
+ * field on its `WidgetDefinition`). This is a renderer-scoped local event and
+ * is never forwarded to transports.
+ * @param widgetId - The widget definition ID
+ * @param instanceId - The specific widget instance ID within the layout
+ */
+const ActivatedPayloadSchema = z.object({
+  /** Widget definition ID */
+  widgetId: z.string(),
+  /** Widget instance ID within the layout */
+  instanceId: z.string(),
 });
 
 /**
@@ -163,6 +203,25 @@ export const WidgetSchemas = {
     request: ListRequestSchema,
     response: ListResponseSchema,
   }),
+
+  /**
+   * Emitted when a user activates a widget by clicking it.
+   *
+   * Subject: `widget.activated`
+   * Type: Local event (fire-and-forget, never sent to transports)
+   * Purpose: Signals that a widget with an `activate` field was clicked.
+   *   Consumers (e.g. analytics, debug tooling) can subscribe to this event
+   *   to observe widget activation without coupling to the grid implementation.
+   * @param widgetId - The widget definition ID
+   * @param instanceId - The widget instance ID within the layout
+   * @example
+   * ```typescript
+   * bus.on(WidgetSubjects.activated, (ctx) => {
+   *   console.log(`Widget activated: ${ctx.payload.widgetId}`);
+   * });
+   * ```
+   */
+  activated: localSubject(ActivatedPayloadSchema),
 } satisfies SchemaRecord;
 
 /**
@@ -179,6 +238,7 @@ export const WidgetRawSchemas = {
     request: ListRequestSchema,
     response: ListResponseSchema,
   },
+  activated: ActivatedPayloadSchema,
 } as const;
 
 /**
@@ -192,3 +252,5 @@ export type WidgetScope = z.infer<typeof WidgetScopeSchema>;
 export type UnregisterPayload = z.infer<typeof UnregisterSchema>;
 export type ListWidgetsRequest = z.infer<typeof ListRequestSchema>;
 export type ListWidgetsResponse = z.infer<typeof ListResponseSchema>;
+/** Payload of the `widget.activated` event. */
+export type WidgetActivatedPayload = z.infer<typeof ActivatedPayloadSchema>;

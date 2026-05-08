@@ -1,5 +1,3 @@
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { type ConfigEnv, loadEnv, type PluginOption, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'url';
@@ -15,6 +13,7 @@ import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { sharedRendererAliases, sharedRendererRoot } from '@makaio/host-shared/renderer/vite-assets';
 import { buildDevHostRuntimeOptions, resolveDevHostOptions, type DevHostOptions } from './src/main/dev-host-options.js';
 import { isValidPort, parseCliPortArg } from '../../scripts/lib/vite-port-helpers.js';
+import { buildNodeRuntimeOptions, resolveMakaioHome } from '@makaio/runtime-node';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
@@ -81,13 +80,16 @@ async function createPlugins(command: ConfigEnv['command'], hostConfig: Renderer
   // Disabled when running inside Electron main process, which sets
   // VITE_DISABLE_BUS_SERVER=true before calling createViteServer().
   if (command === 'serve' && !hostConfig.disableBusServer) {
+    const makaioHome = resolveMakaioHome(hostConfig.env);
+    const runtimeOptions = hostConfig.devHost
+      ? buildDevHostRuntimeOptions(hostConfig.devHost, makaioHome)
+      : await buildNodeRuntimeOptions({ makaioHome, env: hostConfig.env });
+
     const { ViteBusServerPlugin } = await import('@makaio/bus-server-vite');
     plugins.push(
       ViteBusServerPlugin({
         debug: hostConfig.isDebug,
-        runtimeOptions: hostConfig.devHost
-          ? buildDevHostRuntimeOptions(hostConfig.devHost, path.join(os.homedir(), '.makaio'))
-          : undefined,
+        runtimeOptions,
       }) as PluginOption,
     );
   }

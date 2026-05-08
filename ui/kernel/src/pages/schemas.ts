@@ -144,8 +144,8 @@ const PageMetadataSchema = z.object({
   name: z.string(),
   /** Optional page description. */
   description: z.string().optional(),
-  /** Navigation mode: 'switch' replaces current page, 'peek' opens small overlay, 'cover' opens full-viewport overlay. */
-  mode: z.enum(['switch', 'peek', 'cover']),
+  /** Navigation mode: switch replaces current page; peek, cover, and sheet open overlays. */
+  mode: z.enum(['switch', 'peek', 'cover', 'sheet']),
   /** Required UI navigation level for page availability. */
   level: UiNavigationLevelSchema,
   /**

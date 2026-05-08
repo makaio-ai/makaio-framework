@@ -10,8 +10,10 @@ import {
 } from '../../scripts/lib/discover-extension-browser-dev-entries.js';
 import { viteImportMapPlugin } from '../../scripts/lib/vite-import-map-plugin.js';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
-import { sharedRendererAliases } from '@makaio/host-shared/renderer/vite-assets';
+import { sharedRendererAliases, sharedRendererRoot } from '@makaio/host-shared/renderer/vite-assets';
+import { buildDevHostRuntimeOptions, resolveDevHostOptions, type DevHostOptions } from '@makaio/host-shared';
 import { isValidPort, parseCliPortArg } from '../../scripts/lib/vite-port-helpers.js';
+import { buildNodeRuntimeOptions, resolveMakaioHome } from '@makaio/runtime-node';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
@@ -22,6 +24,8 @@ const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
 interface RendererConfig {
   /** Resolved process environment after loading mode env files. */
   readonly env: NodeJS.ProcessEnv;
+  /** Resolved host options, or `undefined` when no host workspace override is configured. */
+  readonly devHost?: DevHostOptions;
   /** Workspace root allowed by the Vite dev server. */
   readonly repoRoot: string;
   /** Port selected for the Vite dev server. */
@@ -42,6 +46,7 @@ interface RendererConfig {
 async function resolveRendererConfig(mode: string): Promise<RendererConfig> {
   const workspaceRoot = WORKSPACE_ROOT;
   const env = { ...loadEnv(mode, workspaceRoot, ''), ...process.env };
+  const devHost = resolveDevHostOptions(env, { baseDir: workspaceRoot });
   const cliPort = parseCliPortArg(process.argv);
   const rawEnvPort = env['MAKAIO_PORT'] ? Number(env['MAKAIO_PORT']) : undefined;
   const envPort = rawEnvPort !== undefined && isValidPort(rawEnvPort) ? rawEnvPort : undefined;
@@ -49,7 +54,8 @@ async function resolveRendererConfig(mode: string): Promise<RendererConfig> {
 
   return {
     env,
-    repoRoot: workspaceRoot,
+    ...(devHost !== undefined ? { devHost } : {}),
+    repoRoot: devHost?.workspaceRoot ?? workspaceRoot,
     devPort,
     disableBusServer: env['VITE_DISABLE_BUS_SERVER'] === 'true',
     ...(env['MAKAIO_BUS_URL'] !== undefined ? { busUrl: env['MAKAIO_BUS_URL'] } : {}),
@@ -75,15 +81,35 @@ async function createPlugins(command: ConfigEnv['command'], config: RendererConf
   // Disabled when running inside the Electrobun host process, which sets
   // VITE_DISABLE_BUS_SERVER=true before calling createViteServer().
   if (command === 'serve' && !config.disableBusServer) {
+    const makaioHome = resolveMakaioHome(config.env);
+    const runtimeOptions = config.devHost
+      ? buildDevHostRuntimeOptions(config.devHost, makaioHome)
+      : await buildNodeRuntimeOptions({ makaioHome, env: config.env });
+
     const { ViteBusServerPlugin } = await import('@makaio/bus-server-vite');
     plugins.push(
       ViteBusServerPlugin({
         debug: config.isDebug,
+        runtimeOptions,
       }) as PluginOption,
     );
   }
 
   return plugins;
+}
+
+/**
+ * Resolve the filesystem roots Vite may serve during renderer development.
+ *
+ * Host-aware dev mode can point `MAKAIO_HOST_WORKSPACE_ROOT` outside this repo,
+ * while shared renderer aliases still resolve to framework-owned files. Allow
+ * both roots in serve mode so Electrobun matches Electron's dev-host contract.
+ * @param command - Vite command (`serve` or `build`).
+ * @param config - Renderer config resolved from the current Vite mode.
+ * @returns Deduplicated absolute paths that Vite may serve.
+ */
+function buildServerFsAllow(command: ConfigEnv['command'], config: RendererConfig): string[] {
+  return Array.from(new Set([config.repoRoot, ...(command === 'serve' && config.devHost ? [sharedRendererRoot] : [])]));
 }
 
 /**
@@ -115,7 +141,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
     server: {
       port: config.devPort,
       fs: {
-        allow: [config.repoRoot],
+        allow: buildServerFsAllow(command, config),
       },
     },
     build: {

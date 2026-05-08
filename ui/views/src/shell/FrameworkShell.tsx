@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type JSX } from 'react';
 import type { PreferenceKey } from '@makaio/services-core/preferences';
 import { BusProvider, useWidgets, useWidgetLayout, useWidgetLayoutActions } from '@makaio/ui-hooks';
+import { SheetOverlay } from './SheetOverlay.js';
 import type { ShellProps, WidgetDefinition, WidgetLayout, WidgetPlacement } from '@makaio/ui-kernel';
 import { WidgetCanvas } from '../widget-canvas/WidgetCanvas.js';
 import { SIZE_MAPPING } from '../widget-canvas/WidgetGrid.js';
@@ -55,6 +56,7 @@ export function FrameworkShell(props: ShellProps): JSX.Element {
   return (
     <BusProvider bus={props.bus}>
       <FrameworkShellContent />
+      <SheetOverlay />
     </BusProvider>
   );
 }

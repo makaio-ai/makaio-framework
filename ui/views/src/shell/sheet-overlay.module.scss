@@ -1,0 +1,130 @@
+/**
+ * SheetOverlay Styles
+ *
+ * Fullscreen overlay for sheet-mode page rendering.
+ * Uses `position: fixed; inset: 0` to sit above the widget canvas
+ * and animates in from the right via a CSS transform transition.
+ */
+
+@use '@makaio/ui-theme' as theme;
+
+/**
+ * Root overlay container — always in the DOM but invisible / inert when closed.
+ *
+ * Delayed `visibility: hidden` lets the exit transition play before the
+ * element is removed from the tab order. The `pointer-events: none` prevents
+ * interaction through the transparent container while it is animating out.
+ */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: theme.$z-cover;
+  pointer-events: none;
+  visibility: hidden;
+  transition: visibility 0s linear 300ms;
+
+  &.open {
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+
+    .panel {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+}
+
+/**
+ * Fullscreen panel — slides in from the right on open.
+ *
+ * Solid `bg-primary` background so the widget canvas below is fully hidden,
+ * matching the "native to the shell" aesthetic rather than a dialog.
+ */
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: theme.$bg-primary;
+  transform: translateX(100%);
+  opacity: 0;
+  transition:
+    transform 300ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 300ms ease-out;
+}
+
+/**
+ * Header bar — matches the FrameworkShell header visual rhythm.
+ */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: theme.$spacing-3;
+  padding: theme.$spacing-3 theme.$spacing-5;
+  border-bottom: 1px solid theme.$border-default;
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-family: theme.$font-ui;
+  font-size: theme.$font-size-base;
+  font-weight: theme.$font-weight-semibold;
+  color: theme.$text-primary;
+  line-height: theme.$line-height-tight;
+}
+
+.closeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: theme.$spacing-8;
+  height: theme.$spacing-8;
+  flex-shrink: 0;
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: theme.$radius-sm;
+  color: theme.$text-secondary;
+  cursor: pointer;
+  transition:
+    background-color 200ms ease-out,
+    color 200ms ease-out;
+
+  &:hover {
+    background: theme.$bg-tertiary;
+    color: theme.$text-primary;
+  }
+
+  &:focus-visible {
+    outline: 2px solid theme.$accent-primary;
+    outline-offset: 2px;
+  }
+}
+
+/**
+ * Content area — fills remaining vertical space with overflow scrolling.
+ */
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+
+  @include theme.custom-scrollbar;
+}
+
+/**
+ * Loading and error states shown while the page component is resolving.
+ */
+.loadingState,
+.errorState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: theme.$text-muted;
+  font-family: theme.$font-ui;
+  font-size: theme.$font-size-sm;
+}

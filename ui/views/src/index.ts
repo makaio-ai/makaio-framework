@@ -29,6 +29,7 @@ export {
 // ---------------------------------------------------------------------------
 export { FrameworkShell } from './shell/FrameworkShell.js';
 export { BusStatusIndicator } from './shell/BusStatusIndicator.js';
+export { SheetOverlay } from './shell/SheetOverlay.js';
 export { TrayView } from './shell/tray-view.js';
 
 // ---------------------------------------------------------------------------

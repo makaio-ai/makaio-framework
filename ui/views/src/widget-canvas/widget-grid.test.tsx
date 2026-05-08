@@ -19,10 +19,26 @@
 import type { ComponentProps, ReactNode } from 'react';
 import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WidgetGrid, SIZE_MAPPING, toFixedLayout } from './WidgetGrid.js';
 import type { UiContextSnapshot } from '@makaio/contracts';
 import type { WidgetDefinition, WidgetLayout, WidgetProps } from '@makaio/ui-kernel';
+import { usePageOverlayStore } from '@makaio/ui-hooks';
+import type { IMakaioBus } from '@makaio/bus-core';
+
+type ActivationBus = Pick<IMakaioBus, 'emit' | 'request'>;
+
+const mockHookState = vi.hoisted(() => ({
+  bus: null as ActivationBus | null,
+}));
+
+vi.mock('@makaio/ui-hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@makaio/ui-hooks')>();
+  return {
+    ...actual,
+    useOptionalBus: () => mockHookState.bus,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // react-grid-layout mock
@@ -90,10 +106,16 @@ vi.mock('react-grid-layout', async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockHookState.bus = null;
+  usePageOverlayStore.getState().close();
 });
 
 function MockWidget({ size }: WidgetProps) {
   return createElement('div', { 'data-testid': 'mock-widget', 'data-size': size });
+}
+
+function InteractiveWidget(): ReactNode {
+  return createElement('button', { type: 'button' }, 'Inner action');
 }
 
 const TEST_UI_CONTEXT: UiContextSnapshot = {
@@ -108,6 +130,11 @@ const WIDGET_DEF: WidgetDefinition = {
   name: 'Test Widget',
   scope: 'tray',
   supportedSizes: ['small'],
+};
+
+const ACTIVATABLE_WIDGET_DEF: WidgetDefinition = {
+  ...WIDGET_DEF,
+  activate: { pageId: 'test-page' },
 };
 
 const BASE_LAYOUT: WidgetLayout = {
@@ -208,6 +235,86 @@ describe('WidgetGrid — locked placements', () => {
     renderGrid();
 
     expect(screen.queryByRole('button', { name: /remove widget/i })).toBeNull();
+  });
+});
+
+describe('WidgetGrid — activation', () => {
+  it('opens the configured page when an activatable widget is clicked outside edit mode', () => {
+    renderGrid({ widgets: [ACTIVATABLE_WIDGET_DEF] });
+
+    fireEvent.click(screen.getByTestId('mock-widget'));
+
+    expect(usePageOverlayStore.getState().activePageId).toBe('test-page');
+  });
+
+  it('does not activate when an interactive child is clicked', () => {
+    renderGrid({
+      widgets: [
+        {
+          ...ACTIVATABLE_WIDGET_DEF,
+          component: InteractiveWidget,
+        },
+      ],
+    });
+
+    const innerButton = screen.getAllByRole('button', { name: 'Inner action' }).find((element) => element.tagName === 'BUTTON');
+    expect(innerButton).toBeDefined();
+    fireEvent.click(innerButton!);
+
+    expect(usePageOverlayStore.getState().activePageId).toBeNull();
+  });
+
+  it('activates with Enter and Space when the tile has focus', () => {
+    renderGrid({ widgets: [ACTIVATABLE_WIDGET_DEF] });
+
+    const tile = screen.getByRole('button');
+    fireEvent.keyDown(tile, { key: 'Enter' });
+
+    expect(usePageOverlayStore.getState().activePageId).toBe('test-page');
+
+    usePageOverlayStore.getState().close();
+    fireEvent.keyDown(tile, { key: ' ' });
+
+    expect(usePageOverlayStore.getState().activePageId).toBe('test-page');
+  });
+
+  it('waits for window activation before running a custom activation handler', async () => {
+    const order: string[] = [];
+    mockHookState.bus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+      request: vi.fn().mockImplementation(async () => {
+        order.push('window');
+        return {};
+      }),
+    };
+
+    renderGrid({
+      widgets: [
+        {
+          ...WIDGET_DEF,
+          activate: {
+            windowId: 'account-manager:accounts-window',
+            onActivate: async () => {
+              order.push('custom');
+            },
+          },
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByTestId('mock-widget'));
+
+    await waitFor(() => {
+      expect(order).toEqual(['window', 'custom']);
+    });
+  });
+
+  it('does not activate widgets while editing', () => {
+    renderGrid({ isEditing: true, widgets: [ACTIVATABLE_WIDGET_DEF] });
+
+    fireEvent.click(screen.getByTestId('mock-widget'));
+
+    expect(usePageOverlayStore.getState().activePageId).toBeNull();
   });
 });
 

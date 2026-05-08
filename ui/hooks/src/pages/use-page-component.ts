@@ -19,6 +19,8 @@ import type { PageDefinition, PageComponentProps } from '@makaio/ui-kernel';
  * Memoized per pageId to avoid re-creating lazy components on every render.
  * @param pageId - Page identifier, or `null` when no page is active.
  *   A `null` value is treated the same as "not found" and returns `undefined`.
+ * @param reloadKey - Optional key that forces React.lazy wrapper recreation
+ *   for retrying failed dynamic imports.
  * @returns Object with Component and definition, or undefined if not registered
  *   or if pageId is null
  * @example
@@ -43,7 +45,10 @@ import type { PageDefinition, PageComponentProps } from '@makaio/ui-kernel';
  * }
  * ```
  */
-export function usePageComponent(pageId: string | null):
+export function usePageComponent(
+  pageId: string | null,
+  reloadKey = 0,
+):
   | {
       Component: ComponentType<PageComponentProps>;
       definition: PageDefinition;
@@ -75,9 +80,11 @@ export function usePageComponent(pageId: string | null):
       return undefined;
     }
 
-    // Wrap the component loader in React.lazy for Suspense support
+    // Wrap the component loader in React.lazy for Suspense support.
+    // `reloadKey` deliberately recreates the wrapper after an import/render
+    // failure so an overlay Retry button can issue a fresh attempt.
     const Component = lazy(definition.component);
 
     return { Component, definition };
-  }, [definition]);
+  }, [definition, reloadKey]);
 }

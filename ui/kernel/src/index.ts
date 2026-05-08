@@ -22,6 +22,8 @@ export {
 export {
   type WidgetProps,
   type WidgetDefinition,
+  type WidgetActivation,
+  type WidgetActivationContext,
   type WidgetInstance,
   type WidgetSlotId,
   type WidgetSlotState,
@@ -43,6 +45,7 @@ export {
   type UnregisterPayload,
   type ListWidgetsRequest,
   type ListWidgetsResponse,
+  type WidgetActivatedPayload,
 } from './widgets/schemas.js';
 
 export { WidgetNamespace, WidgetSubjects } from './widgets/namespace.js';
