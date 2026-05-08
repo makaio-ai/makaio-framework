@@ -22,6 +22,7 @@ const SOURCE_ONLY_PACKAGE_LINKS: Record<string, string> = {
 
 export default defineConfig({
   site: 'https://makaio.ai',
+  build: { inlineStylesheets: 'always' },
   markdown: {
     remarkPlugins: [
       remarkStripMdLinks,

@@ -39,6 +39,8 @@ label:has(> [aria-label='Select theme']) {
   --sl-color-gray-6: #15181d;
   --sl-color-black: #0d0f12;
 
+  --sl-color-text: var(--sl-color-gray-1);
+
   --sl-font: 'Outfit', system-ui, -apple-system, sans-serif;
   --sl-font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
 
@@ -108,9 +110,17 @@ header:not(:has(.header--splash)) {
   box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
 }
 
+.main-pane {
+  isolation: auto;
+}
+
 /* ---------------------------------------------------------------------------
  * Right sidebar (table of contents)
  * ------------------------------------------------------------------------- */
+
+.right-sidebar-panel a {
+  color: var(--sl-color-gray-1);
+}
 
 .right-sidebar a[aria-current='true'],
 .right-sidebar a.current-header {
@@ -123,8 +133,14 @@ header:not(:has(.header--splash)) {
 
 main a:not(.sl-link-button) {
   color: #f59e0b;
-  text-decoration: none;
-  transition: color 0.15s;
+  text-decoration: underline;
+  text-decoration-color: rgba(245, 158, 11, 0.35);
+  text-underline-offset: 0.15em;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+main a:not(.sl-link-button):hover {
+  text-decoration-color: #f59e0b;
 }
 
 main a:not(.sl-link-button):hover {
