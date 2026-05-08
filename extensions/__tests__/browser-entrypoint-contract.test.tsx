@@ -15,8 +15,13 @@
  * @see framework/docs/extensions/creating.md — "Browser Entrypoint"
  */
 
+import { resolve } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import { discoverExtensionBrowserRuntimeDevEntries } from '../../scripts/lib/discover-extension-browser-dev-entries.js';
+import {
+  buildRuntimeBrowserDevEntryForDescriptorRoot,
+  discoverDescriptorRootsFromConfig,
+} from '../../scripts/lib/discover-extension-browser-dev-entries.js';
+import type { ExtensionDevEntry } from '../../scripts/lib/vite-extension-dev-plugin.js';
 
 // ---------------------------------------------------------------------------
 // Trap factory — must be declared before vi.mock calls because vi.mock
@@ -88,7 +93,21 @@ function browserEntryName(urlPath: string): string {
   return match[1];
 }
 
-const BROWSER_ENTRIES = discoverExtensionBrowserRuntimeDevEntries(process.cwd()).map((entry) => ({
+const FRAMEWORK_ROOT = resolve(import.meta.dirname, '../..');
+const EXTENSION_DESCRIPTOR_DISCOVERY_PATHS = [
+  'adapters/implementations',
+  'clients',
+  'extensions',
+  'providers',
+] as const;
+
+function discoverContractBrowserEntries(): ExtensionDevEntry[] {
+  return discoverDescriptorRootsFromConfig(FRAMEWORK_ROOT, EXTENSION_DESCRIPTOR_DISCOVERY_PATHS).flatMap(
+    (descriptorRoot) => buildRuntimeBrowserDevEntryForDescriptorRoot(descriptorRoot) ?? [],
+  );
+}
+
+const BROWSER_ENTRIES = discoverContractBrowserEntries().map((entry) => ({
   name: browserEntryName(entry.urlPath),
   sourceAbsPath: entry.sourceAbsPath,
 }));

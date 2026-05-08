@@ -85,7 +85,7 @@ export async function loadAdapterConfig(
  */
 function normalizeConformancePattern(pattern: string): string {
   const posixPattern = toPosixPath(pattern);
-  const absolutePath = isAbsolute(pattern) ? pattern : resolve(posixPattern);
+  const absolutePath = isAbsolute(pattern) ? pattern : resolve(ROOT, posixPattern);
   const relativeToConformance = toPosixPath(relative(CONFORMANCE_PATH, absolutePath));
   let normalized =
     !relativeToConformance.startsWith('..') && relativeToConformance !== '' ? relativeToConformance : posixPattern;
@@ -93,6 +93,9 @@ function normalizeConformancePattern(pattern: string): string {
   normalized = toPosixPath(normalized);
   const conformanceRelative = `${toPosixPath(relative(ROOT, CONFORMANCE_PATH))}/`;
   if (normalized.startsWith(conformanceRelative)) normalized = normalized.slice(conformanceRelative.length);
+  const nestedConformanceRelative = `/${conformanceRelative}`;
+  const nestedIndex = normalized.indexOf(nestedConformanceRelative);
+  if (nestedIndex !== -1) normalized = normalized.slice(nestedIndex + nestedConformanceRelative.length);
   if (normalized.includes('*') || normalized.includes('/') || normalized.endsWith('.ts')) return normalized;
   return `**/*${normalized}*.test.ts`;
 }
