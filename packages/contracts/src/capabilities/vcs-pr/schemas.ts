@@ -221,8 +221,8 @@ export const VCSPRSchemas = {
     }),
   },
 
-  /** Force re-sync PR state. Subject: `vcs:pr.sync` */
-  sync: {
+  /** Force refresh of enriched PR state (cache bypass). Subject: `vcs:pr.refresh` */
+  refresh: {
     request: z.object({
       /** Local filesystem path to the repository */
       repoPath: z.string(),

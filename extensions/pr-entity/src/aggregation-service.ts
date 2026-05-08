@@ -42,7 +42,7 @@ function prCacheKey(repoPath: string, prNumber: number): string {
 /**
  * VCS:PR aggregation service.
  *
- * Registers bus handlers for `vcs:pr.get`, `vcs:pr.list`, and `vcs:pr.sync`.
+ * Registers bus handlers for `vcs:pr.get`, `vcs:pr.list`, and `vcs:pr.refresh`.
  * On each request it fetches raw VCS data in parallel and assembles a rich
  * `PullRequestState`. An in-memory LRU cache avoids redundant fetches during
  * list operations.
@@ -76,7 +76,7 @@ export class VCSPRAggregationService extends BaseService {
       ctx.setResult({ prs });
     });
 
-    this.registerHandler(VCSPRSubjects.sync, async (ctx) => {
+    this.registerHandler(VCSPRSubjects.refresh, async (ctx) => {
       const { repoPath, prNumber } = ctx.payload;
       const pr = await this.aggregatePR(repoPath, prNumber, true);
       ctx.setResult({ pr });
