@@ -198,14 +198,17 @@ export function resolveConformanceTestPreset(
     options.adapterName,
     provider,
     'primary',
-    normalizeEnvValue(readEnv(primaryModelEnvVar)) ?? provider.fastModel ?? provider.defaultModel,
+    normalizeEnvValue(readEnv(primaryModelEnvVar)) ??
+      provider.primaryTestModel ??
+      provider.fastModel ??
+      provider.defaultModel,
     primaryModelEnvVar,
   );
   const secondaryModelName = requireModelName(
     options.adapterName,
     provider,
     'secondary',
-    normalizeEnvValue(readEnv(secondaryModelEnvVar)) ?? provider.defaultModel,
+    normalizeEnvValue(readEnv(secondaryModelEnvVar)) ?? provider.secondaryTestModel ?? provider.defaultModel,
     secondaryModelEnvVar,
   );
 
