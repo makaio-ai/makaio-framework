@@ -115,6 +115,18 @@ export const ProviderDefinitionSchema = z.object({
   fastModel: z.string().optional(),
 
   /**
+   * Primary model used by conformance tests.
+   * Falls back to `fastModel ?? defaultModel` when omitted.
+   */
+  primaryTestModel: z.string().optional(),
+
+  /**
+   * Secondary model used by lifecycle mutation conformance tests.
+   * Falls back to `defaultModel` when omitted.
+   */
+  secondaryTestModel: z.string().optional(),
+
+  /**
    * Runtime-populated model catalog for this provider.
    *
    * At boot the registry service merges lab definitions with provider-specific
