@@ -1,7 +1,13 @@
 // Message schemas
 export { SDKAssistantMessageSchema } from './assistant-message.js';
 export type { SDKAssistantMessage } from './assistant-message.js';
-export { BaseSdkMessageSchema, BaseSdkMessageWithParentToolSchema } from './base.js';
+export {
+  BaseSdkMessageSchema,
+  BaseSdkMessageWithParentToolSchema,
+  DEFAULT_SDK_AGENT_ID,
+  EnrichedBaseSdkMessageSchema,
+  EnrichedBaseSdkMessageWithParentToolSchema,
+} from './base.js';
 export { BetaMessageSchema } from './beta-message.js';
 export type { BetaMessage } from './beta-message.js';
 export { MessageParamSchema } from './message-param.js';
@@ -196,12 +202,13 @@ export type { TurnState, TurnStateChangedEvent } from './turn-events.js';
 
 // SDK message union + known types
 export {
+  EnrichedSDKMessageSchema,
   KNOWN_SDK_MESSAGE_TYPES,
   KNOWN_SYSTEM_SUBTYPES,
   SDKMessageSchema,
   isKnownSdkMessageForRouting,
 } from './sdk-message.js';
-export type { SDKMessage } from './sdk-message.js';
+export type { EnrichedSDKMessage, SDKMessage } from './sdk-message.js';
 
 // Claude Code status line payload schema
 export {
