@@ -60,4 +60,37 @@ describe('registerElectrobunWindowsBusHandlers', () => {
     expect(result).toEqual({ focused: true, windowId: 99 });
     expect(createWindow).toHaveBeenCalledWith({ registrationId: FRAMEWORK_FALLBACK_WINDOW });
   });
+
+  it('returns the app.focus failure response when background restore throws', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onRestoreFromBackground = vi.fn<() => void>(() => {
+      throw new Error('Dock restore failed');
+    });
+    const focusAnyWindow = vi.fn<() => number | null>(() => null);
+    const openDefaultWindow = vi.fn<() => number>(() => 99);
+
+    try {
+      cleanups.push(
+        registerElectrobunWindowsBusHandlers(MakaioBus, {
+          createWindow: vi.fn<(registrationId: string) => number>(() => 42),
+          dashboardRegistrationId: FRAMEWORK_FALLBACK_WINDOW,
+          findWindow: vi.fn<() => WindowManagerState | undefined>(() => undefined),
+          focusAnyWindow,
+          focusWindow: vi.fn<() => boolean>(() => false),
+          openDefaultWindow,
+          onRestoreFromBackground,
+        }),
+      );
+
+      const result = await MakaioBus.request(HostSubjects.app.focus, {});
+
+      expect(onRestoreFromBackground).toHaveBeenCalledOnce();
+      expect(focusAnyWindow).not.toHaveBeenCalled();
+      expect(openDefaultWindow).not.toHaveBeenCalled();
+      expect(consoleError).toHaveBeenCalledWith('[electrobun] Failed to focus app window:', 'Dock restore failed');
+      expect(result).toEqual({ focused: false, windowId: null });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });

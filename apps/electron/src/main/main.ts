@@ -138,6 +138,31 @@ if (!gotLock) {
    */
   const busHandlerCleanups: Array<() => void> = [];
 
+  /**
+   * Whether the process was started in background-only mode (`--background`).
+   *
+   * Set to `true` on startup when the flag is present and reset to `false` by
+   * {@link restoreFromBackgroundMode} the first time the app is brought to the
+   * foreground.
+   */
+  let isBackgroundMode = process.argv.includes('--background');
+  const startedInBackgroundMode = isBackgroundMode;
+  if (process.platform === 'darwin' && isBackgroundMode) {
+    app.dock?.hide();
+  }
+
+  /**
+   * Upgrade from background-only mode to regular (visible) mode.
+   *
+   * Restores the macOS Dock icon and clears the background-mode flag. Safe to
+   * call multiple times — idempotent once the flag is already `false`.
+   */
+  function restoreFromBackgroundMode(): void {
+    if (!isBackgroundMode) return;
+    app.dock?.show();
+    isBackgroundMode = false;
+  }
+
   let trayEntries: readonly TrayMenuListEntry[] = [];
   let refreshTrayMenu: (() => void) | null = null;
 
@@ -179,6 +204,7 @@ if (!gotLock) {
    * @returns The Electron window ID of the created or reused window.
    */
   function createWindow(options: CreateWindowOptions): number {
+    restoreFromBackgroundMode();
     const { windowId, isNew } = windowManager!.createWindow(options);
 
     if (isNew) {
@@ -238,6 +264,7 @@ if (!gotLock) {
 
     if (process.platform === 'darwin') {
       app.dock?.setIcon(iconPath);
+      if (isBackgroundMode) app.dock?.hide();
     }
 
     const honoApp = new Hono();
@@ -480,7 +507,9 @@ if (!gotLock) {
     });
 
     // macOS dock click: open (or focus) the fallback framework shell window.
+    // When started in background mode, restore the Dock icon first.
     app.on('activate', () => {
+      restoreFromBackgroundMode();
       if (BrowserWindow.getAllWindows().length === 0 && windowManager) {
         openDefaultWindow();
       }
@@ -490,6 +519,7 @@ if (!gotLock) {
   // ── Boot sequence ─────────────────────────────────────────────────────────
 
   app.on('second-instance', () => {
+    restoreFromBackgroundMode();
     if (windowManager && !windowManager.focusWindow()) {
       openDefaultWindow();
     }
@@ -536,6 +566,7 @@ if (!gotLock) {
         notificationProvider,
         localNotificationSubjects: LocalNotificationSubjects,
         runtime,
+        onRestoreFromBackground: restoreFromBackgroundMode,
       });
 
       const { destroy: destroyTray, refreshMenu } = createTray({
@@ -596,7 +627,11 @@ if (!gotLock) {
 
       registerShutdownAndLifecycle(destroyTray);
 
-      await openInitialWindows();
+      // Skip in background mode: windows are opened lazily when the app is
+      // first brought to the foreground (via activate, second-instance, or app.focus).
+      if (!startedInBackgroundMode) {
+        await openInitialWindows();
+      }
     })
     .catch(async (err: unknown) => {
       console.error('[electron] Fatal startup error:', err);

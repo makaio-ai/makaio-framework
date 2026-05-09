@@ -125,6 +125,34 @@ let windowManager: WindowManager | null = null;
 let bootPromise: Promise<MakaioRuntime | null> = Promise.resolve(null);
 
 /**
+ * Whether the process was started in background-only mode (`--background`).
+ *
+ * Set to `true` on startup when the flag is present and reset to `false` by
+ * {@link restoreFromBackgroundMode} the first time the app is brought to the
+ * foreground.
+ */
+let isBackgroundMode = process.argv.includes('--background');
+const startedInBackgroundMode = isBackgroundMode;
+
+// Hide the Dock icon immediately when started in background-only mode so
+// the app never appears in the Dock before the first window is opened.
+if (isBackgroundMode) {
+  Electrobun.Utils.setDockIconVisible(false);
+}
+
+/**
+ * Upgrade from background-only mode to regular (visible) mode.
+ *
+ * Restores the macOS Dock icon and clears the background-mode flag. Safe to
+ * call multiple times — idempotent once the flag is already `false`.
+ */
+function restoreFromBackgroundMode(): void {
+  if (!isBackgroundMode) return;
+  Electrobun.Utils.setDockIconVisible(true);
+  isBackgroundMode = false;
+}
+
+/**
  * Cleanup callbacks registered by desktop chrome bus handler wiring.
  *
  * Each entry is a function returned by `MakaioBus.on(...)` that removes
@@ -196,6 +224,7 @@ async function shutdownGracefully(destroyTray: (() => void) | null): Promise<voi
  * @returns The Electrobun window ID of the created or reused window.
  */
 function createWindow(options: CreateWindowOptions): number {
+  restoreFromBackgroundMode();
   const { windowId, isNew } = windowManager!.createWindow(options);
 
   if (isNew) {
@@ -407,6 +436,7 @@ function openDefaultWindow(): number {
       showTrayPopover,
       runtime,
       windowManager,
+      onRestoreFromBackground: restoreFromBackgroundMode,
     });
 
     let shutdownInProgress = false;
@@ -487,7 +517,9 @@ function openDefaultWindow(): number {
     };
 
     // macOS dock click: reopen the default window when all windows are closed.
+    // When started in background mode, restore the Dock icon first.
     Electrobun.events.on('reopen', () => {
+      restoreFromBackgroundMode();
       if (windowManager && windowManager.listWindows().length === 0) {
         openDefaultWindow();
       }
@@ -518,14 +550,19 @@ function openDefaultWindow(): number {
     process.on('SIGINT', handleShutdown);
 
     // ── Open initial windows ──────────────────────────────────────────────────
-    await openInitialWindows({
-      createWindow,
-      openDefaultWindow,
-      windowManager,
-      sessionScope: WINDOW_SESSION_SCOPE,
-    });
+    // Skip in background mode: windows are opened lazily when the app is
+    // first brought to the foreground (via reopen, app.focus, or makaio open).
+    if (!startedInBackgroundMode) {
+      await openInitialWindows({
+        createWindow,
+        openDefaultWindow,
+        windowManager,
+        sessionScope: WINDOW_SESSION_SCOPE,
+      });
+    }
 
     // Signal the bus URL on stdout for E2E test port discovery.
+    // Emitted unconditionally — background mode still has a live bus server.
     process.stdout.write(`MAKAIO_BUS_URL=${busUrl}\n`);
   } catch (err: unknown) {
     console.error('[electrobun] Fatal startup error:', err);

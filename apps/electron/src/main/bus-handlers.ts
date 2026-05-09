@@ -80,6 +80,13 @@ export interface BusHandlersDeps {
    * to the navigation handler.
    */
   runtime: MakaioRuntime;
+  /**
+   * Called once before the first window is created when upgrading from
+   * background-only mode to regular (visible) mode.
+   *
+   * Optional — omit when the app was not started with `--background`.
+   */
+  onRestoreFromBackground?: () => void;
 }
 
 /**
@@ -100,6 +107,7 @@ export function registerAllBusHandlers(deps: BusHandlersDeps): void {
     notificationProvider,
     localNotificationSubjects,
     runtime,
+    onRestoreFromBackground,
   } = deps;
 
   cleanups.push(
@@ -172,6 +180,7 @@ export function registerAllBusHandlers(deps: BusHandlersDeps): void {
       focusWindow: (id) => getWindowManager().focusWindow(id),
       focusAnyWindow: () => getWindowManager().focusMostRecentWindow(),
       openDefaultWindow: () => createWindow({ registrationId: dashboardRegistrationId }),
+      onRestoreFromBackground,
     }),
   );
 

@@ -107,7 +107,7 @@ function launchApp(): boolean {
  * @param platform - Platform used to interpret install-root layout.
  * @returns The concrete launch target, or `null` when the host did not provide one.
  */
-function resolveLaunchTarget(platform: NodeJS.Platform): string | null {
+export function resolveLaunchTarget(platform: NodeJS.Platform): string | null {
   const configuredPath = process.env[MAKAIO_APP_ENV]?.trim();
   if (!configuredPath) return null;
   if (!isExistingDirectory(configuredPath)) return configuredPath;
@@ -138,6 +138,6 @@ function isExistingDirectory(candidate: string): boolean {
  * @param candidate - Resolved launch target.
  * @returns `true` when the target is a macOS application bundle.
  */
-function shouldUseMacOpen(platform: NodeJS.Platform, candidate: string): boolean {
+export function shouldUseMacOpen(platform: NodeJS.Platform, candidate: string): boolean {
   return platform === 'darwin' && candidate.endsWith('.app') && isExistingDirectory(candidate);
 }
