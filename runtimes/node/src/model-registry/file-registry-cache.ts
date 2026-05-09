@@ -5,7 +5,7 @@ import {
   type ModelRegistry,
   ModelRegistrySchema,
 } from '@makaio/services-core/model-registry';
-import { isRecord } from './fs-utils.js';
+import { isRecord } from '@makaio/utils';
 
 /**
  * Options for file-backed registry cache persistence.

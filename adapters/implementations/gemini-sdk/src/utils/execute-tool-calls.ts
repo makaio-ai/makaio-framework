@@ -10,6 +10,7 @@ import { GeminiConnectorSubjects, type SdkEvent } from '../namespaces/index.js';
 import type { GeminiConnector } from '../connector.js';
 import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
+import { safeStringify } from '@makaio/utils';
 import { extractMcpCallTarget, isMcpCallTool, type ISessionToolLedger } from '@makaio/ai-adapters-core';
 
 /** Bound tool-approval callback forwarded from the connector to the session and execute-tool-calls. */
@@ -47,31 +48,6 @@ export type ExecuteToolCallsOptions = {
 };
 
 type GeminiPart = ToolCallResponseInfo['responseParts'][number];
-
-/**
- * Serialize a value to JSON, preserving structure for BigInt and circular
- * references instead of collapsing to `[object Object]`.
- * @param value - The value to serialize
- * @returns JSON string, or a fallback string on failure
- */
-function safeStringify(value: unknown): string {
-  if (value === undefined) return 'null';
-  const seen = new WeakSet<object>();
-  try {
-    return (
-      JSON.stringify(value, (_key, v: unknown) => {
-        if (typeof v === 'bigint') return v.toString();
-        if (typeof v === 'object' && v !== null) {
-          if (seen.has(v)) return '[Circular]';
-          seen.add(v);
-        }
-        return v;
-      }) ?? String(value)
-    );
-  } catch {
-    return String(value);
-  }
-}
 
 /* eslint-disable max-lines-per-function, complexity */
 /**

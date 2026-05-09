@@ -8,7 +8,8 @@ import {
   ProviderModelOverrideSchema,
   mergeModelMetadata,
 } from '@makaio/services-core/model-registry';
-import { isRecord, listYamlFiles } from './fs-utils.js';
+import { isRecord } from '@makaio/utils';
+import { listYamlFiles } from './fs-utils.js';
 
 type LabRegistryEntryOverlay = Omit<ModelRegistry['labs'][string], 'name'> & { readonly name?: string };
 type ProviderRegistryEntryOverlay = Omit<ModelRegistry['providers'][string], 'name'> & { readonly name?: string };

@@ -1,4 +1,5 @@
 import type { StoredAccountCredential } from '../interfaces/account-store.js';
+import { isRecord } from '@makaio/utils';
 
 /** Serialized credential-only store shape. */
 export type CredentialStoreData = Record<string, StoredAccountCredential[]>;
@@ -10,15 +11,6 @@ export type CredentialStoreData = Record<string, StoredAccountCredential[]>;
  */
 export function cloneStoredAccountCredential(account: StoredAccountCredential): StoredAccountCredential {
   return structuredClone(account);
-}
-
-/**
- * Returns whether the value is a plain object record.
- * @param value - Candidate value
- * @returns Whether the value is a non-array object
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

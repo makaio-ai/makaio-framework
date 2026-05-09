@@ -34,6 +34,7 @@
     "@makaio/client-claude-code": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "@napi-rs/keyring": "^1.0.0",
     "d3-shape": "^3.2.0",
     "drizzle-orm": "0.45.2",

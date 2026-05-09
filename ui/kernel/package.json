@@ -23,6 +23,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/kernel": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {

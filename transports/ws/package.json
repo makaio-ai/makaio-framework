@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {
