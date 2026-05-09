@@ -1,4 +1,15 @@
-# Makaio Framework
+<div align="center">
+  <img src="docs/assets/logo.svg" alt="Makaio Logo" width="120" />
+  <h1>Makaio Framework</h1>
+  <p><strong>A typed, bus-centric runtime for orchestrating AI agents, tools, and sessions across providers.</strong></p>
+
+  [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+  [![CI](https://github.com/makaio-ai/makaio-framework/actions/workflows/ci.yml/badge.svg)](https://github.com/makaio-ai/makaio-framework/actions/workflows/ci.yml)
+
+  [Website](https://makaio.ai) · [Getting Started](https://makaio.ai/guides/getting-started/) · [Why Makaio](https://makaio.ai/why/)
+</div>
+
+---
 
 Most AI tooling today solves one layer: call an LLM, stream a response, maybe loop on tool calls. That works until you need multiple providers in one system, agents that communicate across processes, storage you can swap without rewriting services, or extensions that load at runtime without forking the host.
 
@@ -297,3 +308,16 @@ Representative high-level tree for the framework distribution. It lists the main
     ├── hooks/                 React hooks, stores, providers (BusProvider, useBus)
     └── views/                 Composed views and shell components
 ```
+
+## Contributing
+
+We welcome contributions — adapters, extensions, tools, bug fixes, and documentation. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, contribution surfaces, and PR guidelines.
+
+## Community
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+
+## License
+
+[MIT](LICENSE)
