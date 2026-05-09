@@ -14,6 +14,8 @@ export const providerDefinition: ProviderDefinitionInput = {
   id: 'openai-codex',
   name: 'OpenAI Codex',
   description: 'OpenAI Codex App-Server',
-  defaultModel: 'gpt-5.1-codex-mini',
+  defaultModel: 'gpt-5.5',
   fastModel: 'gpt-5.4-mini',
+  primaryTestModel: 'gpt-5.4-mini',
+  secondaryTestModel: 'gpt-5.3-codex',
 };
