@@ -38,15 +38,6 @@ export function formatError(error: unknown): string {
 }
 
 /**
- * Narrow an unknown value to a plain object record (non-null, non-array).
- * @param value - Value to inspect.
- * @returns Whether the value is a non-array object record.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
  * List `.yaml` files in a directory.
  *
  * Returns an empty array when the directory does not exist (ENOENT) and throws

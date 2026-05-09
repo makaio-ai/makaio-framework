@@ -5,6 +5,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { UiContextSnapshot } from '@makaio/contracts';
+import { isRecord } from '@makaio/utils';
 import type { WidgetScope } from './scope-registry.js';
 import type { ComponentLike } from '../utils/component-types.js';
 
@@ -239,15 +240,6 @@ export interface WidgetLayout {
 }
 
 const VALID_WIDGET_SIZES: ReadonlySet<WidgetSize> = new Set(['small', 'medium', 'large', 'full-width']);
-
-/**
- * Narrow an unknown value to a plain record.
- * @param value - Unknown value to inspect.
- * @returns True when the value is a non-null object.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
-}
 
 /**
  * Check whether a value is a finite number.

@@ -25,6 +25,7 @@ import {
   type AgentToolApproveRequest,
   type AgentToolApproveResponse,
 } from '@makaio/contracts';
+import { safeStringify } from '@makaio/utils';
 import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
 import type { Tool, ToolInvocation } from '@github/copilot-sdk';
 import { GitHubCopilotConnectorSubjects } from './namespaces/index.js';
@@ -59,30 +60,6 @@ export interface CopilotToolHandlerContext {
   toolLedger?: ISessionToolLedger;
   /** Current turn number supplier for ledger bookkeeping. */
   getCurrentTurnNumber?: () => number;
-}
-
-/**
- * Serialize a value to JSON, preserving structure for BigInt and circular
- * references instead of collapsing to `[object Object]`.
- * @param value - The value to serialize
- * @returns JSON string, or a fallback string on failure
- */
-function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  try {
-    return (
-      JSON.stringify(value, (_key, v: unknown) => {
-        if (typeof v === 'bigint') return v.toString();
-        if (typeof v === 'object' && v !== null) {
-          if (seen.has(v)) return '[Circular]';
-          seen.add(v);
-        }
-        return v;
-      }) ?? String(value)
-    );
-  } catch {
-    return String(value);
-  }
 }
 
 /**

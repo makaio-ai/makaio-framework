@@ -1,8 +1,10 @@
 export { DeferredPromise } from './deferred-promise.js';
+export { isRecord } from './is-record.js';
 export { extractJson } from './extract-json.js';
 export { getErrorString } from './getErrorString.js';
 export { normalizeBusSecret } from './normalize-bus-secret.js';
 export { isBunRuntime } from './runtime.js';
+export { safeStringify } from './safe-stringify.js';
 export {
   createTimeoutSignal,
   DEFAULT_TIMEOUTS,

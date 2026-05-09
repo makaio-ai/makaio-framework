@@ -18,6 +18,7 @@ import type {
   CorrelationTracker,
 } from '@makaio/bus-core';
 import { deserializeTransportError } from '@makaio/bus-core';
+import { isRecord } from '@makaio/utils';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry } from './client-registry.js';
@@ -74,16 +75,6 @@ async function invokeHandlers(
       }
     }),
   );
-}
-
-/**
- * Check whether `value` is a non-null, non-array plain object (wire-format
- * record). Used to validate subscription subject maps before touching registry state.
- * @param value - Value to check
- * @returns True when `value` is a plain object suitable for a subjects record
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**

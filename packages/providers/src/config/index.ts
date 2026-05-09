@@ -1,7 +1,7 @@
 import { merge } from 'merge-anything';
 import { ConfigSchema, type Config, type RelayConfig } from '@makaio/contracts';
 import { ConfigError, type IConfigStorage } from '@makaio/core';
-import { normalizeBusSecret } from '@makaio/utils';
+import { isRecord, normalizeBusSecret } from '@makaio/utils';
 
 /**
  * Summarize a config-like object for diagnostics without leaking values.
@@ -19,15 +19,6 @@ function summarizeConfigShape(value: unknown): string {
     present: true,
     keys: Object.keys(value),
   });
-}
-
-/**
- * Check whether a value is a plain object that can be traversed as config.
- * @param value - Value to inspect.
- * @returns True when the value is a non-array object.
- */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value != null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
@@ -63,23 +54,23 @@ function getDefaultBranchValue(key: string): unknown {
  * @returns Config object without environment-only values.
  */
 function stripEnvironmentOnlyValues<T>(effective: T, env: unknown, stored: unknown, defaults: unknown): T {
-  if (!isPlainObject(effective) || !isPlainObject(env)) {
+  if (!isRecord(effective) || !isRecord(env)) {
     return effective;
   }
 
   const result: Record<string, unknown> = { ...effective };
-  const storedObject = isPlainObject(stored) ? stored : {};
-  const defaultObject = isPlainObject(defaults) ? defaults : {};
+  const storedObject = isRecord(stored) ? stored : {};
+  const defaultObject = isRecord(defaults) ? defaults : {};
 
   for (const [key, envValue] of Object.entries(env)) {
     const effectiveValue = result[key];
     const storedValue = storedObject[key];
     const defaultValue = defaultObject[key] ?? getDefaultBranchValue(key);
 
-    if (isPlainObject(effectiveValue) && isPlainObject(envValue)) {
+    if (isRecord(effectiveValue) && isRecord(envValue)) {
       const child = stripEnvironmentOnlyValues(effectiveValue, envValue, storedValue, defaultValue);
       if (
-        isPlainObject(child) &&
+        isRecord(child) &&
         storedValue === undefined &&
         (Object.keys(child).length === 0 || valuesEqual(child, defaultValue))
       ) {
