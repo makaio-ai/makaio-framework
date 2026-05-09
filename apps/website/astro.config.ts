@@ -7,6 +7,7 @@ import { generatePackagePages } from './integrations/generate-package-pages';
 import { generateApiReference } from './integrations/generate-api-reference';
 import { generateBusSubjects } from './integrations/generate-bus-subjects';
 import { composeLlmsFullIntegration } from './integrations/compose-llms-full';
+import { generateMarkdownPages } from './integrations/generate-markdown-pages';
 import { remarkStripMdLinks } from './remark/strip-md-links';
 import { remarkWebHide } from './remark/web-hide';
 import { remarkAutoLinkApi } from './remark/auto-link-api';
@@ -22,7 +23,6 @@ const SOURCE_ONLY_PACKAGE_LINKS: Record<string, string> = {
 
 export default defineConfig({
   site: 'https://makaio.ai',
-  build: { inlineStylesheets: 'always' },
   markdown: {
     remarkPlugins: [
       remarkStripMdLinks,
@@ -198,6 +198,10 @@ export default defineConfig({
     generateApiReference(),
     generatePackagePages(),
     composeLlmsFullIntegration(),
+    generateMarkdownPages({
+      packageSpecifierPattern: PACKAGE_SPECIFIER_PATTERN,
+      sourceOnlyLinks: SOURCE_ONLY_PACKAGE_LINKS,
+    }),
     sitemap({ filter: (page) => !page.includes('/reference/') }),
   ],
 });
