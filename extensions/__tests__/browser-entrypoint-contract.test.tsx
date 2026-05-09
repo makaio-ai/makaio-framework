@@ -132,9 +132,13 @@ describe('browser entrypoint contract — no node:* built-in imports', () => {
   });
 
   for (const entry of BROWSER_ENTRIES) {
-    it(`${entry.name}: browser entry imports no node:* built-ins`, async () => {
-      const mod = await import(entry.sourceAbsPath);
-      expect(mod).toBeDefined();
-    }, BROWSER_ENTRY_IMPORT_TIMEOUT_MS);
+    it(
+      `${entry.name}: browser entry imports no node:* built-ins`,
+      async () => {
+        const mod = await import(entry.sourceAbsPath);
+        expect(mod).toBeDefined();
+      },
+      BROWSER_ENTRY_IMPORT_TIMEOUT_MS,
+    );
   }
 });
