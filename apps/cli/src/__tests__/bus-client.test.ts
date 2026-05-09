@@ -237,7 +237,7 @@ describe('connectBusClient', () => {
 
     const rejection = connectBusClient('ws://127.0.0.1:6252/bus');
 
-    await expect(rejection).rejects.toThrow('Makaio is not running.');
+    await expect(rejection).rejects.toThrow('Could not connect to Makaio.');
     await expect(rejection).rejects.toMatchObject({
       cause: connectionError,
     });

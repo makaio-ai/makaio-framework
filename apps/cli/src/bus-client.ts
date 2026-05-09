@@ -226,10 +226,11 @@ export async function connectBusClient(url?: string, options?: ConnectBusClientO
       );
     }
     throw new Error(
-      `Makaio is not running. Start it with 'makaio serve' or open Makaio.app.\n` + `(tried ${resolvedUrl})`,
-      {
-        cause: error,
-      },
+      `Could not connect to Makaio.\n` +
+        `If the app was just started, it may still be initializing.\n` +
+        `Otherwise, start it with 'makaio serve' or 'makaio open'.\n` +
+        `(tried ${resolvedUrl})`,
+      { cause: error },
     );
   } finally {
     clearTimeout(timeoutId);

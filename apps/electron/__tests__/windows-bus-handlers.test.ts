@@ -29,11 +29,13 @@ function makeWindowState(windowId: number, registrationId: string): WindowState 
  *   simulate an already-open window.
  * @param focusedWindowId - The window ID returned by `focusAnyWindow`, or null
  *   if no windows exist (default 7).
+ * @param onRestoreFromBackground - Optional callback injected into deps.
  * @returns Stub satisfying the {@link WindowsBusHandlerDeps} interface.
  */
 function createDepStub(
   existingWindow?: WindowState,
   focusedWindowId: number | null = 7,
+  onRestoreFromBackground?: () => void,
 ): {
   deps: WindowsBusHandlerDeps;
   createWindow: ReturnType<typeof vi.fn<(registrationId: string) => number>>;
@@ -58,6 +60,7 @@ function createDepStub(
       focusWindow,
       focusAnyWindow,
       openDefaultWindow,
+      onRestoreFromBackground,
     },
     createWindow,
     findWindow,
@@ -245,6 +248,62 @@ describe('registerWindowsBusHandlers', () => {
 
       expect(result.focused).toBe(false);
       expect(result.windowId).toBeNull();
+    });
+
+    it('returns { focused: false, windowId: null } when onRestoreFromBackground throws', async () => {
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const onRestoreFromBackground = vi.fn<() => void>(() => {
+        throw new Error('Dock restore failed');
+      });
+      const { deps, focusAnyWindow, openDefaultWindow } = createDepStub(undefined, null, onRestoreFromBackground);
+
+      try {
+        cleanup = registerWindowsBusHandlers(bus, deps);
+
+        const result = await bus.request(HostSubjects.app.focus, {});
+
+        expect(onRestoreFromBackground).toHaveBeenCalledOnce();
+        expect(focusAnyWindow).not.toHaveBeenCalled();
+        expect(openDefaultWindow).not.toHaveBeenCalled();
+        expect(consoleError).toHaveBeenCalledWith(
+          '[registerWindowsBusHandlers] Failed to focus app window:',
+          'Dock restore failed',
+        );
+        expect(result.focused).toBe(false);
+        expect(result.windowId).toBeNull();
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+
+    it('calls onRestoreFromBackground before opening the default window when no windows are open', async () => {
+      const onRestoreFromBackground = vi.fn<() => void>();
+      const { deps, openDefaultWindow } = createDepStub(undefined, null, onRestoreFromBackground);
+
+      cleanup = registerWindowsBusHandlers(bus, deps);
+
+      const result = await bus.request(HostSubjects.app.focus, {});
+
+      expect(onRestoreFromBackground).toHaveBeenCalledOnce();
+      // restore must be called before the window is opened
+      expect(onRestoreFromBackground.mock.invocationCallOrder[0]).toBeLessThan(
+        openDefaultWindow.mock.invocationCallOrder[0],
+      );
+      expect(result.focused).toBe(true);
+      expect(result.windowId).toBe(99);
+    });
+
+    it('calls onRestoreFromBackground even when an existing window is focused', async () => {
+      const onRestoreFromBackground = vi.fn<() => void>();
+      const { deps } = createDepStub(undefined, 7, onRestoreFromBackground);
+
+      cleanup = registerWindowsBusHandlers(bus, deps);
+
+      const result = await bus.request(HostSubjects.app.focus, {});
+
+      expect(onRestoreFromBackground).toHaveBeenCalledOnce();
+      expect(result.focused).toBe(true);
+      expect(result.windowId).toBe(7);
     });
 
     it("response shape matches the HostSchemas['app.focus'] contract", async () => {

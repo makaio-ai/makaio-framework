@@ -14,13 +14,18 @@ const busClientMocks = vi.hoisted(() => ({
   isAuthConnectionError: vi.fn(),
   probeHealth: vi.fn(),
   resolveClientAuth: vi.fn(),
+  resolveBusUrl: vi.fn().mockReturnValue('ws://127.0.0.1:6252/bus'),
 }));
 const serveMocks = vi.hoisted(() => ({
   serve: vi.fn<(options: ServeOptions) => Promise<void>>(),
 }));
+const appLaunchMocks = vi.hoisted(() => ({
+  launchAppAndWaitForBus: vi.fn().mockResolvedValue({ health: null, launched: false }),
+}));
 
 vi.mock('./bus-client.js', () => busClientMocks);
 vi.mock('./serve.js', () => serveMocks);
+vi.mock('./app-launch.js', () => appLaunchMocks);
 
 import {
   createProgram,
@@ -581,6 +586,28 @@ describe('main — remote manifest behavior', () => {
       expect(stderr.join('')).toContain("unknown command 'missing-subcommand'");
     } finally {
       stderrSpy.mockRestore();
+    }
+  });
+
+  it('reports a background launch timeout instead of the generic server-start hint', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+    vi.mocked(appLaunchMocks.launchAppAndWaitForBus).mockResolvedValue({ health: null, launched: true });
+
+    try {
+      await main(['node', 'makaio', 'missing-remote-command'], [], emptyDiscovery);
+
+      expect(process.exitCode).toBe(1);
+      expect(appLaunchMocks.launchAppAndWaitForBus).toHaveBeenCalledWith('ws://127.0.0.1:6252/bus');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Unknown command "missing-remote-command". Makaio server did not become reachable after starting the desktop app in background mode.',
+        ),
+      );
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Start with: makaio serve'));
+    } finally {
+      errorSpy.mockRestore();
     }
   });
 

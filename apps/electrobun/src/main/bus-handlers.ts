@@ -30,6 +30,13 @@ export interface RegisterBusHandlersOptions {
   runtime: MakaioRuntime;
   /** Active Electrobun window manager. */
   windowManager: WindowManager;
+  /**
+   * Called once before the first window is created when upgrading from
+   * background-only mode to regular (visible) mode.
+   *
+   * Optional — omit when the app was not started with `--background`.
+   */
+  onRestoreFromBackground?: () => void;
 }
 
 /**
@@ -124,6 +131,7 @@ export function registerBusHandlers(options: RegisterBusHandlersOptions): void {
         return windows[windows.length - 1]?.windowId ?? null;
       },
       openDefaultWindow: options.openDefaultWindow,
+      onRestoreFromBackground: options.onRestoreFromBackground,
     }),
   );
 }

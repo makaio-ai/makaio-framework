@@ -54,6 +54,14 @@ export interface WindowsBusHandlerDeps {
   focusAnyWindow: () => number | null;
   /** Open the default shell window. Returns the window ID. */
   openDefaultWindow: () => number;
+  /**
+   * Called once before the first window is created when upgrading from
+   * background-only mode to regular (visible) mode.
+   *
+   * Implementations should restore the Dock icon and clear the background flag.
+   * Optional — omit when the app was not started in background mode.
+   */
+  onRestoreFromBackground?: () => void;
 }
 
 /**
@@ -99,15 +107,22 @@ export function registerWindowsBusHandlers(bus: IMakaioBus, deps: WindowsBusHand
   });
 
   const cleanupFocus = bus.on(HostSubjects.app.focus, (ctx) => {
-    const focusedId = deps.focusAnyWindow();
-    if (focusedId !== null) {
-      ctx.setResult({ focused: true, windowId: focusedId });
-      return;
-    }
     try {
+      // Restore, focus, and fallback window creation form one RPC operation:
+      // host.app.focus must always resolve with the declared response shape.
+      deps.onRestoreFromBackground?.();
+      const focusedId = deps.focusAnyWindow();
+      if (focusedId !== null) {
+        ctx.setResult({ focused: true, windowId: focusedId });
+        return;
+      }
       const windowId = deps.openDefaultWindow();
       ctx.setResult({ focused: true, windowId });
-    } catch {
+    } catch (error) {
+      console.error(
+        '[registerWindowsBusHandlers] Failed to focus app window:',
+        error instanceof Error ? error.message : error,
+      );
       ctx.setResult({ focused: false, windowId: null });
     }
   });
