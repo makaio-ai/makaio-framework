@@ -6,8 +6,8 @@ import { SDKSystemMessageSchema } from './system-message.js';
 import { SDKStreamEventMessageSchema } from './stream-event.js';
 
 /**
- * Union of all SDK message types.
- * Used for the catch-all sdk.event subject.
+ * Union of all SDK message types (raw shape — `agentId` optional).
+ * Used for the catch-all `sdk.event` subject on the bus.
  *
  * Note: Uses z.union() instead of z.discriminatedUnion() because
  * SDKSystemMessageSchema and SDKResultMessageSchema are already
@@ -21,8 +21,19 @@ export const SDKMessageSchema = z.union([
   SDKStreamEventMessageSchema,
 ]);
 
-/** Inferred type for any SDK message. */
+/** Raw SDK message type — `agentId` may be absent. */
 export type SDKMessage = z.infer<typeof SDKMessageSchema>;
+
+/**
+ * Enriched SDK message union — guarantees `agentId` is present.
+ *
+ * Use this schema/type when consuming bus events that have already passed
+ * through the connector `emit()` layer which injects identity metadata.
+ */
+export const EnrichedSDKMessageSchema = z.intersection(SDKMessageSchema, z.object({ agentId: z.string() }));
+
+/** Enriched SDK message type — `agentId` guaranteed present. */
+export type EnrichedSDKMessage = z.infer<typeof EnrichedSDKMessageSchema>;
 
 /**
  * Known SDK message type discriminators for pre-filtering.
@@ -56,8 +67,8 @@ export function isKnownSdkMessageForRouting(message: unknown): message is SDKMes
   if (!message || typeof message !== 'object') return false;
   const discriminator = message as { type?: unknown; subtype?: unknown };
   if (typeof discriminator.type !== 'string' || !KNOWN_SDK_MESSAGE_TYPES.has(discriminator.type)) return false;
-  // No safeParse here: raw SDK payloads lack Makaio enrichment fields (agentId)
-  // that the schema requires. Bus-layer lenient validation catches drift separately.
+  // No safeParse here: routing must work on raw SDK payloads before connector
+  // enrichment. Schema validation is the bus layer's job (lenient mode).
   return (
     discriminator.type !== 'system' ||
     (typeof discriminator.subtype === 'string' && KNOWN_SYSTEM_SUBTYPES.has(discriminator.subtype))
