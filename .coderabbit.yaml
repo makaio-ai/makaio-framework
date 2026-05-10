@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+reviews:
+  in_progress_fortune: false
+  poem: false
+  request_changes_workflow: true
+  path_instructions:
+    - path: docs/plans/**/*.md
+      instructions: Use plans only for context, don't review, don't flag markdown format issues
+    - path: '**/*'
+      instructions: do not flag lint, tsdoc or biome issues - we have our own validation pipeline
+  auto_review:
+    auto_pause_after_reviewed_commits: 0
+    labels:
+      - '!wip'
+      - '!skip:review'
+      - '!skip:ci'
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+  tools:
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    biome:
+      enabled: false
+    phpcs:
+      enabled: false
