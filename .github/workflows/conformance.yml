@@ -16,11 +16,7 @@ jobs:
       startsWith(github.event.comment.body, '/conformance') &&
       github.event.comment.user.type != 'Bot' &&
       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
-    # In the standalone framework repository this file lives at
-    # .github/workflows/conformance.yml and delegates to the local reusable
-    # workflow so framework PRs can test workflow changes before merge.
     uses: ./.github/workflows/conformance-reusable.yml
     with:
       pr_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
-    secrets: inherit

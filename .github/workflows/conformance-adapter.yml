@@ -1,0 +1,94 @@
+name: Conformance Adapter
+
+on:
+  workflow_call:
+    inputs:
+      adapter:
+        required: true
+        type: string
+      provider_env_var:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      pr_ref:
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ inputs.environment }}
+    name: conformance (${{ inputs.adapter }})
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ inputs.pr_ref || '' }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run adapter smoke
+        env:
+          ${{ inputs.provider_env_var }}: ${{ secrets.PROVIDER_API_KEY }}
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a ${{ inputs.adapter }} \
+            agents.simple.test.ts \
+            orchestration/sendMessage.test.ts \
+            --workers 1 \
+            --phase adapter-smoke \
+            --result-output conformance-artifacts/conformance-result-${{ inputs.adapter }}-adapter-smoke.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ inputs.adapter }}-adapter-smoke.json
+
+      - name: Run adapter rest
+        env:
+          ${{ inputs.provider_env_var }}: ${{ secrets.PROVIDER_API_KEY }}
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
+        run: |
+          yarn test:conformance \
+            -a ${{ inputs.adapter }} \
+            --exclude agents.simple.test.ts \
+            --exclude orchestration/sendMessage.test.ts \
+            --phase adapter-rest \
+            --result-output conformance-artifacts/conformance-result-${{ inputs.adapter }}-adapter-rest.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ inputs.adapter }}-adapter-rest.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-artifacts-${{ inputs.adapter }}
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
