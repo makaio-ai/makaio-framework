@@ -1,0 +1,37 @@
+name: Conformance (claude-code-cli)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'adapters/implementations/claude-code-cli/**'
+      - 'adapters/shared/claude-shared/**'
+      - 'clients/claude-code/**'
+      - 'packages/clients-core/**'
+      - 'packages/services/log-import/**'
+      - 'adapters/core/**'
+      - 'adapters/implementations/__tests__/**'
+      - 'packages/contracts/**'
+      - 'packages/bus-core/**'
+      - 'packages/makaio-core/**'
+      - 'packages/utils/**'
+      - 'packages/hooks/**'
+      - 'packages/kernel/**'
+      - 'packages/services/core/**'
+      - 'packages/services/base/**'
+      - 'packages/storage/core/**'
+      - 'packages/mcp-http-server/**'
+      - 'tools/filesystem/**'
+      - 'scripts/lib/conformance/**'
+      - 'scripts/test-adapters.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    uses: ./.github/workflows/conformance-adapter.yml
+    with:
+      adapter: claude-code-cli
+      provider_env_var: OPENCODE_GO_API_KEY
+      environment: conformance-claude-code-cli

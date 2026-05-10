@@ -1,0 +1,34 @@
+name: Conformance (anthropic-sdk)
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'adapters/implementations/anthropic-sdk/**'
+      - 'adapters/shared/stream-session/**'
+      - 'adapters/core/**'
+      - 'adapters/implementations/__tests__/**'
+      - 'packages/contracts/**'
+      - 'packages/bus-core/**'
+      - 'packages/makaio-core/**'
+      - 'packages/utils/**'
+      - 'packages/hooks/**'
+      - 'packages/kernel/**'
+      - 'packages/services/core/**'
+      - 'packages/services/base/**'
+      - 'packages/storage/core/**'
+      - 'packages/mcp-http-server/**'
+      - 'tools/filesystem/**'
+      - 'scripts/lib/conformance/**'
+      - 'scripts/test-adapters.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    uses: ./.github/workflows/conformance-adapter.yml
+    with:
+      adapter: anthropic-sdk
+      provider_env_var: ANTHROPIC_API_KEY
+      environment: conformance-anthropic-sdk
