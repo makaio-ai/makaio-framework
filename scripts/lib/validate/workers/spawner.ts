@@ -79,7 +79,8 @@ export function mergeNodeOptions(existingNodeOptions: string | undefined, requir
     const token = tokens[index];
 
     if (token.startsWith('--max-old-space-size=')) {
-      const parsed = Number(token.slice('--max-old-space-size='.length));
+      const raw = token.slice('--max-old-space-size='.length).replace(/^["']|["']$/g, '');
+      const parsed = Number(raw);
       if (Number.isFinite(parsed)) {
         highestHeapMB = Math.max(highestHeapMB ?? 0, parsed);
       }
@@ -87,7 +88,8 @@ export function mergeNodeOptions(existingNodeOptions: string | undefined, requir
     }
 
     if (token === '--max-old-space-size') {
-      const parsed = Number(tokens[index + 1]);
+      const raw = (tokens[index + 1] ?? '').replace(/^["']|["']$/g, '');
+      const parsed = Number(raw);
       if (Number.isFinite(parsed)) {
         highestHeapMB = Math.max(highestHeapMB ?? 0, parsed);
         index++;

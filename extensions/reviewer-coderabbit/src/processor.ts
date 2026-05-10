@@ -407,13 +407,44 @@ export function parseNitpickSection(
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
 
-  // Each file-level nitpick starts with a nested <details> block whose summary is the file path
-  const fileBlockRe = /<details>\s*<summary>([^<]*(?:<(?!\/summary>)[^<]*)*)<\/summary>([\s\S]*?)<\/details>/gi;
-  let fileMatch: RegExpExecArray | null;
+  // Extract outer <details> blocks using depth-tracking to handle nested </details>
+  let searchFrom = 0;
+  while (searchFrom < nitpickContent.length) {
+    const openIdx = nitpickContent.indexOf('<details', searchFrom);
+    if (openIdx === -1) break;
 
-  while ((fileMatch = fileBlockRe.exec(nitpickContent)) !== null) {
-    const filePath = fileMatch[1].trim();
-    const fileContent = fileMatch[2].trim();
+    let depth = 0;
+    let cursor = openIdx;
+    let endIdx = -1;
+    while (cursor < nitpickContent.length) {
+      const nextOpen = nitpickContent.indexOf('<details', cursor + 1);
+      const nextClose = nitpickContent.indexOf('</details>', cursor + 1);
+      if (nextClose === -1) break;
+
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        depth++;
+        cursor = nextOpen;
+      } else {
+        if (depth === 0) {
+          endIdx = nextClose + '</details>'.length;
+          break;
+        }
+        depth--;
+        cursor = nextClose;
+      }
+    }
+
+    if (endIdx === -1) break;
+
+    const blockText = nitpickContent.slice(openIdx, endIdx);
+    searchFrom = endIdx;
+
+    const summaryMatch = blockText.match(/<summary>([\s\S]*?)<\/summary>/i);
+    if (!summaryMatch) continue;
+
+    const filePath = summaryMatch[1].trim();
+    const afterSummary = blockText.indexOf('</summary>') + '</summary>'.length;
+    const fileContent = blockText.slice(afterSummary, blockText.lastIndexOf('</details>')).trim();
 
     // Within a file block, individual findings are separated by `---` or blank lines
     const blocks = fileContent
