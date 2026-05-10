@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/clients-core';
-import { type ClientRuntimeStarted, type ClientUsageIngestRequest } from '@makaio/contracts/client';
+import {
+  type ClientAccountIdentifier,
+  type ClientRuntimeStarted,
+  type ClientUsageIngestRequest,
+} from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { ClaudeCodeClientService } from '../claude-code-client-service.js';
 import { ClaudeCodeClientSubjects } from '../namespace.js';
@@ -440,6 +444,425 @@ describe('ClaudeCodeClientService', () => {
       for (const cleanup of cleanups) cleanup();
 
       expect(ingestCalls).toHaveLength(0);
+    });
+  });
+
+  describe('statusline ingestion via active-account fallback (no session)', () => {
+    it('emits client.usage.ingest using account.getActive when session storage returns unhandled', async () => {
+      // No session storage handler registered — simulates standalone Claude Code.
+      // account.getActive returns an active identity so the statusline is ingested.
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+
+      const cleanups = [
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          ctx.setResult({
+            identity: {
+              clientAccountId: 'ca-standalone-1',
+              identifiers: [{ scheme: 'account-org-uuid', value: 'acct-001:org-001', strength: 'strong' }],
+              displayLabel: 'Standalone User',
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-standalone-1', snapshot: {} as never });
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        rate_limits: { five_hour: { used_percentage: 42, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(1);
+      expect(ingestCalls[0]).toMatchObject({
+        clientId: 'claude-code',
+        source: 'statusline',
+        account: {
+          displayLabel: 'Standalone User',
+          identifiers: [{ scheme: 'account-org-uuid', value: 'acct-001:org-001', strength: 'strong' }],
+        },
+      });
+    });
+
+    it('emits client.usage.ingest using account.getActive when session storage returns null session', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({ session: null });
+        }),
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          ctx.setResult({
+            identity: {
+              clientAccountId: 'ca-fallback-2',
+              identifiers: [{ scheme: 'account-id', value: 'user-xyz', strength: 'strong' }],
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-fallback-2', snapshot: {} as never });
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        rate_limits: { five_hour: { used_percentage: 20, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(1);
+      expect(ingestCalls[0]).toMatchObject({
+        account: {
+          identifiers: [{ scheme: 'account-id', value: 'user-xyz', strength: 'strong' }],
+        },
+      });
+    });
+
+    it('emits client.usage.ingest using account.getActive when session has no clientAccountId', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+
+      // Session exists but no clientAccountId (not yet linked)
+      const unlinkedSession = {
+        sessionId: 'framework-session-unlinked',
+        createdAt: RECEIVED_AT,
+        lastActivityAt: RECEIVED_AT,
+        agents: [],
+        status: 'active' as const,
+        adapterSessionId: SESSION_ID,
+        clientId: 'claude-code',
+        // no clientAccountId
+        lastClientIdentityObservation: undefined,
+      };
+
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({ session: unlinkedSession as never });
+        }),
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          ctx.setResult({
+            identity: {
+              clientAccountId: 'ca-fallback-3',
+              identifiers: [{ scheme: 'account-org-uuid', value: 'acct-003:org-003', strength: 'strong' }],
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-fallback-3', snapshot: {} as never });
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        rate_limits: { five_hour: { used_percentage: 75, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(1);
+      expect(ingestCalls[0]).toMatchObject({
+        account: {
+          identifiers: [{ scheme: 'account-org-uuid', value: 'acct-003:org-003', strength: 'strong' }],
+        },
+      });
+    });
+
+    it('does not emit client.usage.ingest when both session lookup and account.getActive return nothing', async () => {
+      const ingestCalls: unknown[] = [];
+
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({ session: null });
+        }),
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          ctx.setResult({ identity: null });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-unused', snapshot: {} as never });
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        rate_limits: { five_hour: { used_percentage: 50, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(0);
+    });
+
+    it('prefers session-based identity over account.getActive fallback', async () => {
+      // When the session resolves a valid identity, account.getActive must not
+      // be consulted — the primary path owns the result.
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      let getActiveCalled = false;
+
+      const cleanups = [
+        bus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          ctx.setResult({
+            session: {
+              sessionId: 'framework-session-primary',
+              createdAt: RECEIVED_AT,
+              lastActivityAt: RECEIVED_AT,
+              agents: [],
+              status: 'active' as const,
+              adapterSessionId: ctx.payload.adapterSessionId,
+              clientId: 'claude-code',
+              clientAccountId: 'ca-primary',
+              lastClientIdentityObservation: {
+                clientId: 'claude-code',
+                source: 'claude-agent-sdk',
+                kind: 'account-info',
+                observedAt: RECEIVED_AT,
+                payload: {
+                  identifiers: [{ scheme: 'account-org-uuid', value: 'acct-primary:org-primary', strength: 'strong' }],
+                },
+              },
+            },
+          });
+        }),
+        bus.on(ClientSubjects.account.getActive, () => {
+          getActiveCalled = true;
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-primary', snapshot: {} as never });
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: SESSION_ID,
+        rate_limits: { five_hour: { used_percentage: 60, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(getActiveCalled).toBe(false);
+      expect(ingestCalls).toHaveLength(1);
+      expect(ingestCalls[0]).toMatchObject({
+        account: {
+          identifiers: [{ scheme: 'account-org-uuid', value: 'acct-primary:org-primary', strength: 'strong' }],
+        },
+      });
+    });
+  });
+
+  describe('session identity cache (mid-turn account switch)', () => {
+    interface TestActiveIdentity {
+      clientAccountId: string;
+      identifiers: ClientAccountIdentifier[];
+      displayLabel: string;
+    }
+
+    it('pins identity on first statusline event and reuses it for subsequent events on the same session_id', async () => {
+      // Simulates a 20-minute turn where the user switches accounts mid-turn.
+      // The second statusline event must still attribute to the ORIGINAL account.
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      let getActiveCallCount = 0;
+
+      const cleanups = [
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          getActiveCallCount++;
+          // First call returns account A; second call would return account B
+          // (simulates the user switching accounts). But the second call should
+          // never happen because the identity is cached.
+          ctx.setResult({
+            identity: {
+              clientAccountId: getActiveCallCount === 1 ? 'ca-account-A' : 'ca-account-B',
+              identifiers: [
+                {
+                  scheme: 'account-org-uuid',
+                  value: getActiveCallCount === 1 ? 'acct-A:org-A' : 'acct-B:org-B',
+                  strength: 'strong',
+                },
+              ],
+              displayLabel: getActiveCallCount === 1 ? 'Account A' : 'Account B',
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-account-A', snapshot: {} as never });
+        }),
+      ];
+
+      // First statusline event — identity is resolved and cached
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-long-turn',
+        rate_limits: { five_hour: { used_percentage: 30, resets_at: 1_738_425_600 } },
+      });
+
+      // Second statusline event — same session_id, should use cached identity
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-long-turn',
+        rate_limits: { five_hour: { used_percentage: 45, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      // Both ingest calls should use Account A (the pinned identity)
+      expect(ingestCalls).toHaveLength(2);
+      expect(ingestCalls[0]).toMatchObject({
+        account: { displayLabel: 'Account A', identifiers: [{ value: 'acct-A:org-A' }] },
+      });
+      expect(ingestCalls[1]).toMatchObject({
+        account: { displayLabel: 'Account A', identifiers: [{ value: 'acct-A:org-A' }] },
+      });
+      // getActive was only consulted once — not on the second event
+      expect(getActiveCallCount).toBe(1);
+    });
+
+    it('uses the pinned identity when concurrent statusline events resolve out of order', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      const pendingResolutions: Array<{ resolve: (identity: TestActiveIdentity) => void }> = [];
+      const identityA: TestActiveIdentity = {
+        clientAccountId: 'ca-account-A',
+        identifiers: [{ scheme: 'account-id', value: 'user-A', strength: 'strong' }],
+        displayLabel: 'Account A',
+      };
+      const identityB: TestActiveIdentity = {
+        clientAccountId: 'ca-account-B',
+        identifiers: [{ scheme: 'account-id', value: 'user-B', strength: 'strong' }],
+        displayLabel: 'Account B',
+      };
+
+      const cleanups = [
+        bus.on(ClientSubjects.account.getActive, async (ctx) => {
+          const identity = await new Promise<TestActiveIdentity>((resolve) => {
+            pendingResolutions.push({ resolve });
+          });
+          ctx.setResult({ identity });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-usage', snapshot: {} as never });
+        }),
+      ];
+
+      const first = bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-concurrent',
+        rate_limits: { five_hour: { used_percentage: 30, resets_at: 1_738_425_600 } },
+      });
+      await vi.waitFor(() => expect(pendingResolutions).toHaveLength(1));
+
+      const second = bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-concurrent',
+        rate_limits: { five_hour: { used_percentage: 45, resets_at: 1_738_425_600 } },
+      });
+      await vi.waitFor(() => expect(pendingResolutions).toHaveLength(2));
+
+      pendingResolutions[1]?.resolve(identityB);
+      await vi.waitFor(() => expect(ingestCalls).toHaveLength(1));
+
+      pendingResolutions[0]?.resolve(identityA);
+      await Promise.all([first, second]);
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(2);
+      expect(ingestCalls[0]).toMatchObject({ account: { displayLabel: 'Account B' } });
+      expect(ingestCalls[1]).toMatchObject({ account: { displayLabel: 'Account B' } });
+    });
+
+    it('uses separate cached identities for different session_ids', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      let getActiveCallCount = 0;
+
+      const cleanups = [
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          getActiveCallCount++;
+          ctx.setResult({
+            identity: {
+              clientAccountId: `ca-session-${getActiveCallCount}`,
+              identifiers: [{ scheme: 'account-id', value: `user-${getActiveCallCount}`, strength: 'strong' }],
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-unused', snapshot: {} as never });
+        }),
+      ];
+
+      // Session A resolves its own identity
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-A',
+        rate_limits: { five_hour: { used_percentage: 10, resets_at: 1_738_425_600 } },
+      });
+
+      // Session B resolves its own identity (different getActive call)
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-B',
+        rate_limits: { five_hour: { used_percentage: 20, resets_at: 1_738_425_600 } },
+      });
+
+      // Session A again — should use cached identity from first call
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-A',
+        rate_limits: { five_hour: { used_percentage: 15, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(3);
+      // Session A always uses identity from call 1
+      expect(ingestCalls[0]).toMatchObject({ account: { identifiers: [{ value: 'user-1' }] } });
+      expect(ingestCalls[2]).toMatchObject({ account: { identifiers: [{ value: 'user-1' }] } });
+      // Session B uses identity from call 2
+      expect(ingestCalls[1]).toMatchObject({ account: { identifiers: [{ value: 'user-2' }] } });
+      // getActive was called exactly twice (once per session_id)
+      expect(getActiveCallCount).toBe(2);
+    });
+
+    it('clears the session identity cache on destroy()', async () => {
+      const ingestCalls: ClientUsageIngestRequest[] = [];
+      let getActiveCallCount = 0;
+
+      const cleanups = [
+        bus.on(ClientSubjects.account.getActive, (ctx) => {
+          getActiveCallCount++;
+          ctx.setResult({
+            identity: {
+              clientAccountId: `ca-round-${getActiveCallCount}`,
+              identifiers: [{ scheme: 'account-id', value: `user-${getActiveCallCount}`, strength: 'strong' }],
+            },
+          });
+        }),
+        bus.on(ClientSubjects.usage.ingest, (ctx) => {
+          ingestCalls.push(ctx.payload);
+          ctx.setResult({ clientAccountId: 'ca-unused', snapshot: {} as never });
+        }),
+      ];
+
+      // First emission — identity cached as user-1
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-lifecycle',
+        rate_limits: { five_hour: { used_percentage: 10, resets_at: 1_738_425_600 } },
+      });
+
+      // Destroy and re-init to clear the cache
+      await service.destroy();
+      await service.init();
+
+      // Same session_id — should resolve fresh (user-2)
+      await bus.emit(ClaudeCodeClientSubjects.statusline.received, {
+        session_id: 'sess-lifecycle',
+        rate_limits: { five_hour: { used_percentage: 20, resets_at: 1_738_425_600 } },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(ingestCalls).toHaveLength(2);
+      expect(ingestCalls[0]).toMatchObject({ account: { identifiers: [{ value: 'user-1' }] } });
+      expect(ingestCalls[1]).toMatchObject({ account: { identifiers: [{ value: 'user-2' }] } });
+      expect(getActiveCallCount).toBe(2);
     });
   });
 

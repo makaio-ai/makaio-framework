@@ -12,8 +12,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientWiringApplyResponseSchema } from '@makaio/clients-core';
 import { z } from 'zod';
-import { runClientWireCommand, type ClientWireCommandContext } from '../cli/wire-handler.js';
+import {
+  runClientWireCommand,
+  resolveDefaultMakaioCommand,
+  type ClientWireCommandContext,
+} from '../cli/wire-handler.js';
 import { createClientWiringApplySubjectDef } from '../subjects.js';
+import { wireSchema } from '../cli/contribution.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -195,5 +200,57 @@ describe('runClientWireCommand', () => {
     expect(def.subject).toBe('wiring.apply');
     expect(def.$meta.namespace).toBe('client:test-client');
     expect(def.$meta.isRequest).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wireSchema — Bug D: scope must default to 'user'
+// ---------------------------------------------------------------------------
+
+describe('wireSchema', () => {
+  it('parses successfully with scope defaulting to user when omitted', () => {
+    const result = wireSchema.parse({ client: 'claude-code' });
+    expect(result.scope).toBe('user');
+  });
+
+  it('preserves an explicitly supplied scope value', () => {
+    const result = wireSchema.parse({ client: 'claude-code', scope: 'project' });
+    expect(result.scope).toBe('project');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveDefaultMakaioCommand — Bug C: dev-mode .ts entry must be executable
+// ---------------------------------------------------------------------------
+
+describe('resolveDefaultMakaioCommand', () => {
+  it('returns the script path unchanged when it is a compiled binary (no .ts extension)', () => {
+    const result = resolveDefaultMakaioCommand(['/usr/bin/node', '/usr/local/bin/makaio']);
+    expect(result).toBe('/usr/local/bin/makaio');
+  });
+
+  it('returns the script path unchanged when argv[1] ends with .ts (dev mode)', () => {
+    const result = resolveDefaultMakaioCommand(['/usr/bin/node', '/path/to/cli-entry.ts']);
+    expect(result).toBe('/path/to/cli-entry.ts');
+  });
+
+  it('keeps .ts paths containing spaces as one executable path', () => {
+    const result = resolveDefaultMakaioCommand(['/usr/bin/node', '/Users/alice/My Projects/cli-entry.ts']);
+    expect(result).toBe('/Users/alice/My Projects/cli-entry.ts');
+  });
+
+  it('returns the script path unchanged when argv[1] ends with .mts (dev mode)', () => {
+    const result = resolveDefaultMakaioCommand(['/usr/bin/tsx', '/path/to/cli-entry.mts']);
+    expect(result).toBe('/path/to/cli-entry.mts');
+  });
+
+  it('returns makaio when argv[1] is absent', () => {
+    const result = resolveDefaultMakaioCommand(['/usr/bin/node']);
+    expect(result).toBe('makaio');
+  });
+
+  it('returns makaio when argv is empty', () => {
+    const result = resolveDefaultMakaioCommand([]);
+    expect(result).toBe('makaio');
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Client namespace registration.
  *
- * Registers the global `client.*` namespace for scan, account observation,
+ * Registers the global `client.*` namespace for scan, account observation
+ * (`client.account.observe`, `client.account.activate`, `client.account.getActive`),
  * usage ingestion/snapshot, runtime observation (`client.runtime.observe`,
  * `client.runtime.started`), observed session semantics subjects
  * (`client.session.started`, `client.session.userPrompt.submitted`,

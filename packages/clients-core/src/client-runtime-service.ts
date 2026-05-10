@@ -1,6 +1,7 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   ClientSubjects,
+  type ClientAccountIdentifier,
   type ClientScanTarget,
   type ClientScanResult,
   type ClientUsageIngestRequest,
@@ -20,17 +21,36 @@ type ScannableClientRecord = ClientRecord & { binaryName: string };
 type ScannableClient = Pick<ClientScanTarget, 'clientId' | 'binaryName' | 'minimumVersion'>;
 
 /**
+ * In-memory shape for an active account identity record.
+ */
+interface ActiveIdentityRecord {
+  clientAccountId: string;
+  identifiers: ClientAccountIdentifier[];
+  displayLabel?: string;
+}
+
+/**
  * In-memory runtime service for the global `client.*` contracts.
  *
- * The service owns five concerns:
+ * The service owns six concerns:
  * - account identity canonicalization via {@link ClientAccountRegistry}
  * - latest usage snapshot retention and `client.usage.snapshot` emission
+ * - active account identity tracking (`account.activate` / `account.getActive`)
  * - CLI-backed client discovery via storage + CLI detection orchestration
  * - client runtime instance lifecycle via {@link ClientRuntimeRegistry}
  * - global wiring aggregation via `client.wiring.list` fan-out to enabled clients
  */
 export class ClientRuntimeService extends BaseService {
   private readonly latestSnapshots = new Map<string, ClientUsageSnapshot>();
+
+  /**
+   * Most recently activated account identity per client, keyed by `clientId`.
+   *
+   * Populated by the `account.activate` handler and queried by `account.getActive`.
+   * This allows services (e.g. the Claude Code client) to resolve an active
+   * account identity without requiring a persisted session.
+   */
+  private readonly activeIdentities = new Map<string, ActiveIdentityRecord>();
 
   /**
    * Creates a new client runtime service.
@@ -62,6 +82,18 @@ export class ClientRuntimeService extends BaseService {
       const results = await this.listWirings(ctx.payload);
       ctx.setResult({ results });
     });
+    this.registerHandler(ClientSubjects.account.activate, (ctx) => {
+      this.activeIdentities.set(ctx.payload.clientId, {
+        clientAccountId: ctx.payload.clientAccountId,
+        identifiers: ctx.payload.identifiers,
+        displayLabel: ctx.payload.displayLabel,
+      });
+      ctx.setResult({ accepted: true });
+    });
+    this.registerHandler(ClientSubjects.account.getActive, (ctx) => {
+      const found = this.activeIdentities.get(ctx.payload.clientId);
+      ctx.setResult({ identity: found ?? null });
+    });
   }
 
   /**
@@ -69,6 +101,7 @@ export class ClientRuntimeService extends BaseService {
    */
   protected override onDestroy(): void {
     this.latestSnapshots.clear();
+    this.activeIdentities.clear();
     this.accountRegistry.clear();
     this.runtimeRegistry.clear();
   }

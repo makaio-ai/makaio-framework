@@ -201,6 +201,92 @@ describe('applyClaudeCodeWiring', () => {
     expect(call[0].scope).toBe('local');
   });
 
+  // Bug B: every addHook call must include matcher: '' for Claude Code catch-all format
+  it('passes matcher empty string to addHook for catch-all matching', async () => {
+    await applyClaudeCodeWiring(settings, 'user', 'makaio');
+    const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [{ matcher?: string }][];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((args) => args[0].matcher === '')).toBe(true);
+  });
+
+  // Bug A: existing non-Makaio statusline must be passed through as the upstream renderer.
+  it('embeds existing statusline command as upstream sh renderer when setting Makaio statusline', async () => {
+    const existingCommand = 'npx -y ccstatusline@latest';
+    const settingsWithExisting: ClaudeCodeWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({ effective: {}, perScope: [] }),
+      addHook: vi.fn().mockResolvedValue({ added: true }),
+      removeHook: vi.fn().mockResolvedValue({ removed: 1 }),
+      listStatusline: vi.fn().mockResolvedValue({
+        effective: { type: 'command', command: existingCommand },
+        perScope: [
+          {
+            scope: 'user' as const,
+            path: '~/.claude/settings.json',
+            value: { type: 'command', command: existingCommand },
+          },
+        ],
+      }),
+      setStatusline: vi.fn().mockResolvedValue({
+        previous: { type: 'command', command: existingCommand },
+        applied: {
+          type: 'command',
+          command:
+            'makaio claude statusline --upstream-command sh --upstream-args-json ' + `'["-c","${existingCommand}"]'`,
+        },
+      }),
+      removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+    };
+
+    await applyClaudeCodeWiring(settingsWithExisting, 'user', 'makaio');
+
+    const setCall = (settingsWithExisting.setStatusline as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      { value: { command: string } },
+    ];
+    expect(setCall[0].value.command).toBe(
+      'makaio claude statusline --upstream-command sh --upstream-args-json ' + `'["-c","npx -y ccstatusline@latest"]'`,
+    );
+  });
+
+  it('does not add upstream renderer args when no previous statusline exists', async () => {
+    // Default mock has no existing statusline (listStatusline returns effective: null, perScope: [])
+    await applyClaudeCodeWiring(settings, 'user', 'makaio');
+    const setCall = (settings.setStatusline as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      { value: { command: string } },
+    ];
+    expect(setCall[0].value.command).not.toContain('--upstream-command');
+  });
+
+  it('does not add upstream renderer args when previous statusline is already a Makaio command', async () => {
+    const makaioCommand = 'makaio claude statusline';
+    const settingsWithMakaio: ClaudeCodeWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({ effective: {}, perScope: [] }),
+      addHook: vi.fn().mockResolvedValue({ added: true }),
+      removeHook: vi.fn().mockResolvedValue({ removed: 1 }),
+      listStatusline: vi.fn().mockResolvedValue({
+        effective: { type: 'command', command: makaioCommand },
+        perScope: [
+          {
+            scope: 'user' as const,
+            path: '~/.claude/settings.json',
+            value: { type: 'command', command: makaioCommand },
+          },
+        ],
+      }),
+      setStatusline: vi.fn().mockResolvedValue({
+        previous: { type: 'command', command: makaioCommand },
+        applied: { type: 'command', command: makaioCommand },
+      }),
+      removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+    };
+
+    await applyClaudeCodeWiring(settingsWithMakaio, 'user', 'makaio');
+
+    const setCall = (settingsWithMakaio.setStatusline as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      { value: { command: string } },
+    ];
+    expect(setCall[0].value.command).not.toContain('--upstream-command');
+  });
+
   it('writes hook commands containing the sentinel and event name', async () => {
     await applyClaudeCodeWiring(settings, 'user', 'makaio');
     const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [{ hook: { command: string } }][];

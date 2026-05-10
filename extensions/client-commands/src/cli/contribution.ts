@@ -27,13 +27,13 @@ import { handleClientWiring, type ClientWiringArgs } from './wiring-handler.js';
 // fragment would add indirection without meaningful drift prevention.
 // ---------------------------------------------------------------------------
 
-const wireSchema = z.object({
+export const wireSchema = z.object({
   client: z.string().meta({
     description: 'Client identifier (e.g. claude-code, codex)',
     positional: true,
     placeholder: '<client>',
   }),
-  scope: z.string().meta({
+  scope: z.string().default('user').meta({
     description: 'Scope at which to install hooks (client-specific, e.g. user, global)',
     positional: true,
     placeholder: '<scope>',

@@ -233,4 +233,110 @@ describe('ClientAccountLinker', () => {
       await service.destroy();
     }
   });
+
+  it('emits account.activate for the active account when credentials are detected', async () => {
+    // Tests that account.activate is signalled when a credential is detected and
+    // clients-core returns a canonical account ID for an active account.
+    const bus = createBusInstance();
+    const source = new InMemoryCredentialSource('claude-code', 'Claude Code');
+    const store = new InMemoryAccountStore();
+
+    const activateCalls: Array<{ clientId: string; clientAccountId: string }> = [];
+
+    const cleanups = [
+      bus.on(ClientSubjects.account.observe, (ctx) => {
+        ctx.setResult({ clientAccountId: 'client-account-active-1' });
+      }),
+      bus.on(ClientSubjects.account.activate, (ctx) => {
+        activateCalls.push({ clientId: ctx.payload.clientId, clientAccountId: ctx.payload.clientAccountId });
+        ctx.setResult({ accepted: true });
+      }),
+    ];
+
+    // Set a credential in the source so the polling detects it and emits
+    // credentials.detected for a new active account.
+    source.setCredential({
+      token: 'token-active',
+      fingerprint: '11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      metadata: {
+        accountUuid: '11111111-1111-4111-8111-111111111111',
+        orgUuid: '22222222-2222-4222-8222-222222222222',
+      },
+    });
+
+    const service = new AccountManager(bus, {
+      sources: [source],
+      credentialStore: store.credentialStore,
+      metadataStore: store.metadataStore,
+      usageSnapshotStore: store.usageSnapshotStore,
+      pollIntervalMs: 60_000,
+      makaioCommand: 'makaio-test',
+    });
+
+    try {
+      await service.init();
+
+      // account.activate may be called more than once (detect + syncExistingAccounts
+      // both observe the same active account). Verify at least one call arrives with
+      // the correct identity — idempotent overwrites at the receiver are fine.
+      expect(activateCalls.length).toBeGreaterThanOrEqual(1);
+      expect(activateCalls[0]).toMatchObject({
+        clientId: 'claude-code',
+        clientAccountId: 'client-account-active-1',
+      });
+    } finally {
+      for (const cleanup of cleanups) cleanup();
+      await service.destroy();
+    }
+  });
+
+  it('does not emit account.activate for inactive accounts', async () => {
+    const bus = createBusInstance();
+    const source = new InMemoryCredentialSource('claude-code', 'Claude Code');
+    const store = new InMemoryAccountStore();
+
+    const activateCalls: unknown[] = [];
+
+    const cleanups = [
+      bus.on(ClientSubjects.account.observe, (ctx) => {
+        ctx.setResult({ clientAccountId: 'client-account-inactive' });
+      }),
+      bus.on(ClientSubjects.account.activate, (ctx) => {
+        activateCalls.push(ctx.payload);
+        ctx.setResult({ accepted: true });
+      }),
+    ];
+
+    // Persist an account that is NOT active
+    await store.upsert(
+      'claude-code',
+      makeStoredAccount({
+        id: 'inactive-account-id',
+        fingerprint: '33333333-3333-4333-8333-333333333333:44444444-4444-4444-8444-444444444444',
+        active: false,
+        metadata: {
+          accountUuid: '33333333-3333-4333-8333-333333333333',
+          orgUuid: '44444444-4444-4444-8444-444444444444',
+        },
+      }),
+    );
+
+    const service = new AccountManager(bus, {
+      sources: [source],
+      credentialStore: store.credentialStore,
+      metadataStore: store.metadataStore,
+      usageSnapshotStore: store.usageSnapshotStore,
+      pollIntervalMs: 60_000,
+      makaioCommand: 'makaio-test',
+    });
+
+    try {
+      await service.init();
+
+      expect(activateCalls).toHaveLength(0);
+    } finally {
+      for (const cleanup of cleanups) cleanup();
+      await service.destroy();
+    }
+  });
 });

@@ -91,8 +91,26 @@ export interface ClientWireCommandDependencies {
   readonly resolveMakaioCommand: () => string;
 }
 
+/**
+ * Resolve the default Makaio command from the current process argument vector.
+ *
+ * `argv[1]` must remain a single executable token because client wiring renders
+ * it as the command prefix and shell-quotes it as one argument.  Development
+ * TypeScript entrypoints are executable via their shebang, so they use the same
+ * single-token path contract as compiled binaries.
+ * @param argv - Process argument vector (defaults to `process.argv`).
+ * @returns Executable command string for embedding in hook and statusline commands.
+ */
+export function resolveDefaultMakaioCommand(argv: readonly string[] = process.argv): string {
+  const scriptPath = argv[1];
+  if (scriptPath === undefined || scriptPath === '') {
+    return 'makaio';
+  }
+  return scriptPath;
+}
+
 const defaultDependencies: ClientWireCommandDependencies = {
-  resolveMakaioCommand: () => process.argv[1] ?? 'makaio',
+  resolveMakaioCommand: () => resolveDefaultMakaioCommand(),
 };
 
 // ---------------------------------------------------------------------------

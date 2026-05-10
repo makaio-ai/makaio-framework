@@ -24,6 +24,7 @@ import {
 import { AbsolutePathSchema, NonEmptyStringSchema } from './primitives.js';
 import { ClientRuntimeObserveSchema, ClientRuntimeStartedSchema } from './runtime-observation.js';
 import {
+  ClientAccountIdentifierSchema,
   ClientAccountObserveSchema,
   ClientScanResultSchema,
   ClientScanTargetSchema,
@@ -64,6 +65,51 @@ export const ClientSchemas = {
   },
   'session.account.observe': ClientSessionAccountObserveSchema,
   'account.observe': ClientAccountObserveSchema,
+  /**
+   * Signal which account is currently active for a client.
+   *
+   * Called by the account-manager after successfully linking an account
+   * via `client.account.observe`. `ClientRuntimeService` persists the
+   * supplied identity in memory so that other services (e.g. the Claude
+   * Code client service) can query it without a session lookup.
+   */
+  'account.activate': {
+    request: z.object({
+      /** Stable client identifier (e.g. `'claude-code'`, `'codex'`). */
+      clientId: NonEmptyStringSchema,
+      /** Canonical client account ID assigned by clients-core. */
+      clientAccountId: NonEmptyStringSchema,
+      /** At least one identifier that characterises this account. */
+      identifiers: z.array(ClientAccountIdentifierSchema).min(1),
+      /** Optional human-readable label for this account. */
+      displayLabel: z.string().optional(),
+    }),
+    response: z.object({ accepted: z.boolean() }),
+  },
+  /**
+   * Retrieve the currently active account identity for a client.
+   *
+   * Returns the identity most recently signalled via `account.activate`,
+   * or `null` when no activation has been recorded for the given client.
+   * Used as a fallback by the Claude Code client service when a statusline
+   * payload cannot be correlated to a persisted session.
+   */
+  'account.getActive': {
+    request: z.object({
+      /** Stable client identifier to query. */
+      clientId: NonEmptyStringSchema,
+    }),
+    response: z.object({
+      /** Most recently activated identity, or `null` when none exists. */
+      identity: z
+        .object({
+          clientAccountId: NonEmptyStringSchema,
+          identifiers: z.array(ClientAccountIdentifierSchema).min(1),
+          displayLabel: z.string().optional(),
+        })
+        .nullable(),
+    }),
+  },
   'usage.ingest': ClientUsageIngestSchema,
   'usage.snapshot': ClientUsageSnapshotSchema,
   // Observed session semantics — normalized lifecycle signals from adapters

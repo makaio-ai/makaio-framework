@@ -1,3 +1,4 @@
+#!/usr/bin/env tsx
 /**
  * Standalone CLI entry point for direct Node/tsx invocation.
  *
