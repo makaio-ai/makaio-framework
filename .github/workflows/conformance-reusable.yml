@@ -27,7 +27,7 @@ jobs:
       # Resolve PR metadata before checking out code that will receive provider
       # API keys.
       - name: Reject fork pull requests
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const { data: pullRequest } = await github.rest.pulls.get({
@@ -46,7 +46,7 @@ jobs:
             }
 
       - name: React to comment
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -61,12 +61,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
 
@@ -75,7 +75,7 @@ jobs:
 
       - name: Restore Yarn cache
         id: yarn-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .yarn/cache
@@ -85,7 +85,7 @@ jobs:
 
       - name: Restore node_modules
         id: nm-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: "**/node_modules"
           key: node-modules-v3-${{ hashFiles('yarn.lock') }}
@@ -95,7 +95,7 @@ jobs:
 
       - name: Save Yarn cache
         if: steps.yarn-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .yarn/cache
@@ -104,7 +104,7 @@ jobs:
 
       - name: Save node_modules
         if: steps.nm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: "**/node_modules"
           key: node-modules-v3-${{ hashFiles('yarn.lock') }}
@@ -125,7 +125,7 @@ jobs:
 
       - name: Upload conformance artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conformance-artifacts-openai-node-reference-smoke
           path: conformance-artifacts/*.json
@@ -136,12 +136,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
 
@@ -149,7 +149,7 @@ jobs:
         run: corepack enable
 
       - name: Restore Yarn cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .yarn/cache
@@ -158,7 +158,7 @@ jobs:
           restore-keys: yarn-cache-
 
       - name: Restore node_modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: "**/node_modules"
           key: node-modules-v3-${{ hashFiles('yarn.lock') }}
@@ -181,7 +181,7 @@ jobs:
 
       - name: Upload conformance artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conformance-artifacts-openai-node-reference-rest
           path: conformance-artifacts/*.json
@@ -213,12 +213,12 @@ jobs:
             provider_secret_name: OPENAI_API_KEY
     name: conformance (${{ matrix.adapter }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: refs/pull/${{ inputs.pr_number }}/head
           persist-credentials: false
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: '22'
 
@@ -226,7 +226,7 @@ jobs:
         run: corepack enable
 
       - name: Restore Yarn cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             .yarn/cache
@@ -235,7 +235,7 @@ jobs:
           restore-keys: yarn-cache-
 
       - name: Restore node_modules
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: "**/node_modules"
           key: node-modules-v3-${{ hashFiles('yarn.lock') }}
@@ -282,7 +282,7 @@ jobs:
 
       - name: Upload conformance artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: conformance-artifacts-${{ matrix.adapter }}
           path: conformance-artifacts/*.json
@@ -302,7 +302,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download conformance artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         continue-on-error: true
         with:
           pattern: conformance-artifacts-*
@@ -311,7 +311,7 @@ jobs:
 
       - name: Create GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
           private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
@@ -321,7 +321,7 @@ jobs:
           permission-pull-requests: read
 
       - name: Publish conformance report
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
