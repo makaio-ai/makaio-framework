@@ -431,7 +431,13 @@ export class IndexEngine {
         result += char;
       }
     }
-    return result.split('.').pop()?.replace(/[^\w$]/g, '').trim() ?? '';
+    return (
+      result
+        .split('.')
+        .pop()
+        ?.replace(/[^\w$]/g, '')
+        .trim() ?? ''
+    );
   }
 
   /**

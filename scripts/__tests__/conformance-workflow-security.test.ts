@@ -56,7 +56,8 @@ describe('conformance workflow security', () => {
   });
 
   it('posts the consolidated report through the Makaio GitHub App token', () => {
-    expect(workflowText).toContain('uses: actions/create-github-app-token@v2');
+    // The action may be SHA-pinned; the security contract is that the GitHub App token action is used.
+    expect(workflowText).toContain('uses: actions/create-github-app-token@');
     expect(workflowText).toContain('app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflowText).toContain('private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}');
     expect(workflowText).toContain('github-token: ${{ steps.app-token.outputs.token }}');

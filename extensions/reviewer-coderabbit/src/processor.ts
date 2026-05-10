@@ -146,6 +146,7 @@ export function parseDiffSuggestions(diffBlock: string, filePath: string): Sugge
  * Remove CodeRabbit-internal metadata from a comment body.
  *
  * Strips:
+ * - Paired marker blocks (`<!-- foo_start --> … <!-- foo_end -->`) with hidden payloads
  * - HTML comments (`<!-- … -->`) used for fingerprinting and internal state
  * - Base64 blobs often appended as hidden state
  * @param body - Raw comment body from the VCS API
@@ -153,6 +154,31 @@ export function parseDiffSuggestions(diffBlock: string, filePath: string): Sugge
  */
 export function stripCodeRabbitMetadata(body: string): string {
   let result = body;
+
+  const pairedMarkerStartRe = /<!--\s*([A-Za-z0-9_]+)_start\s*-->/g;
+  let searchFrom = 0;
+  while (searchFrom < result.length) {
+    pairedMarkerStartRe.lastIndex = searchFrom;
+    const startMatch = pairedMarkerStartRe.exec(result);
+    if (!startMatch) break;
+
+    const blockStart = startMatch.index;
+    const contentStart = blockStart + startMatch[0].length;
+    const markerPrefix = startMatch[1];
+    const endMarkerRe = new RegExp(`<!--\\s*${markerPrefix}_end\\s*-->`);
+    const endMatch = endMarkerRe.exec(result.slice(contentStart));
+
+    if (!endMatch) {
+      searchFrom = contentStart;
+      continue;
+    }
+
+    const blockEnd = contentStart + endMatch.index + endMatch[0].length;
+    // Remove paired blocks before standalone comments so hidden payloads are not stranded as visible text.
+    result = result.slice(0, blockStart) + result.slice(blockEnd);
+    searchFrom = blockStart;
+  }
+
   let start: number;
   while ((start = result.indexOf('<!--')) !== -1) {
     const end = result.indexOf('-->', start + 4);
