@@ -12,7 +12,9 @@ async function transform(md: string): Promise<string> {
 describe('extractLinkCards', () => {
   it('extracts title, href, and description', () => {
     const html = '<LinkCard title="Bus" href="/guides/bus/" description="Typed event system." />';
-    expect(extractLinkCards(html)).toEqual([{ title: 'Bus', href: '/guides/bus/', description: 'Typed event system.' }]);
+    expect(extractLinkCards(html)).toEqual([
+      { title: 'Bus', href: '/guides/bus/', description: 'Typed event system.' },
+    ]);
   });
 
   it('extracts multiple cards from a CardGrid', () => {
@@ -40,7 +42,9 @@ describe('remarkStripJsx', () => {
   });
 
   it('converts a LinkCard to a markdown link list', async () => {
-    const result = await transform('<LinkCard title="Getting Started" href="/guides/getting-started/" description="Install and run." />');
+    const result = await transform(
+      '<LinkCard title="Getting Started" href="/guides/getting-started/" description="Install and run." />',
+    );
     expect(result).toBe('* [Getting Started](/guides/getting-started/) — Install and run.');
   });
 
