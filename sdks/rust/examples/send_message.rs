@@ -13,8 +13,8 @@
 //! | `MAKAIO_BUS_URL` | no | WebSocket URL (default: `ws://localhost:6252/bus`) |
 //! | `MAKAIO_MESSAGE` | no | Message text (default: `"Hello, what can you help me with?"`) |
 
-use makaio_bus_sdk::generated::subjects;
-use makaio_bus_sdk::{BusClient, BusClientError};
+use makaio_sdk::generated::subjects;
+use makaio_sdk::{BusClient, BusClientError};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;

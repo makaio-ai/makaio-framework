@@ -192,8 +192,8 @@ The bus protocol is language-neutral. SDKs let any process participate — subsc
 | SDK | Language | Transport | Status |
 |-----|----------|-----------|--------|
 | [`@makaio/sdk`](sdks/typescript/) | TypeScript | Framework-native facade | Pre-release, unpublished package |
-| [`makaio-bus`](sdks/python/) | Python | WebSocket (async) | Pre-release, unpublished package |
-| [`makaio-bus-sdk`](sdks/rust/) | Rust | WebSocket (tokio) | Unpublished crate (`publish = false`) |
+| [`makaio-sdk`](sdks/python/) | Python | WebSocket (async) | Pre-release, unpublished package |
+| [`makaio-sdk`](sdks/rust/) | Rust | WebSocket (tokio) | Unpublished crate (`publish = false`) |
 
 All SDKs expose the same logical surface:
 

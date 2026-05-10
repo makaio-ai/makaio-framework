@@ -3,9 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "makaio-bus"
+name = "makaio-sdk"
 version = "0.1.0"
-description = "Python SDK for the Makaio bus protocol"
+description = "Python SDK for the Makaio Framework"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

@@ -1,8 +1,8 @@
-use makaio_bus_sdk::generated::subjects::{
+use makaio_sdk::generated::subjects::{
     self, ApprovalRequest, ApprovalResponse, RiskLevel, ToolExecuteRequest, ToolExecuteResponse,
     ToolExecuteSuccessResponse,
 };
-use makaio_bus_sdk::{BusClient, BusTransportError};
+use makaio_sdk::{BusClient, BusTransportError};
 use serde_json::Value;
 
 fn serialize<T: serde::Serialize>(value: T, subject: &str) -> Result<Value, BusTransportError> {

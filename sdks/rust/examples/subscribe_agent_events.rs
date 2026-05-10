@@ -1,5 +1,5 @@
-use makaio_bus_sdk::generated::subjects::{AgentMessagePayload, AgentStartedPayload};
-use makaio_bus_sdk::BusClient;
+use makaio_sdk::generated::subjects::{AgentMessagePayload, AgentStartedPayload};
+use makaio_sdk::BusClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
