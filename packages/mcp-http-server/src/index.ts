@@ -33,3 +33,11 @@ export { resolveMcpTools, toolInfoToMcpTool, type PluginToolsetMap, type McpReso
 export { APPROVE_TOOL_NAME } from './approve-tool.js';
 
 export { McpServerBridgeService } from './mcp-server-bridge-service.js';
+
+export {
+  startMcpClientBridge,
+  type McpClientBridgeHandle,
+  type McpClientBridgeOptions,
+  type McpBridgedTool,
+  type McpCallToolResult,
+} from './mcp-client-bridge.js';

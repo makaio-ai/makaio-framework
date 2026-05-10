@@ -13,8 +13,8 @@
   },
   "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
   "files": [
     "dist",
     "descriptor.json",
@@ -24,18 +24,19 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "scripts": {
-    "build": "tsx build.ts",
+    "build": "tsdown",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@makaio/subprocess": "workspace:*",
     "p-queue": "^9.0.0",
     "zod": "^4.1.13"
   },
@@ -51,16 +52,14 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsx": "^4.20.5",
-    "vite": "^8.0.0",
     "vitest": "*"
   },
   "publishConfig": {
     "access": "public",
     "exports": {
       ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
       },
       "./package.json": "./package.json"
     }

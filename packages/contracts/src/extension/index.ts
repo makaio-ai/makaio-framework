@@ -81,8 +81,23 @@ export type {
   MakaioExtension,
 } from './makaio-extension.js';
 export type { EntityUIConfig } from '../shared/ui-config.js';
-export { ExtensionDescriptorSchema, ExtensionEntrypointsSchema } from './extension-descriptor.js';
-export type { ExtensionDescriptor, ExtensionEntrypoints } from './extension-descriptor.js';
+export {
+  DetachedTransportSchema,
+  ExtensionDescriptorSchema,
+  ExtensionEntrypointsSchema,
+  isDetachedDescriptor,
+  parseExtensionDescriptor,
+  safeParseExtensionDescriptor,
+} from './extension-descriptor.js';
+export type {
+  DetachedDescriptor,
+  DetachedTransportConfig,
+  EmbeddedDescriptor,
+  ExtensionDescriptor,
+  ExtensionDescriptorBase,
+  ExtensionDescriptorParseResult,
+  ExtensionEntrypoints,
+} from './extension-descriptor.js';
 export {
   ExtensionWarningActionSchema,
   ExtensionWarningEntrySchema,

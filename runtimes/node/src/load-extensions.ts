@@ -70,8 +70,9 @@ export interface DescriptorSourcePackageGroup {
  * Load extensions by importing their server entry points.
  *
  * For each discovered extension:
- * 1. Check `execution` is `'embedded'` (or omitted — defaults to embedded)
- * 2. Check `makaio.minVersion` against the current framework version
+ * 1. Check `makaio.minVersion` against the current framework version
+ * 2. If `execution` is `'detached'`, synthesize a managed {@link MakaioExtension}
+ *    via {@link createDetachedExtensionPackage} and continue.
  * 3. Resolve `entrypoints.server` to an absolute path
  * 4. Dynamic `import()` the module
  * 5. Validate the default export looks like a {@link MakaioExtension} or
@@ -92,15 +93,13 @@ export async function loadExtensions(
   const packages: MakaioExtension[] = [];
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
+  let createDetachedExtensionPackage:
+    | typeof import('./detached-extension-handle.js').createDetachedExtensionPackage
+    | undefined;
+
   for (const ext of discovered) {
     const { descriptor, extensionPath } = ext;
     const label = `[extensions] ${descriptor.name}@${descriptor.version}`;
-
-    // Gate: execution mode — only 'embedded' (or omitted) is supported
-    if (descriptor.execution === 'detached') {
-      console.warn(`${label}: detached execution not yet supported, skipping`);
-      continue;
-    }
 
     // Gate: version compatibility
     try {
@@ -117,6 +116,27 @@ export async function loadExtensions(
           `minVersion=${descriptor.makaio.minVersion}), skipping:`,
         err instanceof Error ? err.message : err,
       );
+      continue;
+    }
+
+    // Gate: execution mode — synthesize a managed package for detached extensions
+    if (descriptor.execution === 'detached') {
+      let detachedPkg: MakaioExtension;
+      try {
+        createDetachedExtensionPackage ??= (await import('./detached-extension-handle.js'))
+          .createDetachedExtensionPackage;
+        detachedPkg = createDetachedExtensionPackage(descriptor, extensionPath);
+      } catch (err) {
+        console.warn(
+          `${label}: failed to synthesize detached extension package:`,
+          err instanceof Error ? err.message : err,
+        );
+        continue;
+      }
+      packages.push(detachedPkg);
+      if (descriptor.config?.defaults) {
+        configDefaults.set(descriptor.name, descriptor.config.defaults);
+      }
       continue;
     }
 
@@ -249,6 +269,9 @@ export async function attachExtensionCliContributions(
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   for (const ext of discovered) {
+    // Detached extensions run as child processes and have no entrypoints to import.
+    if (ext.descriptor.execution === 'detached') continue;
+
     const cliEntrypoint = ext.descriptor.entrypoints.cli;
     if (!cliEntrypoint) {
       continue;

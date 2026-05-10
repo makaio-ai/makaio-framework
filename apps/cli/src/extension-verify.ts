@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { ExtensionDescriptorSchema, type ExtensionEntrypoints } from '@makaio/contracts';
+import { safeParseExtensionDescriptor, type ExtensionDescriptor } from '@makaio/contracts';
 import {
   ExtensionVerifyError,
   createVerifyState,
@@ -49,6 +49,19 @@ export async function verifyExtensionWorkspace(options: ExtensionVerifyOptions =
   const rootDir = path.resolve(options.cwd ?? process.cwd());
   const state = createVerifyState(rootDir);
   const descriptor = await loadDescriptor(state);
+
+  if (descriptor.execution === 'detached') {
+    // Detached extensions run as child processes and have no entrypoints to
+    // verify — the transport config is validated by the schema at parse time.
+    return {
+      ok: true,
+      rootDir,
+      entrypoints: {},
+      checks: [...state.checks],
+      diagnostics: [],
+    };
+  }
+
   const resolvedEntrypoints = resolveDeclaredEntrypoints(state, descriptor.entrypoints);
 
   await verifyServerEntrypoint(state, descriptor.entrypoints.server, resolvedEntrypoints.server);
@@ -67,11 +80,9 @@ export async function verifyExtensionWorkspace(options: ExtensionVerifyOptions =
 /**
  * Read and parse `descriptor.json`.
  * @param state - Mutable verification state.
- * @returns Parsed descriptor entrypoints.
+ * @returns Parsed extension descriptor.
  */
-async function loadDescriptor(state: ExtensionVerifyState): Promise<{
-  readonly entrypoints: ExtensionEntrypoints;
-}> {
+async function loadDescriptor(state: ExtensionVerifyState): Promise<ExtensionDescriptor> {
   const descriptorPath = path.join(state.rootDir, 'descriptor.json');
   const rawDescriptor = await readDescriptorFile(state, descriptorPath);
 
@@ -86,7 +97,7 @@ async function loadDescriptor(state: ExtensionVerifyState): Promise<{
     });
   }
 
-  const parseResult = ExtensionDescriptorSchema.safeParse(parsedDescriptor);
+  const parseResult = safeParseExtensionDescriptor(parsedDescriptor);
   if (!parseResult.success) {
     return failDescriptorCheck(state, descriptorPath, {
       code: 'descriptor.invalid-schema',

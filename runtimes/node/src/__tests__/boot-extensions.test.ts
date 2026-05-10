@@ -14,7 +14,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
 import type { MakaioExtension } from '@makaio/contracts';
@@ -24,6 +24,7 @@ import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../e
 import { loadExtensions, mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
 import type { CoreBootOptions } from '../boot.js';
 import {
+  buildLocalBusUrl,
   filterConfigDefaultsForLoadedPackages,
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
@@ -220,6 +221,20 @@ describe('filterConfigDefaultsForLoadedPackages', () => {
   });
 });
 
+describe('buildLocalBusUrl', () => {
+  it('uses IPv4 loopback when the host binds the IPv4 wildcard', () => {
+    expect(buildLocalBusUrl('0.0.0.0', 3010)).toBe('ws://127.0.0.1:3010/bus');
+  });
+
+  it('uses IPv6 loopback when the host binds the IPv6 wildcard', () => {
+    expect(buildLocalBusUrl('::', 3010)).toBe('ws://[::1]:3010/bus');
+  });
+
+  it('brackets explicit IPv6 hosts', () => {
+    expect(buildLocalBusUrl('::1', 3010)).toBe('ws://[::1]:3010/bus');
+  });
+});
+
 describe('session orchestrator runtime ownership', () => {
   it('keeps the framework session orchestrator when no loaded extension owns it', () => {
     const selected = selectFrameworkCorePackages([makePackage('plain-extension')]);
@@ -351,21 +366,33 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     expect(result.packages).toHaveLength(0);
   });
 
-  it('skips extension with detached execution mode', async () => {
-    const detachedExt = makeDiscovered('detached-ext');
+  it('synthesizes a managed package for detached execution mode', async () => {
+    const importModule = vi.fn(async () => {
+      throw new Error('detached extensions must not use embedded import fallback');
+    });
     const discovered: DiscoveredExtension[] = [
       {
-        ...detachedExt,
-        descriptor: { ...detachedExt.descriptor, execution: 'detached' },
+        descriptor: {
+          name: 'detached-ext',
+          displayName: 'Detached Ext Display',
+          version: '1.0.0',
+          makaio: { minVersion: '1.0.0' },
+          execution: 'detached',
+          transport: { type: 'bus-stdio', command: 'node', args: ['detached.js'] },
+        },
+        extensionPath: '/fake/path',
+        source: 'local',
       },
     ];
 
     const result = await loadExtensions(discovered, {
       frameworkVersion: FRAMEWORK_VERSION,
-      importModule: async () => ({ default: makePackage('detached-ext') }),
+      importModule,
     });
 
-    expect(result.packages).toHaveLength(0);
+    expect(result.packages).toHaveLength(1);
+    expect(result.packages[0]?.name).toBe('detached-ext');
+    expect(importModule).not.toHaveBeenCalled();
   });
 });
 

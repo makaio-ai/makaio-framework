@@ -3742,11 +3742,10 @@ __metadata:
     "@makaio/bus-core": "workspace:*"
     "@makaio/clients-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     p-queue: "npm:^9.0.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     vitest: "npm:*"
     zod: "npm:^4.1.13"
   peerDependencies:
@@ -4037,6 +4036,17 @@ __metadata:
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/core": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/bus-transport-stdio@workspace:*, @makaio/bus-transport-stdio@workspace:transports/stdio":
+  version: 0.0.0-use.local
+  resolution: "@makaio/bus-transport-stdio@workspace:transports/stdio"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
+    "@types/node": "npm:^24.3.0"
   languageName: unknown
   linkType: soft
 
@@ -4719,11 +4729,13 @@ __metadata:
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server": "workspace:*"
+    "@makaio/bus-transport-stdio": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
     "@makaio/clients-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/machine-identity": "workspace:*"
+    "@makaio/mcp-http-server": "workspace:*"
     "@makaio/platform-macos": "workspace:*"
     "@makaio/preferences": "workspace:*"
     "@makaio/providers": "workspace:*"
@@ -4732,6 +4744,7 @@ __metadata:
     "@makaio/services-package-manager": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/storage-migrations": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/semver": "npm:^7.7.0"
     drizzle-orm: "npm:0.45.2"
@@ -4871,6 +4884,16 @@ __metadata:
     drizzle-orm: "npm:0.45.2"
     globby: "npm:^14.1.0"
     tsx: "npm:^4.20.5"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subprocess@workspace:*, @makaio/subprocess@workspace:packages/subprocess":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subprocess@workspace:packages/subprocess"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
   languageName: unknown
   linkType: soft
 

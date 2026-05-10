@@ -16,6 +16,7 @@ describe('ExtensionContext host-specific fields', () => {
     expectTypeOf<NodeExtensionContext['homedir']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['makaioHome']>().toEqualTypeOf<string>();
     expectTypeOf<NodeExtensionContext['username']>().toEqualTypeOf<string>();
+    expectTypeOf<NodeExtensionContext['busUrl']>().toEqualTypeOf<string | undefined>();
   });
 
   it('allows host-agnostic extensions to opt into the generic base context', () => {

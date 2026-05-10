@@ -359,6 +359,8 @@ export async function discoverLocalExtensions(
   for (const ext of discovered) {
     const { descriptor, extensionPath } = ext;
     if (!descriptor.cli) continue;
+    // Detached extensions run as child processes and have no entrypoints to import.
+    if (descriptor.execution === 'detached') continue;
     // Deduplicate against both already-registered names and this discovery
     // batch itself. Two local extensions declaring the same cli.name is an
     // authoring error — first-discovered wins. Cross-path merging (e.g. a

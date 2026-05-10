@@ -165,12 +165,23 @@ describe('ExtensionDescriptorSchema', () => {
     expect(result.success).toBe(true);
   });
 
-  it('accepts execution: detached', () => {
+  it('accepts execution: detached with a transport config and no entrypoints', () => {
+    const { entrypoints: _entrypoints, ...withoutEntrypoints } = baseDescriptor;
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...withoutEntrypoints,
+      execution: 'detached',
+      transport: { type: 'bus-stdio', command: 'node' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects execution: detached when entrypoints are declared', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
       execution: 'detached',
+      transport: { type: 'bus-stdio', command: 'node' },
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it('rejects an invalid execution value', () => {

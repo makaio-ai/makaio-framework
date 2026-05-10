@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { glob } from 'glob';
 import { minimatch } from 'minimatch';
 import { z } from 'zod';
-import { ExtensionDescriptorSchema } from '@makaio/contracts';
+import { parseExtensionDescriptor } from '@makaio/contracts';
 import { type DiscoveredExtension, type ExtensionDiscovery } from './extension-discovery.js';
 
 /** Environment override for the runtime config file path. */
@@ -387,7 +387,7 @@ async function readDiscoveredExtension(
 ): Promise<DiscoveredExtension | undefined> {
   try {
     const raw = await fs.readFile(descriptorPath, 'utf-8');
-    const descriptor = ExtensionDescriptorSchema.parse(JSON.parse(raw));
+    const descriptor = parseExtensionDescriptor(JSON.parse(raw));
     return {
       descriptor,
       extensionPath: path.dirname(descriptorPath),

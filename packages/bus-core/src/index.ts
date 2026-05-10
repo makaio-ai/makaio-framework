@@ -158,6 +158,9 @@ export {
 
 export { BusLifecycle } from './lifecycle.js';
 
+export { buildSubscribeMessage, buildUnsubscribeMessage } from './subscribe-message.js';
+export type { SubscriptionEntry } from './subscribe-message.js';
+
 export { createExtensionNamespace } from './create-extension-namespace.js';
 export type {
   ExtensionNamespace,

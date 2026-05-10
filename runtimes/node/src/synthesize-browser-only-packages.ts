@@ -50,6 +50,8 @@ export function synthesizeBrowserOnlyPackages(
   for (const ext of discovered) {
     const { descriptor, extensionPath } = ext;
 
+    // Detached extensions run as child processes and have no entrypoints.
+    if (descriptor.execution === 'detached') continue;
     // Skip extensions that have a server entry — those are handled by
     // loadExtensions + bridgeExtensionBrowserEntries.
     if (descriptor.entrypoints.server) continue;

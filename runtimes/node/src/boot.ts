@@ -96,6 +96,18 @@ export type {
   TransportReadyInfo,
 } from './boot-types.js';
 
+/**
+ * Build the loopback URL child processes should use to connect to the host bus.
+ * @param host - Bound server host from the composition root.
+ * @param port - Bound server port.
+ * @returns WebSocket URL for the runtime bus endpoint.
+ */
+export function buildLocalBusUrl(host: string, port: number): string {
+  const connectHost = host === '0.0.0.0' ? '127.0.0.1' : host === '::' ? '::1' : host;
+  const urlHost = connectHost.includes(':') && !connectHost.startsWith('[') ? `[${connectHost}]` : connectHost;
+  return `ws://${urlHost}:${port}/bus`;
+}
+
 // ---------------------------------------------------------------------------
 // Boot functions
 // ---------------------------------------------------------------------------
@@ -289,6 +301,7 @@ export async function bootMakaioRuntimeCore(
         makaioHome,
         username: bootUsername,
         machineId: machineIdentity.machineId,
+        busUrl: buildLocalBusUrl(boundHost, boundPort),
         tryImport,
       },
       capabilities,

@@ -35,7 +35,7 @@ export function bridgeExtensionBrowserEntries(
 
   return packages.map((pkg) => {
     const ext = descriptorByName.get(pkg.name);
-    if (!ext?.descriptor.entrypoints.browser) return pkg;
+    if (!ext?.descriptor.entrypoints?.browser) return pkg;
 
     if (pkg.browser) {
       console.warn(`[extensions] ${pkg.name}: server entry already declares browser, skipping browser bridge`);

@@ -10,7 +10,12 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { ExtensionDescriptorSchema, type ExtensionDescriptor, type ExtensionEntrypoints } from '@makaio/contracts';
+import {
+  isDetachedDescriptor,
+  safeParseExtensionDescriptor,
+  type ExtensionDescriptor,
+  type ExtensionEntrypoints,
+} from '@makaio/contracts';
 import type { PackageInstallResult, PackageUninstallResult } from './schemas.js';
 
 /**
@@ -71,7 +76,9 @@ export class LocalPathInstaller {
       const realExtDir = await fs.realpath(extDir);
 
       const descriptor = await this.readDescriptor(realExtDir);
-      await this.validateEntrypoints(realExtDir, descriptor.entrypoints);
+      if (!isDetachedDescriptor(descriptor)) {
+        await this.validateEntrypoints(realExtDir, descriptor.entrypoints);
+      }
       const linkPath = this.linkPathFor(descriptor.name);
 
       await fs.mkdir(path.dirname(linkPath), { recursive: true });
@@ -194,7 +201,7 @@ export class LocalPathInstaller {
       const descriptorPath = path.join(sourcePath, 'descriptor.json');
       const raw = await fs.readFile(descriptorPath, 'utf-8');
       const parsed = JSON.parse(raw) as unknown;
-      const result = ExtensionDescriptorSchema.safeParse(parsed);
+      const result = safeParseExtensionDescriptor(parsed);
       if (!result.success) {
         return null;
       }
@@ -222,7 +229,7 @@ export class LocalPathInstaller {
     });
 
     const parsed = JSON.parse(raw) as unknown;
-    const result = ExtensionDescriptorSchema.safeParse(parsed);
+    const result = safeParseExtensionDescriptor(parsed);
     if (!result.success) {
       throw new Error(`Invalid descriptor.json: ${result.error.message}`);
     }

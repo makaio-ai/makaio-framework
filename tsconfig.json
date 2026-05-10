@@ -20,6 +20,7 @@
       "@makaio/service-base": ["./packages/services/base/src/index.ts"],
       "@makaio/bus-transport-websocket": ["./transports/ws/src/index.ts"],
       "@makaio/bus-transport-message-channel": ["./transports/message-channel/src/index.ts"],
+      "@makaio/bus-transport-stdio": ["./transports/stdio/src/index.ts"],
       "@makaio/bus-server": ["./packages/bus-server/src/index.ts"],
       "@makaio/bus-server-vite": ["./packages/bus-server-vite/src/index.ts"],
       "@makaio/utils": ["./packages/utils/src/index.ts"],

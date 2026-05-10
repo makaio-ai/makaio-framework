@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { glob } from 'glob';
-import { type ExtensionDescriptor, ExtensionDescriptorSchema, type MakaioExtension } from '@makaio/contracts';
+import { type ExtensionDescriptor, parseExtensionDescriptor, type MakaioExtension } from '@makaio/contracts';
 
 /** Preloaded server entry module used by bundled hosts. */
 export interface ExtensionEntrypointModule {
@@ -183,7 +183,7 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
         try {
           const raw = await fs.readFile(descriptorPath, 'utf-8');
           const json: unknown = JSON.parse(raw);
-          const descriptor = ExtensionDescriptorSchema.parse(json);
+          const descriptor = parseExtensionDescriptor(json);
           const extensionPath = path.dirname(descriptorPath);
           results.push({
             descriptor,
