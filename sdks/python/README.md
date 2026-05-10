@@ -6,7 +6,7 @@ This package is intentionally small in Phase 1. It handles wire envelopes, reque
 subscription advertisement, no-handler responses, and generated subject constants from
 `sdks/manifest/makaio-bus-protocol.json`. Payload validation remains server-side.
 
-The Python distribution package is named `makaio-bus`, but it is not published yet. Install it from
+The Python distribution package is named `makaio-sdk`, but it is not published yet. Install it from
 the workspace when developing locally.
 
 This client currently exposes the unauthenticated WebSocket protocol surface.

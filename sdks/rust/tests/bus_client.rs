@@ -2,12 +2,12 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use makaio_bus_sdk::bus::{
+use makaio_sdk::bus::{
     BroadcastResponseMessage, BusMessage, BusTransportError, EventMessage, HeartbeatMessage,
     RequestMessage, RequestOptions, ResponseMessage,
 };
-use makaio_bus_sdk::generated::subjects::{self, SubjectKind, SUBJECTS};
-use makaio_bus_sdk::{BusClient, BusClientError};
+use makaio_sdk::generated::subjects::{self, SubjectKind, SUBJECTS};
+use makaio_sdk::{BusClient, BusClientError};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Notify};

@@ -3,14 +3,14 @@ title: Rust SDK
 description: Rust SDK for participating in the Makaio bus protocol over WebSockets.
 ---
 
-The Rust SDK (`makaio-bus-sdk`) provides a native Rust client for participating in the Makaio bus
+The Rust SDK (`makaio-sdk`) provides a native Rust client for participating in the Makaio bus
 protocol over WebSockets. The crate is currently unpublished; use it from the framework workspace.
 
 ## Installation
 
 ```toml
 [dependencies]
-makaio-bus-sdk = { path = "../sdks/rust" }
+makaio-sdk = { path = "../sdks/rust" }
 ```
 
 ## Features
@@ -23,7 +23,7 @@ makaio-bus-sdk = { path = "../sdks/rust" }
 ## Quick Start
 
 ```rust
-use makaio_bus_sdk::BusClient;
+use makaio_sdk::BusClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

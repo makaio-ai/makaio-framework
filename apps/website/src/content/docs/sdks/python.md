@@ -3,7 +3,7 @@ title: Python SDK
 description: Python SDK for participating in the Makaio bus protocol over WebSocket.
 ---
 
-The Python SDK (`makaio-bus`) provides a lightweight client for participating in the Makaio bus
+The Python SDK (`makaio-sdk`) provides a lightweight client for participating in the Makaio bus
 protocol over WebSocket. It is not published yet; install it from the framework workspace while
 developing locally.
 

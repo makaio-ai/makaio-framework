@@ -2,7 +2,7 @@
 
 Rust SDK for participating in the Makaio bus protocol over WebSockets.
 
-The crate is named `makaio-bus-sdk` and is currently unpublished (`publish = false`). Use it from
+The crate is named `makaio-sdk` and is currently unpublished (`publish = false`). Use it from
 `sdks/rust` in this source workspace.
 
 This client currently exposes the unauthenticated WebSocket protocol surface.
@@ -18,7 +18,7 @@ The SDK is intentionally small in Phase 1:
 ## Usage
 
 ```rust
-use makaio_bus_sdk::{generated::subjects, BusClient};
+use makaio_sdk::{generated::subjects, BusClient};
 use serde_json::json;
 
 #[tokio::main]

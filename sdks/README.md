@@ -19,8 +19,8 @@ explicit `PublicProtocolNamespaces` catalog.
 sdks/manifest/               -> makaio-bus-protocol.json
   | codegen
   v
-sdks/python/                 -> makaio-bus package, generated subjects + hand-authored BusClient
-sdks/rust/                   -> makaio-bus-sdk crate, generated subjects + hand-authored BusClient
+sdks/python/                 -> makaio-sdk package, generated subjects + hand-authored BusClient
+sdks/rust/                   -> makaio-sdk crate, generated subjects + hand-authored BusClient
   ^ validated by
 sdks/conformance/            -> language-neutral cases and wire fixtures
 ```
@@ -36,7 +36,7 @@ The committed source-tree artifacts are `sdks/manifest/makaio-bus-protocol.json`
 `sdks/python/src/makaio/generated/subjects.py`, and `sdks/rust/src/generated/subjects.rs`.
 Update the shared conformance fixtures before changing individual SDK implementations.
 
-`makaio-bus` (Python) and `makaio-bus-sdk` (Rust) are workspace artifacts and are not published yet.
+`makaio-sdk` (Python) and `makaio-sdk` (Rust) are workspace artifacts and are not published yet.
 
 ### TypeScript Framework SDK
 
@@ -59,7 +59,7 @@ framework-internal packages for ordinary SDK use.
 All SDKs expose the same logical API where the protocol concepts overlap, with language-native
 method names:
 
-| Concept | TypeScript `@makaio/sdk` | Python `makaio-bus` | Rust `makaio-bus-sdk` |
+| Concept | TypeScript `@makaio/sdk` | Python `makaio-sdk` | Rust `makaio-sdk` |
 |---------|---------------------------|---------------------|-----------------------|
 | Connect | `client.connect(options?)` | `await client.connect()` | `BusClient::connect(url).await` |
 | Subscribe | `client.subscribe(subject, handler)` | `await client.subscribe(subject, handler)` | `client.subscribe(subject, handler).await` |
