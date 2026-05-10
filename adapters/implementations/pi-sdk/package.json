@@ -52,7 +52,7 @@
     "@makaio/utils": "workspace:*",
     "@mariozechner/pi-agent-core": "0.72.1",
     "@mariozechner/pi-ai": "0.72.1",
-    "@mariozechner/pi-coding-agent": "0.72.1",
+    "@mariozechner/pi-coding-agent": "0.73.1",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
     "vite": "^8.0.0",
