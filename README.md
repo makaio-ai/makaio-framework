@@ -175,7 +175,7 @@ Each adapter implements the 3-layer contract (Adapter → Agent → Connector) a
 | `claude-code` | Anthropic (Claude Agent SDK implementation) | API SDK | Stable |
 | `codex-app-server` | OpenAI (Codex) | ACP | Experimental |
 | `qwen-acp` | Alibaba (Qwen) | ACP | Experimental |
-| `github-copilot-sdk` | GitHub (Copilot) | API SDK | Community |
+| `github-copilot-sdk` | GitHub (Copilot) | API SDK | [ABANDONED](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/) |
 
 **Status definitions:**
 
