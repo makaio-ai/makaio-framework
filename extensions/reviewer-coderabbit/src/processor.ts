@@ -113,8 +113,14 @@ export function parseDiffSuggestions(diffBlock: string, filePath: string): Sugge
  * @returns Cleaned body suitable for display or further parsing
  */
 export function stripCodeRabbitMetadata(body: string): string {
-  // Strip HTML comments (fingerprints, base64 state blobs)
-  return body.replace(/<!--[\s\S]*?-->/g, '').trim();
+  let result = body;
+  let start: number;
+  while ((start = result.indexOf('<!--')) !== -1) {
+    const end = result.indexOf('-->', start + 4);
+    if (end === -1) break;
+    result = result.slice(0, start) + result.slice(end + 3);
+  }
+  return result.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +408,7 @@ export function parseNitpickSection(
   const findings: ReviewFinding[] = [];
 
   // Each file-level nitpick starts with a nested <details> block whose summary is the file path
-  const fileBlockRe = /<details>\s*<summary>(.*?)<\/summary>([\s\S]*?)<\/details>/gi;
+  const fileBlockRe = /<details>\s*<summary>([^<]*(?:<(?!\/summary>)[^<]*)*)<\/summary>([\s\S]*?)<\/details>/gi;
   let fileMatch: RegExpExecArray | null;
 
   while ((fileMatch = fileBlockRe.exec(nitpickContent)) !== null) {

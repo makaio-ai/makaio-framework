@@ -422,7 +422,7 @@ export class IndexEngine {
     return (
       value
         .trim()
-        .replace(/<.*>/g, '')
+        .replace(/<[^>]*>/g, '')
         .split('.')
         .pop()
         ?.replace(/[^\w$]/g, '')

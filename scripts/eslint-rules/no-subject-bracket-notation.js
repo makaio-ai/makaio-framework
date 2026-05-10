@@ -47,7 +47,7 @@ export default {
         if (!objectName.endsWith('Subjects')) return;
 
         // Build the suggested dot notation
-        const dotNotation = `${objectName}.${keyValue.replace(/\./g, '.')}`;
+        const dotNotation = `${objectName}.${keyValue}`;
 
         context.report({
           node,
