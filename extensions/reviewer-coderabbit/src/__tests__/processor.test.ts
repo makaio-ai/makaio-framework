@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { parseDiffSuggestions, stripCodeRabbitMetadata } from '../processor.js';
+import { extractDetailsBlock, parseDiffSuggestions, stripCodeRabbitMetadata } from '../processor.js';
+
+describe('extractDetailsBlock', () => {
+  it('skips malformed details blocks and still finds later matching sections', () => {
+    const body = [
+      '<details>',
+      'This malformed block has no summary.',
+      '</details>',
+      '<details>',
+      '<summary>🧹 Nitpick comments</summary>',
+      'Valid nitpick content.',
+      '</details>',
+    ].join('\n');
+
+    expect(extractDetailsBlock(body, 'Nitpick comments')).toBe('Valid nitpick content.');
+  });
+});
 
 describe('stripCodeRabbitMetadata', () => {
   it('removes paired CodeRabbit marker blocks before stripping standalone HTML comments', () => {

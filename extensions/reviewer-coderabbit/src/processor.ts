@@ -51,9 +51,20 @@ export function extractDetailsBlock(body: string, summaryPattern: string): strin
     const detailsIdx = lowerBody.indexOf('<details', searchFrom);
     if (detailsIdx === -1) return undefined;
 
+    const nextDetailsIdx = lowerBody.indexOf('<details', detailsIdx + 1);
+    const currentDetailsClose = lowerBody.indexOf('</details>', detailsIdx + 1);
     const summaryOpen = lowerBody.indexOf('<summary>', detailsIdx);
     const summaryClose = lowerBody.indexOf('</summary>', detailsIdx);
-    if (summaryOpen === -1 || summaryClose === -1) return undefined;
+    const summaryBelongsToCurrentDetails =
+      summaryOpen !== -1 &&
+      summaryClose > summaryOpen &&
+      (nextDetailsIdx === -1 || summaryOpen < nextDetailsIdx) &&
+      (currentDetailsClose === -1 || summaryClose < currentDetailsClose);
+    if (!summaryBelongsToCurrentDetails) {
+      // Malformed details blocks should not stop scanning or borrow a later block's summary.
+      searchFrom = detailsIdx + 1;
+      continue;
+    }
 
     const summaryText = body.slice(summaryOpen + '<summary>'.length, summaryClose);
     if (!summaryText.toLowerCase().includes(lowerPattern)) {
