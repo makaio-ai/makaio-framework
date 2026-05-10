@@ -30,7 +30,7 @@
     "@makaio/service-base": "workspace:*",
     "@makaio/storage-core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "hono": "^4.10.4",
+    "hono": "^4.12.18",
     "merge-anything": "^6.0.6",
     "zod": "^4.1.13"
   },

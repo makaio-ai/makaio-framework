@@ -27,8 +27,8 @@
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   },
   "dependencies": {
     "@makaio/client-claude-code": "workspace:*",
@@ -58,9 +58,9 @@
     "@types/react": "^19.2.2",
     "drizzle-kit": "^0.31.8",
     "ink-testing-library": "^3.0.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "tsdown": "^0.21.7",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tsdown": "^0.22.0",
     "tsx": "^4.20.4",
     "typescript": "^6.0.3",
     "vitest": "4.1.5"
