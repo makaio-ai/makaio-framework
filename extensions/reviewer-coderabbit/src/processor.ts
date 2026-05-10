@@ -43,14 +43,53 @@ export function parseSeverity(body: string): FindingSeverity {
  * @returns Inner content of the matched `<details>` block, or `undefined` when not found
  */
 export function extractDetailsBlock(body: string, summaryPattern: string): string | undefined {
-  const escapedPattern = summaryPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Match <details>…<summary>…PATTERN…</summary>…</details>  (non-greedy, dotAll)
-  const re = new RegExp(
-    `<details>[\\s\\S]*?<summary>[^<]*${escapedPattern}[^<]*<\\/summary>([\\s\\S]*?)<\\/details>`,
-    'i',
-  );
-  const match = re.exec(body);
-  return match ? match[1].trim() : undefined;
+  const lowerBody = body.toLowerCase();
+  const lowerPattern = summaryPattern.toLowerCase();
+
+  let searchFrom = 0;
+  while (searchFrom < body.length) {
+    const detailsIdx = lowerBody.indexOf('<details', searchFrom);
+    if (detailsIdx === -1) return undefined;
+
+    const summaryOpen = lowerBody.indexOf('<summary>', detailsIdx);
+    const summaryClose = lowerBody.indexOf('</summary>', detailsIdx);
+    if (summaryOpen === -1 || summaryClose === -1) return undefined;
+
+    const summaryText = body.slice(summaryOpen + '<summary>'.length, summaryClose);
+    if (!summaryText.toLowerCase().includes(lowerPattern)) {
+      searchFrom = detailsIdx + 1;
+      continue;
+    }
+
+    // Found the matching block — walk forward with depth tracking to find the closing </details>
+    let depth = 0;
+    let cursor = detailsIdx;
+    let endIdx = -1;
+    while (cursor < body.length) {
+      const nextOpen = lowerBody.indexOf('<details', cursor + 1);
+      const nextClose = lowerBody.indexOf('</details>', cursor + 1);
+      if (nextClose === -1) break;
+
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        depth++;
+        cursor = nextOpen;
+      } else {
+        if (depth === 0) {
+          endIdx = nextClose;
+          break;
+        }
+        depth--;
+        cursor = nextClose;
+      }
+    }
+
+    if (endIdx === -1) return undefined;
+
+    const contentStart = summaryClose + '</summary>'.length;
+    return body.slice(contentStart, endIdx).trim();
+  }
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
