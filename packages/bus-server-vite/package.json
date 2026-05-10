@@ -11,7 +11,7 @@
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/runtime-node": "workspace:*",
-    "hono": "^4.10.7"
+    "hono": "^4.12.18"
   },
   "peerDependencies": {
     "vite": "^8.0.0"

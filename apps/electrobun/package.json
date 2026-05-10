@@ -41,7 +41,7 @@
     "@makaio/utils": "workspace:*",
     "dotenv": "^17.2.3",
     "electrobun": "^1.16.0",
-    "hono": "^4.10.7",
+    "hono": "^4.12.18",
     "lucide-react": "^0.562.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
