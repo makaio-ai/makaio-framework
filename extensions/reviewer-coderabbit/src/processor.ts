@@ -43,14 +43,64 @@ export function parseSeverity(body: string): FindingSeverity {
  * @returns Inner content of the matched `<details>` block, or `undefined` when not found
  */
 export function extractDetailsBlock(body: string, summaryPattern: string): string | undefined {
-  const escapedPattern = summaryPattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Match <details>…<summary>…PATTERN…</summary>…</details>  (non-greedy, dotAll)
-  const re = new RegExp(
-    `<details>[\\s\\S]*?<summary>[^<]*${escapedPattern}[^<]*<\\/summary>([\\s\\S]*?)<\\/details>`,
-    'i',
-  );
-  const match = re.exec(body);
-  return match ? match[1].trim() : undefined;
+  const lowerBody = body.toLowerCase();
+  const lowerPattern = summaryPattern.toLowerCase();
+
+  let searchFrom = 0;
+  while (searchFrom < body.length) {
+    const detailsIdx = lowerBody.indexOf('<details', searchFrom);
+    if (detailsIdx === -1) return undefined;
+
+    const nextDetailsIdx = lowerBody.indexOf('<details', detailsIdx + 1);
+    const currentDetailsClose = lowerBody.indexOf('</details>', detailsIdx + 1);
+    const summaryOpen = lowerBody.indexOf('<summary>', detailsIdx);
+    const summaryClose = lowerBody.indexOf('</summary>', detailsIdx);
+    const summaryBelongsToCurrentDetails =
+      summaryOpen !== -1 &&
+      summaryClose > summaryOpen &&
+      (nextDetailsIdx === -1 || summaryOpen < nextDetailsIdx) &&
+      (currentDetailsClose === -1 || summaryClose < currentDetailsClose);
+    if (!summaryBelongsToCurrentDetails) {
+      // Malformed details blocks should not stop scanning or borrow a later block's summary.
+      searchFrom = detailsIdx + 1;
+      continue;
+    }
+
+    const summaryText = body.slice(summaryOpen + '<summary>'.length, summaryClose);
+    if (!summaryText.toLowerCase().includes(lowerPattern)) {
+      searchFrom = detailsIdx + 1;
+      continue;
+    }
+
+    // Found the matching block — walk forward with depth tracking to find the closing </details>
+    let depth = 0;
+    let cursor = detailsIdx;
+    let endIdx = -1;
+    while (cursor < body.length) {
+      const nextOpen = lowerBody.indexOf('<details', cursor + 1);
+      const nextClose = lowerBody.indexOf('</details>', cursor + 1);
+      if (nextClose === -1) break;
+
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        depth++;
+        cursor = nextOpen;
+      } else {
+        if (depth === 0) {
+          endIdx = nextClose;
+          break;
+        }
+        depth--;
+        cursor = nextClose;
+      }
+    }
+
+    if (endIdx === -1) return undefined;
+
+    const contentStart = summaryClose + '</summary>'.length;
+    return body.slice(contentStart, endIdx).trim();
+  }
+
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,14 +157,46 @@ export function parseDiffSuggestions(diffBlock: string, filePath: string): Sugge
  * Remove CodeRabbit-internal metadata from a comment body.
  *
  * Strips:
+ * - Paired marker blocks (`<!-- foo_start --> … <!-- foo_end -->`) with hidden payloads
  * - HTML comments (`<!-- … -->`) used for fingerprinting and internal state
  * - Base64 blobs often appended as hidden state
  * @param body - Raw comment body from the VCS API
  * @returns Cleaned body suitable for display or further parsing
  */
 export function stripCodeRabbitMetadata(body: string): string {
-  // Strip HTML comments (fingerprints, base64 state blobs)
-  return body.replace(/<!--[\s\S]*?-->/g, '').trim();
+  let result = body;
+
+  const pairedMarkerStartRe = /<!--\s*([A-Za-z0-9_]+)_start\s*-->/g;
+  let searchFrom = 0;
+  while (searchFrom < result.length) {
+    pairedMarkerStartRe.lastIndex = searchFrom;
+    const startMatch = pairedMarkerStartRe.exec(result);
+    if (!startMatch) break;
+
+    const blockStart = startMatch.index;
+    const contentStart = blockStart + startMatch[0].length;
+    const markerPrefix = startMatch[1];
+    const endMarkerRe = new RegExp(`<!--\\s*${markerPrefix}_end\\s*-->`);
+    const endMatch = endMarkerRe.exec(result.slice(contentStart));
+
+    if (!endMatch) {
+      searchFrom = contentStart;
+      continue;
+    }
+
+    const blockEnd = contentStart + endMatch.index + endMatch[0].length;
+    // Remove paired blocks before standalone comments so hidden payloads are not stranded as visible text.
+    result = result.slice(0, blockStart) + result.slice(blockEnd);
+    searchFrom = blockStart;
+  }
+
+  let start: number;
+  while ((start = result.indexOf('<!--')) !== -1) {
+    const end = result.indexOf('-->', start + 4);
+    if (end === -1) break;
+    result = result.slice(0, start) + result.slice(end + 3);
+  }
+  return result.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -401,13 +483,44 @@ export function parseNitpickSection(
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
 
-  // Each file-level nitpick starts with a nested <details> block whose summary is the file path
-  const fileBlockRe = /<details>\s*<summary>(.*?)<\/summary>([\s\S]*?)<\/details>/gi;
-  let fileMatch: RegExpExecArray | null;
+  // Extract outer <details> blocks using depth-tracking to handle nested </details>
+  let searchFrom = 0;
+  while (searchFrom < nitpickContent.length) {
+    const openIdx = nitpickContent.indexOf('<details', searchFrom);
+    if (openIdx === -1) break;
 
-  while ((fileMatch = fileBlockRe.exec(nitpickContent)) !== null) {
-    const filePath = fileMatch[1].trim();
-    const fileContent = fileMatch[2].trim();
+    let depth = 0;
+    let cursor = openIdx;
+    let endIdx = -1;
+    while (cursor < nitpickContent.length) {
+      const nextOpen = nitpickContent.indexOf('<details', cursor + 1);
+      const nextClose = nitpickContent.indexOf('</details>', cursor + 1);
+      if (nextClose === -1) break;
+
+      if (nextOpen !== -1 && nextOpen < nextClose) {
+        depth++;
+        cursor = nextOpen;
+      } else {
+        if (depth === 0) {
+          endIdx = nextClose + '</details>'.length;
+          break;
+        }
+        depth--;
+        cursor = nextClose;
+      }
+    }
+
+    if (endIdx === -1) break;
+
+    const blockText = nitpickContent.slice(openIdx, endIdx);
+    searchFrom = endIdx;
+
+    const summaryMatch = blockText.match(/<summary>([\s\S]*?)<\/summary>/i);
+    if (!summaryMatch) continue;
+
+    const filePath = summaryMatch[1].trim();
+    const afterSummary = blockText.indexOf('</summary>') + '</summary>'.length;
+    const fileContent = blockText.slice(afterSummary, blockText.lastIndexOf('</details>')).trim();
 
     // Within a file block, individual findings are separated by `---` or blank lines
     const blocks = fileContent

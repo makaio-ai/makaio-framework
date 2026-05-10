@@ -176,7 +176,7 @@ function renderFieldTable(fields: SubjectField[]): string[] {
     // Keep analyzer type strings verbatim. The linked schema source is the
     // canonical expansion point for complex reusable and discriminated types.
     // Escape pipe characters inside type strings to avoid breaking the table.
-    const escapedType = field.type.replace(/\|/g, '\\|');
+    const escapedType = field.type.replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
     lines.push(`| \`${field.name}\` | \`${escapedType}\` | ${required} |`);
   }
 

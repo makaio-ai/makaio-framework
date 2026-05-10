@@ -419,10 +419,20 @@ export class IndexEngine {
    * @returns Normalized identifier, or empty string if nothing remains.
    */
   public normalizeTypeName(value: string): string {
+    const trimmed = value.trim();
+    let result = '';
+    let depth = 0;
+    for (const char of trimmed) {
+      if (char === '<') {
+        depth++;
+      } else if (char === '>') {
+        depth = Math.max(0, depth - 1);
+      } else if (depth === 0) {
+        result += char;
+      }
+    }
     return (
-      value
-        .trim()
-        .replace(/<.*>/g, '')
+      result
         .split('.')
         .pop()
         ?.replace(/[^\w$]/g, '')

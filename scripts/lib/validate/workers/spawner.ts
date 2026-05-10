@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 /** TypeScript workers get more memory since they load the entire type graph (6 GB old-space). */
 const TYPESCRIPT_HEAP_MB = 6144;
 
-const NODE_OPTIONS_TOKEN_REGEX = /"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s]+/g;
+const NODE_OPTIONS_TOKEN_REGEX = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g;
 
 /**
  * Resolves the process id target used for worker cancellation.
@@ -79,7 +79,8 @@ export function mergeNodeOptions(existingNodeOptions: string | undefined, requir
     const token = tokens[index];
 
     if (token.startsWith('--max-old-space-size=')) {
-      const parsed = Number(token.slice('--max-old-space-size='.length));
+      const raw = token.slice('--max-old-space-size='.length).replace(/^["']|["']$/g, '');
+      const parsed = Number(raw);
       if (Number.isFinite(parsed)) {
         highestHeapMB = Math.max(highestHeapMB ?? 0, parsed);
       }
@@ -87,7 +88,8 @@ export function mergeNodeOptions(existingNodeOptions: string | undefined, requir
     }
 
     if (token === '--max-old-space-size') {
-      const parsed = Number(tokens[index + 1]);
+      const raw = (tokens[index + 1] ?? '').replace(/^["']|["']$/g, '');
+      const parsed = Number(raw);
       if (Number.isFinite(parsed)) {
         highestHeapMB = Math.max(highestHeapMB ?? 0, parsed);
         index++;
