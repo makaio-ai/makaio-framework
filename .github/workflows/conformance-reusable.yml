@@ -93,22 +93,6 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Save Yarn cache
-        if: steps.yarn-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: |
-            .yarn/cache
-            .yarn/install-state.gz
-          key: yarn-cache-${{ hashFiles('yarn.lock') }}
-
-      - name: Save node_modules
-        if: steps.nm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: "**/node_modules"
-          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
-
       - name: Run openai-node reference smoke
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
