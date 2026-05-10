@@ -8,14 +8,18 @@
  * consumers that care about Claude-specific extras.
  *
  * Also subscribes to `client:claude-code.statusline.received` events.  For
- * each payload that carries a `session_id`, the service looks up the session
- * via {@link SessionStorageSubjects.getByAdapterSessionId} and reads the
- * linked `clientAccountId` and stored identifiers.  When both are present, the
- * payload is passed to {@link normalizeClaudeCodeStatusline} together with the
- * resolved identity context and the resulting request is forwarded to
- * `client.usage.ingest`.  Payloads without a `session_id`, sessions that have
- * not yet been linked to a client account, or sessions without stored identity
- * evidence are silently skipped — the raw event remains observable on
+ * each payload that carries a `session_id`, the service resolves the account
+ * identity (via session storage or active-account fallback) and pins it in a
+ * per-session cache on first resolution.  Subsequent statusline events for the
+ * same `session_id` reuse the cached identity — this ensures that a
+ * long-running turn continues attributing usage to the account that started
+ * the session, even if the user switches accounts mid-turn.  When both an
+ * identity and rate-limit data are present, the payload is passed to
+ * {@link normalizeClaudeCodeStatusline} together with the resolved identity
+ * context and the resulting request is forwarded to `client.usage.ingest`.
+ * Payloads without a `session_id`, sessions that have not yet been linked to a
+ * client account, or sessions without stored identity evidence are silently
+ * skipped — the raw event remains observable on
  * `client:claude-code.statusline.received`.
  *
  * Also registers request handlers for all six `config.*` subjects, delegating
@@ -85,6 +89,16 @@ const CLIENT_ID = 'claude-code';
 const MANAGED_SESSION_CAP = 10_000;
 
 /**
+ * Maximum number of per-statusline session identities retained for usage
+ * attribution.
+ *
+ * Uses the same cap as adapter-managed sessions because both collections are
+ * keyed by Claude Code session IDs and share the same long-lived service
+ * lifecycle.
+ */
+const SESSION_IDENTITY_CACHE_CAP = MANAGED_SESSION_CAP;
+
+/**
  * Runtime service for the Claude Code client.
  *
  * Listens to the raw hook catch-all ingress subject
@@ -118,6 +132,19 @@ export class ClaudeCodeClientService extends BaseService {
    * emissions for sessions that the adapter path already covers.
    */
   private readonly managedAdapterSessionIds = new Set<string>();
+
+  /**
+   * Per-session identity cache for statusline usage attribution.
+   *
+   * Identity is pinned on the **first** statusline event for each `session_id`
+   * so that a long-running turn (e.g. 20 minutes) continues to attribute usage
+   * to the account that started the session, even if the user switches accounts
+   * in another terminal mid-turn.
+   *
+   * Bounded at {@link SESSION_IDENTITY_CACHE_CAP} entries — the oldest identity
+   * is evicted (FIFO) before inserting a new session when the cap is reached.
+   */
+  private readonly sessionIdentityCache = new Map<string, StatuslineIdentityContext>();
 
   /**
    * Cached promise for the resolved config directory.
@@ -238,10 +265,12 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Clear the adapter-managed session ID set and config dir cache on teardown.
+   * Clear the adapter-managed session ID set, session identity cache, and
+   * config dir cache on teardown.
    */
   protected override onDestroy(): void {
     this.managedAdapterSessionIds.clear();
+    this.sessionIdentityCache.clear();
     this.cachedConfigDir = undefined;
   }
 
@@ -338,20 +367,32 @@ export class ClaudeCodeClientService extends BaseService {
 
   /**
    * Receive a raw statusline payload and forward it to `client.usage.ingest`
-   * when a linked session account is available.
+   * when an account identity can be resolved.
    *
-   * The method resolves identity in three steps:
+   * Identity resolution proceeds in two stages, but is performed **only once
+   * per `session_id`** — subsequent statusline events for the same session
+   * reuse the cached identity.  This guarantees that a long-running turn
+   * (e.g. 20 minutes) continues attributing usage to the account that started
+   * the session, even if the user switches accounts in another terminal
+   * mid-turn.
+   *
+   * **Primary — session-based identity:**
    * 1. Extract `session_id` from the raw payload; return early when absent.
    * 2. Look up the session via {@link SessionStorageSubjects.getByAdapterSessionId}
    *    using `requestOptional` so a missing storage handler (e.g. in early boot
    *    or test isolation) is treated as a skip rather than an error.
-   * 3. Read `clientAccountId` and the stored identifiers from the session; return
-   *    early when either is absent.
+   * 3. Read `clientAccountId` and the stored identifiers from the session.
    *
-   * When all three steps succeed, the resolved identity context is passed to
-   * {@link normalizeClaudeCodeStatusline} together with the raw payload, and the
-   * result is forwarded to `client.usage.ingest` via `bus.requestOptional`
-   * (no-op when no handler is registered, e.g. during early boot).
+   * **Fallback — active account identity from `ClientRuntimeService`:**
+   * When the session lookup does not yield a linked account (no handler, null
+   * session, or missing `clientAccountId`), the service queries
+   * `client.account.getActive` for `clientId === 'claude-code'`.  This covers
+   * standalone Claude Code processes where no Makaio session exists but the
+   * account-manager has already signalled the active identity via
+   * `client.account.activate`.
+   *
+   * When neither stage resolves an identity the method returns early and the
+   * raw event remains observable on `client:claude-code.statusline.received`.
    * @param raw - Raw statusline payload delivered on
    *   `client:claude-code.statusline.received`
    */
@@ -359,15 +400,49 @@ export class ClaudeCodeClientService extends BaseService {
     const adapterSessionId = raw.session_id;
     if (!adapterSessionId) return;
 
-    const sessionResult = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
-      adapterSessionId,
-    });
-    if (!sessionResult.handled || !sessionResult.data.session) return;
+    // 1. Check session identity cache (pinned on first resolution).
+    let identity: StatuslineIdentityContext | null = this.sessionIdentityCache.get(adapterSessionId) ?? null;
 
-    const session = sessionResult.data.session;
-    if (!session.clientAccountId) return;
+    // 2. Primary path: resolve identity from a linked Makaio session.
+    if (!identity) {
+      const sessionResult = await this.bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId,
+      });
+      if (sessionResult.handled && sessionResult.data.session) {
+        identity = resolveIdentityFromSession(sessionResult.data.session);
+      }
+    }
 
-    const identity = resolveIdentityFromSession(session);
+    // 3. Fallback: use the active account identity signalled by the account-manager.
+    //    This covers standalone Claude Code (no session exists yet or no storage
+    //    handler is registered).
+    if (!identity) {
+      const activeResult = await this.bus.requestOptional(ClientSubjects.account.getActive, {
+        clientId: CLIENT_ID,
+      });
+      if (activeResult.handled && activeResult.data.identity) {
+        identity = activeResult.data.identity;
+      }
+    }
+
+    // Pin identity for this session so future account switches don't affect attribution.
+    // Concurrent statusline events may resolve in either order; once one handler
+    // pins an identity, all in-flight handlers must use that pinned value.
+    if (identity) {
+      const cachedIdentity = this.sessionIdentityCache.get(adapterSessionId);
+      if (cachedIdentity) {
+        identity = cachedIdentity;
+      } else {
+        if (this.sessionIdentityCache.size >= SESSION_IDENTITY_CACHE_CAP) {
+          const oldest = this.sessionIdentityCache.keys().next().value;
+          if (oldest !== undefined) {
+            this.sessionIdentityCache.delete(oldest);
+          }
+        }
+        this.sessionIdentityCache.set(adapterSessionId, identity);
+      }
+    }
+
     if (!identity) return;
 
     const normalized = normalizeClaudeCodeStatusline(raw, identity);

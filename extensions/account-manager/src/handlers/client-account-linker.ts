@@ -78,17 +78,51 @@ export class ClientAccountLinker {
     }
 
     const result = await this.observeClientAccount(request);
-    if (!result || account.linkedClientAccountId === result.clientAccountId) {
+    if (!result) {
       return;
     }
 
+    if (account.linkedClientAccountId !== result.clientAccountId) {
+      try {
+        await this.deps.metadataStore.setLinkedClientAccountId(clientId, account.id, result.clientAccountId);
+      } catch (error) {
+        console.error(
+          `[ClientAccountLinker] Failed to persist linked client account for ${clientId}:${account.id}:`,
+          error,
+        );
+      }
+    }
+
+    if (account.active && request.identifiers.length > 0) {
+      await this.signalActiveIdentity(clientId, result.clientAccountId, request);
+    }
+  }
+
+  /**
+   * Signal the active account identity to `ClientRuntimeService` via
+   * `client.account.activate`.
+   *
+   * Best-effort: failures are silently swallowed because the activate signal
+   * is a runtime convenience for services that lack session context (e.g.
+   * standalone Claude Code). Missing it never breaks the linking flow.
+   * @param clientId - Stable client identifier
+   * @param clientAccountId - Canonical account ID returned by `account.observe`
+   * @param request - Observation request that carries resolved identifiers and label
+   */
+  private async signalActiveIdentity(
+    clientId: string,
+    clientAccountId: string,
+    request: NonNullable<ReturnType<typeof buildClientAccountObserveRequest>>,
+  ): Promise<void> {
     try {
-      await this.deps.metadataStore.setLinkedClientAccountId(clientId, account.id, result.clientAccountId);
-    } catch (error) {
-      console.error(
-        `[ClientAccountLinker] Failed to persist linked client account for ${clientId}:${account.id}:`,
-        error,
-      );
+      await this.deps.bus.requestOptional(ClientSubjects.account.activate, {
+        clientId,
+        clientAccountId,
+        identifiers: request.identifiers,
+        displayLabel: request.displayLabel,
+      });
+    } catch {
+      // Activate is best-effort — do not propagate failures.
     }
   }
 

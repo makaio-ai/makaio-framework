@@ -584,4 +584,90 @@ describe('ClientRuntimeService', () => {
       ).rejects.toThrow('hard-evidence');
     });
   });
+
+  describe('account.activate and account.getActive', () => {
+    it('account.getActive returns null when no activation has been signalled', async () => {
+      const result = await bus.request(ClientSubjects.account.getActive, {
+        clientId: 'claude-code',
+      });
+      expect(result.identity).toBeNull();
+    });
+
+    it('account.activate stores the identity and account.getActive retrieves it', async () => {
+      const activateResult = await bus.request(ClientSubjects.account.activate, {
+        clientId: 'claude-code',
+        clientAccountId: 'ca-activate-1',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-1:org-1', strength: 'strong' }],
+        displayLabel: 'Test User',
+      });
+
+      expect(activateResult.accepted).toBe(true);
+
+      const getActiveResult = await bus.request(ClientSubjects.account.getActive, {
+        clientId: 'claude-code',
+      });
+
+      expect(getActiveResult.identity).toEqual({
+        clientAccountId: 'ca-activate-1',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-1:org-1', strength: 'strong' }],
+        displayLabel: 'Test User',
+      });
+    });
+
+    it('account.activate overwrites a previous activation for the same clientId', async () => {
+      await bus.request(ClientSubjects.account.activate, {
+        clientId: 'claude-code',
+        clientAccountId: 'ca-old',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-old:org-old', strength: 'strong' }],
+      });
+
+      await bus.request(ClientSubjects.account.activate, {
+        clientId: 'claude-code',
+        clientAccountId: 'ca-new',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-new:org-new', strength: 'strong' }],
+        displayLabel: 'New User',
+      });
+
+      const result = await bus.request(ClientSubjects.account.getActive, { clientId: 'claude-code' });
+
+      expect(result.identity?.clientAccountId).toBe('ca-new');
+      expect(result.identity?.displayLabel).toBe('New User');
+    });
+
+    it('account.activate is keyed per clientId — different clients do not interfere', async () => {
+      await bus.request(ClientSubjects.account.activate, {
+        clientId: 'claude-code',
+        clientAccountId: 'ca-claude',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-claude:org-claude', strength: 'strong' }],
+      });
+
+      await bus.request(ClientSubjects.account.activate, {
+        clientId: 'codex',
+        clientAccountId: 'ca-codex',
+        identifiers: [{ scheme: 'account-id', value: 'codex-acct-1', strength: 'strong' }],
+      });
+
+      const claudeResult = await bus.request(ClientSubjects.account.getActive, { clientId: 'claude-code' });
+      const codexResult = await bus.request(ClientSubjects.account.getActive, { clientId: 'codex' });
+      const unknownResult = await bus.request(ClientSubjects.account.getActive, { clientId: 'unknown-client' });
+
+      expect(claudeResult.identity?.clientAccountId).toBe('ca-claude');
+      expect(codexResult.identity?.clientAccountId).toBe('ca-codex');
+      expect(unknownResult.identity).toBeNull();
+    });
+
+    it('account.getActive returns null after service destroy and reinit', async () => {
+      await bus.request(ClientSubjects.account.activate, {
+        clientId: 'claude-code',
+        clientAccountId: 'ca-pre-destroy',
+        identifiers: [{ scheme: 'account-org-uuid', value: 'acct-d:org-d', strength: 'strong' }],
+      });
+
+      await service.destroy();
+      await service.init();
+
+      const result = await bus.request(ClientSubjects.account.getActive, { clientId: 'claude-code' });
+      expect(result.identity).toBeNull();
+    });
+  });
 });

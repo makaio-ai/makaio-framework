@@ -89,10 +89,22 @@ const SESSION_EVENTS_DESCRIPTORS = deriveSessionEventDescriptors(clientDefinitio
 /**
  * Build the statusline command string.
  * @param makaioCommand - The Makaio CLI binary name or path (e.g. `'makaio'`).
+ * @param upstreamCommand - Existing shell command to proxy through the
+ *   statusline bridge.
  * @returns The full statusline command string.
  */
-function buildStatuslineCommand(makaioCommand: string): string {
-  return buildClientCommand(makaioCommand, STATUSLINE_COMMAND_SENTINEL.split(' '));
+function buildStatuslineCommand(makaioCommand: string, upstreamCommand?: string): string {
+  const args =
+    upstreamCommand === undefined
+      ? STATUSLINE_COMMAND_SENTINEL.split(' ')
+      : [
+          ...STATUSLINE_COMMAND_SENTINEL.split(' '),
+          '--upstream-command',
+          'sh',
+          '--upstream-args-json',
+          JSON.stringify(['-c', upstreamCommand]),
+        ];
+  return buildClientCommand(makaioCommand, args);
 }
 
 /**
@@ -200,12 +212,20 @@ export async function buildClaudeCodeWiringList(
  * Install all Makaio wiring entries into the specified Claude Code settings
  * scope.
  *
- * Each session-events hook is added via {@link ClaudeCodeClientSettings.addHook}.
- * The statusline entry is written via {@link ClaudeCodeClientSettings.setStatusline}.
+ * Each session-events hook is added via {@link ClaudeCodeClientSettings.addHook}
+ * with `matcher: ''` for catch-all matching.  The statusline entry is written
+ * via {@link ClaudeCodeClientSettings.setStatusline}.
+ *
  * The operation uses replace semantics when `makaioCommand` changes: if a hook
  * for an event already contains the sentinel but with a different command
  * prefix, the old hook is removed before the new one is added.  When the
  * identical command is already present the entry is counted as skipped.
+ *
+ * **Statusline pass-through:** when the target scope already has a non-Makaio
+ * statusline command, the previous shell command is preserved by passing it to
+ * the statusline bridge as an upstream `sh -c` renderer.  Makaio-managed entries
+ * (those whose command contains `STATUSLINE_COMMAND_SENTINEL`) are never
+ * double-wrapped.
  * @param settings - Settings instance scoped to the target project directory.
  * @param scope - Claude Code settings scope to write into (`'user'`, `'project'`,
  *   or `'local'`).
@@ -252,6 +272,7 @@ export async function applyClaudeCodeWiring(
     const result = await settings.addHook({
       scope,
       eventName,
+      matcher: '',
       hook: { type: 'command', command },
     });
     if (result.added) {
@@ -261,7 +282,17 @@ export async function applyClaudeCodeWiring(
     }
   }
 
-  const statuslineCommand = buildStatuslineCommand(makaioCommand);
+  // Read the current per-scope statusline so we can embed an existing non-Makaio
+  // command as --upstream, preserving the previous statusline in pass-through mode.
+  const { perScope: statuslinePerScope } = await settings.listStatusline();
+  const existingScopedStatusline = statuslinePerScope.find((e) => e.scope === scope)?.value ?? null;
+  const existingStatuslineCommand =
+    existingScopedStatusline !== null && !existingScopedStatusline.command.includes(STATUSLINE_COMMAND_SENTINEL)
+      ? existingScopedStatusline.command
+      : null;
+
+  const statuslineCommand = buildStatuslineCommand(makaioCommand, existingStatuslineCommand ?? undefined);
+
   const statuslineResult = await settings.setStatusline({
     scope,
     value: { type: 'command', command: statuslineCommand },
