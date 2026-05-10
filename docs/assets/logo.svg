@@ -1,0 +1,29 @@
+<svg viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .makaio-m { stroke: #1e1e2e; }
+    @media (prefers-color-scheme: dark) {
+      .makaio-m { stroke: #ffffff; }
+    }
+  </style>
+
+  <g transform="translate(200, 200)" stroke-width="24" stroke-linecap="round" fill="none">
+    <path d="M -92 92 A 130 130 0 0 1 -92 -92" stroke="#8a2be2" opacity="0.8" />
+    <path d="M -112.6 -65 A 130 130 0 0 1 112.6 -65" stroke="#00bfff" opacity="0.8" />
+    <path d="M 92 -92 A 130 130 0 0 1 92 92" stroke="#ffd700" opacity="0.8" />
+    <path d="M 120 50 A 130 130 0 0 1 0 130" stroke="#ff8c00" opacity="0.8" />
+    <path d="M 50 120 A 130 130 0 0 1 -120 50" stroke="#ff1493" opacity="0.8" />
+  </g>
+
+  <defs>
+    <clipPath id="makaio-logo-clip">
+      <rect x="14" y="-50" width="100" height="150" transform="rotate(-15 14 5)" />
+    </clipPath>
+  </defs>
+
+  <g transform="translate(195, 195) scale(1.5)" class="makaio-m" stroke-width="9" stroke-linecap="round" fill="none">
+    <path d="M -42 35 L -42 -5 A 21 21 0 0 1 0 -5 L 0 35" />
+    <g clip-path="url(#makaio-logo-clip)">
+      <path d="M 4 -5 A 21 21 0 0 1 46 -5 L 46 35" />
+    </g>
+  </g>
+</svg>
