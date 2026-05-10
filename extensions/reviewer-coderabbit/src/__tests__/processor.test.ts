@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { extractDetailsBlock, parseDiffSuggestions, stripCodeRabbitMetadata } from '../processor.js';
+import {
+  extractDetailsBlock,
+  parseDiffSuggestions,
+  parseNitpickSection,
+  stripCodeRabbitMetadata,
+} from '../processor.js';
 
 describe('extractDetailsBlock', () => {
   it('skips malformed details blocks and still finds later matching sections', () => {
@@ -36,6 +41,37 @@ describe('stripCodeRabbitMetadata', () => {
     expect(cleaned).not.toContain('review_rate_limit_status_end');
     expect(cleaned).not.toContain('"remaining":0');
     expect(cleaned).not.toContain('coderabbit-comment-id');
+  });
+});
+
+describe('parseNitpickSection', () => {
+  it('skips unterminated file blocks and still parses later valid blocks', () => {
+    const findings = parseNitpickSection(
+      [
+        '<details>',
+        '<summary>src/malformed.ts</summary>',
+        '**Malformed block.**',
+        '<details>',
+        '<summary>src/valid.ts</summary>',
+        '**Valid nitpick.**',
+        'Keep this finding.',
+        '</details>',
+      ].join('\n'),
+      {
+        sourceId: 'source-1',
+        target: {
+          repository: 'makaio-ai/makaio-framework',
+          prNumber: 123,
+        },
+        reviews: [],
+      },
+      456,
+      1_778_444_800_000,
+    );
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.file).toBe('src/valid.ts');
+    expect(findings[0]?.message).toContain('Valid nitpick.');
   });
 });
 
