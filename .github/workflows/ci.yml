@@ -57,7 +57,10 @@ jobs:
             setup_bun: true
             setup_playwright: true
           - name: Framework Build
-            command: yarn build:workspaces
+            command: yarn build:framework
+            setup_bun: true
+          - name: Extension Build
+            command: yarn build:framework && yarn build:extensions
             setup_bun: true
     name: ${{ matrix.name }}
 
@@ -66,7 +69,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Enable Corepack
         run: corepack enable
@@ -99,7 +102,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-22-${{ hashFiles('yarn.lock') }}
+          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
       - name: Install dependencies
         run: yarn install --immutable
@@ -118,7 +121,7 @@ jobs:
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae
         with:
           path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-22-${{ hashFiles('yarn.lock') }}
+          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
       - name: Install Python SDK dependencies
         if: matrix.setup_python == true
