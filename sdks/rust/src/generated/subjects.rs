@@ -2,6 +2,7 @@
 //! Subject bindings generated from `framework/sdks/manifest/makaio-bus-protocol.json`.
 #![allow(non_snake_case)]
 
+use crate::bus::{EventSubject, RequestSubject};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -22,60 +23,436 @@ pub enum SubjectKind {
 }
 
 pub mod agent {
+    use super::{EventSubject, RequestSubject, Value};
+
     pub const COMPLETE: &str = "agent.complete";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Complete;
+    impl EventSubject for Complete {
+        type Payload = Value;
+        const SUBJECT: &'static str = COMPLETE;
+    }
+
     pub const CONTEXT_WINDOW_UPDATED: &str = "agent.contextWindow.updated";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ContextWindowUpdated;
+    impl EventSubject for ContextWindowUpdated {
+        type Payload = Value;
+        const SUBJECT: &'static str = CONTEXT_WINDOW_UPDATED;
+    }
+
     pub const CREDENTIAL_CHANGE: &str = "agent.credential.change";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CredentialChange;
+    impl RequestSubject for CredentialChange {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = CREDENTIAL_CHANGE;
+    }
+
     pub const CWD_CHANGE: &str = "agent.cwd.change";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CwdChange;
+    impl RequestSubject for CwdChange {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = CWD_CHANGE;
+    }
+
     pub const CWD_CHANGED: &str = "agent.cwd.changed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CwdChanged;
+    impl EventSubject for CwdChanged {
+        type Payload = Value;
+        const SUBJECT: &'static str = CWD_CHANGED;
+    }
+
     pub const GET_CAPABILITIES: &str = "agent.getCapabilities";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct GetCapabilities;
+    impl RequestSubject for GetCapabilities {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = GET_CAPABILITIES;
+    }
+
     pub const IDLE: &str = "agent.idle";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Idle;
+    impl EventSubject for Idle {
+        type Payload = Value;
+        const SUBJECT: &'static str = IDLE;
+    }
+
     pub const MESSAGE: &str = "agent.message";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Message;
+    impl EventSubject for Message {
+        type Payload = super::AgentMessagePayload;
+        const SUBJECT: &'static str = MESSAGE;
+    }
+
     pub const MESSAGE_DELTA: &str = "agent.message_delta";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MessageDelta;
+    impl EventSubject for MessageDelta {
+        type Payload = Value;
+        const SUBJECT: &'static str = MESSAGE_DELTA;
+    }
+
     pub const MODEL_CHANGE: &str = "agent.model.change";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ModelChange;
+    impl RequestSubject for ModelChange {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = MODEL_CHANGE;
+    }
+
     pub const MODEL_CHANGED: &str = "agent.model.changed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ModelChanged;
+    impl EventSubject for ModelChanged {
+        type Payload = Value;
+        const SUBJECT: &'static str = MODEL_CHANGED;
+    }
+
     pub const REASONING: &str = "agent.reasoning";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Reasoning;
+    impl EventSubject for Reasoning {
+        type Payload = Value;
+        const SUBJECT: &'static str = REASONING;
+    }
+
     pub const REASONING_DELTA: &str = "agent.reasoning_delta";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ReasoningDelta;
+    impl EventSubject for ReasoningDelta {
+        type Payload = Value;
+        const SUBJECT: &'static str = REASONING_DELTA;
+    }
+
     pub const SEND_MESSAGE: &str = "agent.sendMessage";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SendMessage;
+    impl RequestSubject for SendMessage {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = SEND_MESSAGE;
+    }
+
     pub const SESSION_CLOSED: &str = "agent.session.closed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SessionClosed;
+    impl EventSubject for SessionClosed {
+        type Payload = Value;
+        const SUBJECT: &'static str = SESSION_CLOSED;
+    }
+
     pub const STARTED: &str = "agent.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Started;
+    impl EventSubject for Started {
+        type Payload = super::AgentStartedPayload;
+        const SUBJECT: &'static str = STARTED;
+    }
+
     pub const STEP_FINISHED: &str = "agent.step.finished";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StepFinished;
+    impl EventSubject for StepFinished {
+        type Payload = Value;
+        const SUBJECT: &'static str = STEP_FINISHED;
+    }
+
     pub const STEP_STARTED: &str = "agent.step.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StepStarted;
+    impl EventSubject for StepStarted {
+        type Payload = Value;
+        const SUBJECT: &'static str = STEP_STARTED;
+    }
+
     pub const TOOL_COMPLETED: &str = "agent.tool.completed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ToolCompleted;
+    impl EventSubject for ToolCompleted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TOOL_COMPLETED;
+    }
+
     pub const TOOL_OUTPUT: &str = "agent.tool.output";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ToolOutput;
+    impl EventSubject for ToolOutput {
+        type Payload = Value;
+        const SUBJECT: &'static str = TOOL_OUTPUT;
+    }
+
     pub const TOOL_STARTED: &str = "agent.tool.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ToolStarted;
+    impl EventSubject for ToolStarted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TOOL_STARTED;
+    }
+
     pub const TOOL_USE: &str = "agent.tool.use";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ToolUse;
+    impl EventSubject for ToolUse {
+        type Payload = Value;
+        const SUBJECT: &'static str = TOOL_USE;
+    }
+
     pub const TOOL_APPROVE: &str = "agent.toolApprove";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ToolApprove;
+    impl RequestSubject for ToolApprove {
+        type Request = super::AgentToolApproveRequest;
+        type Response = super::AgentToolApproveResponse;
+        const SUBJECT: &'static str = TOOL_APPROVE;
+    }
+
     pub const TURN_COMPLETED: &str = "agent.turn.completed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TurnCompleted;
+    impl EventSubject for TurnCompleted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TURN_COMPLETED;
+    }
+
     pub const TURN_STARTED: &str = "agent.turn.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TurnStarted;
+    impl EventSubject for TurnStarted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TURN_STARTED;
+    }
+
     pub const USAGE: &str = "agent.usage";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Usage;
+    impl EventSubject for Usage {
+        type Payload = Value;
+        const SUBJECT: &'static str = USAGE;
+    }
+
     pub const USER_MESSAGE_ACKNOWLEDGED: &str = "agent.user_message.acknowledged";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UserMessageAcknowledged;
+    impl EventSubject for UserMessageAcknowledged {
+        type Payload = Value;
+        const SUBJECT: &'static str = USER_MESSAGE_ACKNOWLEDGED;
+    }
+
     pub const USER_MESSAGE_COMPLETED: &str = "agent.user_message.completed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UserMessageCompleted;
+    impl EventSubject for UserMessageCompleted {
+        type Payload = Value;
+        const SUBJECT: &'static str = USER_MESSAGE_COMPLETED;
+    }
+
     pub const USER_MESSAGE_SENT: &str = "agent.user_message.sent";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UserMessageSent;
+    impl EventSubject for UserMessageSent {
+        type Payload = Value;
+        const SUBJECT: &'static str = USER_MESSAGE_SENT;
+    }
+
     pub const VALIDATE_MODEL_CHANGE: &str = "agent.validateModelChange";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ValidateModelChange;
+    impl RequestSubject for ValidateModelChange {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = VALIDATE_MODEL_CHANGE;
+    }
 }
 
 pub mod approval {
+    use super::{RequestSubject, Value};
+
     pub const REQUEST: &str = "approval.request";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Request;
+    impl RequestSubject for Request {
+        type Request = super::ApprovalRequest;
+        type Response = super::ApprovalResponse;
+        const SUBJECT: &'static str = REQUEST;
+    }
+
     pub const RESOLVE_ENRICHED_POLICY: &str = "approval.resolveEnrichedPolicy";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct ResolveEnrichedPolicy;
+    impl RequestSubject for ResolveEnrichedPolicy {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = RESOLVE_ENRICHED_POLICY;
+    }
 }
 
 pub mod session {
+    use super::{EventSubject, RequestSubject, Value};
+
     pub const AGENT_ADDED: &str = "session.agent.added";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct AgentAdded;
+    impl EventSubject for AgentAdded {
+        type Payload = Value;
+        const SUBJECT: &'static str = AGENT_ADDED;
+    }
+
     pub const CREATED: &str = "session.created";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Created;
+    impl EventSubject for Created {
+        type Payload = Value;
+        const SUBJECT: &'static str = CREATED;
+    }
+
     pub const SEND_MESSAGE: &str = "session.sendMessage";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SendMessage;
+    impl RequestSubject for SendMessage {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = SEND_MESSAGE;
+    }
+
     pub const TURN_COMPLETED: &str = "session.turn.completed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TurnCompleted;
+    impl EventSubject for TurnCompleted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TURN_COMPLETED;
+    }
+
     pub const TURN_STARTED: &str = "session.turn.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TurnStarted;
+    impl EventSubject for TurnStarted {
+        type Payload = Value;
+        const SUBJECT: &'static str = TURN_STARTED;
+    }
+
     pub const USER_MESSAGE_SENT: &str = "session.user_message.sent";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UserMessageSent;
+    impl EventSubject for UserMessageSent {
+        type Payload = Value;
+        const SUBJECT: &'static str = USER_MESSAGE_SENT;
+    }
 }
 
 pub mod tool {
+    use super::{EventSubject, RequestSubject, Value};
+
     pub const COMPLETED: &str = "tool.completed";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Completed;
+    impl EventSubject for Completed {
+        type Payload = super::ToolCompletedPayload;
+        const SUBJECT: &'static str = COMPLETED;
+    }
+
     pub const ERROR: &str = "tool.error";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Error;
+    impl EventSubject for Error {
+        type Payload = super::ToolErrorPayload;
+        const SUBJECT: &'static str = ERROR;
+    }
+
     pub const EXECUTE: &str = "tool.execute";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Execute;
+    impl RequestSubject for Execute {
+        type Request = super::ToolExecuteRequest;
+        type Response = super::ToolExecuteResponse;
+        const SUBJECT: &'static str = EXECUTE;
+    }
+
     pub const LIST: &str = "tool.list";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct List;
+    impl RequestSubject for List {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = LIST;
+    }
+
     pub const REGISTERED: &str = "tool.registered";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Registered;
+    impl EventSubject for Registered {
+        type Payload = super::ToolRegisteredPayload;
+        const SUBJECT: &'static str = REGISTERED;
+    }
+
     pub const REGISTRY_CHANGED: &str = "tool.registryChanged";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RegistryChanged;
+    impl EventSubject for RegistryChanged {
+        type Payload = super::ToolRegistryChangedPayload;
+        const SUBJECT: &'static str = REGISTRY_CHANGED;
+    }
+
     pub const STARTED: &str = "tool.started";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Started;
+    impl EventSubject for Started {
+        type Payload = super::ToolLifecyclePayload;
+        const SUBJECT: &'static str = STARTED;
+    }
 }
 
 pub const SUBJECTS: &[ProtocolSubject] = &[

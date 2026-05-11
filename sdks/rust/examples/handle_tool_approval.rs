@@ -21,9 +21,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bus = BusClient::connect(&url).await?;
 
     let _approval_handler = bus
-        .on_request_with_priority(subjects::approval::REQUEST, 100, |request| async move {
+        .on_request_with_priority(subjects::approval::REQUEST, 100, |ctx| async move {
             let req: ApprovalRequest =
-                serde_json::from_value(request.payload.clone()).map_err(|e| BusTransportError {
+                serde_json::from_value(ctx.payload()).map_err(|e| BusTransportError {
                     message: e.to_string(),
                     code: Some("DESERIALIZE_ERROR".to_string()),
                     subject: Some(subjects::approval::REQUEST.to_string()),
@@ -43,14 +43,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ApprovalResponse::Allow { updated_input: None }
             };
 
-            serialize(response, subjects::approval::REQUEST)
+            ctx.set_result(serialize(response, subjects::approval::REQUEST)?);
+            Ok(())
         })
         .await?;
 
     let _tool_handler = bus
-        .on_request(subjects::tool::EXECUTE, |request| async move {
+        .on_request(subjects::tool::EXECUTE, |ctx| async move {
             let req: ToolExecuteRequest =
-                serde_json::from_value(request.payload.clone()).map_err(|e| BusTransportError {
+                serde_json::from_value(ctx.payload()).map_err(|e| BusTransportError {
                     message: e.to_string(),
                     code: Some("DESERIALIZE_ERROR".to_string()),
                     subject: Some(subjects::tool::EXECUTE.to_string()),
@@ -62,7 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     success: true,
                     data: req.input,
                 });
-                serialize(response, subjects::tool::EXECUTE)
+                ctx.set_result(serialize(response, subjects::tool::EXECUTE)?);
+                Ok(())
             } else {
                 Err(BusTransportError {
                     message: format!("Unsupported tool `{}`", req.tool_name),
