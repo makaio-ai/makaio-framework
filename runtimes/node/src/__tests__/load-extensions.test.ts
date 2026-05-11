@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { ExtensionEntrypoints, MakaioExtension } from '@makaio/contracts';
 import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { attachExtensionCliContributions, loadExtensions, isWithinDirectory } from '../load-extensions.js';
@@ -48,7 +48,7 @@ const makeExtension = (
     entrypoints: { server: true as const },
     ...descriptorOverrides,
   };
-  const extensionPath = rest.extensionPath ?? createExtensionRoot(descriptor.name, descriptor.entrypoints);
+  const extensionPath = rest.extensionPath ?? createExtensionRoot(descriptor.name, descriptor.entrypoints ?? {});
   return {
     descriptor,
     extensionPath,
@@ -64,14 +64,14 @@ const makeExtension = (
  * @param entrypoints - Descriptor entrypoint declarations to materialize.
  * @returns Absolute extension fixture root.
  */
-function createExtensionRoot(name: string, entrypoints: DiscoveredExtension['descriptor']['entrypoints']): string {
+function createExtensionRoot(name: string, entrypoints: ExtensionEntrypoints): string {
   if (fixtureRoot === undefined) {
     fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'makaio-load-extensions-'));
   }
 
   const extensionPath = fs.mkdtempSync(path.join(fixtureRoot, `${name}-`));
   for (const [surface, entrypoint] of Object.entries(entrypoints) as Array<
-    [keyof DiscoveredExtension['descriptor']['entrypoints'], true | string | undefined]
+    [keyof ExtensionEntrypoints, true | string | undefined]
   >) {
     if (entrypoint === undefined) continue;
     const stem = entrypoint === true ? surface : entrypoint;
@@ -358,17 +358,86 @@ describe('loadExtensions', () => {
     expect(consoleSpy).toHaveBeenCalledOnce();
   });
 
-  it('skips extension with execution: detached', async () => {
+  it('synthesizes a managed package for extension with execution: detached', async () => {
+    const importModule = vi.fn(mockImport);
     const ext = makeExtension({
-      descriptorOverrides: { execution: 'detached' },
+      descriptorOverrides: {
+        entrypoints: undefined,
+        execution: 'detached',
+        transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
+      },
     });
 
     const result = await loadExtensions([ext], {
       frameworkVersion: FRAMEWORK_VERSION,
-      importModule: mockImport,
+      importModule,
+    });
+
+    expect(result.packages).toHaveLength(1);
+    expect(result.packages[0]?.name).toBe('test-ext');
+    expect(importModule).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
+  });
+
+  it('skips a detached extension whose package synthesis fails and continues loading others', async () => {
+    const brokenDescriptor = {
+      name: 'broken-detached',
+      displayName: 'Broken Detached',
+      version: '1.0.0',
+      makaio: { minVersion: '1.0.0' },
+      execution: 'detached',
+      transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
+    } satisfies DiscoveredExtension['descriptor'];
+    Object.defineProperty(brokenDescriptor, 'displayName', {
+      get: () => {
+        throw new Error('descriptor display name unavailable');
+      },
+    });
+    const validExt = makeExtension({
+      descriptorOverrides: {
+        name: 'valid-ext',
+        displayName: 'Valid Extension',
+      },
+    });
+
+    const result = await loadExtensions(
+      [
+        {
+          descriptor: brokenDescriptor,
+          extensionPath: createExtensionRoot('broken-detached', {}),
+          source: 'local',
+        },
+        validExt,
+      ],
+      {
+        frameworkVersion: FRAMEWORK_VERSION,
+        importModule: async () => ({ default: makePackage('valid-ext') }),
+      },
+    );
+
+    expect(result.packages.map((pkg) => pkg.name)).toStrictEqual(['valid-ext']);
+    expect(consoleSpy).toHaveBeenCalledOnce();
+    expect(consoleSpy.mock.calls[0]?.[0]).toContain('failed to synthesize detached extension package');
+  });
+
+  it('skips detached extension when minVersion exceeds current framework version', async () => {
+    const importModule = vi.fn(mockImport);
+    const ext = makeExtension({
+      descriptorOverrides: {
+        entrypoints: undefined,
+        makaio: { minVersion: '99.0.0' },
+        execution: 'detached',
+        transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
+      },
+    });
+
+    const result = await loadExtensions([ext], {
+      frameworkVersion: FRAMEWORK_VERSION,
+      importModule,
     });
 
     expect(result.packages).toHaveLength(0);
+    expect(importModule).not.toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledOnce();
   });
 

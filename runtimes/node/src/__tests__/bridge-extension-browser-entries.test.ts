@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { ExtensionEntrypoints, MakaioExtension } from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { bridgeExtensionBrowserEntries } from '../bridge-extension-browser-entries.js';
 
@@ -57,7 +57,7 @@ let fixtureRoot: string | undefined;
  * @param entrypoints - Descriptor entrypoint declarations to materialize.
  * @returns Absolute extension fixture root.
  */
-function createExtensionRoot(name: string, entrypoints: DiscoveredExtension['descriptor']['entrypoints']): string {
+function createExtensionRoot(name: string, entrypoints: ExtensionEntrypoints): string {
   if (fixtureRoot === undefined) {
     fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'makaio-bridge-browser-'));
   }

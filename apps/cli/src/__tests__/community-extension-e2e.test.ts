@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import * as url from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
-import type { ExtensionDescriptor } from '@makaio/contracts';
+import type { EmbeddedDescriptor } from '@makaio/contracts';
 import { resolveConventionEntrypoint } from '@makaio/runtime-node';
 import type { CliContribution } from '@makaio/kernel/cli';
 import { createMockBus } from '@makaio/test-utils';
@@ -31,7 +31,7 @@ const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'test-extension');
 // Fixture descriptor (matches fixtures/test-extension/descriptor.json)
 // ---------------------------------------------------------------------------
 
-const fixtureDescriptor: ExtensionDescriptor = {
+const fixtureDescriptor: EmbeddedDescriptor = {
   name: 'test-ext',
   displayName: 'Test Extension',
   version: '1.0.0',

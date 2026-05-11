@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import * as url from 'node:url';
-import type { ExtensionDescriptor } from '@makaio/contracts';
+import type { EmbeddedDescriptor, ExtensionEntrypoints } from '@makaio/contracts';
 import type { ExtensionSurface } from './extension-init.js';
 import { buildPortableScaffoldFiles } from './extension-scaffold-portable.js';
 import { buildVerifyTest } from './extension-verify-test.js';
@@ -140,7 +140,7 @@ function buildPackageJson(options: ExtensionScaffoldBuildOptions): string {
  * @returns JSON string with trailing newline.
  */
 function buildDescriptorJson(options: ExtensionScaffoldBuildOptions): string {
-  const descriptor: ExtensionDescriptor = {
+  const descriptor: EmbeddedDescriptor = {
     name: options.name,
     displayName: options.displayName,
     version: DEFAULT_EXTENSION_VERSION,
@@ -160,7 +160,7 @@ function buildDescriptorJson(options: ExtensionScaffoldBuildOptions): string {
  * @param surfaces - Selected surfaces.
  * @returns Convention-based entrypoints for the descriptor.
  */
-function buildDescriptorEntrypoints(surfaces: readonly ExtensionSurface[]): ExtensionDescriptor['entrypoints'] {
+function buildDescriptorEntrypoints(surfaces: readonly ExtensionSurface[]): ExtensionEntrypoints {
   return {
     ...(surfaces.includes('server') ? { server: true as const } : {}),
     ...(surfaces.includes('browser') ? { browser: true as const } : {}),
@@ -177,7 +177,7 @@ function buildDescriptorEntrypoints(surfaces: readonly ExtensionSurface[]): Exte
  * @param options - Normalized scaffold options.
  * @returns Minimal CLI manifest metadata.
  */
-function buildCliManifest(options: ExtensionScaffoldBuildOptions): NonNullable<ExtensionDescriptor['cli']> {
+function buildCliManifest(options: ExtensionScaffoldBuildOptions): NonNullable<EmbeddedDescriptor['cli']> {
   return {
     name: options.name,
     description: `CLI commands for ${options.displayName}`,

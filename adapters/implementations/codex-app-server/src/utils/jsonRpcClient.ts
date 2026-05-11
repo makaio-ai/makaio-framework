@@ -1,29 +1,7 @@
-import type { ServerNotification, ServerRequest } from '../protocol/generated/index.js';
+import { createJsonRpcClient as createGenericClient } from '@makaio/subprocess';
+import type { IJsonlTransport } from '@makaio/subprocess';
+import type { ServerRequest } from '../protocol/generated/index.js';
 import type { StdioTransport } from './createStdioTransport.js';
-
-/**
- * JSON-RPC 2.0 request identifier (number or string, must be unique)
- */
-type RequestId = number | string;
-
-/**
- * JSON-RPC 2.0 request message
- */
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: RequestId;
-  method: string;
-  params?: unknown;
-}
-
-/**
- * JSON-RPC 2.0 notification message
- */
-interface JsonRpcNotification {
-  jsonrpc: '2.0';
-  method: string;
-  params?: unknown;
-}
 
 /**
  * Handler for server requests (e.g., approval requests)
@@ -107,93 +85,29 @@ export interface JsonRpcClient {
  * ```
  */
 export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
-  let nextId = 1;
-  const pendingRequests = new Map<RequestId, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
-  const notificationHandlers = new Map<string, NotificationHandler>();
-  let serverRequestHandler: ServerRequestHandler | null = null;
+  // Bridge: wrap StdioTransport as IJsonlTransport for the generic client.
+  // StdioTransport uses single-callback registration (last-write-wins) while
+  // IJsonlTransport uses multi-listener sets with unsubscribe returns. The
+  // bridge satisfies the type contract; unsubscription is a no-op because
+  // StdioTransport does not support it.
+  const bridgedTransport: IJsonlTransport = {
+    send: (msg) => transport.send(msg),
+    close: () => transport.close(),
+    onMessage: (listener) => {
+      transport.onMessage((msg) => listener(msg));
+      return () => {};
+    },
+    onError: (listener) => {
+      transport.onError((err) => listener(err));
+      return () => {};
+    },
+    get process() {
+      return undefined as never;
+    },
+  };
 
-  /**
-   * Generate unique request ID
-   * @returns Unique request ID
-   */
-  function generateRequestId(): RequestId {
-    return nextId++;
-  }
-
-  /**
-   * Handle incoming messages from transport
-   */
-  transport.onMessage((message) => {
-    // Handle response to client request
-    if ('id' in message && 'result' in message) {
-      const pending = pendingRequests.get(message.id);
-      if (pending) {
-        pendingRequests.delete(message.id);
-        pending.resolve(message.result);
-      }
-      return;
-    }
-
-    // Handle response error
-    if ('id' in message && 'error' in message) {
-      const pending = pendingRequests.get(message.id);
-      if (pending) {
-        pendingRequests.delete(message.id);
-        const errorMessage = message.error as { code: number; message: string };
-        const error = new Error(`JSON-RPC error ${errorMessage.code}: ${errorMessage.message}`);
-        pending.reject(error);
-      }
-      return;
-    }
-
-    // Handle server request (approval)
-    if ('id' in message && 'method' in message) {
-      const serverRequest = message as ServerRequest;
-      if (serverRequestHandler) {
-        serverRequestHandler(serverRequest)
-          .then((result) => {
-            transport.send({
-              jsonrpc: '2.0',
-              id: serverRequest.id,
-              result,
-            });
-          })
-          .catch((error: Error) => {
-            console.warn(`[JsonRpcClient] serverRequestHandler error: ${error.message}`);
-            transport.send({
-              jsonrpc: '2.0',
-              id: serverRequest.id,
-              error: {
-                code: -32603,
-                message: error.message,
-              },
-            });
-          });
-      }
-      return;
-    }
-
-    // Handle notification
-    if ('method' in message && !('id' in message)) {
-      const notification = message as ServerNotification;
-      const handler = notificationHandlers.get(notification.method);
-      if (handler) {
-        handler(notification.method, notification.params);
-      }
-      return;
-    }
-  });
-
-  /**
-   * Handle errors from transport
-   */
-  transport.onError((error) => {
-    // Reject all pending requests with the error
-    for (const [id, pending] of pendingRequests.entries()) {
-      pending.reject(error);
-      pendingRequests.delete(id);
-    }
-  });
+  const generic = createGenericClient(bridgedTransport);
+  let serverRequestUnsubscribe: (() => void) | undefined;
 
   return {
     /**
@@ -203,21 +117,7 @@ export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
      * @returns Promise resolving to response result
      */
     request<T>(method: string, params: unknown): Promise<T> {
-      return new Promise<T>((resolve, reject) => {
-        const id = generateRequestId();
-        const request: JsonRpcRequest = {
-          jsonrpc: '2.0',
-          id,
-          method,
-          params,
-        };
-
-        pendingRequests.set(id, {
-          resolve: resolve as (value: unknown) => void,
-          reject,
-        });
-        transport.send(request);
-      });
+      return generic.request<T>(method, params);
     },
 
     /**
@@ -226,12 +126,7 @@ export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
      * @param params - Notification parameters
      */
     notification(method: string, params: unknown): void {
-      const notification: JsonRpcNotification = {
-        jsonrpc: '2.0',
-        method,
-        params,
-      };
-      transport.send(notification);
+      generic.notification(method, params);
     },
 
     /**
@@ -240,7 +135,7 @@ export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
      * @param handler - Function to handle notifications
      */
     onNotification(method: string, handler: NotificationHandler): void {
-      notificationHandlers.set(method, handler);
+      generic.onNotification(method, handler);
     },
 
     /**
@@ -248,20 +143,17 @@ export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
      * @param handler - Function to handle server requests
      */
     onServerRequest(handler: ServerRequestHandler): void {
-      serverRequestHandler = handler;
+      serverRequestUnsubscribe?.();
+      serverRequestUnsubscribe = generic.onServerRequest((req) => handler(req as ServerRequest));
     },
 
     /**
      * Close the client and cleanup resources
      */
     close(): void {
-      // Reject all pending requests
-      const error = new Error('JSON-RPC client closed');
-      for (const [id, pending] of pendingRequests.entries()) {
-        pending.reject(error);
-        pendingRequests.delete(id);
-      }
-      transport.close();
+      serverRequestUnsubscribe?.();
+      serverRequestUnsubscribe = undefined;
+      generic.close();
     },
   };
 }

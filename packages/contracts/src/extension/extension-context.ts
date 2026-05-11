@@ -91,4 +91,11 @@ export interface NodeExtensionContext extends ExtensionContext {
   readonly makaioHome: string;
   /** Current OS username. */
   readonly username: string;
+  /**
+   * WebSocket URL for the host bus, when the runtime exposes one.
+   *
+   * Detached `bus-websocket` extensions use this to connect back to the host.
+   * Hosts without a WebSocket bus omit it.
+   */
+  readonly busUrl?: string;
 }

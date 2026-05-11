@@ -15,6 +15,57 @@ import { z } from 'zod';
 import type { ExtensionManifest } from './manifest.js';
 import { ExtensionManifestSchema } from './manifest.js';
 
+// ---------------------------------------------------------------------------
+// Detached transport
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared fields for process-based transports.
+ *
+ * `command` is the executable to spawn (must be non-empty).
+ * `args` are additional arguments forwarded to the child process.
+ * `env` is a key-value map of environment variables to inject.
+ * `healthTimeoutMs` limits how long the runtime waits for the child to become
+ * healthy before treating startup as failed.
+ * `shutdownTimeoutMs` limits how long the runtime waits for a graceful stop.
+ */
+const ProcessTransportBaseSchema = z.object({
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  healthTimeoutMs: z.number().int().positive().optional(),
+  shutdownTimeoutMs: z.number().int().positive().optional(),
+});
+
+/**
+ * Restart policy for supervised child processes.
+ *
+ * - `'none'` — never restart (default).
+ * - `'on-crash'` — restart only on non-zero exit.
+ * - `'always'` — restart unconditionally.
+ */
+const RestartPolicySchema = z.enum(['none', 'on-crash', 'always']);
+
+const BusProcessTransportSchema = ProcessTransportBaseSchema.extend({
+  restartPolicy: RestartPolicySchema.optional(),
+});
+
+/**
+ * Discriminated union of supported transports for detached extensions.
+ *
+ * - `bus-stdio` — bidirectional Makaio bus over stdin/stdout.
+ * - `bus-websocket` — bidirectional Makaio bus over a WebSocket connection.
+ * - `mcp-stdio` — MCP protocol over stdin/stdout (no restart policy).
+ */
+export const DetachedTransportSchema = z.discriminatedUnion('type', [
+  BusProcessTransportSchema.extend({ type: z.literal('bus-stdio') }),
+  BusProcessTransportSchema.extend({ type: z.literal('bus-websocket') }),
+  ProcessTransportBaseSchema.extend({ type: z.literal('mcp-stdio') }),
+]);
+
+/** Inferred type from {@link DetachedTransportSchema}. */
+export type DetachedTransportConfig = z.infer<typeof DetachedTransportSchema>;
+
 /**
  * Convention-based entrypoint declarations for each runtime surface.
  *
@@ -109,27 +160,16 @@ export const ExtensionEntrypointsSchema = z
   ) satisfies z.ZodType<ExtensionEntrypoints>;
 
 /**
- * Descriptor for a Makaio extension.
+ * Shared base fields for all extension descriptors.
  *
- * This is the JSON-serializable contract between extension authors and the
- * Makaio runtime. All fields from {@link ExtensionManifest} are valid, plus
- * distribution-specific fields for versioning, entry points, and execution.
- * Runtime contribution registration still comes from the imported
- * {@link MakaioExtension}; descriptor contributions are only metadata.
+ * Contains the fields common to both embedded and detached descriptors,
+ * excluding `entrypoints` and `transport` which differ per execution mode.
  */
-export interface ExtensionDescriptor extends ExtensionManifest {
+export interface ExtensionDescriptorBase extends ExtensionManifest {
   /** SemVer version of the extension package. */
   readonly version: string;
   /** Minimum framework version required (plain SemVer version string). */
   readonly makaio: { readonly minVersion: string };
-  /** Convention-based entrypoint stems and enabled-surface flags per runtime surface. */
-  readonly entrypoints: ExtensionEntrypoints;
-  /**
-   * Handler execution mode.
-   * - `'embedded'` (default) — code is `import()`'d into the host process.
-   * - `'detached'` — reserved for future: isolated worker_thread.
-   */
-  readonly execution?: 'embedded' | 'detached';
   /**
    * Default configuration values for this extension.
    *
@@ -142,7 +182,85 @@ export interface ExtensionDescriptor extends ExtensionManifest {
   };
 }
 
-/** Zod schema for {@link ExtensionDescriptor}. */
+/**
+ * Descriptor for extensions running in the host process (default mode).
+ *
+ * `entrypoints` is required; `execution` is `'embedded'` or omitted.
+ * `transport` must be absent.
+ */
+export interface EmbeddedDescriptor extends ExtensionDescriptorBase {
+  /**
+   * Handler execution mode — `'embedded'` or omitted (defaults to embedded).
+   * Code is `import()`'d directly into the host process.
+   */
+  readonly execution?: 'embedded';
+  /**
+   * Convention-based entrypoint stems and enabled-surface flags per runtime
+   * surface. Required for embedded extensions.
+   */
+  readonly entrypoints: ExtensionEntrypoints;
+  /** Must be absent for embedded extensions. */
+  readonly transport?: undefined;
+}
+
+/**
+ * Descriptor for extensions running as child processes.
+ *
+ * `transport` is required; `execution` must be `'detached'`.
+ * `entrypoints` must be absent.
+ */
+export interface DetachedDescriptor extends ExtensionDescriptorBase {
+  /**
+   * Handler execution mode — must be `'detached'` for subprocess extensions.
+   * The extension runs as a child process communicating via the chosen transport.
+   */
+  readonly execution: 'detached';
+  /**
+   * Transport configuration for detached extensions.
+   *
+   * Specifies the IPC mechanism and process lifecycle options for the child
+   * process.
+   */
+  readonly transport: DetachedTransportConfig;
+  /** Must be absent for detached extensions. */
+  readonly entrypoints?: undefined;
+}
+
+/**
+ * Discriminated union of extension descriptor shapes.
+ *
+ * Narrows automatically via `execution` check:
+ * - `descriptor.execution === 'detached'` → `DetachedDescriptor`
+ * - Otherwise (including `undefined`) → `EmbeddedDescriptor`
+ *
+ * Use {@link isDetachedDescriptor} for an explicit type guard.
+ */
+export type ExtensionDescriptor = EmbeddedDescriptor | DetachedDescriptor;
+
+/**
+ * Type guard for detached extension descriptors.
+ *
+ * After this guard returns `true`, TypeScript narrows the descriptor to
+ * {@link DetachedDescriptor} where `transport` is required and `entrypoints`
+ * is absent.
+ * @param descriptor - The extension descriptor to check.
+ * @returns Whether the descriptor is for a detached (subprocess) extension.
+ */
+export function isDetachedDescriptor(descriptor: ExtensionDescriptor): descriptor is DetachedDescriptor {
+  return descriptor.execution === 'detached';
+}
+
+/**
+ * Zod schema for {@link ExtensionDescriptor}.
+ *
+ * Enforces execution-mode invariants via `superRefine`:
+ * - `execution === 'detached'` requires `transport`; `entrypoints` is optional.
+ * - All other modes (including the default embedded mode) require `entrypoints`.
+ *
+ * Note: `satisfies z.ZodType<ExtensionDescriptor>` is intentionally omitted
+ * because `superRefine` wraps the schema in `ZodEffects`, which is incompatible
+ * with that constraint.
+ */
 export const ExtensionDescriptorSchema = ExtensionManifestSchema.extend({
   version: z.string().min(1),
   makaio: z
@@ -152,11 +270,105 @@ export const ExtensionDescriptorSchema = ExtensionManifestSchema.extend({
       }),
     })
     .readonly(),
-  entrypoints: ExtensionEntrypointsSchema,
+  entrypoints: ExtensionEntrypointsSchema.optional(),
   execution: z.enum(['embedded', 'detached']).optional(),
+  transport: DetachedTransportSchema.optional(),
   config: z
     .object({
       defaults: z.record(z.string(), z.unknown()).optional(),
     })
     .optional(),
-}) satisfies z.ZodType<ExtensionDescriptor>;
+}).superRefine((descriptor, ctx) => {
+  if (descriptor.execution === 'detached') {
+    if (descriptor.transport === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "detached extensions must declare a 'transport' config",
+        path: ['transport'],
+      });
+    }
+    if (descriptor.entrypoints !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'detached extensions must not declare entrypoints',
+        path: ['entrypoints'],
+      });
+    }
+  } else {
+    if (descriptor.entrypoints === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'embedded extensions must declare at least one entrypoint',
+        path: ['entrypoints'],
+      });
+    }
+    if (descriptor.transport !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'embedded extensions must not declare a transport config',
+        path: ['transport'],
+      });
+    }
+  }
+});
+
+/**
+ * Inferred flat output type from {@link ExtensionDescriptorSchema}.
+ *
+ * Zod's `superRefine` cannot narrow the output to a discriminated union, so
+ * the raw inferred type has `entrypoints` and `transport` both optional. The
+ * schema validates the execution-mode invariant at runtime, and callers should
+ * use {@link parseExtensionDescriptor} or {@link safeParseExtensionDescriptor}
+ * to obtain the properly typed {@link ExtensionDescriptor}.
+ */
+type RawDescriptorOutput = z.infer<typeof ExtensionDescriptorSchema>;
+
+/**
+ * Cast a validated raw descriptor output to the {@link ExtensionDescriptor}
+ * discriminated union.
+ *
+ * This cast is safe because {@link ExtensionDescriptorSchema} enforces via
+ * `superRefine` that embedded descriptors have `entrypoints` and detached
+ * descriptors have `transport`, matching the union invariant exactly.
+ * @param raw - The raw validated output from the schema.
+ * @returns The descriptor cast to the discriminated union type.
+ */
+function castToDescriptor(raw: RawDescriptorOutput): ExtensionDescriptor {
+  return raw as ExtensionDescriptor;
+}
+
+/**
+ * Parse and validate an extension descriptor from raw JSON input.
+ *
+ * This is the typed wrapper around {@link ExtensionDescriptorSchema} that
+ * returns the {@link ExtensionDescriptor} discriminated union. Throws a Zod
+ * error on invalid input.
+ * @param input - Raw JSON-like value to parse.
+ * @returns Parsed and typed extension descriptor.
+ */
+export function parseExtensionDescriptor(input: unknown): ExtensionDescriptor {
+  return castToDescriptor(ExtensionDescriptorSchema.parse(input));
+}
+
+/** Result shape returned by {@link safeParseExtensionDescriptor}. */
+export type ExtensionDescriptorParseResult =
+  | { readonly success: true; readonly data: ExtensionDescriptor }
+  | { readonly success: false; readonly error: z.ZodError };
+
+/**
+ * Safely parse and validate an extension descriptor from raw JSON input.
+ *
+ * This is the typed wrapper around {@link ExtensionDescriptorSchema} that
+ * returns a result with the {@link ExtensionDescriptor} discriminated union on
+ * success.
+ * @param input - Raw JSON-like value to parse.
+ * @returns Parse result with `data` typed as {@link ExtensionDescriptor} on
+ *   success, or a Zod error on failure.
+ */
+export function safeParseExtensionDescriptor(input: unknown): ExtensionDescriptorParseResult {
+  const result = ExtensionDescriptorSchema.safeParse(input);
+  if (result.success) {
+    return { success: true, data: castToDescriptor(result.data) };
+  }
+  return result;
+}

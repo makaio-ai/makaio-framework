@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { transformSync } from 'esbuild';
-import { ExtensionDescriptorSchema, type ExtensionDescriptor } from '@makaio/contracts';
+import { parseExtensionDescriptor, type ExtensionDescriptor } from '@makaio/contracts';
 import * as platformNodeModule from '@makaio/runtime-node';
 import * as makaioConfigModule from '@makaio/runtime-node/makaio-config';
 import type { ExtensionDevEntry } from './vite-extension-dev-plugin.js';
@@ -169,7 +169,7 @@ interface ResolvedBrowserEntry {
  */
 function resolveDescriptorBrowserEntry(descriptorRoot: string, label: string): ResolvedBrowserEntry | undefined {
   const descriptor = readExtensionDescriptor(descriptorRoot);
-  if (descriptor?.entrypoints.browser === undefined) return undefined;
+  if (descriptor?.entrypoints?.browser === undefined) return undefined;
 
   const browserEntrypointValue = descriptor.entrypoints.browser;
   const browserStem = entrypointStem('browser', browserEntrypointValue);
@@ -490,7 +490,7 @@ function readExtensionDescriptor(descriptorRoot: string): ExtensionDescriptor | 
   const descriptorPath = path.join(descriptorRoot, 'descriptor.json');
   try {
     const raw = JSON.parse(fs.readFileSync(descriptorPath, 'utf-8')) as unknown;
-    return ExtensionDescriptorSchema.parse(raw);
+    return parseExtensionDescriptor(raw);
   } catch (error) {
     console.warn(
       `[extensions] Skipping invalid descriptor at ${descriptorPath}:`,

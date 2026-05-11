@@ -81,8 +81,8 @@ describe('ExplicitDescriptorDiscovery with browser-only fixture', () => {
 
     expect(discovered).toHaveLength(1);
     expect(discovered[0]?.descriptor.name).toBe('browser-ext');
-    expect(discovered[0]?.descriptor.entrypoints.browser).toBe('bundle/browser/index');
-    expect(discovered[0]?.descriptor.entrypoints.server).toBeUndefined();
+    expect(discovered[0]?.descriptor.entrypoints?.browser).toBe('bundle/browser/index');
+    expect(discovered[0]?.descriptor.entrypoints?.server).toBeUndefined();
   });
 
   it('synthesizeBrowserOnlyPackages produces a package with correct browser entrypoint', async () => {
