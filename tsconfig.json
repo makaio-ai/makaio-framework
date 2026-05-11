@@ -17,6 +17,7 @@
     "paths": {
       "@makaio/core": ["./packages/makaio-core/src/index.ts"],
       "@makaio/bus-core": ["./packages/bus-core/src/index.ts"],
+      "@makaio/subprocess": ["./packages/subprocess/src/index.ts"],
       "@makaio/service-base": ["./packages/services/base/src/index.ts"],
       "@makaio/bus-transport-websocket": ["./transports/ws/src/index.ts"],
       "@makaio/bus-transport-message-channel": ["./transports/message-channel/src/index.ts"],

@@ -14,6 +14,7 @@
  * - `onToolsChanged` is invoked when the server sends `tools/list_changed`
  * - `handle.tools` is live-updated when `onToolsChanged` fires
  */
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBusInstance } from '@makaio/bus-core';
@@ -25,15 +26,28 @@ import { startMcpClientBridge, type McpClientBridgeHandle } from '../mcp-client-
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE_PATH = path.resolve(TEST_DIR, 'fixtures/test-mcp-server.ts');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURE_PATH = path.resolve(__dirname, 'fixtures/test-mcp-server.ts');
 
 /**
- * Repo root: 5 levels up from `__tests__`
- * `__tests__` → `src` → `mcp-http-server` → `packages` → `framework` → `detached-extensions`
+ * Walk up from `startDir` looking for a bin script in `node_modules/.bin`,
+ * mirroring Node's own resolution so hoisted monorepo deps are found.
  */
-const REPO_ROOT = path.resolve(TEST_DIR, '../../../../../');
-const TSX_BIN = path.resolve(REPO_ROOT, 'node_modules/.bin/tsx');
+function resolveBin(name: string, startDir: string): string {
+  let dir = startDir;
+  for (;;) {
+    const candidate = path.join(dir, 'node_modules', '.bin', name);
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(`Cannot find "${name}" in any ancestor node_modules/.bin of ${startDir}`);
+    }
+    dir = parent;
+  }
+}
+
+const PACKAGE_ROOT = path.resolve(__dirname, '../..');
+const TSX_BIN = resolveBin('tsx', PACKAGE_ROOT);
 
 /**
  * Start a bridge connected to the fixture MCP server.
