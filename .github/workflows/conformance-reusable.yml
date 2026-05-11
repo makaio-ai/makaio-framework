@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Resolve PR metadata before checking out code that will receive provider
+      # API keys.
       - name: Reject fork pull requests
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
@@ -54,96 +56,234 @@ jobs:
               content: 'rocket',
             });
 
-  openai-node:
+  reference-smoke:
     needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: openai-node
-      provider_env_var: OPENAI_API_KEY
-      environment: conformance-openai-node
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
 
-  anthropic-sdk:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: anthropic-sdk
-      provider_env_var: ANTHROPIC_API_KEY
-      environment: conformance-anthropic-sdk
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
 
-  claude-agent-sdk:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: claude-agent-sdk
-      provider_env_var: OPENCODE_GO_API_KEY
-      environment: conformance-claude-agent-sdk
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Enable Corepack
+        run: corepack enable
 
-  claude-code-cli:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: claude-code-cli
-      provider_env_var: OPENCODE_GO_API_KEY
-      environment: conformance-claude-code-cli
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
 
-  codex-app-server:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: codex-app-server
-      provider_env_var: OPENAI_API_KEY
-      environment: conformance-codex-app-server
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
 
-  gemini-sdk:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: gemini-sdk
-      provider_env_var: GEMINI_API_KEY
-      environment: conformance-gemini-sdk
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Install dependencies
+        run: yarn install --immutable
 
-  pi-sdk:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: pi-sdk
-      provider_env_var: OPENCODE_GO_API_KEY
-      environment: conformance-pi-sdk
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Run openai-node reference smoke
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a openai-node \
+            agents.simple.test.ts \
+            orchestration/sendMessage.test.ts \
+            --workers 1 \
+            --phase reference-smoke \
+            --result-output conformance-artifacts/conformance-result-openai-node-reference-smoke.json \
+            --schema-violations-output conformance-artifacts/schema-violations-openai-node-reference-smoke.json
 
-  qwen-acp:
-    needs: preflight
-    uses: ./.github/workflows/conformance-adapter.yml
-    with:
-      adapter: qwen-acp
-      provider_env_var: OPENAI_API_KEY
-      environment: conformance-qwen-acp
-      pr_ref: refs/pull/${{ inputs.pr_number }}/head
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-artifacts-openai-node-reference-smoke
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
+
+  reference-rest:
+    needs: reference-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run openai-node reference rest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a openai-node \
+            --exclude agents.simple.test.ts \
+            --exclude orchestration/sendMessage.test.ts \
+            --phase reference-rest \
+            --result-output conformance-artifacts/conformance-result-openai-node-reference-rest.json \
+            --schema-violations-output conformance-artifacts/schema-violations-openai-node-reference-rest.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-artifacts-openai-node-reference-rest
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
+
+  adapter-conformance:
+    needs: reference-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - adapter: anthropic-sdk
+            provider_secret_name: ANTHROPIC_API_KEY
+          - adapter: claude-agent-sdk
+            conformance_provider: opencode-go-anthropic
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: claude-code-cli
+            conformance_provider: opencode-go-anthropic
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: codex-app-server
+            provider_secret_name: OPENAI_API_KEY
+          - adapter: gemini-sdk
+            provider_secret_name: GEMINI_API_KEY
+          - adapter: pi-sdk
+            provider_secret_name: OPENCODE_GO_API_KEY
+          - adapter: qwen-acp
+            provider_secret_name: OPENAI_API_KEY
+    name: conformance (${{ matrix.adapter }})
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: "**/node_modules"
+          key: node-modules-v3-${{ hashFiles('yarn.lock') }}
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Export provider secret
+        env:
+          PROVIDER_SECRET_NAME: ${{ matrix.provider_secret_name }}
+          PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}
+        run: |
+          if [ -z "${PROVIDER_SECRET_VALUE}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for adapter '${{ matrix.adapter }}'"
+            exit 1
+          fi
+          echo "${PROVIDER_SECRET_NAME}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
+
+      - name: Run adapter smoke
+        env:
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+        run: |
+          mkdir -p conformance-artifacts
+          yarn test:conformance \
+            -a ${{ matrix.adapter }} \
+            agents.simple.test.ts \
+            orchestration/sendMessage.test.ts \
+            --workers 1 \
+            --phase adapter-smoke \
+            --result-output conformance-artifacts/conformance-result-${{ matrix.adapter }}-adapter-smoke.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ matrix.adapter }}-adapter-smoke.json
+
+      - name: Run adapter rest
+        env:
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+        run: |
+          yarn test:conformance \
+            -a ${{ matrix.adapter }} \
+            --exclude agents.simple.test.ts \
+            --exclude orchestration/sendMessage.test.ts \
+            --phase adapter-rest \
+            --result-output conformance-artifacts/conformance-result-${{ matrix.adapter }}-adapter-rest.json \
+            --schema-violations-output conformance-artifacts/schema-violations-${{ matrix.adapter }}-adapter-rest.json
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-artifacts-${{ matrix.adapter }}
+          path: conformance-artifacts/*.json
+          if-no-files-found: ignore
 
   conformance-report:
     needs:
       - preflight
-      - openai-node
-      - anthropic-sdk
-      - claude-agent-sdk
-      - claude-code-cli
-      - codex-app-server
-      - gemini-sdk
-      - pi-sdk
-      - qwen-acp
+      - reference-smoke
+      - reference-rest
+      - adapter-conformance
     if: |
       always() &&
       !cancelled() &&
       needs.preflight.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: conformance-report
     steps:
       - name: Download conformance artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

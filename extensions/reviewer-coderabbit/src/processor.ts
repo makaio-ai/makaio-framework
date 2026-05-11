@@ -510,11 +510,7 @@ export function parseNitpickSection(
       }
     }
 
-    if (endIdx === -1) {
-      // A malformed file block should not prevent later sibling blocks from being parsed.
-      searchFrom = openIdx + 1;
-      continue;
-    }
+    if (endIdx === -1) break;
 
     const blockText = nitpickContent.slice(openIdx, endIdx);
     searchFrom = endIdx;
