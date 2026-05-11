@@ -321,6 +321,7 @@ export class CredentialTracker {
         throw new AggregateError(
           [error, rollbackError],
           'Credential tracker activation failed after durable state changed, and rollback could not restore the previous state.',
+          { cause: rollbackError },
         );
       }
       throw error;

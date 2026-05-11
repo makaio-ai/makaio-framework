@@ -19,27 +19,37 @@ function resolveWorkflowPath(): string {
   return resolve(testFileDir, '../../.github/workflows/conformance.yml');
 }
 
+function resolveAdapterWorkflowPath(): string {
+  return resolve(testFileDir, '../../.github/workflows/conformance-adapter.yml');
+}
+
 describe('conformance workflow security', () => {
   const workflowText = readFileSync(resolveWorkflowPath(), 'utf8');
+  const adapterWorkflowText = readFileSync(resolveAdapterWorkflowPath(), 'utf8');
 
-  it('rejects fork pull requests before checking out code or injecting provider API keys', () => {
+  it('rejects fork pull requests before adapter workflows check out code or inject provider API keys', () => {
     const forkGuardIndex = workflowText.indexOf('- name: Reject fork pull requests');
-    const checkoutIndex = workflowText.indexOf('uses: actions/checkout@');
-    const secretInjectionIndexes = [
-      workflowText.indexOf('OPENAI_API_KEY:'),
-      workflowText.indexOf('PROVIDER_SECRET_VALUE:'),
+    const adapterJobIndexes = [
+      workflowText.indexOf('  openai-node:'),
+      workflowText.indexOf('  anthropic-sdk:'),
+      workflowText.indexOf('  claude-agent-sdk:'),
+      workflowText.indexOf('  claude-code-cli:'),
+      workflowText.indexOf('  codex-app-server:'),
+      workflowText.indexOf('  gemini-sdk:'),
+      workflowText.indexOf('  pi-sdk:'),
+      workflowText.indexOf('  qwen-acp:'),
     ];
 
     expect(forkGuardIndex).toBeGreaterThanOrEqual(0);
-    expect(checkoutIndex).toBeGreaterThan(forkGuardIndex);
-    for (const secretInjectionIndex of secretInjectionIndexes) {
-      if (secretInjectionIndex >= 0) {
-        expect(secretInjectionIndex).toBeGreaterThan(forkGuardIndex);
-      }
+    for (const adapterJobIndex of adapterJobIndexes) {
+      expect(adapterJobIndex).toBeGreaterThan(forkGuardIndex);
     }
     expect(workflowText).toContain('github.rest.pulls.get');
     expect(workflowText).toContain('headRepository !== baseRepository');
-    expect(workflowText).toContain('persist-credentials: false');
+    expect(workflowText).toContain('needs: preflight');
+    expect(adapterWorkflowText).toContain('uses: actions/checkout@');
+    expect(adapterWorkflowText).toContain('persist-credentials: false');
+    expect(adapterWorkflowText).toContain('${{ inputs.provider_env_var }}: ${{ secrets.PROVIDER_API_KEY }}');
   });
 
   it('grants the issue-comment and pull-request permissions used by the workflow', () => {
@@ -49,14 +59,14 @@ describe('conformance workflow security', () => {
   });
 
   it('uploads per-adapter schema violation artifacts and tolerates clean runs', () => {
-    expect(workflowText).toContain('schema-violations-${{ matrix.adapter }}-adapter-smoke.json');
-    expect(workflowText).toContain('conformance-result-${{ matrix.adapter }}-adapter-rest.json');
+    expect(adapterWorkflowText).toContain('schema-violations-${{ inputs.adapter }}-adapter-smoke.json');
+    expect(adapterWorkflowText).toContain('conformance-result-${{ inputs.adapter }}-adapter-rest.json');
     expect(workflowText).toContain('continue-on-error: true');
     expect(workflowText).toContain("const escapeCell = (value) => String(value).replace(/\\|/g, '\\\\|')");
   });
 
   it('posts the consolidated report through the Makaio GitHub App token', () => {
-    expect(workflowText).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v\d+)?\s*$/m);
+    expect(workflowText).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v[\d.]+)?\s*$/m);
     expect(workflowText).toContain('app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflowText).toContain('private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}');
     expect(workflowText).toContain('github-token: ${{ steps.app-token.outputs.token }}');
@@ -65,14 +75,11 @@ describe('conformance workflow security', () => {
     expect(workflowText).toContain("comment.user?.type === 'Bot'");
   });
 
-  it('uses the reference adapter gate and CI-only provider overrides for expensive adapters', () => {
-    expect(workflowText).toContain('needs: reference-smoke');
-    expect(workflowText).toContain('- adapter: claude-agent-sdk');
-    expect(workflowText).toContain('- adapter: claude-code-cli');
-    expect(workflowText).toContain('conformance_provider: opencode-go-anthropic');
-    expect(workflowText).toContain('provider_secret_name: OPENCODE_GO_API_KEY');
-    expect(workflowText).toContain('PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}');
-    expect(workflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}');
+  it('uses CI-only provider configuration for expensive adapters', () => {
+    expect(workflowText).toContain('  claude-agent-sdk:');
+    expect(workflowText).toContain('  claude-code-cli:');
+    expect(workflowText).toContain('provider_env_var: OPENCODE_GO_API_KEY');
+    expect(adapterWorkflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}');
     expect(workflowText).not.toContain('github-copilot-sdk');
   });
 });

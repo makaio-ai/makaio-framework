@@ -182,6 +182,7 @@ async function rollbackRegisteredAgent<
     throw new AggregateError(
       [cause, evictionError],
       `[AIAdapter:${adapterName}] startAgent persistence failed and live agent cleanup also failed.`,
+      { cause: evictionError },
     );
   }
 }

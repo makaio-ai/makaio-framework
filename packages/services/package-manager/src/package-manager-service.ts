@@ -324,13 +324,10 @@ export class PackageManagerService extends BaseService {
         try {
           await this.yarnManager.ensureFrameworkDependency(this.frameworkPeerRange);
         } catch (error) {
-          const cause = error instanceof Error ? error : new Error(String(error));
-          throw new Error(
-            `Failed to ensure @makaio/framework dependency ${this.frameworkPeerRange}: ${cause.message}`,
-            {
-              cause,
-            },
-          );
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`Failed to ensure @makaio/framework dependency ${this.frameworkPeerRange}: ${message}`, {
+            cause: error,
+          });
         }
         const version = await this.yarnManager.installPackage(packageName);
         await this.emitInstalled(packageName, version);
@@ -489,8 +486,7 @@ export class PackageManagerService extends BaseService {
       console.info('[PackageManagerService] Found %d package updates', updates.length);
       return updates;
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error('Failed to check for updates', { cause });
+      throw new Error('Failed to check for updates', { cause: error });
     }
   }
 }

@@ -383,7 +383,9 @@ export async function writeRustSubjects(manifest: MakaioProtocolManifest): Promi
     existingContent = await readFile(RUST_SUBJECTS_PATH, 'utf8');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot regenerate Rust subjects without existing file at ${RUST_SUBJECTS_PATH}: ${message}`);
+    throw new Error(`Cannot regenerate Rust subjects without existing file at ${RUST_SUBJECTS_PATH}: ${message}`, {
+      cause: error,
+    });
   }
   const handAuthored = extractHandAuthoredSection(existingContent);
   const lineEnding = detectLineEnding(existingContent);

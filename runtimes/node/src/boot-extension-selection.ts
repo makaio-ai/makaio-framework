@@ -195,6 +195,7 @@ export function registerExtensionBootContributions(
       throw new AggregateError(
         [error, ...rollbackErrors],
         'Extension boot contribution failed and rollback cleanup reported additional errors',
+        { cause: error },
       );
     }
     throw error;

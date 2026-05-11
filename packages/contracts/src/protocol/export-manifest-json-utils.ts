@@ -46,7 +46,7 @@ export function toManifestJsonSchema(namespace: string, subject: string, schema:
     exportedSchema = z.toJSONSchema(schema);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to export JSON Schema for ${namespace}.${subject}: ${message}`);
+    throw new Error(`Failed to export JSON Schema for ${namespace}.${subject}: ${message}`, { cause: error });
   }
 
   if (!isJsonObject(exportedSchema)) {
