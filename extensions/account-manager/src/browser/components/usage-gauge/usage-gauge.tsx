@@ -10,8 +10,8 @@
 
 import type { JSX } from 'react';
 import styles from './usage-gauge.module.scss';
-import { clampUtilization, deriveGaugeState } from '@makaio-community/account-manager/utils';
-import type { GaugeState } from '@makaio-community/account-manager/utils';
+import { clampUtilization, deriveGaugeState } from '@makaio/extension-account-manager/utils';
+import type { GaugeState } from '@makaio/extension-account-manager/utils';
 
 // ---------------------------------------------------------------------------
 // Props

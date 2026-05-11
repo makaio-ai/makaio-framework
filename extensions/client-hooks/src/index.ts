@@ -1,5 +1,5 @@
 /**
- * Public API for \@makaio-community/client-hooks.
+ * Public API for \@makaio/extension-client-hooks.
  *
  * Exports the CLI bridge entry point and the package manifest.
  * @packageDocumentation

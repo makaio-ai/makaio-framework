@@ -16,7 +16,7 @@
 
 import { useMemo, type JSX } from 'react';
 import { eraseWidgetConfig, type WidgetDefinition, type WidgetProps } from '@makaio/ui-kernel';
-import type { UsageEntry } from '@makaio-community/account-manager/schemas';
+import type { UsageEntry } from '@makaio/extension-account-manager/schemas';
 import { useAccountHistory } from '../../data/use-account-history.js';
 import { useAnalyticsContext } from '../../pages/analytics/analytics-context.js';
 import styles from './analytics-distribution-widget.module.scss';

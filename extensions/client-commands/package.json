@@ -1,5 +1,5 @@
 {
-  "name": "@makaio-community/client-commands",
+  "name": "@makaio/extension-client-commands",
   "version": "0.1.0",
   "private": true,
   "type": "module",

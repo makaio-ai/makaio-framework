@@ -1,5 +1,5 @@
 {
-  "name": "@makaio-community/client-hooks",
+  "name": "@makaio/extension-client-hooks",
   "version": "0.1.0",
   "private": true,
   "type": "module",

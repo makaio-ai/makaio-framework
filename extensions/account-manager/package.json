@@ -1,5 +1,5 @@
 {
-  "name": "@makaio-community/account-manager",
+  "name": "@makaio/extension-account-manager",
   "version": "0.1.0",
   "private": true,
   "type": "module",

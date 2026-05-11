@@ -8,7 +8,7 @@
  */
 
 import type { JSX } from 'react';
-import { ACTIVE_INDICATOR, INACTIVE_INDICATOR } from '@makaio-community/account-manager/utils';
+import { ACTIVE_INDICATOR, INACTIVE_INDICATOR } from '@makaio/extension-account-manager/utils';
 import styles from './account-row.module.scss';
 
 // ---------------------------------------------------------------------------

@@ -14,10 +14,10 @@
 
 import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
-import { AccountManagerSubjects } from '@makaio-community/account-manager/register';
-import type { Account, SourceInfo } from '@makaio-community/account-manager/schemas';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import type { PageComponentProps } from '@makaio/ui-kernel';
-import { displayLabel, displayMeta } from '@makaio-community/account-manager/utils';
+import { displayLabel, displayMeta } from '@makaio/extension-account-manager/utils';
 import { useAccounts } from '../../data/use-accounts.js';
 import { useUsageData } from '../../data/use-usage-data.js';
 import { useSwitchAccount } from '../../hooks/use-switch-account.js';
@@ -50,9 +50,7 @@ interface AccountEntryProps {
 /**
  * Rename inline state managed within {@link AccountEntry}.
  */
-type RenameState =
-  | { active: false }
-  | { active: true; value: string; submitting: boolean; error: string | null };
+type RenameState = { active: false } | { active: true; value: string; submitting: boolean; error: string | null };
 
 /**
  * Delete confirmation state managed within {@link AccountEntry}.

@@ -41,7 +41,7 @@ describe('createRepoDevAliases', () => {
 describe('createPortablePackageJson', () => {
   it('rewrites local framework links into versioned portable dev dependencies', () => {
     const packageJson = {
-      name: '@makaio-community/account-manager',
+      name: '@makaio/extension-account-manager',
       version: '0.1.0',
       type: 'module',
       scripts: {
@@ -90,7 +90,7 @@ describe('createPortablePackageJson', () => {
   it('adds the bus-core peer dependency when the source manifest does not declare it', () => {
     const portablePackageJson = createPortablePackageJson(
       {
-        name: '@makaio-community/account-manager',
+        name: '@makaio/extension-account-manager',
         version: '0.1.0',
         type: 'module',
       },

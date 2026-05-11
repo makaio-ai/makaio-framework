@@ -14,7 +14,7 @@ import { useWidgetLayout, useWidgetLayoutActions, useWidgetRegistry } from '@mak
 import type { WidgetLayout } from '@makaio/ui-kernel';
 import type { PreferenceKey } from '@makaio/services-core/preferences';
 import { useAccounts } from '../../data/use-accounts.js';
-import { createAccountCacheKey } from '@makaio-community/account-manager/utils';
+import { createAccountCacheKey } from '@makaio/extension-account-manager/utils';
 import { AnalyticsContext, type AnalyticsFilter, type AnalyticsRange } from './analytics-context.js';
 import styles from './analytics-page.module.scss';
 
