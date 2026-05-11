@@ -50,7 +50,7 @@ export class BundledSeedFetcher implements IModelRegistryFetcher {
       try {
         return ModelRegistrySchema.parse(parseYaml(content));
       } catch (error) {
-        throw new Error(`Invalid bundled model registry seed at ${seedPath}: ${formatError(error)}`, { cause: error });
+        throw new Error(`Invalid bundled model registry seed at ${seedPath}: ${formatError(error)}`);
       }
     }
 
@@ -70,9 +70,7 @@ async function readSeedCandidate(seedPath: string): Promise<string | undefined> 
     if (isMissingFileError(error)) {
       return undefined;
     }
-    throw new Error(`Failed to read bundled model registry seed at ${seedPath}: ${formatError(error)}`, {
-      cause: error,
-    });
+    throw new Error(`Failed to read bundled model registry seed at ${seedPath}: ${formatError(error)}`);
   }
 }
 

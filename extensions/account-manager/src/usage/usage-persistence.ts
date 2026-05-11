@@ -76,7 +76,7 @@ export async function persistChangedWindows(
       blocked,
     };
 
-    let persisted: boolean;
+    let persisted = false;
     try {
       persisted = await writer.append(entry);
     } catch (error) {

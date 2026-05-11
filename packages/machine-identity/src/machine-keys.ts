@@ -170,7 +170,7 @@ async function acquireMachineKeyLock(dir: string): Promise<MachineKeyLock> {
         throw error;
       }
       if (Date.now() >= deadline) {
-        throw new Error(`[machine-keys] Timed out waiting for initialization lock in ${dir}`, { cause: error });
+        throw new Error(`[machine-keys] Timed out waiting for initialization lock in ${dir}`);
       }
       await sleep(MACHINE_KEY_LOCK_RETRY_MS);
     }

@@ -3644,8 +3644,6 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     zod: "npm:^4.1.13"
   peerDependencies:
     "@anthropic-ai/sdk": ^0.90.0
@@ -3670,7 +3668,6 @@ __metadata:
     p-defer: "npm:^4.0.1"
     p-queue: "npm:^9.0.0"
     tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     zod: "npm:^4.1.13"
   peerDependencies:
     "@anthropic-ai/claude-agent-sdk": ^0.2.50
@@ -3691,8 +3688,6 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     zod: "npm:^4.1.13"
   peerDependencies:
     "@makaio/framework": ^0.1.0
@@ -3766,7 +3761,6 @@ __metadata:
     p-queue: "npm:^9.0.0"
     quick-lru: "npm:^7.3.0"
     tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     vitest: "npm:*"
     zod: "npm:^4.1.13"
   peerDependencies:
@@ -3794,8 +3788,6 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     openai: "npm:6.22.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     zod: "npm:^4.1.13"
   peerDependencies:
     "@makaio/framework": ^0.1.0
@@ -3814,19 +3806,17 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/provider-opencode-go": "workspace:*"
     "@makaio/utils": "workspace:*"
-    "@mariozechner/pi-agent-core": "npm:0.73.1"
-    "@mariozechner/pi-ai": "npm:0.73.1"
-    "@mariozechner/pi-coding-agent": "npm:0.73.1"
+    "@mariozechner/pi-agent-core": "npm:0.72.1"
+    "@mariozechner/pi-ai": "npm:0.72.1"
+    "@mariozechner/pi-coding-agent": "npm:0.72.1"
     "@types/node": "npm:^24.3.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     vitest: "npm:*"
     zod: "npm:^4.1.13"
   peerDependencies:
     "@makaio/framework": ^0.1.0
-    "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0"
-    "@mariozechner/pi-ai": ">=0.72.0 <0.74.0"
-    "@mariozechner/pi-coding-agent": ">=0.72.0 <0.74.0"
+    "@mariozechner/pi-agent-core": ">=0.72.0 <0.73.0"
+    "@mariozechner/pi-ai": ">=0.72.0 <0.73.0"
+    "@mariozechner/pi-coding-agent": ">=0.72.0 <0.73.0"
   languageName: unknown
   linkType: soft
 
@@ -5192,19 +5182,31 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mariozechner/pi-agent-core@npm:0.73.1, @mariozechner/pi-agent-core@npm:^0.73.1":
-  version: 0.73.1
-  resolution: "@mariozechner/pi-agent-core@npm:0.73.1"
+"@mariozechner/jiti@npm:^2.6.2":
+  version: 2.6.5
+  resolution: "@mariozechner/jiti@npm:2.6.5"
   dependencies:
-    "@mariozechner/pi-ai": "npm:^0.73.1"
-    typebox: "npm:^1.1.24"
-  checksum: 10c0/30d88a57c821d11ae93e49c47b22038348be0ac6b23293a13530ee406cef460464484c661045fcbc83eb9fab7a8d35381d8ae65fa19de62b2c5f99463479efac
+    std-env: "npm:^3.10.0"
+    yoctocolors: "npm:^2.1.2"
+  bin:
+    jiti: lib/jiti-cli.mjs
+  checksum: 10c0/08dec995543b015b1b90d0c03c30de2ed7f98ef653c35e277713dfa2b8caa34ddb67966d72a9054a21f04b0fdd791c95bcd028dd1b3cf5fc95e7e4b80df3fc12
   languageName: node
   linkType: hard
 
-"@mariozechner/pi-ai@npm:0.73.1, @mariozechner/pi-ai@npm:^0.73.1":
-  version: 0.73.1
-  resolution: "@mariozechner/pi-ai@npm:0.73.1"
+"@mariozechner/pi-agent-core@npm:0.72.1, @mariozechner/pi-agent-core@npm:^0.72.1":
+  version: 0.72.1
+  resolution: "@mariozechner/pi-agent-core@npm:0.72.1"
+  dependencies:
+    "@mariozechner/pi-ai": "npm:^0.72.1"
+    typebox: "npm:^1.1.24"
+  checksum: 10c0/9f65cd00ce3b5dae0c786dfa91f104cd757723a7e2a41c7931fd594abcae6ffee850fa2eb34582661a43ae21d08b94ee6df95c216d2ef8821dcff4ffe0dac735
+  languageName: node
+  linkType: hard
+
+"@mariozechner/pi-ai@npm:0.72.1, @mariozechner/pi-ai@npm:^0.72.1":
+  version: 0.72.1
+  resolution: "@mariozechner/pi-ai@npm:0.72.1"
   dependencies:
     "@anthropic-ai/sdk": "npm:^0.91.1"
     "@aws-sdk/client-bedrock-runtime": "npm:^3.1030.0"
@@ -5219,18 +5221,19 @@ __metadata:
     zod-to-json-schema: "npm:^3.24.6"
   bin:
     pi-ai: dist/cli.js
-  checksum: 10c0/0afc3ee124b191ab69d8e897f0e02a5615b3013b556cd49c069ea023963920759d1e20441ad688b411e2ceeac3f2b2dae8142c7ad8c9237830e782343716e520
+  checksum: 10c0/bcfe321e5f31f39f32c23666606421066982fa2ec797f5001650e49c51aced34d880d4154dc72172e0703b3a55116d1d1a86247514877625b268a11e3488a4cc
   languageName: node
   linkType: hard
 
-"@mariozechner/pi-coding-agent@npm:0.73.1":
-  version: 0.73.1
-  resolution: "@mariozechner/pi-coding-agent@npm:0.73.1"
+"@mariozechner/pi-coding-agent@npm:0.72.1":
+  version: 0.72.1
+  resolution: "@mariozechner/pi-coding-agent@npm:0.72.1"
   dependencies:
     "@mariozechner/clipboard": "npm:^0.3.5"
-    "@mariozechner/pi-agent-core": "npm:^0.73.1"
-    "@mariozechner/pi-ai": "npm:^0.73.1"
-    "@mariozechner/pi-tui": "npm:^0.73.1"
+    "@mariozechner/jiti": "npm:^2.6.2"
+    "@mariozechner/pi-agent-core": "npm:^0.72.1"
+    "@mariozechner/pi-ai": "npm:^0.72.1"
+    "@mariozechner/pi-tui": "npm:^0.72.1"
     "@silvia-odwyer/photon-node": "npm:^0.3.4"
     chalk: "npm:^5.5.0"
     cli-highlight: "npm:^2.1.11"
@@ -5240,7 +5243,6 @@ __metadata:
     glob: "npm:^13.0.1"
     hosted-git-info: "npm:^9.0.2"
     ignore: "npm:^7.0.5"
-    jiti: "npm:^2.7.0"
     marked: "npm:^15.0.12"
     minimatch: "npm:^10.2.3"
     proper-lockfile: "npm:^4.1.2"
@@ -5254,13 +5256,13 @@ __metadata:
       optional: true
   bin:
     pi: dist/cli.js
-  checksum: 10c0/fdb5712f46f215960617cc1200afad6a320996644b5ebba71307301c101f0bd6d7d719912ba2e892706a66f86c9f20a90f41ac503f507ae21898d24b17ecada9
+  checksum: 10c0/31127b2f0e05ae7d97ada1703aa2627fcb0fa73910b5efeb76338dde73a76120cfab7e2d4d9bedf19bfdb4b4d6b45367b1b4d8a44c7d2618b4d61698a9c2f667
   languageName: node
   linkType: hard
 
-"@mariozechner/pi-tui@npm:^0.73.1":
-  version: 0.73.1
-  resolution: "@mariozechner/pi-tui@npm:0.73.1"
+"@mariozechner/pi-tui@npm:^0.72.1":
+  version: 0.72.1
+  resolution: "@mariozechner/pi-tui@npm:0.72.1"
   dependencies:
     "@types/mime-types": "npm:^2.1.4"
     chalk: "npm:^5.5.0"
@@ -5271,7 +5273,7 @@ __metadata:
   dependenciesMeta:
     koffi:
       optional: true
-  checksum: 10c0/caa0b8a86d033e8f3993ab2dbc7761b6b2343574146603c9cbbdc5fa167a624339facde2a9edd9f076c3193f13e860226cd9e88690f5ebef28e5ae8b07bd4f7e
+  checksum: 10c0/ba96b9fac54bcb0f07b16b9c33d63c67f1ad27fd716b30c4d9ce1c894988d69d0dd1d056a06d7a98089a9b0caac4de5a63c4d0a9cdd9fab2ae37cce97b502e05
   languageName: node
   linkType: hard
 
@@ -16949,7 +16951,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jiti@npm:^2.4.2, jiti@npm:^2.6.0, jiti@npm:^2.7.0":
+"jiti@npm:^2.4.2, jiti@npm:^2.6.0":
   version: 2.7.0
   resolution: "jiti@npm:2.7.0"
   bin:
@@ -22681,6 +22683,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"std-env@npm:^3.10.0":
+  version: 3.10.0
+  resolution: "std-env@npm:3.10.0"
+  checksum: 10c0/1814927a45004d36dde6707eaf17552a546769bc79a6421be2c16ce77d238158dfe5de30910b78ec30d95135cc1c59ea73ee22d2ca170f8b9753f84da34c427f
+  languageName: node
+  linkType: hard
+
 "std-env@npm:^4.0.0-rc.1":
   version: 4.1.0
   resolution: "std-env@npm:4.1.0"
@@ -24370,7 +24379,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^6.0.0 || ^7.0.0 || ^8.0.0, vite@npm:^8.0.0":
+"vite@npm:^6.0.0 || ^7.0.0 || ^8.0.0":
   version: 8.0.10
   resolution: "vite@npm:8.0.10"
   dependencies:
@@ -25188,7 +25197,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"yoctocolors@npm:^2.1.1":
+"yoctocolors@npm:^2.1.1, yoctocolors@npm:^2.1.2":
   version: 2.1.2
   resolution: "yoctocolors@npm:2.1.2"
   checksum: 10c0/b220f30f53ebc2167330c3adc86a3c7f158bcba0236f6c67e25644c3188e2571a6014ffc1321943bb619460259d3d27eb4c9cc58c2d884c1b195805883ec7066

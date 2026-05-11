@@ -4,7 +4,7 @@
  *
  * Desktop app package scripts run from `apps/electron` or `apps/electrobun`;
  * the resolved workspace root must expose the stable framework-dist script
- * pair used by supported source layouts.
+ * used by supported source layouts.
  */
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -24,7 +24,7 @@ interface FrameworkDistBuildPlan {
  */
 export function resolveFrameworkDistBuildPlan(packageRoot: string): FrameworkDistBuildPlan {
   const workspaceRoot = resolveWorkspaceRoot(packageRoot);
-  return { cwd: workspaceRoot, scripts: ['build:framework', 'build:framework:assemble'] };
+  return { cwd: workspaceRoot, scripts: ['build:framework'] };
 }
 
 /**

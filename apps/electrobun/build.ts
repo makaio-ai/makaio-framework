@@ -86,7 +86,7 @@ function readFrameworkPackageVersion(packageJsonPath: string): string {
     parsedPackageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to read framework version from ${packageJsonPath}: ${reason}`, { cause: error });
+    throw new Error(`Failed to read framework version from ${packageJsonPath}: ${reason}`);
   }
 
   if (typeof parsedPackageJson !== 'object' || parsedPackageJson === null || !('version' in parsedPackageJson)) {

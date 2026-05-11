@@ -177,7 +177,7 @@ export class TsciAnalyzer implements LanguageAnalyzer {
       sourceFile = this.project.addSourceFileAtPath(file);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to load source file '${file}': ${message}`, { cause: error });
+      throw new Error(`Failed to load source file '${file}': ${message}`);
     }
     this.cache.set(file, sourceFile);
     return sourceFile;

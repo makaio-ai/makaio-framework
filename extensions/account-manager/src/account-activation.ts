@@ -159,7 +159,6 @@ export async function activateAccount(
       throw new AggregateError(
         [error, rollbackError],
         'Account activation failed after durable state changed, and rollback could not restore the previous state.',
-        { cause: rollbackError },
       );
     }
 

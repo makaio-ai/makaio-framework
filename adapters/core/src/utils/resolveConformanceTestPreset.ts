@@ -88,9 +88,7 @@ function parseEnvProviderDefinitions(raw: string | undefined): readonly Provider
     parsed = JSON.parse(normalized);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${MAKAIO_CONFORMANCE_PROVIDER_DEFINITIONS_ENV} must contain valid JSON: ${message}`, {
-      cause: error,
-    });
+    throw new Error(`${MAKAIO_CONFORMANCE_PROVIDER_DEFINITIONS_ENV} must contain valid JSON: ${message}`);
   }
 
   if (!Array.isArray(parsed)) {

@@ -55,7 +55,7 @@ import { NodeFrameworkModuleResolver } from ${JSON.stringify(
 
 const resolver = new NodeFrameworkModuleResolver(${JSON.stringify(tempDir)});
 try {
-  resolver.install();
+  await resolver.install();
   const imported = await import('@makaio/framework/bus');
   if (imported.resolverSmokeValue !== 'mapped') {
     throw new Error(\`Unexpected resolver smoke value: \${String(imported.resolverSmokeValue)}\`);

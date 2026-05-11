@@ -154,7 +154,7 @@ export function parseAnalysisResult(raw: string): AnalysisResult {
     return parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid analysis JSON: ${message}`, { cause: error });
+    throw new Error(`Invalid analysis JSON: ${message}`);
   }
 }
 

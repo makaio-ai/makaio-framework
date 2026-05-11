@@ -348,7 +348,7 @@ export abstract class BaseStreamSession<
       await this.executeApiCall(turn, AbortSignal.any([abortSignal, streamStartTimeout.signal]), adapterSessionId);
     } catch (error) {
       if (!abortSignal.aborted && streamStartTimeout.signal.aborted) {
-        throw new Error(STREAM_START_TIMEOUT_ERROR, { cause: error });
+        throw new Error(STREAM_START_TIMEOUT_ERROR);
       }
       throw error;
     } finally {

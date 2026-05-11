@@ -53,21 +53,7 @@ export type { ClaudeAccountObservationPayload, ClaudeObservedAccountInfo } from 
 // Export schemas
 export { ClaudeCodeProviderConfigSchema, type ClaudeCodeProviderConfig } from './schemas.js';
 
-// Tool handling utilities
-export {
-  toGlobalToolApproval,
-  fromGlobalToolApproval,
-  registerToolApprovalHandler,
-  requestToolApproval,
-  type ToolApprovalContext,
-  type ClaudePermissionResult,
-} from '@makaio/ai-adapters-claude-shared';
-
-// Type-safe content block handlers
-export { CONTENT_BLOCK_HANDLERS } from '@makaio/ai-adapters-claude-shared';
-
 export { UserMessageQueue } from '@makaio/ai-adapters-core';
-export { ClaudeConnectorTurn, type ClaudeTurnState } from './turn.js';
 
 /**
  * Create a test configuration for conformance testing.

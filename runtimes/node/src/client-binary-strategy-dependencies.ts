@@ -107,7 +107,7 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   } catch (err) {
     const name = err instanceof Error ? err.name : '';
     if (name === 'AbortError' || name === 'TimeoutError') {
-      throw new Error(`Timed out fetching ${url} after ${timeoutMs}ms`, { cause: err });
+      throw new Error(`Timed out fetching ${url} after ${timeoutMs}ms`);
     }
     throw err;
   }

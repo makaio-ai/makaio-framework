@@ -6,7 +6,7 @@
  * desktop builds the framework dist is co-located with the app binary and must
  * be resolved explicitly.
  */
-import { registerHooks, type ModuleHooks } from 'node:module';
+import type { ModuleHooks } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -32,14 +32,21 @@ export class NoopFrameworkModuleResolver implements FrameworkModuleResolver {
  */
 export class NodeFrameworkModuleResolver implements FrameworkModuleResolver {
   private hooks: ModuleHooks | undefined;
+  private pending: Promise<void> | undefined;
 
   /**
    * @param frameworkDistPath - Absolute path to the assembled framework dist.
    */
   public constructor(public readonly frameworkDistPath: string) {}
 
-  public install(): void {
-    if (this.hooks) return;
+  public install(): Promise<void> {
+    if (this.hooks) return Promise.resolve();
+    this.pending ??= this.doInstall();
+    return this.pending;
+  }
+
+  private async doInstall(): Promise<void> {
+    const { registerHooks } = await import('node:module');
     const frameworkDistPath = this.frameworkDistPath;
     this.hooks = registerHooks({
       resolve(specifier, context, nextResolve) {

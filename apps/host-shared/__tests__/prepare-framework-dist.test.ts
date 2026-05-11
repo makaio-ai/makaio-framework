@@ -16,7 +16,7 @@ describe('resolveFrameworkDistBuildPlan', () => {
 
       expect(resolveFrameworkDistBuildPlan(packageRoot)).toEqual({
         cwd: root,
-        scripts: ['build:framework', 'build:framework:assemble'],
+        scripts: ['build:framework'],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -32,7 +32,7 @@ describe('resolveFrameworkDistBuildPlan', () => {
 
       expect(resolveFrameworkDistBuildPlan(packageRoot)).toEqual({
         cwd: root,
-        scripts: ['build:framework', 'build:framework:assemble'],
+        scripts: ['build:framework'],
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

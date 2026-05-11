@@ -87,6 +87,7 @@ export function readmeToSlugPath(readme: string): string {
 export function parseReadme(content: string): ParsedReadme {
   let body = content;
   let title = '';
+  let description = '';
   const metadata: Record<string, string> = {};
 
   if (body.startsWith('---\n')) {
@@ -118,7 +119,7 @@ export function parseReadme(content: string): ParsedReadme {
     .replace(/\n/g, ' ')
     .replace(/[`*_[\]]/g, '')
     .trim();
-  const description = firstPara.slice(0, 160);
+  description = firstPara.slice(0, 160);
 
   return { title, description, metadata, body: body.trimStart() };
 }

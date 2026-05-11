@@ -82,9 +82,7 @@ export async function verifyInstalledVersion(
     stdout = await exec(realCommandPath, args, { cwd: realInstallPath });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`Version verification failed: command "${resolvedCommand}" exited with an error: ${message}`, {
-      cause: err,
-    });
+    throw new Error(`Version verification failed: command "${resolvedCommand}" exited with an error: ${message}`);
   }
 
   const normalizedExpected = stripLeadingV(expectedVersion);
