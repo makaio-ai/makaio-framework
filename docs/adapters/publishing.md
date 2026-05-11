@@ -153,8 +153,8 @@ Each adapter requires `publishConfig` in `package.json` to remap source exports 
 
 Build uses `tsdown` (the framework standard) or custom `tsx build.ts` scripts.
 
-The `assemble-dist.ts` script validates that `publishConfig.exports` entries exist in the
-assembled dist.
+The `validate-build-surface.ts` script validates that `publishConfig.exports` entries align
+with the framework dist surface.
 
 ## Summary
 
@@ -180,7 +180,7 @@ assembled dist.
 |------|---------|
 | `../../adapters/core/package.json` | Core package with publishConfig |
 | `../../adapters/implementations/*/package.json` | Adapter package configs |
-| `../../scripts/assemble-dist.ts` | Dist validation script |
+| `../../scripts/validate-build-surface.ts` | Dist surface validation script |
 | `../../.github/workflows/conformance.yml` | Conformance test CI |
 | `../../packages/clients-core/src/client-binary-manager.ts` | ClientBinaryManager (decoupled) |
 | `../../runtimes/node/src/boot-model-registry.ts` | Dynamic model registry |

@@ -13,6 +13,11 @@ import {
   FRAMEWORK_BUILD_PACKAGE_NAMES,
   FRAMEWORK_DIST_SUBPATHS,
 } from '../../build-tooling/framework-public-surface.js';
+import {
+  normalizePackageExports,
+  resolvePackageExportSourceTarget,
+  type PackageExportsField,
+} from '../../build-tooling/package-exports.js';
 
 /** A validated finding from the invariant checker. */
 export interface SurfaceIssue {
@@ -30,15 +35,15 @@ export interface BuildSurfaceResult {
   readonly ok: boolean;
 }
 
-type ExportValue = string | { types?: string; default?: string };
+type ExportValue = string | Readonly<Record<string, unknown>>;
 type ExportMap = Record<string, ExportValue>;
 
 interface PackageManifest {
   name?: string;
   scripts?: Record<string, string>;
-  exports?: ExportMap;
+  exports?: PackageExportsField;
   publishConfig?: {
-    exports?: ExportMap;
+    exports?: PackageExportsField;
   };
 }
 
@@ -82,9 +87,7 @@ function filterBuildableExportKeys(sourceExports: ExportMap): string[] {
   return Object.entries(sourceExports)
     .filter(([key, value]) => {
       if (key === './package.json') return false;
-      const raw = typeof value === 'string' ? value : (value.default ?? '');
-      if (raw.endsWith('.css') || raw.endsWith('.scss') || raw.endsWith('.sass')) return false;
-      return raw.endsWith('.ts') || raw.endsWith('.tsx') || raw.endsWith('.mts');
+      return resolvePackageExportSourceTarget(value) !== undefined;
     })
     .map(([key]) => key);
 }
@@ -103,11 +106,11 @@ function knownDistRoots(): Set<string> {
 /**
  * Collects all file target strings from an export map value.
  * @param value - Single export entry value.
- * @returns All declared file paths (both `default` and `types`).
+ * @returns All declared runtime and declaration file paths.
  */
 function exportTargets(value: ExportValue): string[] {
   if (typeof value === 'string') return [value];
-  return [value.default, value.types].filter((t): t is string => t !== undefined);
+  return [value.default, value.import, value.require, value.types].filter((t): t is string => typeof t === 'string');
 }
 
 /**
@@ -138,8 +141,8 @@ function checkTsdownPublishConfigParity(manifests: ReadonlyMap<string, PackageMa
     if (manifest.scripts?.['build'] !== 'tsdown') continue;
     if (!manifest.exports || !manifest.publishConfig?.exports) continue;
 
-    const sourceKeys = filterBuildableExportKeys(manifest.exports);
-    const publishKeys = new Set(Object.keys(manifest.publishConfig.exports));
+    const sourceKeys = filterBuildableExportKeys(normalizePackageExports(manifest.exports));
+    const publishKeys = new Set(Object.keys(normalizePackageExports(manifest.publishConfig.exports)));
 
     for (const key of sourceKeys) {
       if (!publishKeys.has(key)) {
@@ -227,7 +230,7 @@ export function checkBuildSurface(frameworkRoot: string): BuildSurfaceResult {
   checkTsdownPublishConfigParity(manifestsByPath, issues);
 
   const umbrellaManifest = readJson(join(frameworkRoot, 'package.json')) as PackageManifest;
-  const umbrellaExports = umbrellaManifest.publishConfig?.exports ?? {};
+  const umbrellaExports = normalizePackageExports(umbrellaManifest.publishConfig?.exports);
   const umbrellaExportKeys = new Set(Object.keys(umbrellaExports));
 
   checkDistSubpathsInUmbrella(umbrellaExportKeys, issues);

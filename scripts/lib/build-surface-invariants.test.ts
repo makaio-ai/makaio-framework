@@ -183,6 +183,34 @@ describe('checkBuildSurface', () => {
     expect(issues).toHaveLength(0);
   });
 
+  it('treats conditional import-only TypeScript exports as buildable', () => {
+    const root = makeTempDir();
+    writeMinimalValidFixture(root);
+
+    const pkgDir = join(root, 'packages', 'bus-core');
+    writePackage(pkgDir, {
+      name: '@makaio/bus-core',
+      scripts: { build: 'tsdown' },
+      exports: {
+        '.': {
+          import: './src/index.ts',
+          types: './src/index.ts',
+        },
+        './package.json': './package.json',
+      },
+      publishConfig: {
+        exports: {
+          './package.json': './package.json',
+        },
+      },
+    });
+
+    const result = checkBuildSurface(root);
+    const issues = result.issues.filter((i) => i.kind === 'source-export-missing-from-publishconfig');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain('source export "."');
+  });
+
   it('does not flag non-dist umbrella exports like ./package.json', () => {
     const root = makeTempDir();
     writeMinimalValidFixture(root);
