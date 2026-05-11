@@ -114,9 +114,9 @@
       "@makaio/extension-opencode": ["./extensions/opencode/src/index.ts"],
       "@makaio/extension-opencode/testing": ["./extensions/opencode/src/testing.ts"],
       "@makaio/extension-pin-message": ["./extensions/pin-message/src/index.ts"],
-      "@makaio-community/account-manager": ["./extensions/account-manager/src/index.ts"],
-      "@makaio-community/account-manager/schemas": ["./extensions/account-manager/src/bus/schemas.ts"],
-      "@makaio-community/account-manager/register": ["./extensions/account-manager/src/bus/namespace.ts"],
+      "@makaio/extension-account-manager": ["./extensions/account-manager/src/index.ts"],
+      "@makaio/extension-account-manager/schemas": ["./extensions/account-manager/src/bus/schemas.ts"],
+      "@makaio/extension-account-manager/register": ["./extensions/account-manager/src/bus/namespace.ts"],
       "@makaio/electron/schemas": ["./apps/electron/src/bus/schemas.ts"],
       "@makaio/electron/register": ["./apps/electron/src/bus/namespace.ts"],
       "@makaio/platform-macos": ["./platforms/macos/src/index.ts"]

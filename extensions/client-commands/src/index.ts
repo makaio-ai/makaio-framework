@@ -1,5 +1,5 @@
 /**
- * Public API for \@makaio-community/client-commands.
+ * Public API for \@makaio/extension-client-commands.
  *
  * Exports the CLI contribution and the package manifest.
  * @packageDocumentation

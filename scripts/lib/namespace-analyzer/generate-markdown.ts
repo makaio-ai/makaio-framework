@@ -109,7 +109,6 @@ const PACKAGE_ROUTES: readonly { prefix: string; dir: string; strip: string }[] 
   { prefix: '@makaio/services-', dir: 'services', strip: '@makaio/services-' },
   { prefix: '@makaio/tools-', dir: 'tools', strip: '@makaio/tools-' },
   { prefix: '@makaio/ui-', dir: 'ui', strip: '@makaio/ui-' },
-  { prefix: '@makaio-community/', dir: 'community', strip: '@makaio-community/' },
 ];
 
 /**

@@ -1,5 +1,5 @@
 {
-  "name": "@makaio-community/claude-code-statusline",
+  "name": "@makaio/extension-claude-code-statusline",
   "version": "0.1.0",
   "private": true,
   "type": "module",

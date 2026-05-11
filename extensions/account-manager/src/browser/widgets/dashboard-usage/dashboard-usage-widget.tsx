@@ -22,12 +22,12 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
 import { eraseWidgetConfig } from '@makaio/ui-kernel';
-import { AccountManagerSubjects } from '@makaio-community/account-manager/register';
-import type { Account, AccountUsage } from '@makaio-community/account-manager/schemas';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import type { Account, AccountUsage } from '@makaio/extension-account-manager/schemas';
 import type { WidgetDefinition, WidgetProps } from '@makaio/ui-kernel';
 import { useAccounts } from '../../data/use-accounts.js';
 import { useUsageData } from '../../data/use-usage-data.js';
-import { createAccountCacheKey } from '@makaio-community/account-manager/utils';
+import { createAccountCacheKey } from '@makaio/extension-account-manager/utils';
 import { UsageGauge } from '../../components/usage-gauge/usage-gauge.js';
 import styles from './dashboard-usage-widget.module.scss';
 

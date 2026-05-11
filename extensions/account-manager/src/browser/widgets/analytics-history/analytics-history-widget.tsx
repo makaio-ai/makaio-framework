@@ -24,7 +24,7 @@
 import { useMemo, useState, useCallback, useEffect, type JSX, type MouseEvent } from 'react';
 import { line } from 'd3-shape';
 import { eraseWidgetConfig, type WidgetDefinition, type WidgetProps } from '@makaio/ui-kernel';
-import type { UsageEntry } from '@makaio-community/account-manager/schemas';
+import type { UsageEntry } from '@makaio/extension-account-manager/schemas';
 import { useAccountHistory } from '../../data/use-account-history.js';
 import { useAnalyticsContext } from '../../pages/analytics/analytics-context.js';
 import styles from './analytics-history-widget.module.scss';

@@ -14,13 +14,13 @@
 import { type JSX } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
 import { eraseWidgetConfig } from '@makaio/ui-kernel';
-import type { Account, SourceInfo } from '@makaio-community/account-manager/schemas';
+import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import type { WidgetDefinition, WidgetProps } from '@makaio/ui-kernel';
 import { ACCOUNTS_PAGE_ID } from '../../pages/accounts/declaration.js';
 import { useAccounts } from '../../data/use-accounts.js';
 import { useSwitchAccount } from '../../hooks/use-switch-account.js';
 import { AccountRow } from '../../components/account-row/account-row.js';
-import { displayLabel, formatRelativeTime } from '@makaio-community/account-manager/utils';
+import { displayLabel, formatRelativeTime } from '@makaio/extension-account-manager/utils';
 import styles from './dashboard-accounts-widget.module.scss';
 
 // ---------------------------------------------------------------------------
