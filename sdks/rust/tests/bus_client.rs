@@ -1,10 +1,12 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::{SinkExt, StreamExt};
 use makaio_sdk::bus::{
     AuthMode, BroadcastResponseMessage, BusClientOptions, BusMessage, BusTransportError,
     DispatchMode, EventMessage, HeartbeatMessage, RequestMessage, RequestOptions, ResponseMessage,
+    SubscribeMessage, UnsubscribeMessage,
 };
 use makaio_sdk::generated::subjects::{self, SubjectKind, SUBJECTS};
 use makaio_sdk::{BusClient, BusClientError};
@@ -622,14 +624,26 @@ async fn namespace_wildcard_subscription_dispatches_child_namespace_events() {
 
 #[tokio::test]
 async fn request_resolves_matching_correlation_response() {
-    let server = serve_once(|mut ws| async move {
+    let expected_deadline = Arc::new(StdMutex::new(None));
+
+    let server_expected_deadline = expected_deadline.clone();
+    let server = serve_once(move |mut ws| async move {
         let request = match read_bus_message(&mut ws).await {
             BusMessage::Request(request) => request,
             other => panic!("expected request, received {other:?}"),
         };
+        let future_deadline = server_expected_deadline
+            .lock()
+            .expect("expected_deadline mutex should not be poisoned")
+            .expect("deadline should be recorded before the request is sent");
         assert_eq!(request.priority, Some(7));
-        assert_eq!(request.deadline, Some(123_456));
-        assert_eq!(request.timeout, Some(1_000));
+        assert_eq!(request.deadline, Some(future_deadline));
+        assert!(
+            request
+                .timeout
+                .is_some_and(|timeout| (1..=1_000).contains(&timeout)),
+            "request timeout should be derived from remaining deadline"
+        );
 
         send_bus_message(
             &mut ws,
@@ -646,6 +660,10 @@ async fn request_resolves_matching_correlation_response() {
     let bus = BusClient::connect(&server.url)
         .await
         .expect("client should connect");
+    let future_deadline = now_millis() + 1_000;
+    *expected_deadline
+        .lock()
+        .expect("expected_deadline mutex should not be poisoned") = Some(future_deadline);
     let result = bus
         .request_with_options(
             subjects::tool::LIST,
@@ -653,13 +671,51 @@ async fn request_resolves_matching_correlation_response() {
             RequestOptions {
                 timeout: Duration::from_secs(1),
                 priority: Some(7),
-                deadline: Some(123_456),
+                deadline: Some(future_deadline),
             },
         )
         .await
         .expect("request should resolve");
 
     assert_eq!(result, json!({ "ok": true }));
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn explicit_deadline_bounds_slow_local_handlers_with_zero_timeout() {
+    let server = serve_once(|mut ws| async move {
+        let _ = ws.next().await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request(subjects::tool::LIST, |_ctx| async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(json!({ "tooLate": true }))
+        })
+        .await
+        .expect("slow local handler should register");
+
+    let error = bus
+        .request_with_options(
+            subjects::tool::LIST,
+            json!({ "scope": "workspace" }),
+            RequestOptions {
+                timeout: Duration::ZERO,
+                priority: None,
+                deadline: Some(now_millis() + 50),
+            },
+        )
+        .await
+        .expect_err("explicit deadline should bound the full local request path");
+
+    assert!(
+        matches!(error, BusClientError::RequestTimeout(timeout) if timeout > Duration::ZERO && timeout <= Duration::from_millis(50))
+    );
     bus.close().await.expect("client should close");
     server.assert_completed().await;
 }
@@ -949,6 +1005,441 @@ async fn request_handlers_chain_with_next_and_auto_advance() {
         *calls.lock().expect("calls mutex should not be poisoned"),
         vec!["high", "mid", "low"]
     );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn same_priority_request_handlers_chain_fifo_and_advertise_duplicates() {
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let server = serve_once(move |mut ws| async move {
+        while let Some(Ok(message)) = ws.next().await {
+            if let Some(value) = wire_value(message) {
+                seen_tx.send(value).expect("wire frame should be sent");
+            }
+        }
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let calls = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
+
+    let _first = bus
+        .on_request_with_priority(subjects::tool::LIST, 10, {
+            let calls = calls.clone();
+            move |_ctx| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .expect("calls mutex should not be poisoned")
+                        .push("first");
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .expect("first same-priority handler should register");
+    let _second = bus
+        .on_request_with_priority(subjects::tool::LIST, 10, {
+            let calls = calls.clone();
+            move |ctx| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .expect("calls mutex should not be poisoned")
+                        .push("second");
+                    ctx.set_result(json!({ "handledBy": "second" }));
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .expect("second same-priority handler should register");
+
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": {
+                "tool.list": [10],
+            },
+        })
+    );
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": {
+                "tool.list": [10, 10],
+            },
+        })
+    );
+
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("same-priority chain should resolve"),
+        json!({ "handledBy": "second" })
+    );
+    assert_eq!(
+        *calls.lock().expect("calls mutex should not be poisoned"),
+        vec!["first", "second"]
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn request_timeout_bounds_slow_local_handlers() {
+    let server = serve_once(|mut ws| async move {
+        let _subscribe = read_bus_message(&mut ws).await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request(subjects::tool::LIST, |_ctx| async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Ok(json!({ "tooLate": true }))
+        })
+        .await
+        .expect("slow local handler should register");
+
+    let error = bus
+        .request_with_timeout(
+            subjects::tool::LIST,
+            json!({ "scope": "workspace" }),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("slow local handler should be bounded by request timeout");
+
+    assert!(
+        matches!(error, BusClientError::RequestTimeout(timeout) if timeout == Duration::from_millis(50))
+    );
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn finite_request_forwards_deadline_and_remaining_timeout_after_local_handlers() {
+    let server = serve_once(|mut ws| async move {
+        let _subscribe = read_bus_message(&mut ws).await;
+        let request = match read_bus_message(&mut ws).await {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        assert_eq!(request.priority, Some(100));
+        assert!(
+            request.deadline.is_some(),
+            "finite first remote hop should include an absolute deadline"
+        );
+        let timeout = request.timeout.expect("remote hop should carry timeout");
+        assert!(
+            (1..500).contains(&timeout),
+            "remote hop should carry remaining timeout, got {timeout}"
+        );
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "remote": true })),
+                error: None,
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request_with_priority(subjects::tool::LIST, 100, |_ctx| async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(())
+        })
+        .await
+        .expect("fallthrough local handler should register");
+
+    assert_eq!(
+        bus.request_with_timeout(
+            subjects::tool::LIST,
+            json!({ "scope": "workspace" }),
+            Duration::from_millis(500),
+        )
+        .await
+        .expect("remote request should resolve"),
+        json!({ "remote": true })
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn advertised_higher_priority_remote_handler_runs_before_local_handler() {
+    let server = serve_once(|mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            BusMessage::Subscribe(SubscribeMessage {
+                subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![100])]),
+                filters: None,
+            }),
+        )
+        .await;
+        send_bus_message(&mut ws, BusMessage::SubscribeSyncComplete {}).await;
+
+        let local_subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(local_subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.list": [0],
+                },
+            })
+        );
+
+        let request = match read_bus_message(&mut ws).await {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        assert_eq!(request.priority, None);
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "remote": true })),
+                error: None,
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let local_called = Arc::new(StdMutex::new(false));
+    let _handler = bus
+        .on_request(subjects::tool::LIST, {
+            let local_called = local_called.clone();
+            move |_ctx| {
+                let local_called = local_called.clone();
+                async move {
+                    *local_called
+                        .lock()
+                        .expect("local_called mutex should not be poisoned") = true;
+                    Ok(json!({ "local": true }))
+                }
+            }
+        })
+        .await
+        .expect("local handler should register");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("advertised higher-priority remote handler should resolve"),
+        json!({ "remote": true })
+    );
+    assert!(
+        !*local_called
+            .lock()
+            .expect("local_called mutex should not be poisoned"),
+        "lower-priority local handler should not run before advertised remote handler"
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn remote_unsubscribe_preserves_remaining_advertised_priorities() {
+    let server = serve_once(|mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            BusMessage::Subscribe(SubscribeMessage {
+                subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![300, 100])]),
+                filters: None,
+            }),
+        )
+        .await;
+        send_bus_message(&mut ws, BusMessage::SubscribeSyncComplete {}).await;
+
+        let local_subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(local_subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.list": [50],
+                },
+            })
+        );
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Unsubscribe(UnsubscribeMessage {
+                subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![300])]),
+            }),
+        )
+        .await;
+
+        let request = tokio::time::timeout(Duration::from_millis(500), read_bus_message(&mut ws))
+            .await
+            .expect("remaining remote priority should still receive the request");
+        let request = match request {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        assert_eq!(request.priority, None);
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "remote": true })),
+                error: None,
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request_with_priority(subjects::tool::LIST, 50, |_ctx| async {
+            Ok(json!({ "local": true }))
+        })
+        .await
+        .expect("local handler should register");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("remaining advertised remote priority should resolve"),
+        json!({ "remote": true })
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn local_first_interleaves_remote_priority_between_local_handlers() {
+    let (order_tx, mut order_rx) = mpsc::unbounded_channel::<&'static str>();
+    let server_order_tx = order_tx.clone();
+    let server = serve_once(move |mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            BusMessage::Subscribe(SubscribeMessage {
+                subjects: BTreeMap::from([(subjects::tool::LIST.to_string(), vec![7])]),
+                filters: None,
+            }),
+        )
+        .await;
+        send_bus_message(&mut ws, BusMessage::SubscribeSyncComplete {}).await;
+
+        let first_subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(first_subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.list": [8],
+                },
+            })
+        );
+        let second_subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(second_subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.list": [8, 6],
+                },
+            })
+        );
+
+        let request = match read_bus_message(&mut ws).await {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        assert_eq!(request.priority, Some(8));
+        server_order_tx
+            .send("remote-7")
+            .expect("remote order should be recorded");
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: None,
+                error: Some(BusTransportError::no_handler(subjects::tool::LIST)),
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let high_order_tx = order_tx.clone();
+    let _high_handler = bus
+        .on_request_with_priority(subjects::tool::LIST, 8, move |ctx| {
+            let high_order_tx = high_order_tx.clone();
+            async move {
+                high_order_tx
+                    .send("local-8")
+                    .expect("high local order should be recorded");
+                ctx.next().await?;
+                Ok(())
+            }
+        })
+        .await
+        .expect("high-priority local handler should register");
+    let low_order_tx = order_tx;
+    let _low_handler = bus
+        .on_request_with_priority(subjects::tool::LIST, 6, move |_ctx| {
+            let low_order_tx = low_order_tx.clone();
+            async move {
+                low_order_tx
+                    .send("local-6")
+                    .expect("low local order should be recorded");
+                Ok(json!({ "local": 6 }))
+            }
+        })
+        .await
+        .expect("low-priority local handler should register");
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("local fallback should resolve after remote tier"),
+        json!({ "local": 6 })
+    );
+    assert_eq!(order_rx.recv().await, Some("local-8"));
+    assert_eq!(order_rx.recv().await, Some("remote-7"));
+    assert_eq!(order_rx.recv().await, Some("local-6"));
 
     bus.close().await.expect("client should close");
     server.assert_completed().await;
@@ -1337,15 +1828,26 @@ async fn request_handler_miss_sends_structured_no_handler_error() {
 }
 
 #[tokio::test]
-async fn duplicate_request_handler_registration_is_rejected() {
+async fn same_priority_request_handler_registration_updates_snapshot() {
     let server = serve_once(|mut ws| async move {
-        let subscribe = read_bus_message(&mut ws).await;
+        let first_subscribe = read_bus_message(&mut ws).await;
         assert_eq!(
-            serde_json::to_value(subscribe).expect("subscribe should serialize"),
+            serde_json::to_value(first_subscribe).expect("subscribe should serialize"),
             json!({
                 "type": "subscribe",
                 "subjects": {
                     "tool.execute": [0],
+                },
+            })
+        );
+
+        let second_subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(second_subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.execute": [0, 0],
                 },
             })
         );
@@ -1363,19 +1865,12 @@ async fn duplicate_request_handler_registration_is_rejected() {
         .await
         .expect("first handler should register");
 
-    let duplicate = bus
+    let _second = bus
         .on_request(subjects::tool::EXECUTE, |_| async {
             Ok(json!({ "ok": false }))
         })
-        .await;
-
-    match duplicate {
-        Err(BusClientError::DuplicateRequestHandler(subject)) => {
-            assert_eq!(subject, subjects::tool::EXECUTE);
-        }
-        Err(error) => panic!("expected duplicate handler error, got {error}"),
-        Ok(_) => panic!("second request handler should not register"),
-    }
+        .await
+        .expect("same-priority handler should register");
 
     bus.close().await.expect("client should close");
     server.assert_completed().await;
@@ -2004,6 +2499,15 @@ fn wire_value(message: Message) -> Option<Value> {
         }
         Message::Ping(_) | Message::Pong(_) | Message::Close(_) | Message::Frame(_) => None,
     }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn assert_connection_closed_error(error: BusClientError) {

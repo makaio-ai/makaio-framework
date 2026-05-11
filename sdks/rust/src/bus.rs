@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -67,10 +67,41 @@ struct ClientInner {
     writer: Mutex<Option<BoxTransportWriter>>,
     pending: Mutex<HashMap<String, oneshot::Sender<ResponseMessage>>>,
     event_handlers: Mutex<HashMap<String, HashMap<usize, EventHandler>>>,
-    request_handlers: Mutex<HashMap<String, BTreeMap<i64, RequestHandler>>>,
+    request_handlers: Mutex<HashMap<String, BTreeMap<i64, Vec<RequestHandlerEntry>>>>,
+    remote_request_handlers: Mutex<BTreeMap<String, Vec<i64>>>,
+    remote_subscribe_synced: AtomicBool,
     background_tasks: Mutex<Vec<JoinHandle<()>>>,
     inbound_handler_slots: Arc<Semaphore>,
     next_handler_id: Mutex<usize>,
+}
+
+#[derive(Clone)]
+struct RequestHandlerEntry {
+    handler_id: usize,
+    handler: RequestHandler,
+}
+
+#[derive(Clone)]
+enum RequestChainEntry {
+    Local {
+        priority: i64,
+        handler: RequestHandler,
+    },
+    Remote {
+        priority: i64,
+    },
+}
+
+impl RequestChainEntry {
+    fn priority(&self) -> i64 {
+        match self {
+            Self::Local { priority, .. } | Self::Remote { priority } => *priority,
+        }
+    }
+
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local { .. })
+    }
 }
 
 enum SubjectAdvertisementAction {
@@ -118,6 +149,7 @@ pub struct RequestHandlerRegistration {
     client: BusClient,
     subject: String,
     priority: i64,
+    handler_id: usize,
     active: bool,
 }
 
@@ -560,6 +592,8 @@ impl BusClient {
                 pending: Mutex::new(HashMap::new()),
                 event_handlers: Mutex::new(HashMap::new()),
                 request_handlers: Mutex::new(HashMap::new()),
+                remote_request_handlers: Mutex::new(BTreeMap::new()),
+                remote_subscribe_synced: AtomicBool::new(false),
                 background_tasks: Mutex::new(Vec::new()),
                 inbound_handler_slots: Arc::new(Semaphore::new(MAX_INBOUND_HANDLER_TASKS)),
                 next_handler_id: Mutex::new(0),
@@ -630,6 +664,7 @@ impl BusClient {
         self.fail_pending_requests(BusTransportError::connection_closed())
             .await;
         self.abort_background_tasks().await;
+        self.clear_remote_advertisements().await;
 
         let _ = self.disconnect_writer().await;
 
@@ -738,7 +773,7 @@ impl BusClient {
         let (namespace, subject) = split_exact_full_subject(full_subject)?;
         let payload = serde_json::to_value(payload)?;
         let correlation_id = new_message_id();
-        let mut message = RequestMessage {
+        let message = RequestMessage {
             namespace: namespace.to_string(),
             subject: subject.to_string(),
             payload,
@@ -748,9 +783,39 @@ impl BusClient {
             priority: options.priority,
             deadline: options.deadline,
         };
+        let path_deadline = options
+            .deadline
+            .or_else(|| (!options.timeout.is_zero()).then(|| deadline_after(options.timeout)));
+        let path_timeout = match options.deadline {
+            Some(deadline) => request_path_timeout(options.timeout, deadline)?,
+            None => options.timeout,
+        };
 
+        let request_path = self.execute_request_path(message, options.timeout, path_deadline);
+
+        if path_timeout.is_zero() {
+            request_path.await
+        } else {
+            match tokio::time::timeout(path_timeout, request_path).await {
+                Ok(result) => result,
+                Err(_) => {
+                    self.inner.pending.lock().await.remove(&correlation_id);
+                    Err(BusClientError::RequestTimeout(path_timeout))
+                }
+            }
+        }
+    }
+
+    async fn execute_request_path(
+        &self,
+        mut message: RequestMessage,
+        timeout: Duration,
+        path_deadline: Option<u64>,
+    ) -> BusResult<Value> {
         if self.dispatch == DispatchMode::LocalFirst {
-            let outcome = self.dispatch_request_chain(message.clone()).await?;
+            let outcome = self
+                .dispatch_outbound_request_chain(message.clone(), timeout, path_deadline)
+                .await?;
             if outcome.has_result {
                 return Ok(outcome.result.unwrap_or(Value::Null));
             }
@@ -759,6 +824,19 @@ impl BusClient {
             }
         }
 
+        self.send_remote_request(message, timeout, path_deadline)
+            .await
+    }
+
+    async fn send_remote_request(
+        &self,
+        mut message: RequestMessage,
+        timeout: Duration,
+        path_deadline: Option<u64>,
+    ) -> BusResult<Value> {
+        let correlation_id = message.correlation_id.clone();
+        let remote_timeout =
+            self.prepare_remote_request_timing(&mut message, timeout, path_deadline)?;
         let (sender, receiver) = oneshot::channel();
         self.inner
             .pending
@@ -774,7 +852,7 @@ impl BusClient {
                 .map_err(|_| BusClientError::ResponseChannelClosed)
         };
 
-        let response = if options.timeout.is_zero() {
+        let response = if remote_timeout.is_zero() {
             match await_response.await {
                 Ok(response) => response,
                 Err(error) => {
@@ -783,7 +861,7 @@ impl BusClient {
                 }
             }
         } else {
-            match tokio::time::timeout(options.timeout, await_response).await {
+            match tokio::time::timeout(remote_timeout, await_response).await {
                 Ok(Ok(response)) => response,
                 Ok(Err(error)) => {
                     self.inner.pending.lock().await.remove(&correlation_id);
@@ -791,7 +869,7 @@ impl BusClient {
                 }
                 Err(_) => {
                     self.inner.pending.lock().await.remove(&correlation_id);
-                    return Err(BusClientError::RequestTimeout(options.timeout));
+                    return Err(BusClientError::RequestTimeout(remote_timeout));
                 }
             }
         };
@@ -801,6 +879,29 @@ impl BusClient {
         }
 
         Ok(response.result.unwrap_or(Value::Null))
+    }
+
+    fn prepare_remote_request_timing(
+        &self,
+        message: &mut RequestMessage,
+        timeout: Duration,
+        path_deadline: Option<u64>,
+    ) -> BusResult<Duration> {
+        let deadline = message.deadline.or(path_deadline);
+        if let Some(deadline) = deadline {
+            let remaining_ms = deadline.saturating_sub(now_millis());
+            if remaining_ms == 0 {
+                return Err(BusClientError::RequestTimeout(Duration::from_millis(
+                    remaining_ms,
+                )));
+            }
+            message.deadline = Some(deadline);
+            message.timeout = Some(remaining_ms);
+            Ok(Duration::from_millis(remaining_ms))
+        } else {
+            message.timeout = Some(duration_millis(timeout));
+            Ok(timeout)
+        }
     }
 
     /// Subscribes to inbound events for an exact subject or bus wildcard pattern.
@@ -864,6 +965,7 @@ impl BusClient {
         R: IntoRequestHandlerResult + Send + 'static,
     {
         split_exact_full_subject(full_subject)?;
+        let handler_id = self.next_handler_id().await;
         let user_handler = Arc::new(handler);
         let handler: RequestHandler = Arc::new(move |context| {
             let user_handler = user_handler.clone();
@@ -883,18 +985,19 @@ impl BusClient {
             {
                 let mut handlers = self.inner.request_handlers.lock().await;
                 let subject_handlers = handlers.entry(full_subject.to_string()).or_default();
-                if subject_handlers.contains_key(&priority) {
-                    return Err(BusClientError::DuplicateRequestHandler(
-                        full_subject.to_string(),
-                    ));
-                }
-                subject_handlers.insert(priority, handler.clone());
+                subject_handlers
+                    .entry(priority)
+                    .or_default()
+                    .push(RequestHandlerEntry {
+                        handler_id,
+                        handler: handler.clone(),
+                    });
             }
 
             if let Err(error) = self.send_subscribe_snapshot_with_writer(writer).await {
                 let mut handlers = self.inner.request_handlers.lock().await;
                 if let Some(subject_handlers) = handlers.get_mut(full_subject) {
-                    subject_handlers.remove(&priority);
+                    remove_request_handler_entry(subject_handlers, priority, handler_id);
                     if subject_handlers.is_empty() {
                         handlers.remove(full_subject);
                     }
@@ -906,6 +1009,7 @@ impl BusClient {
             client: self.clone(),
             subject: full_subject.to_string(),
             priority,
+            handler_id,
             active: true,
         })
     }
@@ -950,11 +1054,19 @@ impl BusClient {
                     self.dispatch_event(event).await;
                 }
                 BusMessage::Heartbeat(_) => {}
+                BusMessage::Subscribe(subscribe) => {
+                    self.handle_remote_subscribe(subscribe).await;
+                }
+                BusMessage::Unsubscribe(unsubscribe) => {
+                    self.handle_remote_unsubscribe(unsubscribe).await;
+                }
+                BusMessage::SubscribeSyncComplete {} => {
+                    self.inner
+                        .remote_subscribe_synced
+                        .store(true, Ordering::SeqCst);
+                }
                 BusMessage::Broadcast(_)
                 | BusMessage::BroadcastResponse(_)
-                | BusMessage::Subscribe(_)
-                | BusMessage::Unsubscribe(_)
-                | BusMessage::SubscribeSyncComplete {}
                 | BusMessage::AuthChallenge(_)
                 | BusMessage::AuthResponse(_)
                 | BusMessage::AuthResult(_) => {}
@@ -962,8 +1074,57 @@ impl BusClient {
         }
 
         let _ = self.disconnect_writer().await;
+        self.clear_remote_advertisements().await;
         self.fail_pending_requests(BusTransportError::connection_closed())
             .await;
+    }
+
+    async fn handle_remote_subscribe(&self, subscribe: SubscribeMessage) {
+        let mut remote_handlers = self.inner.remote_request_handlers.lock().await;
+        for (subject, mut priorities) in subscribe.subjects {
+            if priorities.is_empty() {
+                remote_handlers.remove(&subject);
+            } else {
+                priorities.sort_unstable_by(|left, right| right.cmp(left));
+                remote_handlers.insert(subject, priorities);
+            }
+        }
+    }
+
+    async fn handle_remote_unsubscribe(&self, unsubscribe: UnsubscribeMessage) {
+        let mut remote_handlers = self.inner.remote_request_handlers.lock().await;
+        for (subject, removed_priorities) in unsubscribe.subjects {
+            if removed_priorities.is_empty() {
+                remote_handlers.remove(&subject);
+                continue;
+            }
+
+            let should_remove_subject = if let Some(priorities) = remote_handlers.get_mut(&subject)
+            {
+                for removed_priority in removed_priorities {
+                    if let Some(index) = priorities
+                        .iter()
+                        .position(|priority| *priority == removed_priority)
+                    {
+                        priorities.remove(index);
+                    }
+                }
+                priorities.is_empty()
+            } else {
+                false
+            };
+
+            if should_remove_subject {
+                remote_handlers.remove(&subject);
+            }
+        }
+    }
+
+    async fn clear_remote_advertisements(&self) {
+        self.inner.remote_request_handlers.lock().await.clear();
+        self.inner
+            .remote_subscribe_synced
+            .store(false, Ordering::SeqCst);
     }
 
     async fn dispatch_event(&self, event: EventMessage) {
@@ -1009,6 +1170,109 @@ impl BusClient {
         let _ = self.send_message(BusMessage::Response(response)).await;
     }
 
+    async fn dispatch_outbound_request_chain(
+        &self,
+        request: RequestMessage,
+        timeout: Duration,
+        path_deadline: Option<u64>,
+    ) -> BusResult<RequestDispatchOutcome> {
+        let full_subject = join_full_subject(&request.namespace, &request.subject);
+        let chain = self
+            .build_outbound_request_chain(&full_subject, request.priority)
+            .await;
+
+        if chain.is_empty() {
+            return Ok(RequestDispatchOutcome {
+                result: None,
+                has_result: false,
+                next_remote_cursor: None,
+            });
+        }
+
+        let state = Arc::new(StdMutex::new(RequestContextState {
+            payload: request.payload.clone(),
+            result: None,
+            has_result: false,
+            executed_priorities: Vec::new(),
+        }));
+        step_outbound_request_chain(
+            self.clone(),
+            Arc::new(chain),
+            0,
+            state.clone(),
+            Arc::new(request),
+            Arc::from(full_subject),
+            timeout,
+            path_deadline,
+        )
+        .await
+        .map_err(BusClientError::Bus)?;
+        let state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Ok(RequestDispatchOutcome {
+            result: state.result.clone(),
+            has_result: state.has_result,
+            next_remote_cursor: state.executed_priorities.iter().min().copied(),
+        })
+    }
+
+    async fn build_outbound_request_chain(
+        &self,
+        full_subject: &str,
+        cursor: Option<i64>,
+    ) -> Vec<RequestChainEntry> {
+        let mut chain = {
+            let handlers = self.inner.request_handlers.lock().await;
+            handlers
+                .get(full_subject)
+                .map(|handlers| {
+                    handlers
+                        .iter()
+                        .rev()
+                        .flat_map(|(&priority, entries)| {
+                            entries.iter().filter_map(move |entry| {
+                                cursor.map_or(true, |cursor| priority < cursor).then(|| {
+                                    RequestChainEntry::Local {
+                                        priority,
+                                        handler: entry.handler.clone(),
+                                    }
+                                })
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+
+        if self.inner.remote_subscribe_synced.load(Ordering::SeqCst) {
+            let remote_priorities = {
+                let remote_handlers = self.inner.remote_request_handlers.lock().await;
+                remote_handlers
+                    .get(full_subject)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|priority| cursor.map_or(true, |cursor| *priority < cursor))
+                    .collect::<BTreeSet<_>>()
+            };
+
+            chain.extend(
+                remote_priorities
+                    .into_iter()
+                    .map(|priority| RequestChainEntry::Remote { priority }),
+            );
+        }
+
+        chain.sort_by(|left, right| {
+            right
+                .priority()
+                .cmp(&left.priority())
+                .then_with(|| right.is_local().cmp(&left.is_local()))
+        });
+        chain
+    }
+
     async fn dispatch_request_chain(
         &self,
         request: RequestMessage,
@@ -1022,11 +1286,13 @@ impl BusClient {
                     handlers
                         .iter()
                         .rev()
-                        .filter_map(|(&priority, handler)| {
-                            request
-                                .priority
-                                .is_none_or(|cursor| priority < cursor)
-                                .then(|| (priority, handler.clone()))
+                        .flat_map(|(&priority, entries)| {
+                            entries.iter().filter_map(move |entry| {
+                                request
+                                    .priority
+                                    .map_or(true, |cursor| priority < cursor)
+                                    .then(|| (priority, entry.handler.clone()))
+                            })
                         })
                         .collect::<Vec<_>>()
                 })
@@ -1178,10 +1444,7 @@ impl BusClient {
         {
             let handlers = self.inner.request_handlers.lock().await;
             for (subject, priorities) in handlers.iter() {
-                subjects.insert(
-                    subject.clone(),
-                    descending_priorities(priorities.keys().copied()),
-                );
+                subjects.insert(subject.clone(), request_handler_priorities(priorities));
             }
         }
 
@@ -1225,7 +1488,7 @@ impl BusClient {
             .is_some_and(|handlers| !handlers.is_empty());
         let request_priorities = request_handlers
             .get(full_subject)
-            .map(|handlers| handlers.keys().copied().collect::<Vec<_>>())
+            .map(request_handler_priorities)
             .unwrap_or_default();
 
         if has_event_handlers || !request_priorities.is_empty() {
@@ -1253,7 +1516,7 @@ impl BusClient {
                     !handlers.is_empty()
                 }
             },
-            |_, priorities| descending_priorities(priorities.copied()),
+            |_, priorities| request_handler_priorities(priorities),
         );
 
         if subjects.contains_key(full_subject) {
@@ -1269,6 +1532,7 @@ impl BusClient {
         &self,
         full_subject: &str,
         removed_priority: i64,
+        removed_handler_id: usize,
     ) -> SubjectAdvertisementAction {
         let event_handlers = self.inner.event_handlers.lock().await;
         let request_handlers = self.inner.request_handlers.lock().await;
@@ -1279,9 +1543,13 @@ impl BusClient {
             |_, handlers| !handlers.is_empty(),
             |subject, priorities| {
                 if subject == full_subject {
-                    descending_priorities(priorities.copied().filter(|p| *p != removed_priority))
+                    request_handler_priorities_without(
+                        priorities,
+                        removed_priority,
+                        removed_handler_id,
+                    )
                 } else {
-                    descending_priorities(priorities.copied())
+                    request_handler_priorities(priorities)
                 }
             },
         );
@@ -1299,12 +1567,13 @@ impl BusClient {
         &self,
         full_subject: &str,
         removed_priority: i64,
+        removed_handler_id: usize,
     ) -> SubjectAdvertisementAction {
         let event_handlers = self.inner.event_handlers.lock().await;
         let mut request_handlers = self.inner.request_handlers.lock().await;
 
         if let Some(subject_handlers) = request_handlers.get_mut(full_subject) {
-            subject_handlers.remove(&removed_priority);
+            remove_request_handler_entry(subject_handlers, removed_priority, removed_handler_id);
             if subject_handlers.is_empty() {
                 request_handlers.remove(full_subject);
             }
@@ -1315,7 +1584,7 @@ impl BusClient {
             .is_some_and(|handlers| !handlers.is_empty());
         let request_priorities = request_handlers
             .get(full_subject)
-            .map(|handlers| descending_priorities(handlers.keys().copied()))
+            .map(request_handler_priorities)
             .unwrap_or_default();
 
         if has_event_handlers || !request_priorities.is_empty() {
@@ -1375,7 +1644,7 @@ impl RequestHandlerRegistration {
             if let Some(writer) = writer.as_mut() {
                 let action = self
                     .client
-                    .preview_request_handler_removal(&self.subject, self.priority)
+                    .preview_request_handler_removal(&self.subject, self.priority, self.handler_id)
                     .await;
                 self.client
                     .send_subject_action_with_writer(writer, &self.subject, action)
@@ -1384,7 +1653,7 @@ impl RequestHandlerRegistration {
         }
         let _ = self
             .client
-            .remove_request_handler_action(&self.subject, self.priority)
+            .remove_request_handler_action(&self.subject, self.priority, self.handler_id)
             .await;
         self.active = false;
         Ok(())
@@ -1450,14 +1719,132 @@ fn step_request_chain(
     })
 }
 
+fn step_outbound_request_chain(
+    client: BusClient,
+    chain: Arc<Vec<RequestChainEntry>>,
+    index: usize,
+    state: Arc<StdMutex<RequestContextState>>,
+    request: Arc<RequestMessage>,
+    full_subject: Arc<str>,
+    timeout: Duration,
+    path_deadline: Option<u64>,
+) -> RequestNextFuture {
+    Box::pin(async move {
+        let Some(entry) = chain.get(index).cloned() else {
+            return Ok(());
+        };
+        let priority = entry.priority();
+
+        {
+            let mut state = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.executed_priorities.push(priority);
+        }
+
+        match entry {
+            RequestChainEntry::Local { handler, .. } => {
+                let next_called = Arc::new(AtomicBool::new(false));
+                let next = {
+                    let client = client.clone();
+                    let chain = chain.clone();
+                    let request = request.clone();
+                    let full_subject = full_subject.clone();
+                    Some(Arc::new(move |state| {
+                        step_outbound_request_chain(
+                            client.clone(),
+                            chain.clone(),
+                            index + 1,
+                            state,
+                            request.clone(),
+                            full_subject.clone(),
+                            timeout,
+                            path_deadline,
+                        )
+                    }) as RequestNextFn)
+                };
+                let mut context_request = request.as_ref().clone();
+                context_request.priority = local_entry_cursor(&chain, index, request.priority);
+                let context = RequestContext::new(
+                    &context_request,
+                    full_subject.to_string(),
+                    state.clone(),
+                    next,
+                    next_called.clone(),
+                );
+
+                handler(context.clone()).await?;
+
+                let should_auto_advance = {
+                    let state = state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    !next_called.load(Ordering::SeqCst) && !state.has_result
+                };
+
+                if should_auto_advance {
+                    step_outbound_request_chain(
+                        client,
+                        chain,
+                        index + 1,
+                        state,
+                        request,
+                        full_subject,
+                        timeout,
+                        path_deadline,
+                    )
+                    .await?;
+                }
+            }
+            RequestChainEntry::Remote { .. } => {
+                let mut remote_request = request.as_ref().clone();
+                remote_request.payload = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .payload
+                    .clone();
+                remote_request.priority = remote_entry_cursor(&chain, index, request.priority);
+
+                match client
+                    .send_remote_request(remote_request, timeout, path_deadline)
+                    .await
+                {
+                    Ok(result) => {
+                        let mut state = state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        state.result = Some(result);
+                        state.has_result = true;
+                    }
+                    Err(BusClientError::Bus(error))
+                        if is_no_handler_error_for_subject(&error, &full_subject) =>
+                    {
+                        step_outbound_request_chain(
+                            client,
+                            chain,
+                            index + 1,
+                            state,
+                            request,
+                            full_subject,
+                            timeout,
+                            path_deadline,
+                        )
+                        .await?;
+                    }
+                    Err(error) => return Err(bus_client_error_for_context(error, &full_subject)),
+                }
+            }
+        }
+
+        Ok(())
+    })
+}
+
 fn build_post_removal_snapshot(
     event_handlers: &HashMap<String, HashMap<usize, EventHandler>>,
-    request_handlers: &HashMap<String, BTreeMap<i64, RequestHandler>>,
+    request_handlers: &HashMap<String, BTreeMap<i64, Vec<RequestHandlerEntry>>>,
     event_filter: impl Fn(&str, &HashMap<usize, EventHandler>) -> bool,
-    request_priorities: impl Fn(
-        &str,
-        std::collections::btree_map::Keys<'_, i64, RequestHandler>,
-    ) -> Vec<i64>,
+    request_priorities: impl Fn(&str, &BTreeMap<i64, Vec<RequestHandlerEntry>>) -> Vec<i64>,
 ) -> BTreeMap<String, Vec<i64>> {
     let mut subjects = BTreeMap::new();
     for (subject, handlers) in event_handlers.iter() {
@@ -1466,7 +1853,7 @@ fn build_post_removal_snapshot(
         }
     }
     for (subject, handlers) in request_handlers.iter() {
-        let priorities = request_priorities(subject, handlers.keys());
+        let priorities = request_priorities(subject, handlers);
         if !priorities.is_empty() || subjects.contains_key(subject) {
             subjects.insert(subject.clone(), priorities);
         }
@@ -1474,10 +1861,123 @@ fn build_post_removal_snapshot(
     subjects
 }
 
-fn descending_priorities(priorities: impl IntoIterator<Item = i64>) -> Vec<i64> {
-    let mut priorities = priorities.into_iter().collect::<Vec<_>>();
-    priorities.sort_unstable_by(|left, right| right.cmp(left));
-    priorities
+fn request_handler_priorities(handlers: &BTreeMap<i64, Vec<RequestHandlerEntry>>) -> Vec<i64> {
+    handlers
+        .iter()
+        .rev()
+        .flat_map(|(&priority, entries)| std::iter::repeat(priority).take(entries.len()))
+        .collect()
+}
+
+fn request_handler_priorities_without(
+    handlers: &BTreeMap<i64, Vec<RequestHandlerEntry>>,
+    removed_priority: i64,
+    removed_handler_id: usize,
+) -> Vec<i64> {
+    handlers
+        .iter()
+        .rev()
+        .flat_map(|(&priority, entries)| {
+            entries
+                .iter()
+                .filter(move |entry| {
+                    priority != removed_priority || entry.handler_id != removed_handler_id
+                })
+                .map(move |_| priority)
+        })
+        .collect()
+}
+
+fn remove_request_handler_entry(
+    handlers: &mut BTreeMap<i64, Vec<RequestHandlerEntry>>,
+    removed_priority: i64,
+    removed_handler_id: usize,
+) {
+    if let Some(entries) = handlers.get_mut(&removed_priority) {
+        entries.retain(|entry| entry.handler_id != removed_handler_id);
+        if entries.is_empty() {
+            handlers.remove(&removed_priority);
+        }
+    }
+}
+
+fn local_entry_cursor(
+    chain: &[RequestChainEntry],
+    index: usize,
+    initial_cursor: Option<i64>,
+) -> Option<i64> {
+    let current_priority = chain[index].priority();
+    chain[..index]
+        .iter()
+        .rev()
+        .map(RequestChainEntry::priority)
+        .find(|priority| *priority > current_priority)
+        .or(initial_cursor)
+}
+
+fn remote_entry_cursor(
+    chain: &[RequestChainEntry],
+    index: usize,
+    initial_cursor: Option<i64>,
+) -> Option<i64> {
+    if index == 0 {
+        return initial_cursor;
+    }
+
+    let previous_priority = chain[index - 1].priority();
+    let current_priority = chain[index].priority();
+    if previous_priority == current_priority {
+        Some(previous_priority.saturating_add(1))
+    } else {
+        Some(previous_priority)
+    }
+}
+
+fn bus_client_error_for_context(error: BusClientError, full_subject: &str) -> BusTransportError {
+    match error {
+        BusClientError::Bus(error) => error,
+        error => BusTransportError {
+            message: error.to_string(),
+            code: Some("REMOTE_REQUEST_FAILED".to_string()),
+            subject: Some(full_subject.to_string()),
+            data: None,
+        },
+    }
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn request_path_timeout(timeout: Duration, deadline: u64) -> BusResult<Duration> {
+    let remaining_ms = deadline.saturating_sub(now_millis());
+    if remaining_ms == 0 {
+        return Err(BusClientError::RequestTimeout(Duration::from_millis(
+            remaining_ms,
+        )));
+    }
+    let deadline_timeout = Duration::from_millis(remaining_ms);
+    if timeout.is_zero() {
+        return Ok(deadline_timeout);
+    }
+    Ok(timeout.min(deadline_timeout))
+}
+
+fn deadline_after(duration: Duration) -> u64 {
+    now_millis().saturating_add(duration_millis(duration))
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn is_no_handler_error_for_subject(error: &BusTransportError, full_subject: &str) -> bool {
+    error.code.as_deref() == Some("NO_HANDLER") && error.subject.as_deref() == Some(full_subject)
 }
 
 fn split_exact_full_subject(full_subject: &str) -> BusResult<(&str, &str)> {
