@@ -70,4 +70,6 @@ When running with the Makaio desktop app, the account manager contributes:
 
 The account manager polls each tool's credential storage every 5 seconds. When a new fingerprint appears, it creates a persistent account record. When you switch accounts outside Makaio (e.g., via `claude` CLI login), the change is detected automatically.
 
+When the active account is detected or refreshed, the account manager also signals the resolved identity to the framework's client runtime service via `client.account.activate`. This allows standalone client processes that aren't part of a Makaio session (e.g. a Claude Code process running outside the desktop app) to have their usage attributed to the correct account via `client.account.getActive`.
+
 On macOS, remembered credentials are stored in an AES-256-GCM encrypted file and the encryption key is stored in the macOS Keychain. On other platforms, remembered credentials are stored as plaintext JSON with `0600` file permissions, matching the file-backed storage model used by the supported native clients. Use full-disk encryption and restrict host account access when relying on plaintext file-backed storage.

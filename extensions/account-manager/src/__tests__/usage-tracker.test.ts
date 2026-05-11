@@ -14,6 +14,7 @@ import { RateLimitedError, UsageAuthInvalidError } from '../interfaces/usage-pro
 import type { IUsageProvider, UsageResult } from '../interfaces/usage-provider.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { createUsageCacheKey } from '../usage/usage-partitioning.js';
+import { USAGE_AUTH_CODE_TRANSIENT } from '../utils/usage-auth-state.js';
 import { InMemoryAccountStore } from './testing/in-memory-store.js';
 
 // ---------------------------------------------------------------------------
@@ -396,6 +397,42 @@ describe('UsageTracker error cooldown and readCredential', () => {
     expect(afterSuccess?.metadata.usageAuthFingerprint).toBeUndefined();
   });
 
+  it('retries usage fetch when reauth marker originated from transient failures even if credential unchanged', async () => {
+    const storedCredential: RawCredential = {
+      token: 'stored-token',
+      fingerprint: 'fp-stored',
+      metadata: {},
+    };
+
+    await seedAccount(store, storedCredential);
+    await store.metadataStore.patchMetadata(CLIENT_ID, ACCOUNT_ID, 0, {
+      usageAuthState: 'reauth-required',
+      usageAuthFingerprint: 'fp-stored',
+      usageAuthMessage: '3 consecutive transient usage-fetch failures',
+      usageAuthCode: USAGE_AUTH_CODE_TRANSIENT,
+      usageAuthDetectedAt: Date.now(),
+    });
+
+    const { provider, receivedCredentials } = makeSpyProvider(async () => ({ usage: makeUsage() }));
+    const readCredential = vi.fn(async () => ({
+      status: 'ready' as const,
+      credential: storedCredential,
+      changed: false,
+    }));
+
+    tracker = buildTracker(bus, store, provider, readCredential);
+    await emitSwitched(bus);
+
+    expect(receivedCredentials).toHaveLength(1);
+
+    const afterSuccess = await store.get(CLIENT_ID, ACCOUNT_ID);
+    expect(afterSuccess?.metadata.usageAuthState).toBeUndefined();
+    expect(afterSuccess?.metadata.usageAuthFingerprint).toBeUndefined();
+    expect(afterSuccess?.metadata.usageAuthMessage).toBeUndefined();
+    expect(afterSuccess?.metadata.usageAuthCode).toBeUndefined();
+    expect(afterSuccess?.metadata.usageAuthDetectedAt).toBeUndefined();
+  });
+
   it('clearAccountState clears cooldown — next forceRefresh: true goes through', async () => {
     await seedAccount(store);
     let resolveCount = 0;
@@ -650,6 +687,7 @@ describe('UsageTracker transient failure escalation', () => {
     const account = await store.metadataStore.get(CLIENT_ID, ACCOUNT_ID);
     expect(account?.metadata).toMatchObject({
       usageAuthState: 'reauth-required',
+      usageAuthCode: USAGE_AUTH_CODE_TRANSIENT,
     });
   });
 

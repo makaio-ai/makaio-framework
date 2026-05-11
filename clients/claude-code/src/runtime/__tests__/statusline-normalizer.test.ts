@@ -83,7 +83,7 @@ describe('normalizeClaudeCodeStatusline', () => {
   });
 
   describe('rate_limits → usage windows conversion', () => {
-    it('maps five_hour window to key=five-hour and converts resets_at seconds to milliseconds', () => {
+    it('maps five_hour window to key=5h and converts resets_at seconds to milliseconds', () => {
       const result = normalizeClaudeCodeStatusline(
         makeRawStatusline({
           rate_limits: {
@@ -96,14 +96,14 @@ describe('normalizeClaudeCodeStatusline', () => {
       expect(result).not.toBeNull();
       expect(result!.usage.windows).toHaveLength(1);
       expect(result!.usage.windows[0]).toMatchObject({
-        key: 'five-hour',
+        key: '5h',
         label: '5 Hour',
         usedPercentage: 42,
         resetsAt: 1_738_425_600_000,
       });
     });
 
-    it('maps seven_day window to key=seven-day', () => {
+    it('maps seven_day window to key=7d', () => {
       const result = normalizeClaudeCodeStatusline(
         makeRawStatusline({
           rate_limits: {
@@ -116,14 +116,14 @@ describe('normalizeClaudeCodeStatusline', () => {
       expect(result).not.toBeNull();
       expect(result!.usage.windows).toHaveLength(1);
       expect(result!.usage.windows[0]).toMatchObject({
-        key: 'seven-day',
+        key: '7d',
         label: '7 Day',
         usedPercentage: 15,
         resetsAt: 1_738_857_600_000,
       });
     });
 
-    it('maps seven_day_sonnet passthrough window to key=seven-day-sonnet', () => {
+    it('maps seven_day_sonnet passthrough window to key=7d-sonnet', () => {
       const result = normalizeClaudeCodeStatusline(
         makeRawStatusline({
           rate_limits: {
@@ -136,8 +136,8 @@ describe('normalizeClaudeCodeStatusline', () => {
       expect(result).not.toBeNull();
       expect(result!.usage.windows).toHaveLength(1);
       expect(result!.usage.windows[0]).toMatchObject({
-        key: 'seven-day-sonnet',
-        label: '7 Day Sonnet',
+        key: '7d-sonnet',
+        label: 'Sonnet (7 Day)',
         usedPercentage: 8,
         resetsAt: 1_739_000_000_000,
       });
@@ -157,7 +157,7 @@ describe('normalizeClaudeCodeStatusline', () => {
 
       expect(result).not.toBeNull();
       expect(result!.usage.windows).toHaveLength(3);
-      expect(result!.usage.windows.map((w) => w.key)).toEqual(['five-hour', 'seven-day', 'seven-day-sonnet']);
+      expect(result!.usage.windows.map((w) => w.key)).toEqual(['5h', '7d', '7d-sonnet']);
     });
 
     it('omits a window when used_percentage is absent', () => {
@@ -173,7 +173,7 @@ describe('normalizeClaudeCodeStatusline', () => {
 
       expect(result).not.toBeNull();
       expect(result!.usage.windows).toHaveLength(1);
-      expect(result!.usage.windows[0]).toMatchObject({ key: 'seven-day' });
+      expect(result!.usage.windows[0]).toMatchObject({ key: '7d' });
     });
 
     it('sets resetsAt to undefined when resets_at is absent', () => {
@@ -187,7 +187,7 @@ describe('normalizeClaudeCodeStatusline', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result!.usage.windows[0]).toMatchObject({ key: 'five-hour', usedPercentage: 55 });
+      expect(result!.usage.windows[0]).toMatchObject({ key: '5h', usedPercentage: 55 });
       expect(result!.usage.windows[0]!.resetsAt).toBeUndefined();
     });
   });

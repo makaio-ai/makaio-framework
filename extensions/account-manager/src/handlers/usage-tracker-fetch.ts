@@ -11,7 +11,11 @@ import type {
 } from '../interfaces/account-store.js';
 import { getStoredAccount } from '../storage/joined-account-store.js';
 import { logAccountManagerDiagnostic } from '../utils/diagnostics.js';
-import { isUsageAuthInvalidForFingerprint } from '../utils/usage-auth-state.js';
+import {
+  USAGE_AUTH_CODE_TRANSIENT,
+  isUsageAuthInvalidForFingerprint,
+  isTransientReauthMarker,
+} from '../utils/usage-auth-state.js';
 import type { PersistedWindowState } from '../usage/usage-persistence.js';
 import { readUsageCredential } from './read-usage-credential.js';
 import { applyResolvedUsage, persistUsageAuthInvalidIfCurrent, resolveUsageSafely } from './usage-tracker-lifecycle.js';
@@ -211,6 +215,7 @@ async function escalateOrCooldownTransientFailure(opts: EscalateTransientFailure
       generation: opts.generation,
       reason: `${failCount} consecutive transient usage-fetch failures`,
       fingerprint: opts.fingerprint,
+      usageAuthCode: USAGE_AUTH_CODE_TRANSIENT,
       metadataStore: opts.metadataStore,
       usageCache: opts.usageCache,
       errorCooldownUntil: opts.errorCooldownUntil,
@@ -264,7 +269,8 @@ export async function executeUsageFetch(opts: ExecuteUsageFetchOptions): Promise
   );
   if (
     !opts.preparedCredential.changed &&
-    isUsageAuthInvalidForFingerprint(opts.account.metadata, credential.fingerprint)
+    isUsageAuthInvalidForFingerprint(opts.account.metadata, credential.fingerprint) &&
+    !isTransientReauthMarker(opts.account.metadata)
   ) {
     return credential;
   }

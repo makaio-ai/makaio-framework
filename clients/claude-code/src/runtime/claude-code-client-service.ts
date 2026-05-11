@@ -9,11 +9,11 @@
  *
  * Also subscribes to `client:claude-code.statusline.received` events.  For
  * each payload that carries a `session_id`, the service resolves the account
- * identity (via session storage or active-account fallback) and pins it in a
- * per-session cache on first resolution.  Subsequent statusline events for the
- * same `session_id` reuse the cached identity — this ensures that a
- * long-running turn continues attributing usage to the account that started
- * the session, even if the user switches accounts mid-turn.  When both an
+ * identity (via session storage or active-account fallback) and caches it per
+ * session to avoid repeated bus lookups within the same turn.  The cache is
+ * cleared whenever `account.activate` fires for Claude Code, so an account
+ * switch between turns causes the next statusline event to re-resolve identity
+ * against the newly active account.  When both an
  * identity and rate-limit data are present, the payload is passed to
  * {@link normalizeClaudeCodeStatusline} together with the resolved identity
  * context and the resulting request is forwarded to `client.usage.ingest`.
@@ -136,15 +136,26 @@ export class ClaudeCodeClientService extends BaseService {
   /**
    * Per-session identity cache for statusline usage attribution.
    *
-   * Identity is pinned on the **first** statusline event for each `session_id`
-   * so that a long-running turn (e.g. 20 minutes) continues to attribute usage
-   * to the account that started the session, even if the user switches accounts
-   * in another terminal mid-turn.
+   * Identity is resolved on the first statusline event for each `session_id`
+   * and cached so that subsequent events within the same turn avoid repeated
+   * bus lookups.  The cache is **cleared** whenever `account.activate` fires
+   * for Claude Code, ensuring that an account switch between turns causes the
+   * next statusline event to re-resolve identity against the new active account.
    *
    * Bounded at {@link SESSION_IDENTITY_CACHE_CAP} entries — the oldest identity
    * is evicted (FIFO) before inserting a new session when the cap is reached.
    */
   private readonly sessionIdentityCache = new Map<string, StatuslineIdentityContext>();
+
+  /**
+   * Monotonic generation for {@link sessionIdentityCache}.
+   *
+   * Account switches and service teardown invalidate in-flight statusline
+   * resolutions.  Handlers that started before the generation changed may
+   * still emit their already-observed statusline payload, but they must not
+   * repopulate the cache with stale identity after the invalidation.
+   */
+  private sessionIdentityCacheEpoch = 0;
 
   /**
    * Cached promise for the resolved config directory.
@@ -189,6 +200,17 @@ export class ClaudeCodeClientService extends BaseService {
     this.registerHandler(ClientSubjects.version.changed, ({ payload }) => {
       if (payload.clientId === CLIENT_ID) {
         this.cachedConfigDir = undefined;
+      }
+    });
+
+    // Invalidate the session identity cache when the active Claude Code account
+    // changes.  Claude Code uses whichever account is active at turn start, so
+    // a mid-session account switch must re-resolve identity on the next
+    // statusline event rather than reusing the previously pinned value.
+    this.registerHandler(ClientSubjects.account.activate, ({ payload }) => {
+      if (payload.clientId === CLIENT_ID) {
+        this.sessionIdentityCacheEpoch += 1;
+        this.sessionIdentityCache.clear();
       }
     });
 
@@ -240,7 +262,9 @@ export class ClaudeCodeClientService extends BaseService {
       assertAbsoluteProjectDir(ctx.payload.projectDir);
       const configDir = await this.resolveConfigDir();
       const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand));
+      // envPairs is part of the wiring request contract so dev-mode hooks can
+      // launch the CLI with the same runtime config as the host process.
+      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand, ctx.payload.envPairs));
     });
 
     this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
@@ -250,7 +274,11 @@ export class ClaudeCodeClientService extends BaseService {
       }
       const configDir = await this.resolveConfigDir();
       const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand));
+      // envPairs must flow through to generated hook/statusline commands; the
+      // helper owns shell construction, so the service forwards them unchanged.
+      ctx.setResult(
+        await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand, ctx.payload.envPairs),
+      );
     });
 
     this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
@@ -270,6 +298,7 @@ export class ClaudeCodeClientService extends BaseService {
    */
   protected override onDestroy(): void {
     this.managedAdapterSessionIds.clear();
+    this.sessionIdentityCacheEpoch += 1;
     this.sessionIdentityCache.clear();
     this.cachedConfigDir = undefined;
   }
@@ -369,12 +398,10 @@ export class ClaudeCodeClientService extends BaseService {
    * Receive a raw statusline payload and forward it to `client.usage.ingest`
    * when an account identity can be resolved.
    *
-   * Identity resolution proceeds in two stages, but is performed **only once
-   * per `session_id`** — subsequent statusline events for the same session
-   * reuse the cached identity.  This guarantees that a long-running turn
-   * (e.g. 20 minutes) continues attributing usage to the account that started
-   * the session, even if the user switches accounts in another terminal
-   * mid-turn.
+   * Identity resolution proceeds in two stages and is cached per `session_id`
+   * to avoid repeated bus lookups within the same turn.  The cache is cleared
+   * on `account.activate` events for Claude Code, so an account switch between
+   * turns causes the next statusline event to re-resolve identity.
    *
    * **Primary — session-based identity:**
    * 1. Extract `session_id` from the raw payload; return early when absent.
@@ -399,6 +426,7 @@ export class ClaudeCodeClientService extends BaseService {
   private async handleStatuslineReceived(raw: Parameters<typeof normalizeClaudeCodeStatusline>[0]): Promise<void> {
     const adapterSessionId = raw.session_id;
     if (!adapterSessionId) return;
+    const cacheEpoch = this.sessionIdentityCacheEpoch;
 
     // 1. Check session identity cache (pinned on first resolution).
     let identity: StatuslineIdentityContext | null = this.sessionIdentityCache.get(adapterSessionId) ?? null;
@@ -428,7 +456,7 @@ export class ClaudeCodeClientService extends BaseService {
     // Pin identity for this session so future account switches don't affect attribution.
     // Concurrent statusline events may resolve in either order; once one handler
     // pins an identity, all in-flight handlers must use that pinned value.
-    if (identity) {
+    if (identity && cacheEpoch === this.sessionIdentityCacheEpoch) {
       const cachedIdentity = this.sessionIdentityCache.get(adapterSessionId);
       if (cachedIdentity) {
         identity = cachedIdentity;

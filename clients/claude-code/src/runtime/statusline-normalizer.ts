@@ -16,10 +16,11 @@
  *
  * ## Rate limit window mapping
  *
- * Each documented rate limit window is mapped to a stable key/label pair:
- * - `five_hour` → `{ key: 'five-hour', label: '5 Hour' }`
- * - `seven_day` → `{ key: 'seven-day', label: '7 Day' }`
- * - `seven_day_sonnet` → `{ key: 'seven-day-sonnet', label: '7 Day Sonnet' }`
+ * Each documented rate limit window is mapped to a stable key/label pair
+ * that matches the IDs used by the Claude Code API usage source:
+ * - `five_hour` → `{ key: '5h', label: '5 Hour' }`
+ * - `seven_day` → `{ key: '7d', label: '7 Day' }`
+ * - `seven_day_sonnet` → `{ key: '7d-sonnet', label: 'Sonnet (7 Day)' }`
  *
  * Windows missing `used_percentage` are omitted.  `resets_at` is carried from
  * the raw payload (in Unix seconds) and converted to milliseconds for the
@@ -119,14 +120,14 @@ function buildUsageWindows(raw: ClaudeCodeStatuslineRawPayload): ClientUsageWind
 
   const windows: ClientUsageWindow[] = [];
 
-  appendWindow(windows, rateLimits.five_hour, 'five-hour', '5 Hour');
-  appendWindow(windows, rateLimits.seven_day, 'seven-day', '7 Day');
+  appendWindow(windows, rateLimits.five_hour, '5h', '5 Hour');
+  appendWindow(windows, rateLimits.seven_day, '7d', '7 Day');
 
   // seven_day_sonnet is not a typed field in the schema but travels through
   // the passthrough object. Read it via index access and parse defensively.
   const sevenDaySonnet = parseRateLimitWindow(rateLimits['seven_day_sonnet']);
   if (sevenDaySonnet) {
-    appendWindow(windows, sevenDaySonnet, 'seven-day-sonnet', '7 Day Sonnet');
+    appendWindow(windows, sevenDaySonnet, '7d-sonnet', 'Sonnet (7 Day)');
   }
 
   return windows;

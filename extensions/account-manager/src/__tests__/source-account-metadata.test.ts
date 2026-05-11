@@ -48,6 +48,7 @@ describe('sanitizeSourceAccountMetadata', () => {
       usageAuthState: 'reauth-required',
       usageAuthFingerprint: 'fp',
       usageAuthMessage: 'msg',
+      usageAuthCode: 'TRANSIENT_USAGE_FETCH_FAILURES',
       usageAuthDetectedAt: '2024-01-01',
     });
 
