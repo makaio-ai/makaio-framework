@@ -80,7 +80,3 @@ only). Defaults to `true`.
 | Type | Description |
 |------|-------------|
 | `PlatformMacOSPackageOptions` | `{ autoLaunch?: { appName, appPath } \| false }` |
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

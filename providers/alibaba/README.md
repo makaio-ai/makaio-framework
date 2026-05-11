@@ -35,7 +35,3 @@ Type-only package that declares the Alibaba Model Studio provider identity for t
 ## Installation
 
 `@makaio/provider-alibaba` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

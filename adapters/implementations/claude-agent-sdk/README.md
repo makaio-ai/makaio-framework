@@ -172,7 +172,3 @@ src/
 ├── utils/                         # Helper functions
 └── __tests__/                     # Unit tests + fixtures
 ```
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

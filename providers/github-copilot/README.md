@@ -1,5 +1,9 @@
 # @makaio/provider-github-copilot
 
+> [!IMPORTANT]
+> Since GitHub Copilot [changed its pricing model](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/),
+> this provider package is currently no longer actively maintained.
+
 Type-only package that declares the GitHub Copilot provider identity for the Makaio framework. It exports a single `providerDefinition: ProviderDefinitionInput` for GitHub Copilot's premium request-based AI models. GitHub Copilot communicates through its own proprietary transport and does not expose a standard HTTP endpoint, so no `endpoints` field is declared. This is the reference implementation for SDK-only providers. No runtime logic, network calls, or model catalog is included. The `githubCopilotPackage` descriptor wraps the definition for unified package discovery.
 
 ## Provider Identity
@@ -28,7 +32,3 @@ No `endpoints` are declared — the proprietary SDK transport handles all commun
 ## Installation
 
 `@makaio/provider-github-copilot` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

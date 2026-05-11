@@ -2,7 +2,11 @@ dist/
 node_modules/
 .astro/
 .api-symbol-manifest.json
+src/content/docs/adapters/
+src/content/docs/clients/
+src/content/docs/extensions/
 src/content/docs/packages/
+src/content/docs/providers/
 src/content/docs/reference/api/
 src/content/docs/reference/subjects/
 .tsconfigs/

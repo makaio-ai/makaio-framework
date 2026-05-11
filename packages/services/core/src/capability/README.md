@@ -140,7 +140,3 @@ The service knows nothing about specific extensions. It receives providers via b
 Provider registration uses `z.unknown()` at the Zod level (runtime objects with methods cannot be validated by Zod). Type safety is enforced by:
 - `ICapabilityProvider` interface in contracts
 - Domain-specific interfaces (e.g., `IPushNotificationProvider`) extending the base
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

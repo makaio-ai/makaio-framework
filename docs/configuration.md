@@ -84,9 +84,9 @@ configs) is documented separately:
 
 | Topic | Document |
 |-------|----------|
-| Canonical model names, provider definitions, credentials | [Models & Providers](./adapters/models-and-providers) |
-| How adapters are discovered and enabled at boot | [Discovery](./adapters/discovery) |
-| Available adapters and capabilities | [Adapters](./adapters/) |
+| Canonical model names, provider definitions, credentials | [Models & Providers](./architecture/adapters/models-and-providers) |
+| How adapters are discovered and enabled at boot | [Discovery](./architecture/adapters/discovery) |
+| Available adapters and capabilities | [Adapters](./architecture/adapters/) |
 
 Per-adapter config files live at `$MAKAIO_HOME/adapters/<adapterName>.json`.
 Provider config files live at `$MAKAIO_HOME/provider-configs/<providerConfigId>.json`.

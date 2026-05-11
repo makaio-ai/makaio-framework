@@ -163,7 +163,3 @@ const transport = registry.getTransport('websocket'); // typed
 For the transport architecture overview — subscribe-sync handshake, priority-cursor dispatch,
 relay behavior, and how to build a custom transport — see the
 [Transport Guide](../../docs/transport.md).
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

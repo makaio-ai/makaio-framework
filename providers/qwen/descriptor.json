@@ -13,7 +13,9 @@
       {
         "id": "qwen-oauth",
         "name": "Qwen OAuth",
-        "description": "Qwen Code CLI via Agent Client Protocol"
+        "description": "Qwen Code CLI via Agent Client Protocol",
+        "protocols": ["openai"],
+        "requiredClient": "qwen"
       }
     ]
   }

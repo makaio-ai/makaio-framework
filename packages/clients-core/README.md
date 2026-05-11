@@ -72,7 +72,3 @@ MakaioBus.on(ClientSubjects.hookReceived, ({ payload }) => {
 ```json
 { "@makaio/clients-core": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

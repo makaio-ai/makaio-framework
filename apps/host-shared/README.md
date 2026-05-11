@@ -73,7 +73,3 @@ Shared desktop host logic consumed by both `@makaio/electron` and `@makaio/elect
 ## Installation
 
 Private workspace package — not published to npm. Consumed internally by `@makaio/electron` and `@makaio/electrobun`.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

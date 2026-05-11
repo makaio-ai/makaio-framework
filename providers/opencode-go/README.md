@@ -49,7 +49,3 @@ The Anthropic SDK appends `/v1/messages` to the base URL automatically, so the t
 ## Installation
 
 `@makaio/provider-opencode-go` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

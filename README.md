@@ -11,9 +11,47 @@
 
 ---
 
+> [!TIP]
+> **Give your AI agent full context.** Point it at [`makaio.ai/llms.txt`](https://makaio.ai/llms.txt) — everything it needs to answer questions, write extensions, or explore the architecture with you.
+
+---
+
+
 Most AI tooling today solves one layer: call an LLM, stream a response, maybe loop on tool calls. That works until you need multiple providers in one system, agents that communicate across processes, storage you can swap without rewriting services, or extensions that load at runtime without forking the host.
 
 Makaio Framework is a typed runtime for building and hosting AI agent systems. It gives you a bus-centric architecture where agents, services, tools, and storage communicate through typed events and RPC — across threads, processes, or machines.
+
+---
+
+### Connect your AI tools
+
+> [!NOTE]
+> Makaio normalizes the infrastructure beneath your AI tools — adapters, credentials, streaming, storage. Build a usage tracker, session viewer, or approval workflow once, and it works across Claude Code, Codex, Gemini, and more. Already built something for one provider? Move it to Makaio and it works with all of them.
+>
+> → [Connect your tooling](docs/connect.md) · [Shipped extensions](extensions/index.md)
+
+### Extend the ecosystem
+
+> [!NOTE]
+> Scaffold an extension in one command, contribute CLI commands, background services, tools, or UI surfaces. The framework provides adapters for 8 providers, bus-mediated storage, and a full runtime — you focus on what your extension does.
+>
+> → [Create an extension](docs/creating-extensions.md) · [Extension model](docs/architecture/extensions/index.md)
+
+### Compose, intercept, extend
+
+> [!NOTE]
+> Everything flows through a typed bus — tool calls, agent events, storage requests. Intercept tool inputs for redaction, route sensitive analysis to local models, chain handlers with priority middleware. Build sophisticated automations without forking the framework.
+>
+> → [Bus architecture](docs/architecture/bus/index.md) · [Writing an adapter](docs/creating-adapters.md)
+
+### Evaluating agent frameworks?
+
+> [!NOTE]
+> Makaio is not another LangChain wrapper. It's runtime infrastructure: a typed event bus with cross-process transports, a 3-layer adapter contract with conformance tests, and an extension system where capabilities load at runtime. Compare it to the orchestration layer beneath your agents, not the agents themselves.
+>
+> → [How this differs](#how-this-differs) · [Architecture](#architecture)
+
+---
 
 ## Install
 
@@ -160,7 +198,7 @@ Switch `adapterName` and the same session orchestration code runs against Claude
 └─────────────────────────────────────────────────────────┘
 ```
 
-Everything communicates through the [bus](docs/bus/index.md). The transport registry means the bus spans process boundaries — a VS Code extension, a mobile app, or a CI pipeline can participate as a bus client over WebSocket without importing the framework.
+Everything communicates through the [bus](docs/architecture/bus/index.md). The transport registry means the bus spans process boundaries — a VS Code extension, a mobile app, or a CI pipeline can participate as a bus client over WebSocket without importing the framework.
 
 ### Adapters
 
@@ -228,15 +266,15 @@ Cross-language SDKs are generated from a [shared protocol manifest](sdks/manifes
 |-------|------|
 | Writing an extension | [docs/creating-extensions.md](docs/creating-extensions.md) |
 | Writing an adapter | [docs/creating-adapters.md](docs/creating-adapters.md) |
-| Extension model | [docs/extensions.md](docs/extensions.md) |
-| Bus architecture | [docs/bus/](docs/bus/index.md) |
-| Transport (WebSocket, cross-process) | [docs/transport.md](docs/transport.md) |
+| Extension model | [docs/architecture/extensions/index.md](docs/architecture/extensions/index.md) |
+| Bus architecture | [docs/architecture/bus/](docs/architecture/bus/index.md) |
+| Transport (WebSocket, cross-process) | [docs/architecture/transport.md](docs/architecture/transport.md) |
 
 **Host and deploy:**
 
 | Topic | Link |
 |-------|------|
-| Host applications | [docs/apps.md](docs/apps.md) |
+| Host applications | [docs/architecture/apps.md](docs/architecture/apps.md) |
 
 ## Repository Layout
 

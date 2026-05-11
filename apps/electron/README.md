@@ -59,7 +59,3 @@ yarn package
 ## Installation
 
 Private workspace package -- not published to npm. Installed from this source workspace.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

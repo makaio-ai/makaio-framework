@@ -136,7 +136,3 @@ const registry = new ToolRegistry({ bus: MakaioBus, policyProvider });
 - `bus` - for emitting events during execution
 - `sessionId` - for multi-session task correlation
 - `agentId`, `adapterId`, `adapterName`, `turnId`, `turnContext`, `toolCallId` when supplied by the caller
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

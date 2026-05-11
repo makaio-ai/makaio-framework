@@ -148,7 +148,3 @@ Reviewer processor extensions must also be installed to actually receive finding
 makaio extension install ./extensions/reviewer-coderabbit
 makaio extension install ./extensions/reviewer-copilot
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

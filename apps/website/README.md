@@ -61,7 +61,3 @@ The build requires access to the full framework source tree. The `generate-api-r
 ## Installation
 
 Private workspace package — not published to npm. Deployed as a static site to [makaio.ai](https://makaio.ai).
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

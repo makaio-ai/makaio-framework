@@ -3,6 +3,7 @@ interface GenerateWebsiteDocsIdOptions {
   entry: string;
 }
 
+const FRAMEWORK_ARCHITECTURE_PREFIX = 'docs/architecture/';
 const FRAMEWORK_DOCS_PREFIX = 'docs/';
 const WEBSITE_DOCS_PREFIX = 'apps/website/src/content/docs/';
 
@@ -13,6 +14,10 @@ const WEBSITE_DOCS_PREFIX = 'apps/website/src/content/docs/';
  */
 export function generateWebsiteDocsId(options: GenerateWebsiteDocsIdOptions): string {
   const withoutExtension = options.entry.replace(/\.(md|mdx)$/u, '');
+
+  if (withoutExtension.startsWith(FRAMEWORK_ARCHITECTURE_PREFIX)) {
+    return `architecture/${slugPath(withoutExtension.slice(FRAMEWORK_ARCHITECTURE_PREFIX.length))}`;
+  }
 
   if (withoutExtension.startsWith(FRAMEWORK_DOCS_PREFIX)) {
     return `guides/${slugPath(withoutExtension.slice(FRAMEWORK_DOCS_PREFIX.length))}`;

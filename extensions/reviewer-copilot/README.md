@@ -47,7 +47,3 @@ Requires the `review` extension to be loaded and running. The processor is regis
 makaio extension install ./extensions/reviewer-copilot
 makaio extension install ./extensions/review
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

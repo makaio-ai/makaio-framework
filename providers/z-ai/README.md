@@ -36,7 +36,3 @@ The two entries let adapters select whichever wire protocol they support. Both p
 ## Installation
 
 `@makaio/provider-z-ai` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

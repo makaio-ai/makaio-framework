@@ -13,7 +13,8 @@
       {
         "id": "z-ai",
         "name": "Z.AI (GLM)",
-        "description": "Z.AI \u2014 Anthropic and OpenAI compatible API"
+        "description": "Z.AI \u2014 Anthropic and OpenAI compatible API",
+        "protocols": ["anthropic", "openai"]
       }
     ]
   }

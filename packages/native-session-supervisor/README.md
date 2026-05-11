@@ -81,7 +81,3 @@ const runtime = registry.get('sup-1');
 ```json
 { "@makaio/native-session-supervisor": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

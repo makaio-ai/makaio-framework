@@ -13,12 +13,14 @@
       {
         "id": "opencode-go",
         "name": "OpenCode Go",
-        "description": "OpenCode Go gateway \u2014 OpenAI compatible API"
+        "description": "OpenCode Go gateway \u2014 OpenAI compatible API",
+        "protocols": ["openai"]
       },
       {
         "id": "opencode-go-anthropic",
         "name": "OpenCode Go (Anthropic)",
-        "description": "OpenCode Go gateway \u2014 Anthropic compatible API"
+        "description": "OpenCode Go gateway \u2014 Anthropic compatible API",
+        "protocols": ["anthropic"]
       }
     ]
   }

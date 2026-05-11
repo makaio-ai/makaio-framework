@@ -13,12 +13,15 @@
       {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Official Anthropic API"
+        "description": "Official Anthropic API",
+        "protocols": ["anthropic"]
       },
       {
         "id": "anthropic-oauth",
         "name": "Anthropic (Subscription)",
-        "description": "Anthropic Claude via OAuth subscription"
+        "description": "Anthropic Claude via OAuth subscription",
+        "protocols": ["anthropic"],
+        "requiredClient": "claude-code"
       }
     ]
   }

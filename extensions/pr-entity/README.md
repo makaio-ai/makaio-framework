@@ -71,7 +71,3 @@ The tool supports three operations via a discriminated union on `op`:
 ```bash
 makaio extension install ./extensions/pr-entity
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

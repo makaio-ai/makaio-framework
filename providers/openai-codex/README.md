@@ -22,7 +22,3 @@ No `endpoints` or `credentialEnvVars` are declared — the subprocess transport 
 ## Installation
 
 `@makaio/provider-openai-codex` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

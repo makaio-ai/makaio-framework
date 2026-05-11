@@ -58,7 +58,3 @@ To integrate with Claude Desktop, add an entry to `claude_desktop_config.json`:
 ## Installation
 
 Private workspace package — not published to npm. The `makaio mcp-server` CLI command in `@makaio/cli` is the intended entry point for end users.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

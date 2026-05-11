@@ -44,7 +44,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `pages` | `{ id: string; name: string; mode: "switch" \| "peek" \| "cover"; level: UiNavigationLevel; description?: string \| undefined; surfaces?: "all" \| ("mobile" \| "web" \| "electron" \| "electrobun" \| "tray")[] \| undefined; }[]` | yes |
+| `pages` | `{ id: string; name: string; mode: "switch" \| "peek" \| "cover" \| "sheet"; level: UiNavigationLevel; description?: string \| undefined; surfaces?: "all" \| ("mobile" \| "web" \| "electron" \| "electrobun" \| "tray")[] \| undefined; }[]` | yes |
 
 ---
 

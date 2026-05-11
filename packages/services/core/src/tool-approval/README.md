@@ -76,7 +76,3 @@ await service.init();
 | `@makaio/tools-filesystem` | `extractToolFilePath`, `FileAccessRuleProvider` type |
 
 Internal sibling import: `../session` for `AgentStorageSubjects` and `SessionStorageSubjects`.
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

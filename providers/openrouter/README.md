@@ -32,7 +32,3 @@ Type-only provider package for OpenRouter — a unified API gateway that proxies
 ## Installation
 
 `@makaio/provider-openrouter` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

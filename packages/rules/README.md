@@ -113,7 +113,3 @@ import-without-side-effects scenarios.
 ```json
 { "@makaio/rules": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

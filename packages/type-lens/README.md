@@ -116,7 +116,3 @@ The package exposes granular sub-paths for selective imports:
 ```json
 { "@makaio/type-lens": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

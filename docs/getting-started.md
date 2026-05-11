@@ -142,7 +142,7 @@ Zod schemas. `once()` returns a promise that resolves on the next matching
 event — use `filter` to narrow by payload fields and `timeoutMs` to avoid
 hanging indefinitely.
 
-See [`docs/bus/`](./bus/index.md) for the full bus architecture guide.
+See [`docs/bus/`](./architecture/bus/index.md) for the full bus architecture guide.
 
 ## Writing a Tool
 
@@ -265,7 +265,7 @@ shutdown, it calls `service.destroy()` in reverse dependency order.
 
 For dependencies, surface gating, CLI authoring, scaffolding, and the
 build/publish workflow, see
-[Creating Extensions](./extensions/creating).
+[Creating Extensions](./creating-extensions).
 
 ## Sessions and Agents
 
@@ -284,7 +284,7 @@ const { messageId, turnId } = await bus.request(
     agent: {
       kind: 'canonical-model',
       model: 'sonnet',
-      // See docs/adapters/models-and-providers for the canonical model name format.
+      // See docs/architecture/adapters/models-and-providers for the canonical model name format.
       // Examples: 'gpt-5.2', 'anthropic::sonnet', 'openai-node/openai::gpt-5.2'
     },
     message: 'What files are in the current directory?',
@@ -366,12 +366,12 @@ Do not override the reporter with `--reporter`.
 
 | Topic | Document |
 |-------|----------|
-| Bus architecture (full guide) | [`docs/bus/`](./bus/index.md) |
-| Adapters overview | [`docs/adapters/`](./adapters/) |
-| Models, providers, credentials | [`docs/adapters/models-and-providers`](./adapters/models-and-providers) |
-| Building a new adapter | [`docs/adapters/creating`](./adapters/creating) |
-| Extension model (full guide) | [`docs/extensions/`](./extensions/) |
-| CLI commands and server | [`docs/cli.md`](./cli.md) |
+| Bus architecture | [Architecture: Bus](./architecture/bus/index.md) |
+| Adapters overview | [Architecture: Adapters](./architecture/adapters/) |
+| Models, providers, credentials | [Architecture: Models & Providers](./architecture/adapters/models-and-providers) |
+| Building a new adapter | [Guide: Creating Adapters](./creating-adapters) |
+| Extension model | [Architecture: Extensions](./architecture/extensions/) |
+| CLI commands and server | [Guide: CLI](./cli.md) |
 
 Package-level READMEs:
 

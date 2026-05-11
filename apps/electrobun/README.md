@@ -74,7 +74,3 @@ yarn package:canary:base   # base variant, canary track
 ## Installation
 
 Private workspace package -- not published to npm. Installed from this source workspace.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

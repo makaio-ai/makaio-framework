@@ -13,7 +13,9 @@
       {
         "id": "openai-codex",
         "name": "OpenAI Codex",
-        "description": "OpenAI Codex App-Server"
+        "description": "OpenAI Codex App-Server",
+        "protocols": ["openai"],
+        "requiredClient": "codex"
       }
     ]
   }

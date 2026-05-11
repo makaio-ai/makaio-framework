@@ -42,7 +42,7 @@ Adapters can be created in this repository or as external packages. They must:
 4. Expose runtime contribution through a `./server` entrypoint whose default export is a `MakaioExtension` package descriptor
 5. Pass the conformance test suite
 
-See [Creating Adapters](../../docs/creating-adapters.md) for the full guide.
+See [Creating Adapters](../../docs/adapters/creating.md) for the full guide.
 
 ## Community Adapters
 

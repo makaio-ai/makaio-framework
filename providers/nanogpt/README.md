@@ -32,7 +32,3 @@ Type-only provider package for NanoGPT — a specialized OpenAI-compatible infer
 ## Installation
 
 `@makaio/provider-nanogpt` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

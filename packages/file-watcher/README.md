@@ -78,7 +78,3 @@ watcher.dispose();
 ```json
 { "@makaio/file-watcher": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

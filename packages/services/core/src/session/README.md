@@ -197,7 +197,3 @@ session/
 ├── testing/                          # Shared test helpers
 └── __tests__/                        # Unit tests
 ```
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

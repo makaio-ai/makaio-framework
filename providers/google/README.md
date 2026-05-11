@@ -39,7 +39,3 @@ Neither variant declares `endpoints`. The OAuth variant additionally carries no 
 ## Installation
 
 `@makaio/provider-google` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

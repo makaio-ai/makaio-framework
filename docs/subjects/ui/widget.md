@@ -22,11 +22,27 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `activated` | [`widget.activated`](#widget.activated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/ui/kernel/src/widgets/schemas.ts) |
 | `list` | [`widget.list`](#widget.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/ui/kernel/src/widgets/schemas.ts) |
 | `register` | [`widget.register`](#widget.register) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/ui/kernel/src/widgets/schemas.ts) |
 | `unregister` | [`widget.unregister`](#widget.unregister) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/ui/kernel/src/widgets/schemas.ts) |
 
 ## Subject Details
+
+### <a id="widget.activated"></a>`widget.activated` (event)
+
+Emitted when a user activates a widget by clicking it.
+
+Subject: `widget.activated`
+Type: Local event (fire-and-forget, never sent to transports)
+Purpose: Signals that a widget with an `activate` field was clicked.
+  Consumers (e.g. analytics, debug tooling) can subscribe to this event
+  to observe widget activation without coupling to the grid implementation.
+
+| Field | Type | Required |
+|-------|------|----------|
+| `instanceId` | `string` | yes |
+| `widgetId` | `string` | yes |
 
 ### <a id="widget.list"></a>`widget.list` (rpc)
 
@@ -46,7 +62,7 @@ Purpose: Query available widgets, optionally filtered by scope.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `widgets` | `{ id: string; name: string; scope: string \| string[]; supportedSizes: ("small" \| "medium" \| "large" \| "full-width")[]; defaultSize: "small" \| "medium" \| "large" \| "full-width"; component: {} \| null; description?: string \| undefined; defaultConfig?: unknown; allowMultiple?: boolean \| undefined; }[]` | yes |
+| `widgets` | `{ id: string; name: string; scope: string \| string[]; supportedSizes: ("small" \| "medium" \| "large" \| "full-width")[]; defaultSize: "small" \| "medium" \| "large" \| "full-width"; component: {} \| null; description?: string \| undefined; defaultConfig?: unknown; allowMultiple?: boolean \| undefined; activate?: { pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: Function \| undefined; } \| undefined; }[]` | yes |
 
 ### <a id="widget.register"></a>`widget.register` (event)
 
@@ -58,6 +74,7 @@ Purpose: Plugins or built-in widgets emit this to register themselves.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `activate` | `{ pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: Function \| undefined; } \| undefined` | no |
 | `allowMultiple` | `boolean \| undefined` | no |
 | `component` | `{} \| null` | yes |
 | `defaultConfig` | `unknown` | no |

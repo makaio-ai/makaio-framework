@@ -494,7 +494,7 @@ export const greeterExtension: MakaioExtension<ExtensionContext> = {
 
 | Topic | What it covers |
 |-------|----------------|
-| [Creating Extensions](./creating) | Scaffolding, surfaces, CLI/browser/server entrypoints, build, verification |
+| [Creating Extensions](../../creating-extensions) | Scaffolding, surfaces, CLI/browser/server entrypoints, build, verification |
 | [Discovery & Loading](./discovery) | Descriptor discovery, loading pipeline, config resolution, contribution wiring |
 | [Browser & UI](./browser) | Renderer architecture, shell inversion, framework web primitives |
 | [Distribution](./distribution) | Extension distribution, descriptor-selected loading, local authoring workflow |

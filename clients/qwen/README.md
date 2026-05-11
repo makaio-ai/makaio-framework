@@ -43,7 +43,3 @@ Default export is `qwenPackage` — the single package registered when this clie
 ## Installation
 
 `@makaio/client-qwen` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

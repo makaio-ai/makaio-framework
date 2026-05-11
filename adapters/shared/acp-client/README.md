@@ -87,7 +87,3 @@ resource leaks.
 
 This is a private workspace package. It is not published to npm and is only
 available from this source workspace.
-
----
-
-*Part of the [Makaio AI Framework](../../../README.md)*

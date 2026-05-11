@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 86 |
-| Subjects | 692 (304 events, 388 RPCs) |
+| Subjects | 695 (305 events, 390 RPCs) |
 | framework | 84 |
 | extension | 2 |
 | kind: bus | 60 |
@@ -29,7 +29,7 @@ next: false
 | [clients/](./clients/index.md) | 4 | 30 |
 | [extensions/](./extensions/index.md) | 2 | 9 |
 | [services/](./services/index.md) | 32 | 184 |
-| [ui/](./ui/index.md) | 3 | 8 |
+| [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
 
@@ -49,7 +49,7 @@ next: false
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
-| [`client`](./client.md) | bus | 23 | 11E / 12R |
+| [`client`](./client.md) | bus | 25 | 11E / 14R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
 | [`credential`](./credential.md) | bus | 8 | 0E / 8R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |
