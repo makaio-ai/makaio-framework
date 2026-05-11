@@ -170,6 +170,7 @@ export async function commitSnapshotPersistence(
       throw new AggregateError(
         [error, rollbackError],
         'Adapter subsystem snapshot commit failed and rollback could not restore the previous state.',
+        { cause: rollbackError },
       );
     }
 

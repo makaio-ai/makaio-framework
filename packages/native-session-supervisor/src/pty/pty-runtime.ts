@@ -204,7 +204,7 @@ export class PtyRuntime {
       ptyProcess = await this.backend.spawn(file, args, options);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to spawn PTY (file=${file}): ${msg}`);
+      throw new Error(`Failed to spawn PTY (file=${file}): ${msg}`, { cause: error });
     }
 
     // Guard: if destroy() ran during the async spawn, kill the new PTY and bail.

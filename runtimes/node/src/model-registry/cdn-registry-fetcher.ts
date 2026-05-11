@@ -69,7 +69,7 @@ export class CdnRegistryFetcher implements IModelRegistryFetcher {
       return ModelRegistrySchema.parse(parsed);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Failed to fetch model registry: timed out after ${this.timeoutMs}ms`);
+        throw new Error(`Failed to fetch model registry: timed out after ${this.timeoutMs}ms`, { cause: error });
       }
       throw error;
     } finally {

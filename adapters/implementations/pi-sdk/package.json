@@ -38,9 +38,9 @@
   },
   "peerDependencies": {
     "@makaio/framework": "^0.1.0",
-    "@mariozechner/pi-agent-core": ">=0.72.0 <0.73.0",
-    "@mariozechner/pi-ai": ">=0.72.0 <0.73.0",
-    "@mariozechner/pi-coding-agent": ">=0.72.0 <0.73.0"
+    "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0",
+    "@mariozechner/pi-ai": ">=0.72.0 <0.74.0",
+    "@mariozechner/pi-coding-agent": ">=0.72.0 <0.74.0"
   },
   "devDependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
@@ -50,8 +50,8 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/provider-opencode-go": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "@mariozechner/pi-agent-core": "0.72.1",
-    "@mariozechner/pi-ai": "0.72.1",
+    "@mariozechner/pi-agent-core": "0.73.1",
+    "@mariozechner/pi-ai": "0.73.1",
     "@mariozechner/pi-coding-agent": "0.73.1",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",

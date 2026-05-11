@@ -131,8 +131,7 @@ export class YarnPackageManager {
       await xfs.writeJsonPromise(packageJsonPath, initialPackageJson);
       console.info('[YarnPackageManager] Created package.json at %s', packageJsonPath);
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error('Failed to initialize package.json', { cause });
+      throw new Error('Failed to initialize package.json', { cause: error });
     }
   }
 
@@ -252,8 +251,7 @@ export class YarnPackageManager {
       console.info('[YarnPackageManager] Installed %s@%s', packageIdent, version);
       return version;
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error(`Failed to install ${packageName}`, { cause });
+      throw new Error(`Failed to install ${packageName}`, { cause: error });
     }
   }
 
@@ -280,8 +278,7 @@ export class YarnPackageManager {
 
       console.info('[YarnPackageManager] Uninstalled %s', packageName);
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error(`Failed to uninstall ${packageName}`, { cause });
+      throw new Error(`Failed to uninstall ${packageName}`, { cause: error });
     }
   }
 
@@ -328,8 +325,7 @@ export class YarnPackageManager {
 
       return packages;
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error('Failed to list packages', { cause });
+      throw new Error('Failed to list packages', { cause: error });
     }
   }
 
@@ -353,8 +349,7 @@ export class YarnPackageManager {
       await this.runProjectInstall(configuration, project, cache);
       console.info('[YarnPackageManager] Ensured @makaio/framework@%s', versionRange);
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error(`Failed to ensure @makaio/framework@${versionRange}`, { cause });
+      throw new Error(`Failed to ensure @makaio/framework@${versionRange}`, { cause: error });
     }
   }
 
@@ -402,8 +397,7 @@ export class YarnPackageManager {
 
       return version;
     } catch (error) {
-      const cause = error instanceof Error ? error : new Error(String(error));
-      throw new Error(`Failed to get latest version for ${packageName}`, { cause });
+      throw new Error(`Failed to get latest version for ${packageName}`, { cause: error });
     }
   }
 

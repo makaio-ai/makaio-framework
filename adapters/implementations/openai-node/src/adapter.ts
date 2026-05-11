@@ -97,7 +97,9 @@ export class OpenAIAdapter extends AIAdapter<OpenAINodeConnectorBus, OpenAINodeC
       return normalizeOpenAIModels(data.data);
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(`Failed to fetch models from ${apiUrl}: timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`);
+        throw new Error(`Failed to fetch models from ${apiUrl}: timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`, {
+          cause: error,
+        });
       }
       throw error;
     } finally {

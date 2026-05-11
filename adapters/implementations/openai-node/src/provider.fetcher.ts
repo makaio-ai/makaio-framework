@@ -126,7 +126,7 @@ export async function fetchModels(definition: ProviderDefinitionInput): Promise<
     return json.data.map(normalizeModel);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error(`${definition.name} API request timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`);
+      throw new Error(`${definition.name} API request timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`, { cause: error });
     }
     throw error;
   } finally {
