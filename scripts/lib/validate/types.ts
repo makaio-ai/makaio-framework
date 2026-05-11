@@ -8,12 +8,15 @@
  */
 export type ValidationTool = 'prettier' | 'eslint' | 'stylelint' | 'typescript';
 
+/** Tool name for built-in or host-provided validation results. */
+export type ValidationToolName = ValidationTool | (string & {});
+
 /**
  * Base validation result for each tool's finding.
  */
 export interface ValidationResult {
   /** Tool that generated this result */
-  tool: ValidationTool;
+  tool: ValidationToolName;
   /** Validation message */
   message: string;
   /** Severity level */
@@ -80,7 +83,7 @@ export type ToolStatus = 'ok' | 'skipped' | 'failed';
  */
 export interface ToolRunStatus {
   /** Tool name */
-  tool: ValidationTool;
+  tool: ValidationToolName;
   /** Execution status */
   status: ToolStatus;
   /** Reason for skip/failure (e.g., 'no-eslint-config') */

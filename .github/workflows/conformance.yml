@@ -12,12 +12,18 @@ permissions:
 
 jobs:
   conformance:
+    # issue_comment payloads expose PR author trust through github.event.issue,
+    # not github.event.pull_request.
     if: |
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/conformance') &&
       github.event.comment.user.type != 'Bot' &&
-      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association) &&
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.issue.author_association)
     uses: ./.github/workflows/conformance-reusable.yml
     with:
       pr_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
+    # The reusable workflow reads provider and GitHub App secrets; the caller
+    # must inherit them because workflow_call does not pass secrets implicitly.
+    secrets: inherit

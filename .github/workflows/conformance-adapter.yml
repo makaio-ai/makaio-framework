@@ -59,9 +59,14 @@ jobs:
 
       - name: Run adapter smoke
         env:
-          ${{ inputs.provider_env_var }}: ${{ secrets.PROVIDER_API_KEY }}
+          PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
           MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
         run: |
+          if [ -z "${PROVIDER_API_KEY}" ]; then
+            echo "::error::Missing secret 'PROVIDER_API_KEY' for adapter '${{ inputs.adapter }}'"
+            exit 1
+          fi
+          export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"
           mkdir -p conformance-artifacts
           yarn test:conformance \
             -a ${{ inputs.adapter }} \
@@ -74,9 +79,14 @@ jobs:
 
       - name: Run adapter rest
         env:
-          ${{ inputs.provider_env_var }}: ${{ secrets.PROVIDER_API_KEY }}
+          PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
           MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
         run: |
+          if [ -z "${PROVIDER_API_KEY}" ]; then
+            echo "::error::Missing secret 'PROVIDER_API_KEY' for adapter '${{ inputs.adapter }}'"
+            exit 1
+          fi
+          export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"
           yarn test:conformance \
             -a ${{ inputs.adapter }} \
             --exclude agents.simple.test.ts \

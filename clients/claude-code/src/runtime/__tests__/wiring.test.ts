@@ -115,6 +115,20 @@ describe('buildClaudeCodeWiringList', () => {
     expect(statuslineEntry?.command).toBe('makaio-dev claude statusline');
   });
 
+  it('prepends envPairs before the executable in all command fields', async () => {
+    const settings = createMockSettings();
+    const envPairs = ['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev'];
+    const result = await buildClaudeCodeWiringList(settings, '/path/to/cli-entry.ts', envPairs);
+    const hookEntry = result.entries.find((e) => e.name === 'SessionStart');
+    expect(hookEntry?.command).toBe(
+      'MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts hook received claude-code SessionStart',
+    );
+    const statuslineEntry = result.entries.find((e) => e.name === 'statusline');
+    expect(statuslineEntry?.command).toBe(
+      'MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts claude statusline',
+    );
+  });
+
   it('session-events entries belong to session-events group', async () => {
     const settings = createMockSettings();
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
@@ -294,6 +308,23 @@ describe('applyClaudeCodeWiring', () => {
     expect(commandsWritten.some((cmd) => cmd.includes('hook received claude-code'))).toBe(true);
   });
 
+  it('prepends envPairs before the executable in hook and statusline commands', async () => {
+    const envPairs = ['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev'];
+    await applyClaudeCodeWiring(settings, 'user', '/path/to/cli-entry.ts', envPairs);
+
+    const hookCalls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [{ hook: { command: string } }][];
+    for (const [req] of hookCalls) {
+      expect(req.hook.command).toMatch(/^MAKAIO_CONFIG_FILE=.+ MAKAIO_HOME=.+ \/path\/to\/cli-entry\.ts /);
+    }
+
+    const statuslineCalls = (settings.setStatusline as ReturnType<typeof vi.fn>).mock.calls as [
+      { value: { command: string } },
+    ][];
+    expect(statuslineCalls[0][0].value.command).toMatch(
+      /^MAKAIO_CONFIG_FILE=.+ MAKAIO_HOME=.+ \/path\/to\/cli-entry\.ts claude statusline/,
+    );
+  });
+
   it('removes stale hook before adding when sentinel matches but makaioCommand prefix differs (replace semantics)', async () => {
     // Seed perScope with hooks that have the sentinel for every framework-tracked
     // event but with a stale 'makaio-dev' prefix.  The replace path triggers
@@ -402,7 +433,7 @@ describe('removeClaudeCodeWiring', () => {
     expect(result.removed).toBeGreaterThan(0);
   });
 
-  it('calls removeStatusline when the target scope has a Makaio statusline', async () => {
+  it('calls removeStatusline when the target scope has a Makaio statusline without upstream', async () => {
     const settingsWithStatusline = createMockSettings({}, { type: 'command', command: 'makaio claude statusline' }, [
       {
         scope: 'user',
@@ -416,7 +447,77 @@ describe('removeClaudeCodeWiring', () => {
     });
     const result = await removeClaudeCodeWiring(settingsWithStatusline, 'user');
     expect(settingsWithStatusline.removeStatusline).toHaveBeenCalledWith({ scope: 'user' });
-    // removed count includes the statusline
+    expect(settingsWithStatusline.setStatusline).not.toHaveBeenCalled();
+    expect(result.removed).toBeGreaterThan(0);
+  });
+
+  it('restores the original upstream command when unwiring a statusline with --upstream', async () => {
+    const makaioCommand =
+      'makaio claude statusline --upstream-command sh --upstream-args-json \'["-c","npx -y ccstatusline@latest"]\'';
+    const settingsWithUpstream = createMockSettings({}, { type: 'command', command: makaioCommand }, [
+      {
+        scope: 'user',
+        path: '/home/.claude/settings.json',
+        value: { type: 'command', command: makaioCommand },
+      },
+    ]);
+    (settingsWithUpstream.setStatusline as ReturnType<typeof vi.fn>).mockResolvedValue({
+      previous: { type: 'command', command: makaioCommand },
+      applied: { type: 'command', command: 'npx -y ccstatusline@latest' },
+    });
+    const result = await removeClaudeCodeWiring(settingsWithUpstream, 'user');
+    expect(settingsWithUpstream.removeStatusline).not.toHaveBeenCalled();
+    expect(settingsWithUpstream.setStatusline).toHaveBeenCalledWith({
+      scope: 'user',
+      value: { type: 'command', command: 'npx -y ccstatusline@latest' },
+    });
+    expect(result.removed).toBeGreaterThan(0);
+  });
+
+  it('preserves extra statusline fields like padding when restoring upstream', async () => {
+    const makaioCommand =
+      'makaio claude statusline --upstream-command sh --upstream-args-json \'["-c","npx -y ccstatusline@latest"]\'';
+    const settingsWithPadding = createMockSettings({}, { type: 'command', command: makaioCommand }, [
+      {
+        scope: 'user',
+        path: '/home/.claude/settings.json',
+        value: { type: 'command', command: makaioCommand, padding: 0 } as { type: 'command'; command: string },
+      },
+    ]);
+    (settingsWithPadding.setStatusline as ReturnType<typeof vi.fn>).mockResolvedValue({
+      previous: { type: 'command', command: makaioCommand, padding: 0 },
+      applied: { type: 'command', command: 'npx -y ccstatusline@latest', padding: 0 },
+    });
+    await removeClaudeCodeWiring(settingsWithPadding, 'user');
+    const setCall = (settingsWithPadding.setStatusline as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      { value: Record<string, unknown> },
+    ];
+    expect(setCall[0].value).toMatchObject({
+      type: 'command',
+      command: 'npx -y ccstatusline@latest',
+      padding: 0,
+    });
+  });
+
+  it('restores the upstream command when trailing flags follow the JSON array', async () => {
+    const makaioCommand =
+      'makaio claude statusline --upstream-command sh --upstream-args-json \'["-c","npx -y ccstatusline@latest"]\' --some-future-flag';
+    const settingsWithTrailing = createMockSettings({}, { type: 'command', command: makaioCommand }, [
+      {
+        scope: 'user',
+        path: '/home/.claude/settings.json',
+        value: { type: 'command', command: makaioCommand },
+      },
+    ]);
+    (settingsWithTrailing.setStatusline as ReturnType<typeof vi.fn>).mockResolvedValue({
+      previous: { type: 'command', command: makaioCommand },
+      applied: { type: 'command', command: 'npx -y ccstatusline@latest' },
+    });
+    const result = await removeClaudeCodeWiring(settingsWithTrailing, 'user');
+    expect(settingsWithTrailing.setStatusline).toHaveBeenCalledWith({
+      scope: 'user',
+      value: { type: 'command', command: 'npx -y ccstatusline@latest' },
+    });
     expect(result.removed).toBeGreaterThan(0);
   });
 

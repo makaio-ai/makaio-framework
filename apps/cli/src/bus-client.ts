@@ -179,16 +179,28 @@ function resolveReconnectConfig(
 export async function connectBusClient(url?: string, options?: ConnectBusClientOptions): Promise<IMakaioBus> {
   const resolvedUrl = resolveBusUrl(url);
   const resolvedReconnectConfig = resolveReconnectConfig(options?.autoReconnect);
-
+  const debug = process.env['MAKAIO_DEBUG'] === 'true';
   const transport = new WebSocketClientTransport({
     url: resolvedUrl,
     name: 'ws-client',
     autoReconnect: resolvedReconnectConfig,
     auth: options?.auth,
-    debug: process.env['MAKAIO_DEBUG'] === 'true',
+    debug,
   });
 
   const bus = createBusInstance({ transports: [transport] });
+
+  if (debug) {
+    bus.__onAny((context) => {
+      let payload: string;
+      try {
+        payload = JSON.stringify(context.payload);
+      } catch {
+        payload = '[unserializable payload]';
+      }
+      console.debug(`[bus-client] subject: ${context.subject}, payload: ${payload}`);
+    });
+  }
 
   // Always enforce an initial connection timeout so both fail-fast CLI commands
   // and interactive sessions surface a failure state if the TCP/WebSocket open

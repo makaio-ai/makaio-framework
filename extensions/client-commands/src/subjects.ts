@@ -28,7 +28,7 @@ import { createClientWiringSubjectDef } from '@makaio/clients-core';
  * a specific client's scope enum.
  */
 type ClientWiringApplyPayload = RequestMessagePayload<
-  { scope: string; projectDir?: string; makaioCommand: string },
+  { scope: string; projectDir?: string; makaioCommand: string; envPairs?: string[] },
   ClientWiringApplyResponse
 >;
 

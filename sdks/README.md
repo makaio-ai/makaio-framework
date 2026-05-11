@@ -33,7 +33,8 @@ yarn tsx scripts/generate-sdk-bindings.ts
 ```
 
 The committed source-tree artifacts are `sdks/manifest/makaio-bus-protocol.json`,
-`sdks/python/src/makaio/generated/subjects.py`, and `sdks/rust/src/generated/subjects.rs`.
+`sdks/python/src/makaio/generated/` (namespace modules, payload dataclasses, and subjects),
+and `sdks/rust/src/generated/subjects.rs` (typed subject structs and payload types).
 Update the shared conformance fixtures before changing individual SDK implementations.
 
 `makaio-sdk` (Python) and `makaio-sdk` (Rust) are workspace artifacts and are not published yet.
@@ -62,15 +63,18 @@ method names:
 | Concept | TypeScript `@makaio/sdk` | Python `makaio-sdk` | Rust `makaio-sdk` |
 |---------|---------------------------|---------------------|-----------------------|
 | Connect | `client.connect(options?)` | `await client.connect()` | `BusClient::connect(url).await` |
+| Connect (options) | `new BusClient(url, { dispatch, auth })` | `BusClient(url, dispatch=..., auth=...)` | `BusClient::connect_with_options(url, opts).await` |
+| Connect (stdio) | — | `BusClient.from_stdio()` | `BusClient::from_stdio(stream).await` |
 | Subscribe | `client.subscribe(subject, handler)` | `await client.subscribe(subject, handler)` | `client.subscribe(subject, handler).await` |
 | Request handler | `client.onRequest(subject, handler)` | `await client.on_request(subject, handler)` | `client.on_request(subject, handler).await` |
 | Emit | `client.emit(subject, payload)` | `await client.emit(subject, payload)` | `client.emit(subject, payload).await` |
 | Request | `client.request(subject, payload)` | `await client.request(subject, payload)` | `client.request(subject, payload).await` |
+| Once | `client.once(subject, options?)` | `await client.once(subject, filter=..., timeout_ms=...)` | — |
 | Close | `client.close()` | `await client.close()` | `client.close().await` |
 
-Authentication support is currently part of the TypeScript facade via `BusClientOptions.auth` and
-automatic `MAKAIO_BUS_SECRET` resolution. The Python and Rust protocol clients currently expose the
-unauthenticated WebSocket protocol surface.
+All three SDKs support HMAC authentication via `MAKAIO_BUS_SECRET` with automatic `/health`
+probing. The TypeScript SDK resolves auth through `BusClientOptions.auth`; Python and Rust resolve
+it through `BusClient` constructor options (`auth` parameter) and environment variable fallback.
 
 Payload validation remains server-side. SDKs trust the wire format and do not re-validate schemas
 locally; the server's Zod schemas remain authoritative.
@@ -93,7 +97,9 @@ When adding or changing an SDK surface:
 ## Conformance
 
 `sdks/conformance/cases.json` and `sdks/conformance/fixtures/messages.json` define
-language-neutral protocol scenarios.
+language-neutral protocol scenarios covering wire protocol shapes, local dispatch behavior,
+request middleware chaining, and HMAC authentication handshakes.
+
 Cross-language protocol SDKs must pass the full conformance suite. The TypeScript SDK must exercise
 the same fixtures through its public `BusClient` facade where behavior overlaps, and it should add
 focused facade tests for TypeScript-specific wrapper behavior such as handler options, auth, or

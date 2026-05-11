@@ -11,12 +11,15 @@ scripts, and tooling on top of a running Makaio instance.
 
 The TypeScript SDK is framework-native: it uses the framework's bus packages
 directly (`@makaio/bus-core`, `@makaio/bus-transport-websocket`) rather than
-the WebSocket wire protocol. This means it participates in the same bus
+reimplementing the bus protocol. This means it participates in the same bus
 abstractions (subject types, payload filters, handler priorities) as
 first-party framework code.
 
-The Python and Rust SDKs connect over the WebSocket transport using the raw
-bus wire protocol.
+The Python and Rust SDKs reimplement the bus protocol in their respective
+languages. They support the same logical surface — local-first dispatch,
+request middleware chaining, HMAC auth, typed subject descriptors — but
+through standalone implementations rather than framework package wrappers.
+They also offer stdio transport for detached extension processes.
 
 ## Quick Start
 

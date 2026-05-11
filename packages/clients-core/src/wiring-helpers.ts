@@ -48,19 +48,29 @@ export interface SessionEventDescriptor {
  * Native client settings store command strings rather than argv arrays, so the
  * executable and arguments must be rendered with shell quoting before they are
  * persisted.
+ *
+ * When `envPairs` is provided, each `KEY=value` string is prepended before the
+ * executable as inline environment variable assignments — the standard POSIX
+ * shell pattern for per-command env overrides.
  * @param makaioCommand - Makaio CLI binary name or absolute path.
  * @param args - Argument tokens appended after the Makaio command.
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
  * @returns Shell-safe command string.
  */
-export function buildClientCommand(makaioCommand: string, args: readonly string[]): string {
-  return [makaioCommand, ...args].map(renderShellArg).join(' ');
+export function buildClientCommand(
+  makaioCommand: string,
+  args: readonly string[],
+  envPairs?: readonly string[],
+): string {
+  const tokens = [...(envPairs ?? []), makaioCommand, ...args];
+  return tokens.map(renderShellArg).join(' ');
 }
 
 /**
  * Build the full hook command string for a single session-event wiring entry.
  *
  * The resulting command takes the form:
- * `<makaioCommand> <sentinel> <eventName>`
+ * `[envPairs...] <makaioCommand> <sentinel> <eventName>`
  *
  * For example, given `'makaio'`, `'hook received claude-code'`, `'SessionStart'`
  * the function returns `'makaio hook received claude-code SessionStart'`.
@@ -68,10 +78,16 @@ export function buildClientCommand(makaioCommand: string, args: readonly string[
  * @param sentinel - Client-specific sentinel string embedded in every Makaio
  *   hook command (e.g. `'hook received claude-code'`).
  * @param eventName - Native hook event name (e.g. `'SessionStart'`).
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
  * @returns Full hook command string to write into the client's native config.
  */
-export function buildHookCommand(makaioCommand: string, sentinel: string, eventName: string): string {
-  return buildClientCommand(makaioCommand, [...sentinel.split(' '), eventName]);
+export function buildHookCommand(
+  makaioCommand: string,
+  sentinel: string,
+  eventName: string,
+  envPairs?: readonly string[],
+): string {
+  return buildClientCommand(makaioCommand, [...sentinel.split(' '), eventName], envPairs);
 }
 
 /**

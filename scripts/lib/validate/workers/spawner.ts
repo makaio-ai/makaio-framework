@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 /** TypeScript workers get more memory since they load the entire type graph (6 GB old-space). */
 const TYPESCRIPT_HEAP_MB = 6144;
 
-const NODE_OPTIONS_TOKEN_REGEX = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g;
+const NODE_OPTIONS_TOKEN_REGEX = /(?:[^\s"']+|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')+/g;
 
 /**
  * Resolves the process id target used for worker cancellation.

@@ -21,6 +21,7 @@
  */
 
 import path from 'path';
+import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { WorkspaceValidator } from './lib/validate/index.js';
 import type {
@@ -40,6 +41,16 @@ const DEFAULT_VALIDATE_PROFILE: ValidateProfile = (() => {
 })();
 
 const VALIDATION_TOOLS: ValidationTool[] = ['prettier', 'eslint', 'stylelint', 'typescript'];
+
+export interface ValidateCliHooks {
+  /**
+   * Allows host wrappers to add repository-specific validation results after
+   * the built-in framework validators run and before output is formatted.
+   * @param summary - Mutable validation summary.
+   * @param options - Resolved validation options used for this run.
+   */
+  afterValidate?: (summary: ValidationSummary, options: ValidateOptions) => Promise<void> | void;
+}
 
 interface ParsedCliArgs {
   flags: {
@@ -425,10 +436,12 @@ function formatIssuesOutput(summary: ValidationSummary, showActions: boolean): s
 }
 
 /**
- * Main entry point.
+ * Runs the validation CLI and returns the process exit code.
+ * @param args - CLI arguments without the executable and script path.
+ * @param hooks - Optional host hooks that can extend validation before output.
+ * @returns Process exit code for the validation run.
  */
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
+export async function runValidateCli(args: string[], hooks: ValidateCliHooks = {}): Promise<number> {
   const parsed = parseCliArgs(args);
 
   if (parsed.flags.help) {
@@ -449,10 +462,11 @@ async function main(): Promise<void> {
   try {
     const validator = new WorkspaceValidator();
     const summary = await validator.validate(options);
+    await hooks.afterValidate?.(summary, options);
 
     if (parsed.flags.json) {
       console.info(JSON.stringify(summary, null, 2));
-      return;
+      return 0;
     }
 
     const isEmpty = Object.keys(summary.fileResults).length === 0;
@@ -466,8 +480,7 @@ async function main(): Promise<void> {
       }
       output += `\n${formatCompactSummary(summary)}`;
       console.info(output);
-      const exitCode = anyFailed ? 2 : 0;
-      process.exit(exitCode);
+      return anyFailed ? 2 : 0;
     }
 
     let output = formatIssuesOutput(summary, parsed.flags.showActions);
@@ -477,17 +490,32 @@ async function main(): Promise<void> {
     output += `\n\n${formatCompactSummary(summary)}`;
     console.info(output);
 
-    const exitCode = summary.filesWithErrors > 0 ? 1 : anyFailed ? 2 : 0;
-    process.exit(exitCode);
+    return summary.filesWithErrors > 0 ? 1 : anyFailed ? 2 : 0;
   } catch (error: Error | unknown) {
     console.error(chalk.red('Validation failed:'), error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    return 1;
   }
+}
+
+/**
+ * Main entry point.
+ */
+async function main(): Promise<void> {
+  process.exit(await runValidateCli(process.argv.slice(2)));
+}
+
+/**
+ * Checks whether this module is the process entrypoint instead of an imported CLI helper.
+ * @returns True when the current process launched this file directly.
+ */
+function isDirectCliExecution(): boolean {
+  const entry = process.argv[1];
+  return entry !== undefined && path.resolve(entry) === fileURLToPath(import.meta.url);
 }
 
 // Run when executed directly or imported by the workspace wrapper, but not
 // when imported for unit tests. Vitest sets the VITEST environment variable
 // before importing test modules, so its presence reliably signals test mode.
-if (!process.env['VITEST']) {
+if (!process.env['VITEST'] && isDirectCliExecution()) {
   main();
 }

@@ -50,7 +50,9 @@ interface AccountEntryProps {
 /**
  * Rename inline state managed within {@link AccountEntry}.
  */
-type RenameState = { active: false } | { active: true; value: string; submitting: boolean; error: string | null };
+type RenameState =
+  | { active: false }
+  | { active: true; value: string; submitting: boolean; error: string | null };
 
 /**
  * Delete confirmation state managed within {@link AccountEntry}.

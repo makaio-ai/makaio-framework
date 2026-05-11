@@ -31,7 +31,7 @@ const FIXTURE_PATH = path.resolve(__dirname, 'fixtures/test-mcp-server.ts');
 
 /**
  * Walk up from `startDir` looking for a bin script in `node_modules/.bin`,
- * mirroring Node's own resolution so hoisted monorepo deps are found.
+ * mirroring Node's own resolution so hoisted workspace deps are found.
  * @param name - Bin script name to find.
  * @param startDir - Directory to start walking from.
  */

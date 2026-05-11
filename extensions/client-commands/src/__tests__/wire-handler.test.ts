@@ -15,6 +15,7 @@ import { z } from 'zod';
 import {
   runClientWireCommand,
   resolveDefaultMakaioCommand,
+  resolveDefaultEnvPairs,
   type ClientWireCommandContext,
 } from '../cli/wire-handler.js';
 import { createClientWiringApplySubjectDef } from '../subjects.js';
@@ -76,6 +77,7 @@ function registerTestClientWiringNamespace(bus: IMakaioBus, clientId: string) {
         scope: z.string(),
         projectDir: z.string().optional(),
         makaioCommand: z.string(),
+        envPairs: z.array(z.string()).optional(),
       }),
       response: ClientWiringApplyResponseSchema,
     },
@@ -252,5 +254,86 @@ describe('resolveDefaultMakaioCommand', () => {
   it('returns makaio when argv is empty', () => {
     const result = resolveDefaultMakaioCommand([]);
     expect(result).toBe('makaio');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveDefaultEnvPairs — dev-mode env var detection
+// ---------------------------------------------------------------------------
+
+describe('resolveDefaultEnvPairs', () => {
+  it('returns undefined when MAKAIO_CONFIG_FILE is not set', () => {
+    expect(resolveDefaultEnvPairs({})).toBeUndefined();
+  });
+
+  it('returns MAKAIO_CONFIG_FILE pair when set', () => {
+    const result = resolveDefaultEnvPairs({ MAKAIO_CONFIG_FILE: '/path/to/config.ts' });
+    expect(result).toEqual(['MAKAIO_CONFIG_FILE=/path/to/config.ts']);
+  });
+
+  it('includes MAKAIO_HOME when both are set', () => {
+    const result = resolveDefaultEnvPairs({
+      MAKAIO_CONFIG_FILE: '/path/to/config.ts',
+      MAKAIO_HOME: '/path/to/.makaio-dev',
+    });
+    expect(result).toEqual(['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev']);
+  });
+
+  it('omits MAKAIO_HOME when only MAKAIO_CONFIG_FILE is set', () => {
+    const result = resolveDefaultEnvPairs({ MAKAIO_CONFIG_FILE: '/path/to/config.ts' });
+    expect(result).toHaveLength(1);
+    expect(result![0]).toMatch(/^MAKAIO_CONFIG_FILE=/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runClientWireCommand — envPairs forwarding
+// ---------------------------------------------------------------------------
+
+describe('runClientWireCommand envPairs', () => {
+  let bus: IMakaioBus;
+
+  beforeEach(() => {
+    bus = createBusInstance();
+  });
+
+  it('forwards envPairs to the bus request payload when provided', async () => {
+    const subjects = registerTestClientWiringNamespace(bus, 'claude-code');
+
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+    const cleanup = bus.on(subjects.wiring.apply, (ctx) => {
+      capturedPayloads.push(ctx.payload as Record<string, unknown>);
+      ctx.setResult({ applied: 6, skipped: 0 });
+    });
+
+    const ctx = createContext(bus, { client: 'claude-code', scope: 'user' });
+    await runClientWireCommand(ctx, {
+      resolveMakaioCommand: () => '/path/to/cli-entry.ts',
+      resolveEnvPairs: () => ['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev'],
+    });
+
+    cleanup();
+
+    expect(capturedPayloads[0]).toMatchObject({
+      makaioCommand: '/path/to/cli-entry.ts',
+      envPairs: ['MAKAIO_CONFIG_FILE=/path/to/config.ts', 'MAKAIO_HOME=/path/to/.makaio-dev'],
+    });
+  });
+
+  it('sends undefined envPairs when resolveEnvPairs is not provided', async () => {
+    const subjects = registerTestClientWiringNamespace(bus, 'claude-code');
+
+    const capturedPayloads: Array<Record<string, unknown>> = [];
+    const cleanup = bus.on(subjects.wiring.apply, (ctx) => {
+      capturedPayloads.push(ctx.payload as Record<string, unknown>);
+      ctx.setResult({ applied: 6, skipped: 0 });
+    });
+
+    const ctx = createContext(bus, { client: 'claude-code', scope: 'user' });
+    await runClientWireCommand(ctx, { resolveMakaioCommand: () => 'makaio' });
+
+    cleanup();
+
+    expect(capturedPayloads[0]?.envPairs).toBeUndefined();
   });
 });
