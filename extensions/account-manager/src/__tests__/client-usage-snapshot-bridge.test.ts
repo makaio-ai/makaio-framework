@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, assert, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { AccountManager } from '../account-manager.js';
@@ -409,5 +409,131 @@ describe('client usage snapshot bridge', () => {
     } finally {
       cleanup();
     }
+  });
+
+  it('preserves windows from prior cache that are absent in the incoming statusline snapshot', async () => {
+    const bus = createBusInstance();
+    const metadataStore = new InMemoryAccountMetadataStore();
+    await metadataStore.upsert('claude-code', {
+      id: 'acc-1',
+      label: 'Test Account',
+      linkedClientAccountId: 'client-account-1',
+      metadata: {},
+      active: true,
+      detectedAt: 0,
+      lastSeenAt: 0,
+    });
+
+    const accountGenerations = new Map<string, number>();
+    const usageCache = new Map();
+    const cacheKeyIndex = new Map<string, { clientId: string; accountId: string }>();
+    const linkedClientSnapshotFreshUntil = new Map<string, number>();
+    const lastFetchAt = new Map<string, number>();
+    const errorCooldownUntil = new Map<string, number>();
+    const persistedWindows = new Map();
+    const persistenceChains = new Map<string, Promise<void>>();
+
+    const commonOpts = {
+      bus,
+      metadataStore,
+      usageSnapshotStore: undefined,
+      accountGenerations,
+      usageCache,
+      cacheKeyIndex,
+      linkedClientSnapshotFreshUntil,
+      lastFetchAt,
+      errorCooldownUntil,
+      persistedWindows,
+      persistenceChains,
+      pollIntervalMs: 60_000,
+      sourceConfigs: new Map(),
+      isCurrentGeneration: (cacheKey: string, generation: number) =>
+        (accountGenerations.get(cacheKey) ?? 0) === generation,
+      isStopped: () => false,
+      emitPendingResetsIfFresh: async () => undefined,
+    };
+
+    // First ingest: API poll with 3 windows including seven-day-sonnet
+    await ingestLinkedClientSnapshot({
+      ...commonOpts,
+      snapshot: {
+        clientAccountId: 'client-account-1',
+        clientId: 'claude-code',
+        observedAt: 1_000,
+        source: 'api',
+        usage: {
+          windows: [
+            { key: 'five-hour', label: '5 Hour', usedPercentage: 10, resetsAt: 20_000 },
+            { key: 'seven-day', label: '7 Day', usedPercentage: 50, resetsAt: 100_000 },
+            { key: 'seven-day-sonnet', label: '7 Day Sonnet', usedPercentage: 30, resetsAt: 100_000 },
+          ],
+        },
+      },
+    });
+
+    const cacheKey = createUsageCacheKey('claude-code', 'acc-1');
+    const afterApi = usageCache.get(cacheKey);
+    assert(afterApi, `Expected usageCache entry for ${cacheKey} after API ingest`);
+    expect(afterApi.windows).toHaveLength(3);
+
+    // Second ingest: statusline with only 2 windows (no seven-day-sonnet)
+    await ingestLinkedClientSnapshot({
+      ...commonOpts,
+      snapshot: {
+        clientAccountId: 'client-account-1',
+        clientId: 'claude-code',
+        observedAt: 2_000,
+        source: 'statusline',
+        usage: {
+          windows: [
+            { key: 'five-hour', label: '5 Hour', usedPercentage: 15, resetsAt: 20_000 },
+            { key: 'seven-day', label: '7 Day', usedPercentage: 55, resetsAt: 100_000 },
+          ],
+        },
+      },
+    });
+
+    const afterStatusline = usageCache.get(cacheKey);
+    assert(afterStatusline, `Expected usageCache entry for ${cacheKey} after statusline ingest`);
+    expect(afterStatusline.windows).toHaveLength(3);
+
+    const windowIds = afterStatusline.windows.map((w: { id: string }) => w.id);
+    expect(windowIds).toContain('five-hour');
+    expect(windowIds).toContain('seven-day');
+    expect(windowIds).toContain('seven-day-sonnet');
+
+    // Updated windows should reflect statusline values
+    const fiveHour = afterStatusline.windows.find((w: { id: string }) => w.id === 'five-hour');
+    assert(fiveHour, 'Expected five-hour window after statusline merge');
+    expect(fiveHour.utilization).toBe(15);
+    const sevenDay = afterStatusline.windows.find((w: { id: string }) => w.id === 'seven-day');
+    assert(sevenDay, 'Expected seven-day window after statusline merge');
+    expect(sevenDay.utilization).toBe(55);
+    expect(sevenDay.resetsAt).toBe(100_000);
+
+    // Preserved window retains its original values
+    const sonnet = afterStatusline.windows.find((w: { id: string }) => w.id === 'seven-day-sonnet');
+    assert(sonnet, 'Expected seven-day-sonnet window after statusline merge');
+    expect(sonnet.utilization).toBe(30);
+
+    await ingestLinkedClientSnapshot({
+      ...commonOpts,
+      snapshot: {
+        clientAccountId: 'client-account-1',
+        clientId: 'claude-code',
+        observedAt: 3_000,
+        source: 'api',
+        usage: {
+          windows: [
+            { key: 'five-hour', label: '5 Hour', usedPercentage: 20, resetsAt: 40_000 },
+            { key: 'seven-day', label: '7 Day', usedPercentage: 60, resetsAt: 120_000 },
+          ],
+        },
+      },
+    });
+
+    const afterSecondApi = usageCache.get(cacheKey);
+    assert(afterSecondApi, `Expected usageCache entry for ${cacheKey} after second API ingest`);
+    expect(afterSecondApi.windows.map((w: { id: string }) => w.id)).toEqual(['five-hour', 'seven-day']);
   });
 });

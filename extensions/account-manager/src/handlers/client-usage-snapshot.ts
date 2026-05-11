@@ -57,8 +57,11 @@ export async function ingestLinkedClientSnapshot(opts: IngestLinkedClientSnapsho
     const generation = opts.accountGenerations.get(key) ?? 0;
     opts.accountGenerations.set(key, generation);
 
-    const bridgedUsage = toAccountUsage(opts.snapshot);
     const currentUsage = opts.usageCache.get(key);
+    const incomingUsage = toAccountUsage(opts.snapshot);
+    const bridgedUsage = shouldPreserveMissingWindows(opts.snapshot)
+      ? mergeWithExistingWindows(incomingUsage, currentUsage)
+      : incomingUsage;
     if (currentUsage && currentUsage.fetchedAt > bridgedUsage.fetchedAt) {
       continue;
     }
@@ -104,6 +107,15 @@ export async function ingestLinkedClientSnapshot(opts: IngestLinkedClientSnapsho
 }
 
 /**
+ * Returns whether missing windows should be carried forward from cached usage.
+ * @param snapshot - Canonical client usage snapshot
+ * @returns Whether the source is partial and should preserve absent windows
+ */
+function shouldPreserveMissingWindows(snapshot: ClientUsageSnapshot): boolean {
+  return snapshot.source !== 'api';
+}
+
+/**
  * Converts a normalized clients-core snapshot into the account-manager shape.
  * @param snapshot - Canonical client usage snapshot
  * @returns Account-manager usage snapshot
@@ -121,4 +133,29 @@ function toAccountUsage(snapshot: ClientUsageSnapshot): AccountUsage {
       windowSeconds: 0,
     })),
   };
+}
+
+/**
+ * Merge incoming usage with previously cached windows so that windows not
+ * present in a partial new snapshot (e.g. `seven_day_sonnet` absent from
+ * statusline data) are preserved from the prior cache entry.
+ *
+ * Windows present in `incoming` replace existing windows with the same `id`.
+ * Windows only in `existing` are carried forward unchanged.
+ * @param incoming - Freshly bridged usage from the statusline or API
+ * @param existing - Previously cached usage, if any
+ * @returns Usage with merged windows
+ */
+function mergeWithExistingWindows(incoming: AccountUsage, existing: AccountUsage | undefined): AccountUsage {
+  if (!existing || existing.windows.length === 0) {
+    return incoming;
+  }
+
+  const incomingIds = new Set(incoming.windows.map((w) => w.id));
+  const preservedWindows = existing.windows.filter((w) => !incomingIds.has(w.id));
+  if (preservedWindows.length === 0) {
+    return incoming;
+  }
+
+  return { ...incoming, windows: [...incoming.windows, ...preservedWindows] };
 }

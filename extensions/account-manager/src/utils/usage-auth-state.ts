@@ -3,6 +3,15 @@
  */
 const USAGE_AUTH_STATE_REAUTH_REQUIRED = 'reauth-required';
 
+/** Structured usage-auth marker for definitive upstream auth rejection. */
+export const USAGE_AUTH_CODE_AUTH_INVALID = 'AUTH_INVALID';
+
+/** Structured usage-auth marker for transient usage-fetch escalation. */
+export const USAGE_AUTH_CODE_TRANSIENT = 'TRANSIENT_USAGE_FETCH_FAILURES';
+
+/** Structured reasons for persisted usage-auth invalid metadata. */
+export type UsageAuthCode = typeof USAGE_AUTH_CODE_AUTH_INVALID | typeof USAGE_AUTH_CODE_TRANSIENT;
+
 /**
  * Human-readable account metadata note for invalid usage auth.
  */
@@ -18,17 +27,20 @@ const USAGE_AUTH_PENDING_DISPLAY_TEXT = 'reauth pending';
  * @param fingerprint - Credential fingerprint that produced the auth failure
  * @param message - Human-readable upstream failure reason
  * @param detectedAt - Epoch ms when the failure was observed
+ * @param code - Structured reason code for retry/suppression decisions
  * @returns Metadata patch payload
  */
 export function buildUsageAuthInvalidMetadata(
   fingerprint: string,
   message: string,
   detectedAt: number,
+  code: UsageAuthCode = USAGE_AUTH_CODE_AUTH_INVALID,
 ): Record<string, unknown> {
   return {
     usageAuthState: USAGE_AUTH_STATE_REAUTH_REQUIRED,
     usageAuthFingerprint: fingerprint,
     usageAuthMessage: message,
+    usageAuthCode: code,
     usageAuthDetectedAt: detectedAt,
   };
 }
@@ -44,6 +56,23 @@ export function isUsageAuthInvalidForFingerprint(metadata: Record<string, unknow
 }
 
 /**
+ * Returns whether the reauth marker was set by transient failures rather than
+ * a definitive auth rejection.
+ *
+ * Transient-origin markers should not permanently suppress usage fetches — the
+ * credential may still be valid, and a retry can clear the marker on success.
+ * @param metadata - Account metadata record
+ * @returns `true` when the structured marker indicates transient-failure escalation
+ */
+export function isTransientReauthMarker(metadata: Record<string, unknown>): boolean {
+  // usageAuthMessage is display/debug text and may contain arbitrary upstream
+  // wording; retry decisions must use the account-manager-owned structured code.
+  return (
+    metadata.usageAuthState === USAGE_AUTH_STATE_REAUTH_REQUIRED && metadata.usageAuthCode === USAGE_AUTH_CODE_TRANSIENT
+  );
+}
+
+/**
  * Build metadata patches that clear any persisted usage-auth invalid marker.
  * @param metadata - Account metadata record
  * @returns Patch payload, or null when nothing is marked
@@ -56,6 +85,7 @@ export function buildUsageAuthClearMetadata(metadata: Record<string, unknown>): 
     usageAuthState: null,
     usageAuthFingerprint: null,
     usageAuthMessage: null,
+    usageAuthCode: null,
     usageAuthDetectedAt: null,
   };
 }

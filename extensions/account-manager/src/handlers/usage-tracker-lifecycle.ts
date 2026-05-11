@@ -10,7 +10,11 @@ import type {
   IAccountUsageSnapshotStore,
 } from '../interfaces/account-store.js';
 import { metadataPatchChanges } from '../utils/json-merge-patch.js';
-import { buildUsageAuthClearMetadata, buildUsageAuthInvalidMetadata } from '../utils/usage-auth-state.js';
+import {
+  buildUsageAuthClearMetadata,
+  buildUsageAuthInvalidMetadata,
+  type UsageAuthCode,
+} from '../utils/usage-auth-state.js';
 import { createUsageCacheKey, parseUsageCacheKey } from '../usage/usage-partitioning.js';
 import { persistChangedWindows, type PersistedWindowState } from '../usage/usage-persistence.js';
 import { collectUsageRefreshTargets } from './usage-refresh-targets.js';
@@ -121,6 +125,7 @@ interface PersistUsageAuthInvalidOptions {
   generation: number;
   reason: string;
   fingerprint: string;
+  usageAuthCode?: UsageAuthCode;
   usageCache: Map<string, AccountUsage>;
   errorCooldownUntil: Map<string, number>;
   isAccountGone: (key: string, generation: number) => boolean;
@@ -470,7 +475,7 @@ export async function applyResolvedUsage(opts: ApplyResolvedUsageOptions): Promi
 export async function persistUsageAuthInvalidIfCurrent(opts: PersistUsageAuthInvalidOptions): Promise<void> {
   const latest = await opts.metadataStore.getWithMetadataGeneration(opts.clientId, opts.accountId);
   if (!latest || opts.isAccountGone(opts.key, opts.generation)) return;
-  const patches = buildUsageAuthInvalidMetadata(opts.fingerprint, opts.reason, Date.now());
+  const patches = buildUsageAuthInvalidMetadata(opts.fingerprint, opts.reason, Date.now(), opts.usageAuthCode);
   const updated = await opts.metadataStore.patchMetadata(
     opts.clientId,
     opts.accountId,

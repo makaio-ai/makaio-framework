@@ -2,6 +2,7 @@ const ACCOUNT_MANAGER_METADATA_KEYS = [
   'usageAuthState',
   'usageAuthFingerprint',
   'usageAuthMessage',
+  'usageAuthCode',
   'usageAuthDetectedAt',
 ] as const;
 
