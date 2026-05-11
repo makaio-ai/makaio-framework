@@ -140,12 +140,9 @@ main a:not(.sl-link-button) {
 }
 
 main a:not(.sl-link-button):hover {
-  text-decoration-color: #f59e0b;
-}
-
-main a:not(.sl-link-button):hover {
   color: #fbbf24;
   text-decoration: underline;
+  text-decoration-color: #f59e0b;
 }
 
 main h1,

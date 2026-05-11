@@ -3818,8 +3818,6 @@ __metadata:
     "@mariozechner/pi-ai": "npm:0.73.1"
     "@mariozechner/pi-coding-agent": "npm:0.73.1"
     "@types/node": "npm:^24.3.0"
-    tsx: "npm:^4.20.5"
-    vite: "npm:^8.0.0"
     vitest: "npm:*"
     zod: "npm:^4.1.13"
   peerDependencies:
