@@ -10,5 +10,11 @@ export const SDK_PROTOCOL_MANIFEST_PATH = resolve(FRAMEWORK_ROOT, 'sdks/manifest
 /** Absolute path to generated Python subject constants. */
 export const PYTHON_SUBJECTS_PATH = resolve(FRAMEWORK_ROOT, 'sdks/python/src/makaio/generated/subjects.py');
 
+/** Absolute directory for generated Python namespace modules and `__init__.py`. */
+export const PYTHON_GENERATED_DIR = resolve(FRAMEWORK_ROOT, 'sdks/python/src/makaio/generated/');
+
+/** Absolute directory for generated Python payload dataclass modules. */
+export const PYTHON_PAYLOADS_DIR = resolve(FRAMEWORK_ROOT, 'sdks/python/src/makaio/generated/payloads/');
+
 /** Absolute path to generated Rust subject constants and models. */
 export const RUST_SUBJECTS_PATH = resolve(FRAMEWORK_ROOT, 'sdks/rust/src/generated/subjects.rs');

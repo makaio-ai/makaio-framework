@@ -5646,21 +5646,6 @@
             "type": "string"
           }
         },
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "source": {
-                  "const": "extension"
-                }
-              },
-              "required": ["source"]
-            },
-            "then": {
-              "required": ["extensionId"]
-            }
-          }
-        ],
         "required": ["sessionId", "message"],
         "type": "object"
       },

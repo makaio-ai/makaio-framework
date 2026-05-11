@@ -1,7 +1,7 @@
 /**
  * Conformance tests for the `\@makaio/sdk` TypeScript bus protocol client.
  *
- * Verifies the 8 wire-protocol behaviors defined in
+ * Verifies the wire-protocol, local-dispatch, and auth behaviors defined in
  * `sdks/conformance/cases.json` against the fixture messages in
  * `sdks/conformance/fixtures/messages.json`.
  *
@@ -13,11 +13,12 @@
  * paths participate without requiring pre-registered typed subject definitions.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { WebSocketLike, WebSocketCloseEvent } from '@makaio/bus-transport-websocket';
+import type { SubjectDefinition } from '@makaio/core';
 import { ApprovalSubjects, BusClient, AgentSubjects, ToolSubjects } from '../src/index.js';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,24 @@ function loadMessages(): Record<string, Record<string, unknown>> {
 
 const CASES = loadCases();
 const MESSAGES = loadMessages();
+const CONFORMANCE_CASE_DECISIONS = {
+  'auth-challenge-response': 'covered',
+  'event-delivery-agent-complete': 'covered',
+  'request-response-correlation-approval-request': 'covered',
+  'no-handler-response-tool-execute': 'covered',
+  'subscribe-replace-and-unsubscribe-approval-request': 'covered',
+  'wildcard-subscriptions-agent-wildcard': 'covered',
+  'reconnect-subscription-replay': 'covered',
+  'heartbeat-handling': 'covered',
+  'broadcast-response-tool-execute': 'covered',
+  'local-event-parallel-dispatch': 'covered',
+  'local-request-dispatch': 'covered',
+  'local-request-priority-chain': 'covered',
+  'local-wildcard-event-matching': 'covered',
+} as const satisfies Record<string, 'covered'>;
+
+// Auth secret used by the auth-challenge-response conformance fixture.
+const AUTH_CONFORMANCE_SECRET = 'conformance-secret';
 
 /**
  * Look up a conformance message by its fixture key.
@@ -101,6 +120,51 @@ function conformanceCase(id: string): ConformanceCase {
   const c = CASES.find((x) => x.id === id);
   if (!c) throw new Error(`Unknown conformance case: ${id}`);
   return c;
+}
+
+/**
+ * Build an SDK-facing event subject for conformance-only subjects that are not
+ * part of the framework contracts package.
+ * @param namespace - Bus namespace.
+ * @param subject - Subject key within the namespace.
+ * @param options - Subject metadata overrides.
+ * @returns Subject definition accepted by the BusClient facade.
+ */
+function eventSubject(namespace: string, subject: string, options?: { local?: boolean }): SubjectDefinition {
+  return {
+    subject,
+    $meta: {
+      namespace,
+      isRequest: false,
+      local: options?.local ?? false,
+      channel: false,
+      payload: {},
+    },
+  };
+}
+
+/**
+ * Build an SDK-facing request subject for conformance-only subjects that are
+ * not part of the framework contracts package.
+ * @param namespace - Bus namespace.
+ * @param subject - Subject key within the namespace.
+ * @param options - Subject metadata overrides.
+ * @returns Subject definition accepted by the BusClient facade.
+ */
+function requestSubject(namespace: string, subject: string, options?: { local?: boolean }): SubjectDefinition {
+  return {
+    subject,
+    $meta: {
+      namespace,
+      isRequest: true,
+      local: options?.local ?? false,
+      channel: false,
+      payload: {
+        request: {},
+        response: {},
+      },
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -235,14 +299,16 @@ interface Harness {
  * `subscribe-sync-complete` and request/response fixtures through
  * `harness.fakes[i]`.
  * @param count - Number of fake sockets to allocate for this test harness.
+ * @param dispatch - Request dispatch mode to use for the connected client.
  * @returns Harness with the connected transport and fake socket
  */
-async function createHarness(count = 1): Promise<Harness> {
+async function createHarness(count = 1, dispatch: 'local-first' | 'remote' = 'remote'): Promise<Harness> {
   const fakes = Array.from({ length: count }, () => new FakeWebSocket());
   const client = new BusClient('ws://test-host/bus');
 
   let index = 0;
   const connect = client.connect({
+    dispatch,
     createWebSocket: () => {
       const fake = fakes[index];
       index += 1;
@@ -316,19 +382,15 @@ describe('conformance fixture integrity', () => {
     }
   });
 
-  it('all 8 required conformance case IDs are present', () => {
-    const required = [
-      'event-delivery-agent-complete',
-      'request-response-correlation-approval-request',
-      'no-handler-response-tool-execute',
-      'subscribe-replace-and-unsubscribe-approval-request',
-      'wildcard-subscriptions-agent-wildcard',
-      'reconnect-subscription-replay',
-      'heartbeat-handling',
-      'broadcast-response-tool-execute',
-    ];
+  it('all TypeScript facade conformance cases are explicitly covered', () => {
+    const expected = CASES.map((c) => c.id).sort();
+    const decided = Object.keys(CONFORMANCE_CASE_DECISIONS).sort();
+    expect(decided).toEqual(expected);
+  });
+
+  it('all conformance case decisions resolve to cases', () => {
     const ids = new Set(CASES.map((c) => c.id));
-    for (const id of required) {
+    for (const id of Object.keys(CONFORMANCE_CASE_DECISIONS)) {
       expect(ids.has(id), `Missing conformance case: ${id}`).toBe(true);
     }
   });
@@ -402,6 +464,81 @@ describe('BusClient public facade', () => {
         action: 'allow',
       },
     });
+  });
+
+  it('uses default local-first dispatch for matching local request handlers without sending a wire request', async () => {
+    const unsubscribe = client.onRequest(
+      ApprovalSubjects.request,
+      () => ({
+        action: 'allow',
+      }),
+      { priority: 250 },
+    );
+
+    const subscribeFrame = await fake.waitSent(1);
+    expect(subscribeFrame).toEqual(msg('subscribe.approval.request'));
+
+    const requestFixture = msg('request.approval.request');
+    const result = await client.request<unknown, { action: 'allow' }>(
+      ApprovalSubjects.request,
+      requestFixture.payload,
+      { timeout: requestFixture.timeout as number },
+    );
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    expect(result).toEqual({ action: 'allow' });
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent.some((frame) => frame.type === 'request')).toBe(false);
+    unsubscribe();
+  });
+
+  it("bypasses local request handlers and sends over the transport when dispatch is 'remote'", async () => {
+    client.close();
+    fake = new FakeWebSocket();
+    client = new BusClient('ws://test-host/bus');
+
+    const connectPromise = client.connect({ dispatch: 'remote', createWebSocket: () => fake });
+    await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
+    fake.receiveMessage({ type: 'subscribe-sync-complete' });
+    await connectPromise;
+
+    let localCalls = 0;
+    client.onRequest(
+      ApprovalSubjects.request,
+      () => {
+        localCalls += 1;
+        return {
+          action: 'deny',
+        };
+      },
+      { priority: 250 },
+    );
+
+    const subscribeFrame = await fake.waitSent(1);
+    expect(subscribeFrame).toEqual(msg('subscribe.approval.request'));
+
+    const requestFixture = msg('request.approval.request');
+    const responsePromise = client.request<unknown, { action: 'allow' }>(
+      ApprovalSubjects.request,
+      requestFixture.payload,
+      { timeout: requestFixture.timeout as number },
+    );
+
+    const requestFrame = await fake.waitSent(2);
+    expect(requestFrame.type).toBe('request');
+    expect(requestFrame.namespace).toBe(requestFixture.namespace);
+    expect(requestFrame.subject).toBe(requestFixture.subject);
+    expect(localCalls).toBe(0);
+
+    const responseFixture = msg('response.approval.request');
+    fake.receiveMessage({
+      ...responseFixture,
+      correlationId: requestFrame.correlationId,
+    });
+
+    await expect(responsePromise).resolves.toEqual(responseFixture.result);
+    expect(localCalls).toBe(0);
   });
 });
 
@@ -754,5 +891,191 @@ describe(conformanceCase('broadcast-response-tool-execute').title, () => {
     // trigger event subscription callbacks (`type: 'event'` dispatch only).
     expect(receivedCount).toBe(0);
     unsubscribe();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case 9: local-event-parallel-dispatch
+// ---------------------------------------------------------------------------
+
+describe(conformanceCase('local-event-parallel-dispatch').title, () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await createHarness(1, 'local-first');
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('local event emission reaches every matching SDK facade subscriber', async () => {
+    const { client, fakes } = harness;
+    const fake = fakes[0]!;
+    const subject = eventSubject('test', 'event.parallel', {
+      local: true,
+    });
+    const received: string[] = [];
+
+    const unsubscribeA = client.subscribe(subject, () => {
+      received.push('a');
+    });
+    const unsubscribeB = client.subscribe(subject, () => {
+      received.push('b');
+    });
+
+    await fake.waitSent(2);
+    const frameCountBeforeEmit = fake.sent.length;
+
+    await client.emit(subject, { seq: 1 });
+
+    expect(received.sort()).toEqual(['a', 'b']);
+    expect(fake.sent).toHaveLength(frameCountBeforeEmit);
+    expect(fake.sent.some((frame) => frame.type === 'event')).toBe(false);
+
+    unsubscribeA();
+    unsubscribeB();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case 10: local-request-priority-chain
+// ---------------------------------------------------------------------------
+
+describe(conformanceCase('local-request-priority-chain').title, () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await createHarness(1, 'local-first');
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('higher priority local handler can delegate to the lower priority handler result', async () => {
+    const { client, fakes } = harness;
+    const fake = fakes[0]!;
+    const subject = requestSubject('test', 'chain', {
+      local: true,
+    });
+    const calls: string[] = [];
+
+    const unsubscribeHigh = client.onRequest(
+      subject,
+      async (ctx) => {
+        calls.push('high');
+        await ctx.next();
+      },
+      { priority: 100 },
+    );
+    const unsubscribeLow = client.onRequest(
+      subject,
+      () => {
+        calls.push('low');
+        return { from: 'low' };
+      },
+      { priority: 50 },
+    );
+
+    await fake.waitSent(2);
+    const frameCountBeforeRequest = fake.sent.length;
+
+    const result = await client.request<Record<string, never>, { from: string }>(subject, {});
+
+    expect(result).toEqual({ from: 'low' });
+    expect(calls).toEqual(['high', 'low']);
+    expect(fake.sent).toHaveLength(frameCountBeforeRequest);
+    expect(fake.sent.some((frame) => frame.type === 'request')).toBe(false);
+
+    unsubscribeHigh();
+    unsubscribeLow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case 11: local-wildcard-event-matching
+// ---------------------------------------------------------------------------
+
+describe(conformanceCase('local-wildcard-event-matching').title, () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await createHarness(1, 'local-first');
+  });
+
+  afterEach(async () => {
+    await harness.teardown();
+  });
+
+  it('local wildcard subscription matches an emitted concrete subject', async () => {
+    const { client, fakes } = harness;
+    const fake = fakes[0]!;
+    const receivedEvents: Array<{ subject: string; payload: unknown }> = [];
+    const localAgentComplete = eventSubject('agent', 'complete', {
+      local: true,
+    });
+
+    const unsubscribe = client.subscribe(AgentSubjects.$all, (ctx) => {
+      receivedEvents.push({ subject: ctx.subject, payload: ctx.payload });
+    });
+
+    const subscribeFrame = await fake.waitSent(1);
+    expect(subscribeFrame).toEqual(msg('subscribe.agent.wildcard'));
+
+    const eventFixture = msg('event.agent.complete');
+    await client.emit(localAgentComplete, eventFixture.payload as Record<string, unknown>);
+
+    expect(receivedEvents).toHaveLength(1);
+    expect(receivedEvents[0]).toEqual({
+      subject: `${eventFixture.namespace}.${eventFixture.subject}`,
+      payload: eventFixture.payload,
+    });
+    expect(fake.sent.some((frame) => frame.type === 'event')).toBe(false);
+
+    unsubscribe();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case 12: auth-challenge-response
+// ---------------------------------------------------------------------------
+
+describe(conformanceCase('auth-challenge-response').title, () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('auto-resolved HMAC auth responds to the server challenge with the fixture signature', async () => {
+    const fake = new FakeWebSocket();
+    const client = new BusClient('ws://test-host/bus');
+    const previousSecret = process.env.MAKAIO_BUS_SECRET;
+    const fetchStub = vi.fn(async () => new Response(JSON.stringify({ ok: true, auth: true }), { status: 200 }));
+
+    vi.stubGlobal('fetch', fetchStub);
+    process.env.MAKAIO_BUS_SECRET = AUTH_CONFORMANCE_SECRET;
+
+    try {
+      const connectPromise = client.connect({ createWebSocket: () => fake, connectTimeoutMs: 2000 });
+      await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
+
+      fake.receiveMessage(msg('auth-challenge'));
+
+      const responseFrame = await fake.waitSent(1);
+      expect(responseFrame).toEqual(msg('auth-response'));
+
+      fake.receiveMessage(msg('auth-result'));
+      fake.receiveMessage(msg('subscribe-sync-complete'));
+      await connectPromise;
+
+      expect(fetchStub).toHaveBeenCalledWith('http://test-host/health', expect.any(Object));
+    } finally {
+      client.close();
+      if (previousSecret === undefined) {
+        delete process.env.MAKAIO_BUS_SECRET;
+      } else {
+        process.env.MAKAIO_BUS_SECRET = previousSecret;
+      }
+    }
   });
 });

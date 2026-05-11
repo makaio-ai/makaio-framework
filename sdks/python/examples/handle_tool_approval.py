@@ -3,17 +3,12 @@
 import asyncio
 import os
 import signal
-from collections.abc import Mapping
-from typing import Any
 
-from makaio import BusClient, BusError
-from makaio.generated import subjects
-
-_DENY_RESPONSE: dict[str, str] = {
-    "action": "deny",
-    "message": "Destructive operations require manual approval",
-}
-_ALLOW_RESPONSE: dict[str, str] = {"action": "allow"}
+from makaio import BusClient, BusError, RequestContext
+from makaio._serialization import from_wire
+from makaio.generated import approval, tool
+from makaio.generated.payloads.approval import ApprovalRequestRequest
+from makaio.generated.payloads.tool import ToolExecuteRequest, ToolExecuteResponse
 
 
 async def main() -> None:
@@ -31,42 +26,35 @@ async def main() -> None:
             signal.signal(sig, lambda *_: stop.set())
 
     async def handle_approval(
-        payload: object,
-        message: Mapping[str, Any],
-    ) -> dict[str, str]:
-        if not isinstance(payload, dict):
-            raise BusError("Expected object payload", code="INVALID_PAYLOAD", subject=subjects.APPROVAL_REQUEST)
-        tool_name = payload.get("toolName", "<unknown>")
-        risk_level = payload.get("riskLevel", "unknown")
-        capabilities: list[str] = payload.get("capabilities") or []
-        # capabilities are wire-level strings ("file.read", "shell.execute", etc.)
-        caps_display = ", ".join(str(c) for c in capabilities) if capabilities else "none"
+        ctx: RequestContext[ApprovalRequestRequest, object],
+    ) -> None:
+        payload = from_wire(ctx.payload, ApprovalRequestRequest)
+        caps_display = ", ".join(payload.capabilities) if payload.capabilities else "none"
         print(
-            f"approval.request: tool={tool_name}"
-            f"  risk={risk_level}"
+            f"approval.request: tool={payload.tool_name}"
+            f"  risk={payload.risk_level}"
             f"  capabilities=[{caps_display}]"
         )
-        if risk_level == "destructive":
-            return _DENY_RESPONSE
-        return _ALLOW_RESPONSE
+        if payload.risk_level == "destructive":
+            ctx.set_result({"action": "deny", "message": "Destructive operations require manual approval"})
+        else:
+            ctx.set_result({"action": "allow"})
 
     async def handle_tool(
-        payload: object,
-        message: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise BusError("Expected object payload", code="INVALID_PAYLOAD", subject=subjects.TOOL_EXECUTE)
-        tool_name = payload.get("toolName")
-        if tool_name == "example.echo":
-            return {"success": True, "data": payload.get("input")}
+        ctx: RequestContext[ToolExecuteRequest, ToolExecuteResponse],
+    ) -> None:
+        payload = from_wire(ctx.payload, ToolExecuteRequest)
+        if payload.tool_name == "example.echo":
+            ctx.set_result({"success": True, "data": payload.input})
+            return
         raise BusError(
             "Unsupported tool",
             code="UNSUPPORTED_TOOL",
-            subject=subjects.TOOL_EXECUTE,
+            subject=tool.execute.full_subject,
         )
 
-    await client.on_request(subjects.APPROVAL_REQUEST, handle_approval, priority=100)
-    await client.on_request(subjects.TOOL_EXECUTE, handle_tool, priority=0)
+    await client.on_request(approval.request, handle_approval, priority=100)
+    await client.on_request(tool.execute, handle_tool, priority=0)
     print(f"Listening for approval requests on {url} — press Ctrl+C to stop")
 
     await stop.wait()

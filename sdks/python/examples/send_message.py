@@ -12,11 +12,14 @@ import argparse
 import asyncio
 import os
 import sys
-from collections.abc import Mapping
 from uuid import uuid4
 
-from makaio import BusClient, BusError
-from makaio.generated import subjects
+from makaio import BusClient, BusError, EventContext, OnceTimeoutError, RequestTimeoutError, to_wire
+from makaio.generated import session
+from makaio.generated.payloads.session import (
+    SessionSendMessageRequest,
+    SessionTurnCompletedPayload,
+)
 
 BUS_URL = os.environ.get("MAKAIO_BUS_URL", "ws://localhost:6252/bus")
 DEFAULT_MESSAGE = "Hello, what can you help me with?"
@@ -35,53 +38,58 @@ async def main() -> None:
     args = parse_args()
 
     session_id = str(uuid4())
-    turn_completed = asyncio.Event()
 
     client = BusClient(BUS_URL)
     await client.connect()
 
     try:
-        async def on_session_event(payload: object, message: Mapping[str, object]) -> None:
-            if isinstance(payload, Mapping) and payload.get("sessionId") != session_id:
+        # Log every session event in this session.
+        async def on_session_event(ctx: EventContext[object]) -> None:
+            if isinstance(ctx.payload, dict) and ctx.payload.get("sessionId") != session_id:
                 return
-            full_subject = f"{message.get('namespace')}.{message.get('subject')}"
-            print(f"{full_subject}: {payload}")
-            if full_subject == "session.turn.completed":
-                turn_completed.set()
-
-        async def on_agent_event(payload: object, message: Mapping[str, object]) -> None:
-            if isinstance(payload, Mapping) and payload.get("sessionId") != session_id:
-                return
-            full_subject = f"{message.get('namespace')}.{message.get('subject')}"
-            print(f"{full_subject}: {payload}")
+            print(f"{ctx.subject}: {ctx.payload}")
 
         await client.subscribe("session.*", on_session_event)
-        await client.subscribe("agent.*", on_agent_event)
+
+        turn_task = asyncio.create_task(
+            client.once(
+                session.turn_completed,
+                filter={"sessionId": session_id},
+                timeout_ms=30_000,
+            )
+        )
+
+        # Send the message via session.sendMessage request.
+        request_payload = SessionSendMessageRequest(
+            session_id=session_id,
+            message=args.message,
+            agent={"kind": "canonical-model", "model": args.model},
+        )
+
         try:
             response = await client.request(
-                subjects.SESSION_SEND_MESSAGE,
-                {
-                    "sessionId": session_id,
-                    "agent": {
-                        "kind": "canonical-model",
-                        "model": args.model,
-                    },
-                    "message": args.message,
-                },
-                response_timeout=30,
+                session.send_message,
+                request_payload,
+                timeout_ms=30_000,
             )
-        except asyncio.TimeoutError:
+        except RequestTimeoutError:
             print("Timed out waiting for session.sendMessage acknowledgement", file=sys.stderr)
             raise SystemExit(1)
 
         print(f"session_id={session_id}")
-        print(response)
+        print(to_wire(response))
 
+        # Wait for the turn to complete using once() with a session filter.
         try:
-            await asyncio.wait_for(turn_completed.wait(), timeout=30)
-        except asyncio.TimeoutError:
+            ctx = await turn_task
+            turn = ctx.payload
+            if not isinstance(turn, SessionTurnCompletedPayload):
+                raise TypeError(f"Expected SessionTurnCompletedPayload, got {type(turn).__name__}")
+            print(f"turn completed — success={turn.success}, turn={turn.turn_number}")
+        except OnceTimeoutError:
             print("Timed out waiting for session.turn.completed", file=sys.stderr)
             raise SystemExit(1)
+
     except BusError as error:
         print(f"Bus error [{error.code}]: {error.message}", file=sys.stderr)
         raise SystemExit(1)

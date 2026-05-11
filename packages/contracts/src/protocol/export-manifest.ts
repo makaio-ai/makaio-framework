@@ -25,7 +25,7 @@ import { compareStrings } from './export-manifest-string-utils.js';
 
 export { defaultRustModelChecker };
 
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 2;
 
 type RegisteredSubjectSchema = ReturnType<
   ReturnType<typeof MakaioBus.getContext>['namespaceRegistry']['listRegisteredSubjects']
