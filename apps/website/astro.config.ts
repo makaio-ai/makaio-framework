@@ -172,15 +172,19 @@ export default defineConfig({
             {
               label: 'Bus Subjects',
               collapsed: true,
-              autogenerate: { directory: 'reference/subjects', collapsed: true },
+              items: [{ autogenerate: { directory: 'reference/subjects', collapsed: true } }],
             },
-            { label: 'API', collapsed: true, autogenerate: { directory: 'reference/api', collapsed: true } },
+            {
+              label: 'API',
+              collapsed: true,
+              items: [{ autogenerate: { directory: 'reference/api', collapsed: true } }],
+            },
           ],
         },
         {
           label: 'Packages',
           collapsed: true,
-          autogenerate: { directory: 'packages', collapsed: true },
+          items: [{ autogenerate: { directory: 'packages', collapsed: true } }],
         },
         {
           label: 'SDKs',

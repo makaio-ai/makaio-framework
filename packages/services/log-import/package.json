@@ -38,7 +38,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@libsql/client": "^0.15.0",
+    "@libsql/client": "^0.17.3",
     "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/extension-opencode": "workspace:*",

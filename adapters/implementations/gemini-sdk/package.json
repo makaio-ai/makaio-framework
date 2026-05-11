@@ -13,8 +13,8 @@
   },
   "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
   "files": [
     "dist",
     "descriptor.json",
@@ -24,13 +24,13 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsx build.ts",
+    "build": "tsdown",
     "dev": "tsx src/test-run.ts",
     "test": "echo 'ERROR: Tests must be run via `yarn test` from repository root!' && exit 1",
     "lint": "echo 'ERROR: Run `yarn validate path/to/package` from repository root instead!' && exit 1"
@@ -45,7 +45,7 @@
     "@makaio/framework": "^0.1.0"
   },
   "devDependencies": {
-    "@agentclientprotocol/sdk": "0.14.1",
+    "@agentclientprotocol/sdk": "0.21.0",
     "@google/gemini-cli": "0.39.1",
     "@google/gemini-cli-core": "0.39.1",
     "@google/genai": "1.48.0",
@@ -58,15 +58,14 @@
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
-    "vite": "^8.0.0",
     "vitest": "*"
   },
   "publishConfig": {
     "access": "public",
     "exports": {
       ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
       },
       "./package.json": "./package.json"
     }

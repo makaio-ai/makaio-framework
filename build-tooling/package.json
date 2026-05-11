@@ -33,6 +33,10 @@
       "source": "./tsdown-extension-preset.ts",
       "default": "./tsdown-extension-preset.ts"
     },
+    "./tsdown-adapter-preset": {
+      "source": "./tsdown-adapter-preset.ts",
+      "default": "./tsdown-adapter-preset.ts"
+    },
     "./framework-public-surface": {
       "source": "./framework-public-surface.ts",
       "default": "./framework-public-surface.ts"
@@ -49,16 +53,20 @@
       "source": "./portable-package.ts",
       "default": "./portable-package.ts"
     },
+    "./package-exports": {
+      "source": "./package-exports.ts",
+      "default": "./package-exports.ts"
+    },
     "./tsdown-scss": {
       "source": "./tsdown-scss.ts",
       "default": "./tsdown-scss.ts"
     }
   },
   "dependencies": {
-    "tsdown": "^0.21.7",
+    "tsdown": "^0.22.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.0",
-    "vite-plugin-dts": "^5.0.0"
+    "vite": "^8.0.12",
+    "vite-plugin-dts": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
