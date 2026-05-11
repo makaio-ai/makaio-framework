@@ -102,14 +102,17 @@ export function isExternal(id: string, externals: (string | RegExp)[]): boolean 
  */
 export function createDtsPlugin(outDir: string, packageRoot: string): ReturnType<typeof dts> {
   return dts({
-    outDirs: outDir,
+    outDir,
     // Restrict to only this package's src - prevents traversing into workspace deps
     entryRoot: resolve(packageRoot, 'src'),
     include: [resolve(packageRoot, 'src')],
     exclude: ['**/*.test.ts', '**/*.spec.ts', '**/__tests__/**'],
     insertTypesEntry: true,
+    rollupTypes: false,
     // Don't emit declaration files for external dependencies
     copyDtsFiles: false,
+    // Suppress output - workspace deps have their own type checking
+    logLevel: 'silent',
     // Suppress diagnostic errors from workspace dependencies
     afterDiagnostic: () => {
       // Intentionally empty - swallow diagnostics
