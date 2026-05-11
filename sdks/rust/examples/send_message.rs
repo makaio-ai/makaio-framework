@@ -106,18 +106,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let response = match bus
-        .request(
-            subjects::session::SEND_MESSAGE,
-            json!({
-                "sessionId": session_id.clone(),
-                "agent": {
-                    "kind": "canonical-model",
-                    "model": model,
-                },
-                "message": message,
-            }),
-        )
+    let response: Value = match bus
+        .request_subject::<subjects::session::SendMessage>(json!({
+            "sessionId": session_id.clone(),
+            "agent": {
+                "kind": "canonical-model",
+                "model": model,
+            },
+            "message": message,
+        }))
         .await
     {
         Ok(response) => response,
@@ -147,7 +144,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("session_id={session_id}");
     println!("{response}");
 
-    // std has `impl From<&str> for Box<dyn Error>`, so `.into()` is valid here.
     let completion_result: Result<(), Box<dyn std::error::Error>> =
         match timeout(Duration::from_secs(30), turn_completed_rx.recv()).await {
             Ok(Some(())) => Ok(()),

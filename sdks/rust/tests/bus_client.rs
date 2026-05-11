@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use makaio_sdk::bus::{
-    BroadcastResponseMessage, BusMessage, BusTransportError, EventMessage, HeartbeatMessage,
-    RequestMessage, RequestOptions, ResponseMessage,
+    AuthMode, BroadcastResponseMessage, BusClientOptions, BusMessage, BusTransportError,
+    DispatchMode, EventMessage, HeartbeatMessage, RequestMessage, RequestOptions, ResponseMessage,
 };
 use makaio_sdk::generated::subjects::{self, SubjectKind, SUBJECTS};
 use makaio_sdk::{BusClient, BusClientError};
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, Notify};
 use tokio_tungstenite::tungstenite::Message;
@@ -206,6 +207,231 @@ async fn subscribe_and_emit_use_expected_event_framing() {
 
     bus.close().await.expect("client should close");
     server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn hmac_auth_connect_sends_conformance_signature_before_read_loop() {
+    let server = serve_once(|mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-challenge"))
+                .expect("challenge fixture should deserialize"),
+        )
+        .await;
+
+        let response = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(response).expect("auth response should serialize"),
+            conformance_message("auth-response")
+        );
+
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-result"))
+                .expect("auth result fixture should deserialize"),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect_with_options(
+        &server.url,
+        BusClientOptions {
+            auth: AuthMode::Force,
+            secret: Some("conformance-secret".to_string()),
+            ..BusClientOptions::default()
+        },
+    )
+    .await
+    .expect("authenticated client should connect");
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn auto_auth_rejects_empty_secret_when_health_requires_auth_before_websocket_connect() {
+    let server = serve_health_once(r#"{"ok":true,"auth":true}"#).await;
+
+    let result = BusClient::connect_with_options(
+        &server.url,
+        BusClientOptions {
+            auth: AuthMode::Auto,
+            secret: Some("   ".to_string()),
+            ..BusClientOptions::default()
+        },
+    )
+    .await;
+
+    match result {
+        Err(BusClientError::Auth(message)) => {
+            assert!(message.contains("MAKAIO_BUS_SECRET is set but empty"));
+        }
+        Err(error) => panic!("expected auth error, got {error}"),
+        Ok(_) => panic!(
+            "auto auth should reject an empty configured secret when the server requires auth"
+        ),
+    }
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn auto_auth_uses_health_probe_and_hmac_when_server_requires_auth() {
+    let server = serve_with_health(r#"{"ok":true,"auth":true}"#, |mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-challenge"))
+                .expect("challenge fixture should deserialize"),
+        )
+        .await;
+
+        let response = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(response).expect("auth response should serialize"),
+            conformance_message("auth-response")
+        );
+
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-result"))
+                .expect("auth result fixture should deserialize"),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect_with_options(
+        &server.url,
+        BusClientOptions {
+            auth: AuthMode::Auto,
+            secret: Some("  conformance-secret  ".to_string()),
+            ..BusClientOptions::default()
+        },
+    )
+    .await
+    .expect("auto-authenticated client should connect");
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn auto_auth_reprobes_on_reconnect_to_new_endpoint() {
+    let first = serve_with_health(r#"{"ok":true,"auth":false}"#, |mut ws| async move {
+        let _ = ws.next().await;
+    })
+    .await;
+
+    let bus = BusClient::connect_with_options(
+        &first.url,
+        BusClientOptions {
+            auth: AuthMode::Auto,
+            secret: Some("conformance-secret".to_string()),
+            ..BusClientOptions::default()
+        },
+    )
+    .await
+    .expect("client should connect without auth when health reports auth=false");
+
+    let second = serve_with_health(r#"{"ok":true,"auth":true}"#, |mut ws| async move {
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-challenge"))
+                .expect("challenge fixture should deserialize"),
+        )
+        .await;
+
+        let response = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(response).expect("auth response should serialize"),
+            conformance_message("auth-response")
+        );
+
+        send_bus_message(
+            &mut ws,
+            serde_json::from_value(conformance_message("auth-result"))
+                .expect("auth result fixture should deserialize"),
+        )
+        .await;
+        let _ = ws.next().await;
+    })
+    .await;
+
+    bus.reconnect_to(&second.url)
+        .await
+        .expect("auto auth should re-probe and authenticate on reconnect");
+    bus.close().await.expect("client should close");
+
+    first.assert_completed().await;
+    second.assert_completed().await;
+}
+
+#[tokio::test]
+async fn emit_dispatches_to_matching_local_event_handlers_before_remote_send() {
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel();
+    let server = serve_once(move |mut ws| async move {
+        let subscribe = read_bus_message(&mut ws).await;
+        seen_tx
+            .send(subscribe)
+            .expect("subscribe frame should be sent");
+        let event = read_bus_message(&mut ws).await;
+        seen_tx.send(event).expect("event frame should be sent");
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _subscription = bus
+        .subscribe("agent.*", move |event| {
+            let local_tx = local_tx.clone();
+            async move {
+                local_tx
+                    .send(json!({ "subject": event.subject, "payload": event.payload }))
+                    .expect("local event should send");
+            }
+        })
+        .await
+        .expect("wildcard subscription should register");
+
+    bus.emit(subjects::agent::MESSAGE, json!({ "content": "hello" }))
+        .await
+        .expect("event should emit");
+
+    assert_eq!(
+        next_payload(&mut local_rx).await,
+        json!({ "subject": "message", "payload": { "content": "hello" } })
+    );
+    assert_eq!(next_seen_message(&mut seen_rx).await["type"], "subscribe");
+    assert_eq!(next_seen_message(&mut seen_rx).await["type"], "event");
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn from_stdio_uses_line_delimited_json_transport() {
+    let (client_stream, mut host_stream) = tokio::io::duplex(4096);
+    let bus = BusClient::from_stdio(client_stream)
+        .await
+        .expect("stdio client should connect");
+
+    bus.emit(subjects::agent::MESSAGE, json!({ "content": "hello" }))
+        .await
+        .expect("stdio event should emit");
+
+    let mut line = String::new();
+    let mut reader = tokio::io::BufReader::new(&mut host_stream);
+    tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut line)
+        .await
+        .expect("host should read one frame");
+    let frame: Value = serde_json::from_str(&line).expect("stdio frame should be json");
+    assert_eq!(frame["type"], "event");
+    assert_eq!(frame["namespace"], "agent");
+    assert_eq!(frame["subject"], "message");
+
+    bus.close().await.expect("client should close");
 }
 
 #[tokio::test]
@@ -439,6 +665,64 @@ async fn request_resolves_matching_correlation_response() {
 }
 
 #[tokio::test]
+async fn generated_subject_structs_drive_typed_request_and_event_methods() {
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let server = serve_once(move |mut ws| async move {
+        let request_message = read_bus_message(&mut ws).await;
+        seen_tx
+            .send(request_message.clone())
+            .expect("request frame should be observed");
+        let request = match request_message {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "typed": true })),
+                error: None,
+            }),
+        )
+        .await;
+        let event = read_bus_message(&mut ws).await;
+        seen_tx.send(event).expect("event frame should be observed");
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let response: Value = bus
+        .request_subject::<subjects::tool::List>(json!({ "scope": "workspace" }))
+        .await
+        .expect("typed request should resolve");
+    assert_eq!(response, json!({ "typed": true }));
+
+    bus.emit_subject::<subjects::agent::Message>(subjects::AgentMessagePayload {
+        agent_id: "agent-1".to_string(),
+        adapter_id: "adapter-1".to_string(),
+        adapter_name: "test".to_string(),
+        adapter_session_id: "adapter-session-1".to_string(),
+        content: "hello".to_string(),
+        message_id: None,
+        session_id: None,
+        turn_id: None,
+    })
+    .await
+    .expect("typed event should emit");
+
+    assert_eq!(next_seen_message(&mut seen_rx).await["type"], "request");
+    let event = next_seen_message(&mut seen_rx).await;
+    assert_eq!(event["type"], "event");
+    assert_eq!(event["namespace"], "agent");
+    assert_eq!(event["subject"], "message");
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
 async fn request_with_zero_timeout_preserves_wire_timeout_and_waits_locally() {
     let server = serve_once(|mut ws| async move {
         let request = match read_bus_message(&mut ws).await {
@@ -480,6 +764,192 @@ async fn request_with_zero_timeout_preserves_wire_timeout_and_waits_locally() {
     .expect("request should succeed");
 
     assert_eq!(result, json!({ "ok": true }));
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn request_uses_local_handler_before_remote_transport_by_default() {
+    let (seen_tx, mut seen_rx) = mpsc::unbounded_channel();
+    let server = serve_once(move |mut ws| async move {
+        while let Some(Ok(message)) = ws.next().await {
+            if let Some(value) = wire_value(message) {
+                seen_tx.send(value).expect("wire frame should be sent");
+            }
+        }
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request(subjects::tool::LIST, |_| async {
+            Ok(json!({ "local": true }))
+        })
+        .await
+        .expect("local handler should register");
+
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("local request should resolve"),
+        json!({ "local": true })
+    );
+    assert_eq!(
+        next_seen_value(&mut seen_rx).await,
+        json!({
+            "type": "subscribe",
+            "subjects": {
+                "tool.list": [0],
+            },
+        })
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), seen_rx.recv())
+            .await
+            .is_err(),
+        "local-first request must not send a remote request when a local handler resolves it"
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn remote_dispatch_mode_forwards_request_even_when_local_handler_exists() {
+    let server = serve_once(|mut ws| async move {
+        let subscribe = read_bus_message(&mut ws).await;
+        assert_eq!(
+            serde_json::to_value(subscribe).expect("subscribe should serialize"),
+            json!({
+                "type": "subscribe",
+                "subjects": {
+                    "tool.list": [0],
+                },
+            })
+        );
+
+        let request = match read_bus_message(&mut ws).await {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+        assert_eq!(request.namespace, "tool");
+        assert_eq!(request.subject, "list");
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "remote": true })),
+                error: None,
+            }),
+        )
+        .await;
+    })
+    .await;
+
+    let bus = BusClient::connect_with_dispatch(&server.url, DispatchMode::Remote)
+        .await
+        .expect("client should connect");
+    let _handler = bus
+        .on_request(subjects::tool::LIST, |_| async {
+            panic!("remote dispatch must not invoke local handlers");
+            #[allow(unreachable_code)]
+            Ok(())
+        })
+        .await
+        .expect("local handler should register");
+
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("remote request should resolve"),
+        json!({ "remote": true })
+    );
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
+}
+
+#[tokio::test]
+async fn request_handlers_chain_with_next_and_auto_advance() {
+    let server = serve_once(|mut ws| async move {
+        let _first_subscribe = read_bus_message(&mut ws).await;
+        let _second_subscribe = read_bus_message(&mut ws).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let calls = Arc::new(StdMutex::new(Vec::<&'static str>::new()));
+
+    let _low = bus
+        .on_request_with_priority(subjects::tool::LIST, 10, {
+            let calls = calls.clone();
+            move |ctx| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .expect("calls mutex should not be poisoned")
+                        .push("low");
+                    ctx.set_result(json!({ "handledBy": "low" }));
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .expect("low handler should register");
+    let _mid = bus
+        .on_request_with_priority(subjects::tool::LIST, 50, {
+            let calls = calls.clone();
+            move |_ctx| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .expect("calls mutex should not be poisoned")
+                        .push("mid");
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .expect("mid handler should register");
+    let _high = bus
+        .on_request_with_priority(subjects::tool::LIST, 100, {
+            let calls = calls.clone();
+            move |ctx| {
+                let calls = calls.clone();
+                async move {
+                    calls
+                        .lock()
+                        .expect("calls mutex should not be poisoned")
+                        .push("high");
+                    ctx.next().await?;
+                    let result = ctx.result().expect("next handler should set a result");
+                    ctx.set_result(json!({ "wrapped": result }));
+                    Ok(())
+                }
+            }
+        })
+        .await
+        .expect("high handler should register");
+
+    assert_eq!(
+        bus.request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+            .await
+            .expect("local chain should resolve"),
+        json!({ "wrapped": { "handledBy": "low" } })
+    );
+    assert_eq!(
+        *calls.lock().expect("calls mutex should not be poisoned"),
+        vec!["high", "mid", "low"]
+    );
+
     bus.close().await.expect("client should close");
     server.assert_completed().await;
 }
@@ -819,7 +1289,7 @@ async fn request_handler_registration_sends_result_response() {
         .on_request(subjects::tool::EXECUTE, |request| async move {
             Ok(json!({
                 "success": true,
-                "data": request.payload.get("input").cloned().unwrap_or(Value::Null),
+                "data": request.payload().get("input").cloned().unwrap_or(Value::Null),
             }))
         })
         .await
@@ -1097,13 +1567,8 @@ async fn reconnect_replays_local_subscriptions() {
     let (reconnect_response_seen_tx, reconnect_response_seen_rx) = oneshot::channel();
 
     let server = tokio::spawn(async move {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .expect("first websocket should connect");
-        let mut ws = accept_async(stream)
-            .await
-            .expect("first websocket handshake should complete");
+        let mut ws =
+            accept_websocket_after_health_probes(&listener, r#"{"ok":true,"auth":false}"#).await;
 
         let first_event_subscribe = read_bus_message(&mut ws).await;
         assert_eq!(
@@ -1133,13 +1598,8 @@ async fn reconnect_replays_local_subscriptions() {
             .expect("first websocket close frame should send");
         let _ = initial_connection_closed_tx.send(());
 
-        let (stream, _) = listener
-            .accept()
-            .await
-            .expect("reconnect websocket should connect");
-        let mut ws = accept_async(stream)
-            .await
-            .expect("reconnect websocket handshake should complete");
+        let mut ws =
+            accept_websocket_after_health_probes(&listener, r#"{"ok":true,"auth":false}"#).await;
 
         let replay_subscribe = read_bus_message(&mut ws).await;
         assert_eq!(
@@ -1217,7 +1677,7 @@ async fn reconnect_replays_local_subscriptions() {
         .on_request_with_priority(subjects::approval::REQUEST, 100, |request| async move {
             Ok(json!({
                 "approved": true,
-                "toolName": request.payload.get("toolName").cloned().unwrap_or(Value::Null),
+                "toolName": request.payload().get("toolName").cloned().unwrap_or(Value::Null),
             }))
         })
         .await
@@ -1413,6 +1873,14 @@ where
     F: FnOnce(WebSocketStream<TcpStream>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
+    serve_with_health(r#"{"ok":true,"auth":false}"#, handler).await
+}
+
+async fn serve_with_health<F, Fut>(health_body: &'static str, handler: F) -> TestServer
+where
+    F: FnOnce(WebSocketStream<TcpStream>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener should bind");
@@ -1420,19 +1888,79 @@ where
         .local_addr()
         .expect("test listener should have an address");
     let task = tokio::spawn(async move {
-        let (stream, _) = listener
-            .accept()
-            .await
-            .expect("test websocket should connect");
-        let ws = accept_async(stream)
-            .await
-            .expect("test websocket handshake should complete");
+        let ws = accept_websocket_after_health_probes(&listener, health_body).await;
         handler(ws).await;
     });
     TestServer {
         url: format!("ws://{address}"),
         task,
     }
+}
+
+async fn serve_health_once(health_body: &'static str) -> TestServer {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("test listener should have an address");
+    let task = tokio::spawn(async move {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("test health probe should connect");
+        assert!(
+            respond_to_health_probe_if_requested(&mut stream, health_body).await,
+            "expected a /health probe before any websocket connection",
+        );
+    });
+    TestServer {
+        url: format!("ws://{address}"),
+        task,
+    }
+}
+
+async fn accept_websocket_after_health_probes(
+    listener: &TcpListener,
+    health_body: &'static str,
+) -> WebSocketStream<TcpStream> {
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("test websocket should connect");
+        if respond_to_health_probe_if_requested(&mut stream, health_body).await {
+            continue;
+        }
+        return accept_async(stream)
+            .await
+            .expect("test websocket handshake should complete");
+    }
+}
+
+async fn respond_to_health_probe_if_requested(stream: &mut TcpStream, health_body: &str) -> bool {
+    let mut peek = [0_u8; 128];
+    let byte_count = stream
+        .peek(&mut peek)
+        .await
+        .expect("test connection should be readable");
+    let request = std::str::from_utf8(&peek[..byte_count]).unwrap_or_default();
+    if !request.starts_with("GET /health") {
+        return false;
+    }
+
+    let mut drain = [0_u8; 1024];
+    let _ = stream.read(&mut drain).await;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        health_body.len(),
+        health_body,
+    );
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .expect("health response should write");
+    true
 }
 
 async fn read_bus_message(ws: &mut WebSocketStream<TcpStream>) -> BusMessage {
@@ -1592,6 +2120,39 @@ fn assert_conformance_assertion_shape(
                 messages.contains_key(message_ref),
                 "{case_id} references missing fixture {message_ref}"
             );
+        }
+        "local-handled" | "result-matches" => {
+            assert!(
+                assertion["subject"].is_string(),
+                "{case_id} {kind} assertions must declare a subject"
+            );
+            if kind == "result-matches" {
+                assert!(
+                    assertion.get("expected").is_some(),
+                    "{case_id} result-matches assertions must declare expected"
+                );
+            }
+        }
+        "all-received" => {
+            assert!(
+                assertion["subject"].is_string(),
+                "{case_id} all-received assertions must declare a subject"
+            );
+            assert!(
+                assertion["handlerCount"].is_number(),
+                "{case_id} all-received assertions must declare handlerCount"
+            );
+        }
+        "auth-handshake" => {
+            for key in ["challengeRef", "responseRef", "resultRef"] {
+                let message_ref = assertion[key].as_str().unwrap_or_else(|| {
+                    panic!("{case_id} auth-handshake assertions must declare {key}")
+                });
+                assert!(
+                    messages.contains_key(message_ref),
+                    "{case_id} references missing fixture {message_ref}"
+                );
+            }
         }
         _ => panic!("{case_id} declares unsupported assertion kind {kind}"),
     }

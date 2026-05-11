@@ -166,4 +166,17 @@ describe('Rust subject bindings generation', () => {
 
     expect(normalizedCommitted.startsWith(normalizedGenerated)).toBe(true);
   });
+
+  it('generates typed Rust subject structs for known payload types', () => {
+    const manifest = exportProtocolManifest({ catalog: PublicProtocolNamespaces });
+    const source = generateRustSubjectsSection(manifest);
+
+    expect(source).toContain('pub struct Message;');
+    expect(source).toContain('impl EventSubject for Message {');
+    expect(source).toContain('type Payload = super::AgentMessagePayload;');
+    expect(source).toContain('pub struct Execute;');
+    expect(source).toContain('impl RequestSubject for Execute {');
+    expect(source).toContain('type Request = super::ToolExecuteRequest;');
+    expect(source).toContain('type Response = super::ToolExecuteResponse;');
+  });
 });

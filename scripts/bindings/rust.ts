@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../packages/contracts/src/protocol/types.js';
 import { RUST_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
+import { rustSubjectPayloadType } from './rust-payloads.js';
 
 /**
  * Rust reserved keywords and strict keywords that cannot be used as bare identifiers.
@@ -91,6 +92,19 @@ export function toRustConstantName(subject: string): string {
     .replace(/([A-Z])/g, '_$1')
     .toUpperCase()
     .replace(/^_/, '');
+}
+
+/**
+ * Convert a subject string to a Rust PascalCase zero-sized subject type name.
+ * @param subject - Subject key inside a namespace, e.g. `contextWindow.updated`
+ * @returns PascalCase type name, e.g. `ContextWindowUpdated`
+ */
+function toRustSubjectTypeName(subject: string): string {
+  return toRustConstantName(subject)
+    .split('_')
+    .filter((part) => part.length > 0)
+    .map((part) => part[0]!.toUpperCase() + part.slice(1).toLowerCase())
+    .join('');
 }
 
 /**
@@ -213,13 +227,39 @@ function normalizeLineEndings(content: string, lineEnding: '\n' | '\r\n'): strin
  */
 function generateNamespaceModule(namespace: string, subjects: MakaioProtocolSubject[]): string {
   const modName = toRustModuleName(namespace);
-  const lines: string[] = [`pub mod ${modName} {`];
+  const uses: string[] = [];
+  if (subjects.some((subject) => subject.kind === 'event')) {
+    uses.push('EventSubject');
+  }
+  if (subjects.some((subject) => subject.kind === 'request')) {
+    uses.push('RequestSubject');
+  }
+  uses.push('Value');
+  const lines: string[] = [`pub mod ${modName} {`, `    use super::{${uses.join(', ')}};`, ''];
 
   for (const subject of subjects) {
     const constName = toRustConstantName(subject.subject);
+    const typeName = toRustSubjectTypeName(subject.subject);
     lines.push(`    pub const ${constName}: &str = "${subject.fullSubject}";`);
+    lines.push('');
+    lines.push('    #[derive(Debug, Clone, Copy, PartialEq, Eq)]');
+    lines.push(`    pub struct ${typeName};`);
+    if (subject.kind === 'event') {
+      lines.push(`    impl EventSubject for ${typeName} {`);
+      lines.push(`        type Payload = ${rustSubjectPayloadType(subject.fullSubject, 'event')};`);
+    } else {
+      lines.push(`    impl RequestSubject for ${typeName} {`);
+      lines.push(`        type Request = ${rustSubjectPayloadType(subject.fullSubject, 'request')};`);
+      lines.push(`        type Response = ${rustSubjectPayloadType(subject.fullSubject, 'response')};`);
+    }
+    lines.push(`        const SUBJECT: &'static str = ${constName};`);
+    lines.push('    }');
+    lines.push('');
   }
 
+  if (lines.at(-1) === '') {
+    lines.pop();
+  }
   lines.push('}');
   return lines.join('\n');
 }
@@ -262,6 +302,7 @@ export function generateRustSubjectsSection(manifest: MakaioProtocolManifest): s
     '//! Subject bindings generated from `framework/sdks/manifest/makaio-bus-protocol.json`.',
     '#![allow(non_snake_case)]',
     '',
+    'use crate::bus::{EventSubject, RequestSubject};',
     'use serde::{Deserialize, Serialize};',
     'use serde_json::{Map, Value};',
     '',
