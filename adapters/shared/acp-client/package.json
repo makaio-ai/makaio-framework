@@ -15,7 +15,7 @@
     "@makaio/build-tooling": "workspace:*"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.19.0"
+    "@agentclientprotocol/sdk": "^0.21.0"
   },
   "publishConfig": {
     "exports": {

@@ -49,7 +49,7 @@
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
-    "vite": "^8.0.0"
+    "vite": "^8.0.12"
   },
   "publishConfig": {
     "access": "public",
