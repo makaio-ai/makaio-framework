@@ -13,7 +13,7 @@ import {
 } from './rust.js';
 
 const TEST_MANIFEST = {
-  version: 1,
+  version: 2,
   subjects: [
     {
       kind: 'event',
@@ -76,7 +76,7 @@ describe('Rust subject bindings generation', () => {
 
   it('fails loudly when namespaces collapse to the same Rust module name', () => {
     const manifest = {
-      version: 1,
+      version: 2,
       subjects: [
         {
           kind: 'event',
@@ -104,7 +104,7 @@ describe('Rust subject bindings generation', () => {
 
   it('fails loudly when subject names collapse to the same Rust constant name', () => {
     const manifest = {
-      version: 1,
+      version: 2,
       subjects: [
         {
           kind: 'event',
@@ -132,7 +132,7 @@ describe('Rust subject bindings generation', () => {
 
   it('fails loudly when the manifest repeats the same subject in one namespace', () => {
     const manifest = {
-      version: 1,
+      version: 2,
       subjects: [
         {
           kind: 'event',

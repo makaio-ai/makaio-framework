@@ -6,7 +6,7 @@ export type JsonObject = Record<string, unknown>;
 /** Protocol manifest emitted for language-specific SDK generation. */
 export interface MakaioProtocolManifest {
   /** Manifest format version. */
-  version: 1;
+  version: 2;
   /** Published bus subjects selected by the protocol catalog. */
   subjects: MakaioProtocolSubject[];
 }

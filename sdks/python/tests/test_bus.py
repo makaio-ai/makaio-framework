@@ -3,12 +3,20 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from makaio import BusClient, BusError
-from makaio.bus import _subject_matches_pattern
-from makaio.generated import subjects
+from makaio import BusClient, BusError, RequestTimeoutError
+from makaio._dispatch import _subject_matches_pattern
+from makaio.generated import agent, subjects
+from makaio.generated.payloads.agent import (
+    AgentSendMessageRequest,
+    AgentSendMessageRequestSessionContext,
+    AgentSendMessageResponse,
+    AgentStartedPayload,
+)
+from makaio.types import EventContext, RequestContext
 
 CONFORMANCE_DIR = Path(__file__).resolve().parents[2] / "conformance"
 
@@ -66,14 +74,40 @@ def assert_conformance_assertion_shape(case_id, assertion):
         if not isinstance(assertion.get("messageRef"), str):
             raise AssertionError(f"{case_id} {kind} assertions must declare a messageRef")
         return
+    if kind == "local-handled":
+        if not isinstance(assertion.get("subject"), str):
+            raise AssertionError(f"{case_id} local-handled assertions must declare a subject")
+        return
+    if kind == "result-matches":
+        if not isinstance(assertion.get("subject"), str):
+            raise AssertionError(f"{case_id} result-matches assertions must declare a subject")
+        if "expected" not in assertion:
+            raise AssertionError(f"{case_id} result-matches assertions must declare an expected value")
+        return
+    if kind == "all-received":
+        if not isinstance(assertion.get("subject"), str):
+            raise AssertionError(f"{case_id} all-received assertions must declare a subject")
+        if not isinstance(assertion.get("handlerCount"), int):
+            raise AssertionError(f"{case_id} all-received assertions must declare handlerCount")
+        return
+    if kind == "auth-handshake":
+        if not isinstance(assertion.get("challengeRef"), str):
+            raise AssertionError(f"{case_id} auth-handshake assertions must declare a challengeRef")
+        if not isinstance(assertion.get("responseRef"), str):
+            raise AssertionError(f"{case_id} auth-handshake assertions must declare a responseRef")
+        if not isinstance(assertion.get("resultRef"), str):
+            raise AssertionError(f"{case_id} auth-handshake assertions must declare a resultRef")
+        return
     raise AssertionError(f"{case_id} declares unsupported assertion kind {kind!r}")
 
 
 class FakeWebSocket:
-    def __init__(self):
+    def __init__(self, *, auto_sync_complete=True):
         self.sent = []
         self.incoming = asyncio.Queue()
         self.closed = False
+        if auto_sync_complete:
+            self.push({"type": "subscribe-sync-complete"})
 
     async def send(self, message):
         self.sent.append(json.loads(message))
@@ -89,6 +123,9 @@ class FakeWebSocket:
 
     async def receive(self, message):
         await self.incoming.put(json.dumps(message))
+
+    def push(self, message):
+        self.incoming.put_nowait(json.dumps(message))
 
     async def receive_raw(self, message):
         """Queue a raw inbound frame without JSON serialization."""
@@ -118,6 +155,32 @@ class FailingCloseWebSocket(FakeWebSocket):
     async def close(self):
         self.closed = True
         raise RuntimeError("close failed")
+
+
+class MemoryLineReader:
+    def __init__(self):
+        self.lines = asyncio.Queue()
+
+    async def readline(self):
+        return await self.lines.get()
+
+    def push(self, message):
+        self.lines.put_nowait(json.dumps(message).encode("utf-8") + b"\n")
+
+
+class MemoryLineWriter:
+    def __init__(self):
+        self.frames = []
+        self.closed = False
+
+    def write(self, data):
+        self.frames.append(data)
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        self.closed = True
 
 
 class RequestGateBusClient(BusClient):
@@ -154,18 +217,23 @@ class ConformanceFixtureTest(unittest.TestCase):
                         self.assertIn(message_ref, messages)
                     for replay_ref in assertion.get("messages", []):
                         self.assertIn(replay_ref, messages)
+                    for ref_key in ("challengeRef", "responseRef", "resultRef"):
+                        auth_ref = assertion.get(ref_key)
+                        if isinstance(auth_ref, str):
+                            self.assertIn(auth_ref, messages)
 
 
 class SubjectPatternTest(unittest.TestCase):
+    # Note: _subject_matches_pattern from _dispatch uses (subject, pattern) order.
     def test_dot_wildcard_matches_subject_prefixes(self):
-        self.assertTrue(_subject_matches_pattern("agent.*", "agent.started"))
-        self.assertTrue(_subject_matches_pattern("agent.*", "agent.contextWindow.updated"))
-        self.assertFalse(_subject_matches_pattern("agent.*", "agent:worker.started"))
+        self.assertTrue(_subject_matches_pattern("agent.started", "agent.*"))
+        self.assertTrue(_subject_matches_pattern("agent.contextWindow.updated", "agent.*"))
+        self.assertFalse(_subject_matches_pattern("agent:worker.started", "agent.*"))
 
     def test_colon_wildcard_matches_child_namespace_prefixes(self):
-        self.assertTrue(_subject_matches_pattern("tool.execute:*", "tool.execute:remote"))
-        self.assertTrue(_subject_matches_pattern("adapter:*", "adapter:claudeCode:sdk.thinking"))
-        self.assertFalse(_subject_matches_pattern("adapter:*", "adapter.initialized"))
+        self.assertTrue(_subject_matches_pattern("tool.execute:remote", "tool.execute:*"))
+        self.assertTrue(_subject_matches_pattern("adapter:claudeCode:sdk.thinking", "adapter:*"))
+        self.assertFalse(_subject_matches_pattern("adapter.initialized", "adapter:*"))
 
 
 class BusClientTest(unittest.IsolatedAsyncioTestCase):
@@ -180,8 +248,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
     async def test_event_subscribe_and_emit_framing(self):
         received = asyncio.Future()
 
-        async def handler(payload, message):
-            received.set_result((payload, message))
+        async def handler(ctx: EventContext):
+            received.set_result((ctx.payload, ctx.message))
 
         await self.client.subscribe(subjects.AGENT_STARTED, handler)
 
@@ -189,6 +257,11 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(subscribe_frame, {"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}})
 
         await self.client.emit(subjects.AGENT_STARTED, {"agentId": "agent-1"})
+        payload, message = await asyncio.wait_for(received, timeout=1)
+        self.assertEqual(payload, {"agentId": "agent-1"})
+        self.assertEqual(message["type"], "event")
+
+        received = asyncio.Future()
         event_frame = await self.websocket.wait_sent(2)
         self.assertEqual(event_frame["type"], "event")
         self.assertEqual(event_frame["namespace"], "agent")
@@ -210,6 +283,70 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload, {"agentId": "agent-2"})
         self.assertEqual(message["messageId"], "message-1")
 
+    async def test_typed_event_subject_serializes_and_deserializes_payload(self):
+        received = asyncio.Future()
+
+        async def handler(ctx: EventContext):
+            received.set_result(ctx.payload)
+
+        await self.client.subscribe(agent.started, handler)
+        await self.websocket.wait_sent(1)
+
+        payload = AgentStartedPayload(
+            adapter_id="adapter-1",
+            adapter_name="test",
+            adapter_session_id="adapter-session-1",
+            agent_id="agent-1",
+            cwd=None,
+            model=None,
+        )
+        await self.client.emit(agent.started, payload)
+
+        local_payload = await asyncio.wait_for(received, timeout=1)
+        self.assertEqual(local_payload, payload)
+
+        event_frame = await self.websocket.wait_sent(2)
+        self.assertEqual(
+            event_frame["payload"],
+            {
+                "adapterId": "adapter-1",
+                "adapterName": "test",
+                "adapterSessionId": "adapter-session-1",
+                "agentId": "agent-1",
+            },
+        )
+
+        received = asyncio.Future()
+        await self.websocket.receive(
+            {
+                "type": "event",
+                "namespace": "agent",
+                "subject": "started",
+                "payload": {
+                    "adapterId": "adapter-2",
+                    "adapterName": "test",
+                    "adapterSessionId": "adapter-session-2",
+                    "agentId": "agent-2",
+                    "cwd": "/tmp/project",
+                    "model": "test-model",
+                },
+                "messageId": "message-typed",
+            },
+        )
+
+        inbound_payload = await asyncio.wait_for(received, timeout=1)
+        self.assertEqual(
+            inbound_payload,
+            AgentStartedPayload(
+                adapter_id="adapter-2",
+                adapter_name="test",
+                adapter_session_id="adapter-session-2",
+                agent_id="agent-2",
+                cwd="/tmp/project",
+                model="test-model",
+            ),
+        )
+
     async def test_request_response_correlation(self):
         request_task = asyncio.create_task(self.client.request(subjects.TOOL_LIST, {"scope": "workspace"}))
 
@@ -230,6 +367,59 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await asyncio.wait_for(request_task, timeout=1), {"tools": []})
 
+    async def test_typed_request_subject_serializes_payload_and_deserializes_response(self):
+        payload = AgentSendMessageRequest(
+            adapter_id="adapter-1",
+            agent_id="agent-1",
+            message={"role": "user", "content": "hello"},
+            session_context=AgentSendMessageRequestSessionContext(is_first_turn=True),
+        )
+        request_task = asyncio.create_task(self.client.request(agent.send_message, payload))
+
+        request_frame = await self.websocket.wait_sent(1)
+        self.assertEqual(request_frame["type"], "request")
+        self.assertEqual(request_frame["namespace"], "agent")
+        self.assertEqual(request_frame["subject"], "sendMessage")
+        self.assertEqual(
+            request_frame["payload"],
+            {
+                "adapterId": "adapter-1",
+                "agentId": "agent-1",
+                "message": {"role": "user", "content": "hello"},
+                "sessionContext": {"isFirstTurn": True},
+            },
+        )
+
+        await self.websocket.receive(
+            {
+                "type": "response",
+                "correlationId": request_frame["correlationId"],
+                "result": {"messageId": "message-1"},
+            },
+        )
+
+        self.assertEqual(
+            await asyncio.wait_for(request_task, timeout=1),
+            AgentSendMessageResponse(message_id="message-1"),
+        )
+
+    async def test_local_first_typed_request_deserializes_local_dict_response(self):
+        async def handler(ctx: RequestContext):
+            ctx.set_result({"messageId": "message-local"})
+
+        await self.client.on_request(agent.send_message, handler)
+        await self.websocket.wait_sent(1)
+
+        payload = AgentSendMessageRequest(
+            adapter_id="adapter-1",
+            agent_id="agent-1",
+            message={"role": "user", "content": "hello"},
+        )
+
+        result = await self.client.request(agent.send_message, payload)
+
+        self.assertEqual(result, AgentSendMessageResponse(message_id="message-local"))
+
     async def test_request_wire_propagates_timeout_priority_and_deadline(self):
         request_task = asyncio.create_task(
             self.client.request(
@@ -238,7 +428,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                 timeout=15,
                 priority=250,
                 deadline=1234567890,
-                response_timeout=1,
+                timeout_ms=1000,
             ),
         )
 
@@ -252,7 +442,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_frame["deadline"], 1234567890)
         self.assertIsInstance(request_frame["correlationId"], str)
         self.assertIsInstance(request_frame["messageId"], str)
-        self.assertNotIn("response_timeout", request_frame)
+        self.assertNotIn("timeout_ms", request_frame)
 
         await self.websocket.receive(
             {
@@ -263,6 +453,51 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(await asyncio.wait_for(request_task, timeout=1), {"tools": []})
+
+    async def test_request_timeout_raises_sdk_timeout_error(self):
+        request_task = asyncio.create_task(
+            self.client.request(subjects.TOOL_LIST, {"scope": "workspace"}, timeout_ms=10),
+        )
+
+        request_frame = await self.websocket.wait_sent(1)
+        self.assertEqual(request_frame["type"], "request")
+
+        with self.assertRaises(RequestTimeoutError) as raised:
+            await asyncio.wait_for(request_task, timeout=1)
+
+        self.assertEqual(raised.exception.subject, subjects.TOOL_LIST)
+        self.assertEqual(raised.exception.timeout_ms, 10)
+
+    async def test_local_first_request_timeout_covers_local_handler(self):
+        started = asyncio.Event()
+
+        async def blocking_handler(ctx: RequestContext):
+            started.set()
+            await asyncio.Future()
+
+        await self.client.on_request(subjects.TOOL_EXECUTE, blocking_handler, priority=100)
+        await self.websocket.wait_sent(1)
+
+        with self.assertRaises(RequestTimeoutError) as raised:
+            await self.client.request(subjects.TOOL_EXECUTE, {"toolId": "local"}, timeout_ms=10)
+
+        await asyncio.wait_for(started.wait(), timeout=1)
+        self.assertEqual(raised.exception.subject, subjects.TOOL_EXECUTE)
+        self.assertEqual(len(self.websocket.sent), 1)
+
+    async def test_transport_drop_resets_connection_and_fails_pending_request(self):
+        request_task = asyncio.create_task(self.client.request(subjects.TOOL_LIST, {"scope": "workspace"}))
+        await self.websocket.wait_sent(1)
+
+        await self.websocket.incoming.put(RuntimeError("connection dropped"))
+
+        with self.assertRaises(BusError) as raised:
+            await asyncio.wait_for(request_task, timeout=1)
+
+        self.assertEqual(raised.exception.code, "CONNECTION_CLOSED")
+        self.assertTrue(self.websocket.closed)
+        with self.assertRaisesRegex(RuntimeError, "not connected"):
+            await self.client.emit(subjects.AGENT_STARTED, {"agentId": "agent-1"})
 
     async def test_request_error_raises_bus_error(self):
         request_task = asyncio.create_task(self.client.request(subjects.TOOL_EXECUTE, {"toolId": "missing"}))
@@ -326,11 +561,11 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         received = asyncio.Future()
 
-        async def event_handler(payload, message):
-            received.set_result(payload)
+        async def event_handler(ctx: EventContext):
+            received.set_result(ctx.payload)
 
-        async def request_handler(payload, message):
-            return {"approved": True, "toolName": payload.get("toolName")}
+        async def request_handler(ctx: RequestContext):
+            ctx.set_result({"approved": True, "toolName": ctx.payload.get("toolName")})
 
         await client.subscribe(subjects.AGENT_STARTED, event_handler)
         await client.on_request(subjects.APPROVAL_REQUEST, request_handler, priority=100)
@@ -392,6 +627,117 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
         await client.close()
 
+    async def test_transport_drop_leaves_client_reconnectable(self):
+        initial_websocket = FakeWebSocket()
+        reconnect_websocket = FakeWebSocket()
+        websockets = iter((initial_websocket, reconnect_websocket))
+        client = BusClient("ws://test", websocket_factory=lambda url: next(websockets))
+        await client.connect()
+        await client.subscribe(subjects.AGENT_STARTED, lambda ctx: None)
+        await initial_websocket.wait_sent(1)
+
+        initial_websocket.incoming.put_nowait(RuntimeError("socket dropped"))
+        await asyncio.sleep(0.05)
+
+        await client.reconnect()
+
+        self.assertEqual(
+            reconnect_websocket.sent,
+            [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
+        )
+        await client.close()
+
+    async def test_auto_reconnect_replays_local_subscriptions_after_transport_drop(self):
+        initial_websocket = FakeWebSocket()
+        reconnect_websocket = FakeWebSocket()
+        websockets = iter((initial_websocket, reconnect_websocket))
+        client = BusClient(
+            "ws://test",
+            auto_reconnect=True,
+            websocket_factory=lambda url: next(websockets),
+        )
+        await client.connect()
+        await client.subscribe(subjects.AGENT_STARTED, lambda ctx: None)
+        await initial_websocket.wait_sent(1)
+
+        initial_websocket.incoming.put_nowait(RuntimeError("socket dropped"))
+        await reconnect_websocket.wait_sent(1)
+
+        self.assertEqual(
+            reconnect_websocket.sent,
+            [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
+        )
+        await client.close()
+
+    async def test_local_first_fallthrough_sends_next_priority_cursor(self):
+        async def high_handler(ctx: RequestContext):
+            await ctx.next()
+
+        async def low_handler(ctx: RequestContext):
+            pass
+
+        await self.client.on_request(subjects.TOOL_EXECUTE, high_handler, priority=100)
+        await self.client.on_request(subjects.TOOL_EXECUTE, low_handler, priority=50)
+        await self.websocket.wait_sent(2)
+
+        request_task = asyncio.create_task(self.client.request(subjects.TOOL_EXECUTE, {"toolId": "remote"}))
+        request_frame = await self.websocket.wait_sent(3)
+
+        self.assertEqual(request_frame["type"], "request")
+        self.assertEqual(request_frame["priority"], 50)
+
+        await self.websocket.receive(
+            {
+                "type": "response",
+                "correlationId": request_frame["correlationId"],
+                "result": {"handledBy": "remote"},
+            },
+        )
+        self.assertEqual(await asyncio.wait_for(request_task, timeout=1), {"handledBy": "remote"})
+
+    async def test_remote_dispatch_sends_wire_request_when_local_handler_exists(self):
+        websocket = FakeWebSocket()
+        client = BusClient("ws://test", dispatch="remote", websocket_factory=lambda url: websocket)
+        await client.connect()
+
+        async def handler(ctx: RequestContext):
+            ctx.set_result({"handledBy": "local"})
+
+        await client.on_request(subjects.TOOL_EXECUTE, handler, priority=100)
+        await websocket.wait_sent(1)
+
+        request_task = asyncio.create_task(client.request(subjects.TOOL_EXECUTE, {"toolId": "remote"}))
+        request_frame = await websocket.wait_sent(2)
+        self.assertEqual(request_frame["type"], "request")
+        self.assertNotIn("priority", request_frame)
+
+        await websocket.receive(
+            {
+                "type": "response",
+                "correlationId": request_frame["correlationId"],
+                "result": {"handledBy": "remote"},
+            },
+        )
+
+        self.assertEqual(await asyncio.wait_for(request_task, timeout=1), {"handledBy": "remote"})
+        await client.close()
+
+    async def test_remote_dispatch_emit_skips_local_event_handlers(self):
+        websocket = FakeWebSocket()
+        client = BusClient("ws://test", dispatch="remote", websocket_factory=lambda url: websocket)
+        await client.connect()
+        received = asyncio.Event()
+
+        await client.subscribe(subjects.AGENT_STARTED, lambda ctx: received.set())
+        await websocket.wait_sent(1)
+
+        await client.emit(subjects.AGENT_STARTED, {"agentId": "agent-1"})
+        event_frame = await websocket.wait_sent(2)
+
+        self.assertEqual(event_frame["type"], "event")
+        self.assertFalse(received.is_set())
+        await client.close()
+
     async def test_request_send_stays_bound_to_original_socket_during_reconnect(self):
         initial_websocket = FakeWebSocket()
         reconnect_websocket = FakeWebSocket()
@@ -429,16 +775,17 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         websockets = iter((initial_websocket, reconnect_websocket))
         client = BusClient("ws://test", websocket_factory=lambda url: next(websockets))
         await client.connect()
-        await client.subscribe(subjects.AGENT_STARTED, lambda payload, message: None)
+        await client.subscribe(subjects.AGENT_STARTED, lambda ctx: None)
         await initial_websocket.wait_sent(1)
 
+        initial_transport = client._transport
         await client.reconnect()
         self.assertEqual(
             reconnect_websocket.sent,
             [{"type": "subscribe", "subjects": {subjects.AGENT_STARTED: []}}],
         )
 
-        await client._mark_connection_closed("stale socket closed", websocket=initial_websocket)
+        await client._mark_connection_closed("stale socket closed", transport=initial_transport)
 
         await client.emit(subjects.AGENT_STARTED, {"agentId": "agent-3"})
         event_frame = await reconnect_websocket.wait_sent(2)
@@ -447,8 +794,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         await client.close()
 
     async def test_request_and_request_handler_reject_wildcards(self):
-        async def handler(payload, message):
-            return None
+        async def handler(ctx: RequestContext):
+            ctx.set_result(None)
 
         for subject in ("*", "agent.*", "adapter:*"):
             with self.subTest(operation="emit", subject=subject):
@@ -466,8 +813,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.websocket.sent, [])
 
     async def test_subscribe_rejects_unsupported_wildcard_shapes(self):
-        async def handler(payload, message):
-            return None
+        async def handler(ctx: EventContext):
+            pass
 
         for subject in ("agent.*.updated", "tool.ex*ecute", "adapter:**", "**"):
             with self.subTest(subject=subject):
@@ -481,7 +828,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         release_handler = asyncio.Event()
         handler_finished = asyncio.Event()
 
-        async def blocking_handler(payload, message):
+        async def blocking_handler(ctx: EventContext):
             handler_started.set()
             await release_handler.wait()
             handler_finished.set()
@@ -521,10 +868,10 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         handler_started = asyncio.Event()
         release_handler = asyncio.Event()
 
-        async def blocking_handler(payload, message):
+        async def blocking_handler(ctx: RequestContext):
             handler_started.set()
             await release_handler.wait()
-            return {"ok": True}
+            ctx.set_result({"ok": True})
 
         await self.client.on_request(subjects.TOOL_EXECUTE, blocking_handler, priority=10)
         await self.websocket.wait_sent(1)
@@ -562,7 +909,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         handler_started = asyncio.Event()
         handler_cancelled = asyncio.Event()
 
-        async def blocking_handler(payload, message):
+        async def blocking_handler(ctx: EventContext):
             handler_started.set()
             try:
                 await asyncio.Future()
@@ -591,7 +938,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         handler_started = asyncio.Event()
         handler_cancelled = asyncio.Event()
 
-        async def blocking_handler(payload, message):
+        async def blocking_handler(ctx: RequestContext):
             handler_started.set()
             try:
                 await asyncio.Future()
@@ -625,11 +972,11 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response_frame, conformance_message("response.tool.execute.no-handler"))
 
     async def test_subscribe_replace_semantics_and_unsubscribe(self):
-        async def first_handler(payload, message):
-            return {"handledBy": "first"}
+        async def first_handler(ctx: RequestContext):
+            ctx.set_result({"handledBy": "first"})
 
-        async def second_handler(payload, message):
-            return {"handledBy": "second"}
+        async def second_handler(ctx: RequestContext):
+            ctx.set_result({"handledBy": "second"})
 
         first = await self.client.on_request(subjects.TOOL_EXECUTE, first_handler, priority=10)
         first_subscribe = await self.websocket.wait_sent(1)
@@ -650,8 +997,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
     async def test_heartbeat_is_ignored(self):
         received = asyncio.Future()
 
-        async def handler(payload, message):
-            received.set_result(payload)
+        async def handler(ctx: EventContext):
+            received.set_result(ctx.payload)
 
         await self.client.subscribe(subjects.AGENT_COMPLETE, handler)
         await self.websocket.wait_sent(1)
@@ -665,8 +1012,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
     async def test_broadcast_and_broadcast_response_are_silently_ignored(self):
         received = asyncio.Future()
 
-        async def handler(payload, message):
-            received.set_result(payload)
+        async def handler(ctx: EventContext):
+            received.set_result(ctx.payload)
 
         await self.client.subscribe(subjects.TOOL_EXECUTE, handler)
         await self.websocket.wait_sent(1)
@@ -680,8 +1027,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
     async def test_wildcard_agent_event_subscription(self):
         received = asyncio.Future()
 
-        async def handler(payload, message):
-            received.set_result((payload, message))
+        async def handler(ctx: EventContext):
+            received.set_result((ctx.payload, ctx.message))
 
         await self.client.subscribe("agent.*", handler)
         subscribe_frame = await self.websocket.wait_sent(1)
@@ -697,13 +1044,13 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         received = []
         seen = asyncio.Event()
 
-        async def global_handler(payload, message):
-            received.append(("global", message["namespace"], message["subject"], payload))
+        async def global_handler(ctx: EventContext):
+            received.append(("global", ctx.message["namespace"], ctx.message["subject"], ctx.payload))
             if len(received) == 3:
                 seen.set()
 
-        async def adapter_handler(payload, message):
-            received.append(("adapter", message["namespace"], message["subject"], payload))
+        async def adapter_handler(ctx: EventContext):
+            received.append(("adapter", ctx.message["namespace"], ctx.message["subject"], ctx.payload))
             if len(received) == 3:
                 seen.set()
 
@@ -748,8 +1095,8 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
         calls = []
         received = asyncio.Event()
 
-        async def handler(payload, message):
-            calls.append((payload, message))
+        async def handler(ctx: EventContext):
+            calls.append((ctx.payload, ctx.message))
             received.set()
 
         first = await self.client.subscribe(subjects.AGENT_STARTED, handler)
@@ -781,18 +1128,18 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
     async def test_event_handler_exception_does_not_stop_later_event_delivery(self):
         received = asyncio.Future()
 
-        async def failing_handler(payload, message):
+        async def failing_handler(ctx: EventContext):
             raise RuntimeError("handler failed")
 
-        async def working_handler(payload, message):
-            received.set_result(payload)
+        async def working_handler(ctx: EventContext):
+            received.set_result(ctx.payload)
 
         await self.client.subscribe(subjects.AGENT_STARTED, failing_handler)
         await self.websocket.wait_sent(1)
         await self.client.subscribe(subjects.AGENT_COMPLETE, working_handler)
         await self.websocket.wait_sent(2)
 
-        with self.assertLogs("makaio.bus", level="ERROR") as logs:
+        with self.assertLogs("makaio", level="ERROR") as logs:
             await self.websocket.receive(
                 {
                     "type": "event",
@@ -814,10 +1161,99 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(await asyncio.wait_for(received, timeout=1), {"agentId": "agent-2"})
 
-        self.assertIn("Makaio event handler failed for agent.started", logs.output[0])
+        self.assertIn("agent.started", logs.output[0])
 
 
 class ConnectLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_waits_for_subscribe_sync_complete(self):
+        websocket = FakeWebSocket(auto_sync_complete=False)
+        client = BusClient("ws://test", websocket_factory=lambda url: websocket, connect_timeout_ms=500)
+
+        connect_task = asyncio.create_task(client.connect())
+        await asyncio.sleep(0.05)
+        self.assertFalse(connect_task.done())
+
+        await websocket.receive({"type": "subscribe-sync-complete"})
+        await asyncio.wait_for(connect_task, timeout=1)
+
+        await client.close()
+
+    async def test_connect_timeout_covers_readiness(self):
+        websocket = FakeWebSocket(auto_sync_complete=False)
+        client = BusClient("ws://test", websocket_factory=lambda url: websocket, connect_timeout_ms=25)
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await client.connect()
+
+        self.assertTrue(websocket.closed)
+
+    async def test_connect_timeout_covers_transport_connect(self):
+        started = asyncio.Event()
+
+        async def factory(url):
+            started.set()
+            await asyncio.Future()
+
+        client = BusClient("ws://test", websocket_factory=factory, connect_timeout_ms=25)
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await client.connect()
+
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+    async def test_auth_false_skips_probe_and_handshake(self):
+        websocket = FakeWebSocket()
+        client = BusClient("ws://test", auth=False, websocket_factory=lambda url: websocket)
+
+        with patch("makaio.bus.probe_health", new=AsyncMock(side_effect=AssertionError("probe called"))):
+            await client.connect()
+
+        self.assertEqual(websocket.sent, [])
+        await client.close()
+
+    async def test_from_stdio_connects_over_stdio_transport(self):
+        reader = MemoryLineReader()
+        writer = MemoryLineWriter()
+        reader.push({"type": "subscribe-sync-complete"})
+        client = BusClient.from_stdio(input_stream=reader, output_stream=writer, connect_timeout_ms=500)
+
+        await client.connect()
+        await client.emit(subjects.AGENT_STARTED, {"agentId": "agent-stdio"})
+
+        self.assertEqual(len(writer.frames), 1)
+        frame = json.loads(writer.frames[0].decode("utf-8"))
+        self.assertEqual(frame["type"], "event")
+        self.assertEqual(frame["namespace"], "agent")
+        self.assertEqual(frame["subject"], "started")
+
+        await client.close()
+
+    async def test_auto_probe_auth_requires_secret(self):
+        websocket = FakeWebSocket(auto_sync_complete=False)
+        client = BusClient("ws://test", websocket_factory=lambda url: websocket)
+
+        with patch("makaio.bus.probe_health", new=AsyncMock(return_value=MagicMock(auth=True))):
+            with patch.dict("os.environ", {}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "MAKAIO_BUS_SECRET"):
+                    await client.connect()
+
+        self.assertEqual(websocket.sent, [])
+
+    async def test_auto_probe_auth_handshake_with_secret(self):
+        websocket = FakeWebSocket(auto_sync_complete=False)
+        websocket.push({"type": "auth-challenge", "nonce": "nonce-1"})
+        websocket.push({"type": "auth-result", "success": True})
+        websocket.push({"type": "subscribe-sync-complete"})
+        client = BusClient("ws://test", websocket_factory=lambda url: websocket)
+
+        with patch("makaio.bus.probe_health", new=AsyncMock(return_value=MagicMock(auth=True))):
+            with patch.dict("os.environ", {"MAKAIO_BUS_SECRET": "secret-1"}, clear=True):
+                await client.connect()
+
+        self.assertEqual(len(websocket.sent), 1)
+        self.assertEqual(websocket.sent[0]["type"], "auth-response")
+        await client.close()
+
     async def test_failed_subscription_replay_rolls_back_connection(self):
         failing_websocket = FailingSendWebSocket()
         working_websocket = FakeWebSocket()
@@ -828,8 +1264,8 @@ class ConnectLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
         client = BusClient("ws://test", websocket_factory=factory)
 
-        async def handler(payload, message):
-            return None
+        async def handler(ctx: EventContext):
+            pass
 
         await client.subscribe(subjects.AGENT_STARTED, handler)
 
@@ -881,18 +1317,21 @@ class RegistrationRollbackTest(unittest.IsolatedAsyncioTestCase):
         client = BusClient("ws://test", websocket_factory=factory)
         await client.connect()
 
-        async def handler(payload, message):
-            return None
+        async def handler(ctx: EventContext):
+            pass
 
         with self.assertRaisesRegex(RuntimeError, "send failed"):
             await client.subscribe(subjects.AGENT_STARTED, handler)
 
         await client.close()
-        await client.connect()
+
+        # After close, a new client is required to establish a fresh connection.
+        client2 = BusClient("ws://test", websocket_factory=lambda url: working_websocket)
+        await client2.connect()
 
         self.assertEqual(working_websocket.sent, [])
 
-        await client.close()
+        await client2.close()
 
     async def test_on_request_rolls_back_when_advertisement_fails(self):
         failing_websocket = FailingSendWebSocket()
@@ -905,29 +1344,32 @@ class RegistrationRollbackTest(unittest.IsolatedAsyncioTestCase):
         client = BusClient("ws://test", websocket_factory=factory)
         await client.connect()
 
-        async def handler(payload, message):
-            return {"success": True}
+        async def handler(ctx: RequestContext):
+            ctx.set_result({"success": True})
 
         with self.assertRaisesRegex(RuntimeError, "send failed"):
             await client.on_request(subjects.TOOL_EXECUTE, handler, priority=10)
 
         await client.close()
-        await client.connect()
+
+        # After close, a new client is required to establish a fresh connection.
+        client2 = BusClient("ws://test", websocket_factory=lambda url: working_websocket)
+        await client2.connect()
 
         self.assertEqual(working_websocket.sent, [])
 
-        await client.close()
+        await client2.close()
 
     async def test_request_handler_serialization_failure_returns_handler_error(self):
         websocket = FakeWebSocket()
         client = BusClient("ws://test", websocket_factory=lambda url: websocket)
         await client.connect()
 
-        async def bad_handler(payload, message):
-            return {"payload": {1, 2}}
+        async def bad_handler(ctx: RequestContext):
+            ctx.set_result({"payload": {1, 2}})
 
-        async def good_handler(payload, message):
-            return {"ok": True}
+        async def good_handler(ctx: RequestContext):
+            ctx.set_result({"ok": True})
 
         await client.on_request(subjects.TOOL_EXECUTE, bad_handler, priority=10)
         await websocket.wait_sent(1)
@@ -977,7 +1419,7 @@ class RegistrationRollbackTest(unittest.IsolatedAsyncioTestCase):
 
         handler_finished = asyncio.Event()
 
-        async def handler(payload, message):
+        async def handler(ctx: EventContext):
             await client.close()
             handler_finished.set()
 

@@ -54,7 +54,7 @@ describe('protocol manifest export', () => {
   it('exports all clean registered subjects in auto-discovery mode', () => {
     const manifest = exportProtocolManifest();
 
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
 
     // Known public namespaces must all be present.
     const namespaces = new Set(manifest.subjects.map((subject) => subject.namespace));

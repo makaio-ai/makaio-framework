@@ -4,8 +4,8 @@
  * Wraps `@makaio/bus-core` and `@makaio/bus-transport-websocket`
  * into a single, developer-friendly API that mirrors the Python and Rust SDKs.
  */
-import { createBusInstance } from '@makaio/bus-core';
-import type { IMakaioBus, OnOptions } from '@makaio/bus-core';
+import { DEFAULT_REQUEST_TIMEOUT_MS, createBusInstance } from '@makaio/bus-core';
+import type { BusRequestMessage, IMakaioBus, OnOptions } from '@makaio/bus-core';
 import type { EventContext, RequestContext, SubjectDefinition } from '@makaio/core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type {
@@ -47,6 +47,12 @@ export interface BusClientOptions {
   connectTimeoutMs?: number;
   /** Enable debug logging on the transport (default: false). */
   debug?: boolean;
+  /**
+   * Controls request dispatch behavior.
+   * - `'local-first'` — check local handlers before forwarding to the server (default)
+   * - `'remote'` — always route requests through the transport (relay mode)
+   */
+  dispatch?: 'local-first' | 'remote';
 }
 
 /** Health probe result from the server's `/health` endpoint. */
@@ -97,7 +103,9 @@ export interface OnceOptions {
  */
 export class BusClient {
   private bus: IMakaioBus | null = null;
+  private transport: WebSocketClientTransport | null = null;
   private readonly url: string;
+  private dispatch: 'local-first' | 'remote' = 'local-first';
 
   public constructor(url?: string) {
     this.url = (url ?? readEnv('MAKAIO_BUS_URL')?.trim()) || DEFAULT_BUS_URL;
@@ -113,6 +121,7 @@ export class BusClient {
   public async connect(options?: BusClientOptions): Promise<void> {
     if (this.bus) return;
 
+    this.dispatch = options?.dispatch ?? 'local-first';
     const auth = options?.auth ?? (await this.resolveAuth());
     const reconnect = resolveReconnectConfig(options?.autoReconnect);
 
@@ -157,6 +166,7 @@ export class BusClient {
     }
 
     this.bus = bus;
+    this.transport = transport;
   }
 
   /**
@@ -193,10 +203,12 @@ export class BusClient {
     payload: TReq,
     options?: { timeout?: number },
   ): Promise<TRes> {
-    return this.getBus().request(subject as never, payload as never, {
-      ...options,
-      transports: [SDK_CLIENT_TRANSPORT_NAME],
-    }) as Promise<TRes>;
+    if (this.dispatch === 'remote') {
+      return this.sendRemoteRequest<TReq, TRes>(subject, payload, options);
+    }
+
+    const requestOptions: Record<string, unknown> = { ...options };
+    return this.getBus().request(subject as never, payload as never, requestOptions) as Promise<TRes>;
   }
 
   /**
@@ -251,6 +263,7 @@ export class BusClient {
     if (this.bus) {
       this.bus.disconnect();
       this.bus = null;
+      this.transport = null;
     }
   }
 
@@ -276,6 +289,42 @@ export class BusClient {
       throw new Error('Makaio bus requires authentication. Set MAKAIO_BUS_SECRET to connect.');
     }
     return new HmacAuth({ secret });
+  }
+
+  /**
+   * Send a request directly through the SDK transport, bypassing local handlers.
+   * @param subject - Request subject definition.
+   * @param payload - Request payload.
+   * @param options - Optional timeout configuration.
+   * @returns Promise resolving to the remote response payload.
+   */
+  private async sendRemoteRequest<TReq, TRes>(
+    subject: SubjectDefinition,
+    payload: TReq,
+    options?: { timeout?: number },
+  ): Promise<TRes> {
+    const transport = this.getTransport();
+    const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const message: BusRequestMessage = {
+      type: 'request',
+      namespace: subject.$meta.namespace,
+      subject: subject.subject,
+      payload,
+      correlationId: createRequestId(),
+      messageId: createRequestId(),
+      timeout,
+    };
+
+    return transport.send(message, timeout) as Promise<TRes>;
+  }
+
+  /**
+   * Return the connected SDK transport.
+   * @returns Connected WebSocket client transport.
+   */
+  private getTransport(): WebSocketClientTransport {
+    if (!this.transport) throw new Error('BusClient is not connected. Call connect() first.');
+    return this.transport;
   }
 }
 
@@ -335,4 +384,16 @@ function resolveReconnectConfig(
  */
 function readEnv(key: string): string | undefined {
   return typeof process !== 'undefined' ? process.env[key] : undefined;
+}
+
+/**
+ * Create a correlation/message identifier without depending on Node-only APIs.
+ * The non-crypto fallback is only for runtimes without randomUUID().
+ * @returns Opaque request identifier.
+ */
+function createRequestId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }

@@ -213,6 +213,94 @@
           "messageRef": "broadcast-response.tool.execute"
         }
       ]
+    },
+    {
+      "id": "local-request-dispatch",
+      "title": "Local request dispatch",
+      "description": "A request is handled by a locally registered handler without any wire roundtrip. The response comes from the local handler, not from the server.",
+      "wire": [],
+      "assertions": [
+        {
+          "kind": "local-handled",
+          "subject": "test.local"
+        },
+        {
+          "kind": "result-matches",
+          "subject": "test.local",
+          "expected": { "handled": true }
+        }
+      ]
+    },
+    {
+      "id": "local-request-priority-chain",
+      "title": "Local request priority chain",
+      "description": "Two local request handlers at different priorities. Higher-priority handler calls next(), lower-priority handler sets the result. The final result matches what the lower-priority handler set.",
+      "wire": [],
+      "assertions": [
+        {
+          "kind": "result-matches",
+          "subject": "test.chain",
+          "expected": { "from": "low" }
+        }
+      ]
+    },
+    {
+      "id": "local-event-parallel-dispatch",
+      "title": "Local event parallel dispatch",
+      "description": "An event delivered to multiple matching local handlers. All handlers receive the event.",
+      "wire": [],
+      "assertions": [
+        {
+          "kind": "all-received",
+          "subject": "test.event.parallel",
+          "handlerCount": 2
+        }
+      ]
+    },
+    {
+      "id": "local-wildcard-event-matching",
+      "title": "Local wildcard event matching",
+      "description": "A wildcard subscription (agent.*) matches an event on agent.complete.",
+      "wire": [
+        {
+          "direction": "server->client",
+          "messageRef": "event.agent.complete"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "matches",
+          "subject": "agent.complete",
+          "pattern": "agent.*"
+        }
+      ]
+    },
+    {
+      "id": "auth-challenge-response",
+      "title": "HMAC auth challenge-response handshake",
+      "description": "Server sends auth-challenge with a nonce; client responds with an HMAC-SHA256 signature; server confirms with auth-result success=true.",
+      "wire": [
+        {
+          "direction": "server->client",
+          "messageRef": "auth-challenge"
+        },
+        {
+          "direction": "client->server",
+          "messageRef": "auth-response"
+        },
+        {
+          "direction": "server->client",
+          "messageRef": "auth-result"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "auth-handshake",
+          "challengeRef": "auth-challenge",
+          "responseRef": "auth-response",
+          "resultRef": "auth-result"
+        }
+      ]
     }
   ]
 }

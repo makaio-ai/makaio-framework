@@ -193,6 +193,18 @@
       "subjects": {
         "approval.request": [250]
       }
+    },
+    "auth-challenge": {
+      "type": "auth-challenge",
+      "nonce": "conformance-nonce-001"
+    },
+    "auth-response": {
+      "type": "auth-response",
+      "signature": "912104a25d59313bf4129b452165e560e11c11e79e1fd68ef8dfd38eada1d846"
+    },
+    "auth-result": {
+      "type": "auth-result",
+      "success": true
     }
   }
 }
