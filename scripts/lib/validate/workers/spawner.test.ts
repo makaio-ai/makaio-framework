@@ -34,6 +34,18 @@ describe('mergeNodeOptions', () => {
       expected: '--require "./path with spaces/register.js" --max-old-space-size=6144',
     },
     {
+      label: 'preserves attached quoted option values with spaces',
+      input: '--title="foo bar" --trace-warnings',
+      minMB: 6144,
+      expected: '--title="foo bar" --trace-warnings --max-old-space-size=6144',
+    },
+    {
+      label: 'preserves unquoted Windows paths',
+      input: '--require C:\\Users\\me\\register.js',
+      minMB: 6144,
+      expected: '--require C:\\Users\\me\\register.js --max-old-space-size=6144',
+    },
+    {
       label: 'normalizes the spaced heap flag form without duplicating it',
       input: '--trace-warnings --max-old-space-size 8192',
       minMB: 6144,
@@ -54,6 +66,16 @@ describe('stripImportFlags', () => {
       expected: '--trace-warnings --max-old-space-size=4096',
     },
     { label: 'strips --import=<value> form', input: '--import=tsx/esm --trace-warnings', expected: '--trace-warnings' },
+    {
+      label: 'strips attached quoted --import values without leaving fragments',
+      input: '--title="foo bar" --import="./path with spaces/loader.mjs" --trace-warnings',
+      expected: '--title="foo bar" --trace-warnings',
+    },
+    {
+      label: 'strips attached unquoted Windows --import values without leaving fragments',
+      input: '--import=C:\\Users\\me\\loader.mjs --trace-warnings',
+      expected: '--trace-warnings',
+    },
     {
       label: 'passes through when no --import flags exist',
       input: '--trace-warnings --max-old-space-size=2048',

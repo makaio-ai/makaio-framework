@@ -40,8 +40,8 @@ Pick the path that matches what you need:
 
 ### I want to integrate from another language
 - [SDKs Overview](/sdks/) — multi-language bus protocol clients
-- [Python SDK](/sdks/python/) — asyncio-based bus client
-- [Rust SDK](/sdks/rust/) — Tokio-based bus client
+- [Python SDK](/sdks/python/) — asyncio bus node with local dispatch, auth, and typed subjects
+- [Rust SDK](/sdks/rust/) — Tokio bus node with local dispatch, auth, and typed subjects
 - [TypeScript SDK](/sdks/typescript/) — native TypeScript client
 
 ### I want the CLI

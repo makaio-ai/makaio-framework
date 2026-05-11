@@ -89,6 +89,16 @@ export interface ClientWireCommandDependencies {
    * @returns The Makaio executable path or command string.
    */
   readonly resolveMakaioCommand: () => string;
+  /**
+   * Resolve environment variable pairs to prepend before the executable in
+   * every generated hook/statusline command.
+   *
+   * Returns `undefined` in production (binary is self-contained). In dev mode
+   * returns `MAKAIO_CONFIG_FILE=...` and `MAKAIO_HOME=...` so the hook
+   * subprocess discovers extensions and runtime state.
+   * @returns Array of `KEY=value` strings, or `undefined`.
+   */
+  readonly resolveEnvPairs?: () => string[] | undefined;
 }
 
 /**
@@ -109,8 +119,30 @@ export function resolveDefaultMakaioCommand(argv: readonly string[] = process.ar
   return scriptPath;
 }
 
+/**
+ * Build env pairs from the current process environment when running in dev mode.
+ *
+ * Dev mode is detected by the presence of `MAKAIO_CONFIG_FILE` in the
+ * environment. In production, the binary discovers its config via the default
+ * `~/.makaio/` path and no env injection is needed.
+ * @param env - Environment snapshot (defaults to `process.env`).
+ * @returns Array of `KEY=value` strings, or `undefined` in production.
+ */
+export function resolveDefaultEnvPairs(env: NodeJS.ProcessEnv = process.env): string[] | undefined {
+  const configFile = env['MAKAIO_CONFIG_FILE'];
+  if (!configFile) return undefined;
+
+  const pairs: string[] = [`MAKAIO_CONFIG_FILE=${configFile}`];
+  const home = env['MAKAIO_HOME'];
+  if (home) {
+    pairs.push(`MAKAIO_HOME=${home}`);
+  }
+  return pairs;
+}
+
 const defaultDependencies: ClientWireCommandDependencies = {
   resolveMakaioCommand: () => resolveDefaultMakaioCommand(),
+  resolveEnvPairs: () => resolveDefaultEnvPairs(),
 };
 
 // ---------------------------------------------------------------------------
@@ -143,6 +175,7 @@ export async function runClientWireCommand(
 ): Promise<void> {
   const { client, scope, projectDir } = ctx.args;
   const makaioCommand = deps.resolveMakaioCommand();
+  const envPairs = deps.resolveEnvPairs?.();
   const subject = createClientWiringApplySubjectDef(client);
 
   let result: ClientWiringApplyResponse;
@@ -151,6 +184,7 @@ export async function runClientWireCommand(
       scope,
       projectDir,
       makaioCommand,
+      envPairs,
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

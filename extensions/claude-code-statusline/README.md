@@ -37,12 +37,10 @@ Add to your Claude Code settings (`.claude/settings.json` at user or project sco
 If you already have a statusline renderer (e.g., `starship`), chain it:
 
 ```bash
-makaio claude statusline starship '["prompt", "--no-newline"]'
+makaio claude statusline -u starship --upstream-args-json '["prompt", "--no-newline"]'
 ```
 
-The two positional arguments are:
-1. The upstream executable path or command name.
-2. A JSON array of arguments to pass to that executable.
+Pass the upstream executable via `--upstream-command` (or `-u`) and its arguments as a JSON array via `--upstream-args-json`.
 
 ### Wire automatically
 
@@ -54,10 +52,10 @@ makaio client wire claude-code user
 
 ## Flags
 
-| Argument | Description |
-|----------|-------------|
-| `upstreamCommand` (`-u`) | Executable to spawn after emitting to the bus |
-| `upstreamArgsJson` | JSON array of arguments for the upstream command |
+| Flag | Description |
+|------|-------------|
+| `--upstream-command`, `-u` | Executable to spawn after emitting to the bus |
+| `--upstream-args-json` | JSON array of arguments for the upstream command |
 
 ## Installation
 

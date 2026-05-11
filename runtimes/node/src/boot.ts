@@ -165,6 +165,19 @@ export async function bootMakaioRuntimeCore(
     // 2. Bus + busCreated phase
     // -----------------------------------------------------------------------
     const bus = MakaioBus;
+
+    if (process.env['MAKAIO_DEBUG'] === 'true') {
+      const disposeDebugHook = bus.__onAny((context) => {
+        let payload: string;
+        try {
+          payload = JSON.stringify(context.payload);
+        } catch {
+          payload = '[unserializable payload]';
+        }
+        console.debug(`[bus-server] subject: ${context.subject}, payload: ${payload}`);
+      });
+      shutdownSteps.push(disposeDebugHook);
+    }
     await bus.emit(KernelSubjects.phase.busCreated, { machineId });
 
     // -----------------------------------------------------------------------

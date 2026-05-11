@@ -16,7 +16,10 @@ This extension is CLI-only: it has no background service and no storage. All hoo
 ### Install hooks into a client
 
 ```bash
-# Install at user scope (affects all projects)
+# Install at user scope — scope defaults to 'user' when omitted
+makaio client wire claude-code
+
+# Install at user scope (explicit)
 makaio client wire claude-code user
 
 # Install at project scope
@@ -66,7 +69,7 @@ claude-code:
 | Argument | Short | Description |
 |----------|-------|-------------|
 | `<client>` | | Client identifier, e.g. `claude-code`, `codex` |
-| `<scope>` | | Scope to install at, e.g. `user`, `global`, `project` |
+| `[scope]` | | Scope to install at, e.g. `user`, `global`, `project`. Defaults to `user` when omitted. |
 | `--project-dir` | `-d` | Absolute path to project directory (required for project scopes) |
 
 ### `unwire`

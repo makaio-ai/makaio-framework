@@ -19,6 +19,21 @@ function resolveWorkflowPath(): string {
   return resolve(testFileDir, '../../.github/workflows/conformance.yml');
 }
 
+function resolveFrameworkWorkflowPath(fileName: string): string {
+  return resolve(testFileDir, '../../.github/workflows', fileName);
+}
+
+function readWorkflow(fileName: string): string {
+  return readFileSync(resolveFrameworkWorkflowPath(fileName), 'utf8');
+}
+
+function extractStepBlock(workflowText: string, stepName: string): string {
+  const startIndex = workflowText.indexOf(`- name: ${stepName}`);
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+  const nextStepIndex = workflowText.indexOf('\n      - name:', startIndex + 1);
+  return workflowText.slice(startIndex, nextStepIndex === -1 ? undefined : nextStepIndex);
+}
+
 describe('conformance workflow security', () => {
   const workflowText = readFileSync(resolveWorkflowPath(), 'utf8');
 
@@ -56,7 +71,14 @@ describe('conformance workflow security', () => {
   });
 
   it('posts the consolidated report through the Makaio GitHub App token', () => {
-    expect(workflowText).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v[\d.]+)?\s*$/m);
+    const tokenActionUses = workflowText
+      .split('\n')
+      .filter((line) => line.includes('uses: actions/create-github-app-token@'));
+
+    expect(tokenActionUses.length).toBeGreaterThan(0);
+    for (const line of tokenActionUses) {
+      expect(line).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v[\d.]+)?\s*$/);
+    }
     expect(workflowText).toContain('app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflowText).toContain('private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}');
     expect(workflowText).toContain('github-token: ${{ steps.app-token.outputs.token }}');
@@ -74,5 +96,33 @@ describe('conformance workflow security', () => {
     expect(workflowText).toContain('PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}');
     expect(workflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}');
     expect(workflowText).not.toContain('github-copilot-sdk');
+  });
+
+  it('fails adapter workflow jobs before exporting a missing provider secret', () => {
+    const adapterWorkflowText = readWorkflow('conformance-adapter.yml');
+
+    for (const stepName of ['Run adapter smoke', 'Run adapter rest']) {
+      const stepBlock = extractStepBlock(adapterWorkflowText, stepName);
+      const secretGuardIndex = stepBlock.indexOf('if [ -z "${PROVIDER_API_KEY}" ]; then');
+      const exportIndex = stepBlock.indexOf('export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"');
+
+      expect(secretGuardIndex).toBeGreaterThanOrEqual(0);
+      expect(exportIndex).toBeGreaterThan(secretGuardIndex);
+      expect(stepBlock).toContain('Missing secret');
+      expect(stepBlock).toContain('exit 1');
+    }
+  });
+
+  it('only inherits conformance secrets for trusted commenters on trusted pull requests', () => {
+    const callerWorkflowText = readWorkflow('conformance.yml');
+
+    expect(callerWorkflowText).toContain(
+      'contains(fromJSON(\'["OWNER","MEMBER"]\'), github.event.comment.author_association)',
+    );
+    expect(callerWorkflowText).toContain(
+      'contains(fromJSON(\'["OWNER","MEMBER"]\'), github.event.issue.author_association)',
+    );
+    expect(callerWorkflowText).not.toContain('github.event.pull_request.author_association');
+    expect(callerWorkflowText).toContain('secrets: inherit');
   });
 });

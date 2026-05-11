@@ -10,6 +10,7 @@ export type {
   ValidateOptions,
   ValidateProfile,
   ValidationTool,
+  ValidationToolName,
   ValidationSummary,
   ToolStatus,
   ToolRunStatus,

@@ -102,7 +102,7 @@ async function createPlugins(command: ConfigEnv['command'], config: RendererConf
  * Resolve the filesystem roots Vite may serve during renderer development.
  *
  * Host-aware dev mode can point `MAKAIO_HOST_WORKSPACE_ROOT` outside this repo,
- * while shared renderer aliases still resolve to framework-owned files. Allow
+ * while shared renderer aliases still resolve to shared framework files. Allow
  * both roots in serve mode so Electrobun matches Electron's dev-host contract.
  * @param command - Vite command (`serve` or `build`).
  * @param config - Renderer config resolved from the current Vite mode.

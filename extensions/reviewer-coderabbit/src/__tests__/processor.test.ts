@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { extractDetailsBlock, parseDiffSuggestions, stripCodeRabbitMetadata } from '../processor.js';
+import {
+  extractDetailsBlock,
+  parseDiffSuggestions,
+  parseNitpickSection,
+  stripCodeRabbitMetadata,
+} from '../processor.js';
 
 describe('extractDetailsBlock', () => {
   it('skips malformed details blocks and still finds later matching sections', () => {
@@ -36,6 +41,29 @@ describe('stripCodeRabbitMetadata', () => {
     expect(cleaned).not.toContain('review_rate_limit_status_end');
     expect(cleaned).not.toContain('"remaining":0');
     expect(cleaned).not.toContain('coderabbit-comment-id');
+  });
+});
+
+describe('parseNitpickSection', () => {
+  it('keeps file-scoped nitpicks when details and summary tags use mixed case', () => {
+    const findings = parseNitpickSection(
+      [
+        '<DETAILS>',
+        '<SUMMARY>src/example.ts</SUMMARY>',
+        '**Tighten assertion.**',
+        '</DETAILS>',
+        '<details>',
+        '<summary>src/other.ts</summary>',
+        '**Add coverage.**',
+        '</details>',
+      ].join('\n'),
+      { sourceId: 'reviewer', target: { repository: 'makaio-ai/makaio', prNumber: 893 }, reviews: [] },
+      123,
+      1_700_000_000_000,
+    );
+
+    expect(findings).toHaveLength(2);
+    expect(findings.map((finding) => finding.file)).toEqual(['src/example.ts', 'src/other.ts']);
   });
 });
 

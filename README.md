@@ -192,19 +192,21 @@ The bus protocol is language-neutral. SDKs let any process participate — subsc
 | SDK | Language | Transport | Status |
 |-----|----------|-----------|--------|
 | [`@makaio/sdk`](sdks/typescript/) | TypeScript | Framework-native facade | Pre-release, unpublished package |
-| [`makaio-sdk`](sdks/python/) | Python | WebSocket (async) | Pre-release, unpublished package |
-| [`makaio-sdk`](sdks/rust/) | Rust | WebSocket (tokio) | Unpublished crate (`publish = false`) |
+| [`makaio-sdk`](sdks/python/) | Python | WebSocket + stdio (asyncio) | Pre-release, unpublished package |
+| [`makaio-sdk`](sdks/rust/) | Rust | WebSocket + stdio (tokio) | Unpublished crate (`publish = false`) |
 
 All SDKs expose the same logical surface:
 
 ```
-connect(url, auth?)          // WebSocket connection
-subscribe(subject, handler)  // event subscription
-onRequest/on_request(...)    // request handler (TypeScript uses onRequest; Python/Rust use on_request)
-request(subject, payload)    // typed RPC
-emit(subject, payload)       // fire-and-forget
+connect(url, options?)       // WebSocket connection with optional HMAC auth and dispatch mode
+subscribe(subject, handler)  // event subscription (local + remote dispatch)
+onRequest/on_request(...)    // request handler with middleware chaining (TypeScript uses onRequest; Python/Rust use on_request)
+request(subject, payload)    // typed RPC (local-first dispatch by default)
+emit(subject, payload)       // fire-and-forget (dispatches to local + remote subscribers)
 close()                      // clean shutdown
 ```
+
+All three SDKs support HMAC authentication (auto-probed from `/health`), local-first request dispatch with middleware chaining via `RequestContext.next()`, typed subject descriptors generated from the protocol manifest, and WebSocket transport. Python and Rust additionally support stdio transport for detached extension processes.
 
 Subscription cleanup is language-shaped: TypeScript returns unsubscribe functions, Python subscription handles expose `close()`, and Rust uses `unsubscribe()` for event subscriptions and `unregister()` for request handlers.
 
@@ -289,8 +291,8 @@ Representative high-level tree for the framework distribution. It lists the main
 │   └── node/                  Node host assembly: bootMakaioRuntime(), discovery, DB init
 ├── sdks/
 │   ├── typescript/            @makaio/sdk — TypeScript facade
-│   ├── python/                Python SDK (async WebSocket)
-│   ├── rust/                  Rust SDK (tokio WebSocket)
+│   ├── python/                Python SDK (asyncio, WebSocket + stdio)
+│   ├── rust/                  Rust SDK (tokio, WebSocket + stdio)
 │   ├── manifest/              Language-neutral protocol definition (generated)
 │   └── conformance/           Shared wire-level conformance fixtures
 ├── tools/

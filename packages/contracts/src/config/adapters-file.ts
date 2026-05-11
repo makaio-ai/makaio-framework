@@ -24,7 +24,7 @@ export const AdaptersFileAdapterSchema = z.object({
 });
 
 /**
- * Framework-owned file-based adapter configuration stored at `~/.makaio/adapters.json`.
+ * File-based adapter configuration stored at `~/.makaio/adapters.json`.
  */
 export const AdaptersFileSchema = z.object({
   $schema: z.literal('makaio/adapters-config/v1'),

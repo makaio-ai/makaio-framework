@@ -5,8 +5,12 @@
  * etc. In dev mode these resolve through workspace `node_modules`. In packaged
  * desktop builds the framework dist is co-located with the app binary and must
  * be resolved explicitly.
+ *
+ * The `node:module` `registerHooks` API is imported lazily inside
+ * {@link NodeFrameworkModuleResolver.install} so that this module can be loaded
+ * safely in Bun (which does not ship that export). Bun hosts use
+ * `BunFrameworkModuleResolver` or `NoopFrameworkModuleResolver` instead.
  */
-import { registerHooks, type ModuleHooks } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -29,17 +33,41 @@ export class NoopFrameworkModuleResolver implements FrameworkModuleResolver {
 /**
  * Node.js resolver for packaged hosts that ship an assembled `@makaio/framework`
  * dist next to the app resources.
+ *
+ * Imports `registerHooks` from `node:module` lazily in {@link install} so this
+ * file can be loaded safely in Bun where that export does not exist.
  */
 export class NodeFrameworkModuleResolver implements FrameworkModuleResolver {
-  private hooks: ModuleHooks | undefined;
+  private hooks: { deregister(): void } | undefined;
+  private installPromise: Promise<void> | undefined;
+  private installToken: object | undefined;
 
   /**
    * @param frameworkDistPath - Absolute path to the assembled framework dist.
    */
   public constructor(public readonly frameworkDistPath: string) {}
 
-  public install(): void {
+  public async install(): Promise<void> {
     if (this.hooks) return;
+    if (this.installPromise) return this.installPromise;
+
+    const installToken = {};
+    this.installToken = installToken;
+    const installPromise = this.installWithToken(installToken);
+    this.installPromise = installPromise;
+    try {
+      await installPromise;
+    } finally {
+      if (this.installPromise === installPromise) {
+        this.installPromise = undefined;
+      }
+    }
+  }
+
+  private async installWithToken(installToken: object): Promise<void> {
+    const { registerHooks } = await import('node:module');
+    if (this.installToken !== installToken || this.hooks) return;
+
     const frameworkDistPath = this.frameworkDistPath;
     this.hooks = registerHooks({
       resolve(specifier, context, nextResolve) {
@@ -53,6 +81,8 @@ export class NodeFrameworkModuleResolver implements FrameworkModuleResolver {
   }
 
   public uninstall(): void {
+    this.installToken = undefined;
+    this.installPromise = undefined;
     this.hooks?.deregister();
     this.hooks = undefined;
   }

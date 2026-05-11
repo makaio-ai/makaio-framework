@@ -21,20 +21,26 @@ Each case uses two simple pieces:
 
 ## Scope
 
-The cases cover the current Makaio bus protocol shapes:
+The cases cover the current Makaio bus protocol shapes and SDK behavioral contracts:
 
-- `event`
-- `request`
-- `response`
-- `broadcast`
-- `broadcast-response`
+**Wire protocol shapes:**
+- `event`, `request`, `response`
+- `broadcast`, `broadcast-response`
 - `heartbeat`
-- `subscribe`
-- `unsubscribe`
-- `subscribe-sync-complete`
+- `subscribe`, `unsubscribe`, `subscribe-sync-complete`
 
-The cases are intentionally narrow and protocol-focused. They are meant to be consumed by SDK
-tests, not by the framework runtime.
+**Local dispatch behavior:**
+- `local-request-dispatch` — request resolved by a local handler without wire roundtrip
+- `local-request-priority-chain` — two local handlers with `next()` middleware chaining
+- `local-event-parallel-dispatch` — event delivered to all matching local handlers
+- `local-wildcard-event-matching` — wildcard pattern matches against event subjects
+
+**Authentication:**
+- `auth-challenge-response` — HMAC-SHA256 challenge-response handshake sequence
+
+The cases cover both wire-level protocol shapes and SDK-level behavioral contracts (local
+dispatch, middleware chaining). They are meant to be consumed by SDK tests, not by the
+framework runtime.
 
 ## Fixture Rules
 
@@ -60,6 +66,11 @@ The case set includes:
 - reconnect subscription replay
 - heartbeat handling
 - broadcast / broadcast-response ignore handling
+- local request dispatch (local-first without wire roundtrip)
+- local request priority chain (middleware `next()` chaining)
+- local event parallel dispatch
+- local wildcard event matching
+- HMAC auth challenge-response handshake
 
 ## How To Use
 

@@ -57,6 +57,12 @@ export const ClaudeCodeWiringSchemas = {
        * in the response entries.
        */
       makaioCommand: z.string().min(1),
+      /**
+       * Optional `KEY=value` pairs prepended before the executable in every
+       * generated command string. Used in dev mode to inject runtime config
+       * env vars that the hook subprocess needs.
+       */
+      envPairs: z.array(z.string()).optional(),
     }),
     response: ClientWiringListResponseSchema,
   },
@@ -83,6 +89,12 @@ export const ClaudeCodeWiringSchemas = {
          * non-empty.
          */
         makaioCommand: z.string().min(1),
+        /**
+         * Optional `KEY=value` pairs prepended before the executable in every
+         * generated command string. Used in dev mode to inject runtime config
+         * env vars that the hook subprocess needs.
+         */
+        envPairs: z.array(z.string()).optional(),
       })
       .refine((data) => data.scope === 'user' || data.projectDir !== undefined, {
         message: 'projectDir is required when scope is project or local',

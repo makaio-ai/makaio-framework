@@ -6,6 +6,16 @@ import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { NoopFrameworkModuleResolver, resolveFrameworkSpecifier } from './framework-module-resolver.js';
 
+function runNodeResolverScript(tempDir: string, source: string) {
+  const nodeBinary = process.env['NODE_BINARY'] ?? 'node';
+  const smokeScriptPath = join(tempDir, 'resolver-smoke.mjs');
+  writeFileSync(smokeScriptPath, source, 'utf8');
+  return spawnSync(nodeBinary, ['--import', 'tsx', smokeScriptPath], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
 describe('framework module resolver', () => {
   it('maps framework subpath specifiers into the configured dist path', () => {
     expect(resolveFrameworkSpecifier('/app/dist/framework', '@makaio/framework/bus')).toBe(
@@ -43,19 +53,20 @@ describe('framework module resolver', () => {
   it('node resolver maps framework imports while installed', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'makaio-framework-resolver-'));
     const busDir = join(tempDir, 'bus');
-    const smokeScriptPath = join(tempDir, 'resolver-smoke.mjs');
     mkdirSync(busDir, { recursive: true });
     writeFileSync(join(busDir, 'index.mjs'), 'export const resolverSmokeValue = "mapped";\n');
-    writeFileSync(
-      smokeScriptPath,
-      `
+
+    try {
+      const result = runNodeResolverScript(
+        tempDir,
+        `
 import { NodeFrameworkModuleResolver } from ${JSON.stringify(
-        pathToFileURL(join(import.meta.dirname, 'framework-module-resolver.ts')).href,
-      )};
+          pathToFileURL(join(import.meta.dirname, 'framework-module-resolver.ts')).href,
+        )};
 
 const resolver = new NodeFrameworkModuleResolver(${JSON.stringify(tempDir)});
 try {
-  resolver.install();
+  await resolver.install();
   const imported = await import('@makaio/framework/bus');
   if (imported.resolverSmokeValue !== 'mapped') {
     throw new Error(\`Unexpected resolver smoke value: \${String(imported.resolverSmokeValue)}\`);
@@ -65,16 +76,98 @@ try {
   resolver.uninstall();
 }
 `,
-      'utf8',
-    );
+      );
 
-    try {
-      const result = spawnSync(process.execPath, ['--import', 'tsx', smokeScriptPath], {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).toBe('mapped');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('node resolver does not leave stale hooks after concurrent installs are uninstalled', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'makaio-framework-resolver-'));
+    mkdirSync(join(tempDir, 'bus'), { recursive: true });
+    mkdirSync(join(tempDir, 'contracts'), { recursive: true });
+    writeFileSync(join(tempDir, 'bus', 'index.mjs'), 'export const resolverSmokeValue = "mapped";\n');
+    writeFileSync(join(tempDir, 'contracts', 'index.mjs'), 'export const staleHookValue = "stale";\n');
+
+    try {
+      const result = runNodeResolverScript(
+        tempDir,
+        `
+import { NodeFrameworkModuleResolver } from ${JSON.stringify(
+          pathToFileURL(join(import.meta.dirname, 'framework-module-resolver.ts')).href,
+        )};
+
+const resolver = new NodeFrameworkModuleResolver(${JSON.stringify(tempDir)});
+await Promise.all([resolver.install(), resolver.install()]);
+const imported = await import('@makaio/framework/bus');
+if (imported.resolverSmokeValue !== 'mapped') {
+  throw new Error(\`Unexpected resolver smoke value: \${String(imported.resolverSmokeValue)}\`);
+}
+
+resolver.uninstall();
+try {
+  await import('@makaio/framework/contracts');
+  throw new Error('Resolver remained installed after concurrent install uninstall');
+} catch (error) {
+  if (error instanceof Error && error.message === 'Resolver remained installed after concurrent install uninstall') {
+    throw error;
+  }
+}
+console.log('uninstalled');
+`,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe('uninstalled');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('node resolver cancels stale in-flight installs before later installs attach hooks', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'makaio-framework-resolver-'));
+    mkdirSync(join(tempDir, 'bus'), { recursive: true });
+    mkdirSync(join(tempDir, 'contracts'), { recursive: true });
+    writeFileSync(join(tempDir, 'bus', 'index.mjs'), 'export const resolverSmokeValue = "mapped";\n');
+    writeFileSync(join(tempDir, 'contracts', 'index.mjs'), 'export const staleHookValue = "stale";\n');
+
+    try {
+      const result = runNodeResolverScript(
+        tempDir,
+        `
+import { NodeFrameworkModuleResolver } from ${JSON.stringify(
+          pathToFileURL(join(import.meta.dirname, 'framework-module-resolver.ts')).href,
+        )};
+
+const resolver = new NodeFrameworkModuleResolver(${JSON.stringify(tempDir)});
+const staleInstall = resolver.install();
+resolver.uninstall();
+const currentInstall = resolver.install();
+await Promise.all([staleInstall, currentInstall]);
+
+const imported = await import('@makaio/framework/bus');
+if (imported.resolverSmokeValue !== 'mapped') {
+  throw new Error(\`Unexpected resolver smoke value: \${String(imported.resolverSmokeValue)}\`);
+}
+
+resolver.uninstall();
+try {
+  await import('@makaio/framework/contracts');
+  throw new Error('Resolver remained installed after canceled install');
+} catch (error) {
+  if (error instanceof Error && error.message === 'Resolver remained installed after canceled install') {
+    throw error;
+  }
+}
+console.log('reinstalled');
+`,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe('reinstalled');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

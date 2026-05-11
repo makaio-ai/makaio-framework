@@ -91,20 +91,30 @@ const SESSION_EVENTS_DESCRIPTORS = deriveSessionEventDescriptors(clientDefinitio
  * @param makaioCommand - The Makaio CLI binary name or path (e.g. `'makaio'`).
  * @param upstreamCommand - Existing shell command to proxy through the
  *   statusline bridge.
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
  * @returns The full statusline command string.
  */
-function buildStatuslineCommand(makaioCommand: string, upstreamCommand?: string): string {
+function buildStatuslineCommand(makaioCommand: string, upstreamCommand?: string, envPairs?: readonly string[]): string {
   const args =
     upstreamCommand === undefined
       ? STATUSLINE_COMMAND_SENTINEL.split(' ')
-      : [
-          ...STATUSLINE_COMMAND_SENTINEL.split(' '),
-          '--upstream-command',
-          'sh',
-          '--upstream-args-json',
-          JSON.stringify(['-c', upstreamCommand]),
-        ];
-  return buildClientCommand(makaioCommand, args);
+      : [...STATUSLINE_COMMAND_SENTINEL.split(' '), '--upstream-command', ...platformShellArgs(upstreamCommand)];
+  return buildClientCommand(makaioCommand, args, envPairs);
+}
+
+/**
+ * Build the shell invocation args for an upstream command string.
+ *
+ * On Windows, `cmd /c` is used because `sh` is not available. On POSIX
+ * platforms, `sh -c` is the standard way to execute a command string.
+ * @param command - Shell command string to execute.
+ * @returns `[shell, '--upstream-args-json', jsonArgs]` tokens.
+ */
+function platformShellArgs(command: string): string[] {
+  const isWindows = process.platform === 'win32';
+  const shell = isWindows ? 'cmd' : 'sh';
+  const flag = isWindows ? '/c' : '-c';
+  return [shell, '--upstream-args-json', JSON.stringify([flag, command])];
 }
 
 /**
@@ -158,6 +168,112 @@ function isHookInstalled(effective: Record<string, unknown[]>, eventName: string
   return findManagedHookCommand(effective, eventName, sentinel) !== null;
 }
 
+/**
+ * Extract the original upstream shell command from a Makaio-managed statusline.
+ *
+ * The statusline bridge embeds the previous command as:
+ * `... --upstream-args-json '["-c","<original>"]'`
+ *
+ * The JSON array may be followed by additional flags, so the extraction locates
+ * the opening `[` and scans forward to find the matching `]`, respecting nested
+ * brackets and JSON string escapes.
+ *
+ * Returns `null` when no upstream was embedded (pure Makaio statusline with
+ * no previous command to restore).
+ * @param command - Full Makaio-managed statusline command string.
+ * @returns The original shell command, or `null`.
+ */
+function extractUpstreamCommand(command: string): string | null {
+  const marker = '--upstream-args-json';
+  const idx = command.indexOf(marker);
+  if (idx === -1) return null;
+
+  let tail = command.slice(idx + marker.length).trim();
+
+  // Strip optional single-quote wrapping added by renderShellArg. The closing
+  // quote is NOT necessarily at end-of-string when extra flags follow.
+  if (tail.startsWith("'")) {
+    tail = tail.slice(1);
+    const closeQuote = findClosingSingleQuote(tail);
+    if (closeQuote !== -1) {
+      tail = tail.slice(0, closeQuote).replaceAll("'\\''", "'");
+    }
+  }
+
+  const jsonPart = extractJsonArray(tail);
+  if (jsonPart === null) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(jsonPart);
+    if (
+      Array.isArray(parsed) &&
+      parsed.length >= 2 &&
+      (parsed[0] === '-c' || parsed[0] === '/c') &&
+      typeof parsed[1] === 'string'
+    ) {
+      return parsed[1];
+    }
+  } catch {
+    // Malformed JSON — cannot extract upstream.
+  }
+  return null;
+}
+
+/**
+ * Find the index of the closing single quote, skipping shell-escaped
+ * sequences (`'\''`).
+ * @param s - String starting immediately after the opening single quote.
+ * @returns Index of the closing `'`, or -1.
+ */
+function findClosingSingleQuote(s: string): number {
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === "'" && s.slice(i, i + 4) === "'\\''") {
+      i += 4;
+      continue;
+    }
+    if (s[i] === "'") return i;
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * Extract the first balanced JSON array substring from `s`.
+ *
+ * Scans from the first `[` and counts bracket depth, respecting JSON string
+ * literals (double-quoted, with `\"` escapes).
+ * @param s - Input string potentially containing a JSON array.
+ * @returns The balanced `[...]` substring, or `null`.
+ */
+function extractJsonArray(s: string): string | null {
+  const start = s.indexOf('[');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inString) {
+      if (ch === '\\') {
+        i++;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '[') {
+      depth++;
+    } else if (ch === ']') {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -177,11 +293,14 @@ function isHookInstalled(effective: Record<string, unknown[]>, eventName: string
  * @param settings - Settings instance scoped to the target project directory.
  * @param makaioCommand - Makaio CLI binary name or path used to build the
  *   command string (e.g. `'makaio'`).
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable
+ *   in every generated command string.
  * @returns Wiring list response containing all known entries and their status.
  */
 export async function buildClaudeCodeWiringList(
   settings: ClaudeCodeWiringSettings,
   makaioCommand: string,
+  envPairs?: readonly string[],
 ): Promise<{ entries: ClientWiringEntry[] }> {
   const [{ effective: effectiveHooks }, { effective: effectiveStatusline }] = await Promise.all([
     settings.listHooks(),
@@ -190,12 +309,12 @@ export async function buildClaudeCodeWiringList(
 
   const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName }) => {
     const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName);
+    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs);
     const installed = isHookInstalled(effectiveHooks, eventName, sentinel);
     return { group: 'session-events', name: eventName, installed, command };
   });
 
-  const statuslineCommand = buildStatuslineCommand(makaioCommand);
+  const statuslineCommand = buildStatuslineCommand(makaioCommand, undefined, envPairs);
   const statuslineInstalled =
     effectiveStatusline !== null && effectiveStatusline.command.includes(STATUSLINE_COMMAND_SENTINEL);
   entries.push({
@@ -231,12 +350,15 @@ export async function buildClaudeCodeWiringList(
  *   or `'local'`).
  * @param makaioCommand - Makaio CLI binary name or path to embed in hook
  *   commands and the statusline command (e.g. `'makaio'`).
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable
+ *   in every generated command string.
  * @returns Counts of entries applied and skipped.
  */
 export async function applyClaudeCodeWiring(
   settings: ClaudeCodeWiringSettings,
   scope: ClaudeCodeScope,
   makaioCommand: string,
+  envPairs?: readonly string[],
 ): Promise<{ applied: number; skipped: number }> {
   let applied = 0;
   let skipped = 0;
@@ -250,7 +372,7 @@ export async function applyClaudeCodeWiring(
   // the applied/skipped bookkeeping straightforward.
   for (const { eventName } of SESSION_EVENTS_DESCRIPTORS) {
     const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName);
+    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs);
 
     const existingCommand = findManagedHookCommand(scopeEvents, eventName, sentinel);
 
@@ -291,11 +413,11 @@ export async function applyClaudeCodeWiring(
       ? existingScopedStatusline.command
       : null;
 
-  const statuslineCommand = buildStatuslineCommand(makaioCommand, existingStatuslineCommand ?? undefined);
+  const statuslineCommand = buildStatuslineCommand(makaioCommand, existingStatuslineCommand ?? undefined, envPairs);
 
   const statuslineResult = await settings.setStatusline({
     scope,
-    value: { type: 'command', command: statuslineCommand },
+    value: { ...(existingScopedStatusline ?? {}), type: 'command', command: statuslineCommand },
   });
   // setStatusline is idempotent: when the previous value already contains the
   // sentinel command the modifier returns `current` unchanged and the file is
@@ -351,10 +473,19 @@ export async function removeClaudeCodeWiring(
   const scopeEntry = perScope.find((e) => e.scope === scope);
   const scopeValue = scopeEntry?.value ?? null;
   if (scopeValue !== null && scopeValue.command.includes(STATUSLINE_COMMAND_SENTINEL)) {
-    const statuslineResult = await settings.removeStatusline({ scope });
-    if (statuslineResult.removed) {
-      removed++;
+    const restoredCommand = extractUpstreamCommand(scopeValue.command);
+    if (restoredCommand !== null) {
+      // Restore the original statusline that was embedded as --upstream,
+      // preserving any extra fields (e.g. padding) from the Makaio entry.
+      const { command: _, ...extraFields } = scopeValue;
+      await settings.setStatusline({
+        scope,
+        value: { ...extraFields, type: 'command', command: restoredCommand },
+      });
+    } else {
+      await settings.removeStatusline({ scope });
     }
+    removed++;
   }
 
   return { removed };

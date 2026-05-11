@@ -12,9 +12,14 @@ SDKs follow two intentionally different architecture tracks.
 
 ### Cross-Language Protocol SDKs
 
-Python, Rust, and future non-TypeScript SDKs implement the bus protocol in the target language. The
-canonical language-neutral protocol definition is generated from `@makaio/contracts` through the
-explicit `PublicProtocolNamespaces` catalog.
+Python, Rust, and future non-TypeScript SDKs reimplement the bus protocol in the target language.
+All three SDKs share a common feature surface: local-first request dispatch, request middleware
+chaining, HMAC authentication, typed subject descriptors generated from the protocol manifest,
+and conformance-tested wire behavior. Python and Rust additionally support stdio transport for
+detached extension processes.
+
+The canonical language-neutral protocol definition is generated from `@makaio/contracts` through
+the explicit `PublicProtocolNamespaces` catalog.
 
 ### TypeScript SDK
 
@@ -23,8 +28,11 @@ thin convenience wrapper for TypeScript consumers that want to connect to a runn
 
 ## Available SDKs
 
-| SDK | Language | Status |
-|-----|----------|--------|
-| [Python](/sdks/python/) | Python 3.11+ | Phase 1 |
-| [Rust](/sdks/rust/) | Rust (stable) | Phase 1 |
-| [TypeScript](/sdks/typescript/) | TypeScript 5+ | Phase 1 |
+| SDK | Language | Transport | Status |
+|-----|----------|-----------|--------|
+| [Python](/sdks/python/) | Python 3.10+ | WebSocket + stdio | Pre-release |
+| [Rust](/sdks/rust/) | Rust (stable) | WebSocket + stdio | Pre-release |
+| [TypeScript](/sdks/typescript/) | TypeScript 5+ | Framework-native | Pre-release |
+
+All SDKs support HMAC authentication, local-first request dispatch with middleware chaining,
+and typed subject descriptors.
