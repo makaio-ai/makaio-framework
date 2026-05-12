@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMockBus } from '@makaio/test-utils';
-import { createProcessCommandContext, disconnectBusSafely } from './command-runtime.js';
+import { createProcessCommandContext, disconnectBusSafely, evaluateBeforeRunGate } from './command-runtime.js';
+import type { BeforeRunContext } from '@makaio/kernel/cli';
 
 describe('createProcessCommandContext', () => {
   let baselineListenerCount: number;
@@ -137,5 +138,23 @@ describe('disconnectBusSafely', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('evaluateBeforeRunGate', () => {
+  const context: BeforeRunContext = {
+    subcommandName: 'status',
+    args: {},
+    bus: null,
+  };
+
+  it('blocks malformed beforeRun results', async () => {
+    const gate = await evaluateBeforeRunGate(() => ({ ok: true }), context, 'Bus unavailable');
+
+    expect(gate).toEqual({
+      allowed: false,
+      message: 'beforeRun hook failed: hook returned an invalid result',
+      exitCode: 1,
+    });
   });
 });

@@ -6,7 +6,7 @@
  * metadata (descriptions, short flags, positional arguments) via Zod `.meta()`.
  */
 import { z } from 'zod';
-import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
+import { defineCliSubcommand, requireBus, type CliContribution } from '@makaio/kernel/cli';
 import { handleList, handleSwitch, handleLabel, handleRemove, handleSources } from './handlers.js';
 import { handleWatch } from './handlers/watch.js';
 
@@ -44,8 +44,8 @@ export const accountManagerCli: CliContribution = {
   name: 'account-manager',
   description: 'Manage AI tool credentials',
 
-  interactive: async ({ bus }) => {
-    // Dynamic import to avoid loading Ink/React for non-interactive commands
+  interactive: async (ctx) => {
+    const bus = requireBus(ctx);
     const { renderApp } = await import('./interactive.js');
     await renderApp(bus);
   },

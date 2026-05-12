@@ -83,6 +83,25 @@ export async function handleExecute(
     return { exitCode: 1, stdout: [], stderr: ['Validation failed:', ...issues] };
   }
 
+  if (contribution.beforeRun) {
+    try {
+      const gate = await contribution.beforeRun({
+        subcommandName: subcommand,
+        args: (parsed.data as Record<string, unknown>) ?? {},
+        bus,
+      });
+      if (!gate.proceed) {
+        return { exitCode: gate.exitCode ?? 1, stdout: [], stderr: [gate.message] };
+      }
+    } catch (err) {
+      return {
+        exitCode: 1,
+        stdout: [],
+        stderr: [`beforeRun hook failed: ${err instanceof Error ? err.message : String(err)}`],
+      };
+    }
+  }
+
   const stdout: string[] = [];
   const stderr: string[] = [];
   const output: OutputWriter = {

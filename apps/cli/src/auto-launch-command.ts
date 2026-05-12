@@ -16,7 +16,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .command('enable')
     .description('Enable auto-launch at login')
     .action(async () => {
-      const bus = await requireBus();
+      const bus = await connectOrExit();
       try {
         const result = await bus.requestOptional(PlatformSubjects.autoLaunch.enable, { hidden: true });
         if (!result.handled) {
@@ -38,7 +38,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .command('disable')
     .description('Disable auto-launch at login')
     .action(async () => {
-      const bus = await requireBus();
+      const bus = await connectOrExit();
       try {
         const result = await bus.requestOptional(PlatformSubjects.autoLaunch.disable, {});
         if (!result.handled) {
@@ -60,7 +60,7 @@ export function registerAutoLaunchCommand(program: Command): void {
     .command('status')
     .description('Show auto-launch status')
     .action(async () => {
-      const bus = await requireBus();
+      const bus = await connectOrExit();
       try {
         const result = await bus.requestOptional(PlatformSubjects.autoLaunch.getStatus, {});
         if (!result.handled || !result.data.supported) {
@@ -80,7 +80,7 @@ export function registerAutoLaunchCommand(program: Command): void {
  * Connect to a running Makaio instance, or fail with an actionable message.
  * @returns A connected bus client.
  */
-async function requireBus(): Promise<IMakaioBus> {
+async function connectOrExit(): Promise<IMakaioBus> {
   const health = await probeHealth();
   if (!health) {
     console.error('Makaio is not running. Start it with: makaio open');

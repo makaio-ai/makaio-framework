@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
+import { ALWAYS_PROCEED, defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import { handleClaudeStatusline, type ClaudeStatuslineArgs } from './handler.js';
 
 export const claudeStatuslineSchema = z.object({
@@ -25,4 +25,5 @@ export const claudeCodeStatuslineCli: CliContribution = {
       handleClaudeStatusline,
     ),
   ],
+  beforeRun: () => ALWAYS_PROCEED,
 };

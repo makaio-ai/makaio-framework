@@ -253,7 +253,7 @@ function registerStatusSubcommand(parent: CommandInstance, ctx: NativeClientComm
  * @param ctx - Bus and error context for the current CLI invocation.
  * @returns The connected bus, or `null` when the connection failed.
  */
-function requireBus(ctx: NativeClientCommandContext): IMakaioBus | null {
+function requireConnectedBus(ctx: NativeClientCommandContext): IMakaioBus | null {
   if (ctx.bus) return ctx.bus;
   process.stderr.write(`${formatConnectionError(ctx.connectionError)}\n`);
   process.exitCode = 1;
@@ -266,7 +266,7 @@ function requireBus(ctx: NativeClientCommandContext): IMakaioBus | null {
  * @param ctx - Bus and error context.
  */
 async function handleLaunch(client: NativeClientCliDefinition, ctx: NativeClientCommandContext): Promise<void> {
-  const bus = requireBus(ctx);
+  const bus = requireConnectedBus(ctx);
   if (!bus) return;
 
   const request: NativeSupervisorLaunchRequest = {
@@ -293,7 +293,7 @@ async function handleLaunch(client: NativeClientCliDefinition, ctx: NativeClient
  * @param ctx - Bus and error context.
  */
 async function handleAttach(request: NativeSupervisorAttachRequest, ctx: NativeClientCommandContext): Promise<void> {
-  const bus = requireBus(ctx);
+  const bus = requireConnectedBus(ctx);
   if (!bus) return;
 
   try {
@@ -325,7 +325,7 @@ async function handleAttach(request: NativeSupervisorAttachRequest, ctx: NativeC
  * @param ctx - Bus and error context.
  */
 async function handleStop(request: NativeSupervisorStopRequest, ctx: NativeClientCommandContext): Promise<void> {
-  const bus = requireBus(ctx);
+  const bus = requireConnectedBus(ctx);
   if (!bus) return;
 
   try {
@@ -348,7 +348,7 @@ async function handleStop(request: NativeSupervisorStopRequest, ctx: NativeClien
  * @param ctx - Bus and error context.
  */
 async function handleStatus(request: NativeSupervisorStatusRequest, ctx: NativeClientCommandContext): Promise<void> {
-  const bus = requireBus(ctx);
+  const bus = requireConnectedBus(ctx);
   if (!bus) return;
 
   try {

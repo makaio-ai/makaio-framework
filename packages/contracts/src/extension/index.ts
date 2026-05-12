@@ -58,6 +58,8 @@ export type {
 export type { ExtensionIdentity, ExtensionService, ExtensionServiceLifecycle } from './extension-lifecycle.js';
 export type { ExtensionContext, NodeExtensionContext } from './extension-context.js';
 export type {
+  ExtensionCliBeforeRunContext,
+  ExtensionCliBeforeRunResult,
   ExtensionCliContribution,
   ExtensionCliHandlerContext,
   ExtensionCliInteractiveContext,

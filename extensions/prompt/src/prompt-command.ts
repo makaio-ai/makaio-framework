@@ -14,7 +14,7 @@
  */
 import { z } from 'zod';
 import type { WildcardContext } from '@makaio/core';
-import { defineCliSubcommand, type CommandContext } from '@makaio/kernel/cli';
+import { defineCliSubcommand, requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { AgentSubjects, SessionStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import type { CanonicalModelSelection, SystemPrompt } from '@makaio/contracts';
 import { OnceAbortError } from '@makaio/bus-core';
@@ -165,7 +165,8 @@ function subscribeAgentEvents(
   sessionId: string,
   formatter: OutputFormatter,
 ): () => void {
-  return ctx.bus.on(
+  const bus = requireBus(ctx);
+  return bus.on(
     AgentSubjects.$all,
     (busCtx: WildcardContext<unknown, unknown>) => {
       if (!busCtx.isRequest) {
@@ -188,16 +189,17 @@ function subscribeAgentEvents(
  * @param sessionId - Session ID to scope the handler to.
  */
 async function enableFullAccessApprovalPolicy(ctx: CommandContext<PromptArgs>, sessionId: string): Promise<void> {
-  const { session } = await ctx.bus.request(SessionSubjects.get, { sessionId });
+  const bus = requireBus(ctx);
+  const { session } = await bus.request(SessionSubjects.get, { sessionId });
   if (session && session.status !== 'active') {
     throw new Error(`Session is not active: ${sessionId}`);
   }
 
   if (!session) {
-    await ctx.bus.request(SessionSubjects.create, { sessionId });
+    await bus.request(SessionSubjects.create, { sessionId });
   }
 
-  const update = await ctx.bus.request(SessionStorageSubjects.update, {
+  const update = await bus.request(SessionStorageSubjects.update, {
     sessionId,
     approvalPolicyOverride: 'full-access',
   });
@@ -267,7 +269,8 @@ function buildAgentSelection(args: PromptArgs): CanonicalModelSelection | undefi
  * @param ctx - Command context provided by the CLI framework.
  */
 export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<void> {
-  const { args, bus, output, signal } = ctx;
+  const bus = requireBus(ctx);
+  const { args, output, signal } = ctx;
   const startTime = Date.now();
 
   const promptText = await resolvePromptText(args.prompt, output);

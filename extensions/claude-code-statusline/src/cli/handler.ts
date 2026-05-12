@@ -13,7 +13,7 @@ export interface ClaudeStatuslineArgs {
 
 export interface ClaudeStatuslineCommandContext {
   readonly args: ClaudeStatuslineArgs;
-  readonly bus: Pick<IMakaioBus, 'emit'>;
+  readonly bus: Pick<IMakaioBus, 'emit'> | null;
   readonly output: Pick<CommandContext<ClaudeStatuslineArgs>['output'], 'write' | 'error'>;
   readonly signal?: AbortSignal;
   readonly setExitCode: CommandContext<ClaudeStatuslineArgs>['setExitCode'];
@@ -118,14 +118,17 @@ function parseRawStatuslinePayload(stdinText: string): ClaudeCodeStatuslineRawPa
 
 /**
  * Emit the raw statusline payload on the Claude Code client subject.
- * @param bus - Bus facade used by the command context.
+ * @param bus - Bus facade used by the command context, or `null` when the bus is unavailable.
  * @param payload - Parsed raw Claude statusline payload.
  * @returns Promise that resolves after the best-effort emit settles.
  */
 async function safeEmitRawPayload(
-  bus: Pick<IMakaioBus, 'emit'>,
+  bus: Pick<IMakaioBus, 'emit'> | null,
   payload: ClaudeCodeStatuslineRawPayload,
 ): Promise<void> {
+  if (!bus) {
+    return;
+  }
   try {
     await bus.emit(ClaudeCodeClientSubjects.statusline.received, payload);
   } catch {

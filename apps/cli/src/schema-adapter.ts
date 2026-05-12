@@ -8,11 +8,10 @@
 import { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CliSubcommandEntry, CliContribution, FieldSchema } from '@makaio/kernel/cli';
-import { getMeta, isBooleanSchema, isNumberSchema } from '@makaio/kernel/cli';
+import { INTERACTIVE_SUBCOMMAND, getMeta, isBooleanSchema, isNumberSchema } from '@makaio/kernel/cli';
 import { toCliLongOptionName } from './flag-names.js';
-import { createProcessCommandContext } from './command-runtime.js';
+import { createProcessCommandContext, evaluateBeforeRunGate } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
-import { formatConnectionError } from './connection-error.js';
 import { findOrCreateCommand, claimSubcommandName, type CommandInstance } from './command-tree.js';
 
 /**
@@ -58,20 +57,26 @@ export function registerContribution(
 
   for (const sub of contribution.subcommands) {
     if (!claimSubcommandName(cmd, sub.name, `${contribution.name} ${sub.name}`, 'contribution')) continue;
-    registerSubcommand(cmd, sub, bus, connectionError);
+    registerSubcommand(cmd, sub, bus, connectionError, contribution.beforeRun);
   }
 
   if (created && contribution.interactive) {
     const interactiveHandler = contribution.interactive;
+    const contributionBeforeRun = contribution.beforeRun;
     cmd.action(async () => {
       if (!hasInteractiveTerminal()) {
         console.error(formatInteractiveTerminalError(contribution.name));
         process.exitCode = 1;
         return;
       }
-      if (!bus) {
-        console.error(formatConnectionError(connectionError));
-        process.exitCode = 1;
+      const gate = await evaluateBeforeRunGate(
+        contributionBeforeRun,
+        { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus },
+        connectionError,
+      );
+      if (!gate.allowed) {
+        console.error(gate.message);
+        process.exitCode = gate.exitCode;
         return;
       }
       try {
@@ -93,12 +98,14 @@ export function registerContribution(
  * @param entry - The subcommand definition (schema + handler).
  * @param bus - Pre-connected bus instance, or `null` when the connection failed.
  * @param connectionError - Human-readable reason the bus connection failed.
+ * @param beforeRun - Optional pre-execution gate from the contribution.
  */
 function registerSubcommand(
   parent: CommandInstance,
   entry: CliSubcommandEntry,
   bus: IMakaioBus | null,
   connectionError?: string,
+  beforeRun?: CliContribution['beforeRun'],
 ): void {
   const cmd = parent.command(entry.name).description(entry.description);
 
@@ -126,9 +133,14 @@ function registerSubcommand(
       return;
     }
 
-    if (!bus) {
-      console.error(formatConnectionError(connectionError));
-      process.exitCode = 1;
+    const gate = await evaluateBeforeRunGate(
+      beforeRun,
+      { subcommandName: entry.name, args: parsed.data as Record<string, unknown>, bus },
+      connectionError,
+    );
+    if (!gate.allowed) {
+      console.error(gate.message);
+      process.exitCode = gate.exitCode;
       return;
     }
 

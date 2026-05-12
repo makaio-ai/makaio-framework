@@ -29,7 +29,7 @@ const { bus: fakeBus } = createMockBus();
  * testing, using the provided handler spy.
  * @param handler - The interactive handler to attach.
  */
-function makeContribution(handler: (ctx: { bus: IMakaioBus }) => Promise<void>): CliContribution {
+function makeContribution(handler: (ctx: { bus: IMakaioBus | null }) => Promise<void>): CliContribution {
   return {
     name: 'test-cmd',
     description: 'A test command',
@@ -322,6 +322,122 @@ describe('registerContribution — connection handling', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('runs handler with null bus when beforeRun returns proceed: true and bus is null', async () => {
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'test-cmd',
+        description: 'A test command',
+        subcommands: [
+          {
+            name: 'list',
+            description: 'List items',
+            schema: z.object({}),
+            handler,
+          },
+        ],
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['test-cmd', 'list'], { from: 'user' });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: null }));
+  });
+
+  it('blocks execution when beforeRun returns proceed: false', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'test-cmd',
+        description: 'A test command',
+        subcommands: [
+          {
+            name: 'list',
+            description: 'List items',
+            schema: z.object({}),
+            handler,
+          },
+        ],
+        async beforeRun() {
+          return { proceed: false, message: 'License required' };
+        },
+      },
+      fakeBus,
+    );
+
+    try {
+      await program.parseAsync(['test-cmd', 'list'], { from: 'user' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith('License required');
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('runs interactive handler with null bus when beforeRun returns proceed: true', async () => {
+    ttyFixture.set({ stdoutIsTTY: true, stdinIsTTY: true });
+    const interactiveHandler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'test-cmd',
+        description: 'A test command',
+        interactive: interactiveHandler,
+        subcommands: [],
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['test-cmd'], { from: 'user' });
+    expect(interactiveHandler).toHaveBeenCalledOnce();
+    expect(interactiveHandler).toHaveBeenCalledWith({ bus: null });
+  });
+
+  it('passes subcommand name and parsed args to beforeRun', async () => {
+    const beforeRun = vi.fn(async () => ({ proceed: true as const }));
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'test-cmd',
+        description: 'A test command',
+        subcommands: [
+          {
+            name: 'greet',
+            description: 'Say hello',
+            schema: z.object({ name: z.string().meta({ positional: true, placeholder: '<name>' }) }),
+            handler: vi.fn(() => Promise.resolve()),
+          },
+        ],
+        beforeRun,
+      },
+      fakeBus,
+    );
+
+    await program.parseAsync(['test-cmd', 'greet', 'Alice'], { from: 'user' });
+    expect(beforeRun).toHaveBeenCalledWith(
+      expect.objectContaining({ subcommandName: 'greet', args: { name: 'Alice' }, bus: fakeBus }),
+    );
   });
 
   it('skips top-level registration when the contribution name already exists', () => {

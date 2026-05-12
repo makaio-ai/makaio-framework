@@ -19,7 +19,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
-import type { CommandContext } from '@makaio/kernel/cli';
+import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 
 // ---------------------------------------------------------------------------
 // Public args shape
@@ -103,7 +103,7 @@ const defaultDependencies: ClientWiringCommandDependencies = {
  * @param ctx - Full CLI command context supplied by the CLI framework.
  */
 export async function handleClientWiring(ctx: CommandContext<ClientWiringArgs>): Promise<void> {
-  await runClientWiringCommand(ctx, defaultDependencies);
+  await runClientWiringCommand({ ...ctx, bus: requireBus(ctx) }, defaultDependencies);
 }
 
 /**

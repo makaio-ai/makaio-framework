@@ -18,7 +18,7 @@
  */
 
 import { z } from 'zod';
-import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
+import { ALWAYS_PROCEED, defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import { handleClientHook } from './client-hook-command.js';
 
 const hookSchema = z.object({
@@ -55,6 +55,7 @@ export const clientHooksCli: CliContribution = {
       handleClientHook,
     ),
   ],
+  beforeRun: () => ALWAYS_PROCEED,
 };
 
 export default clientHooksCli;
