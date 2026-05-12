@@ -8,6 +8,7 @@
  * so `watch` is exclusively a machine-consumable event stream.
  */
 import { AccountManagerSubjects } from '../../bus/namespace.js';
+import { requireBus } from '@makaio/kernel/cli';
 import type { CommandContext } from '@makaio/kernel/cli';
 
 /**
@@ -29,25 +30,26 @@ function emit(ctx: Pick<CommandContext<unknown>, 'output'>, type: string, payloa
  * @param ctx - CLI command context with parsed arguments and bus access.
  */
 export async function handleWatch(ctx: CommandContext<unknown>): Promise<void> {
+  const bus = requireBus(ctx);
   const cleanups: Array<() => void> = [];
 
   cleanups.push(
-    ctx.bus.on(AccountManagerSubjects.credentials.detected, (busCtx) => {
+    bus.on(AccountManagerSubjects.credentials.detected, (busCtx) => {
       emit(ctx, 'credentials.detected', busCtx.payload);
     }),
-    ctx.bus.on(AccountManagerSubjects.credentials.switched, (busCtx) => {
+    bus.on(AccountManagerSubjects.credentials.switched, (busCtx) => {
       emit(ctx, 'credentials.switched', busCtx.payload);
     }),
-    ctx.bus.on(AccountManagerSubjects.credentials.refreshed, (busCtx) => {
+    bus.on(AccountManagerSubjects.credentials.refreshed, (busCtx) => {
       emit(ctx, 'credentials.refreshed', busCtx.payload);
     }),
-    ctx.bus.on(AccountManagerSubjects.credentials.error, (busCtx) => {
+    bus.on(AccountManagerSubjects.credentials.error, (busCtx) => {
       emit(ctx, 'credentials.error', busCtx.payload);
     }),
-    ctx.bus.on(AccountManagerSubjects.usage.updated, (busCtx) => {
+    bus.on(AccountManagerSubjects.usage.updated, (busCtx) => {
       emit(ctx, 'usage.updated', busCtx.payload);
     }),
-    ctx.bus.on(AccountManagerSubjects.accounts.metadataPatched, (busCtx) => {
+    bus.on(AccountManagerSubjects.accounts.metadataPatched, (busCtx) => {
       emit(ctx, 'accounts.metadataPatched', busCtx.payload);
     }),
   );

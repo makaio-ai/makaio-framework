@@ -463,6 +463,71 @@ describe('registerManifestCommand — error handling', () => {
     expect(consoleErrorSpy).not.toHaveBeenCalledWith('Bus unavailable');
   });
 
+  it('runs handler with null bus when beforeRun returns proceed: true', async () => {
+    const handler = vi.fn(() => Promise.resolve());
+    const contribution: CliContribution = {
+      name: 'test-cmd',
+      description: 'A test command',
+      subcommands: [
+        {
+          name: 'list',
+          description: 'List items',
+          schema: z.object({}),
+          handler,
+        },
+      ],
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      connectionError: 'Bus unavailable',
+      hasInteractive: false,
+      importModule,
+    };
+    const program = makeProgram();
+    registerManifestCommand(program, simpleManifest, ctx);
+
+    await program.parseAsync(['test-cmd', 'list'], { from: 'user' });
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: null }));
+    expect(process.exitCode).toBe(originalExitCode);
+  });
+
+  it('blocks execution when beforeRun returns proceed: false', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const handler = vi.fn(() => Promise.resolve());
+    const contribution: CliContribution = {
+      name: 'test-cmd',
+      description: 'A test command',
+      subcommands: [
+        {
+          name: 'list',
+          description: 'List items',
+          schema: z.object({}),
+          handler,
+        },
+      ],
+      async beforeRun() {
+        return { proceed: false, message: 'Upgrade to Pro' };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx = makeCtx(importModule);
+    const program = makeProgram();
+    registerManifestCommand(program, simpleManifest, ctx);
+
+    await program.parseAsync(['test-cmd', 'list'], { from: 'user' });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Upgrade to Pro');
+  });
+
   it('sets exit code 1 and logs error when handler throws', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const contribution: CliContribution = {

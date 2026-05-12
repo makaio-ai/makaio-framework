@@ -21,8 +21,13 @@ export interface ExtensionCliOutputWriter {
 export interface ExtensionCliHandlerContext {
   /** Parsed and validated command arguments/options. */
   readonly args: unknown;
-  /** Bus client connected to the running Makaio instance. */
-  readonly bus: IMakaioBus;
+  /**
+   * Bus client connected to the running Makaio instance.
+   *
+   * `null` when the bus is unavailable and the contribution's `beforeRun`
+   * hook opted into offline execution.
+   */
+  readonly bus: IMakaioBus | null;
   /** Output channel for writing to stdout and stderr. */
   readonly output: ExtensionCliOutputWriter;
   /** Abort signal triggered when the invocation is cancelled. */
@@ -38,8 +43,13 @@ export interface ExtensionCliHandlerContext {
  * Interactive entry context stored in the contracts layer.
  */
 export interface ExtensionCliInteractiveContext {
-  /** Bus client connected to the running Makaio instance. */
-  readonly bus: IMakaioBus;
+  /**
+   * Bus client connected to the running Makaio instance.
+   *
+   * `null` when the bus is unavailable and the contribution's `beforeRun`
+   * hook opted into bus-optional execution.
+   */
+  readonly bus: IMakaioBus | null;
 }
 
 /**
@@ -60,6 +70,25 @@ export interface ExtensionCliSubcommandEntry {
 }
 
 /**
+ * Type-erased context for the {@link ExtensionCliContribution.beforeRun} gate.
+ */
+export interface ExtensionCliBeforeRunContext {
+  /** Subcommand name, or `'__interactive__'` for bare interactive invocations. */
+  readonly subcommandName: string;
+  /** Parsed and validated arguments for the subcommand. */
+  readonly args: Record<string, unknown>;
+  /** Bus client, or `null` when the server is unreachable. */
+  readonly bus: IMakaioBus | null;
+}
+
+/**
+ * Type-erased result of an {@link ExtensionCliContribution.beforeRun} gate.
+ */
+export type ExtensionCliBeforeRunResult =
+  | { readonly proceed: true }
+  | { readonly proceed: false; readonly message: string; readonly exitCode?: number };
+
+/**
  * An extension's CLI contribution declared in its `MakaioExtension` manifest.
  *
  * Full implementation types live in `@makaio/kernel/cli`. This contract
@@ -72,4 +101,12 @@ export interface ExtensionCliContribution extends CliManifest {
   readonly interactive?: (ctx: ExtensionCliInteractiveContext) => Promise<void>;
   /** Declared subcommands exposed by this contribution. */
   readonly subcommands: ReadonlyArray<ExtensionCliSubcommandEntry>;
+  /**
+   * Pre-execution gate that replaces the default bus-required check.
+   * @param context - Subcommand name, parsed args, and bus availability.
+   * @returns Whether to proceed or block with a message.
+   */
+  readonly beforeRun?: (
+    context: ExtensionCliBeforeRunContext,
+  ) => ExtensionCliBeforeRunResult | Promise<ExtensionCliBeforeRunResult>;
 }

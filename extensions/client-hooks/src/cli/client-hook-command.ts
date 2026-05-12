@@ -70,8 +70,10 @@ export interface ClientHookCommandContext {
    * `emit` is used for the primary `hook.received` event.
    * `requestOptional` is used for the best-effort `client.runtime.observe`
    * request — it silently succeeds when no handler is registered.
+   *
+   * May be `null` when the bus is unavailable; all bus calls are fail-open.
    */
-  readonly bus: Pick<IMakaioBus, 'emit' | 'requestOptional'>;
+  readonly bus: Pick<IMakaioBus, 'emit' | 'requestOptional'> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,11 +140,13 @@ export async function runClientHookCommand(
     ...(metadata !== undefined && { metadata }),
   };
 
-  try {
-    const hookReceivedSubject = createRawClientHookReceivedSubject(client);
-    await ctx.bus.emit(hookReceivedSubject, hookPayload);
-  } catch {
-    // Fail open: bus unavailability must not break the calling client hook.
+  if (ctx.bus) {
+    try {
+      const hookReceivedSubject = createRawClientHookReceivedSubject(client);
+      await ctx.bus.emit(hookReceivedSubject, hookPayload);
+    } catch {
+      // Fail open: bus unavailability must not break the calling client hook.
+    }
   }
 
   safeEmitRuntimeObserve(ctx.bus, client, metadata);
@@ -247,15 +251,18 @@ async function readProcessStdinText(stdin: NodeJS.ReadStream = process.stdin): P
  * Uses fire-and-forget (`void … .catch()`) so the hook bridge never blocks
  * waiting for the runtime-observe service — consistent with the other producers
  * (claude-agent-sdk, codex-app-server).
- * @param bus - Bus façade with `requestOptional` support.
+ * @param bus - Bus façade with `requestOptional` support, or `null` when unavailable.
  * @param clientId - Stable client identifier passed to the hook command.
  * @param metadata - Parsed metadata record from `--metadata-json`, or `undefined`.
  */
 function safeEmitRuntimeObserve(
-  bus: Pick<IMakaioBus, 'requestOptional'>,
+  bus: Pick<IMakaioBus, 'requestOptional'> | null,
   clientId: string,
   metadata: Record<string, unknown> | undefined,
 ): void {
+  if (!bus) {
+    return;
+  }
   const rawPid = metadata?.pid;
   const pid = typeof rawPid === 'number' && Number.isInteger(rawPid) && rawPid > 0 ? rawPid : undefined;
   const supervisorSessionId = pickNonEmptyStringValue(metadata?.supervisorSessionId);

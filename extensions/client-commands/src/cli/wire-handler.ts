@@ -17,7 +17,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientWiringApplyResponse } from '@makaio/clients-core';
-import type { CommandContext } from '@makaio/kernel/cli';
+import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { createClientWiringApplySubjectDef } from '../subjects.js';
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ const defaultDependencies: ClientWireCommandDependencies = {
  * @param ctx - Full CLI command context supplied by the CLI framework.
  */
 export async function handleClientWire(ctx: CommandContext<ClientWireArgs>): Promise<void> {
-  await runClientWireCommand(ctx, defaultDependencies);
+  await runClientWireCommand({ ...ctx, bus: requireBus(ctx) }, defaultDependencies);
 }
 
 /**

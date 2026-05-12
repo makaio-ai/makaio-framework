@@ -13,12 +13,12 @@
  */
 import type { CliArgManifest, CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { CliContribution } from '@makaio/kernel/cli';
+import { INTERACTIVE_SUBCOMMAND } from '@makaio/kernel/cli';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { formatInteractiveTerminalError, formatZodError, hasInteractiveTerminal } from './schema-adapter.js';
 import { toCliLongOptionName } from './flag-names.js';
-import { createProcessCommandContext } from './command-runtime.js';
+import { createProcessCommandContext, evaluateBeforeRunGate } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
-import { formatConnectionError } from './connection-error.js';
 import { findOrCreateCommand, claimSubcommandName, type CommandInstance } from './command-tree.js';
 
 // ---------------------------------------------------------------------------
@@ -216,9 +216,14 @@ async function resolveAndExecute(
     return;
   }
 
-  if (!ctx.bus) {
-    console.error(formatConnectionError(ctx.connectionError));
-    process.exitCode = 1;
+  const gate = await evaluateBeforeRunGate(
+    contribution.beforeRun,
+    { subcommandName, args: parsed.data as Record<string, unknown>, bus: ctx.bus },
+    ctx.connectionError,
+  );
+  if (!gate.allowed) {
+    console.error(gate.message);
+    process.exitCode = gate.exitCode;
     return;
   }
 
@@ -269,9 +274,14 @@ async function resolveAndExecuteInteractive(ctx: ManifestCommandContext, command
     return;
   }
 
-  if (!ctx.bus) {
-    console.error(formatConnectionError(ctx.connectionError));
-    process.exitCode = 1;
+  const gate = await evaluateBeforeRunGate(
+    contribution.beforeRun,
+    { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: ctx.bus },
+    ctx.connectionError,
+  );
+  if (!gate.allowed) {
+    console.error(gate.message);
+    process.exitCode = gate.exitCode;
     return;
   }
 

@@ -15,7 +15,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientWiringRemoveResponse } from '@makaio/clients-core';
-import type { CommandContext } from '@makaio/kernel/cli';
+import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { createClientWiringRemoveSubjectDef } from '../subjects.js';
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ export interface ClientUnwireCommandContext {
  * @param ctx - Full CLI command context supplied by the CLI framework.
  */
 export async function handleClientUnwire(ctx: CommandContext<ClientUnwireArgs>): Promise<void> {
-  await runClientUnwireCommand(ctx);
+  await runClientUnwireCommand({ ...ctx, bus: requireBus(ctx) });
 }
 
 /**

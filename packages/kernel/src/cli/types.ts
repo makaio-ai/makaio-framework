@@ -18,14 +18,15 @@
  * export const cli: CliContribution = {
  *   name: 'account-manager',
  *   description: 'Manage AI tool credentials',
- *   interactive: async ({ bus }) => {
+ *   interactive: async (ctx) => {
+ *     const bus = requireBus(ctx);
  *     // Ink TUI — launched by bare `makaio account-manager`
  *   },
  *   subcommands: [
  *     defineCliSubcommand('list', 'List configured credentials', listSchema, async (ctx) => {
  *       // ctx.args.profile → string | undefined
  *       // ctx.args.format  → 'table' | 'json'
- *       // ctx.bus           → IMakaioBus
+ *       // ctx.bus           → IMakaioBus | null
  *       // ctx.output        → OutputWriter
  *       // ctx.setExitCode() → signal a non-zero command result
  *     }),
@@ -82,8 +83,15 @@ export interface OutputWriter {
 export interface CommandContext<TArgs> {
   /** Parsed and validated command arguments/options. */
   readonly args: TArgs;
-  /** Bus client connected to the running Makaio instance. */
-  readonly bus: IMakaioBus;
+  /**
+   * Bus client connected to the running Makaio instance.
+   *
+   * `null` when the bus is unavailable and the command opted into offline
+   * execution via {@link CliContribution.beforeRun}. Handlers that declared
+   * themselves runnable without the bus must check for `null` before making
+   * bus calls.
+   */
+  readonly bus: IMakaioBus | null;
   /** Output channel for writing to stdout/stderr. */
   readonly output: OutputWriter;
   /**
@@ -107,6 +115,46 @@ export interface CommandContext<TArgs> {
    */
   setExitCode(exitCode: number): void;
 }
+
+// ---------------------------------------------------------------------------
+// beforeRun — pre-execution gate for CLI contributions
+// ---------------------------------------------------------------------------
+
+/**
+ * Context provided to {@link CliContribution.beforeRun} for pre-execution
+ * gating decisions.
+ */
+export interface BeforeRunContext {
+  /**
+   * Name of the subcommand being invoked (e.g. `'list'`, `'statusline'`).
+   *
+   * Set to {@link INTERACTIVE_SUBCOMMAND} (`'__interactive__'`) when the bare
+   * interactive invocation is dispatched.
+   */
+  readonly subcommandName: string;
+  /** Parsed and validated arguments for the subcommand. */
+  readonly args: Record<string, unknown>;
+  /**
+   * Bus client, or `null` when the server is unreachable.
+   *
+   * Extensions that can operate without the bus inspect this to decide
+   * whether to proceed. Extensions that need a license check can use
+   * the bus (when available) to query license state.
+   */
+  readonly bus: IMakaioBus | null;
+}
+
+/**
+ * Result of a {@link CliContribution.beforeRun} gate check.
+ *
+ * - `{ proceed: true }` — skip the default bus-required gate and run the
+ *   handler. The handler receives `bus: IMakaioBus | null`.
+ * - `{ proceed: false, message, exitCode? }` — block execution and display
+ *   the message. Defaults to exit code 1.
+ */
+export type BeforeRunResult =
+  | { readonly proceed: true }
+  | { readonly proceed: false; readonly message: string; readonly exitCode?: number };
 
 // ---------------------------------------------------------------------------
 // Subcommand definition — schema + handler, fully typed
@@ -149,6 +197,24 @@ export interface CliSubcommandEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Sentinel subcommand name passed to {@link CliContribution.beforeRun} when
+ * the bare interactive invocation (`makaio <name>`) is dispatched.
+ */
+export const INTERACTIVE_SUBCOMMAND = '__interactive__' as const;
+
+/**
+ * Convenience {@link BeforeRunResult} for extensions that always proceed.
+ *
+ * Use this as the return value from {@link CliContribution.beforeRun} when
+ * the extension unconditionally opts into bus-optional execution.
+ */
+export const ALWAYS_PROCEED: BeforeRunResult = { proceed: true } as const;
+
+// ---------------------------------------------------------------------------
 // Top-level CLI contribution — what extensions export
 // ---------------------------------------------------------------------------
 
@@ -172,10 +238,58 @@ export interface CliContribution extends CliManifest {
    * When defined, bare `makaio <name>` enters this handler instead of printing
    * help. Typically renders an Ink TUI that reuses the same bus RPC calls as
    * the non-interactive subcommands.
+   *
+   * The bus is non-null when no {@link beforeRun} hook is defined (the default
+   * gate ensures a connected bus). When `beforeRun` opts into bus-optional
+   * execution, `bus` may be `null` — use {@link requireBus} at the top of the
+   * handler if the TUI needs bus RPC calls.
    */
-  readonly interactive?: (ctx: { bus: IMakaioBus }) => Promise<void>;
+  readonly interactive?: (ctx: { bus: IMakaioBus | null }) => Promise<void>;
   /** Typed subcommand definitions with Zod schemas and strongly-typed handlers. */
   readonly subcommands: ReadonlyArray<CliSubcommandEntry>;
+  /**
+   * Pre-execution gate evaluated before the default bus-required check.
+   *
+   * When provided, this hook **replaces** the default "bus must be connected"
+   * gate. The extension inspects the context (including bus availability) and
+   * decides whether execution should proceed.
+   *
+   * Use cases:
+   * - **Bus-optional commands** — extensions that can operate without the
+   *   server (e.g. `claude-code-statusline`, fire-and-forget hooks).
+   * - **License gates** — paid extensions that need to verify a subscription
+   *   before allowing execution.
+   *
+   * When absent, the CLI framework applies the default behavior: require a
+   * connected bus and fail with a connection error when unavailable.
+   * @param context - Subcommand name, parsed args, and bus availability.
+   * @returns Whether to proceed or block with a message.
+   */
+  readonly beforeRun?: (context: BeforeRunContext) => BeforeRunResult | Promise<BeforeRunResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Bus narrowing — runtime assertion for bus-required handlers
+// ---------------------------------------------------------------------------
+
+/**
+ * Assert that the bus is available and narrow the type to non-null.
+ *
+ * Handlers that require the bus (i.e. extensions without a `beforeRun` hook
+ * that permits offline execution) call this at the top of their handler to
+ * get a typed non-null bus reference. Throws if the bus is unexpectedly null
+ * — which should not happen when the default bus-required gate is active.
+ *
+ * Works with both subcommand {@link CommandContext} and interactive handler
+ * contexts — any object with a `bus` property satisfies the signature.
+ * @param ctx - Context containing a potentially null bus reference.
+ * @returns The non-null bus instance.
+ */
+export function requireBus(ctx: { readonly bus: IMakaioBus | null }): IMakaioBus {
+  if (!ctx.bus) {
+    throw new Error('This command requires a running Makaio server.');
+  }
+  return ctx.bus;
 }
 
 // ---------------------------------------------------------------------------
