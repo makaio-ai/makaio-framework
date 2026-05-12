@@ -27,10 +27,10 @@ Pick the path that matches what you need:
 - [Models & Providers](/guides/adapters/models-and-providers/) — model enumeration and capability tags
 
 ### I want to work with tools
-- [`@makaio/tools-core`](/packages/tools/core/) — typed tool definitions with Zod I/O schemas
-- [`@makaio/tools-filesystem`](/packages/tools/filesystem/) — filesystem tool implementations
-- [`@makaio/tools-shell`](/packages/tools/shell/) — shell execution tools
-- [`@makaio/tools-subagent`](/packages/tools/subagent/) — subagent delegation tools
+- [`@makaio/tools-core`](/packages/tools-core/) — typed tool definitions with Zod I/O schemas
+- [`@makaio/extension-filesystem`](/extensions/filesystem/) — filesystem tool implementations
+- [`@makaio/extension-shell`](/extensions/shell/) — shell execution tools
+- [`@makaio/extension-subagent`](/extensions/subagent/) — subagent delegation tools
 
 ### I want to use storage
 - [Bus Storage Guide](/guides/bus/storage/) — bus-mediated, backend-agnostic storage

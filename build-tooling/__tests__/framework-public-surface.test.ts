@@ -91,6 +91,14 @@ describe('FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS', () => {
   it('tools-core maps to the primary tools subpath, not tools/testing', () => {
     const entry = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.find((e) => e.packageName === '@makaio/tools-core');
     expect(entry?.frameworkSubpath).toBe('tools');
+    expect(entry?.packageRoot).toBe('packages/tools-core');
+  });
+
+  it('does not expose descriptor-owned tool extensions as tools subpaths', () => {
+    const subpathSet = new Set<string>(FRAMEWORK_DIST_SUBPATHS.map((e) => e.subpath));
+    expect(subpathSet.has('tools/filesystem')).toBe(false);
+    expect(subpathSet.has('tools/shell')).toBe(false);
+    expect(subpathSet.has('tools/subagent')).toBe(false);
   });
 });
 

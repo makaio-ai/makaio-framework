@@ -50,10 +50,10 @@ const packages: PackageEntry[] = [
   { readme: 'packages/storage/handlers/README.md' },
   { readme: 'packages/storage-migrations/README.md' },
 
-  { readme: 'tools/core/README.md' },
-  { readme: 'tools/filesystem/README.md' },
-  { readme: 'tools/shell/README.md' },
-  { readme: 'tools/subagent/README.md' },
+  { readme: 'packages/tools-core/README.md' },
+  { readme: 'extensions/filesystem/README.md' },
+  { readme: 'extensions/shell/README.md' },
+  { readme: 'extensions/subagent/README.md' },
 
   { readme: 'adapters/core/README.md' },
   { readme: 'adapters/shared/stream-session/README.md' },

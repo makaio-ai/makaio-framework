@@ -73,6 +73,6 @@ await service.init();
 | `@makaio/bus-core` | `IMakaioBus` for request/subscribe |
 | `@makaio/service-base` | `BaseService` lifecycle and handler registration |
 | `@makaio/contracts` | Bus subjects (`AgentSubjects`, `ApprovalSubjects`, `HarnessSubjects`), policy types, capability meta-tags |
-| `@makaio/tools-filesystem` | `extractToolFilePath`, `FileAccessRuleProvider` type |
+| `@makaio/tools-core` | `extractToolFilePath`, `FileAccessRuleProvider` type |
 
 Internal sibling import: `../session` for `AgentStorageSubjects` and `SessionStorageSubjects`.

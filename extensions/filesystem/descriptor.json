@@ -1,0 +1,13 @@
+{
+  "name": "filesystem",
+  "displayName": "Filesystem Tools",
+  "version": "0.1.0",
+  "makaio": {
+    "minVersion": "0.1.0"
+  },
+  "surface": "headless",
+  "entrypoints": {
+    "server": true
+  },
+  "execution": "embedded"
+}
