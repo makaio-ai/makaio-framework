@@ -22,6 +22,8 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `account.activate` | [`client.account.activate`](#client.account.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
+| `account.getActive` | [`client.account.getActive`](#client.account.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
 | `account.observe` | [`client.account.observe`](#client.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/account-identity.ts) |
 | `install` | [`client.install`](#client.install) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
 | `installJob.completed` | [`client.installJob.completed`](#client.installJob.completed) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
@@ -47,6 +49,57 @@ next: false
 | `wiring.list` | [`client.wiring.list`](#client.wiring.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
 
 ## Subject Details
+
+### <a id="client.account.activate"></a>`client.account.activate` (rpc)
+
+Signal which account is currently active for a client.
+
+Called by the account-manager after successfully linking an account
+via `client.account.observe`. `ClientRuntimeService` persists the
+supplied identity in memory so that other services (e.g. the Claude
+Code client service) can query it without a session lookup.
+
+Subject: `client.account.activate`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientAccountId` | `string` | yes |
+| `clientId` | `string` | yes |
+| `displayLabel` | `string \| undefined` | no |
+| `identifiers` | `{ scheme: string; value: string; strength: "strong" \| "alias"; }[]` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `accepted` | `boolean` | yes |
+
+### <a id="client.account.getActive"></a>`client.account.getActive` (rpc)
+
+Retrieve the currently active account identity for a client.
+
+Returns the identity most recently signalled via `account.activate`,
+or `null` when no activation has been recorded for the given client.
+Used as a fallback by the Claude Code client service when a statusline
+payload cannot be correlated to a persisted session.
+
+Subject: `client.account.getActive`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `identity` | `{ clientAccountId: string; identifiers: { scheme: string; value: string; strength: "strong" \| "alias"; }[]; displayLabel?: string \| undefined; } \| null` | yes |
 
 ### <a id="client.account.observe"></a>`client.account.observe` (rpc)
 

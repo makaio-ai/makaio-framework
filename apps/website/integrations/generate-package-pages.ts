@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AstroIntegration } from 'astro';
+import { convertGitHubCallouts, normalizeReadmeRelativeLinks, stripLeadingBlockquotes } from './readme-utils';
 
 export interface PackageEntry {
   readme: string;
@@ -15,6 +16,9 @@ interface ParsedReadme {
 
 const FRAMEWORK_ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
 const PACKAGE_ROUTE_MANIFEST_PATH = path.resolve(import.meta.dirname, '..', '.package-route-manifest.json');
+// Astro may invoke integration hooks from the repo root or the website package;
+// generated content is anchored to this integration package either way.
+const PACKAGE_DOCS_OUT_DIR = path.resolve(import.meta.dirname, '..', 'src', 'content', 'docs', 'packages');
 const YAML_RESERVED_VALUE = /[":{}[\],&*?|>!%#@`]/;
 const YAML_RESERVED_PREFIX = /^[-?:,[\]{}#&*!|>'"%@`]/;
 const YAML_MULTILINE = /[\n\r]/;
@@ -63,8 +67,6 @@ const packages: PackageEntry[] = [
   { readme: 'adapters/implementations/openai-node/README.md' },
 
   { readme: 'transports/ws/README.md' },
-
-  { readme: 'sdks/conformance/README.md' },
 ];
 
 /**
@@ -112,7 +114,7 @@ export function parseReadme(content: string): ParsedReadme {
   }
 
   // Extract description from first non-empty paragraph
-  const trimmed = body.trimStart();
+  const trimmed = stripLeadingBlockquotes(body.trimStart());
   const paraEnd = trimmed.indexOf('\n\n');
   const firstPara = (paraEnd !== -1 ? trimmed.slice(0, paraEnd) : trimmed.split('\n')[0]!)
     .replace(/\n/g, ' ')
@@ -144,17 +146,14 @@ function yamlEscape(value: string): string {
 
 /**
  * Rewrites README-relative Markdown links after relocating content to `/packages`.
+ * Image links use raw asset URLs via the shared README normalizer.
  * @param body - Markdown body from the README.
  * @param readmePath - README path relative to the framework root.
  * @returns Markdown body with non-local relative links pointing at source.
  */
 export function normalizeReadmeLinks(body: string, readmePath: string): string {
   const readmeDir = path.posix.dirname(readmePath.replaceAll(path.sep, '/'));
-  return body.replaceAll(/\]\((?!#|[a-z][a-z0-9+.-]*:|\/)([^)\s]+)(#[^)\s]+)?\)/gi, (_match, href, hash = '') => {
-    const hrefText = String(href);
-    const sourcePath = path.posix.normalize(path.posix.join(readmeDir, hrefText));
-    return `](https://github.com/makaio-ai/makaio-framework/blob/main/${sourcePath}${String(hash)})`;
-  });
+  return normalizeReadmeRelativeLinks(body, readmeDir);
 }
 
 /**
@@ -232,7 +231,7 @@ export function generatePackagePageFiles(outDir: string, packageEntries: readonl
     const raw = fs.readFileSync(readmePath, 'utf-8');
     const parsed = parseReadme(raw);
     const description = resolvePackageDescription(pkg.readme, FRAMEWORK_ROOT, parsed.description);
-    const body = normalizeReadmeLinks(parsed.body, pkg.readme);
+    const body = normalizeReadmeLinks(convertGitHubCallouts(parsed.body), pkg.readme);
 
     const slugPath = readmeToSlugPath(pkg.readme);
     const sidebarLabel = path.posix.basename(slugPath);
@@ -285,8 +284,7 @@ export function generatePackagePages(): AstroIntegration {
     name: 'generate-package-pages',
     hooks: {
       'astro:config:setup': () => {
-        const outDir = path.resolve('src/content/docs/packages');
-        generatePackagePageFiles(outDir);
+        generatePackagePageFiles(PACKAGE_DOCS_OUT_DIR);
         writePackageRouteManifest(PACKAGE_ROUTE_MANIFEST_PATH);
       },
     },

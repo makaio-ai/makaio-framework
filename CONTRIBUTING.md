@@ -45,7 +45,7 @@ you changed before submitting:
 yarn test:conformance --adapter openai-node
 ```
 
-See [Creating Adapters](docs/creating-adapters.md).
+See [Creating Adapters](docs/adapters/creating.md).
 
 ### Extensions — New Capabilities
 

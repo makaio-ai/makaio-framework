@@ -122,7 +122,3 @@ protocol while the project is in pre-release:
   }
 }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

@@ -269,7 +269,7 @@ const unsubscribe = ctx.bus.__onAny((msgCtx) => {
 });
 ```
 
-For full bus documentation, see [Bus Architecture](../bus/).
+For full bus documentation, see [Bus Architecture](./architecture/bus/).
 
 ---
 
@@ -454,7 +454,7 @@ host-owned chunks, but extension browser entries should not target it. The build
 the shared externalization automatically.
 
 For the full browser extension architecture, renderer lifecycle, and framework web primitives,
-see [Browser & UI](./browser).
+see [Browser & UI](./architecture/extensions/browser).
 
 ---
 

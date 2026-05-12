@@ -13,7 +13,8 @@
       {
         "id": "nanogpt",
         "name": "NanoGPT",
-        "description": "NanoGPT - OpenAI-compatible API"
+        "description": "NanoGPT - OpenAI-compatible API",
+        "protocols": ["openai"]
       }
     ]
   }

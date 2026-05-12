@@ -13,7 +13,8 @@
       {
         "id": "openrouter",
         "name": "OpenRouter",
-        "description": "OpenRouter — unified API for 300+ AI models across providers."
+        "description": "OpenRouter — unified API for 300+ AI models across providers.",
+        "protocols": ["openai"]
       }
     ]
   }

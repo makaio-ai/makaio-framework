@@ -13,7 +13,9 @@
       {
         "id": "github-copilot",
         "name": "GitHub Copilot",
-        "description": "GitHub Copilot \u2014 premium request-based AI models"
+        "description": "GitHub Copilot \u2014 premium request-based AI models",
+        "protocols": ["openai"],
+        "requiredClient": "github-copilot"
       }
     ]
   }

@@ -43,7 +43,3 @@ Default export is `geminiPackage` — the single package registered when this cl
 ## Installation
 
 `@makaio/client-gemini` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

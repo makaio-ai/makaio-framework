@@ -62,7 +62,3 @@ workspace protocol:
 ```json
 { "@makaio/adapter-subsystem": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

@@ -33,7 +33,3 @@ This is the coding-specific Anthropic-compatible endpoint, distinct from the gen
 ## Installation
 
 `@makaio/provider-kimi` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

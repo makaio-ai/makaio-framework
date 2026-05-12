@@ -13,7 +13,8 @@
       {
         "id": "alibaba",
         "name": "Alibaba Model Studio",
-        "description": "Alibaba Model Studio \u2014 Anthropic and OpenAI compatible API"
+        "description": "Alibaba Model Studio \u2014 Anthropic and OpenAI compatible API",
+        "protocols": ["anthropic", "openai"]
       }
     ]
   }

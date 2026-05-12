@@ -83,7 +83,3 @@ unsubscribes those handlers. Registering importers alone does not install the bu
   and the package lifecycle token.
 - `./log-import` and `./namespace` are side-effect entries for registering the log-import bus surface.
 - `./schemas` exports the bus schema objects used by the namespace and handlers.
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

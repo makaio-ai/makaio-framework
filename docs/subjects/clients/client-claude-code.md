@@ -225,6 +225,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `envPairs` | `string[] \| undefined` | no |
 | `makaioCommand` | `string` | yes |
 | `projectDir` | `string \| undefined` | no |
 | `scope` | `"user" \| "local" \| "project"` | yes |
@@ -252,6 +253,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `envPairs` | `string[] \| undefined` | no |
 | `makaioCommand` | `string` | yes |
 | `projectDir` | `string \| undefined` | no |
 

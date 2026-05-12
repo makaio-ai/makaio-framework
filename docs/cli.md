@@ -318,7 +318,7 @@ export const cli: CliContribution = {
 };
 ```
 
-See [Extensions](./extensions/) for how to declare this in a full
+See [Extensions](./architecture/extensions/) for how to declare this in a full
 `MakaioExtension`.
 
 ---

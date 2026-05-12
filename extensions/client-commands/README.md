@@ -99,7 +99,3 @@ claude-code:
 ```bash
 makaio extension install ./extensions/client-commands
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

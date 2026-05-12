@@ -27,7 +27,3 @@ This provider has no network HTTP endpoints. Qwen Code communicates through the 
 ## Installation
 
 `@makaio/provider-qwen-acp` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

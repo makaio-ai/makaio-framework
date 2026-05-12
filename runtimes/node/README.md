@@ -173,7 +173,3 @@ export default defineMakaioConfig({
 | `@makaio/runtime-node/makaio-config` | Config loading, parsing, and resolution |
 | `@makaio/runtime-node/runtime/schemas` | Runtime bus message schemas |
 | `@makaio/runtime-node/runtime/register` | Side-effect import to register runtime bus namespace |
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

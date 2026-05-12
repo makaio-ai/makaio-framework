@@ -89,7 +89,3 @@ MakaioBus.on(PackageSubjects.installed, ({ payload }) => {
 ```json
 { "@makaio/services-package-manager": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../../README.md)*

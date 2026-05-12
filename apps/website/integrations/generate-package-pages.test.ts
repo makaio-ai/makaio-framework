@@ -12,6 +12,7 @@ import {
   resolvePackageDescription,
   sidebarDescription,
 } from './generate-package-pages';
+import { convertGitHubCallouts } from './readme-utils';
 
 describe('parseReadme', () => {
   it('preserves existing frontmatter metadata while deriving title and description', () => {
@@ -77,6 +78,22 @@ describe('parseReadme', () => {
     expect(frontmatter).toContain('sidebar:');
     expect(frontmatter).toContain('label: bus-core');
     expect(frontmatter).toContain('data-description: Typed bus primitives for the framework');
+  });
+
+  it('skips leading GitHub callouts when deriving the README description', () => {
+    const parsed = parseReadme(
+      ['# Package', '', '> [!IMPORTANT]', '> Use this carefully.', '', 'Public API docs.'].join('\n'),
+    );
+
+    expect(parsed.description).toBe('Public API docs.');
+  });
+});
+
+describe('convertGitHubCallouts', () => {
+  it('converts CRLF GitHub callouts to Starlight admonitions', () => {
+    expect(convertGitHubCallouts('> [!WARNING]\r\n> First line.\r\n> Second line.\r\n')).toBe(
+      ':::caution\nFirst line.\nSecond line.\n:::\n',
+    );
   });
 });
 
@@ -163,6 +180,12 @@ describe('normalizeReadmeLinks', () => {
   it('keeps anchors and absolute URLs unchanged', () => {
     expect(normalizeReadmeLinks('[Local](#api) [External](https://example.com)', 'packages/bus/README.md')).toBe(
       '[Local](#api) [External](https://example.com)',
+    );
+  });
+
+  it('rewrites README-relative images to raw asset URLs', () => {
+    expect(normalizeReadmeLinks('![Screenshot](./assets/screen.png)', 'packages/bus/README.md')).toBe(
+      '![Screenshot](https://raw.githubusercontent.com/makaio-ai/makaio-framework/main/packages/bus/assets/screen.png)',
     );
   });
 });

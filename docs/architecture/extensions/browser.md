@@ -6,7 +6,7 @@ description: Renderer architecture, shell inversion, and framework web primitive
 ## Renderer architecture — host / shell inversion
 
 The desktop renderer is a framework-layer host. It boots with `BusProvider` from
-[`@makaio/ui-hooks`](../../ui/hooks/README.md). `ExtensionBrowserLoader` then queries the bus for active extensions with
+[`@makaio/ui-hooks`](../../../ui/hooks/README.md). `ExtensionBrowserLoader` then queries the bus for active extensions with
 `ExtensionInfo.browser.entrypoint`, imports each browser entrypoint, and checks whether any
 loaded `ExtensionBrowserFactory` returned a shell component:
 
@@ -58,7 +58,7 @@ The former `@makaio/web-core` package has been split into focused packages that 
 `framework/ui/`. Framework-only renderer surfaces compose these
 packages rather than importing from a single monolithic package.
 
-**[`@makaio/ui-kernel`](../../ui/kernel/README.md)** — pure contracts and registries (no React):
+**[`@makaio/ui-kernel`](../../../ui/kernel/README.md)** — pure contracts and registries (no React):
 
 | Export | Kind | Purpose |
 |--------|------|---------|
@@ -68,7 +68,7 @@ packages rather than importing from a single monolithic package.
 | `ExtensionBrowserContribution` | Type | Contract returned by each extension's browser factory |
 | `ExtensionBrowserFactory` | Type | Default-export shape of browser entry bundles |
 
-**[`@makaio/ui-hooks`](../../ui/hooks/README.md)** — React hooks, stores, providers, and bus-aware code:
+**[`@makaio/ui-hooks`](../../../ui/hooks/README.md)** — React hooks, stores, providers, and bus-aware code:
 
 | Export | Kind | Purpose |
 |--------|------|---------|
@@ -76,7 +76,7 @@ packages rather than importing from a single monolithic package.
 | `useBus` | Hook | Reads the bus from `BusProvider` context |
 | `useWindowContext` | Hook | Window navigation state (`windowId`, `activeProjectId`, `activeSessionId`, etc.) |
 
-**[`@makaio/ui-views`](../../ui/views/README.md)** — composed React views and shell components:
+**[`@makaio/ui-views`](../../../ui/views/README.md)** — composed React views and shell components:
 
 | Export | Kind | Purpose |
 |--------|------|---------|
@@ -96,7 +96,7 @@ packages rather than importing from a single monolithic package.
   contracts and helpers, and use only documented browser-safe product subpaths for
   renderer-only UI hooks. The root barrel may still appear in the host shared externals
   list for legacy host-owned chunks, but it is not an extension browser authoring surface.
-- Do not runtime-import framework internals such as [`@makaio/ui-hooks`](../../ui/hooks/README.md) from browser entry
+- Do not runtime-import framework internals such as [`@makaio/ui-hooks`](../../../ui/hooks/README.md) from browser entry
   bundles. The host import map only guarantees the shared externals above.
 - Extension authors writing shell UI should keep application-specific providers inside
   the shell contribution instead of adding them to framework UI packages.
@@ -105,9 +105,9 @@ packages rather than importing from a single monolithic package.
 
 Browser-capable extensions build against a framework-owned shared externals
 contract. The current canonical shared browser specifiers are defined in
-[`@makaio/build-tooling/browser-shared-externals`](../../build-tooling/browser-shared-externals.ts) and are used by both:
+[`@makaio/build-tooling/browser-shared-externals`](../../../build-tooling/browser-shared-externals.ts) and are used by both:
 
-- [`@makaio/build-tooling/tsdown-extension-preset`](../../build-tooling/tsdown-extension-preset.ts)
+- [`@makaio/build-tooling/tsdown-extension-preset`](../../../build-tooling/tsdown-extension-preset.ts)
 - host import-map generation
 - author-time verification
 

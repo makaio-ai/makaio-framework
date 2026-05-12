@@ -7,13 +7,13 @@ next: false
 
 # ui
 
-3 namespaces, 8 subjects (4 events, 4 RPCs).
+3 namespaces, 9 subjects (5 events, 4 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
 | [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`ui`](./ui.md) | bus | 4 | 2E / 2R |
-| [`widget`](./widget.md) | bus | 3 | 2E / 1R |
+| [`widget`](./widget.md) | bus | 4 | 3E / 1R |
 
 ---
 

@@ -2,6 +2,10 @@
 
 Static client definition for GitHub Copilot. This package declares the user-facing identity of the `copilot` binary within the framework. GitHub Copilot is an SDK-only integration — the `copilot` binary is used for CLI detection during onboarding but no native tools are exposed by the client itself. All tool invocations default to `always-ask` to ensure explicit user approval. This is a minimal definition-first package with no runtime entrypoint.
 
+> [!IMPORTANT]
+> Since GitHub Copilot [changed its pricing model](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/),
+> this provider package is currently no longer actively maintained.
+
 ## Client Identity
 
 | Field | Value |
@@ -42,7 +46,3 @@ Default export is `githubCopilotPackage` — the single package registered when 
 ## Installation
 
 `@makaio/client-github-copilot` is a private workspace package used internally by the framework.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

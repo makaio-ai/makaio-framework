@@ -1,5 +1,9 @@
 # @makaio/adapter-github-copilot-sdk
 
+> [!IMPORTANT]
+> Since GitHub Copilot [changed its pricing model](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/),
+> this provider package is currently no longer actively maintained.
+
 GitHub Copilot SDK adapter for the Makaio AI framework.
 
 ## Quick Start

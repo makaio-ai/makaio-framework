@@ -66,7 +66,3 @@ as a peer dependency:
   "vite": "^8.0.0"
 }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

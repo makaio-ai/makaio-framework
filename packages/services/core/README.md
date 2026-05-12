@@ -102,7 +102,3 @@ major domains:
 | `capabilityPackage` | `CapabilityToken` | `CapabilityService` |
 | `trayMenuPackage` | `TrayMenuToken` | `TrayMenuService` |
 | `frameworkCorePackages()` | — | Convenience factory returning all framework-critical extension packages |
-
----
-
-*Part of the [Makaio AI Framework](../../../README.md)*

@@ -93,7 +93,3 @@ All portable runtime-node exports are re-exported unchanged, including
 `loadExtensions`, `createHonoRouteGraph`, `createHttpRouteGraphBuilder`, and
 all associated types. See the
 [runtime-node README](../node/README.md) for the full list.
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

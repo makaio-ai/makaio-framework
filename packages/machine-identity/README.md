@@ -71,7 +71,3 @@ const ok = await machineKeysExist(keysDir);
 ```json
 { "@makaio/machine-identity": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

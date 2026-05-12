@@ -85,7 +85,7 @@ caps.hasAll(['tools', 'vision']);   // boolean
 ```
 
 Adapters can declare custom capabilities via TypeScript declaration merging. See
-[Creating Adapters](./creating) for the full declaration merging pattern.
+[Creating Adapters](../../creating-adapters) for the full declaration merging pattern.
 
 ---
 
@@ -97,7 +97,7 @@ unregisters handlers.
 
 Adapter instances are contributed through `MakaioExtension.adapters` and managed by the
 adapter subsystem contribution processor, which calls `init()` and `close()` as part of the
-extension lifecycle. See [Creating Adapters](./creating) for the full implementation walkthrough.
+extension lifecycle. See [Creating Adapters](../../creating-adapters) for the full implementation walkthrough.
 
 ---
 
@@ -196,7 +196,7 @@ streaming deltas, tool events, and usage.
 
 | Topic | Document |
 |-------|----------|
-| Building a new adapter | [Creating Adapters](./creating) |
+| Building a new adapter | [Creating Adapters](../../creating-adapters) |
 | Models, providers, credentials | [Models & Providers](./models-and-providers) |
 | How adapters are discovered and loaded | [Discovery](./discovery) |
 | Publishing and versioning strategy | [Publishing](./publishing) |

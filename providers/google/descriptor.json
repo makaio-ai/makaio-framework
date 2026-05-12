@@ -13,12 +13,16 @@
       {
         "id": "google",
         "name": "Google AI",
-        "description": "Official Google AI API"
+        "description": "Official Google AI API",
+        "protocols": ["openai"],
+        "requiredClient": "gemini"
       },
       {
         "id": "google-oauth",
         "name": "Google AI (Subscription)",
-        "description": "Google Gemini via OAuth subscription"
+        "description": "Google Gemini via OAuth subscription",
+        "protocols": ["openai"],
+        "requiredClient": "gemini"
       }
     ]
   }

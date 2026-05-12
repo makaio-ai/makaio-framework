@@ -62,7 +62,3 @@ makaio client wire claude-code user
 ```bash
 makaio extension install ./extensions/claude-code-statusline
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

@@ -93,7 +93,3 @@ Fired only when `metadata` contains at least one of `pid`, `supervisorSessionId`
 ```bash
 makaio extension install ./extensions/client-hooks
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

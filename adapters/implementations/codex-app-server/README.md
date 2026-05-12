@@ -309,7 +309,3 @@ src/
     ├── createStdioTransport.ts
     └── jsonRpcClient.ts
 ```
-
----
-
-*Part of the [Makaio AI Framework](https://github.com/makaio-ai/makaio-framework)*

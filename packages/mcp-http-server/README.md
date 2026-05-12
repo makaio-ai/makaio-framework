@@ -81,7 +81,3 @@ const service = new McpServerBridgeService(bus);
 ```json
 { "@makaio/mcp-http-server": "workspace:*" }
 ```
-
----
-
-*Part of the [Makaio AI Framework](../../README.md)*

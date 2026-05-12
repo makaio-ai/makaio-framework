@@ -13,7 +13,8 @@
       {
         "id": "kimi",
         "name": "Kimi",
-        "description": "Kimi - Anthropic-compatible API"
+        "description": "Kimi - Anthropic-compatible API",
+        "protocols": ["anthropic"]
       }
     ]
   }

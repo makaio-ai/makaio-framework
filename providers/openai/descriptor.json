@@ -13,7 +13,8 @@
       {
         "id": "openai",
         "name": "OpenAI",
-        "description": "Official OpenAI API"
+        "description": "Official OpenAI API",
+        "protocols": ["openai"]
       }
     ]
   }

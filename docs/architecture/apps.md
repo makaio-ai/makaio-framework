@@ -205,7 +205,7 @@ Current known gaps:
 
 ## Related Documentation
 
-- [CLI](./cli.md) — headless CLI host architecture
+- [CLI](../cli.md) — headless CLI host architecture
 - [Extensions](./extensions/) — the extension model consumed by all hosts
 - [Transport](./transport.md) — WebSocket bus transport used by all hosts
-- [Getting Started](./getting-started.md) — first-time setup via CLI or desktop hosts
+- [Getting Started](../getting-started.md) — first-time setup via CLI or desktop hosts

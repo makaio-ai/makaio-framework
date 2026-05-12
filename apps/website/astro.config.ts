@@ -7,8 +7,10 @@ import { generatePackagePages } from './integrations/generate-package-pages';
 import { generateApiReference } from './integrations/generate-api-reference';
 import { generateBusSubjects } from './integrations/generate-bus-subjects';
 import { composeLlmsFullIntegration } from './integrations/compose-llms-full';
+import { generateExtensionPages } from './integrations/generate-extension-pages';
+import { generateCatalogPages } from './integrations/generate-catalog-pages';
 import { generateMarkdownPages } from './integrations/generate-markdown-pages';
-import { remarkStripMdLinks } from './remark/strip-md-links';
+import { remarkResolveInternalLinks } from './remark/resolve-internal-links';
 import { remarkWebHide } from './remark/web-hide';
 import { remarkAutoLinkApi } from './remark/auto-link-api';
 import { remarkAutoLinkPackages } from './remark/auto-link-packages';
@@ -25,7 +27,7 @@ export default defineConfig({
   site: 'https://makaio.ai',
   markdown: {
     remarkPlugins: [
-      remarkStripMdLinks,
+      [remarkResolveInternalLinks, { sourceUrlBase: SOURCE_URL_BASE }],
       remarkWebHide,
       remarkAutoLinkApi,
       [
@@ -73,34 +75,44 @@ export default defineConfig({
             'reference/subjects/**',
             'packages/**',
             'sdks/**',
-            'guides/apps',
-            'guides/cli',
-            'guides/creating-adapters',
-            'guides/extensions/creating',
-            'guides/extensions/index',
-            'guides/extensions/discovery',
-            'guides/extensions/browser',
-            'guides/extensions/distribution',
-            'guides/transport',
+            'architecture/**',
+            'clients/**',
+            'adapters/**',
+            'providers/**',
           ],
-          promote: [
-            'index',
-            'why',
-            'guides/getting-started',
-            'guides/bus/index',
-            'guides/bus/decoupling',
-            'guides/bus/patterns',
-            'guides/bus/storage',
-            'guides/bus/testing',
-            'guides/configuration',
-          ],
+          promote: ['index', 'why', 'guides/getting-started', 'guides/connect', 'guides/configuration'],
           demote: ['packages/**', 'sdks/**', 'reference/subjects/**', 'reference/api/**'],
           rawContent: true,
           customSets: [
             {
               label: 'Guides',
               paths: ['guides/**'],
-              description: 'large conceptual and workflow documentation set for using the framework',
+              description: 'workflow and how-to documentation set for using the framework',
+            },
+            {
+              label: 'Architecture',
+              paths: ['architecture/**'],
+              description: 'conceptual architecture documentation: bus, extensions, adapters, transport',
+            },
+            {
+              label: 'Clients',
+              paths: ['clients/**'],
+              description: 'catalog of supported AI coding clients with capabilities and integrations',
+            },
+            {
+              label: 'Adapters',
+              paths: ['adapters/**'],
+              description: 'catalog of adapter implementations bridging clients to model providers',
+            },
+            {
+              label: 'Providers',
+              paths: ['providers/**'],
+              description: 'catalog of model providers with protocol and client compatibility',
+            },
+            {
+              label: 'Extensions',
+              paths: ['extensions/**'],
+              description: 'catalog of shipped extensions with features, CLI commands, and usage',
             },
             {
               label: 'Packages',
@@ -138,31 +150,47 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
+            { label: 'Connect Your Tools', link: '/guides/connect/' },
+            { label: 'Creating Extensions', link: '/guides/creating-extensions/' },
+            { label: 'Creating Adapters', link: '/guides/creating-adapters/' },
+            { label: 'CLI', link: '/guides/cli/' },
+            { label: 'Configuration', link: '/guides/configuration/' },
+          ],
+        },
+        {
+          label: 'Architecture',
+          collapsed: true,
+          items: [
             {
               label: 'Bus',
               items: [
-                { label: 'Overview', link: '/guides/bus/' },
-                { label: 'Patterns', link: '/guides/bus/patterns/' },
-                { label: 'Storage', link: '/guides/bus/storage/' },
-                { label: 'Decoupling', link: '/guides/bus/decoupling/' },
-                { label: 'Testing', link: '/guides/bus/testing/' },
+                { label: 'Overview', link: '/architecture/bus/' },
+                { label: 'Patterns', link: '/architecture/bus/patterns/' },
+                { label: 'Storage', link: '/architecture/bus/storage/' },
+                { label: 'Decoupling', link: '/architecture/bus/decoupling/' },
+                { label: 'Testing', link: '/architecture/bus/testing/' },
               ],
             },
             {
               label: 'Extensions',
               items: [
-                { label: 'Overview', link: '/guides/extensions/' },
-                { label: 'Creating Extensions', link: '/guides/extensions/creating/' },
-                { label: 'Discovery & Loading', link: '/guides/extensions/discovery/' },
-                { label: 'Browser & UI', link: '/guides/extensions/browser/' },
-                { label: 'Distribution', link: '/guides/extensions/distribution/' },
+                { label: 'Overview', link: '/architecture/extensions/' },
+                { label: 'Discovery & Loading', link: '/architecture/extensions/discovery/' },
+                { label: 'Browser & UI', link: '/architecture/extensions/browser/' },
+                { label: 'Distribution', link: '/architecture/extensions/distribution/' },
               ],
             },
-            { label: 'Adapters', link: '/guides/creating-adapters/' },
-            { label: 'CLI', link: '/guides/cli/' },
-            { label: 'Transport', link: '/guides/transport/' },
-            { label: 'Configuration', link: '/guides/configuration/' },
-            { label: 'Desktop Apps', link: '/guides/apps/' },
+            {
+              label: 'Adapters',
+              items: [
+                { label: 'Overview', link: '/architecture/adapters/' },
+                { label: 'Discovery', link: '/architecture/adapters/discovery/' },
+                { label: 'Models & Providers', link: '/architecture/adapters/models-and-providers/' },
+                { label: 'Publishing', link: '/architecture/adapters/publishing/' },
+              ],
+            },
+            { label: 'Transport', link: '/architecture/transport/' },
+            { label: 'Desktop Apps', link: '/architecture/apps/' },
           ],
         },
         {
@@ -187,6 +215,26 @@ export default defineConfig({
           items: [{ autogenerate: { directory: 'packages', collapsed: true } }],
         },
         {
+          label: 'Clients',
+          collapsed: true,
+          items: [{ autogenerate: { directory: 'clients', collapsed: true } }],
+        },
+        {
+          label: 'Adapters',
+          collapsed: true,
+          items: [{ autogenerate: { directory: 'adapters', collapsed: true } }],
+        },
+        {
+          label: 'Providers',
+          collapsed: true,
+          items: [{ autogenerate: { directory: 'providers', collapsed: true } }],
+        },
+        {
+          label: 'Extensions',
+          collapsed: true,
+          items: [{ autogenerate: { directory: 'extensions', collapsed: true } }],
+        },
+        {
           label: 'SDKs',
           collapsed: true,
           items: [
@@ -201,6 +249,8 @@ export default defineConfig({
     generateBusSubjects(),
     generateApiReference(),
     generatePackagePages(),
+    generateExtensionPages(),
+    generateCatalogPages(),
     composeLlmsFullIntegration(),
     generateMarkdownPages({
       packageSpecifierPattern: PACKAGE_SPECIFIER_PATTERN,
