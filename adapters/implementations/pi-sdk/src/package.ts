@@ -5,6 +5,7 @@
  * {@link MakaioExtension} shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { PiSdkAdapterName } from './constants.js';
@@ -21,7 +22,8 @@ import { providerIds } from './provider.js';
 export const piSdkPackage: MakaioExtension = {
   name: PiSdkAdapterName,
   displayName: 'Pi SDK',
-  dependencies: providerIds.map((definitionId) => `provider-${definitionId}`),
+  version: '0.1.0',
+  dependencies: providerIds.map((definitionId) => dep(`provider-${definitionId}`)),
   adapters: [
     {
       manifest: {

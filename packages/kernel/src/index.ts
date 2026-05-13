@@ -22,7 +22,12 @@ export { BootNamespace, BootSubjects } from './boot-namespace.js';
 export { ServiceSkipError } from './service-skip-error.js';
 export { createShutdownSequence } from './shutdown.js';
 
-export type { ContributionProcessor, ExtensionRuntimeSurface } from './extension/index.js';
+export type {
+  ContributionProcessor,
+  ExtensionRuntimeSurface,
+  RuntimeCapability,
+  RuntimeEnvironment,
+} from './extension/index.js';
 export { ExtensionCoordinator, coalesceExtensionOverrides, filterEligibleExtensions } from './extension/index.js';
 
 export {

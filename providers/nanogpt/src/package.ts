@@ -14,5 +14,6 @@ import { providerDefinition } from './definition.js';
 export const nanogptPackage: MakaioExtension = {
   name: 'provider-nanogpt',
   displayName: 'NanoGPT',
+  version: '0.1.0',
   providers: [providerDefinition],
 };

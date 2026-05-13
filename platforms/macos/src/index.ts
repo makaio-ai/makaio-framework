@@ -27,7 +27,8 @@ export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions 
   return {
     name: 'platform-macos',
     displayName: 'Platform: macOS',
-    requires: ['darwin'],
+    version: '0.1.0',
+    requires: [{ type: 'host', id: 'darwin' }],
     create: (ctx) => {
       const target =
         options.autoLaunch === false
@@ -63,6 +64,6 @@ export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions 
  * Provides OS-level capabilities for macOS hosts:
  * - Auto-launch (Login Items)
  *
- * Gated to macOS via `requires: ['darwin']`.
+ * Gated to macOS via `requires: [{ type: 'host', id: 'darwin' }]`.
  */
 export const platformMacOSPackage: MakaioExtension = createPlatformMacOSPackage();

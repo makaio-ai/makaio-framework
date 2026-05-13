@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
 import { isPortableAbsolutePath, NonEmptyStringSchema } from './primitives.js';
+import { VersionLiteralSchema, type VersionRange, VersionRangeSchema } from '../version/index.js';
 
 /**
  * Schema for a capability annotation attached to a native client tool.
@@ -341,6 +342,34 @@ export const ClientRuntimeCapabilitiesSchema = z
 
 export type ClientRuntimeCapabilities = z.infer<typeof ClientRuntimeCapabilitiesSchema>;
 
+// ---------------------------------------------------------------------------
+// Binary compatibility descriptor
+// ---------------------------------------------------------------------------
+
+/**
+ * Binary compatibility descriptor for a client definition.
+ *
+ * Groups all binary-related compatibility information: the executable name
+ * used for PATH detection and the version range the framework supports.
+ */
+export interface ClientBinaryCompatibility {
+  /** Binary name used for CLI detection (e.g. `'claude'` for the `claude` binary on `PATH`). */
+  readonly name: string;
+  /**
+   * npm semver range of supported binary versions
+   * (e.g. `'>=1.0.0'`, `'^2.0.0'`).
+   */
+  readonly supportedVersions: VersionRange;
+}
+
+/** Zod schema for {@link ClientBinaryCompatibility}. */
+export const ClientBinaryCompatibilitySchema = z
+  .object({
+    name: z.string().min(1),
+    supportedVersions: VersionRangeSchema,
+  })
+  .strict() satisfies z.ZodType<ClientBinaryCompatibility>;
+
 /**
  * Static definition for a Makaio client package.
  *
@@ -363,15 +392,18 @@ export const ClientDefinitionSchema = z
     id: z.string(),
     /** Display name shown in the UI (e.g. `'Claude Code'`). */
     name: z.string(),
+    /** SemVer version of the client definition contract. */
+    version: VersionLiteralSchema,
     /** Short human-readable description for UI surfaces. */
     description: z.string().optional(),
     /**
-     * Binary name used for CLI detection
-     * (e.g. `'claude'` for the `claude` binary on `PATH`).
+     * Binary compatibility descriptor for this client.
+     *
+     * When present, declares the binary name for PATH detection and the
+     * supported version range. Omit for clients that do not expose a
+     * named binary on `PATH` (e.g. purely-managed or embedded clients).
      */
-    binaryName: z.string().optional(),
-    /** Minimum supported binary version (semver, e.g. `'1.0.0'`). */
-    minimumVersion: z.string().optional(),
+    binary: ClientBinaryCompatibilitySchema.optional(),
     /** Native tools the binary exposes to the harness. */
     nativeTools: z.array(ClientToolDefinitionSchema).default([]),
     /**
@@ -438,6 +470,7 @@ export const ClientDefinitionSchema = z
      */
     configIsolation: ConfigIsolationSchema.optional(),
   })
+  .strict()
   .refine(
     (definition) => !definition.runtimeCapabilities.supportsManagedBinary || definition.managedInstall !== undefined,
     {

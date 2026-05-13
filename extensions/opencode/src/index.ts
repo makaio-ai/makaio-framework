@@ -22,6 +22,7 @@ import { OpenCodeLogImporter } from './importer.js';
 export const opencodePackage: MakaioExtension = {
   name: 'opencode',
   displayName: 'OpenCode',
+  version: '0.1.0',
 
   /**
    * Log import capability.

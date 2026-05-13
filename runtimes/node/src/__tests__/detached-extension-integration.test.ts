@@ -43,7 +43,7 @@ function makeTestDescriptor(): DetachedDescriptor {
     name: 'test-detached',
     displayName: 'Test Detached Extension',
     version: '1.0.0',
-    makaio: { minVersion: '0.1.0' },
+    makaio: { framework: '>=0.1.0' },
     execution: 'detached',
     transport: {
       type: 'bus-stdio',

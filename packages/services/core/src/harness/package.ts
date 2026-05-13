@@ -15,6 +15,7 @@ import { registerDrizzleHarnessStorage } from './storage/handler.js';
 export const harnessPackage: MakaioExtension = {
   name: 'makaio.harness',
   displayName: 'Harness',
+  version: '0.1.0',
   critical: true,
   storage: {
     /**

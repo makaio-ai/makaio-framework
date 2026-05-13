@@ -1,5 +1,6 @@
 import type { MakaioExtension } from '@makaio/contracts';
-import type { ExtensionRuntimeSurface } from './types.js';
+import { versionSatisfies } from '@makaio/contracts';
+import type { ExtensionRuntimeSurface, RuntimeEnvironment } from './types.js';
 
 /**
  * Keep the last extension registered for a given name.
@@ -22,16 +23,16 @@ export function coalesceExtensionOverrides(extensions: ReadonlyArray<MakaioExten
  * Filter extensions by runtime surface / environment requirements and prune dependents.
  * @param extensions - Full extension set to filter.
  * @param surface - Runtime surface to match.
- * @param capabilities - Host-provided environment capabilities, or `undefined` to allow all.
+ * @param env - Host-provided runtime environment, or `undefined` to allow all.
  * @returns Extensions eligible for loading in the current host environment.
  */
 export function filterEligibleExtensions(
   extensions: ReadonlyArray<MakaioExtension>,
   surface: ExtensionRuntimeSurface,
-  capabilities: ReadonlySet<string> | undefined,
+  env: RuntimeEnvironment | undefined,
 ): MakaioExtension[] {
   const allInputNames = new Set(extensions.map((p) => p.name));
-  const directlyEligible = extensions.filter((pkg) => matchesRequirements(pkg, surface, capabilities));
+  const directlyEligible = extensions.filter((pkg) => matchesRequirements(pkg, surface, env));
   const byName = new Map(directlyEligible.map((pkg) => [pkg.name, pkg]));
   const eligibleNames = new Set(byName.keys());
 
@@ -40,7 +41,8 @@ export function filterEligibleExtensions(
     changed = false;
     for (const name of eligibleNames) {
       const hasFilteredDependency = (byName.get(name)!.dependencies ?? []).some(
-        (dependency) => allInputNames.has(dependency) && !eligibleNames.has(dependency),
+        (dependency) =>
+          !dependency.optional && allInputNames.has(dependency.name) && !eligibleNames.has(dependency.name),
       );
       if (hasFilteredDependency) {
         eligibleNames.delete(name);
@@ -56,19 +58,40 @@ export function filterEligibleExtensions(
  * Check whether an extension's environment requirements are satisfied.
  * @param pkg - Extension manifest to evaluate.
  * @param surface - Runtime surface to match.
- * @param capabilities - Host-provided environment capabilities, or `undefined` to allow all.
+ * @param env - Host-provided runtime environment, or `undefined` to allow all.
  * @returns `true` when the extension is eligible for this runtime.
  */
 function matchesRequirements(
   pkg: MakaioExtension,
   surface: ExtensionRuntimeSurface,
-  capabilities: ReadonlySet<string> | undefined,
+  env: RuntimeEnvironment | undefined,
 ): boolean {
   if (!matchesSurface(pkg, surface)) return false;
   const requirements = pkg.requires;
   if (!requirements || requirements.length === 0) return true;
-  if (!capabilities) return true;
-  return requirements.every((capability) => capabilities.has(capability));
+  if (!env) return true;
+  return requirements.every((req) => {
+    switch (req.type) {
+      case 'host':
+        return env.hosts.has(req.id);
+      case 'capability':
+        if (!env.capabilities.has(req.id)) return false;
+        if (req.version === undefined) return true;
+        return capabilityVersionSatisfies(env, req.id, req.version);
+    }
+  });
+}
+
+/**
+ * Check a versioned host capability requirement.
+ * @param env - Host-provided runtime environment.
+ * @param id - Capability token.
+ * @param range - Required semver range.
+ * @returns `true` when the host declared a satisfying concrete capability version.
+ */
+function capabilityVersionSatisfies(env: RuntimeEnvironment, id: string, range: string): boolean {
+  const version = env.capabilityVersions?.get(id);
+  return version !== undefined && versionSatisfies(version, range);
 }
 
 /**

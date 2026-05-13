@@ -18,5 +18,6 @@ import { clientDefinition } from './definition.js';
 export const githubCopilotPackage: MakaioExtension = {
   name: 'github-copilot',
   displayName: 'GitHub Copilot',
+  version: '0.1.0',
   clients: [clientDefinition],
 };

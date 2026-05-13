@@ -6,6 +6,7 @@ describe('createClientDefinition', () => {
     const definition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
+      version: '0.1.0',
       defaultApprovalPolicy: 'full-access',
       nativeTools: [
         {
@@ -33,6 +34,7 @@ describe('createClientDefinition', () => {
     const definition = createClientDefinition({
       id: 'claude-code',
       name: 'Claude Code',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
     });
 

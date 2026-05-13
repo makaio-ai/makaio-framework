@@ -23,6 +23,7 @@ describe('ExtensionContext host-specific fields', () => {
     const extension = {
       name: 'portable-extension',
       displayName: 'Portable Extension',
+      version: '0.1.0',
       create(ctx) {
         expectTypeOf<HasKey<typeof ctx, 'makaioHome'>>().toEqualTypeOf<false>();
         return {

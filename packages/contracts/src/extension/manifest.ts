@@ -16,6 +16,7 @@ import { BrowserEntrypointSchema } from './browser-entrypoint.js';
 import { CapabilityTokenSchema, type CapabilityToken } from './capability-token.js';
 import type { ContributionManifest } from './contribution-manifest.js';
 import { ContributionManifestSchema } from './contribution-manifest.js';
+import { type VersionLiteral, VersionLiteralSchema, type VersionRange, VersionRangeSchema } from '../version/index.js';
 
 // ---------------------------------------------------------------------------
 // Window manifest
@@ -314,7 +315,109 @@ export const StorageManifestSchema = z.object({
 }) satisfies z.ZodType<StorageManifest>;
 
 // ---------------------------------------------------------------------------
-// Top-level manifest
+// Extension dependency
+// ---------------------------------------------------------------------------
+
+/**
+ * A structured dependency declaration on another extension.
+ *
+ * Carries the dependency name, a semver version range the declared extension
+ * must satisfy, and an optional `optional` flag for non-fatal dependencies.
+ */
+export interface ExtensionDependency {
+  /** Discriminant — always `'extension'`. */
+  readonly type: 'extension';
+  /**
+   * {@link ExtensionManifest.name} of the required extension.
+   *
+   * Accepts the same plain or scoped npm identifier format as
+   * {@link ExtensionManifest.name}.
+   */
+  readonly name: string;
+  /**
+   * Semver range the installed extension version must satisfy.
+   *
+   * Uses the same syntax as npm range strings (e.g. `'>=1.0.0 <2.0.0'`,
+   * `'^1.5.0'`).
+   */
+  readonly version: VersionRange;
+  /**
+   * When `true` the extension may start even if this dependency is absent or
+   * fails to activate.
+   *
+   * Omitting this field is equivalent to `false`.
+   */
+  readonly optional?: boolean;
+}
+
+/** Zod schema for {@link ExtensionDependency}. */
+export const ExtensionDependencySchema = z.object({
+  type: z.literal('extension'),
+  name: z.string().min(1),
+  version: VersionRangeSchema,
+  optional: z.boolean().optional(),
+}) satisfies z.ZodType<ExtensionDependency>;
+
+/** Default semver range for extension dependencies when no explicit range is provided. */
+export const DEFAULT_EXTENSION_DEPENDENCY_RANGE: VersionRange = '>=0.1.0';
+
+/**
+ * Factory that creates an {@link ExtensionDependency} with `type: 'extension'`.
+ *
+ * Prefer this helper over inline object literals to keep dependency
+ * declarations concise and consistent across package descriptors.
+ * @param name - {@link ExtensionManifest.name} of the required extension.
+ * @param version - Semver range the required extension must satisfy.
+ * @param optional - When `true`, activation continues if the dependency is absent.
+ * @returns A fully-typed {@link ExtensionDependency} object.
+ * @example
+ * dependencies: [dep('provider-anthropic'), dep('makaio.clients-core')]
+ */
+export function dep(
+  name: string,
+  version: VersionRange = DEFAULT_EXTENSION_DEPENDENCY_RANGE,
+  optional?: boolean,
+): ExtensionDependency {
+  return optional !== undefined ? { type: 'extension', name, version, optional } : { type: 'extension', name, version };
+}
+
+// ---------------------------------------------------------------------------
+// Runtime requirement
+// ---------------------------------------------------------------------------
+
+/**
+ * A typed runtime-environment gate that an extension declares it needs before
+ * the kernel will activate it.
+ *
+ * Two flavors are supported:
+ * - `'host'` — the runtime host must be present (e.g. `{ type: 'host', id: 'node' }`).
+ * - `'capability'` — the host must advertise the named capability token
+ *   (e.g. `{ type: 'capability', id: 'storage.drizzle' }`). The optional
+ *   `version` field requires the host capability to declare a satisfying
+ *   concrete version.
+ *
+ * This is an environment compatibility gate, not an extension-to-extension
+ * dependency. Use {@link ExtensionManifest.dependencies} for structural ordering.
+ */
+export type RuntimeRequirement =
+  | { readonly type: 'host'; readonly id: string }
+  | { readonly type: 'capability'; readonly id: string; readonly version?: VersionRange };
+
+/** Zod schema for {@link RuntimeRequirement}. */
+export const RuntimeRequirementSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('host'),
+    id: z.string().min(1),
+  }),
+  z.object({
+    type: z.literal('capability'),
+    id: z.string().min(1),
+    version: VersionRangeSchema.optional(),
+  }),
+]) satisfies z.ZodType<RuntimeRequirement>;
+
+// ---------------------------------------------------------------------------
+// Extension manifest
 // ---------------------------------------------------------------------------
 
 /**
@@ -339,6 +442,14 @@ export interface ExtensionManifest {
   /** Human-readable display name shown in UI surfaces (e.g. `'Auth Switcher'`). */
   readonly displayName: string;
   /**
+   * SemVer version of this extension package.
+   *
+   * Descriptor-only synthesized packages receive this from `descriptor.json`;
+   * code-defined executable packages declare the same field directly on their
+   * package object.
+   */
+  readonly version: VersionLiteral;
+  /**
    * Execution surface the extension targets.
    *
    * - `'interactive'` — requires a UI shell (e.g., Electron renderer).
@@ -347,19 +458,26 @@ export interface ExtensionManifest {
    */
   readonly surface?: 'interactive' | 'headless' | 'any';
   /**
-   * Names of other extensions this extension depends on.
+   * Structured dependencies on other extensions.
    *
-   * The registry ensures dependencies are initialized before this extension.
-   * Values are {@link ExtensionManifest.name} identifiers.
+   * The registry ensures all listed extensions are initialized before this
+   * extension starts. Each entry carries the dependency name, a semver version
+   * range the installed extension must satisfy, and an optional `optional` flag.
+   * @see {@link ExtensionDependency}
    */
-  readonly dependencies?: readonly string[];
+  readonly dependencies?: readonly ExtensionDependency[];
   /**
-   * Host-provided environment capability tokens this extension requires.
+   * Runtime-environment gates this extension must satisfy before the kernel
+   * activates it.
+   *
+   * Each entry is a {@link RuntimeRequirement} that declares either a required
+   * host identity (e.g. `'node'`) or a host-advertised capability token (e.g.
+   * `'storage.drizzle'`). All entries must be satisfied (AND semantics).
    *
    * This is an environment compatibility gate, not an extension-to-extension
    * dependency. Use {@link dependencies} for structural extension ordering.
    */
-  readonly requires?: readonly string[];
+  readonly requires?: readonly RuntimeRequirement[];
   /**
    * Capability tokens this extension provides when active.
    *
@@ -409,9 +527,10 @@ export const ExtensionManifestSchema = z.object({
       return parts.every((p) => p !== '.' && p !== '..');
     }, 'Extension name must not be a dot-segment'),
   displayName: z.string().min(1),
+  version: VersionLiteralSchema,
   surface: z.enum(['interactive', 'headless', 'any']).optional(),
-  dependencies: z.array(z.string()).readonly().optional(),
-  requires: z.array(z.string().trim().min(1)).readonly().optional(),
+  dependencies: z.array(ExtensionDependencySchema).readonly().optional(),
+  requires: z.array(RuntimeRequirementSchema).readonly().optional(),
   provides: z.array(CapabilityTokenSchema).readonly().optional(),
   windows: z.array(WindowManifestSchema).readonly().optional(),
   tray: TrayManifestSchema.optional(),

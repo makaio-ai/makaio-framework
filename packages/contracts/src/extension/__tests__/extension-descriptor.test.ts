@@ -5,7 +5,7 @@ const baseDescriptor = {
   name: 'my-extension',
   displayName: 'My Extension',
   version: '1.0.0',
-  makaio: { minVersion: '2.0.0' },
+  makaio: { framework: '>=2.0.0' },
   entrypoints: { server: true },
 };
 
@@ -19,7 +19,7 @@ describe('ExtensionDescriptorSchema', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
       surface: 'headless',
-      dependencies: ['account-manager'],
+      dependencies: [{ type: 'extension', name: 'account-manager', version: '>=1.0.0' }],
       entrypoints: {
         server: true,
         browser: 'browser/index',
@@ -51,7 +51,7 @@ describe('ExtensionDescriptorSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a descriptor with missing makaio.minVersion', () => {
+  it('rejects a descriptor with missing makaio.framework', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
       makaio: {},
@@ -59,20 +59,28 @@ describe('ExtensionDescriptorSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a descriptor with empty makaio.minVersion', () => {
+  it('rejects a descriptor with empty makaio.framework', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
-      makaio: { minVersion: '' },
+      makaio: { framework: '' },
     });
     expect(result.success).toBe(false);
   });
 
-  it('rejects a descriptor with a non-semver makaio.minVersion', () => {
+  it('rejects a descriptor with an invalid semver range in makaio.framework', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
-      makaio: { minVersion: 'latest' },
+      makaio: { framework: 'not-a-range' },
     });
     expect(result.success).toBe(false);
+  });
+
+  it('accepts makaio.framework as a compound range', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      makaio: { framework: '>=1.0.0 <2.0.0' },
+    });
+    expect(result.success).toBe(true);
   });
 
   it('rejects a descriptor with missing entrypoints', () => {
@@ -239,6 +247,26 @@ describe('ExtensionDescriptorSchema', () => {
     const result = ExtensionDescriptorSchema.safeParse({
       ...baseDescriptor,
       config: { defaults: 'not-an-object' },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('legacy field rejection', () => {
+  it('rejects descriptor with minVersion instead of framework', () => {
+    // minVersion is the old field name; Zod strips unknown keys, so the
+    // required `framework` field is absent and parsing must fail.
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      makaio: { minVersion: '0.1.0' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects descriptor when legacy minVersion is present alongside framework', () => {
+    const result = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      makaio: { framework: '>=2.0.0', minVersion: '0.1.0' },
     });
     expect(result.success).toBe(false);
   });

@@ -14,7 +14,7 @@ async function writeDescriptor(root: string, name: string): Promise<void> {
       name,
       displayName: name,
       version: '0.1.0',
-      makaio: { minVersion: '0.1.0' },
+      makaio: { framework: '>=0.1.0' },
       entrypoints: { server: true },
     }),
   );

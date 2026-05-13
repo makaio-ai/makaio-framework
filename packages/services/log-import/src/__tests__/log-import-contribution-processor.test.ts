@@ -74,6 +74,7 @@ function makePkg(name: string, configOverrides: Record<string, unknown> = {}): M
   return {
     name,
     displayName: name,
+    version: '0.1.0',
     logImport: {
       adapterName: `${name}-adapter`,
       displayName: name,

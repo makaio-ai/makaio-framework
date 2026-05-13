@@ -76,6 +76,7 @@ function pkg(name: string, overrides: Partial<MakaioExtension> = {}): MakaioExte
   return {
     name,
     displayName: name,
+    version: '0.1.0',
     create: (ctx) => new NoopService(ctx.bus),
     ...overrides,
   };

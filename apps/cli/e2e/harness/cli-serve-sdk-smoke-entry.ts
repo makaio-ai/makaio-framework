@@ -21,7 +21,7 @@ const DEVEX_SMOKE_DESCRIPTOR = {
     name: DEVEX_SMOKE_EXTENSION_NAME,
     displayName: 'DevEx Smoke Fixture',
     version: '0.0.0',
-    makaio: { minVersion: '0.1.0' },
+    makaio: { framework: '>=0.1.0' },
     entrypoints: { server: true as const },
   },
   extensionPath: FIXTURE_DIR,

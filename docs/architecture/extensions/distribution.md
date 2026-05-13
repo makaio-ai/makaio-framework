@@ -26,11 +26,12 @@ by awaited `ContributionProcessor` instances registered from `boot.ts`.
 
 ```ts
 import { KernelSubjects } from '@makaio/kernel';
+import { dep } from '@makaio/contracts';
 
 export const settingsIntegrationExtension: MakaioExtension = {
   name: 'my-ext.settings-integration',
   displayName: 'Settings Integration',
-  dependencies: ['my-ext.credential'],
+  dependencies: [dep('my-ext.credential')],
   critical: true,
   create: (ctx) => {
     const unsubscribe = ctx.bus.on(KernelSubjects.phase.coordinatorReady, async (phaseCtx) => {

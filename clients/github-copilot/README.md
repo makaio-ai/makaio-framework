@@ -12,9 +12,10 @@ Static client definition for GitHub Copilot. This package declares the user-faci
 |-------|-------|
 | `id` | `github-copilot` |
 | `name` | `GitHub Copilot` |
+| `version` | `0.1.0` |
 | `description` | GitHub Copilot — AI pair programming assistant |
-| `binaryName` | `copilot` |
-| `minimumVersion` | _(none declared)_ |
+| `binary.name` | `copilot` |
+| `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
 | `defaultProviderId` | `github-copilot` |
 | `configIsolation.envVar` | `COPILOT_HOME` |

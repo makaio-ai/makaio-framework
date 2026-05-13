@@ -8,5 +8,6 @@ import { claudeCodeStatuslineCli } from './cli/contribution.js';
 export const claudeCodeStatuslinePackage: MakaioExtension = {
   name: 'claude-code-statusline',
   displayName: 'Claude Code Statusline',
+  version: '0.1.0',
   cli: claudeCodeStatuslineCli,
 };

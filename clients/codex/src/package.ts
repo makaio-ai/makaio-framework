@@ -18,5 +18,6 @@ import { clientDefinition } from './definition.js';
 export const codexPackage: MakaioExtension = {
   name: 'codex',
   displayName: 'Codex',
+  version: '0.1.0',
   clients: [clientDefinition],
 };

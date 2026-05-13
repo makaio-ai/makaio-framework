@@ -14,5 +14,6 @@ import { providerDefinition } from './definition.js';
 export const zAiPackage: MakaioExtension = {
   name: 'provider-z-ai',
   displayName: 'Z.AI (GLM)',
+  version: '0.1.0',
   providers: [providerDefinition],
 };

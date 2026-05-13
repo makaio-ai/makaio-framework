@@ -19,9 +19,12 @@ import { createClientDefinition } from '@makaio/contracts';
 export const clientDefinition = createClientDefinition({
   id: 'claude-code',
   name: 'Claude Code',
+  version: '0.1.0',
   description: 'Anthropic Claude Code CLI — an agentic coding assistant',
-  binaryName: 'claude',
-  minimumVersion: '1.0.0',
+  binary: {
+    name: 'claude',
+    supportedVersions: '>=1.0.0',
+  },
   configIsolation: {
     envVar: 'CLAUDE_CONFIG_DIR',
     defaultPath: '~/.claude',

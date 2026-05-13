@@ -18,5 +18,6 @@ import { clientDefinition } from './definition.js';
 export const claudeCodePackage: MakaioExtension = {
   name: 'claude-code',
   displayName: 'Claude Code',
+  version: '0.1.0',
   clients: [clientDefinition],
 };

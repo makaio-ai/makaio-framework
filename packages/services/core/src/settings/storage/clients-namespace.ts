@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { createStorageNamespace } from '@makaio/storage-core';
 import { ApprovalPolicySchema } from '@makaio/contracts/harness';
-import { ClientToolDefinitionSchema, LogSourceDefinitionSchema } from '@makaio/contracts/client';
+import {
+  ClientBinaryCompatibilitySchema,
+  ClientToolDefinitionSchema,
+  LogSourceDefinitionSchema,
+} from '@makaio/contracts/client';
 import { StorageIdRequestSchema } from './shared-schemas.js';
 
 /**
@@ -19,10 +23,8 @@ export const ClientRecordSchema = z.object({
   name: z.string(),
   /** Short human-readable description of the client. */
   description: z.string().optional(),
-  /** Binary name used for CLI detection (e.g. `'claude'`). */
-  binaryName: z.string().optional(),
-  /** Minimum supported binary version (semver). */
-  minimumVersion: z.string().optional(),
+  /** Binary compatibility used for CLI detection and version gating. */
+  binary: ClientBinaryCompatibilitySchema.optional(),
   /** Native tools the binary exposes to the harness. */
   nativeTools: z.array(ClientToolDefinitionSchema),
   /** Default approval policy applied when creating a harness for this client. */

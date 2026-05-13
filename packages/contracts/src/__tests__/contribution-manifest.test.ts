@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AdapterClientRefSchema,
   AdapterManifestSchema,
   ClientManifestSchema,
   ContributionManifestSchema,
@@ -7,6 +8,46 @@ import {
   ProviderManifestSchema,
 } from '@makaio/contracts/extension';
 import { ExtensionDescriptorSchema } from '../extension/extension-descriptor.js';
+
+// ---------------------------------------------------------------------------
+// AdapterClientRef
+// ---------------------------------------------------------------------------
+
+describe('AdapterClientRefSchema', () => {
+  it('accepts AdapterClientRef with binaryVersion', () => {
+    const result = AdapterClientRefSchema.safeParse({
+      id: 'claude-code',
+      version: '>=1.0.0 <2.0.0',
+      binaryVersion: '>=1.0.0 <1.2.0',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts AdapterClientRef without binaryVersion', () => {
+    const result = AdapterClientRefSchema.safeParse({
+      id: 'claude-code',
+      version: '>=1.0.0 <2.0.0',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects AdapterClientRef with an invalid version range', () => {
+    const result = AdapterClientRefSchema.safeParse({
+      id: 'claude-code',
+      version: 'not-a-range',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects AdapterClientRef with an invalid binaryVersion range', () => {
+    const result = AdapterClientRefSchema.safeParse({
+      id: 'claude-code',
+      version: '^1.0.0',
+      binaryVersion: 'not-a-range',
+    });
+    expect(result.success).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // AdapterManifest
@@ -161,7 +202,7 @@ describe('ClientManifestSchema', () => {
       id: 'claude-code',
       name: 'Claude Code',
       description: 'The Claude Code CLI binary',
-      binaryName: 'claude',
+      binary: { name: 'claude' },
     });
 
     expect(result.success).toBe(true);
@@ -169,7 +210,7 @@ describe('ClientManifestSchema', () => {
       expect(result.data.id).toBe('claude-code');
       expect(result.data.name).toBe('Claude Code');
       expect(result.data.description).toBe('The Claude Code CLI binary');
-      expect(result.data.binaryName).toBe('claude');
+      expect(result.data.binary?.name).toBe('claude');
     }
   });
 
@@ -182,7 +223,7 @@ describe('ClientManifestSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.description).toBeUndefined();
-      expect(result.data.binaryName).toBeUndefined();
+      expect(result.data.binary).toBeUndefined();
     }
   });
 
@@ -217,6 +258,17 @@ describe('ClientManifestSchema', () => {
       name: '',
     });
 
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('legacy field rejection', () => {
+  it('rejects legacy binaryName from ClientManifest', () => {
+    const result = ClientManifestSchema.safeParse({
+      id: 'test',
+      name: 'Test',
+      binaryName: 'test-bin',
+    });
     expect(result.success).toBe(false);
   });
 });
@@ -425,6 +477,7 @@ describe('ExtensionManifestSchema with contributions field', () => {
   const baseManifest = {
     name: 'my-extension',
     displayName: 'My Extension',
+    version: '0.1.0',
   };
 
   it('parses a manifest with a contributions field', () => {
@@ -432,7 +485,7 @@ describe('ExtensionManifestSchema with contributions field', () => {
       ...baseManifest,
       contributions: {
         adapters: [{ name: 'my-adapter', protocols: ['anthropic'] }],
-        clients: [{ id: 'my-client', name: 'My Client', binaryName: 'my-bin' }],
+        clients: [{ id: 'my-client', name: 'My Client', binary: { name: 'my-bin' } }],
       },
     });
 
@@ -443,7 +496,7 @@ describe('ExtensionManifestSchema with contributions field', () => {
     }
   });
 
-  it('parses a manifest without a contributions field (backwards compatible)', () => {
+  it('parses a manifest without a contributions field', () => {
     const result = ExtensionManifestSchema.safeParse(baseManifest);
 
     expect(result.success).toBe(true);
@@ -471,7 +524,7 @@ describe('ExtensionDescriptorSchema with contributions field', () => {
     name: 'my-extension',
     displayName: 'My Extension',
     version: '1.0.0',
-    makaio: { minVersion: '2.0.0' },
+    makaio: { framework: '>=2.0.0' },
     entrypoints: { server: true },
   };
 
@@ -488,18 +541,18 @@ describe('ExtensionDescriptorSchema with contributions field', () => {
             defaultProvider: 'anthropic',
           },
         ],
-        clients: [{ id: 'claude-code', name: 'Claude Code', binaryName: 'claude' }],
+        clients: [{ id: 'claude-code', name: 'Claude Code', binary: { name: 'claude' } }],
       },
     });
 
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.contributions?.adapters?.[0]?.name).toBe('claude-code');
-      expect(result.data.contributions?.clients?.[0]?.binaryName).toBe('claude');
+      expect(result.data.contributions?.clients?.[0]?.binary?.name).toBe('claude');
     }
   });
 
-  it('parses a descriptor without a contributions field (backwards compatible)', () => {
+  it('parses a descriptor without a contributions field', () => {
     const result = ExtensionDescriptorSchema.safeParse(baseDescriptor);
 
     expect(result.success).toBe(true);

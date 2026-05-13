@@ -1,4 +1,5 @@
 import type { ExtensionDiscovery } from './extension-discovery.js';
+import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
 import {
   buildConfiguredRuntimeOptions,
   type ConfiguredRuntimeOptions,
@@ -21,8 +22,8 @@ export interface NodeRuntimeOptions extends ConfiguredRuntimeOptions {
    * user-home defaults.
    */
   readonly discovery: ExtensionDiscovery;
-  /** Host capability tokens for Node.js boot. */
-  readonly hostCapabilities: readonly string[];
+  /** Host capability facts for Node.js boot. */
+  readonly hostCapabilities: readonly HostCapabilityDeclaration[];
 }
 
 /**

@@ -17,5 +17,6 @@ import { providerDefinitionOAuth } from './definition-oauth.js';
 export const googlePackage: MakaioExtension = {
   name: 'provider-google',
   displayName: 'Google AI',
+  version: '0.1.0',
   providers: [providerDefinition, providerDefinitionOAuth],
 };

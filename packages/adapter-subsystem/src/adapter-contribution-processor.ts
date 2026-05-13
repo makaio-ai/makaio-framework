@@ -19,7 +19,12 @@ import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter } from './adapter-runtime-types.js';
-import { cloneAdapterClientRefs, resolveDefaultClientId } from './adapter-client-refs.js';
+import {
+  cloneAdapterClientRefs,
+  resolveDefaultClientId,
+  validateAdapterClientRefs,
+  type AdapterClientCatalogEntry,
+} from './adapter-client-refs.js';
 
 /**
  * Clone model descriptors before injecting them into loaded adapter metadata.
@@ -214,6 +219,7 @@ export class AdapterContributionProcessor {
     for (const definition of pkg.providers ?? []) {
       providerDefinitionCache.set(definition.id, definition);
     }
+    const clientCatalog = catalog.clients as readonly AdapterClientCatalogEntry[];
 
     try {
       for (const contribution of contributions) {
@@ -223,6 +229,7 @@ export class AdapterContributionProcessor {
           ctx.bus,
           providerModelCache,
           providerDefinitionCache,
+          clientCatalog,
         );
         activated.push(contribution.definition.name);
         completed.push(loadedAdapter);
@@ -281,6 +288,7 @@ export class AdapterContributionProcessor {
    * @param bus - Bus used to resolve registry-populated provider models.
    * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
+   * @param clientCatalog - Pre-built active client catalog from the batch caller.
    * @returns Loaded adapter after successful registration and optional initialization.
    */
   private async activateAdapterContribution(
@@ -289,6 +297,7 @@ export class AdapterContributionProcessor {
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
     providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+    clientCatalog?: readonly AdapterClientCatalogEntry[],
   ): Promise<LoadedAdapter> {
     const loadedAdapter = await this.buildLoadedAdapter(
       packageName,
@@ -296,6 +305,7 @@ export class AdapterContributionProcessor {
       bus,
       providerModelCache,
       providerDefinitionCache,
+      clientCatalog,
     );
     let registered = false;
 
@@ -404,6 +414,7 @@ export class AdapterContributionProcessor {
    * @param providerModelCache - Optional per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Optional per-batch cache deduplicating catalog bus calls.
    *   When supplied, the catalog RPC is skipped and provider definitions are resolved from this map.
+   * @param clientCatalog - Optional active client catalog used to validate adapter client refs.
    * @returns Constructed loaded adapter ready for registration.
    */
   public async buildLoadedAdapter(
@@ -412,10 +423,14 @@ export class AdapterContributionProcessor {
     bus: IMakaioBus = MakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]> = new Map(),
     providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+    clientCatalog?: readonly AdapterClientCatalogEntry[],
   ): Promise<LoadedAdapter> {
     const def = contribution.definition;
     const manifest = contribution.manifest;
     const adapterName = def.name;
+    const resolvedClientCatalog =
+      clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
+    await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus);
     const resolvedProviders = await this.resolveProviderDefinitions(
       bus,
       def.providers,

@@ -7,7 +7,7 @@ interface ExtensionDescriptor {
   name: string;
   displayName: string;
   version: string;
-  makaio?: { minVersion?: string };
+  makaio?: { framework?: string };
   entrypoints?: { browser?: boolean | string; server?: boolean | string; cli?: boolean | string };
   cli?: { name: string; description: string; subcommands?: { name: string; description: string }[] };
   contributions?: Record<string, unknown>;

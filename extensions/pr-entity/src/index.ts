@@ -23,6 +23,7 @@ import { VCSPRAggregationService } from './aggregation-service.js';
 export const prEntityPackage: MakaioExtension = {
   name: 'pr-entity',
   displayName: 'PR Entity',
+  version: '0.1.0',
 
   tools: {
     /**

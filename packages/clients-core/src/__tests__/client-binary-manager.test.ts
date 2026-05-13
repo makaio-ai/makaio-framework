@@ -46,6 +46,7 @@ const CHECKSUM = 'abc123';
 const TEST_CLIENT_DEFINITION = createClientDefinition({
   id: 'test-client',
   name: 'Test Client',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
@@ -64,6 +65,7 @@ const TEST_CLIENT_DEFINITION = createClientDefinition({
 const POST_INSTALL_CLIENT_DEFINITION = createClientDefinition({
   id: 'test-client',
   name: 'Test Client',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
@@ -77,6 +79,7 @@ const POST_INSTALL_CLIENT_DEFINITION = createClientDefinition({
 const UNKNOWN_HANDLER_CLIENT_DEFINITION = createClientDefinition({
   id: 'test-client',
   name: 'Test Client',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
@@ -84,6 +87,17 @@ const UNKNOWN_HANDLER_CLIENT_DEFINITION = createClientDefinition({
   postInstall: {
     kind: 'unknown-handler',
   },
+});
+
+const CONSTRAINED_CLIENT_DEFINITION = createClientDefinition({
+  id: 'test-client',
+  name: 'Test Client',
+  version: '0.1.0',
+  defaultApprovalPolicy: 'always-ask',
+  binary: { name: 'test-client', supportedVersions: '>=2.0.0 <3.0.0' },
+  runtimeCapabilities: { supportsManagedBinary: true },
+  managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
+  versionCommand: TEST_CLIENT_DEFINITION.versionCommand,
 });
 
 function makeDefinitionLookup(definition = TEST_CLIENT_DEFINITION): ClientDefinitionLookup {
@@ -444,6 +458,16 @@ describe('ClientBinaryManager', () => {
     await expect(bus.request(ClientSubjects.install, { clientId: 'no-such-client' })).rejects.toThrow(
       'no definition registered',
     );
+  });
+
+  it('client.install rejects versions outside the supported binary range', async () => {
+    const strategyDeps = makeStrategyDeps();
+    await initManager(strategyDeps, { definition: CONSTRAINED_CLIENT_DEFINITION });
+
+    await expect(bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.9.0' })).rejects.toThrow(
+      "client.install: requested binary version 1.9.0 for client 'test-client' does not satisfy >=2.0.0 <3.0.0",
+    );
+    expect(strategyDeps.downloadFile).not.toHaveBeenCalled();
   });
 
   it('client.install rejects a second concurrent install for the same client', async () => {
@@ -975,6 +999,16 @@ describe('ClientBinaryManager', () => {
     );
   });
 
+  it('client.update rejects latest versions outside the supported binary range', async () => {
+    const strategyDeps = makeStrategyDeps({ latestVersion: '3.1.0' });
+    await initManager(strategyDeps, { definition: CONSTRAINED_CLIENT_DEFINITION });
+
+    await expect(bus.request(ClientSubjects.update, { clientId: 'test-client' })).rejects.toThrow(
+      "client.update: resolved binary version 3.1.0 for client 'test-client' does not satisfy >=2.0.0 <3.0.0",
+    );
+    expect(strategyDeps.downloadFile).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Activation failure cleanup (storage consistency)
   // -------------------------------------------------------------------------
@@ -1049,6 +1083,31 @@ describe('ClientBinaryManager', () => {
     await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '99.0.0' })).rejects.toThrow(
       'not installed',
     );
+  });
+
+  it('client.setActive rejects installed versions outside the supported binary range', async () => {
+    const version = '1.9.0';
+    const installPath = expectedInstallPath('test-client', version);
+    const executablePath = path.join(installPath, 'bin', 'test-client');
+    await fs.mkdir(path.dirname(executablePath), { recursive: true });
+    await fs.writeFile(executablePath, '#!/bin/sh\n');
+    const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version,
+      installPath,
+      installedAt: now,
+      createdAt: now,
+    });
+
+    const strategyDeps = makeStrategyDeps();
+    await initManager(strategyDeps, { definition: CONSTRAINED_CLIENT_DEFINITION });
+
+    await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version })).rejects.toThrow(
+      "client.setActive: requested binary version 1.9.0 for client 'test-client' does not satisfy >=2.0.0 <3.0.0",
+    );
+    expect(strategyDeps.exec).not.toHaveBeenCalled();
   });
 
   it('client.setActive rejects a stored installPath that points at another in-base client directory', async () => {

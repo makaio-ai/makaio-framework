@@ -17,8 +17,12 @@ import { createClientDefinition } from '@makaio/contracts';
 export const clientDefinition = createClientDefinition({
   id: 'qwen',
   name: 'Qwen Code',
+  version: '0.1.0',
   description: 'Qwen Code CLI — an agentic coding assistant via ACP',
-  binaryName: 'qwen',
+  binary: {
+    name: 'qwen',
+    supportedVersions: '*',
+  },
   configIsolation: {
     envVar: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH',
     defaultPath: '/etc/qwen-code/system-defaults.json',

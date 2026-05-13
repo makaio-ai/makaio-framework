@@ -288,6 +288,7 @@ describe('ExtensionSubjects', () => {
             definition: {
               id: 'codex',
               name: 'Codex',
+              version: '0.1.0',
               defaultApprovalPolicy: 'full-access',
             },
           },

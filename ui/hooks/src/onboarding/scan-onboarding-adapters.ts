@@ -79,7 +79,7 @@ export interface ScanContext {
   scannedClients: Array<{
     id: string;
     name: string;
-    binaryName: string;
+    binary: string;
     found: boolean;
     version?: string;
     warningMessage?: string;
@@ -103,12 +103,12 @@ export async function buildScanContext(): Promise<ScanContext | null> {
   ]);
 
   const scannableClients = clients
-    .filter((c): c is typeof c & { binaryName: string } => c.enabled && c.binaryName !== undefined)
+    .filter((c): c is typeof c & { binary: NonNullable<typeof c.binary> } => c.enabled && c.binary !== undefined)
     .map((c) => ({
       id: c.id,
       name: c.name,
-      binaryName: c.binaryName,
-      minimumVersion: c.minimumVersion,
+      binary: c.binary.name,
+      supportedVersions: c.binary.supportedVersions,
     }));
 
   if (scannableClients.length === 0) {
@@ -118,8 +118,8 @@ export async function buildScanContext(): Promise<ScanContext | null> {
   const { results } = await MakaioBus.request(ClientSubjects.scan, {
     targets: scannableClients.map((client) => ({
       clientId: client.id,
-      binaryName: client.binaryName,
-      minimumVersion: client.minimumVersion,
+      binaryName: client.binary,
+      supportedVersions: client.supportedVersions,
     })),
   });
   const scanResultsByClientId = new Map(results.map((result) => [result.clientId, result]));
@@ -128,7 +128,7 @@ export async function buildScanContext(): Promise<ScanContext | null> {
     return {
       id: client.id,
       name: client.name,
-      binaryName: client.binaryName,
+      binary: client.binary,
       found: scanResult?.found ?? false,
       version: scanResult?.version,
       warningMessage: scanResult?.warningMessage,
@@ -191,7 +191,7 @@ function buildAdapterResults(ctx: ScanContext): OnboardingAdapter[] {
       results.push({
         adapterName,
         displayName: client.name,
-        binary: client.binaryName,
+        binary: client.binary,
         found: client.found,
         version: client.version,
         warningMessage: client.warningMessage,
@@ -244,7 +244,7 @@ function buildClientResults(ctx: ScanContext): OnboardingClient[] {
     results.push({
       clientId: client.id,
       name: client.name,
-      binary: client.binaryName,
+      binary: client.binary,
       found: client.found,
       version: client.version,
       warningMessage: client.warningMessage,

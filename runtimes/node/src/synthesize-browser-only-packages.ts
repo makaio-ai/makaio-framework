@@ -1,12 +1,21 @@
 import * as path from 'node:path';
 import type { MakaioExtension } from '@makaio/contracts';
+import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DiscoveredExtension } from './extension-discovery.js';
 import { defaultCreateMount, type BridgeBrowserOptions } from './create-static-mount.js';
 import {
   buildExtensionBrowserRuntimeEntrypoint,
   buildExtensionBrowserUrlPrefix,
 } from './extension-browser-entry-paths.js';
-import { entrypointStem, resolveConventionEntrypoint } from './load-extensions.js';
+import { entrypointStem, isDescriptorFrameworkCompatible, resolveConventionEntrypoint } from './load-extensions.js';
+
+/**
+ * Options for {@link synthesizeBrowserOnlyPackages}.
+ */
+export interface SynthesizeBrowserOnlyOptions extends BridgeBrowserOptions {
+  /** Current framework version for framework range gating. */
+  readonly frameworkVersion?: string;
+}
 
 /**
  * Result returned by {@link synthesizeBrowserOnlyPackages}.
@@ -41,14 +50,18 @@ export interface SynthesizedBrowserOnlyResult {
  */
 export function synthesizeBrowserOnlyPackages(
   discovered: ReadonlyArray<DiscoveredExtension>,
-  options: BridgeBrowserOptions = {},
+  options: SynthesizeBrowserOnlyOptions = {},
 ): SynthesizedBrowserOnlyResult {
-  const { createMount = defaultCreateMount } = options;
+  const { createMount = defaultCreateMount, frameworkVersion } = options;
   const packages: MakaioExtension[] = [];
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   for (const ext of discovered) {
     const { descriptor, extensionPath } = ext;
+
+    if (frameworkVersion !== undefined && !isDescriptorFrameworkCompatible(ext, frameworkVersion)) {
+      continue;
+    }
 
     // Detached extensions run as child processes and have no entrypoints.
     if (descriptor.execution === 'detached') continue;
@@ -73,10 +86,7 @@ export function synthesizeBrowserOnlyPackages(
     const entrypoint = buildExtensionBrowserRuntimeEntrypoint(descriptor.name, browserStem);
 
     packages.push({
-      name: descriptor.name,
-      displayName: descriptor.displayName,
-      ...(descriptor.surface !== undefined ? { surface: descriptor.surface } : {}),
-      ...(descriptor.dependencies !== undefined ? { dependencies: descriptor.dependencies } : {}),
+      ...descriptorToBasePackage(descriptor),
       browser: { entrypoint },
       http: {
         prefix: urlPrefix,

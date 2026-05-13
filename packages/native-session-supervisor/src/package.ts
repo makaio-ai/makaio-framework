@@ -23,6 +23,7 @@ import { registerDrizzleSupervisorRuntimeStorage } from './storage/drizzle-handl
 export const nativeSessionSupervisorPackage: MakaioExtension = {
   name: 'makaio.native-session-supervisor',
   displayName: 'Native Session Supervisor',
+  version: '0.1.0',
   critical: true,
 
   /**

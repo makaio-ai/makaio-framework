@@ -3,7 +3,9 @@ import {
   CliArgManifestSchema,
   CliManifestSchema,
   CliSubcommandManifestSchema,
+  ExtensionDependencySchema,
   ExtensionManifestSchema,
+  RuntimeRequirementSchema,
   WindowManifestSchema,
   WindowParamSpecSchema,
 } from '../manifest.js';
@@ -11,6 +13,7 @@ import {
 const baseManifest = {
   name: 'my-extension',
   displayName: 'My Extension',
+  version: '1.0.0',
 };
 
 describe('ExtensionManifestSchema', () => {
@@ -19,11 +22,16 @@ describe('ExtensionManifestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('rejects a manifest with missing version', () => {
+    const result = ExtensionManifestSchema.safeParse({ name: 'my-extension', displayName: 'My Extension' });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts a valid full manifest', () => {
     const result = ExtensionManifestSchema.safeParse({
       ...baseManifest,
       surface: 'interactive',
-      dependencies: ['account-manager'],
+      dependencies: [{ type: 'extension', name: 'account-manager', version: '>=1.0.0' }],
       windows: [
         {
           id: 'main',
@@ -134,6 +142,177 @@ describe('ExtensionManifestSchema', () => {
       ...baseManifest,
       storage: { migrations: 'drizzle', migrationSourceId: '' },
     });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts structured extension dependencies', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      dependencies: [{ type: 'extension', name: 'auth-manager', version: '^2.0.0' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts optional structured dependencies', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      dependencies: [{ type: 'extension', name: 'auth-manager', version: '>=1.0.0', optional: true }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects plain string dependencies', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      dependencies: ['account-manager'],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a host requirement in requires', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      requires: [{ type: 'host', id: 'node' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a capability requirement in requires', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      requires: [{ type: 'capability', id: 'storage.drizzle' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a capability requirement with a version range in requires', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      requires: [{ type: 'capability', id: 'storage.drizzle', version: '>=1.0.0' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects plain string requires on manifest', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      requires: ['node'],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('ExtensionDependencySchema', () => {
+  it('accepts a valid minimal dependency', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'extension',
+      name: 'account-manager',
+      version: '>=1.0.0',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a dependency with optional: true', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'extension',
+      name: 'account-manager',
+      version: '^1.5.0',
+      optional: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a dependency with wrong type discriminant', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'package',
+      name: 'account-manager',
+      version: '>=1.0.0',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a dependency with empty name', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'extension',
+      name: '',
+      version: '>=1.0.0',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a dependency with an invalid version range', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'extension',
+      name: 'account-manager',
+      version: 'not-a-semver',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a dependency with a missing version', () => {
+    const result = ExtensionDependencySchema.safeParse({
+      type: 'extension',
+      name: 'account-manager',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('RuntimeRequirementSchema', () => {
+  it('accepts a host requirement', () => {
+    const result = RuntimeRequirementSchema.safeParse({ type: 'host', id: 'node' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ type: 'host', id: 'node' });
+    }
+  });
+
+  it('accepts a capability requirement without version', () => {
+    const result = RuntimeRequirementSchema.safeParse({ type: 'capability', id: 'storage.drizzle' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ type: 'capability', id: 'storage.drizzle' });
+    }
+  });
+
+  it('accepts a capability requirement with a valid semver version range', () => {
+    const result = RuntimeRequirementSchema.safeParse({
+      type: 'capability',
+      id: 'storage.drizzle',
+      version: '>=1.0.0',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual({ type: 'capability', id: 'storage.drizzle', version: '>=1.0.0' });
+    }
+  });
+
+  it('rejects a capability requirement with an invalid version range', () => {
+    const result = RuntimeRequirementSchema.safeParse({
+      type: 'capability',
+      id: 'storage.drizzle',
+      version: 'not-a-semver',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a host requirement with an empty id', () => {
+    const result = RuntimeRequirementSchema.safeParse({ type: 'host', id: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a capability requirement with an empty id', () => {
+    const result = RuntimeRequirementSchema.safeParse({ type: 'capability', id: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an unknown type discriminant', () => {
+    const result = RuntimeRequirementSchema.safeParse({ type: 'platform', id: 'linux' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a plain string (legacy format)', () => {
+    const result = RuntimeRequirementSchema.safeParse('node');
     expect(result.success).toBe(false);
   });
 });

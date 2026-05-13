@@ -15,7 +15,7 @@ function makeDescriptor(name: string, version = '1.0.0'): Record<string, unknown
     name,
     displayName: name,
     version,
-    makaio: { minVersion: '0.1.0' },
+    makaio: { framework: '>=0.1.0' },
     entrypoints: { server: 'index' },
   };
 }

@@ -102,7 +102,7 @@ describe('buildDevHostRuntimeOptions', () => {
         name: 'test-extension',
         displayName: 'Test Extension',
         version: '0.1.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { server: true },
       }),
       'utf-8',

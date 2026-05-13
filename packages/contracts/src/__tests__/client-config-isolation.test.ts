@@ -24,6 +24,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
   return {
     id: 'example-client',
     name: 'Example Client',
+    version: '0.1.0',
     defaultApprovalPolicy: 'always-ask',
     ...overrides,
   };

@@ -46,11 +46,12 @@ export async function startExtensionEntry(
   }
 
   const inactiveDeps = (entry.pkg.dependencies ?? []).filter((dep) => {
-    const depEntry = host.entries.get(dep);
+    if (dep.optional) return false;
+    const depEntry = host.entries.get(dep.name);
     return depEntry?.state !== 'active';
   });
   if (inactiveDeps.length > 0) {
-    const message = `Required dependencies not active: ${inactiveDeps.join(', ')}`;
+    const message = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
     failEntry(host, name, entry, message);
     if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${message}`);
     return;

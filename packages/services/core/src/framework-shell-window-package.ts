@@ -11,6 +11,7 @@ import type { MakaioExtension } from '@makaio/contracts';
 export const frameworkShellWindowPackage: MakaioExtension = {
   name: 'framework-shell',
   displayName: 'Shell',
+  version: '0.1.0',
   surface: 'interactive',
   windows: [
     {

@@ -38,6 +38,7 @@ export {
 export const reviewerCodeRabbitPackage: MakaioExtension = {
   name: 'reviewer-coderabbit',
   displayName: 'CodeRabbit Reviewer Processor',
+  version: '0.1.0',
 
   /**
    * Creates the extension service.

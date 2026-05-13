@@ -1,16 +1,17 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { satisfies } from 'semver';
+import { versionSatisfies } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import type { CliContribution, CliSubcommandEntry } from '@makaio/kernel/cli';
+import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DiscoveredExtension } from './extension-discovery.js';
 
 /**
  * Options for {@link loadExtensions}.
  */
 export interface LoadExtensionsOptions {
-  /** Current framework version for minVersion gating. */
+  /** Current framework version for framework range gating. */
   readonly frameworkVersion: string;
   /**
    * Override for filesystem-based dynamic import — used in tests and dev hosts.
@@ -19,6 +20,9 @@ export interface LoadExtensionsOptions {
    */
   readonly importModule?: (entryPath: string) => Promise<{ default: unknown }>;
 }
+
+/** Options for descriptor-backed CLI contribution loading. */
+export type AttachExtensionCliContributionsOptions = Pick<LoadExtensionsOptions, 'importModule' | 'frameworkVersion'>;
 
 /**
  * Result returned by {@link loadExtensions}.
@@ -70,7 +74,7 @@ export interface DescriptorSourcePackageGroup {
  * Load extensions by importing their server entry points.
  *
  * For each discovered extension:
- * 1. Check `makaio.minVersion` against the current framework version
+ * 1. Check `makaio.framework` range against the current framework version
  * 2. If `execution` is `'detached'`, synthesize a managed {@link MakaioExtension}
  *    via {@link createDetachedExtensionPackage} and continue.
  * 3. Resolve `entrypoints.server` to an absolute path
@@ -101,21 +105,7 @@ export async function loadExtensions(
     const { descriptor, extensionPath } = ext;
     const label = `[extensions] ${descriptor.name}@${descriptor.version}`;
 
-    // Gate: version compatibility
-    try {
-      if (!satisfies(frameworkVersion, `>=${descriptor.makaio.minVersion}`, { includePrerelease: true })) {
-        console.warn(
-          `${label}: requires framework >=${descriptor.makaio.minVersion}, ` +
-            `current is ${frameworkVersion}, skipping`,
-        );
-        continue;
-      }
-    } catch (err) {
-      console.warn(
-        `${label}: invalid version metadata (framework=${frameworkVersion}, ` +
-          `minVersion=${descriptor.makaio.minVersion}), skipping:`,
-        err instanceof Error ? err.message : err,
-      );
+    if (!isDescriptorFrameworkCompatible(ext, frameworkVersion)) {
       continue;
     }
 
@@ -256,26 +246,21 @@ function normalizePackageExport(value: unknown, descriptorName: string, label: s
  * Extensions with invalid CLI entrypoints are skipped with a warning.
  * @param discovered - Extensions found by a {@link ExtensionDiscovery}.
  * @param packages - Already loaded/synthesized packages to augment.
- * @param options - Optional import override.
+ * @param options - Required framework version and optional import override.
  * @returns Updated package list with executable CLI contributions attached.
  */
 export async function attachExtensionCliContributions(
   discovered: ReadonlyArray<DiscoveredExtension>,
   packages: ReadonlyArray<MakaioExtension>,
-  options: Pick<LoadExtensionsOptions, 'importModule'> = {},
+  options: AttachExtensionCliContributionsOptions,
 ): Promise<ExtensionCliAttachResult> {
-  const { importModule = defaultImport } = options;
+  const { importModule = defaultImport, frameworkVersion } = options;
   const packagesByName = new Map(packages.map((pkg) => [pkg.name, pkg] as const));
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   for (const ext of discovered) {
-    // Detached extensions run as child processes and have no entrypoints to import.
-    if (ext.descriptor.execution === 'detached') continue;
-
-    const cliEntrypoint = ext.descriptor.entrypoints.cli;
-    if (!cliEntrypoint) {
-      continue;
-    }
+    const cliEntrypoint = resolveEligibleCliEntrypoint(ext, frameworkVersion);
+    if (!cliEntrypoint) continue;
 
     const label = `[extensions] ${ext.descriptor.name}@${ext.descriptor.version}`;
     const existing = packagesByName.get(ext.descriptor.name);
@@ -308,20 +293,14 @@ export async function attachExtensionCliContributions(
       continue;
     }
 
-    if (ext.descriptor.entrypoints.server || ext.descriptor.entrypoints.browser) {
+    if (ext.descriptor.entrypoints?.server || ext.descriptor.entrypoints?.browser) {
       console.warn(
         `${label}: server or browser entry is present but no package was loaded, skipping CLI-only synthesis`,
       );
       continue;
     }
 
-    packagesByName.set(ext.descriptor.name, {
-      name: ext.descriptor.name,
-      displayName: ext.descriptor.displayName,
-      ...(ext.descriptor.surface !== undefined ? { surface: ext.descriptor.surface } : {}),
-      ...(ext.descriptor.dependencies !== undefined ? { dependencies: ext.descriptor.dependencies } : {}),
-      cli: mod.default,
-    });
+    packagesByName.set(ext.descriptor.name, createCliOnlyExtensionPackage(ext, mod.default));
 
     if (ext.descriptor.config?.defaults) {
       configDefaults.set(ext.descriptor.name, ext.descriptor.config.defaults);
@@ -329,6 +308,55 @@ export async function attachExtensionCliContributions(
   }
 
   return { packages: [...packagesByName.values()], configDefaults };
+}
+
+/**
+ * Resolve a CLI entrypoint only when the descriptor is eligible for CLI loading.
+ * @param ext - Discovered extension descriptor.
+ * @param frameworkVersion - Current framework version.
+ * @returns CLI entrypoint declaration, or undefined when this descriptor should be skipped.
+ */
+function resolveEligibleCliEntrypoint(ext: DiscoveredExtension, frameworkVersion: string): true | string | undefined {
+  if (!isDescriptorFrameworkCompatible(ext, frameworkVersion)) return undefined;
+  if (ext.descriptor.execution === 'detached') return undefined;
+  return ext.descriptor.entrypoints?.cli;
+}
+
+/**
+ * Create a synthesized CLI-only extension package from descriptor metadata.
+ * @param ext - Discovered CLI-only extension.
+ * @param cli - Executable CLI contribution imported from the descriptor entrypoint.
+ * @returns A minimal {@link MakaioExtension} carrying descriptor gates and CLI handlers.
+ */
+function createCliOnlyExtensionPackage(ext: DiscoveredExtension, cli: CliContribution): MakaioExtension {
+  return { ...descriptorToBasePackage(ext.descriptor), cli };
+}
+
+/**
+ * Check a descriptor's framework compatibility range.
+ * @param ext - Discovered extension to evaluate.
+ * @param frameworkVersion - Current framework version.
+ * @returns `true` when the descriptor can load on this framework version.
+ */
+export function isDescriptorFrameworkCompatible(ext: DiscoveredExtension, frameworkVersion: string): boolean {
+  const { descriptor } = ext;
+  const label = `[extensions] ${descriptor.name}@${descriptor.version}`;
+  try {
+    if (versionSatisfies(frameworkVersion, descriptor.makaio.framework)) {
+      return true;
+    }
+    console.warn(
+      `${label}: requires framework ${descriptor.makaio.framework}, ` + `current is ${frameworkVersion}, skipping`,
+    );
+    return false;
+  } catch (err) {
+    console.warn(
+      `${label}: invalid version metadata (framework=${frameworkVersion}, ` +
+        `range=${descriptor.makaio.framework}), skipping:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
 }
 
 /**
@@ -418,7 +446,9 @@ export function mergePackagesByDescriptorSourcePriority(
 export function isMakaioExtensionLike(value: unknown): value is MakaioExtension {
   if (typeof value !== 'object' || value === null) return false;
   const obj = value as Record<string, unknown>;
-  return typeof obj['name'] === 'string' && typeof obj['displayName'] === 'string';
+  return (
+    typeof obj['name'] === 'string' && typeof obj['displayName'] === 'string' && typeof obj['version'] === 'string'
+  );
 }
 
 /**

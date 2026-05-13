@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { CodexClientSessionService } from './codex-client-session-service.js';
 
@@ -24,7 +25,8 @@ export type { CodexNormalizedEvent, CodexNormalizedSubject } from './hook-normal
 export const codexClientRuntimePackage: MakaioExtension = {
   name: 'codex.runtime',
   displayName: 'Codex Client Runtime',
-  dependencies: ['makaio.clients-core'],
+  version: '0.1.0',
+  dependencies: [dep('makaio.clients-core')],
   /**
    * Create the Codex client session service bound to the runtime bus.
    * @param ctx - Runtime package context

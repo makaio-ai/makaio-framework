@@ -5,7 +5,7 @@ const base = {
   name: 'test-ext',
   displayName: 'Test Extension',
   version: '1.0.0',
-  makaio: { minVersion: '0.1.0' },
+  makaio: { framework: '>=0.1.0' },
 };
 
 describe('ExtensionDescriptorSchema — detached transport', () => {

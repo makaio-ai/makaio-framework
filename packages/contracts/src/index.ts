@@ -502,7 +502,9 @@ export type {
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,
+  dep,
   DetachedTransportSchema,
+  ExtensionDependencySchema,
   ExtensionDescriptorSchema,
   ExtensionEntrypointsSchema,
   extensionToken,
@@ -538,6 +540,7 @@ export type {
   CliArgManifest,
   CliManifest,
   CliSubcommandManifest,
+  ExtensionDependency,
   CreateSessionEventActionResult,
   EntrypointConfig,
   EventFilter,
@@ -604,6 +607,7 @@ export type {
 export { CredentialSubjects } from './credential/index.js';
 export {
   ClientAccountIdentifierSchema,
+  ClientBinaryCompatibilitySchema,
   ClientDefinitionSchema,
   ClientIdentityObservationSchema,
   ClientSessionAccountObserveSchema,
@@ -618,6 +622,7 @@ export {
 export type {
   ClientAccountIdentifier,
   ClientAccountObserveRequest,
+  ClientBinaryCompatibility,
   ClientBinaryListEntry,
   ClientDefinition,
   ClientExecutionContext,
@@ -668,6 +673,14 @@ export type { Config, RelayConfig } from './config/config-schema.js';
 export { ConfigSchemas } from './config/config-subjects.js';
 export type { ConfigGetResponse, ConfigUpdateRequest, ConfigUpdateResponse } from './config/config-subjects.js';
 export { ConfigSubjects } from './config/config-namespace.js';
+export {
+  isUniversalRange,
+  type VersionLiteral,
+  VersionLiteralSchema,
+  type VersionRange,
+  VersionRangeSchema,
+  versionSatisfies,
+} from './version/index.js';
 // Toast schemas and namespace registration are available via the
 // '@makaio/contracts/toast' subpath import. Excluded from the root
 // barrel to avoid adding another namespace registration side effect

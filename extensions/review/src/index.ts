@@ -20,6 +20,7 @@ const PACKAGE_ROOT = resolvePackageRoot(import.meta);
 export const reviewPackage: MakaioExtension = {
   name: 'review',
   displayName: 'Review Findings',
+  version: '0.1.0',
 
   storage: {
     migrations: 'drizzle',

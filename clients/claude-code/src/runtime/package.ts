@@ -1,3 +1,4 @@
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { ClaudeCodeClientService } from './claude-code-client-service.js';
 export { ClaudeCodeClientSubjects } from './namespace.js';
@@ -26,7 +27,8 @@ export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } fr
 export const claudeCodeClientRuntimePackage: MakaioExtension = {
   name: 'claude-code.runtime',
   displayName: 'Claude Code Client Runtime',
-  dependencies: ['makaio.clients-core'],
+  version: '0.1.0',
+  dependencies: [dep('makaio.clients-core')],
   /**
    * Create the Claude Code client service bound to the runtime bus.
    * @param ctx - Runtime package context

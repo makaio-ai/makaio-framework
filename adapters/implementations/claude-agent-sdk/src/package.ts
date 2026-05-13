@@ -5,6 +5,7 @@
  * {@link MakaioExtension} shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { ClaudeCodeAdapterName } from './constants.js';
@@ -24,7 +25,8 @@ const clients = adapterDefinition.clients;
 export const claudeAgentSdkPackage: MakaioExtension = {
   name: extensionName,
   displayName,
-  dependencies: ['provider-anthropic', 'provider-z-ai', 'provider-kimi'],
+  version: '0.1.0',
+  dependencies: [dep('provider-anthropic'), dep('provider-z-ai'), dep('provider-kimi')],
   adapters: [
     {
       manifest: {

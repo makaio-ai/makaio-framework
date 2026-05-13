@@ -10,6 +10,7 @@ import { filesystemToolset } from './toolset.js';
 export const filesystemPackage: MakaioExtension = {
   name: 'filesystem',
   displayName: 'Filesystem Tools',
+  version: '0.1.0',
   surface: 'headless',
   tools: {
     /**

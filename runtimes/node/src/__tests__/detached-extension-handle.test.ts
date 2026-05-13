@@ -26,7 +26,7 @@ function makeBusStdioDescriptor(overrides: Partial<DetachedDescriptor> = {}): De
     name: 'my-detached-ext',
     displayName: 'My Detached Extension',
     version: '1.0.0',
-    makaio: { minVersion: '1.0.0' },
+    makaio: { framework: '>=1.0.0' },
     execution: 'detached',
     transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
     ...overrides,
@@ -42,7 +42,7 @@ function makeBusWebSocketDescriptor(overrides: Partial<DetachedDescriptor> = {})
     name: 'my-ws-ext',
     displayName: 'My WebSocket Extension',
     version: '1.0.0',
-    makaio: { minVersion: '1.0.0' },
+    makaio: { framework: '>=1.0.0' },
     execution: 'detached',
     transport: { type: 'bus-websocket', command: 'node', args: ['ws-ext.js'] },
     ...overrides,
@@ -58,7 +58,7 @@ function makeMcpStdioDescriptor(overrides: Partial<DetachedDescriptor> = {}): De
     name: 'my-mcp-ext',
     displayName: 'My MCP Extension',
     version: '1.0.0',
-    makaio: { minVersion: '1.0.0' },
+    makaio: { framework: '>=1.0.0' },
     execution: 'detached',
     transport: { type: 'mcp-stdio', command: 'node', args: ['mcp-ext.js'] },
     ...overrides,
@@ -115,10 +115,11 @@ describe('createDetachedExtensionPackage', () => {
     });
 
     it('propagates dependencies when set on the descriptor', () => {
-      const descriptor = makeBusStdioDescriptor({ dependencies: ['other-ext'] });
+      const dep = { type: 'extension' as const, name: 'other-ext', version: '>=1.0.0' as const };
+      const descriptor = makeBusStdioDescriptor({ dependencies: [dep] });
       const pkg = createDetachedExtensionPackage(descriptor, FAKE_EXTENSION_PATH);
 
-      expect(pkg.dependencies).toStrictEqual(['other-ext']);
+      expect(pkg.dependencies).toStrictEqual([dep]);
     });
 
     it('omits dependencies when not set on the descriptor', () => {
@@ -129,10 +130,13 @@ describe('createDetachedExtensionPackage', () => {
     });
 
     it('propagates capability gates from the descriptor manifest', () => {
-      const descriptor = makeBusStdioDescriptor({ requires: ['node'], provides: ['adapters'] });
+      const descriptor = makeBusStdioDescriptor({
+        requires: [{ type: 'capability', id: 'node' }],
+        provides: ['adapters'],
+      });
       const pkg = createDetachedExtensionPackage(descriptor, FAKE_EXTENSION_PATH);
 
-      expect(pkg.requires).toStrictEqual(['node']);
+      expect(pkg.requires).toStrictEqual([{ type: 'capability', id: 'node' }]);
       expect(pkg.provides).toStrictEqual(['adapters']);
     });
   });

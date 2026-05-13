@@ -8,9 +8,10 @@ Static client definition for the Google Gemini CLI. This package declares the us
 |-------|-------|
 | `id` | `gemini` |
 | `name` | `Gemini` |
+| `version` | `0.1.0` |
 | `description` | Google Gemini CLI — AI assistant |
-| `binaryName` | `gemini` |
-| `minimumVersion` | _(none declared)_ |
+| `binary.name` | `gemini` |
+| `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
 | `defaultProviderId` | `google-oauth` |
 | `configIsolation.envVar` | `GEMINI_CLI_SYSTEM_SETTINGS_PATH` |

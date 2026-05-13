@@ -61,7 +61,7 @@ import {
 } from './boot-config.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
 import {
-  buildCapabilitySet,
+  buildRuntimeEnvironment,
   collectHostCleanups,
   normalizeNodeHostCapabilities,
   parseSkipExtensions,
@@ -82,7 +82,7 @@ import type {
 
 export { filterConfigDefaultsForLoadedPackages, mergePackageConfigDefaults } from './boot-config.js';
 export {
-  buildCapabilitySet,
+  buildRuntimeEnvironment,
   normalizeNodeHostCapabilities,
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
@@ -297,12 +297,12 @@ export async function bootMakaioRuntimeCore(
         skipExtensions,
         frameworkVersion: runtimeFrameworkVersion,
       });
-    const capabilities = buildCapabilitySet(process.platform, options.hostCapabilities);
+    const runtimeEnvironment = buildRuntimeEnvironment(process.platform, options.hostCapabilities);
     const bootEligibleExtensionPackages = selectBootEligibleExtensionPackages({
       packages: allExtensionPackages,
       configProvider: options.extensionConfigProvider,
       surface: options.surface ?? 'headless',
-      capabilities,
+      runtimeEnvironment,
     });
 
     const coordinator = new ExtensionCoordinator(bus, {
@@ -317,7 +317,7 @@ export async function bootMakaioRuntimeCore(
         busUrl: buildLocalBusUrl(boundHost, boundPort),
         tryImport,
       },
-      capabilities,
+      runtimeEnvironment,
       launcherCommand: options.launcherCommand,
       loadConfig: options.extensionConfigProvider
         ? (name) => options.extensionConfigProvider!.loadConfig(name)

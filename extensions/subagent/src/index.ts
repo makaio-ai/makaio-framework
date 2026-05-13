@@ -10,6 +10,7 @@ import { createChildSubagentToolset, createParentSubagentToolset } from './tools
 export const subagentPackage: MakaioExtension = {
   name: 'subagent',
   displayName: 'Subagent Tools',
+  version: '0.1.0',
   surface: 'headless',
   tools: {
     /**

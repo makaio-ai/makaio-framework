@@ -14,6 +14,8 @@
 import { z } from 'zod';
 import type { ExtensionManifest } from './manifest.js';
 import { ExtensionManifestSchema } from './manifest.js';
+import type { VersionRange } from '../version/index.js';
+import { VersionLiteralSchema, VersionRangeSchema } from '../version/index.js';
 
 // ---------------------------------------------------------------------------
 // Detached transport
@@ -118,22 +120,6 @@ function isSafeEntrypointStem(stem: string): boolean {
   );
 }
 
-/**
- * Validate a plain SemVer version string without pulling server-only parsing
- * libraries into the shared contracts package.
- *
- * `descriptor.json` needs only a version literal here, not full range syntax.
- * The runtime keeps using `semver.satisfies()` for the actual compatibility
- * gate when loading extensions.
- * @param version - Raw `makaio.minVersion` value from descriptor.json.
- * @returns Whether the value is a valid SemVer version literal.
- */
-function isValidSemverVersion(version: string): boolean {
-  const semverVersionPattern =
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-  return semverVersionPattern.test(version);
-}
-
 const EntrypointStemSchema = z.union([
   z.literal(true),
   z.string().min(1).refine(isSafeEntrypointStem, {
@@ -168,8 +154,8 @@ export const ExtensionEntrypointsSchema = z
 export interface ExtensionDescriptorBase extends ExtensionManifest {
   /** SemVer version of the extension package. */
   readonly version: string;
-  /** Minimum framework version required (plain SemVer version string). */
-  readonly makaio: { readonly minVersion: string };
+  /** Framework version range required (npm semver range, e.g. `">=1.0.0 <2.0.0"`). */
+  readonly makaio: { readonly framework: VersionRange };
   /**
    * Default configuration values for this extension.
    *
@@ -262,13 +248,12 @@ export function isDetachedDescriptor(descriptor: ExtensionDescriptor): descripto
  * with that constraint.
  */
 export const ExtensionDescriptorSchema = ExtensionManifestSchema.extend({
-  version: z.string().min(1),
+  version: VersionLiteralSchema,
   makaio: z
     .object({
-      minVersion: z.string().min(1).refine(isValidSemverVersion, {
-        message: 'minVersion must be a valid semver version',
-      }),
+      framework: VersionRangeSchema,
     })
+    .strict()
     .readonly(),
   entrypoints: ExtensionEntrypointsSchema.optional(),
   execution: z.enum(['embedded', 'detached']).optional(),

@@ -30,6 +30,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
   return {
     id: 'claude-code',
     name: 'Claude Code',
+    version: '0.1.0',
     defaultApprovalPolicy: 'always-ask',
     ...overrides,
   };
@@ -555,6 +556,7 @@ describe('createClientDefinition — managed install integration', () => {
     const definition = createClientDefinition({
       id: 'claude-code',
       name: 'Claude Code',
+      version: '0.1.0',
       defaultApprovalPolicy: 'full-access',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
@@ -585,6 +587,7 @@ describe('createClientDefinition — managed install integration', () => {
     const definition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: { type: 'npm', package: 'openai-codex' },
@@ -599,6 +602,7 @@ describe('createClientDefinition — managed install integration', () => {
     const definition = createClientDefinition({
       id: 'my-client',
       name: 'My Client',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {

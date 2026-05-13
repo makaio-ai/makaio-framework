@@ -62,14 +62,14 @@ describe('buildScanContext()', () => {
               id: 'claude-code',
               name: 'Claude Code',
               packageName: '@makaio/client-claude-code',
-              binaryName: 'claude',
+              binary: { name: 'claude', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',
               createdAt: 0,
               updatedAt: 0,
             },
-            // Client with no binaryName — should be excluded from scan targets
+            // Client with no binary — should be excluded from scan targets
             {
               id: 'web-only',
               name: 'Web Only',
@@ -99,7 +99,7 @@ describe('buildScanContext()', () => {
     cleanups.push(
       MakaioBus.on(ClientSubjects.scan, (ctx) => {
         expect(ctx.payload.targets).toEqual([
-          { clientId: 'claude-code', binaryName: 'claude', minimumVersion: undefined },
+          { clientId: 'claude-code', binaryName: 'claude', supportedVersions: '*' },
         ]);
         ctx.setResult({
           results: [{ clientId: 'claude-code', found: true, version: '2.1.90', warningMessage: 'upgrade soon' }],
@@ -114,7 +114,7 @@ describe('buildScanContext()', () => {
         {
           id: 'claude-code',
           name: 'Claude Code',
-          binaryName: 'claude',
+          binary: 'claude',
           found: true,
           version: '2.1.90',
           warningMessage: 'upgrade soon',
@@ -126,7 +126,7 @@ describe('buildScanContext()', () => {
     cleanups.forEach((fn) => fn());
   });
 
-  it('returns null when no enabled clients have a binaryName', async () => {
+  it('returns null when no enabled clients have a binary', async () => {
     const cleanups: Array<() => void> = [];
 
     cleanups.push(
@@ -159,7 +159,7 @@ describe('buildScanContext()', () => {
     // incorrectly invoked.
     cleanups.push(
       MakaioBus.on(ClientSubjects.scan, (_ctx) => {
-        throw new Error('client.scan must not be called when no clients have a binaryName');
+        throw new Error('client.scan must not be called when no clients have a binary');
       }),
     );
 
@@ -181,7 +181,7 @@ describe('scanOnboardingAdapters()', () => {
               id: 'claude-code',
               name: 'Claude Code',
               packageName: '@makaio/client-claude-code',
-              binaryName: 'claude',
+              binary: { name: 'claude', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',
@@ -270,7 +270,7 @@ describe('scanOnboardingAdapters()', () => {
               id: 'codex',
               name: 'Codex',
               packageName: '@makaio/client-codex',
-              binaryName: 'codex',
+              binary: { name: 'codex', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',
@@ -315,7 +315,7 @@ describe('scanOnboardingClients()', () => {
               id: 'claude-code',
               name: 'Claude Code',
               packageName: '@makaio/client-claude-code',
-              binaryName: 'claude',
+              binary: { name: 'claude', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',
@@ -376,7 +376,7 @@ describe('scanOnboardingClients()', () => {
               id: 'codex',
               name: 'Codex',
               packageName: '@makaio/client-codex',
-              binaryName: 'codex',
+              binary: { name: 'codex', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',
@@ -452,7 +452,7 @@ describe('scanOnboarding()', () => {
               id: 'claude-code',
               name: 'Claude Code',
               packageName: '@makaio/client-claude-code',
-              binaryName: 'claude',
+              binary: { name: 'claude', supportedVersions: '*' },
               enabled: true,
               nativeTools: [],
               defaultApprovalPolicy: 'always-ask',

@@ -14,5 +14,6 @@ import { providerDefinition } from './definition.js';
 export const openaiPackage: MakaioExtension = {
   name: 'provider-openai',
   displayName: 'OpenAI',
+  version: '0.1.0',
   providers: [providerDefinition],
 };

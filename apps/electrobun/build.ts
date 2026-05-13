@@ -74,7 +74,7 @@ function resolveFrameworkPackageJsonPath(workspaceRoot: string): string {
 const FRAMEWORK_PACKAGE_JSON_PATH = resolveFrameworkPackageJsonPath(WORKSPACE_ROOT);
 
 /**
- * Read and validate the framework version used for extension minVersion checks.
+ * Read and validate the framework version used for extension framework range checks.
  * @param packageJsonPath - Absolute path to `@makaio/runtime-node/package.json`.
  * @returns Validated package version string.
  * @throws Error when the package metadata cannot be parsed or lacks a non-empty string version.
