@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
-import type { MakaioExtension } from '@makaio/contracts';
+import { ToolSubjects, type MakaioExtension } from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -30,7 +30,10 @@ import {
   selectFrameworkCorePackages,
 } from '../boot.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
-import { SessionOrchestratorToken } from '@makaio/services-core';
+import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
+import { filesystemPackage } from '@makaio/extension-filesystem';
+import { shellPackage } from '@makaio/extension-shell';
+import { subagentPackage } from '@makaio/extension-subagent';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -310,6 +313,41 @@ describe('runtime boot contribution rollback', () => {
     expect(calls).toStrictEqual(['second-cleanup', 'first-cleanup']);
     expect(thrown).toBeInstanceOf(AggregateError);
     expect((thrown as AggregateError).errors).toStrictEqual([configureError, cleanupError]);
+  });
+});
+
+describe('runtime tool extension contributions', () => {
+  it('exposes migrated framework tool extensions through ToolSubjects.list', async () => {
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: {
+        platform: process.platform,
+        homedir: '/home/test',
+        makaioHome: TEST_MAKAIO_HOME,
+        username: 'test',
+        machineId: 'machine-1',
+        busUrl: 'ws://127.0.0.1:0/bus',
+        tryImport: async () => null,
+      },
+    });
+
+    coordinator.load([toolRegistryPackage, filesystemPackage, shellPackage, subagentPackage]);
+    coordinator.registerContributionProcessor(createToolContributionProcessor());
+
+    try {
+      await coordinator.startAll();
+
+      const listed = await bus.request(ToolSubjects.list, {});
+      const toolsetNames = listed.toolsets.map((toolset) => toolset.name);
+      const toolNames = listed.tools.map((tool) => tool.name);
+
+      expect(toolsetNames).toEqual(
+        expect.arrayContaining(['filesystem', 'shell', 'subagent-parent', 'subagent-child']),
+      );
+      expect(toolNames).toEqual(expect.arrayContaining(['read_file', 'shell_exec', 'spawn_subagent', 'complete_task']));
+    } finally {
+      await coordinator.shutdown();
+    }
   });
 });
 

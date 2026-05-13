@@ -191,7 +191,7 @@ const result = await bus.request(ToolSubjects.execute, {
 // result: { success: true, data: { time: '2026-04-12T...' } }
 ```
 
-For a real example, see `../tools/filesystem/src/tools/read-file.ts` — the
+For a real example, see `../extensions/filesystem/src/tools/read-file.ts` — the
 framework's built-in file read tool with path validation, encoding support,
 and size constraints.
 
@@ -381,5 +381,5 @@ Package-level READMEs:
 | Contracts | [`../packages/contracts/README.md`](../packages/contracts/README.md) |
 | Kernel | [`../packages/kernel/README.md`](../packages/kernel/README.md) |
 | Adapter contracts | [`../adapters/core/README.md`](../adapters/core/README.md) |
-| Tools core | [`../tools/core/README.md`](../tools/core/README.md) |
+| Tools core | [`../packages/tools-core/README.md`](../packages/tools-core/README.md) |
 | Storage core | [`../packages/storage/core/README.md`](../packages/storage/core/README.md) |

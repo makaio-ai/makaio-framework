@@ -14,7 +14,7 @@ import {
 import { MakaioBus, createChannelEndpoint } from '@makaio/bus-core';
 import { registerMemorySessionStorage, MakaioSessionService } from '@makaio/services-core/session';
 import os from 'node:os';
-import { filesystemToolset } from '@makaio/tools-filesystem';
+import { filesystemToolset } from '@makaio/extension-filesystem';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import PQueue from 'p-queue';
 import { afterAll, expect, type TaskMeta } from 'vitest';

@@ -8,7 +8,7 @@
     "packages/kernel",
     "packages/hooks",
     "packages/utils",
-    "tools/core",
+    "packages/tools-core",
     "adapters/core",
     "packages/services/core"
   ],

@@ -1,0 +1,36 @@
+{
+  "name": "@makaio/extension-subagent",
+  "description": "Subagent communication tool extension and state manager.",
+  "version": "0.1.0",
+  "type": "module",
+  "types": "./src/index.ts",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
+    "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.5"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./server": "./dist/server.mjs",
+      "./package.json": "./package.json"
+    }
+  }
+}

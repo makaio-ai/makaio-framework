@@ -324,18 +324,6 @@
         "types": "./dist/tools/testing/index.d.mts",
         "default": "./dist/tools/testing/index.mjs"
       },
-      "./tools/filesystem": {
-        "types": "./dist/tools/filesystem/index.d.mts",
-        "default": "./dist/tools/filesystem/index.mjs"
-      },
-      "./tools/shell": {
-        "types": "./dist/tools/shell/index.d.mts",
-        "default": "./dist/tools/shell/index.mjs"
-      },
-      "./tools/subagent": {
-        "types": "./dist/tools/subagent/index.d.mts",
-        "default": "./dist/tools/subagent/index.mjs"
-      },
       "./node/bus-server": {
         "types": "./dist/node/bus-server/index.d.mts",
         "default": "./dist/node/bus-server/index.mjs"
