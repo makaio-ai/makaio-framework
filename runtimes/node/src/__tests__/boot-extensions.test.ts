@@ -4,7 +4,7 @@
  * These tests cover:
  * - resolveExtensionOptions correctly handles extensions
  * - Descriptor-source priority wins on package name collision
- * - Extension with incompatible minVersion is skipped
+ * - Extension with incompatible framework range is skipped
  *
  * Full bootMakaioRuntime integration tests are out of scope here (they require
  * an HTTP server, SQLite DB, and many other heavy dependencies). The logic
@@ -49,19 +49,20 @@ let fixtureRoot: string | undefined;
 const makePackage = (name: string): MakaioExtension => ({
   name,
   displayName: `${name} Display`,
+  version: '0.1.0',
 });
 
 /**
  * Build a minimal valid {@link DiscoveredExtension}.
  * @param name - Extension name used in the descriptor.
- * @param minVersion - Minimum framework version required. Defaults to `'1.0.0'`.
+ * @param frameworkRange - Framework semver range required. Defaults to `'>=1.0.0'`.
  */
-const makeDiscovered = (name: string, minVersion = '1.0.0'): DiscoveredExtension => ({
+const makeDiscovered = (name: string, frameworkRange = '>=1.0.0'): DiscoveredExtension => ({
   descriptor: {
     name,
     displayName: `${name} Display`,
     version: '1.0.0',
-    makaio: { minVersion },
+    makaio: { framework: frameworkRange },
     entrypoints: { server: true as const },
   },
   extensionPath: createExtensionRoot(name),
@@ -378,11 +379,11 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     });
 
     expect(result.packages).toHaveLength(1);
-    expect(result.packages[0]).toBe(pkg);
+    expect(result.packages[0]).toEqual(pkg);
   });
 
-  it('skips an extension whose minVersion exceeds the framework version', async () => {
-    const discovery = new ExplicitDescriptorDiscovery([makeDiscovered('version-gated-ext', '99.0.0')]);
+  it('skips an extension whose framework range excludes the framework version', async () => {
+    const discovery = new ExplicitDescriptorDiscovery([makeDiscovered('version-gated-ext', '>=99.0.0')]);
     const discovered = await discovery.discover();
 
     const result = await loadExtensions(discovered, {
@@ -414,7 +415,7 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
           name: 'detached-ext',
           displayName: 'Detached Ext Display',
           version: '1.0.0',
-          makaio: { minVersion: '1.0.0' },
+          makaio: { framework: '>=1.0.0' },
           execution: 'detached',
           transport: { type: 'bus-stdio', command: 'node', args: ['detached.js'] },
         },
@@ -487,8 +488,8 @@ describe('extension pipeline integration', () => {
 
   it('pipeline skips version-gated extensions and boot continues', async () => {
     const discovery = new ExplicitDescriptorDiscovery([
-      makeDiscovered('valid-ext', '1.0.0'),
-      makeDiscovered('gated-ext', '99.0.0'),
+      makeDiscovered('valid-ext', '>=1.0.0'),
+      makeDiscovered('gated-ext', '>=99.0.0'),
     ]);
 
     const discovered = await discovery.discover();

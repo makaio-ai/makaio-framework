@@ -45,6 +45,7 @@ import { verifyInstalledVersion } from './client-binary-version-verifier.js';
 import { ClientBinaryResolver, toVersionCommandTuple } from './client-binary-resolver.js';
 import { StrategyFeedFetcher } from './client-binary-strategy-feed-fetcher.js';
 import { assembleBinaryList } from './client-binary-list-assembler.js';
+import { assertSupportedBinaryVersion } from './client-binary-version-support.js';
 
 // ---------------------------------------------------------------------------
 // Manager implementation
@@ -218,6 +219,15 @@ export class ClientBinaryManager extends BaseService {
         descriptor,
         requestedVersion,
       );
+      if (definition.binary !== undefined) {
+        assertSupportedBinaryVersion(
+          'client.install',
+          clientId,
+          resolvedVersion,
+          definition.binary.supportedVersions,
+          requestedVersion === undefined ? 'resolved binary version' : 'requested binary version',
+        );
+      }
 
       // When the caller did not supply an explicit version, the resolver may
       // have performed a live upstream feed fetch to determine the latest
@@ -266,6 +276,15 @@ export class ClientBinaryManager extends BaseService {
       }
 
       const resolvedVersion = meta.latestAvailableVersion;
+      if (definition.binary !== undefined) {
+        assertSupportedBinaryVersion(
+          'client.update',
+          clientId,
+          resolvedVersion,
+          definition.binary.supportedVersions,
+          'resolved binary version',
+        );
+      }
       const jobId = this.startInstallJob(clientId, resolvedVersion, descriptor, definition, true, 'update');
 
       return { jobId, resolvedVersion };
@@ -306,6 +325,15 @@ export class ClientBinaryManager extends BaseService {
       const definition = this.definitionLookup.getDefinition(clientId);
       if (definition === undefined) {
         throw new Error(`client.setActive: no definition registered for client '${clientId}'`);
+      }
+      if (definition.binary !== undefined) {
+        assertSupportedBinaryVersion(
+          'client.setActive',
+          clientId,
+          version,
+          definition.binary.supportedVersions,
+          'requested binary version',
+        );
       }
       const versionCommand = toVersionCommandTuple(definition.versionCommand);
       if (versionCommand === undefined) {

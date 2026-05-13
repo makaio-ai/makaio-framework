@@ -3,7 +3,7 @@
   "displayName": "Gemini",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "entrypoints": {
     "server": true
@@ -14,7 +14,7 @@
         "id": "gemini",
         "name": "Gemini",
         "description": "Google Gemini CLI \u2014 AI assistant",
-        "binaryName": "gemini"
+        "binary": { "name": "gemini" }
       }
     ]
   }

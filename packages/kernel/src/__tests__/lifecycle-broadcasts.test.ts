@@ -39,6 +39,7 @@ function makePackage(
   return {
     name,
     displayName: name,
+    version: '0.1.0',
     ...options,
   };
 }

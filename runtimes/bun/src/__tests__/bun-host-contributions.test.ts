@@ -30,6 +30,7 @@ describe('Bun host contributions', () => {
     const hostPackage: BunHostExtensionPackage = {
       name: 'relay',
       displayName: 'Relay',
+      version: '0.1.0',
       bun: {
         createFetch: (next) => (request, server) => {
           calls.push('extension-fetch');
@@ -78,10 +79,15 @@ describe('Bun host contributions', () => {
   });
 
   it('collects only active packages with valid Bun host hooks', () => {
-    const plainPackage: MakaioExtension = { name: 'api', displayName: 'API' };
+    const plainPackage: MakaioExtension = {
+      name: 'api',
+      displayName: 'API',
+      version: '0.1.0',
+    };
     const hostPackage: BunHostExtensionPackage = {
       name: 'relay',
       displayName: 'Relay',
+      version: '0.1.0',
       bun: {
         createFetch: (next) => next,
       },

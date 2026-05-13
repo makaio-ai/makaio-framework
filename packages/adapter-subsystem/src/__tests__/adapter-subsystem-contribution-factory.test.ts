@@ -34,6 +34,7 @@ const TEST_ADAPTER_CONTRIBUTION = {
 const PKG_WITH_ADAPTERS: MakaioExtension = {
   name: 'test-adapter-pkg',
   displayName: 'Test Adapter Package',
+  version: '0.1.0',
   adapters: [TEST_ADAPTER_CONTRIBUTION],
 };
 
@@ -69,7 +70,11 @@ describe('createAdapterSubsystemContributionProcessor', () => {
         getAdapterSubsystemService: () => undefined,
       });
 
-      const pkgWithoutAdapters: MakaioExtension = { name: 'no-adapters', displayName: 'No Adapters' };
+      const pkgWithoutAdapters: MakaioExtension = {
+        name: 'no-adapters',
+        displayName: 'No Adapters',
+        version: '0.1.0',
+      };
       expect(processor.filter?.(pkgWithoutAdapters)).toBe(false);
     });
 
@@ -81,6 +86,7 @@ describe('createAdapterSubsystemContributionProcessor', () => {
       const pkgEmptyAdapters: MakaioExtension = {
         name: 'empty-adapters',
         displayName: 'Empty Adapters',
+        version: '0.1.0',
         adapters: [],
       };
       expect(processor.filter?.(pkgEmptyAdapters)).toBe(false);

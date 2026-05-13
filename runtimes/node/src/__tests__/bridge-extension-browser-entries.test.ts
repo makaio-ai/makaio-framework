@@ -21,6 +21,7 @@ import { bridgeExtensionBrowserEntries } from '../bridge-extension-browser-entri
 const makePackage = (name: string, overrides: Partial<MakaioExtension> = {}): MakaioExtension => ({
   name,
   displayName: `${name} Display`,
+  version: '0.1.0',
   ...overrides,
 });
 
@@ -35,7 +36,7 @@ const makeDiscovered = (name: string, browserEntry?: true | string, extensionPat
     name,
     displayName: `${name} Display`,
     version: '1.0.0',
-    makaio: { minVersion: '2.0.0' },
+    makaio: { framework: '>=2.0.0' },
     entrypoints: {
       server: true as const,
       ...(browserEntry !== undefined ? { browser: browserEntry } : {}),

@@ -21,6 +21,7 @@ import { DEVEX_SMOKE_ADAPTER_NAME } from './shared.js';
 const devexSmokeExtension: MakaioExtension = {
   name: 'devex-smoke-fixture',
   displayName: 'DevEx Smoke Fixture',
+  version: '0.1.0',
   providers: [providerDefinition],
   adapters: [
     {

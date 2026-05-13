@@ -8,6 +8,7 @@
  */
 
 export {
+  ClientBinaryCompatibilitySchema,
   ClientDefinitionSchema,
   ClientHookEventDeclarationSchema,
   ClientRuntimeCapabilitiesSchema,
@@ -22,6 +23,7 @@ export {
   PostInstallDescriptorSchema,
 } from './definition.js';
 export type {
+  ClientBinaryCompatibility,
   ClientDefinition,
   ClientDefinitionInput,
   ClientHookEventDeclaration,

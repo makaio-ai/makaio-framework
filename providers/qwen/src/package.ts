@@ -14,5 +14,6 @@ import { providerDefinition } from './definition.js';
 export const qwenPackage: MakaioExtension = {
   name: 'provider-qwen-acp',
   displayName: 'Qwen OAuth',
+  version: '0.1.0',
   providers: [providerDefinition],
 };

@@ -8,9 +8,10 @@ Static client definition and schema library for the OpenAI Codex CLI. This packa
 |-------|-------|
 | `id` | `codex` |
 | `name` | `Codex` |
+| `version` | `0.1.0` |
 | `description` | OpenAI Codex CLI — an agentic coding assistant |
-| `binaryName` | `codex` |
-| `minimumVersion` | _(none declared)_ |
+| `binary.name` | `codex` |
+| `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `full-access` |
 | `defaultProviderId` | `openai-codex` |
 | `configIsolation.envVar` | `CODEX_HOME` |

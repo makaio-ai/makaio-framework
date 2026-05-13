@@ -43,7 +43,7 @@ async function createWorkspace(
         displayName: 'Verify Fixture',
         version: '0.1.0',
         makaio: {
-          minVersion: '0.1.0',
+          framework: '>=0.1.0',
         },
         entrypoints,
         execution: 'embedded',

@@ -17,7 +17,7 @@ const baseDescriptor = {
   name: 'test-extension',
   displayName: 'Test Extension',
   version: '1.0.0',
-  makaio: { minVersion: '0.1.0' },
+  makaio: { framework: '>=0.1.0' },
   entrypoints: { server: true as const },
 };
 
@@ -25,7 +25,7 @@ interface TestDescriptor {
   readonly name: string;
   readonly displayName: string;
   readonly version: string;
-  readonly makaio: { readonly minVersion: string };
+  readonly makaio: { readonly framework: string };
   readonly entrypoints: { readonly server: true | string };
 }
 

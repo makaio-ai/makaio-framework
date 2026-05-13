@@ -42,8 +42,9 @@ import { CLIENT_BINARY_DDL } from './test-ddl.js';
 const BASE_DEFINITION_INPUT = {
   id: 'claude-code',
   name: 'Claude Code',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask' as const,
-  binaryName: 'claude',
+  binary: { name: 'claude', supportedVersions: '>=0.0.0' },
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
     type: 'npm' as const,
@@ -66,24 +67,26 @@ const DEFINITION_NO_ISOLATION = createClientDefinition({
 
 /**
  * A global-only definition (no managedInstall, no versionCommand) that declares
- * a binaryName for PATH scanning. Used to seed storage with an "orphan" active
+ * a binary.name for PATH scanning. Used to seed storage with an "orphan" active
  * version to trigger the missing-versionCommand guard in buildManagedContext.
  */
 const DEFINITION_NO_VERSION_COMMAND = createClientDefinition({
   id: 'global-only',
   name: 'Global Only',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask' as const,
-  binaryName: 'global-only',
+  binary: { name: 'global-only', supportedVersions: '>=0.0.0' },
   runtimeCapabilities: {},
 });
 
 /**
- * A definition with no binaryName to trigger the missing-binaryName guard in
+ * A definition with no binary descriptor to trigger the missing-binary.name guard in
  * buildGlobalContext when no managed version is active.
  */
 const DEFINITION_NO_BINARY_NAME = createClientDefinition({
   id: 'no-binary-name',
   name: 'No Binary Name',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask' as const,
   runtimeCapabilities: {},
 });
@@ -277,8 +280,64 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     }
   });
 
-  it('global fallback: version is null when scan returns no version', async () => {
-    await initManager([DEFINITION_WITH_ISOLATION]);
+  it('global fallback rejects when scan returns no version for a constrained binary range', async () => {
+    const constrainedDef = createClientDefinition({
+      ...BASE_DEFINITION_INPUT,
+      binary: { name: 'claude', supportedVersions: '>=2.0.0 <3.0.0' },
+    });
+    await initManager([constrainedDef]);
+
+    const scanCleanup = bus.on(
+      ClientSubjects.scan,
+      (ctx) => {
+        ctx.setResult({
+          results: [{ clientId: 'claude-code', found: true }],
+        });
+      },
+      { priority: 100 },
+    );
+
+    try {
+      await expect(bus.request(ClientSubjects.resolveBinary, { clientId: 'claude-code' })).rejects.toThrow(
+        "client.resolveBinary: detected global binary version for client 'claude-code' did not report a version",
+      );
+    } finally {
+      scanCleanup();
+    }
+  });
+
+  it('global fallback rejects when scan returns a version outside the supported range', async () => {
+    const definition = createClientDefinition({
+      ...BASE_DEFINITION_INPUT,
+      binary: { name: 'claude', supportedVersions: '>=2.0.0 <3.0.0' },
+    });
+    await initManager([definition]);
+
+    const scanCleanup = bus.on(
+      ClientSubjects.scan,
+      (ctx) => {
+        ctx.setResult({
+          results: [{ clientId: 'claude-code', found: true, version: '1.9.0' }],
+        });
+      },
+      { priority: 100 },
+    );
+
+    try {
+      await expect(bus.request(ClientSubjects.resolveBinary, { clientId: 'claude-code' })).rejects.toThrow(
+        "client.resolveBinary: detected global binary version 1.9.0 for client 'claude-code' does not satisfy >=2.0.0 <3.0.0",
+      );
+    } finally {
+      scanCleanup();
+    }
+  });
+
+  it('global fallback allows an unknown version when supportedVersions is unconstrained', async () => {
+    const definition = createClientDefinition({
+      ...BASE_DEFINITION_INPUT,
+      binary: { name: 'claude', supportedVersions: '*' },
+    });
+    await initManager([definition]);
 
     const scanCleanup = bus.on(
       ClientSubjects.scan,
@@ -294,7 +353,6 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       const result = await bus.request(ClientSubjects.resolveBinary, { clientId: 'claude-code' });
 
       expect(result.source).toBe('global');
-      expect(result.binaryPath).toBeNull();
       expect(result.version).toBeNull();
     } finally {
       scanCleanup();
@@ -328,7 +386,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     const definition = createClientDefinition({
       ...BASE_DEFINITION_INPUT,
       id: 'home-only',
-      binaryName: 'home-only',
+      binary: { name: 'home-only', supportedVersions: '>=0.0.0' },
       configIsolation: { envVar: 'HOME_ONLY_CONFIG', defaultPath: '~' },
     });
     await initManager([definition]);
@@ -337,7 +395,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       ClientSubjects.scan,
       (ctx) => {
         ctx.setResult({
-          results: [{ clientId: 'home-only', found: true }],
+          results: [{ clientId: 'home-only', found: true, version: '1.0.0' }],
         });
       },
       { priority: 100 },
@@ -356,7 +414,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     const definition = createClientDefinition({
       ...BASE_DEFINITION_INPUT,
       id: 'qwen',
-      binaryName: 'qwen',
+      binary: { name: 'qwen', supportedVersions: '>=0.0.0' },
       configIsolation: {
         envVar: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH',
         defaultPath: '/etc/qwen-code/system-defaults.json',
@@ -369,7 +427,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       ClientSubjects.scan,
       (ctx) => {
         ctx.setResult({
-          results: [{ clientId: 'qwen', found: true }],
+          results: [{ clientId: 'qwen', found: true, version: '1.0.0' }],
         });
       },
       { priority: 100 },
@@ -388,7 +446,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     const definition = createClientDefinition({
       ...BASE_DEFINITION_INPUT,
       id: 'qwen',
-      binaryName: 'qwen',
+      binary: { name: 'qwen', supportedVersions: '>=0.0.0' },
       configIsolation: {
         envVar: 'QWEN_CODE_SYSTEM_DEFAULTS_PATH',
         defaultPath: '/etc/qwen-code/system-defaults.json',
@@ -408,6 +466,22 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     expect(result.env).toEqual({
       QWEN_CODE_SYSTEM_DEFAULTS_PATH: path.join(expectedConfigDir, 'system-defaults.json'),
     });
+  });
+
+  it('managed resolution rejects active versions outside the supported binary range', async () => {
+    const definition = createClientDefinition({
+      ...BASE_DEFINITION_INPUT,
+      binary: { name: 'claude', supportedVersions: '>=2.0.0 <3.0.0' },
+    });
+    await initManager([definition]);
+
+    const version = '1.9.0';
+    const installPath = path.join(testBasePath, 'claude-code', version);
+    await seedActiveVersion('claude-code', version, installPath);
+
+    await expect(bus.request(ClientSubjects.resolveBinary, { clientId: 'claude-code' })).rejects.toThrow(
+      "client.resolveBinary: managed binary version 1.9.0 for client 'claude-code' does not satisfy >=2.0.0 <3.0.0",
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -504,12 +578,12 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
   // Guard: binaryName absent on global fallback
   // -------------------------------------------------------------------------
 
-  it('throws when definition has no binaryName and no managed version is active', async () => {
+  it('throws when definition has no binary.name and no managed version is active', async () => {
     await initManager([DEFINITION_NO_BINARY_NAME]);
 
     // No active managed version seeded → buildGlobalContext will be reached
     await expect(bus.request(ClientSubjects.resolveBinary, { clientId: 'no-binary-name' })).rejects.toThrow(
-      `definition for 'no-binary-name' has no binaryName`,
+      `definition for 'no-binary-name' has no binary.name`,
     );
   });
 
@@ -525,7 +599,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     const tamperedDefinition: ClientDefinition = {
       ...DEFINITION_WITH_ISOLATION,
       id: 'traversal-test',
-      binaryName: 'traversal-test',
+      binary: { name: 'traversal-test', supportedVersions: '>=0.0.0' },
       versionCommand: ['../../etc/evil', '--version'],
     };
     await initManager([tamperedDefinition]);
@@ -550,7 +624,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       createClientDefinition({
         ...BASE_DEFINITION_INPUT,
         id: 'bad-path-client',
-        binaryName: 'bad-path-client',
+        binary: { name: 'bad-path-client', supportedVersions: '>=0.0.0' },
         configIsolation: { envVar: 'BAD_PATH_CONFIG', defaultPath: 'relative/config' },
       }),
     ).toThrow("defaultPath must be absolute, '~', or start with '~/'");
@@ -562,7 +636,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       createClientDefinition({
         ...BASE_DEFINITION_INPUT,
         id: 'bad-file-path-client',
-        binaryName: 'bad-file-path-client',
+        binary: { name: 'bad-file-path-client', supportedVersions: '>=0.0.0' },
         configIsolation: {
           envVar: 'BAD_FILE_PATH_CONFIG',
           defaultPath: 'relative/config/settings.json',

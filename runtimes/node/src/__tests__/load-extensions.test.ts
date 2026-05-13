@@ -18,6 +18,7 @@ let fixtureRoot: string | undefined;
 const makePackage = (name: string): MakaioExtension => ({
   name,
   displayName: `${name} Display`,
+  version: '0.1.0',
 });
 
 /**
@@ -44,7 +45,7 @@ const makeExtension = (
     name: 'test-ext',
     displayName: 'Test Extension',
     version: '1.0.0',
-    makaio: { minVersion: '2.0.0' },
+    makaio: { framework: '>=2.0.0' },
     entrypoints: { server: true as const },
     ...descriptorOverrides,
   };
@@ -174,7 +175,21 @@ describe('loadExtensions', () => {
     });
 
     expect(result.packages).toHaveLength(1);
-    expect(result.packages[0]).toBe(pkg);
+    expect(result.packages[0]).toMatchObject(pkg);
+  });
+
+  it('preserves the server package version when descriptor version differs', async () => {
+    const pkg = makePackage('test-ext');
+    const ext = makeExtension({
+      descriptorOverrides: { version: '1.2.3' },
+    });
+
+    const result = await loadExtensions([ext], {
+      frameworkVersion: FRAMEWORK_VERSION,
+      importModule: async () => ({ default: pkg }),
+    });
+
+    expect(result.packages[0]).toMatchObject({ name: 'test-ext', version: '0.1.0' });
   });
 
   it('skips extension when CLI default export only looks like a manifest', async () => {
@@ -185,6 +200,7 @@ describe('loadExtensions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({
         default: {
           name: 'test-ext',
@@ -208,6 +224,7 @@ describe('loadExtensions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({
         default: {
           name: 'test-ext',
@@ -220,6 +237,23 @@ describe('loadExtensions', () => {
     expect(result.packages).toHaveLength(0);
     // consoleSpy is fresh per test (beforeEach/afterEach) — same rationale as above.
     expect(consoleSpy).toHaveBeenCalledOnce();
+  });
+
+  it('skips CLI-only synthesis when framework range excludes current framework version', async () => {
+    const ext = makeExtension({
+      descriptorOverrides: {
+        entrypoints: { cli: true as const },
+        makaio: { framework: '>=4.0.0' },
+      },
+    });
+
+    const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
+      importModule: async () => ({ default: makeCliContribution('test-ext') }),
+    });
+
+    expect(result.packages).toStrictEqual([]);
+    expect(result.configDefaults.size).toBe(0);
   });
 
   it('passes the resolved absolute entry path to importModule', async () => {
@@ -259,9 +293,9 @@ describe('loadExtensions', () => {
     expect(consoleSpy.mock.calls[0]?.[0]).toContain('could not be resolved within extension directory');
   });
 
-  it('skips extension when minVersion exceeds current framework version', async () => {
+  it('skips extension when framework range excludes current framework version', async () => {
     const ext = makeExtension({
-      descriptorOverrides: { makaio: { minVersion: '99.0.0' } },
+      descriptorOverrides: { makaio: { framework: '>=99.0.0' } },
     });
 
     const result = await loadExtensions([ext], {
@@ -273,9 +307,9 @@ describe('loadExtensions', () => {
     expect(consoleSpy).toHaveBeenCalledOnce();
   });
 
-  it('accepts pre-release framework version that satisfies minVersion', async () => {
+  it('accepts pre-release framework version that satisfies framework range', async () => {
     // Pre-release version 2.0.0-alpha.1 should satisfy >=1.0.0
-    const extensions = [makeExtension({ descriptorOverrides: { makaio: { minVersion: '1.0.0' } } })];
+    const extensions = [makeExtension({ descriptorOverrides: { makaio: { framework: '>=1.0.0' } } })];
     const result = await loadExtensions(extensions, {
       frameworkVersion: '2.0.0-alpha.1',
       importModule: mockImport,
@@ -299,7 +333,7 @@ describe('loadExtensions', () => {
     });
 
     expect(result.packages).toHaveLength(1);
-    expect(result.packages[0]).toBe(pkg);
+    expect(result.packages[0]).toMatchObject(pkg);
   });
 
   it('skips extension with no server entrypoint', async () => {
@@ -384,7 +418,7 @@ describe('loadExtensions', () => {
       name: 'broken-detached',
       displayName: 'Broken Detached',
       version: '1.0.0',
-      makaio: { minVersion: '1.0.0' },
+      makaio: { framework: '>=1.0.0' },
       execution: 'detached',
       transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
     } satisfies DiscoveredExtension['descriptor'];
@@ -420,12 +454,12 @@ describe('loadExtensions', () => {
     expect(consoleSpy.mock.calls[0]?.[0]).toContain('failed to synthesize detached extension package');
   });
 
-  it('skips detached extension when minVersion exceeds current framework version', async () => {
+  it('skips detached extension when framework range excludes current framework version', async () => {
     const importModule = vi.fn(mockImport);
     const ext = makeExtension({
       descriptorOverrides: {
         entrypoints: undefined,
-        makaio: { minVersion: '99.0.0' },
+        makaio: { framework: '>=99.0.0' },
         execution: 'detached',
         transport: { type: 'bus-stdio', command: 'node', args: ['ext.js'] },
       },
@@ -441,9 +475,9 @@ describe('loadExtensions', () => {
     expect(consoleSpy).toHaveBeenCalledOnce();
   });
 
-  it('skips extension when minVersion is not valid semver', async () => {
+  it('skips extension when framework range is not a valid semver range', async () => {
     const ext = makeExtension({
-      descriptorOverrides: { makaio: { minVersion: 'not-a-version' } },
+      descriptorOverrides: { makaio: { framework: 'not-a-range' } },
     });
 
     const result = await loadExtensions([ext], {
@@ -461,7 +495,7 @@ describe('loadExtensions', () => {
     const result = await loadExtensions([ext], {
       frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({
-        default: { name: 'wrong-name', displayName: 'Wrong' },
+        default: { name: 'wrong-name', displayName: 'Wrong', version: '0.1.0' },
       }),
     });
 
@@ -571,7 +605,7 @@ describe('loadExtensions', () => {
         descriptorOverrides: {
           name: 'version-gated',
           displayName: 'Version Gated',
-          makaio: { minVersion: '99.0.0' },
+          makaio: { framework: '>=99.0.0' },
         },
       }),
       makeExtension({
@@ -589,7 +623,7 @@ describe('loadExtensions', () => {
     });
 
     expect(result.packages).toHaveLength(1);
-    expect(result.packages[0]).toBe(validPkg);
+    expect(result.packages[0]).toMatchObject(validPkg);
     expect(consoleSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -644,6 +678,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [basePackage], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async (entryPath) => ({
         default: entryPath.endsWith('/dist/cli.mjs') ? makeCliContribution('test-ext') : basePackage,
       }),
@@ -664,6 +699,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makeCliContribution('test-ext') }),
     });
 
@@ -686,6 +722,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makeCliContribution('test-ext') }),
     });
 
@@ -702,6 +739,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makeCliContribution('test-ext') }),
     });
 
@@ -721,6 +759,7 @@ describe('attachExtensionCliContributions', () => {
     const capturedPaths: string[] = [];
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async (entryPath) => {
         capturedPaths.push(entryPath);
         return { default: makeCliContribution('test-ext') };
@@ -740,6 +779,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makeCliContribution('test-ext') }),
     });
 
@@ -755,6 +795,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makeCliContribution('test-ext') }),
     });
 
@@ -775,6 +816,7 @@ describe('attachExtensionCliContributions', () => {
     });
 
     const result = await attachExtensionCliContributions([ext], [basePackage], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule: async (entryPath) => ({
         default: entryPath.endsWith('/dist/cli.mjs') ? makeCliContribution('test-ext') : basePackage,
       }),
@@ -797,6 +839,7 @@ describe('attachExtensionCliContributions', () => {
     const importModule = vi.fn(async () => ({ default: makeCliContribution('test-ext') }));
 
     const result = await attachExtensionCliContributions([ext], [basePackage], {
+      frameworkVersion: FRAMEWORK_VERSION,
       importModule,
     });
 

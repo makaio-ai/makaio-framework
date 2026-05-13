@@ -37,6 +37,7 @@ describe('CapabilityToken', () => {
     const manifest = {
       name: 'my-extension',
       displayName: 'My Extension',
+      version: '0.1.0',
       provides: ['adapters'],
     } satisfies ExtensionManifest;
 

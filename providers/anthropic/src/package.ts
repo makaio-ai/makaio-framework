@@ -17,5 +17,6 @@ import { providerDefinitionOAuth } from './definition-oauth.js';
 export const anthropicPackage: MakaioExtension = {
   name: 'provider-anthropic',
   displayName: 'Anthropic',
+  version: '0.1.0',
   providers: [providerDefinition, providerDefinitionOAuth],
 };

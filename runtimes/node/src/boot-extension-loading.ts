@@ -1,6 +1,7 @@
 import type { MakaioExtension } from '@makaio/contracts';
 import {
   attachExtensionCliContributions,
+  isDescriptorFrameworkCompatible,
   loadExtensions,
   type ExtensionCliAttachResult,
   type ExtensionLoadResult,
@@ -47,6 +48,7 @@ export async function loadBootExtensions(options: {
     configDefaults: new Map(),
   };
   let discovered: ReadonlyArray<DiscoveredExtension> = [];
+  const frameworkVersion = options.frameworkVersion ?? (await readFrameworkVersion());
 
   try {
     discovered = await options.extensionOptions.extensions.discover();
@@ -62,22 +64,25 @@ export async function loadBootExtensions(options: {
     console.warn('[boot] Extension discovery failed, skipping:', err instanceof Error ? err.message : err);
   }
 
-  if (discovered.length > 0) {
+  const compatible = discovered.filter((ext) => isDescriptorFrameworkCompatible(ext, frameworkVersion));
+
+  if (compatible.length > 0) {
     try {
-      extensionLoadResult = await loadExtensions(discovered, {
-        frameworkVersion: options.frameworkVersion ?? (await readFrameworkVersion()),
+      extensionLoadResult = await loadExtensions(compatible, {
+        frameworkVersion,
       });
     } catch (err) {
       console.warn('[boot] Extension loading failed, skipping:', err instanceof Error ? err.message : err);
     }
   }
 
-  const bridgedPackages = bridgeExtensionBrowserEntries(discovered, extensionLoadResult.packages);
-  const browserOnlyResult = synthesizeBrowserOnlyPackages(discovered);
-  const extensionsWithCli = await attachExtensionCliContributions(discovered, [
-    ...bridgedPackages,
-    ...browserOnlyResult.packages,
-  ]);
+  const bridgedPackages = bridgeExtensionBrowserEntries(compatible, extensionLoadResult.packages);
+  const browserOnlyResult = synthesizeBrowserOnlyPackages(compatible, { frameworkVersion });
+  const extensionsWithCli = await attachExtensionCliContributions(
+    compatible,
+    [...bridgedPackages, ...browserOnlyResult.packages],
+    { frameworkVersion },
+  );
 
   return {
     discovered,

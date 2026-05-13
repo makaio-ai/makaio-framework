@@ -13,6 +13,7 @@ import type {
   WindowRegistry,
 } from '@makaio/kernel';
 import type { ShutdownStep } from './boot-phase.js';
+import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 
@@ -157,7 +158,7 @@ export interface CoreBootOptions {
   discovery?: ExtensionDiscovery;
 
   /**
-   * Framework version used for extension `minVersion` gating.
+   * Framework version used for extension `makaio.framework` range gating.
    *
    * When omitted, the version is read from `@makaio/runtime-node`'s
    * `package.json` at boot time. Pass an explicit value in tests or host
@@ -166,15 +167,19 @@ export interface CoreBootOptions {
   frameworkVersion?: string;
 
   /**
-   * Capability tokens declared by the host composition root.
+   * Capability facts declared by the host composition root.
    *
-   * Passed directly to the coordinator as the full capability set (merged with
-   * the current OS platform token). Runtime tokens such as `'node'` must be
-   * included here by Node-based hosts; the boot layer no longer injects them
-   * automatically so that Bun and future platforms can declare their own tokens.
-   * @example ['node', 'workspace-host']
+   * Passed to the coordinator as the host capability set, with object-form
+   * entries preserving concrete versions for versioned `requires` checks.
+   * Runtime tokens such as `'node'` must be included here by Node-based hosts;
+   * the boot layer no longer injects them automatically so that Bun and future
+   * platforms can declare their own tokens.
+   * @example
+   * ```ts
+   * ['node', 'workspace-host', { id: 'storage.drizzle', version: '1.2.0' }]
+   * ```
    */
-  readonly hostCapabilities?: readonly string[];
+  readonly hostCapabilities?: readonly HostCapabilityDeclaration[];
 
   /**
    * Host-provided package config defaults keyed by package name.

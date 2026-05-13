@@ -24,6 +24,7 @@ import type {
   ExtensionCoordinatorOptions,
   ExtensionEntry,
   ExtensionRuntimeSurface,
+  RuntimeEnvironment,
 } from './types.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
 import {
@@ -72,7 +73,7 @@ export class ExtensionCoordinator {
   private readonly extensionContextBase:
     | Omit<NodeExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
     | undefined;
-  private readonly capabilities: ReadonlySet<string> | undefined;
+  private readonly runtimeEnvironment: RuntimeEnvironment | undefined;
 
   /**
    * AbortController signalling graceful shutdown to all active packages.
@@ -122,7 +123,7 @@ export class ExtensionCoordinator {
     this.surface = options.surface ?? 'headless';
     this.db = options.db;
     this.extensionContextBase = options.extensionContextBase;
-    this.capabilities = options.capabilities;
+    this.runtimeEnvironment = options.runtimeEnvironment;
     this.persistEnabled = options.persistEnabled;
     this.loadEnabled = options.loadEnabled;
     this.loadConfig = options.loadConfig;
@@ -200,7 +201,9 @@ export class ExtensionCoordinator {
       );
     }
 
-    const eligible = coalesceExtensionOverrides(filterEligibleExtensions(packages, this.surface, this.capabilities));
+    const eligible = coalesceExtensionOverrides(
+      filterEligibleExtensions(packages, this.surface, this.runtimeEnvironment),
+    );
     this.loadOrder = topoSort(eligible);
 
     for (const name of this.loadOrder) {

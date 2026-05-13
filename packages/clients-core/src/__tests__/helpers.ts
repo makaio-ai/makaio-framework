@@ -13,8 +13,7 @@ export function makeClientRecord(
 ): ClientRecord {
   return {
     description: undefined,
-    binaryName: undefined,
-    minimumVersion: undefined,
+    binary: undefined,
     nativeTools: [],
     defaultApprovalPolicy: 'always-ask',
     logSources: undefined,

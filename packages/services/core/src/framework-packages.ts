@@ -1,5 +1,5 @@
 import type { MakaioExtension } from '@makaio/contracts';
-import { extensionToken } from '@makaio/contracts';
+import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
@@ -55,6 +55,7 @@ export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-re
 export const sessionStoragePackage: MakaioExtension = {
   name: SessionStorageToken.name,
   displayName: 'Session Storage',
+  version: '0.1.0',
   critical: true,
   storage: {
     /**
@@ -105,7 +106,8 @@ export const sessionStoragePackage: MakaioExtension = {
 export const sessionBridgePackage: MakaioExtension = {
   name: SessionBridgeToken.name,
   displayName: 'Session Bridge',
-  dependencies: [SessionStorageToken.name],
+  version: '0.1.0',
+  dependencies: [dep(SessionStorageToken.name)],
   critical: true,
   create: (ctx) => new SessionBridge(ctx.bus),
 };
@@ -114,7 +116,8 @@ export const sessionBridgePackage: MakaioExtension = {
 export const sessionPackage: MakaioExtension = {
   name: SessionToken.name,
   displayName: 'Session',
-  dependencies: [SessionBridgeToken.name],
+  version: '0.1.0',
+  dependencies: [dep(SessionBridgeToken.name)],
   critical: true,
   create: (ctx) => new MakaioSessionService(ctx.bus),
 };
@@ -123,7 +126,8 @@ export const sessionPackage: MakaioExtension = {
 export const sessionOrchestratorPackage: MakaioExtension = {
   name: SessionOrchestratorToken.name,
   displayName: 'Session Orchestrator',
-  dependencies: [SessionToken.name, canonicalModelPackage.name],
+  version: '0.1.0',
+  dependencies: [dep(SessionToken.name), dep(canonicalModelPackage.name)],
   critical: true,
   runtimeOwnership: { sessionOrchestrator: true },
   create: (ctx) => new SessionOrchestrator(ctx.bus, ctx.machineId),
@@ -133,6 +137,7 @@ export const sessionOrchestratorPackage: MakaioExtension = {
 export const toolRegistryPackage: MakaioExtension = {
   name: ToolRegistryToken.name,
   displayName: 'Tool Registry',
+  version: '0.1.0',
   critical: true,
   create: (ctx) => new ToolRegistry({ bus: ctx.bus }),
 };
@@ -141,7 +146,8 @@ export const toolRegistryPackage: MakaioExtension = {
 export const toolApprovalPackage: MakaioExtension = {
   name: ToolApprovalToken.name,
   displayName: 'Tool Approval',
-  dependencies: [ToolRegistryToken.name],
+  version: '0.1.0',
+  dependencies: [dep(ToolRegistryToken.name)],
   critical: true,
   create: (ctx) => new ToolApprovalService(ctx.bus),
 };
@@ -150,6 +156,7 @@ export const toolApprovalPackage: MakaioExtension = {
 export const trayMenuPackage: MakaioExtension = {
   name: TrayMenuToken.name,
   displayName: 'Tray Menu',
+  version: '0.1.0',
   critical: true,
   create: (ctx) => new TrayMenuService(ctx.bus),
 };
@@ -158,6 +165,7 @@ export const trayMenuPackage: MakaioExtension = {
 export const capabilityPackage: MakaioExtension = {
   name: CapabilityToken.name,
   displayName: 'Capability',
+  version: '0.1.0',
   critical: true,
   create: (ctx) => new CapabilityService(ctx.bus),
 };
@@ -171,6 +179,7 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
   return {
     name: ModelRegistryToken.name,
     displayName: 'Model Registry',
+    version: '0.1.0',
     critical: true,
     create: (ctx) => new ModelRegistryService({ bus: ctx.bus, fetcher }),
   };

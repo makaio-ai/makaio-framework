@@ -37,7 +37,7 @@ const BROWSER_EXT_DISCOVERED: DiscoveredExtension = {
     name: 'browser-ext',
     displayName: 'Browser Extension',
     version: '1.0.0',
-    makaio: { minVersion: '0.1.0' },
+    makaio: { framework: '>=0.1.0' },
     entrypoints: { browser: 'bundle/browser/index' },
   },
   extensionPath: BROWSER_EXT_PATH,
@@ -154,7 +154,7 @@ describe('mount callback wiring', () => {
         name: 'browser-ext-two',
         displayName: 'Browser Extension Two',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: 'browser/index' },
       },
       extensionPath: path.join(FIXTURES_DIR, 'browser-ext-two'),
@@ -194,7 +194,7 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       },
       extensionPath: path.join(FIXTURES_DIR, 'makaio-dev'),
@@ -219,7 +219,13 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
       createMount: makeMountSpy(mountRecords),
     });
 
-    const bundledPackages: MakaioExtension[] = [{ name: 'bundled-browser-ext', displayName: 'Bundled Browser Ext' }];
+    const bundledPackages: MakaioExtension[] = [
+      {
+        name: 'bundled-browser-ext',
+        displayName: 'Bundled Browser Ext',
+        version: '0.1.0',
+      },
+    ];
     const merged = mergePackagesByDescriptorSourcePriority([
       { descriptorName: 'browser-ext', descriptorSource: 'workspace-descriptors', packages: synthesized },
       { descriptorName: 'bundled-browser-ext', descriptorSource: 'bundled-descriptors', packages: bundledPackages },
@@ -238,7 +244,13 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
 
     const { packages: synthesized } = synthesizeBrowserOnlyPackages(discovered, { createMount: () => () => {} });
 
-    const bundledPackages: MakaioExtension[] = [{ name: 'browser-ext', displayName: 'Bundled Browser Ext' }];
+    const bundledPackages: MakaioExtension[] = [
+      {
+        name: 'browser-ext',
+        displayName: 'Bundled Browser Ext',
+        version: '0.1.0',
+      },
+    ];
     const merged = mergePackagesByDescriptorSourcePriority([
       { descriptorName: 'browser-ext', descriptorSource: 'workspace-descriptors', packages: synthesized },
       { descriptorName: 'browser-ext', descriptorSource: 'bundled-descriptors', packages: bundledPackages },
@@ -253,7 +265,7 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
         name: 'full-ext',
         displayName: 'Full Extension',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { server: true as const, browser: 'browser/index' },
       },
       extensionPath: path.join(FIXTURES_DIR, 'full-ext'),

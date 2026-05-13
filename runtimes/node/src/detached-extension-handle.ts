@@ -8,6 +8,7 @@
  */
 
 import type { MakaioExtension, NodeExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts';
+import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { StdioServerTransport } from '@makaio/bus-transport-stdio';
 import { createProcessLifecycle, type ProcessLifecycleHandle } from '@makaio/subprocess';
@@ -382,12 +383,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
  */
 export function createDetachedExtensionPackage(descriptor: DetachedDescriptor, extensionPath: string): MakaioExtension {
   return {
-    name: descriptor.name,
-    displayName: descriptor.displayName,
-    ...(descriptor.surface !== undefined ? { surface: descriptor.surface } : {}),
-    ...(descriptor.dependencies !== undefined ? { dependencies: descriptor.dependencies } : {}),
-    ...(descriptor.requires !== undefined ? { requires: descriptor.requires } : {}),
-    ...(descriptor.provides !== undefined ? { provides: descriptor.provides } : {}),
+    ...descriptorToBasePackage(descriptor),
 
     create(ctx: NodeExtensionContext): ExtensionServiceLifecycle {
       if (descriptor.transport.type === 'bus-stdio') {

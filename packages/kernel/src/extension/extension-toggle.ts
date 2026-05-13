@@ -92,11 +92,12 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
   const { pkg } = entry;
   let storageCleanup: (() => void) | undefined;
   const inactiveDeps = (pkg.dependencies ?? []).filter((dep) => {
-    const depEntry = host.entries.get(dep);
+    if (dep.optional) return false;
+    const depEntry = host.entries.get(dep.name);
     return !depEntry || depEntry.state !== 'active';
   });
   if (inactiveDeps.length > 0) {
-    entry.error = `Required dependencies not active: ${inactiveDeps.join(', ')}`;
+    entry.error = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
     console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, entry.error);
     transitionPackageEntry(host.bus, entry, 'failed');
     return false;
@@ -194,7 +195,7 @@ async function disableExtension(host: ToggleHost, name: string, entry: Extension
     .filter(([dependentName, dependentEntry]) => {
       if (dependentName === name) return false;
       if (dependentEntry.state !== 'active') return false;
-      return dependentEntry.pkg.dependencies?.includes(name) ?? false;
+      return dependentEntry.pkg.dependencies?.some((dep) => !dep.optional && dep.name === name) ?? false;
     })
     .map(([dependentName]) => dependentName);
 

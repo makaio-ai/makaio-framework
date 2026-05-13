@@ -1,14 +1,14 @@
 /**
- * Tests for host-declared capability set construction in the boot sequence.
+ * Tests for host-declared runtime environment construction in the boot sequence.
  *
- * These tests cover the pure {@link buildCapabilitySet} helper, which is the
- * only extractable unit of the capability logic inside `bootMakaioRuntime`.
+ * These tests cover the pure {@link buildRuntimeEnvironment} helper, which is
+ * the only extractable unit of the capability logic inside `bootMakaioRuntime`.
  * Full integration tests (requiring an HTTP server, SQLite, etc.) are out of
  * scope here.
  *
- * A second describe block exercises the full path from {@link buildCapabilitySet}
- * through {@link ExtensionCoordinator} to verify that capability-gated packages
- * are correctly included or excluded based on the host's declared capabilities.
+ * A second describe block exercises the full path from {@link buildRuntimeEnvironment}
+ * through {@link ExtensionCoordinator} to verify that requirement-gated packages
+ * are correctly included or excluded based on the host's declared environment.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,67 +17,65 @@ import type { MakaioExtension } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
 import {
-  buildCapabilitySet,
+  buildRuntimeEnvironment,
   mergePackageConfigDefaults,
   normalizeNodeHostCapabilities,
   selectFrameworkCorePackages,
 } from '../boot.js';
 import { isMissingOptionalRuntimePackage } from '../optional-package.js';
 
-describe('buildCapabilitySet', () => {
-  it('always includes the given platform', () => {
-    const set = buildCapabilitySet('linux');
+describe('buildRuntimeEnvironment', () => {
+  it('always includes the given platform in hosts', () => {
+    const env = buildRuntimeEnvironment('linux');
 
-    expect(set.has('linux')).toBe(true);
+    expect(env.hosts.has('linux')).toBe(true);
   });
 
-  it('does not inject node automatically when hostCapabilities is omitted', () => {
-    const set = buildCapabilitySet('darwin');
+  it('does not inject node into hosts automatically when hostCapabilities is omitted', () => {
+    const env = buildRuntimeEnvironment('darwin');
 
-    expect(set.has('node')).toBe(false);
-    expect([...set]).toStrictEqual(['darwin']);
+    expect(env.hosts.has('node')).toBe(false);
+    expect([...env.hosts]).toStrictEqual(['darwin']);
   });
 
-  it('produces only platform when hostCapabilities is an empty array', () => {
-    const set = buildCapabilitySet('win32', []);
+  it('produces only platform in hosts when hostCapabilities is an empty array', () => {
+    const env = buildRuntimeEnvironment('win32', []);
 
-    expect([...set]).toStrictEqual(['win32']);
+    expect([...env.hosts]).toStrictEqual(['win32']);
+    expect(env.capabilities.size).toBe(0);
   });
 
-  it('merges host-declared capabilities into the base set', () => {
-    const set = buildCapabilitySet('darwin', ['node', 'native-pty', 'workspace-host']);
+  it('places string tokens in hosts only and object tokens in capabilities only', () => {
+    const env = buildRuntimeEnvironment('darwin', ['node', 'native-pty', 'workspace-host']);
 
-    expect(set.has('node')).toBe(true);
-    expect(set.has('darwin')).toBe(true);
-    expect(set.has('native-pty')).toBe(true);
-    expect(set.has('workspace-host')).toBe(true);
-    expect(set.size).toBe(4);
+    expect(env.hosts.has('darwin')).toBe(true);
+    expect(env.hosts.has('node')).toBe(true);
+    expect(env.hosts.has('native-pty')).toBe(true);
+    expect(env.hosts.has('workspace-host')).toBe(true);
+    expect(env.capabilities.size).toBe(0);
   });
 
-  it('deduplicates tokens when hostCapabilities overlaps with base tokens', () => {
-    const set = buildCapabilitySet('linux', ['node', 'linux', 'native-pty']);
+  it('preserves versions for object-form capability declarations', () => {
+    const env = buildRuntimeEnvironment('darwin', [
+      'node',
+      { id: 'storage.drizzle', version: '1.2.0' },
+      { id: 'native-pty' },
+    ]);
 
-    // Set semantics: duplicates are silently collapsed
-    expect(set.has('node')).toBe(true);
-    expect(set.has('linux')).toBe(true);
-    expect(set.has('native-pty')).toBe(true);
-    expect(set.size).toBe(3);
+    expect(env.capabilities.has('storage.drizzle')).toBe(true);
+    expect(env.capabilities.has('native-pty')).toBe(true);
+    expect(env.capabilityVersions?.get('storage.drizzle')).toBe('1.2.0');
+    expect(env.capabilityVersions?.has('native-pty')).toBe(false);
+    expect(env.hosts.has('node')).toBe(true);
+    expect(env.hosts.has('storage.drizzle')).toBe(false);
   });
 
-  it('host-declared capability token is absent when host does not declare it', () => {
-    const set = buildCapabilitySet('darwin');
+  it('host-declared capability token is absent from capabilities when host does not declare it', () => {
+    const env = buildRuntimeEnvironment('darwin');
 
-    expect(set.has('workspace-host')).toBe(false);
-    expect(set.has('native-pty')).toBe(false);
-    expect(set.has('node')).toBe(false);
-  });
-
-  it('returns a mutable Set (for coordinator consumption)', () => {
-    const set = buildCapabilitySet('darwin', ['node', 'workspace-host']);
-
-    // Verify the return type is a real Set that can be mutated
-    set.add('extra-token');
-    expect(set.has('extra-token')).toBe(true);
+    expect(env.capabilities.has('workspace-host')).toBe(false);
+    expect(env.capabilities.has('native-pty')).toBe(false);
+    expect(env.capabilities.has('node')).toBe(false);
   });
 });
 
@@ -94,6 +92,12 @@ describe('normalizeNodeHostCapabilities', () => {
 
     expect(normalizeNodeHostCapabilities(hostCapabilities)).toBe(hostCapabilities);
   });
+
+  it('adds node when object-form metadata declares a node capability but not a host identity', () => {
+    const hostCapabilities = [{ id: 'node', version: '24.0.0' }, 'native-pty'] as const;
+
+    expect(normalizeNodeHostCapabilities(hostCapabilities)).toEqual(['node', ...hostCapabilities]);
+  });
 });
 
 describe('selectFrameworkCorePackages', () => {
@@ -107,6 +111,7 @@ describe('selectFrameworkCorePackages', () => {
       {
         name: 'host-runtime',
         displayName: 'Host Runtime',
+        version: '0.1.0',
         runtimeOwnership: { sessionOrchestrator: true },
       },
     ]);
@@ -134,9 +139,9 @@ describe('mergePackageConfigDefaults', () => {
   });
 });
 
-describe('buildCapabilitySet → ExtensionCoordinator integration', () => {
+describe('buildRuntimeEnvironment → ExtensionCoordinator integration', () => {
   /**
-   * Minimal package descriptor that gates on the `node` environment token.
+   * Minimal package descriptor that gates on the `node` capability token.
    *
    * No `create` factory is needed: the coordinator marks service-free packages
    * as `active` after `startAll`, so the test only needs to observe whether the
@@ -145,13 +150,14 @@ describe('buildCapabilitySet → ExtensionCoordinator integration', () => {
   const nodeGatedPackage: MakaioExtension = {
     name: 'node-feature',
     displayName: 'Node Feature',
-    requires: ['node'],
+    version: '0.1.0',
+    requires: [{ type: 'host', id: 'node' }],
   };
 
   it('includes a requires-gated package when the capability is present', async () => {
-    const capabilities = buildCapabilitySet('linux', ['node']);
+    const runtimeEnvironment = buildRuntimeEnvironment('linux', ['node']);
     const bus = createBusInstance();
-    const coordinator = new ExtensionCoordinator(bus, { capabilities });
+    const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
 
     try {
       coordinator.load([nodeGatedPackage]);
@@ -166,9 +172,9 @@ describe('buildCapabilitySet → ExtensionCoordinator integration', () => {
   });
 
   it('excludes a requires-gated package when the capability is absent', async () => {
-    const capabilities = buildCapabilitySet('linux');
+    const runtimeEnvironment = buildRuntimeEnvironment('linux');
     const bus = createBusInstance();
-    const coordinator = new ExtensionCoordinator(bus, { capabilities });
+    const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
 
     try {
       coordinator.load([nodeGatedPackage]);
@@ -176,6 +182,69 @@ describe('buildCapabilitySet → ExtensionCoordinator integration', () => {
 
       const names = coordinator.list().map((e) => e.name);
       expect(names).not.toContain('node-feature');
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('includes a package gated on host identity when the host is present', async () => {
+    const runtimeEnvironment = buildRuntimeEnvironment('linux', ['node']);
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
+    const linuxOnlyPackage: MakaioExtension = {
+      name: 'linux-feature',
+      displayName: 'Linux Feature',
+      version: '0.1.0',
+      requires: [{ type: 'host', id: 'linux' }],
+    };
+
+    try {
+      coordinator.load([linuxOnlyPackage]);
+      await coordinator.startAll();
+
+      expect(coordinator.list().find((e) => e.name === 'linux-feature')?.state).toBe('active');
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('includes a package gated on the node host identity when normalized host capabilities include node', async () => {
+    const runtimeEnvironment = buildRuntimeEnvironment('linux', normalizeNodeHostCapabilities());
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
+    const nodeHostPackage: MakaioExtension = {
+      name: 'node-host-feature',
+      displayName: 'Linux Feature',
+      version: '0.1.0',
+      requires: [{ type: 'host', id: 'node' }],
+    };
+
+    try {
+      coordinator.load([nodeHostPackage]);
+      await coordinator.startAll();
+
+      expect(coordinator.list().find((e) => e.name === 'node-host-feature')?.state).toBe('active');
+    } finally {
+      await coordinator.shutdown();
+    }
+  });
+
+  it('excludes a package gated on host identity when running on a different host', async () => {
+    const runtimeEnvironment = buildRuntimeEnvironment('darwin', ['node']);
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
+    const linuxOnlyPackage: MakaioExtension = {
+      name: 'linux-feature',
+      displayName: 'Linux Feature',
+      version: '0.1.0',
+      requires: [{ type: 'host', id: 'linux' }],
+    };
+
+    try {
+      coordinator.load([linuxOnlyPackage]);
+      await coordinator.startAll();
+
+      expect(coordinator.list()).toHaveLength(0);
     } finally {
       await coordinator.shutdown();
     }

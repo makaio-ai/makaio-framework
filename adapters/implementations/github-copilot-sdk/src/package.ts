@@ -5,6 +5,7 @@
  * {@link MakaioExtension} shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { GitHubCopilotSdkAdapterName } from './constants.js';
@@ -21,7 +22,8 @@ const clients = adapterDefinition.clients;
 export const githubCopilotSdkPackage: MakaioExtension = {
   name: GitHubCopilotSdkAdapterName,
   displayName: 'GitHub Copilot',
-  dependencies: ['provider-github-copilot'],
+  version: '0.1.0',
+  dependencies: [dep('provider-github-copilot')],
   adapters: [
     {
       manifest: {

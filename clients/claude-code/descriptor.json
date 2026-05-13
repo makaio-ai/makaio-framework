@@ -3,7 +3,7 @@
   "displayName": "Claude Code",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "entrypoints": {
     "server": true
@@ -14,7 +14,7 @@
         "id": "claude-code",
         "name": "Claude Code",
         "description": "Anthropic Claude Code CLI \u2014 an agentic coding assistant",
-        "binaryName": "claude"
+        "binary": { "name": "claude" }
       }
     ]
   }

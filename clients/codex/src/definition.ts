@@ -20,8 +20,12 @@ import { codexCapabilityMap, createClientDefinition } from '@makaio/contracts';
 export const clientDefinition = createClientDefinition({
   id: 'codex',
   name: 'Codex',
+  version: '0.1.0',
   description: 'OpenAI Codex CLI — an agentic coding assistant',
-  binaryName: 'codex',
+  binary: {
+    name: 'codex',
+    supportedVersions: '*',
+  },
   configIsolation: { envVar: 'CODEX_HOME', defaultPath: '~/.codex' },
   nativeTools: [
     {

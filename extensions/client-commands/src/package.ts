@@ -21,5 +21,6 @@ import { clientCommandsCli } from './cli/contribution.js';
 export const clientCommandsPackage: MakaioExtension = {
   name: 'client-commands',
   displayName: 'Client Commands',
+  version: '0.1.0',
   cli: clientCommandsCli,
 };

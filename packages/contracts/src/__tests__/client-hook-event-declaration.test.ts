@@ -54,6 +54,7 @@ describe('ClientHookEventDeclaration', () => {
     const def = createClientDefinition({
       id: 'test-client',
       name: 'Test',
+      version: '0.1.0',
       nativeTools: [],
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {

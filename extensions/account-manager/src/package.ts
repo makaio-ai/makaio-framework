@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { parseExtensionConfig, type MakaioExtension } from '@makaio/contracts';
+import { dep, parseExtensionConfig, type MakaioExtension } from '@makaio/contracts';
 import { AccountManager } from './account-manager.js';
 import { ClaudeCodeSource } from './sources/claude-code-source.js';
 import { CodexSource } from './sources/codex-source.js';
@@ -52,7 +52,8 @@ const AccountManagerConfigSchema = z.object({
 export const accountManagerPackage: MakaioExtension = {
   name: 'account-manager',
   displayName: 'Makaio Account Manager',
-  dependencies: ['makaio.clients-core'],
+  version: '0.1.0',
+  dependencies: [dep('makaio.clients-core')],
   storage: {
     migrations: 'drizzle',
     packageRoot: PACKAGE_ROOT,

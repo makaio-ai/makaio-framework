@@ -70,7 +70,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
           name,
           displayName: name,
           version: '1.0.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: '>=0.1.0' },
           entrypoints: browser === undefined ? { server: true } : { browser },
         },
         null,
@@ -111,7 +111,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
           name,
           displayName: name,
           version: '1.0.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: '>=0.1.0' },
           entrypoints: { browser: true as const },
         }),
       );
@@ -136,7 +136,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
         name: 'scoped-ext',
         displayName: 'Scoped Ext',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -210,14 +210,14 @@ describe('discoverExtensionBrowserDevEntries', () => {
             name: 'makaio-dev',
             displayName: 'Makaio Dev',
             version: '1.0.0',
-            makaio: { minVersion: '0.1.0' },
+            makaio: { framework: '>=0.1.0' },
             entrypoints: { browser: true as const },
           },
           extensionPath: descriptorRoot,
           source: 'local',
         },
       ],
-      [{ name: 'makaio-dev', displayName: 'Makaio Dev' }],
+      [{ name: 'makaio-dev', displayName: 'Makaio Dev', version: '0.1.0' }],
       { createMount: () => () => undefined },
     );
 
@@ -253,7 +253,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
           name: 'duplicate-ext',
           displayName: 'Duplicate Ext',
           version: '1.0.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: '>=0.1.0' },
           entrypoints: { browser: browserFile.replace('.ts', '') },
         }),
       );
@@ -320,7 +320,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
         name: 'linked-ext',
         displayName: 'Linked Extension',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -350,7 +350,7 @@ describe('discoverExtensionBrowserDevEntries', () => {
         name: 'nested-ext',
         displayName: 'nested-ext',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -426,7 +426,7 @@ describe('descriptor browser build entries', () => {
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -448,7 +448,7 @@ describe('descriptor browser build entries', () => {
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -470,7 +470,7 @@ describe('descriptor browser build entries', () => {
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: 'browser/index' },
       }),
     );
@@ -500,7 +500,7 @@ describe('descriptor browser build entries', () => {
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );
@@ -526,7 +526,7 @@ describe('descriptor browser build entries', () => {
         name: 'makaio-dev',
         displayName: 'Makaio Dev',
         version: '1.0.0',
-        makaio: { minVersion: '0.1.0' },
+        makaio: { framework: '>=0.1.0' },
         entrypoints: { browser: true as const },
       }),
     );

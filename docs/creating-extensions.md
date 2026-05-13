@@ -469,7 +469,7 @@ reads it to discover and load extensions without importing their code.
   "displayName": "My Extension",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "entrypoints": {
     "server": true,
@@ -567,8 +567,8 @@ semantic versioning with the following conventions during the `0.x` phase:
 - **Patch bumps** (`0.x.y → 0.x.(y+1)`) are compatible fixes — no breaking API changes.
 - **Minor bumps** (`0.x → 0.(x+1)`) while in `0.x` may include breaking changes, consistent
   with the semver `0.x` pre-stable convention.
-- **`peerDependencies["@makaio/framework"]`** is the compatibility contract. Consumers use it
-  to pin the range of framework versions a given adapter version supports.
+- **`descriptor.json` `makaio.framework`** is the runtime compatibility contract. Consumers
+  use it to pin the framework versions a given extension or adapter version supports.
 
 When the framework reaches `1.0`, the standard semver breaking-change semantics apply.
 

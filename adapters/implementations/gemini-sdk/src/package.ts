@@ -5,6 +5,7 @@
  * {@link MakaioExtension} shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { GeminiSdkAdapterName } from './constants.js';
@@ -21,7 +22,8 @@ const clients = adapterDefinition.clients;
 export const geminiSdkPackage: MakaioExtension = {
   name: GeminiSdkAdapterName,
   displayName: 'Gemini SDK',
-  dependencies: ['provider-google'],
+  version: '0.1.0',
+  dependencies: [dep('provider-google')],
   adapters: [
     {
       manifest: {

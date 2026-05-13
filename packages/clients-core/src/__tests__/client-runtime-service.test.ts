@@ -280,23 +280,21 @@ describe('ClientRuntimeService', () => {
         name: 'Codex',
         packageName: '@makaio/client-codex',
         enabled: true,
-        binaryName: 'codex',
-        minimumVersion: '1.2.0',
+        binary: { name: 'codex', supportedVersions: '>=1.2.0' },
       }),
       makeClientRecord({
         id: 'claude-code',
         name: 'Claude Code',
         packageName: '@makaio/client-claude-code',
         enabled: true,
-        binaryName: 'claude',
-        minimumVersion: '2.0.0',
+        binary: { name: 'claude', supportedVersions: '>=2.0.0' },
       }),
       makeClientRecord({
         id: 'disabled-client',
         name: 'Disabled Client',
         packageName: '@makaio/client-disabled',
         enabled: false,
-        binaryName: 'disabled',
+        binary: { name: 'disabled', supportedVersions: '*' },
       }),
       makeClientRecord({
         id: 'web-client',
@@ -328,7 +326,7 @@ describe('ClientRuntimeService', () => {
         clientId: 'codex',
         found: true,
         version: '1.1.0',
-        warningMessage: 'Recommended: v1.2.0+',
+        warningMessage: 'Unsupported version: requires >=1.2.0',
       },
       {
         clientId: 'claude-code',
@@ -348,7 +346,7 @@ describe('ClientRuntimeService', () => {
     });
 
     const result = await bus.request(ClientSubjects.scan, {
-      targets: [{ clientId: 'codex', binaryName: 'codex', minimumVersion: '1.2.0' }],
+      targets: [{ clientId: 'codex', binaryName: 'codex', supportedVersions: '>=1.2.0' }],
     });
 
     cleanupScan();
@@ -359,7 +357,7 @@ describe('ClientRuntimeService', () => {
         clientId: 'codex',
         found: true,
         version: '1.1.0',
-        warningMessage: 'Recommended: v1.2.0+',
+        warningMessage: 'Unsupported version: requires >=1.2.0',
       },
     ]);
   });
@@ -371,16 +369,14 @@ describe('ClientRuntimeService', () => {
         name: 'Codex',
         packageName: '@makaio/client-codex',
         enabled: true,
-        binaryName: 'codex',
-        minimumVersion: '1.2.0',
+        binary: { name: 'codex', supportedVersions: '>=1.2.0' },
       }),
       makeClientRecord({
         id: 'claude-code',
         name: 'Claude Code',
         packageName: '@makaio/client-claude-code',
         enabled: true,
-        binaryName: 'claude',
-        minimumVersion: '2.0.0',
+        binary: { name: 'claude', supportedVersions: '>=2.0.0' },
       }),
     ];
     const detectionResults: CLIDetectionResult[] = [
@@ -406,7 +402,7 @@ describe('ClientRuntimeService', () => {
         clientId: 'codex',
         found: true,
         version: '1.1.0-beta.1',
-        warningMessage: 'Recommended: v1.2.0+',
+        warningMessage: 'Unsupported version: requires >=1.2.0',
       },
       {
         clientId: 'claude-code',

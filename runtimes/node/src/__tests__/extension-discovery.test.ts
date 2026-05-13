@@ -13,7 +13,7 @@ const baseDescriptor = {
   name: 'test-extension',
   displayName: 'Test Extension',
   version: '1.0.0',
-  makaio: { minVersion: '2.0.0' },
+  makaio: { framework: '>=2.0.0' },
   entrypoints: { server: true as const },
 };
 

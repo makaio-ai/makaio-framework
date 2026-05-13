@@ -11,7 +11,7 @@ describe('Prompt Extension Contract', () => {
     expect(descriptor['name']).toBe('prompt');
     expect(descriptor['displayName']).toBeDefined();
     expect(descriptor['version']).toBeDefined();
-    expect((descriptor['makaio'] as Record<string, unknown>)?.['minVersion']).toBeDefined();
+    expect((descriptor['makaio'] as Record<string, unknown>)?.['framework']).toBeDefined();
     expect((descriptor['entrypoints'] as Record<string, unknown>)?.['cli']).toBeDefined();
     expect((descriptor['cli'] as { subcommands?: Array<{ name: string }> }).subcommands).toEqual([
       expect.objectContaining({ name: 'send' }),

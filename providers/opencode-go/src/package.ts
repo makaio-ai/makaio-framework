@@ -17,5 +17,6 @@ import { openaiProviderDefinition, anthropicProviderDefinition } from './definit
 export const opencodeGoPackage: MakaioExtension = {
   name: 'provider-opencode-go',
   displayName: 'OpenCode Go',
+  version: '0.1.0',
   providers: [openaiProviderDefinition, anthropicProviderDefinition],
 };

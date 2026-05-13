@@ -11,6 +11,7 @@ import { registerHybridPreferencesStorage } from './storage/hybrid-handler.js';
 export const preferencesStoragePackage: MakaioExtension = {
   name: 'preferences-storage',
   displayName: 'Preferences Storage',
+  version: '0.1.0',
   critical: true,
   storage: {
     /**

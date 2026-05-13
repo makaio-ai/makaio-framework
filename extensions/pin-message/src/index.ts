@@ -26,6 +26,7 @@ import { createActions } from './actions.js';
 export const PinMessagePackage: MakaioExtension = {
   name: 'pin-message',
   displayName: 'Pin Message',
+  version: '0.1.0',
 
   /**
    * Creates the package service.

@@ -6,7 +6,9 @@ import {
   type AdapterContribution,
   type ExtensionContext,
   type MakaioExtension,
+  createClientDefinition,
 } from '@makaio/contracts';
+import { ClientSubjects } from '@makaio/contracts/client';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import type {
   AdapterFileConfigSet,
@@ -171,6 +173,7 @@ function createExtension(name: string, adapters: readonly AdapterContribution[])
   return {
     name,
     displayName: name,
+    version: '0.1.0',
     adapters,
   };
 }
@@ -643,40 +646,70 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [],
+        clients: [
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code',
+              name: 'Claude Code',
+              version: '1.2.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code-nightly',
+              name: 'Claude Code Nightly',
+              version: '2.0.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+        ],
+      });
+    });
+
     let capturedOptions: AdapterFactoryOptions | undefined;
-    await service.processAdapterContributions(
-      '@owner/client-backed-package',
-      createExtension('@owner/client-backed-package', [
-        {
-          manifest: {
-            name: 'client-backed-adapter',
-            displayName: 'Client Backed Adapter',
-            protocols: ['anthropic'],
-            clients: [
-              { id: 'claude-code', version: '^1.0.0' },
-              { id: 'claude-code-nightly', version: '>=2.0.0' },
-            ],
-          },
-          definition: {
-            name: 'client-backed-adapter',
-            displayName: 'Client Backed Adapter',
-            providers: [],
-            defaultTimeouts: {
-              initialization: 30_000,
-              acknowledgement: 30_000,
-              completion: 60_000,
-              toolApproval: 5_000,
-              eventWait: 10_000,
+    try {
+      await service.processAdapterContributions(
+        '@owner/client-backed-package',
+        createExtension('@owner/client-backed-package', [
+          {
+            manifest: {
+              name: 'client-backed-adapter',
+              displayName: 'Client Backed Adapter',
+              protocols: ['anthropic'],
+              clients: [
+                { id: 'claude-code', version: '^1.0.0' },
+                { id: 'claude-code-nightly', version: '>=2.0.0' },
+              ],
             },
-            createAdapter: async (options?: unknown) => {
-              capturedOptions = readAdapterFactoryOptions(options);
-              return { adapterId: capturedOptions.adapterId };
+            definition: {
+              name: 'client-backed-adapter',
+              displayName: 'Client Backed Adapter',
+              providers: [],
+              defaultTimeouts: {
+                initialization: 30_000,
+                acknowledgement: 30_000,
+                completion: 60_000,
+                toolApproval: 5_000,
+                eventWait: 10_000,
+              },
+              createAdapter: async (options?: unknown) => {
+                capturedOptions = readAdapterFactoryOptions(options);
+                return { adapterId: capturedOptions.adapterId };
+              },
             },
           },
-        },
-      ]),
-      { bus: MakaioBus } as ExtensionContext,
-    );
+        ]),
+        { bus: MakaioBus } as ExtensionContext,
+      );
+    } finally {
+      offCatalog();
+    }
 
     expect(service.getLoadedAdapters()[0]).toMatchObject({
       clients: [
@@ -687,5 +720,236 @@ describe('AdapterContributionProcessor rollback', () => {
     expect(capturedOptions).toMatchObject({
       clientId: 'claude-code',
     });
+  });
+
+  it('rejects an adapter that references a missing client', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['client-backed-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    await expect(
+      service.processAdapterContributions(
+        '@owner/client-backed-package',
+        {
+          name: '@owner/client-backed-package',
+          displayName: '@owner/client-backed-package',
+          version: '0.1.0',
+          adapters: [
+            {
+              ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                adapterId: readAdapterFactoryOptions(options).adapterId,
+              })),
+              manifest: {
+                name: 'client-backed-adapter',
+                displayName: 'Client Backed Adapter',
+                protocols: ['anthropic'],
+                clients: [{ id: 'missing-client', version: '^1.0.0' }],
+              },
+            },
+          ],
+        },
+        { bus: MakaioBus } as ExtensionContext,
+      ),
+    ).rejects.toThrow(/references missing client "missing-client"/);
+  });
+
+  it('rejects an adapter when the referenced client definition version is incompatible', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['client-backed-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [],
+        clients: [
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code',
+              name: 'Claude Code',
+              version: '1.2.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+        ],
+      });
+    });
+
+    try {
+      await expect(
+        service.processAdapterContributions(
+          '@owner/client-backed-package',
+          {
+            name: '@owner/client-backed-package',
+            displayName: '@owner/client-backed-package',
+            version: '0.1.0',
+            adapters: [
+              {
+                ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                  adapterId: readAdapterFactoryOptions(options).adapterId,
+                })),
+                manifest: {
+                  name: 'client-backed-adapter',
+                  displayName: 'Client Backed Adapter',
+                  protocols: ['anthropic'],
+                  clients: [{ id: 'claude-code', version: '^2.0.0' }],
+                },
+              },
+            ],
+          },
+          { bus: MakaioBus } as ExtensionContext,
+        ),
+      ).rejects.toThrow(/client "claude-code" definition version 1\.2\.0 does not satisfy \^2\.0\.0/);
+    } finally {
+      offCatalog();
+    }
+  });
+
+  it('rejects an adapter when the resolved client binary version is incompatible', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['client-backed-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [],
+        clients: [
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code',
+              name: 'Claude Code',
+              version: '1.2.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+        ],
+      });
+    });
+    const offResolve = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      ctx.setResult({ binaryPath: null, env: {}, configDir: null, source: 'global', version: '1.5.0' });
+    });
+
+    try {
+      await expect(
+        service.processAdapterContributions(
+          '@owner/client-backed-package',
+          {
+            name: '@owner/client-backed-package',
+            displayName: '@owner/client-backed-package',
+            version: '0.1.0',
+            adapters: [
+              {
+                ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                  adapterId: readAdapterFactoryOptions(options).adapterId,
+                })),
+                manifest: {
+                  name: 'client-backed-adapter',
+                  displayName: 'Client Backed Adapter',
+                  protocols: ['anthropic'],
+                  clients: [{ id: 'claude-code', version: '^1.0.0', binaryVersion: '>=2.0.0' }],
+                },
+              },
+            ],
+          },
+          { bus: MakaioBus } as ExtensionContext,
+        ),
+      ).rejects.toThrow(/client "claude-code" binary version 1\.5\.0 does not satisfy >=2\.0\.0/);
+    } finally {
+      offCatalog();
+      offResolve();
+    }
+  });
+
+  it('does not resolve a client binary for universal binaryVersion ranges', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['client-backed-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [],
+        clients: [
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code',
+              name: 'Claude Code',
+              version: '1.2.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+        ],
+      });
+    });
+    const resolveHandler = vi.fn();
+    const offResolve = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      resolveHandler();
+      ctx.setResult({ binaryPath: null, env: {}, configDir: null, source: 'global', version: null });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/client-backed-package',
+        {
+          name: '@owner/client-backed-package',
+          displayName: '@owner/client-backed-package',
+          version: '0.1.0',
+          adapters: [
+            {
+              ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                adapterId: readAdapterFactoryOptions(options).adapterId,
+              })),
+              manifest: {
+                name: 'client-backed-adapter',
+                displayName: 'Client Backed Adapter',
+                protocols: ['anthropic'],
+                clients: [{ id: 'claude-code', version: '^1.0.0', binaryVersion: '*' }],
+              },
+            },
+          ],
+        },
+        { bus: MakaioBus } as ExtensionContext,
+      );
+
+      expect(resolveHandler).not.toHaveBeenCalled();
+      expect(service.getLoadedAdapters()[0]?.name).toBe('client-backed-adapter');
+    } finally {
+      offCatalog();
+      offResolve();
+    }
   });
 });

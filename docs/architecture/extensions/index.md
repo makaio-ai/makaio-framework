@@ -22,8 +22,8 @@ interface ExtensionManifest {
   name: string;          // unique identifier, e.g. 'account-manager'
   displayName: string;   // shown in UI surfaces
   surface?: 'interactive' | 'headless' | 'any'; // default: 'any'
-  dependencies?: string[];  // extension ordering only; booted first
-  requires?: string[];      // narrow host/runtime environment gates, e.g. 'node'
+  dependencies?: ExtensionDependency[];  // extension ordering and version range; booted first
+  requires?: RuntimeRequirement[];       // typed host/runtime environment gates, e.g. { type: 'host', id: 'node' }
   provides?: string[];      // catalog/onboarding metadata; not a boot token
   windows?: WindowManifest[];
   tray?: TrayManifest;
@@ -75,7 +75,7 @@ compatibility, and descriptor-level defaults.
   "displayName": "Weather Tools",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "entrypoints": {
     "server": true,
@@ -134,7 +134,7 @@ export const weatherToolsExtension: MakaioExtension = {
 export const weatherToolsSyncExtension: MakaioExtension = {
   name: 'weather-tools.sync',
   displayName: 'Weather Sync',
-  dependencies: ['weather-tools'],
+  dependencies: [{ type: 'extension', name: 'weather-tools', version: '^1.0.0' }],
 };
 
 export default [weatherToolsExtension, weatherToolsSyncExtension];
@@ -399,15 +399,20 @@ surface. An extension with tray or window surfaces should declare `'interactive'
 
 ## `dependencies` — boot ordering
 
-List the `name` values of other extensions that must be initialized before this one.
+Declare structured `ExtensionDependency` objects naming the extensions that must be
+initialized before this one. Each dependency carries a semver `version` range that must
+be satisfied by the installed extension package.
 `ExtensionCoordinator` uses Kahn's algorithm to derive a topological boot order and
-validates that all declared dependencies are present in the loaded set.
+validates that all declared dependencies are present and version-compatible.
 
 ```ts
 export const myExtension: MakaioExtension = {
   name: 'my-package',
   displayName: 'My Package',
-  dependencies: ['my-package.settings', 'session'],
+  dependencies: [
+    { type: 'extension', name: 'my-package.settings', version: '>=1.0.0 <2.0.0' },
+    { type: 'extension', name: 'session', version: '>=1.0.0 <2.0.0' },
+  ],
   create: (ctx) => new MyService(ctx.bus),
 };
 ```

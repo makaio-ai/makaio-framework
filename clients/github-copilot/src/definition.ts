@@ -20,8 +20,12 @@ import { createClientDefinition } from '@makaio/contracts';
 export const clientDefinition = createClientDefinition({
   id: 'github-copilot',
   name: 'GitHub Copilot',
+  version: '0.1.0',
   description: 'GitHub Copilot — AI pair programming assistant',
-  binaryName: 'copilot',
+  binary: {
+    name: 'copilot',
+    supportedVersions: '*',
+  },
   configIsolation: { envVar: 'COPILOT_HOME', defaultPath: '~/.copilot' },
   defaultApprovalPolicy: 'always-ask',
   defaultProviderId: 'github-copilot',

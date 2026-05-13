@@ -3,7 +3,7 @@
   "displayName": "GitHub Copilot",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "entrypoints": {
     "server": true
@@ -14,7 +14,7 @@
         "id": "github-copilot",
         "name": "GitHub Copilot",
         "description": "GitHub Copilot \u2014 AI pair programming assistant",
-        "binaryName": "copilot"
+        "binary": { "name": "copilot" }
       }
     ]
   }

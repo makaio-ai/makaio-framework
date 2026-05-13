@@ -29,7 +29,7 @@ const makeDiscovered = (
     name,
     displayName: `${name} Display`,
     version: '1.0.0',
-    makaio: { minVersion: '2.0.0' },
+    makaio: { framework: '>=2.0.0' },
     entrypoints: {
       ...(serverEntry !== undefined ? { server: serverEntry } : {}),
       ...(browserEntry !== undefined ? { browser: browserEntry } : {}),
@@ -133,6 +133,22 @@ describe('synthesizeBrowserOnlyPackages', () => {
     expect(result.packages).toHaveLength(1);
     expect(result.packages[0]?.name).toBe('my-browser-ext');
     expect(result.packages[0]?.displayName).toBe('my-browser-ext Display');
+  });
+
+  it('skips browser-only extensions when framework range excludes current framework version', () => {
+    const discovered = makeDiscovered('future-browser-ext', 'browser/index');
+    const futureOnly: DiscoveredExtension = {
+      ...discovered,
+      descriptor: { ...discovered.descriptor, makaio: { framework: '>=4.0.0' } },
+    };
+
+    const result = synthesizeBrowserOnlyPackages([futureOnly], {
+      frameworkVersion: '3.0.0',
+      createMount: () => () => {},
+    });
+
+    expect(result.packages).toStrictEqual([]);
+    expect(result.configDefaults.size).toBe(0);
   });
 
   it('sets browser.entrypoint to /extensions/<name>/browser/<filename>', () => {

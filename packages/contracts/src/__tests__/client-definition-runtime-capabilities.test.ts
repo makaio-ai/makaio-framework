@@ -25,6 +25,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
   return {
     id: 'claude-code',
     name: 'Claude Code',
+    version: '0.1.0',
     defaultApprovalPolicy: 'always-ask',
     ...overrides,
   };
@@ -153,6 +154,7 @@ describe('createClientDefinition — runtime capability flags', () => {
     const definition = createClientDefinition({
       id: 'claude-code',
       name: 'Claude Code',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
     });
 
@@ -169,6 +171,7 @@ describe('createClientDefinition — runtime capability flags', () => {
     const definition = createClientDefinition({
       id: 'claude-code',
       name: 'Claude Code',
+      version: '0.1.0',
       defaultApprovalPolicy: 'full-access',
       runtimeCapabilities: {
         supportsHooks: true,
@@ -191,6 +194,7 @@ describe('createClientDefinition — runtime capability flags', () => {
     const definition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: {
         supportsHooks: true,

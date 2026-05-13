@@ -28,6 +28,7 @@ export function createPackageManagerPackage(options: PackageManagerPackageOption
   return {
     name: 'makaio.package-manager',
     displayName: 'Package Manager',
+    version: '0.1.0',
     critical: true,
     create: (ctx) =>
       new PackageManagerService(ctx.bus, ctx.makaioHome, {

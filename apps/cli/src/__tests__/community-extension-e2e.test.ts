@@ -35,7 +35,7 @@ const fixtureDescriptor: EmbeddedDescriptor = {
   name: 'test-ext',
   displayName: 'Test Extension',
   version: '1.0.0',
-  makaio: { minVersion: '0.1.0' },
+  makaio: { framework: '>=0.1.0' },
   entrypoints: { cli: 'cli/index' },
   cli: {
     name: 'test-ext',

@@ -64,6 +64,7 @@ describe('createToolContributionProcessor', () => {
     const pkg = {
       name: 'pkg-tools',
       displayName: 'Tools Package',
+      version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha'), makeToolset('beta')] },
     } satisfies MakaioExtension;
 
@@ -92,6 +93,7 @@ describe('createToolContributionProcessor', () => {
     const pkg = {
       name: 'pkg-tools',
       displayName: 'Tools Package',
+      version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha'), makeToolset('beta')] },
     } satisfies MakaioExtension;
 
@@ -106,6 +108,7 @@ describe('createToolContributionProcessor', () => {
     const pkg = {
       name: 'pkg-tools',
       displayName: 'Tools Package',
+      version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha')] },
     } satisfies MakaioExtension;
 

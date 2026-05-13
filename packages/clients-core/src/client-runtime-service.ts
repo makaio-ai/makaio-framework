@@ -1,3 +1,4 @@
+import { versionSatisfies } from '@makaio/contracts';
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   ClientSubjects,
@@ -17,8 +18,10 @@ import { canonicalizeClientId } from './client-session-observed-semantics.js';
 import { createClientWiringListSubjectDef } from './create-client-wiring-list-subject.js';
 import { assertAbsoluteProjectDir, type ClientWiringAggregatedResult } from './wiring-schemas.js';
 
-type ScannableClientRecord = ClientRecord & { binaryName: string };
-type ScannableClient = Pick<ClientScanTarget, 'clientId' | 'binaryName' | 'minimumVersion'>;
+type ScannableClientRecord = ClientRecord & {
+  binary: NonNullable<ClientRecord['binary']>;
+};
+type ScannableClient = Pick<ClientScanTarget, 'clientId' | 'binaryName' | 'supportedVersions'>;
 
 /**
  * In-memory shape for an active account identity record.
@@ -230,7 +233,7 @@ export class ClientRuntimeService extends BaseService {
         clientId: client.clientId,
         found,
         version,
-        warningMessage: resolveWarningMessage(found, version, client.minimumVersion),
+        warningMessage: resolveWarningMessage(found, version, client.supportedVersions),
       };
     });
   }
@@ -239,8 +242,8 @@ export class ClientRuntimeService extends BaseService {
     const { clients } = await this.bus.request(ClientStorageSubjects.list, {});
     return clients.filter(isScannableClientRecord).map((client) => ({
       clientId: client.id,
-      binaryName: client.binaryName,
-      minimumVersion: client.minimumVersion,
+      binaryName: client.binary.name,
+      supportedVersions: client.binary.supportedVersions,
     }));
   }
 
@@ -405,71 +408,34 @@ function withDisplayLabel(
  * @returns True when the client is enabled and declares a binary name
  */
 function isScannableClientRecord(client: ClientRecord): client is ScannableClientRecord {
-  return client.enabled && client.binaryName !== undefined;
-}
-
-/**
- * Parse a semver string into comparable numeric parts.
- *
- * Prerelease and build metadata are accepted but ignored because scan warnings
- * only need to know whether the reported major/minor/patch is below the stored
- * minimum.
- * @param version - Semver string with an optional leading `v`
- * @returns Parsed `[major, minor, patch]` tuple, or null when unparsable
- */
-function parseSemver(version: string): [number, number, number] | null {
-  const cleaned = version.trim().replace(/^v/i, '');
-  const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
-  if (!match) {
-    return null;
-  }
-
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-/**
- * Returns whether the detected CLI version is lower than the required minimum.
- * @param detectedVersion - Version reported by CLI detection
- * @param minimumVersion - Minimum supported version from client storage
- * @returns True when the detected version is below the minimum
- */
-function isVersionBelowMinimum(detectedVersion: string, minimumVersion: string): boolean {
-  const detected = parseSemver(detectedVersion);
-  const minimum = parseSemver(minimumVersion);
-
-  if (!detected || !minimum) {
-    return false;
-  }
-
-  if (detected[0] !== minimum[0]) {
-    return detected[0] < minimum[0];
-  }
-  if (detected[1] !== minimum[1]) {
-    return detected[1] < minimum[1];
-  }
-  return detected[2] < minimum[2];
+  return client.enabled && client.binary !== undefined;
 }
 
 /**
  * Resolve the client scan warning message for a detected CLI binary.
+ *
+ * Returns a warning string when the detected version does not satisfy the
+ * declared `supportedVersions` range. Uses `semver.satisfies()` so any valid
+ * npm semver range is accepted, including `>=1.2.0`, `^2.0.0`, or
+ * `>=1.0.0 <3.0.0`.
  * @param found - Whether the binary was detected
  * @param detectedVersion - Version reported by CLI detection, if any
- * @param minimumVersion - Minimum supported version for the client, if any
+ * @param supportedVersions - npm semver range for the client, if any
  * @returns Warning banner text, or undefined when no warning applies
  */
 function resolveWarningMessage(
   found: boolean,
   detectedVersion: string | undefined,
-  minimumVersion: string | undefined,
+  supportedVersions: string | undefined,
 ): string | undefined {
   if (
     found &&
     detectedVersion !== undefined &&
     detectedVersion !== 'unknown' &&
-    minimumVersion !== undefined &&
-    isVersionBelowMinimum(detectedVersion, minimumVersion)
+    supportedVersions !== undefined &&
+    !versionSatisfies(detectedVersion, supportedVersions)
   ) {
-    return `Recommended: v${minimumVersion.replace(/^v/i, '')}+`;
+    return `Unsupported version: requires ${supportedVersions}`;
   }
 
   return undefined;

@@ -8,9 +8,10 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 |-------|-------|
 | `id` | `claude-code` |
 | `name` | `Claude Code` |
+| `version` | `0.1.0` |
 | `description` | Anthropic Claude Code CLI — an agentic coding assistant |
-| `binaryName` | `claude` |
-| `minimumVersion` | `1.0.0` |
+| `binary.name` | `claude` |
+| `binary.supportedVersions` | `>=1.0.0` |
 | `defaultApprovalPolicy` | `full-access` |
 | `defaultProviderId` | `anthropic-oauth` |
 | `configIsolation.envVar` | `CLAUDE_CONFIG_DIR` |

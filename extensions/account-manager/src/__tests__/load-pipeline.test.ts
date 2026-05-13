@@ -18,7 +18,7 @@ describe('account-manager extension load pipeline', () => {
           name: 'account-manager',
           displayName: 'Makaio Account Manager',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: '>=0.1.0' },
           entrypoints: {
             browser: 'browser/index',
             server: true as const,

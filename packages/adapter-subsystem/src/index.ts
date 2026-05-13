@@ -60,6 +60,7 @@ export function createAdapterSubsystemPackage(options: CreateAdapterSubsystemPac
   return {
     name: AdapterSubsystemToken.name,
     displayName: 'Adapter Subsystem',
+    version: '0.1.0',
     provides: ['adapters'] satisfies readonly CapabilityToken[],
     critical: true,
     create: (ctx) =>

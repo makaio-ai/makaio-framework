@@ -8,7 +8,7 @@ import { buildVerifyTest } from './extension-verify-test.js';
 import { toRelativeImportPath } from './extension-path.js';
 
 const DEFAULT_EXTENSION_VERSION = '0.1.0';
-const DEFAULT_MAKAIO_MIN_VERSION = '0.1.0';
+const DEFAULT_MAKAIO_FRAMEWORK_RANGE = '>=0.1.0';
 const DEFAULT_DEV_DEPENDENCY_VERSIONS = {
   tsdown: '^0.21.7',
   tsx: '^4.20.4',
@@ -145,7 +145,7 @@ function buildDescriptorJson(options: ExtensionScaffoldBuildOptions): string {
     displayName: options.displayName,
     version: DEFAULT_EXTENSION_VERSION,
     makaio: {
-      minVersion: DEFAULT_MAKAIO_MIN_VERSION,
+      framework: DEFAULT_MAKAIO_FRAMEWORK_RANGE,
     },
     entrypoints: buildDescriptorEntrypoints(options.surfaces),
     ...(options.surfaces.includes('cli') ? { cli: buildCliManifest(options) } : {}),

@@ -3,7 +3,7 @@
   "displayName": "Filesystem Tools",
   "version": "0.1.0",
   "makaio": {
-    "minVersion": "0.1.0"
+    "framework": ">=0.1.0"
   },
   "surface": "headless",
   "entrypoints": {

@@ -8,6 +8,7 @@ import { ShellService } from './shell-service.js';
 export const shellPackage: MakaioExtension = {
   name: 'shell',
   displayName: 'Shell Tools',
+  version: '0.1.0',
   surface: 'headless',
   tools: {
     /**

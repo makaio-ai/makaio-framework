@@ -18,6 +18,7 @@ import type { ClientDefinitionLookup } from '../client-binary-manager-types.js';
 const DEFINITION_A = createClientDefinition({
   id: 'client-a',
   name: 'Client A',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
@@ -36,6 +37,7 @@ const DEFINITION_A = createClientDefinition({
 const DEFINITION_B = createClientDefinition({
   id: 'client-b',
   name: 'Client B',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: false },
 });

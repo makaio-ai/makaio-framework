@@ -28,6 +28,7 @@ import { CLIENTS_CORE_DDL } from './test-ddl.js';
 const MANAGED_DEFINITION = createClientDefinition({
   id: 'claude-code',
   name: 'Claude Code',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
@@ -46,6 +47,7 @@ const MANAGED_DEFINITION = createClientDefinition({
 const UNMANAGED_DEFINITION = createClientDefinition({
   id: 'codex',
   name: 'Codex',
+  version: '0.1.0',
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: false },
 });
@@ -175,6 +177,7 @@ describe('createClientsCorePackage (integration)', () => {
     const secondManaged = createClientDefinition({
       id: 'gemini-code',
       name: 'Gemini Code',
+      version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
@@ -205,6 +208,7 @@ describe('createClientsCorePackage (integration)', () => {
       createClientDefinition({
         id: 'late-added',
         name: 'Late Added',
+        version: '0.1.0',
         defaultApprovalPolicy: 'always-ask',
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: {

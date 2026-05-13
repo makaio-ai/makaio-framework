@@ -5,7 +5,10 @@ describe('sessionClientAccountLinkingPackage', () => {
   it('declares an explicit dependency on session storage', () => {
     expect(sessionClientAccountLinkingPackage).toMatchObject({
       name: SESSION_CLIENT_ACCOUNT_LINKING_PACKAGE_NAME,
-      dependencies: ['session-storage', 'makaio.clients-core'],
+      dependencies: [
+        { type: 'extension', name: 'session-storage' },
+        { type: 'extension', name: 'makaio.clients-core' },
+      ],
     });
   });
 });

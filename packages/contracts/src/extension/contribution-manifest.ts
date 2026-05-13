@@ -26,6 +26,7 @@
 
 import { z } from 'zod';
 import { type ProtocolId, ProtocolIdSchema } from '../provider/definition.js';
+import { type VersionRange, VersionRangeSchema } from '../version/index.js';
 
 // ---------------------------------------------------------------------------
 // ProtocolConfig
@@ -93,25 +94,37 @@ export const ProtocolRefSchema = z.union([
  *
  * The `version` field follows npm/package.json semver range syntax so the
  * executable adapter contribution can verify compatibility against the
- * installed client version.
+ * installed client (npm package) version. The optional `binaryVersion` field
+ * constrains the version of the shipped binary separately — useful when the
+ * npm package version and the embedded binary version diverge.
  * @example `{ id: 'claude-code', version: '^1.5.0' }`
+ * @example `{ id: 'claude-code', version: '^1.5.0', binaryVersion: '>=1.0.0 <1.2.0' }`
  */
 export interface AdapterClientRef {
   /** Stable client identifier matching {@link ClientManifest.id}. */
   readonly id: string;
   /**
-   * Semver range the adapter is compatible with.
+   * Semver range the adapter is compatible with for the npm package version.
    *
    * Uses the same syntax as `package.json` dependency fields
    * (e.g., `'^1.5.0'`, `'>=2.0.0'`, `'*'`).
    */
-  readonly version: string;
+  readonly version: VersionRange;
+  /**
+   * Optional semver range constraining the binary version separately from the
+   * npm package version. The adapter subsystem evaluates this field at
+   * activation time by resolving the active client binary.
+   *
+   * Omit when the binary version is assumed to match the npm package version.
+   */
+  readonly binaryVersion?: VersionRange;
 }
 
 /** Zod schema for {@link AdapterClientRef}. */
 export const AdapterClientRefSchema = z.object({
   id: z.string().min(1),
-  version: z.string().min(1),
+  version: VersionRangeSchema,
+  binaryVersion: VersionRangeSchema.optional(),
 }) satisfies z.ZodType<AdapterClientRef>;
 
 // ---------------------------------------------------------------------------
@@ -201,22 +214,28 @@ export interface ClientManifest {
   /** Short description of what this client binary does. */
   readonly description?: string;
   /**
-   * Name of the executable on `$PATH` or the absolute path to the binary.
+   * Binary identity for this client.
    *
-   * When omitted, executable client definitions use {@link id} as the default
-   * binary lookup key.
-   * @example `'claude'`
+   * When present, carries the executable name used for PATH detection.
+   * When omitted, executable client definitions use {@link id} as the
+   * default binary lookup key.
+   * @example `{ name: 'claude' }`
    */
-  readonly binaryName?: string;
+  readonly binary?: { readonly name: string };
 }
 
 /** Zod schema for {@link ClientManifest}. */
-export const ClientManifestSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  binaryName: z.string().min(1).optional(),
-}) satisfies z.ZodType<ClientManifest>;
+export const ClientManifestSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    binary: z
+      .object({ name: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
+  .strict() satisfies z.ZodType<ClientManifest>;
 
 // ---------------------------------------------------------------------------
 // ProviderManifest
@@ -448,7 +467,7 @@ export const UiSurfaceFlagsSchema = z.object({
  *       }
  *     ],
  *     "clients": [
- *       { "id": "claude-code", "name": "Claude Code", "binaryName": "claude" }
+ *       { "id": "claude-code", "name": "Claude Code", "binary": { "name": "claude" } }
  *     ]
  *   }
  * }

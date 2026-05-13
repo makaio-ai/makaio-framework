@@ -18,5 +18,6 @@ import { clientDefinition } from './definition.js';
 export const geminiPackage: MakaioExtension = {
   name: 'gemini',
   displayName: 'Gemini',
+  version: '0.1.0',
   clients: [clientDefinition],
 };

@@ -76,7 +76,7 @@ function makePackage(
   name: string,
   options: Partial<Omit<MakaioExtension, 'name' | 'displayName'>> = {},
 ): MakaioExtension {
-  return { name, displayName: name, ...options };
+  return { name, displayName: name, version: '0.1.0', ...options };
 }
 
 // ---------------------------------------------------------------------------

@@ -20,5 +20,6 @@ import { clientHooksCli } from './cli/index.js';
 export const clientHooksPackage: MakaioExtension = {
   name: 'client-hooks',
   displayName: 'Client Hook Bridge',
+  version: '0.1.0',
   cli: clientHooksCli,
 };

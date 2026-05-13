@@ -393,7 +393,7 @@ describe('extension init builtin', () => {
     await mkdir(distDir, { recursive: true });
     await writeFile(
       path.join(distDir, 'server.mjs'),
-      "export default { name: 'verified-ext', displayName: 'Verified Ext' };\n",
+      "export default { name: 'verified-ext', displayName: 'Verified Ext', version: '0.1.0' };\n",
       'utf8',
     );
     await writeFile(path.join(distDir, 'browser.mjs'), "import 'react';\nexport default () => ({});\n", 'utf8');

@@ -5,6 +5,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   createClientDefinition,
+  type ExtensionDependency,
   type MakaioExtension,
   type NodeExtensionContext as ExtensionContext,
   type ProviderDefinition,
@@ -87,8 +88,27 @@ function makePackage(
   return {
     name,
     displayName: name,
+    version: '0.1.0',
     ...options,
   };
+}
+
+/**
+ * Build a minimal {@link ExtensionDependency} for test fixtures.
+ * @param name - Name of the required extension.
+ * @returns A minimal structured dependency object.
+ */
+function dep(name: string): ExtensionDependency {
+  return { type: 'extension', name, version: '>=0.1.0' };
+}
+
+/**
+ * Build an optional structured dependency for test fixtures.
+ * @param name - Name of the optional extension.
+ * @returns A structured optional dependency object.
+ */
+function optionalDep(name: string): ExtensionDependency {
+  return { ...dep(name), optional: true };
 }
 
 /**
@@ -127,14 +147,14 @@ describe('ExtensionCoordinator', () => {
 
     const packages: MakaioExtension[] = [
       makePackage('c', {
-        dependencies: ['b'],
+        dependencies: [dep('b')],
         create: (ctx) =>
           makeMockService(ctx.bus, () => {
             callOrder.push('c');
           }),
       }),
       makePackage('b', {
-        dependencies: ['a'],
+        dependencies: [dep('a')],
         create: (ctx) =>
           makeMockService(ctx.bus, () => {
             callOrder.push('b');
@@ -312,14 +332,14 @@ describe('ExtensionCoordinator', () => {
           }),
       }),
       makePackage('b', {
-        dependencies: ['a'],
+        dependencies: [dep('a')],
         create: (ctx) =>
           makeMockService(ctx.bus, undefined, () => {
             shutdownOrder.push('b');
           }),
       }),
       makePackage('c', {
-        dependencies: ['b'],
+        dependencies: [dep('b')],
         create: (ctx) =>
           makeMockService(ctx.bus, undefined, () => {
             shutdownOrder.push('c');
@@ -341,8 +361,8 @@ describe('ExtensionCoordinator', () => {
   // 6. Cycle detection
   it('throws on circular dependency during load', () => {
     const packages: MakaioExtension[] = [
-      makePackage('x', { dependencies: ['y'] }),
-      makePackage('y', { dependencies: ['x'] }),
+      makePackage('x', { dependencies: [dep('y')] }),
+      makePackage('y', { dependencies: [dep('x')] }),
     ];
 
     const coordinator = new ExtensionCoordinator(bus, {
@@ -353,7 +373,7 @@ describe('ExtensionCoordinator', () => {
 
   // 7. Missing declared dependency throws
   it('throws when a package declares a dependency not present in the loaded set', () => {
-    const packages: MakaioExtension[] = [makePackage('child', { dependencies: ['missing-parent'] })];
+    const packages: MakaioExtension[] = [makePackage('child', { dependencies: [dep('missing-parent')] })];
 
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -418,7 +438,7 @@ describe('ExtensionCoordinator', () => {
           }),
       }),
       makePackage('b', {
-        dependencies: ['a'],
+        dependencies: [dep('a')],
         create: (ctx) => makeMockService(ctx.bus),
       }),
     ];
@@ -434,6 +454,45 @@ describe('ExtensionCoordinator', () => {
     const bInfo = list.find((e) => e.name === 'b');
     expect(bInfo?.state).toBe('failed');
     expect(bInfo?.error).toMatch(/Required dependencies not active: a/);
+  });
+
+  it('starts a package when an optional dependency is absent', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('child', {
+        dependencies: [optionalDep('missing-optional')],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+
+    await coordinator.startAll();
+
+    expect(coordinator.list().find((e) => e.name === 'child')?.state).toBe('active');
+  });
+
+  it('starts a package when an optional dependency failed', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('optional-parent', {
+        create: (ctx) =>
+          makeMockService(ctx.bus, async () => {
+            throw new Error('optional failed');
+          }),
+      }),
+      makePackage('child', {
+        dependencies: [optionalDep('optional-parent')],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+
+    await coordinator.startAll();
+
+    expect(coordinator.list().find((e) => e.name === 'optional-parent')?.state).toBe('failed');
+    expect(coordinator.list().find((e) => e.name === 'child')?.state).toBe('active');
   });
 
   // 9. list() returns current state
@@ -519,6 +578,7 @@ describe('ExtensionCoordinator', () => {
     const clientDefinition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
+      version: '0.1.0',
       defaultApprovalPolicy: 'full-access',
     });
     const packages: MakaioExtension[] = [
@@ -559,14 +619,14 @@ describe('ExtensionCoordinator', () => {
           }),
       }),
       makePackage('b', {
-        dependencies: ['a'],
+        dependencies: [dep('a')],
         create: (ctx) =>
           makeMockService(ctx.bus, undefined, async () => {
             throw new Error('destroy error in b');
           }),
       }),
       makePackage('c', {
-        dependencies: ['b'],
+        dependencies: [dep('b')],
         create: (ctx) =>
           makeMockService(ctx.bus, undefined, () => {
             shutdownOrder.push('c');
@@ -808,7 +868,7 @@ describe('ExtensionCoordinator', () => {
           }),
       }),
       makePackage('child', {
-        dependencies: ['dep'],
+        dependencies: [dep('dep')],
         create: (ctx) => makeMockService(ctx.bus),
       }),
     ]);
@@ -915,7 +975,7 @@ describe('ExtensionCoordinator', () => {
     coordinator.load([
       makePackage('dep', { create: (ctx) => makeMockService(ctx.bus) }),
       makePackage('child', {
-        dependencies: ['dep'],
+        dependencies: [dep('dep')],
         create: (ctx) => makeMockService(ctx.bus),
       }),
     ]);
@@ -933,6 +993,35 @@ describe('ExtensionCoordinator', () => {
     await coordinator.shutdown();
   });
 
+  it('allows disabling a package that is only an optional dependency of active dependents', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('dep', { create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('child', {
+        dependencies: [optionalDep('dep')],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'dep', enabled: false });
+
+    expect(result.success).toBe(true);
+    expect(coordinator.list().find((entry) => entry.name === 'dep')).toMatchObject({
+      state: 'stopped',
+      enabled: false,
+    });
+    expect(coordinator.list().find((entry) => entry.name === 'child')).toMatchObject({
+      state: 'active',
+      enabled: true,
+    });
+
+    await coordinator.shutdown();
+  });
+
   it('clears a stale disable error after the package can be stopped successfully', async () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -941,7 +1030,7 @@ describe('ExtensionCoordinator', () => {
     coordinator.load([
       makePackage('dep', { create: (ctx) => makeMockService(ctx.bus) }),
       makePackage('child', {
-        dependencies: ['dep'],
+        dependencies: [dep('dep')],
         create: (ctx) => makeMockService(ctx.bus),
       }),
     ]);
@@ -1486,12 +1575,12 @@ describe('ExtensionCoordinator', () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['bar']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['bar']) },
       });
 
       coordinator.load([
         makePackage('needs-foo', {
-          requires: ['foo'],
+          requires: [{ type: 'capability', id: 'foo' }],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
       ]);
@@ -1505,12 +1594,12 @@ describe('ExtensionCoordinator', () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['foo']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['foo']) },
       });
 
       coordinator.load([
         makePackage('needs-foo', {
-          requires: ['foo'],
+          requires: [{ type: 'capability', id: 'foo' }],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
       ]);
@@ -1525,12 +1614,15 @@ describe('ExtensionCoordinator', () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['foo']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['foo']) },
       });
 
       coordinator.load([
         makePackage('needs-foo-and-bar', {
-          requires: ['foo', 'bar'],
+          requires: [
+            { type: 'capability', id: 'foo' },
+            { type: 'capability', id: 'bar' },
+          ],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
       ]);
@@ -1540,7 +1632,75 @@ describe('ExtensionCoordinator', () => {
       expect(coordinator.list()).toHaveLength(0);
     });
 
-    it('passes all requires when no capabilities are set on coordinator', async () => {
+    it('includes a package whose versioned capability requirement is satisfied', async () => {
+      const initFn = vi.fn();
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        runtimeEnvironment: {
+          hosts: new Set(),
+          capabilities: new Set(['storage.drizzle']),
+          capabilityVersions: new Map([['storage.drizzle', '1.2.0']]),
+        },
+      });
+
+      coordinator.load([
+        makePackage('needs-storage-version', {
+          requires: [{ type: 'capability', id: 'storage.drizzle', version: '>=1.0.0 <2.0.0' }],
+          create: (ctx) => makeMockService(ctx.bus, initFn),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(initFn).toHaveBeenCalledOnce();
+      expect(coordinator.list()[0]).toMatchObject({ name: 'needs-storage-version', state: 'active' });
+    });
+
+    it('excludes a package whose versioned capability requirement is incompatible', async () => {
+      const initFn = vi.fn();
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        runtimeEnvironment: {
+          hosts: new Set(),
+          capabilities: new Set(['storage.drizzle']),
+          capabilityVersions: new Map([['storage.drizzle', '2.0.0']]),
+        },
+      });
+
+      coordinator.load([
+        makePackage('needs-storage-version', {
+          requires: [{ type: 'capability', id: 'storage.drizzle', version: '>=1.0.0 <2.0.0' }],
+          create: (ctx) => makeMockService(ctx.bus, initFn),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(initFn).not.toHaveBeenCalled();
+      expect(coordinator.list()).toHaveLength(0);
+    });
+
+    it('excludes a package whose versioned capability requirement has no declared host version', async () => {
+      const initFn = vi.fn();
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        runtimeEnvironment: {
+          hosts: new Set(),
+          capabilities: new Set(['storage.drizzle']),
+        },
+      });
+
+      coordinator.load([
+        makePackage('needs-storage-version', {
+          requires: [{ type: 'capability', id: 'storage.drizzle', version: '>=1.0.0 <2.0.0' }],
+          create: (ctx) => makeMockService(ctx.bus, initFn),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(initFn).not.toHaveBeenCalled();
+      expect(coordinator.list()).toHaveLength(0);
+    });
+
+    it('passes all requires when no runtimeEnvironment is set on coordinator', async () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
@@ -1548,7 +1708,7 @@ describe('ExtensionCoordinator', () => {
 
       coordinator.load([
         makePackage('needs-foo-no-caps', {
-          requires: ['foo'],
+          requires: [{ type: 'capability', id: 'foo' }],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
       ]);
@@ -1559,11 +1719,11 @@ describe('ExtensionCoordinator', () => {
       expect(coordinator.list()[0]).toMatchObject({ name: 'needs-foo-no-caps', state: 'active' });
     });
 
-    it('includes packages with no requires regardless of capabilities', async () => {
+    it('includes packages with no requires regardless of runtimeEnvironment', async () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['foo']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['foo']) },
       });
 
       coordinator.load([
@@ -1582,18 +1742,18 @@ describe('ExtensionCoordinator', () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['bar']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['bar']) },
       });
 
       // parent requires 'foo' (not in capabilities) → filtered out.
       // child depends on parent → transitively pruned instead of throwing.
       coordinator.load([
         makePackage('parent', {
-          requires: ['foo'],
+          requires: [{ type: 'capability', id: 'foo' }],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
         makePackage('child', {
-          dependencies: ['parent'],
+          dependencies: [dep('parent')],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
       ]);
@@ -1607,16 +1767,16 @@ describe('ExtensionCoordinator', () => {
       const initFn = vi.fn();
       const coordinator = new ExtensionCoordinator(bus, {
         extensionContextBase: TEST_PKG_CTX_BASE,
-        capabilities: new Set(['bar']),
+        runtimeEnvironment: { hosts: new Set(), capabilities: new Set(['bar']) },
       });
 
       coordinator.load([
         makePackage('gated-parent', {
-          requires: ['foo'],
+          requires: [{ type: 'capability', id: 'foo' }],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
         makePackage('gated-child', {
-          dependencies: ['gated-parent'],
+          dependencies: [dep('gated-parent')],
           create: (ctx) => makeMockService(ctx.bus, initFn),
         }),
         makePackage('independent', {
@@ -1628,6 +1788,44 @@ describe('ExtensionCoordinator', () => {
       expect(initFn).toHaveBeenCalledOnce();
       expect(coordinator.list()).toHaveLength(1);
       expect(coordinator.list()[0]).toMatchObject({ name: 'independent', state: 'active' });
+    });
+
+    it('gates on host identity when type is host', async () => {
+      const initFn = vi.fn();
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        runtimeEnvironment: { hosts: new Set(['linux']), capabilities: new Set() },
+      });
+
+      coordinator.load([
+        makePackage('linux-only', {
+          requires: [{ type: 'host', id: 'linux' }],
+          create: (ctx) => makeMockService(ctx.bus, initFn),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(initFn).toHaveBeenCalledOnce();
+      expect(coordinator.list()[0]).toMatchObject({ name: 'linux-only', state: 'active' });
+    });
+
+    it('excludes package gated on host identity when running on a different host', async () => {
+      const initFn = vi.fn();
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        runtimeEnvironment: { hosts: new Set(['darwin']), capabilities: new Set() },
+      });
+
+      coordinator.load([
+        makePackage('linux-only', {
+          requires: [{ type: 'host', id: 'linux' }],
+          create: (ctx) => makeMockService(ctx.bus, initFn),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(initFn).not.toHaveBeenCalled();
+      expect(coordinator.list()).toHaveLength(0);
     });
   });
 
@@ -1664,7 +1862,7 @@ describe('ExtensionCoordinator', () => {
       });
 
       const pkgB = makePackage('pkg-b', {
-        dependencies: ['pkg-a'],
+        dependencies: [dep('pkg-a')],
         create: (ctx) => {
           capturedService = ctx.getService(tokenA);
           return makeMockService(ctx.bus);
@@ -1695,7 +1893,7 @@ describe('ExtensionCoordinator', () => {
       });
 
       const pkgB = makePackage('pkg-b', {
-        dependencies: ['pkg-a'],
+        dependencies: [dep('pkg-a')],
         create: (ctx) => makeMockService(ctx.bus),
       });
 
@@ -2067,7 +2265,7 @@ describe('ExtensionCoordinator', () => {
       // b depends on a — so a must appear first in migration sources
       coordinator.load([
         makePackage('b', {
-          dependencies: ['a'],
+          dependencies: [dep('a')],
           storage: { migrations: '/b/drizzle' },
         }),
         makePackage('a', {

@@ -17,8 +17,12 @@ import { createClientDefinition } from '@makaio/contracts';
 export const clientDefinition = createClientDefinition({
   id: 'gemini',
   name: 'Gemini',
+  version: '0.1.0',
   description: 'Google Gemini CLI — AI assistant',
-  binaryName: 'gemini',
+  binary: {
+    name: 'gemini',
+    supportedVersions: '*',
+  },
   configIsolation: {
     envVar: 'GEMINI_CLI_SYSTEM_SETTINGS_PATH',
     defaultPath: '~/.gemini/settings.json',

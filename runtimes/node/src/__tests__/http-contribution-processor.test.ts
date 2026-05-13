@@ -14,6 +14,7 @@ function makeTestExtension(partial: Partial<MakaioExtension> = {}): MakaioExtens
   return {
     name: 'test-ext',
     displayName: 'Test Extension',
+    version: '0.1.0',
     ...partial,
   };
 }

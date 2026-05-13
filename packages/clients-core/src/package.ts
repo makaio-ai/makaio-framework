@@ -182,6 +182,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
   return {
     name: 'makaio.clients-core',
     displayName: 'Clients Core',
+    version: '0.1.0',
     critical: true,
     storage: {
       /**

@@ -9,6 +9,7 @@ export const LogImportRegistryToken = extensionToken<LogImportRegistry>('log-imp
 export const logImportRegistryPackage: MakaioExtension = {
   name: LogImportRegistryToken.name,
   displayName: 'Log Import Registry',
+  version: '0.1.0',
   critical: true,
   create: (ctx) => new LogImportRegistry({ bus: ctx.bus }),
 };

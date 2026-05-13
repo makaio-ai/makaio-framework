@@ -5,6 +5,7 @@
  * {@link MakaioExtension} shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
+import { dep } from '@makaio/contracts';
 import type { MakaioExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { OpenAINodeAdapterName } from './constants.js';
@@ -19,13 +20,14 @@ import { OpenAINodeAdapterName } from './constants.js';
 export const openaiNodePackage: MakaioExtension = {
   name: OpenAINodeAdapterName,
   displayName: 'OpenAI',
+  version: '0.1.0',
   dependencies: [
-    'provider-openai',
-    'provider-nanogpt',
-    'provider-openrouter',
-    'provider-z-ai',
-    'provider-alibaba',
-    'provider-opencode-go',
+    dep('provider-openai'),
+    dep('provider-nanogpt'),
+    dep('provider-openrouter'),
+    dep('provider-z-ai'),
+    dep('provider-alibaba'),
+    dep('provider-opencode-go'),
   ],
   adapters: [
     {

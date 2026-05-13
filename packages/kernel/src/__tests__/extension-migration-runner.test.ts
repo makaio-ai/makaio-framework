@@ -35,6 +35,7 @@ describe('runExtensionMigrations', () => {
     const pkg: MakaioExtension = {
       name: 'escaping-extension',
       displayName: 'Escaping extension',
+      version: '0.1.0',
       storage: {
         migrations: '../shared/drizzle',
         packageRoot: '/workspace/extensions/escaping-extension',

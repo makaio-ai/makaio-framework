@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { JsonObjectSchema } from '../shared/index.js';
 import { EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
+import { VersionRangeSchema } from '../version/index.js';
 
 /**
  * Strength classification for a client account identifier.
@@ -69,11 +70,16 @@ export type ClientScanResult = z.infer<typeof ClientScanResultSchema>;
 
 /**
  * Explicit CLI scan target supplied by callers that already resolved clients.
+ *
+ * `binaryName` is the resolved executable name for PATH lookup — kept as a
+ * flat field because this is a resolved scan parameter, not a definition
+ * shape. `supportedVersions` is the semver range used to validate the
+ * detected binary version.
  */
 export const ClientScanTargetSchema = z.object({
   clientId: NonEmptyStringSchema,
   binaryName: NonEmptyStringSchema,
-  minimumVersion: z.string().optional(),
+  supportedVersions: VersionRangeSchema.optional(),
 });
 
 export type ClientScanTarget = z.infer<typeof ClientScanTargetSchema>;

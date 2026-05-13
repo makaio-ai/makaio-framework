@@ -14,5 +14,6 @@ import { providerDefinition } from './definition.js';
 export const openrouterPackage: MakaioExtension = {
   name: 'provider-openrouter',
   displayName: 'OpenRouter',
+  version: '0.1.0',
   providers: [providerDefinition],
 };

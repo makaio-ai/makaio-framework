@@ -19,6 +19,7 @@ import { BinaryNotFoundError } from './client-binary-errors.js';
 import { isPathWithinBase } from './client-binary-manager-types.js';
 import type { ClientDefinitionLookup } from './client-binary-manager-types.js';
 import type { StrategyDependencies } from './binary-strategies/index.js';
+import { assertSupportedBinaryVersion } from './client-binary-version-support.js';
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -222,6 +223,16 @@ export class ClientBinaryResolver {
       );
     }
 
+    if (definition.binary !== undefined) {
+      assertSupportedBinaryVersion(
+        'client.resolveBinary',
+        clientId,
+        version,
+        definition.binary.supportedVersions,
+        'managed binary version',
+      );
+    }
+
     const binaryRelPath = toVersionCommandTuple(definition.versionCommand)?.[0];
     if (binaryRelPath === undefined) {
       throw new Error(
@@ -249,11 +260,15 @@ export class ClientBinaryResolver {
    * @returns Global execution context with null binaryPath
    */
   private async buildGlobalContext(clientId: string, definition: ClientDefinition): Promise<ClientExecutionContext> {
-    if (!definition.binaryName) {
-      throw new Error(`client.resolveBinary: definition for '${clientId}' has no binaryName — cannot scan PATH`);
+    if (!definition.binary?.name) {
+      throw new Error(`client.resolveBinary: definition for '${clientId}' has no binary.name — cannot scan PATH`);
     }
 
-    const scanTarget = { clientId, binaryName: definition.binaryName, minimumVersion: definition.minimumVersion };
+    const scanTarget = {
+      clientId,
+      binaryName: definition.binary.name,
+      supportedVersions: definition.binary.supportedVersions,
+    };
     const { results } = await this.bus.request(ClientSubjects.scan, { targets: [scanTarget] });
 
     const scanResult = results.find((r) => r.clientId === clientId);
@@ -262,6 +277,13 @@ export class ClientBinaryResolver {
     }
 
     const version = scanResult.version ?? null;
+    assertSupportedBinaryVersion(
+      'client.resolveBinary',
+      clientId,
+      version,
+      definition.binary.supportedVersions,
+      'detected global binary version',
+    );
     const configDir = this.resolveGlobalConfigDir(definition);
 
     return { binaryPath: null, env: {}, configDir, source: 'global', version };

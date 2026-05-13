@@ -8,9 +8,10 @@ Static client definition for Qwen Code. This package declares the user-facing id
 |-------|-------|
 | `id` | `qwen` |
 | `name` | `Qwen Code` |
+| `version` | `0.1.0` |
 | `description` | Qwen Code CLI — an agentic coding assistant via ACP |
-| `binaryName` | `qwen` |
-| `minimumVersion` | _(none declared)_ |
+| `binary.name` | `qwen` |
+| `binary.supportedVersions` | `*` |
 | `defaultApprovalPolicy` | `always-ask` |
 | `defaultProviderId` | `qwen-oauth` |
 | `configIsolation.envVar` | `QWEN_CODE_SYSTEM_DEFAULTS_PATH` |

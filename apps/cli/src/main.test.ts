@@ -37,6 +37,8 @@ import {
 } from './main.js';
 import { createTestTTYFixture } from './test-tty-fixture.js';
 
+const TEST_FRAMEWORK_RANGE = '>=0.1.0';
+
 describe('extractRootConfigArg', () => {
   it('strips root-level --config before the command and returns the path', () => {
     const result = extractRootConfigArg(['node', 'makaio', '--config', './makaio.config.json', 'serve']);
@@ -155,7 +157,7 @@ describe('main — remote manifest behavior', () => {
           name: 'config-cli-extension',
           displayName: 'Config CLI Extension',
           version: '1.0.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { server: true },
         }),
         'utf-8',
@@ -225,7 +227,7 @@ describe('main — remote manifest behavior', () => {
           name: 'account-manager',
           displayName: 'Account Manager',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true },
           cli: {
             name: 'account-manager',
@@ -348,7 +350,7 @@ describe('main — remote manifest behavior', () => {
           name: 'account-manager',
           displayName: 'Account Manager',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true as const },
           cli: {
             name: 'account-manager',
@@ -390,7 +392,7 @@ describe('main — remote manifest behavior', () => {
           name: 'escaping-cli',
           displayName: 'Escaping CLI',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true as const },
           cli: {
             name: 'escaping-cli',
@@ -447,7 +449,7 @@ describe('main — remote manifest behavior', () => {
           name: 'local-url-test',
           displayName: 'Local URL Test',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true as const },
           cli: {
             name: 'local-url-test',
@@ -510,7 +512,7 @@ describe('main — remote manifest behavior', () => {
           name: 'local-help-test',
           displayName: 'Local Help Test',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true as const },
           cli: {
             name: 'local-help-test',
@@ -667,7 +669,7 @@ describe('discoverLocalExtensions', () => {
           name: 'test-ext-live-schema',
           displayName: 'Test Extension (live schema)',
           version: '1.0.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: 'cli/index' },
           cli: {
             name: 'test-ext-live-schema',
@@ -731,7 +733,7 @@ describe('discoverLocalExtensions', () => {
             name: 'duplicate-local-first',
             displayName: 'Duplicate Local First',
             version: '0.1.0',
-            makaio: { minVersion: '0.1.0' },
+            makaio: { framework: TEST_FRAMEWORK_RANGE },
             entrypoints: { cli: true as const },
             cli: {
               name: 'duplicate-local-cli',
@@ -748,7 +750,7 @@ describe('discoverLocalExtensions', () => {
             name: 'duplicate-local-second',
             displayName: 'Duplicate Local Second',
             version: '0.1.0',
-            makaio: { minVersion: '0.1.0' },
+            makaio: { framework: TEST_FRAMEWORK_RANGE },
             entrypoints: { cli: true as const },
             cli: {
               name: 'duplicate-local-cli',
@@ -788,7 +790,7 @@ describe('discoverLocalExtensions', () => {
             name: 'serve-collision',
             displayName: 'Serve Collision',
             version: '0.1.0',
-            makaio: { minVersion: '0.1.0' },
+            makaio: { framework: TEST_FRAMEWORK_RANGE },
             entrypoints: { cli: true as const },
             cli: {
               name: 'serve',
@@ -850,7 +852,7 @@ describe('toCliModuleImportSpecifier', () => {
           name: 'local-url-test',
           displayName: 'Local URL Test',
           version: '0.1.0',
-          makaio: { minVersion: '0.1.0' },
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
           entrypoints: { cli: true as const },
           cli: {
             name: 'local-url-test',

@@ -4,7 +4,9 @@ import {
   ExtensionCoordinator,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
+  type RuntimeCapability,
   type ExtensionRuntimeSurface,
+  type RuntimeEnvironment,
 } from '@makaio/kernel';
 import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
 import type { ShutdownStep } from './boot-phase.js';
@@ -35,50 +37,86 @@ function normalizeHostCleanups(cleanup: void | ShutdownStep | readonly ShutdownS
 }
 
 /**
- * Build the initial capability set for the extension coordinator.
+ * Build the runtime environment snapshot for the extension coordinator.
  *
- * Combines the current OS platform token with the host-declared capability
- * tokens from the composition root. Node-based hosts must include `'node'` in
- * their host capabilities array. The platform-agnostic core deliberately does
- * not inject Node semantics; the Node wrapper normalizes before calling core.
+ * `hosts` receives the OS platform token (`'darwin'`, `'linux'`, `'win32'`)
+ * plus any plain-string host-identity tokens (e.g. `'node'`) so extensions
+ * can gate on `{ type: 'host', id: 'node' }`.
+ *
+ * `capabilities` receives only object-form {@link RuntimeCapability} tokens
+ * so extensions can gate on `{ type: 'capability', id: 'storage.drizzle' }`.
+ * Plain-string declarations are host identities, not capabilities.
+ *
+ * Node-based hosts must include `'node'` in their host capabilities array.
+ * The platform-agnostic core deliberately does not inject Node semantics;
+ * the Node wrapper normalizes before calling core.
  * @param platform - Current OS platform string (e.g. `'darwin'`, `'linux'`).
- * @param hostCapabilities - Tokens declared by the composition root.
- * @returns Mutable Set ready for passing to {@link ExtensionCoordinator}.
+ * @param hostCapabilities - Host identity and capability facts declared by the composition root.
+ * @returns Runtime environment ready for passing to {@link ExtensionCoordinator}.
  */
-export function buildCapabilitySet(platform: string, hostCapabilities: readonly string[] = []): Set<string> {
-  return new Set<string>([platform, ...hostCapabilities]);
+export function buildRuntimeEnvironment(
+  platform: string,
+  hostCapabilities: readonly HostCapabilityDeclaration[] = [],
+): RuntimeEnvironment {
+  const hosts = new Set<string>([platform]);
+  const capabilities = new Set<string>();
+  const capabilityVersions = new Map<string, NonNullable<RuntimeCapability['version']>>();
+
+  for (const declaration of hostCapabilities) {
+    if (typeof declaration === 'string') {
+      hosts.add(declaration);
+    } else {
+      capabilities.add(declaration.id);
+      if (declaration.version !== undefined) {
+        capabilityVersions.set(declaration.id, declaration.version);
+      }
+    }
+  }
+
+  return {
+    hosts,
+    capabilities,
+    ...(capabilityVersions.size > 0 ? { capabilityVersions } : {}),
+  };
 }
 
 /**
  * Return host capability tokens for Node.js composition roots.
  *
  * This helper is intentionally called by Node surfaces before boot rather
- * than from {@link buildCapabilitySet}, so the platform token remains an
+ * than from {@link buildRuntimeEnvironment}, so the platform token remains an
  * explicit host policy and Bun/future runtimes do not inherit Node semantics.
- * @param hostCapabilities - Host-declared capability tokens.
+ * @param hostCapabilities - Host-declared capability facts.
  * @returns Capability tokens with `'node'` present exactly once.
  */
-export function normalizeNodeHostCapabilities(hostCapabilities: readonly string[] = []): readonly string[] {
-  return hostCapabilities.includes('node') ? hostCapabilities : ['node', ...hostCapabilities];
+export function normalizeNodeHostCapabilities(
+  hostCapabilities: readonly HostCapabilityDeclaration[] = [],
+): readonly HostCapabilityDeclaration[] {
+  return hostCapabilities.some((capability) => typeof capability === 'string' && capability === 'node')
+    ? hostCapabilities
+    : ['node', ...hostCapabilities];
 }
+
+/** Host capability input accepted by Node runtime composition roots. */
+export type HostCapabilityDeclaration = string | RuntimeCapability;
 
 /**
  * Select descriptor-backed extension packages that are allowed to contribute
  * during this boot.
- * @param options - Package set, persisted enablement source, surface, and host capabilities.
+ * @param options - Package set, persisted enablement source, surface, and runtime environment.
  * @returns Loaded extension packages eligible for coordinator boot.
  */
 export function selectBootEligibleExtensionPackages(options: {
   readonly packages: ReadonlyArray<MakaioExtension>;
   readonly configProvider: ExtensionConfigProvider | undefined;
   readonly surface: ExtensionRuntimeSurface;
-  readonly capabilities: ReadonlySet<string>;
+  readonly runtimeEnvironment: RuntimeEnvironment;
 }): ReadonlyArray<MakaioExtension> {
   return coalesceExtensionOverrides(
     filterEligibleExtensions(
       filterPersistentlyEnabledExtensionPackages(options.packages, options.configProvider),
       options.surface,
-      options.capabilities,
+      options.runtimeEnvironment,
     ),
   );
 }

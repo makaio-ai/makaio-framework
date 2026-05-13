@@ -5,6 +5,7 @@ import type {
   ExtensionIdentity,
   ExtensionService,
   NodeExtensionContext,
+  VersionLiteral,
 } from '@makaio/contracts';
 import type { ComponentState } from '../observability/index.js';
 
@@ -20,6 +21,47 @@ export type ContributionProcessor = ExtensionContributionProcessor<NodeExtension
  * which the coordinator interprets as "load on all surfaces".
  */
 export type ExtensionRuntimeSurface = 'interactive' | 'headless';
+
+/**
+ * Host-advertised runtime capability fact.
+ */
+export interface RuntimeCapability {
+  /** Stable capability token. */
+  readonly id: string;
+  /** Concrete capability contract version when the host exposes one. */
+  readonly version?: VersionLiteral;
+}
+
+/**
+ * Snapshot of the runtime environment provided by the host.
+ *
+ * The coordinator uses this to evaluate {@link RuntimeRequirement} gates on
+ * each extension before deciding whether to load it.
+ */
+export interface RuntimeEnvironment {
+  /**
+   * Identifiers of the active host runtimes (e.g. `'node'`, `'electron'`).
+   *
+   * Extensions that declare `{ type: 'host', id: '...' }` requirements check
+   * against this set.
+   */
+  readonly hosts: ReadonlySet<string>;
+  /**
+   * Capability tokens advertised by the host (e.g. `'storage.drizzle'`).
+   *
+   * Extensions that declare `{ type: 'capability', id: '...' }` requirements
+   * check against this set. Versioned requirements additionally consult
+   * {@link RuntimeEnvironment.capabilityVersions}.
+   */
+  readonly capabilities: ReadonlySet<string>;
+  /**
+   * Concrete versions for host capabilities that expose a versioned contract.
+   *
+   * A capability requirement with a `version` range is satisfied only when the
+   * capability ID is present and this map contains a satisfying concrete version.
+   */
+  readonly capabilityVersions?: ReadonlyMap<string, VersionLiteral>;
+}
 
 /**
  * Options for constructing an {@link ExtensionCoordinator}.
@@ -51,13 +93,14 @@ export interface ExtensionCoordinatorOptions {
     'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
   >;
   /**
-   * Host-provided environment capability tokens.
+   * Host-provided runtime environment snapshot used to evaluate extension
+   * {@link RuntimeRequirement} gates during {@link ExtensionCoordinator.load}.
    *
-   * Packages whose {@link MakaioExtension.requires} entries are not all present
-   * in this set are excluded during {@link ExtensionCoordinator.load}. Omit the
-   * set only in tests that intentionally bypass environment gating.
+   * Extensions whose {@link MakaioExtension.requires} entries are not all
+   * satisfied by the supplied environment are excluded. Omit only in tests that
+   * intentionally bypass environment gating.
    */
-  capabilities?: ReadonlySet<string>;
+  runtimeEnvironment?: RuntimeEnvironment;
   /**
    * Optional callback to persist enabled/disabled state after a setEnabled call.
    * The composition root supplies this to bridge into PreferencesSubjects or another durable store.

@@ -236,7 +236,7 @@ function renderClientPage(client: ClientEntity, graph: EntityGraph): string {
   const parts: string[] = [];
   parts.push(frontmatter({ title: client.name, description }));
   parts.push(`> ${description}\n\n`);
-  if (client.binaryName) parts.push(`**Binary:** \`${client.binaryName}\`\n\n`);
+  if (client.binary?.name) parts.push(`**Binary:** \`${client.binary.name}\`\n\n`);
 
   parts.push(renderRelatedAdapters(graph.clientToAdapters.get(client.id) ?? []));
   parts.push(renderRelatedProviders(graph.clientToProviders.get(client.id) ?? []));
@@ -268,7 +268,7 @@ function renderClientIndexPage(clients: readonly ClientEntity[]): string {
   lines.push('| Client | Binary | Description |');
   lines.push('|--------|--------|-------------|');
   for (const c of clients) {
-    lines.push(`| [${c.name}](./${c.slug}/) | \`${c.binaryName ?? '—'}\` | ${sidebarDescription(c.description)} |`);
+    lines.push(`| [${c.name}](./${c.slug}/) | \`${c.binary?.name ?? '—'}\` | ${sidebarDescription(c.description)} |`);
   }
   lines.push('');
   return lines.join('\n');

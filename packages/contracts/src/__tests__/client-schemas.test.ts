@@ -1,10 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClientAccountObserveSchema,
+  ClientDefinitionSchema,
   ClientScanResultSchema,
   ClientUsageIngestSchema,
   ClientUsageSnapshotSchema,
 } from '@makaio/contracts/client';
+
+/** Minimal valid {@link ClientDefinitionSchema} input used by legacy rejection tests. */
+const validDef = {
+  id: 'test-client',
+  name: 'Test Client',
+  version: '0.1.0',
+  defaultApprovalPolicy: 'always-ask',
+} as const;
 
 function createValidUsageIngestRequest() {
   return {
@@ -131,5 +140,30 @@ describe('client schemas', () => {
         clientAccountId: ' ',
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('legacy field rejection', () => {
+  it('rejects a client definition without a version', () => {
+    const { version: _version, ...input } = validDef;
+    expect(ClientDefinitionSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('rejects legacy binaryName', () => {
+    const input = { ...validDef, binaryName: 'claude' };
+    expect(ClientDefinitionSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('rejects legacy minimumVersion', () => {
+    const input = { ...validDef, minimumVersion: '1.0.0' };
+    expect(ClientDefinitionSchema.safeParse(input).success).toBe(false);
+  });
+
+  it('rejects binary preferredVersion', () => {
+    const input = {
+      ...validDef,
+      binary: { name: 'test', supportedVersions: '>=1.0.0', preferredVersion: '1.2.3' },
+    };
+    expect(ClientDefinitionSchema.safeParse(input).success).toBe(false);
   });
 });

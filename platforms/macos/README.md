@@ -5,8 +5,8 @@ Login Item management (auto-launch at user login) via AppleScript and integrates
 with the framework's capability bus so any host can query and control the
 capability through standard bus subjects.
 
-The package is gated to `darwin` via its `requires: ['darwin']` extension
-declaration — on non-macOS hosts it is a no-op even if loaded.
+The package is gated to `darwin` via its `requires: [{ type: 'host', id: 'darwin' }]`
+extension declaration — on non-macOS hosts it is a no-op even if loaded.
 
 ## Capabilities
 

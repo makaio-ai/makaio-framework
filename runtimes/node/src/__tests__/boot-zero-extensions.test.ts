@@ -86,7 +86,7 @@ async function filesystemDescriptorFixture(
       name,
       displayName,
       version: '1.0.0',
-      makaio: { minVersion: '1.0.0' },
+      makaio: { framework: '>=1.0.0' },
       entrypoints: { server: true as const },
       ...(options.surface !== undefined ? { surface: options.surface } : {}),
     },
@@ -159,6 +159,7 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
 const bootPackage = {
   name: 'boot-fixture',
   displayName: 'Boot Fixture',
+  version: '1.0.0',
   runtimeBoot: {
     configure({ registerContributionProcessor }) {
       globalThis.__makaioBootZeroEvents.push('boot-configured');
@@ -171,7 +172,7 @@ const bootPackage = {
     },
   },
 };
-const targetPackage = { name: 'boot-fixture.target', displayName: 'Boot Fixture Target' };
+const targetPackage = { name: 'boot-fixture.target', displayName: 'Boot Fixture Target', version: '1.0.0' };
 export default [bootPackage, targetPackage];
 `,
     );
@@ -197,6 +198,7 @@ export default [bootPackage, targetPackage];
 export default {
   name: 'disabled-runtime-owner',
   displayName: 'Disabled Runtime Owner',
+  version: '1.0.0',
   tray: { label: 'Disabled Owner', section: 'tools' },
   windows: [{ id: 'settings', style: 'utility' }],
   runtimeOwnership: { sessionOrchestrator: true },
@@ -241,6 +243,7 @@ export default {
 export default {
   name: 'interactive-runtime-owner',
   displayName: 'Interactive Runtime Owner',
+  version: '1.0.0',
   surface: 'interactive',
   runtimeOwnership: { sessionOrchestrator: true },
   runtimeBoot: {
@@ -298,6 +301,7 @@ export default {
 export default {
   name: 'service-package',
   displayName: 'Service Package',
+  version: '1.0.0',
   create: () => ({
     destroy: () => {
       globalThis.__makaioBootZeroEvents.push('service-destroyed');

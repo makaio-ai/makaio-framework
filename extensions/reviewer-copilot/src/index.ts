@@ -28,6 +28,7 @@ export { copilotProcessor } from './processor.js';
 export const reviewerCopilotPackage: MakaioExtension = {
   name: 'reviewer-copilot',
   displayName: 'Copilot Reviewer Processor',
+  version: '0.1.0',
 
   /**
    * Creates the extension service.

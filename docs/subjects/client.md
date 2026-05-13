@@ -330,7 +330,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `targets` | `{ clientId: string; binaryName: string; minimumVersion?: string \| undefined; }[] \| undefined` | no |
+| `targets` | `{ clientId: string; binaryName: string; supportedVersions?: string \| undefined; }[] \| undefined` | no |
 
 **Response:**
 

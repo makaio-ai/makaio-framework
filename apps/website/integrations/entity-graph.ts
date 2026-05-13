@@ -9,7 +9,8 @@ export interface ClientEntity {
   id: string;
   name: string;
   description: string;
-  binaryName?: string;
+  /** Binary compatibility descriptor contributed by the client package. */
+  binary?: { name: string };
   /** Filesystem directory name (e.g. `claude-code`). */
   slug: string;
 }
@@ -78,7 +79,7 @@ interface ClientProviderEdges {
 
 interface ClientDescriptor {
   contributions?: {
-    clients?: { id: string; name: string; description: string; binaryName?: string }[];
+    clients?: { id: string; name: string; description: string; binary?: { name: string } }[];
   };
 }
 
