@@ -37,5 +37,4 @@ jobs:
     uses: ./.github/workflows/conformance-adapter.yml
     with:
       adapter: claude-code-cli
-      provider_env_var: OPENCODE_GO_API_KEY
       environment: conformance-claude-code-cli

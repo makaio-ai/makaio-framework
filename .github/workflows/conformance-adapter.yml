@@ -7,8 +7,25 @@ on:
         required: true
         type: string
       provider_env_var:
-        required: true
+        required: false
         type: string
+        default: ''
+      provider_secret_name:
+        required: false
+        type: string
+        default: ''
+      conformance_provider:
+        required: false
+        type: string
+        default: ''
+      primary_model:
+        required: false
+        type: string
+        default: ''
+      secondary_model:
+        required: false
+        type: string
+        default: ''
       environment:
         required: true
         type: string
@@ -57,17 +74,36 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Install adapter CLI
+        uses: ./.github/actions/install-conformance-cli
+        with:
+          adapter: ${{ inputs.adapter }}
+
       - name: Run adapter smoke
         env:
-          PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
-          MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
+          PROVIDER_SECRET_NAME: ${{ inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME }}
+          PROVIDER_ENV_VAR: ${{ inputs.provider_env_var || vars.PROVIDER_ENV_VAR }}
+          PROVIDER_API_KEY: ${{ secrets[inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME] }}
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ inputs.conformance_provider || vars.MAKAIO_CONFORMANCE_PROVIDER }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ inputs.primary_model || vars.MAKAIO_CONFORMANCE_PRIMARY_MODEL }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ inputs.secondary_model || vars.MAKAIO_CONFORMANCE_SECONDARY_MODEL }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
-          if [ -z "${PROVIDER_API_KEY}" ]; then
-            echo "::error::Missing secret 'PROVIDER_API_KEY' for adapter '${{ inputs.adapter }}'"
+          if [ -z "${PROVIDER_SECRET_NAME}" ]; then
+            echo "::error::Missing provider secret name for adapter '${{ inputs.adapter }}'. Set input provider_secret_name or environment variable PROVIDER_SECRET_NAME."
             exit 1
           fi
-          export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"
-          mkdir -p conformance-artifacts
+          if [ -z "${PROVIDER_ENV_VAR}" ]; then
+            echo "::error::Missing provider environment variable for adapter '${{ inputs.adapter }}'. Set input provider_env_var or environment variable PROVIDER_ENV_VAR."
+            exit 1
+          fi
+          if [ -z "${PROVIDER_API_KEY}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for adapter '${{ inputs.adapter }}'"
+            exit 1
+          fi
+          export "${PROVIDER_ENV_VAR}=${PROVIDER_API_KEY}"
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a ${{ inputs.adapter }} \
             agents.simple.test.ts \
@@ -79,14 +115,29 @@ jobs:
 
       - name: Run adapter rest
         env:
-          PROVIDER_API_KEY: ${{ secrets.PROVIDER_API_KEY }}
-          MAKAIO_CONFORMANCE_PROVIDER: ${{ vars.MAKAIO_CONFORMANCE_PROVIDER }}
+          PROVIDER_SECRET_NAME: ${{ inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME }}
+          PROVIDER_ENV_VAR: ${{ inputs.provider_env_var || vars.PROVIDER_ENV_VAR }}
+          PROVIDER_API_KEY: ${{ secrets[inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME] }}
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ inputs.conformance_provider || vars.MAKAIO_CONFORMANCE_PROVIDER }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ inputs.primary_model || vars.MAKAIO_CONFORMANCE_PRIMARY_MODEL }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ inputs.secondary_model || vars.MAKAIO_CONFORMANCE_SECONDARY_MODEL }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
-          if [ -z "${PROVIDER_API_KEY}" ]; then
-            echo "::error::Missing secret 'PROVIDER_API_KEY' for adapter '${{ inputs.adapter }}'"
+          if [ -z "${PROVIDER_SECRET_NAME}" ]; then
+            echo "::error::Missing provider secret name for adapter '${{ inputs.adapter }}'. Set input provider_secret_name or environment variable PROVIDER_SECRET_NAME."
             exit 1
           fi
-          export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"
+          if [ -z "${PROVIDER_ENV_VAR}" ]; then
+            echo "::error::Missing provider environment variable for adapter '${{ inputs.adapter }}'. Set input provider_env_var or environment variable PROVIDER_ENV_VAR."
+            exit 1
+          fi
+          if [ -z "${PROVIDER_API_KEY}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for adapter '${{ inputs.adapter }}'"
+            exit 1
+          fi
+          export "${PROVIDER_ENV_VAR}=${PROVIDER_API_KEY}"
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a ${{ inputs.adapter }} \
             --exclude agents.simple.test.ts \
@@ -100,5 +151,5 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conformance-artifacts-${{ inputs.adapter }}
-          path: conformance-artifacts/*.json
+          path: conformance-artifacts/**
           if-no-files-found: ignore

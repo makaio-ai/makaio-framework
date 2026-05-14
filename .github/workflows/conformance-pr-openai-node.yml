@@ -31,5 +31,4 @@ jobs:
     uses: ./.github/workflows/conformance-adapter.yml
     with:
       adapter: openai-node
-      provider_env_var: OPENCODE_GO_API_KEY
       environment: conformance-openai-node

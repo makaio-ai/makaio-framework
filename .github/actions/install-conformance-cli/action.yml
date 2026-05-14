@@ -1,0 +1,35 @@
+name: Install conformance CLI
+description: Install subprocess CLIs required by adapter conformance runs.
+
+inputs:
+  adapter:
+    description: Adapter name being tested.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install adapter CLI
+      shell: bash
+      env:
+        ADAPTER: ${{ inputs.adapter }}
+      run: |
+        case "${ADAPTER}" in
+          codex-app-server)
+            npm install -g @openai/codex
+            codex --version
+            ;;
+          claude-code-cli)
+            curl -fsSL https://claude.ai/install.sh | bash
+            for dir in "${HOME}/.local/bin" "${HOME}/.claude/local"; do
+              if [ -d "${dir}" ]; then
+                echo "${dir}" >> "${GITHUB_PATH}"
+                export PATH="${dir}:${PATH}"
+              fi
+            done
+            claude --version
+            ;;
+          *)
+            echo "No CLI install required for ${ADAPTER}"
+            ;;
+        esac

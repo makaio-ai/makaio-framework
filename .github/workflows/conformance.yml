@@ -16,13 +16,14 @@ jobs:
     # exposed to checked-out PR code.
     if: |
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/conformance') &&
+      (github.event.comment.body == '/conformance' || startsWith(github.event.comment.body, '/conformance ')) &&
       github.event.comment.user.type != 'Bot' &&
       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
     uses: ./.github/workflows/conformance-reusable.yml
     with:
       pr_number: ${{ github.event.issue.number }}
       comment_id: ${{ github.event.comment.id }}
+      comment_body: ${{ github.event.comment.body }}
     # The reusable workflow reads provider and GitHub App secrets; the caller
     # must inherit them because workflow_call does not pass secrets implicitly.
     secrets: inherit

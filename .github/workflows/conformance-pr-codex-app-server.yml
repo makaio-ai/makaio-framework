@@ -30,5 +30,4 @@ jobs:
     uses: ./.github/workflows/conformance-adapter.yml
     with:
       adapter: codex-app-server
-      provider_env_var: OPENAI_API_KEY
       environment: conformance-codex-app-server

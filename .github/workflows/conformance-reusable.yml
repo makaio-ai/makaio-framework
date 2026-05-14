@@ -9,6 +9,9 @@ on:
       comment_id:
         required: true
         type: number
+      comment_body:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +26,15 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      adapter_matrix: ${{ steps.command.outputs.adapter_matrix }}
+      has_adapter_jobs: ${{ steps.command.outputs.has_adapter_jobs }}
+      openai_enabled: ${{ steps.command.outputs.openai_enabled }}
+      openai_provider_env_var: ${{ steps.command.outputs.openai_provider_env_var }}
+      openai_provider_secret_name: ${{ steps.command.outputs.openai_provider_secret_name }}
+      openai_conformance_provider: ${{ steps.command.outputs.openai_conformance_provider }}
+      openai_primary_model: ${{ steps.command.outputs.openai_primary_model }}
+      openai_secondary_model: ${{ steps.command.outputs.openai_secondary_model }}
     steps:
       # Resolve PR metadata before checking out code that will receive provider
       # API keys.
@@ -44,6 +56,150 @@ jobs:
                 'Conformance tests require provider API keys and only run for pull requests from this repository.',
               );
             }
+
+      - name: Parse conformance command
+        id: command
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const adapterConfigs = {
+              'openai-node': {
+                adapter: 'openai-node',
+                provider_env_var: 'OPENCODE_GO_API_KEY',
+                provider_secret_name: 'OPENCODE_GO_API_KEY',
+                conformance_provider: 'opencode-go',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'anthropic-sdk': {
+                adapter: 'anthropic-sdk',
+                provider_env_var: 'OPENCODE_GO_API_KEY',
+                provider_secret_name: 'OPENCODE_GO_API_KEY',
+                conformance_provider: 'opencode-go-anthropic',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'claude-agent-sdk': {
+                adapter: 'claude-agent-sdk',
+                provider_env_var: 'OPENCODE_GO_API_KEY',
+                provider_secret_name: 'OPENCODE_GO_API_KEY',
+                conformance_provider: 'opencode-go-anthropic',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'claude-code-cli': {
+                adapter: 'claude-code-cli',
+                provider_env_var: 'OPENCODE_GO_API_KEY',
+                provider_secret_name: 'OPENCODE_GO_API_KEY',
+                conformance_provider: 'opencode-go-anthropic',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'codex-app-server': {
+                adapter: 'codex-app-server',
+                provider_env_var: 'CODEX_ACCESS_TOKEN',
+                provider_secret_name: 'CODEX_ACCESS_TOKEN',
+                conformance_provider: '',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'gemini-sdk': {
+                adapter: 'gemini-sdk',
+                provider_env_var: 'GEMINI_API_KEY',
+                provider_secret_name: 'GEMINI_API_KEY',
+                conformance_provider: '',
+                primary_model: '',
+                secondary_model: '',
+              },
+              'pi-sdk': {
+                adapter: 'pi-sdk',
+                provider_env_var: 'OPENCODE_GO_API_KEY',
+                provider_secret_name: 'OPENCODE_GO_API_KEY',
+                conformance_provider: 'opencode-go',
+                primary_model: '',
+                secondary_model: '',
+              },
+            };
+
+            const body = process.env.COMMENT_BODY.trim();
+            const parts = body.split(/\s+/).filter(Boolean);
+            if (parts[0] !== '/conformance') {
+              core.setFailed(`Unsupported conformance command: ${body}`);
+              return;
+            }
+
+            let target = 'all';
+            let overrideStart = 1;
+            if (parts[1] && !parts[1].includes('=')) {
+              target = parts[1];
+              overrideStart = 2;
+            }
+
+            const allowedTargets = new Set(['all', ...Object.keys(adapterConfigs)]);
+            if (!allowedTargets.has(target)) {
+              core.setFailed(`Unknown conformance adapter '${target}'. Available: all, ${Object.keys(adapterConfigs).join(', ')}`);
+              return;
+            }
+
+            const overrides = {};
+            const aliases = {
+              provider: 'conformance_provider',
+              conformance_provider: 'conformance_provider',
+              secret: 'provider_secret_name',
+              provider_secret_name: 'provider_secret_name',
+              env: 'provider_env_var',
+              provider_env_var: 'provider_env_var',
+              primary: 'primary_model',
+              primary_model: 'primary_model',
+              secondary: 'secondary_model',
+              secondary_model: 'secondary_model',
+            };
+
+            for (const token of parts.slice(overrideStart)) {
+              const separator = token.indexOf('=');
+              if (separator <= 0) {
+                core.setFailed(`Invalid conformance override '${token}'. Expected key=value.`);
+                return;
+              }
+              const key = token.slice(0, separator);
+              const value = token.slice(separator + 1);
+              const normalizedKey = aliases[key];
+              if (!normalizedKey) {
+                core.setFailed(`Unknown conformance override '${key}'. Supported: ${Object.keys(aliases).join(', ')}`);
+                return;
+              }
+              overrides[normalizedKey] = value;
+            }
+
+            const applyOverrides = (config) => ({ ...config, ...overrides });
+            const selectedConfigs = target === 'all'
+              ? Object.values(adapterConfigs).map(applyOverrides)
+              : [applyOverrides(adapterConfigs[target])];
+            const openaiConfig = selectedConfigs.find((config) => config.adapter === 'openai-node');
+            const nonOpenaiConfigs = selectedConfigs.filter((config) => config.adapter !== 'openai-node');
+            const matrix = {
+              include: nonOpenaiConfigs.length > 0
+                ? nonOpenaiConfigs
+                : [{
+                    adapter: 'none',
+                    provider_env_var: 'UNUSED',
+                    provider_secret_name: 'UNUSED',
+                    conformance_provider: '',
+                    primary_model: '',
+                    secondary_model: '',
+                  }],
+            };
+
+            core.setOutput('adapter_matrix', JSON.stringify(matrix));
+            core.setOutput('has_adapter_jobs', nonOpenaiConfigs.length > 0 ? 'true' : 'false');
+            core.setOutput('openai_enabled', openaiConfig ? 'true' : 'false');
+            core.setOutput('openai_provider_env_var', openaiConfig?.provider_env_var ?? '');
+            core.setOutput('openai_provider_secret_name', openaiConfig?.provider_secret_name ?? '');
+            core.setOutput('openai_conformance_provider', openaiConfig?.conformance_provider ?? '');
+            core.setOutput('openai_primary_model', openaiConfig?.primary_model ?? '');
+            core.setOutput('openai_secondary_model', openaiConfig?.secondary_model ?? '');
+        env:
+          COMMENT_BODY: ${{ inputs.comment_body }}
 
       - name: Create GitHub App token
         id: app-token
@@ -76,6 +232,7 @@ jobs:
 
   reference-smoke:
     needs: preflight
+    if: needs.preflight.outputs.openai_enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -111,12 +268,35 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Export openai-node provider secret
+        env:
+          PROVIDER_SECRET_NAME: ${{ needs.preflight.outputs.openai_provider_secret_name }}
+          PROVIDER_ENV_VAR: ${{ needs.preflight.outputs.openai_provider_env_var }}
+          PROVIDER_SECRET_VALUE: ${{ secrets[needs.preflight.outputs.openai_provider_secret_name] }}
+        run: |
+          if [ -z "${PROVIDER_SECRET_NAME}" ]; then
+            echo "::error::Missing provider secret name for openai-node"
+            exit 1
+          fi
+          if [ -z "${PROVIDER_ENV_VAR}" ]; then
+            echo "::error::Missing provider environment variable for openai-node"
+            exit 1
+          fi
+          if [ -z "${PROVIDER_SECRET_VALUE}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for openai-node"
+            exit 1
+          fi
+          echo "${PROVIDER_ENV_VAR}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
+
       - name: Run openai-node reference smoke
         env:
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-          MAKAIO_CONFORMANCE_PROVIDER: opencode-go
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ needs.preflight.outputs.openai_conformance_provider }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ needs.preflight.outputs.openai_primary_model }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ needs.preflight.outputs.openai_secondary_model }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
-          mkdir -p conformance-artifacts
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a openai-node \
             agents.simple.test.ts \
@@ -131,11 +311,14 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conformance-artifacts-openai-node-reference-smoke
-          path: conformance-artifacts/*.json
+          path: conformance-artifacts/**
           if-no-files-found: ignore
 
   reference-rest:
-    needs: reference-smoke
+    needs:
+      - preflight
+      - reference-smoke
+    if: needs.preflight.outputs.openai_enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -169,12 +352,35 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Export openai-node provider secret
+        env:
+          PROVIDER_SECRET_NAME: ${{ needs.preflight.outputs.openai_provider_secret_name }}
+          PROVIDER_ENV_VAR: ${{ needs.preflight.outputs.openai_provider_env_var }}
+          PROVIDER_SECRET_VALUE: ${{ secrets[needs.preflight.outputs.openai_provider_secret_name] }}
+        run: |
+          if [ -z "${PROVIDER_SECRET_NAME}" ]; then
+            echo "::error::Missing provider secret name for openai-node"
+            exit 1
+          fi
+          if [ -z "${PROVIDER_ENV_VAR}" ]; then
+            echo "::error::Missing provider environment variable for openai-node"
+            exit 1
+          fi
+          if [ -z "${PROVIDER_SECRET_VALUE}" ]; then
+            echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for openai-node"
+            exit 1
+          fi
+          echo "${PROVIDER_ENV_VAR}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
+
       - name: Run openai-node reference rest
         env:
-          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-          MAKAIO_CONFORMANCE_PROVIDER: opencode-go
+          MAKAIO_CONFORMANCE_PROVIDER: ${{ needs.preflight.outputs.openai_conformance_provider }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ needs.preflight.outputs.openai_primary_model }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ needs.preflight.outputs.openai_secondary_model }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
-          mkdir -p conformance-artifacts
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a openai-node \
             --exclude agents.simple.test.ts \
@@ -188,33 +394,17 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conformance-artifacts-openai-node-reference-rest
-          path: conformance-artifacts/*.json
+          path: conformance-artifacts/**
           if-no-files-found: ignore
 
   adapter-conformance:
-    needs: reference-smoke
+    needs: preflight
+    if: needs.preflight.outputs.has_adapter_jobs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - adapter: anthropic-sdk
-            provider_secret_name: ANTHROPIC_API_KEY
-          - adapter: claude-agent-sdk
-            conformance_provider: opencode-go-anthropic
-            provider_secret_name: OPENCODE_GO_API_KEY
-          - adapter: claude-code-cli
-            conformance_provider: opencode-go-anthropic
-            provider_secret_name: OPENCODE_GO_API_KEY
-          - adapter: codex-app-server
-            provider_secret_name: OPENAI_API_KEY
-          - adapter: gemini-sdk
-            provider_secret_name: GEMINI_API_KEY
-          - adapter: pi-sdk
-            provider_secret_name: OPENCODE_GO_API_KEY
-          - adapter: qwen-acp
-            provider_secret_name: OPENAI_API_KEY
+      matrix: ${{ fromJSON(needs.preflight.outputs.adapter_matrix) }}
     name: conformance (${{ matrix.adapter }})
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -247,22 +437,36 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
+      - name: Install adapter CLI
+        uses: ./.github/actions/install-conformance-cli
+        with:
+          adapter: ${{ matrix.adapter }}
+
       - name: Export provider secret
         env:
           PROVIDER_SECRET_NAME: ${{ matrix.provider_secret_name }}
+          PROVIDER_ENV_VAR: ${{ matrix.provider_env_var }}
           PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}
         run: |
+          if [ -z "${PROVIDER_ENV_VAR}" ]; then
+            echo "::error::Missing provider environment variable for adapter '${{ matrix.adapter }}'"
+            exit 1
+          fi
           if [ -z "${PROVIDER_SECRET_VALUE}" ]; then
             echo "::error::Missing secret '${PROVIDER_SECRET_NAME}' for adapter '${{ matrix.adapter }}'"
             exit 1
           fi
-          echo "${PROVIDER_SECRET_NAME}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
+          echo "${PROVIDER_ENV_VAR}=${PROVIDER_SECRET_VALUE}" >> "$GITHUB_ENV"
 
       - name: Run adapter smoke
         env:
           MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ matrix.primary_model }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ matrix.secondary_model }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
-          mkdir -p conformance-artifacts
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a ${{ matrix.adapter }} \
             agents.simple.test.ts \
@@ -275,7 +479,12 @@ jobs:
       - name: Run adapter rest
         env:
           MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}
+          MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ matrix.primary_model }}
+          MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ matrix.secondary_model }}
+          MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs
+          TMPDIR: conformance-artifacts/logs
         run: |
+          mkdir -p conformance-artifacts/logs
           yarn test:conformance \
             -a ${{ matrix.adapter }} \
             --exclude agents.simple.test.ts \
@@ -289,7 +498,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: conformance-artifacts-${{ matrix.adapter }}
-          path: conformance-artifacts/*.json
+          path: conformance-artifacts/**
           if-no-files-found: ignore
 
   conformance-report:

@@ -27,6 +27,10 @@ function readWorkflow(fileName: string): string {
   return readFileSync(resolveFrameworkWorkflowPath(fileName), 'utf8');
 }
 
+function readGithubAction(relativePath: string): string {
+  return readFileSync(resolve(testFileDir, '../../.github/actions', relativePath), 'utf8');
+}
+
 function extractStepBlock(workflowText: string, stepName: string): string {
   const startIndex = workflowText.indexOf(`- name: ${stepName}`);
   expect(startIndex).toBeGreaterThanOrEqual(0);
@@ -66,6 +70,10 @@ describe('conformance workflow security', () => {
   it('uploads per-adapter schema violation artifacts and tolerates clean runs', () => {
     expect(workflowText).toContain('schema-violations-${{ matrix.adapter }}-adapter-smoke.json');
     expect(workflowText).toContain('conformance-result-${{ matrix.adapter }}-adapter-rest.json');
+    expect(workflowText).toContain('MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs');
+    expect(workflowText).toContain('TMPDIR: conformance-artifacts/logs');
+    expect(workflowText).toContain('mkdir -p conformance-artifacts/logs');
+    expect(workflowText).toContain('path: conformance-artifacts/**');
     expect(workflowText).toContain('continue-on-error: true');
     expect(workflowText).toContain("const escapeCell = (value) => String(value).replace(/\\|/g, '\\\\|')");
   });
@@ -88,18 +96,28 @@ describe('conformance workflow security', () => {
   });
 
   it('uses the reference adapter gate and CI-only provider overrides for expensive adapters', () => {
-    expect(workflowText).toContain('needs: reference-smoke');
+    expect(workflowText).toContain('openai_enabled');
+    expect(workflowText).toContain('adapter_matrix');
     for (const stepName of ['Run openai-node reference smoke', 'Run openai-node reference rest']) {
       const stepBlock = extractStepBlock(workflowText, stepName);
-      expect(stepBlock).toContain('OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}');
-      expect(stepBlock).toContain('MAKAIO_CONFORMANCE_PROVIDER: opencode-go');
+      expect(stepBlock).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ needs.preflight.outputs.openai_conformance_provider }}');
+      expect(stepBlock).toContain(
+        'MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ needs.preflight.outputs.openai_primary_model }}',
+      );
+      expect(stepBlock).toContain(
+        'MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ needs.preflight.outputs.openai_secondary_model }}',
+      );
     }
-    expect(workflowText).toContain('- adapter: claude-agent-sdk');
-    expect(workflowText).toContain('- adapter: claude-code-cli');
-    expect(workflowText).toContain('conformance_provider: opencode-go-anthropic');
-    expect(workflowText).toContain('provider_secret_name: OPENCODE_GO_API_KEY');
+    expect(workflowText).toContain("'claude-agent-sdk': {");
+    expect(workflowText).toContain("'claude-code-cli': {");
+    expect(workflowText).toContain("conformance_provider: 'opencode-go-anthropic'");
+    expect(workflowText).toContain("provider_secret_name: 'OPENCODE_GO_API_KEY'");
+    expect(workflowText).toContain("provider_env_var: 'OPENCODE_GO_API_KEY'");
     expect(workflowText).toContain('PROVIDER_SECRET_VALUE: ${{ secrets[matrix.provider_secret_name] }}');
+    expect(workflowText).toContain('PROVIDER_ENV_VAR: ${{ matrix.provider_env_var }}');
     expect(workflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}');
+    expect(workflowText).toContain('MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ matrix.primary_model }}');
+    expect(workflowText).toContain('MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ matrix.secondary_model }}');
     expect(workflowText).not.toContain('github-copilot-sdk');
   });
 
@@ -109,13 +127,52 @@ describe('conformance workflow security', () => {
     for (const stepName of ['Run adapter smoke', 'Run adapter rest']) {
       const stepBlock = extractStepBlock(adapterWorkflowText, stepName);
       const secretGuardIndex = stepBlock.indexOf('if [ -z "${PROVIDER_API_KEY}" ]; then');
-      const exportIndex = stepBlock.indexOf('export "${{ inputs.provider_env_var }}=${PROVIDER_API_KEY}"');
+      const exportIndex = stepBlock.indexOf('export "${PROVIDER_ENV_VAR}=${PROVIDER_API_KEY}"');
 
       expect(secretGuardIndex).toBeGreaterThanOrEqual(0);
       expect(exportIndex).toBeGreaterThan(secretGuardIndex);
       expect(stepBlock).toContain('Missing secret');
       expect(stepBlock).toContain('exit 1');
     }
+    expect(adapterWorkflowText).toContain('provider_secret_name:');
+    expect(adapterWorkflowText).toContain('PROVIDER_SECRET_NAME: ${{ inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME }}');
+    expect(adapterWorkflowText).toContain('PROVIDER_ENV_VAR: ${{ inputs.provider_env_var || vars.PROVIDER_ENV_VAR }}');
+    expect(adapterWorkflowText).toContain('PROVIDER_API_KEY: ${{ secrets[inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME] }}');
+    expect(adapterWorkflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ inputs.conformance_provider || vars.MAKAIO_CONFORMANCE_PROVIDER }}');
+    expect(adapterWorkflowText).toContain(
+      'MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ inputs.primary_model || vars.MAKAIO_CONFORMANCE_PRIMARY_MODEL }}',
+    );
+    expect(adapterWorkflowText).toContain(
+      'MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ inputs.secondary_model || vars.MAKAIO_CONFORMANCE_SECONDARY_MODEL }}',
+    );
+    expect(adapterWorkflowText).toContain('MAKAIO_CONFORMANCE_LOG_DIR: conformance-artifacts/logs');
+    expect(adapterWorkflowText).toContain('TMPDIR: conformance-artifacts/logs');
+    expect(adapterWorkflowText).toContain('mkdir -p conformance-artifacts/logs');
+    expect(adapterWorkflowText).toContain('path: conformance-artifacts/**');
+    expect(adapterWorkflowText).not.toContain('secrets.PROVIDER_API_KEY');
+
+    const openAiPrWorkflowText = readWorkflow('conformance-pr-openai-node.yml');
+    expect(openAiPrWorkflowText).toContain('environment: conformance-openai-node');
+    expect(openAiPrWorkflowText).not.toContain('provider_secret_name:');
+    expect(openAiPrWorkflowText).not.toContain('provider_env_var:');
+    expect(openAiPrWorkflowText).not.toContain('conformance_provider:');
+  });
+
+  it('installs only subprocess adapter CLIs through the shared conformance action', () => {
+    const adapterWorkflowText = readWorkflow('conformance-adapter.yml');
+    const installActionText = readGithubAction('install-conformance-cli/action.yml');
+
+    expect(workflowText).toContain('uses: ./.github/actions/install-conformance-cli');
+    expect(workflowText).toContain('adapter: ${{ matrix.adapter }}');
+    expect(adapterWorkflowText).toContain('uses: ./.github/actions/install-conformance-cli');
+    expect(adapterWorkflowText).toContain('adapter: ${{ inputs.adapter }}');
+    expect(workflowText).not.toContain('name: Install Codex');
+
+    expect(installActionText).toContain('codex-app-server)');
+    expect(installActionText).toContain('npm install -g @openai/codex');
+    expect(installActionText).toContain('claude-code-cli)');
+    expect(installActionText).toContain('curl -fsSL https://claude.ai/install.sh | bash');
+    expect(installActionText).not.toContain('claude-agent-sdk)');
   });
 
   it('only inherits conformance secrets for trusted commenters on pull request comments', () => {
@@ -126,6 +183,7 @@ describe('conformance workflow security', () => {
     );
     expect(callerWorkflowText).not.toContain('github.event.issue.author_association');
     expect(callerWorkflowText).not.toContain('github.event.pull_request.author_association');
+    expect(callerWorkflowText).toContain('comment_body: ${{ github.event.comment.body }}');
     expect(callerWorkflowText).toContain('secrets: inherit');
   });
 });

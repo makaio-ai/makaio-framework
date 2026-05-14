@@ -30,5 +30,4 @@ jobs:
     uses: ./.github/workflows/conformance-adapter.yml
     with:
       adapter: gemini-sdk
-      provider_env_var: GEMINI_API_KEY
       environment: conformance-gemini-sdk
