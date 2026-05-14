@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 const _AdapterClaudeSubjectSchemas = {
   initialized: z.object({ timestamp: z.number() }),
@@ -8,19 +9,25 @@ const _AdapterClaudeSubjectSchemas = {
 };
 
 // Register test namespaces for scoped bus tests
-const adapterClaudeCodeNamespace = MakaioBus.registerNamespace('scopedTest:claudeCode', _AdapterClaudeSubjectSchemas);
+const adapterClaudeCodeNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedTest:claudeCode', _AdapterClaudeSubjectSchemas),
+);
 
 const _AdapterClaudeSubjects = adapterClaudeCodeNamespace.subjects;
 
-const adapterClaudeSdkNamespace = MakaioBus.registerNamespace('scopedTest:claudeCode:sdk', {
-  thinking: z.object({ content: z.string() }),
-});
+const adapterClaudeSdkNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedTest:claudeCode:sdk', {
+    thinking: z.object({ content: z.string() }),
+  }),
+);
 
 const _AdapterClaudeSdkSubjects = adapterClaudeSdkNamespace.subjects;
 
-const adapterOpenAINamespace = MakaioBus.registerNamespace('scopedTest:openai', {
-  initialized: z.object({ timestamp: z.number() }),
-});
+const adapterOpenAINamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedTest:openai', {
+    initialized: z.object({ timestamp: z.number() }),
+  }),
+);
 
 const _AdapterOpenAISubjects = adapterOpenAINamespace.subjects;
 

@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientWiringApplyResponseSchema } from '@makaio/clients-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import {
   runClientWireCommand,
@@ -71,17 +72,19 @@ function createContext(
  *   subject is accessible as `subjects.wiring.apply` (nested dot notation).
  */
 function registerTestClientWiringNamespace(bus: IMakaioBus, clientId: string) {
-  return bus.registerNamespace(`client:${clientId}`, {
-    'wiring.apply': {
-      request: z.object({
-        scope: z.string(),
-        projectDir: z.string().optional(),
-        makaioCommand: z.string(),
-        envPairs: z.array(z.string()).optional(),
-      }),
-      response: ClientWiringApplyResponseSchema,
-    },
-  }).subjects;
+  return bus.registerNamespace(
+    createBusNamespace(`client:${clientId}`, {
+      'wiring.apply': {
+        request: z.object({
+          scope: z.string(),
+          projectDir: z.string().optional(),
+          makaioCommand: z.string(),
+          envPairs: z.array(z.string()).optional(),
+        }),
+        response: ClientWiringApplyResponseSchema,
+      },
+    }),
+  ).subjects;
 }
 
 // ---------------------------------------------------------------------------

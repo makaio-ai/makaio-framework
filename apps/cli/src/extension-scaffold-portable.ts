@@ -10,7 +10,6 @@ const CLI_RUNTIME_PACKAGE = {
     '@makaio/kernel': ['./node_modules/@makaio/kernel/src/index.ts'],
     '@makaio/kernel/cli': ['./node_modules/@makaio/kernel/src/cli/index.ts'],
     '@makaio/kernel/cli/schemas': ['./node_modules/@makaio/kernel/src/cli/schemas.ts'],
-    '@makaio/kernel/cli/register': ['./node_modules/@makaio/kernel/src/cli/register.ts'],
   },
   repoDevAlias: "'@makaio/kernel': 'src'",
   versionPackageJsonPath: 'packages/kernel/package.json',

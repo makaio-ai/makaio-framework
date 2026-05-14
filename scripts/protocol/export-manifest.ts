@@ -1,4 +1,5 @@
-import { MakaioBus, isRequestSchema } from '@makaio/bus-core';
+import { MakaioBus } from '@makaio/bus-core';
+import { isChannelSchema, isLocalSchema, isRequestSchema, unwrapSchema } from '@makaio/core';
 import type {
   MakaioProtocolEventSubject,
   MakaioProtocolManifest,
@@ -11,17 +12,17 @@ import type {
   ProtocolExportSubjectAudit,
   ProtocolNamespaceCatalog,
   ProtocolNamespaceCatalogEntry,
-} from './types.js';
+} from '../../packages/contracts/src/protocol/types.js';
 import {
   createAuditIssue,
   createSubjectAudit,
   formatProtocolExportAuditIssues,
   getCatalogEntries,
   getCatalogSubjectKeys,
-} from './export-manifest-audit-utils.js';
-import { defaultRustModelChecker } from './export-manifest-rust-checker.js';
-import { toManifestJsonSchema } from './export-manifest-json-utils.js';
-import { compareStrings } from './export-manifest-string-utils.js';
+} from '../../packages/contracts/src/protocol/export-manifest-audit-utils.js';
+import { defaultRustModelChecker } from '../../packages/contracts/src/protocol/export-manifest-rust-checker.js';
+import { toManifestJsonSchema } from '../../packages/contracts/src/protocol/export-manifest-json-utils.js';
+import { compareStrings } from '../../packages/contracts/src/protocol/export-manifest-string-utils.js';
 
 export { defaultRustModelChecker };
 
@@ -54,14 +55,6 @@ function getErrorMessage(error: unknown): string {
  * Read the runtime namespace registry as a subject lookup table.
  * @returns Registered subject metadata keyed by fully-qualified subject
  */
-function getRegisteredSubjectsByFullSubject(): Map<string, RegisteredSubjectSchema> {
-  return new Map(
-    MakaioBus.getContext()
-      .namespaceRegistry.listRegisteredSubjects()
-      .map((subject) => [subject.fullSubject, subject]),
-  );
-}
-
 /**
  * Convert one registered subject into a manifest subject entry.
  * @param subject - Registered subject metadata to export
@@ -99,23 +92,22 @@ function exportRegisteredSubject(subject: RegisteredSubjectSchema): MakaioProtoc
  * @param subject - Subject key to resolve
  * @returns Runtime metadata for the selected subject
  */
-function resolveCatalogSubject(
-  registeredSubjects: ReadonlyMap<string, RegisteredSubjectSchema>,
-  catalogEntry: ProtocolNamespaceCatalogEntry,
-  subject: string,
-): RegisteredSubjectSchema {
+function resolveCatalogSubject(catalogEntry: ProtocolNamespaceCatalogEntry, subject: string): RegisteredSubjectSchema {
   if (!(subject in catalogEntry.schemas)) {
     throw new Error(`Protocol catalog selected ${catalogEntry.namespace}.${subject}, but no catalog schema exists`);
   }
 
   const fullSubject = `${catalogEntry.namespace}.${subject}`;
-  const registeredSubject = registeredSubjects.get(fullSubject);
+  const schema = catalogEntry.schemas[subject];
 
-  if (!registeredSubject) {
-    throw new Error(`Protocol catalog selected ${fullSubject}, but it was not registered through registerNamespace()`);
-  }
-
-  return registeredSubject;
+  return {
+    namespace: catalogEntry.namespace,
+    subject,
+    fullSubject,
+    schema: unwrapSchema(schema),
+    local: isLocalSchema(schema),
+    channel: isChannelSchema(schema),
+  };
 }
 
 /**
@@ -189,7 +181,7 @@ function auditAutoDiscovery(options: ProtocolExportOptions): ProtocolExportAudit
  *
  * Performs a single pass over the catalog entries, exporting each subject and recording both
  * the audit result and the manifest-ready subject in one traversal.
- * @param catalog - Namespace catalog that selects which registered subjects to collect
+ * @param catalog - Namespace catalog that selects which subjects to collect
  * @param options - Protocol export options
  * @returns Internal export collection with manifest subjects and a blocking audit report
  */
@@ -198,7 +190,6 @@ function collectCatalogExport(
   options: ProtocolExportOptions,
 ): ProtocolExportCollection {
   const catalogEntries = getCatalogEntries(catalog);
-  const registeredSubjects = getRegisteredSubjectsByFullSubject();
   const auditSubjects: ProtocolExportSubjectAudit[] = [];
   const manifestSubjects: MakaioProtocolSubject[] = [];
   const issues: ProtocolExportAuditIssue[] = [];
@@ -210,7 +201,7 @@ function collectCatalogExport(
       let exportedSubject: MakaioProtocolSubject;
 
       try {
-        exportedSubject = exportRegisteredSubject(resolveCatalogSubject(registeredSubjects, catalogEntry, subject));
+        exportedSubject = exportRegisteredSubject(resolveCatalogSubject(catalogEntry, subject));
       } catch (error) {
         const message = getErrorMessage(error);
         issues.push(createAuditIssue(catalogEntry.namespace, subject, 'jsonSchema', message));

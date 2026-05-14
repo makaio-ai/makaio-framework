@@ -3,16 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "sideEffects": [
-    "./src/adapter-subsystem/namespace.ts",
-    "./src/**/namespace.ts",
-    "./src/**/*-namespace.ts",
-    "./src/**/storage-namespace.ts",
-    "./dist/adapter-subsystem/namespace.mjs",
-    "./dist/**/namespace.mjs",
-    "./dist/**/*-namespace.mjs",
-    "./dist/**/storage-namespace.mjs"
-  ],
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*"

@@ -14,8 +14,8 @@
  */
 
 import type { z } from 'zod';
-import type { RequiredTimeoutConfig } from '@makaio/utils';
 import type { ProtocolId, ProviderDefinitionInput } from '../provider/definition.js';
+import type { RequiredTimeoutConfig } from '../timeout/index.js';
 
 // ---------------------------------------------------------------------------
 // AdapterProviderRef

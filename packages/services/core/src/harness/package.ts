@@ -1,5 +1,6 @@
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { HarnessService } from './harness-service.js';
 import { registerDrizzleHarnessStorage } from './storage/handler.js';
 
@@ -12,7 +13,7 @@ import { registerDrizzleHarnessStorage } from './storage/handler.js';
  * Storage handlers are registered before `create` so that
  * `HarnessService.onInit()` can seed default harnesses via the bus immediately.
  */
-export const harnessPackage: MakaioExtension = {
+export const harnessPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'makaio.harness',
   displayName: 'Harness',
   version: '0.1.0',

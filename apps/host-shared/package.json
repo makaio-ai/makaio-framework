@@ -15,10 +15,6 @@
     "./build/embedded-migrations": "./src/build/embedded-migrations.ts",
     "./build/workspace-paths": "./src/build/workspace-paths.ts"
   },
-  "sideEffects": [
-    "./src/bus/namespace.ts",
-    "./src/bus/index.ts"
-  ],
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",

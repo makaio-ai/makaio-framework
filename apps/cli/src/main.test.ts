@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CliManifest } from '@makaio/contracts';
-import { CliRpcSubjects } from '@makaio/kernel/cli/register';
+import { CliRpcSubjects } from '@makaio/kernel/cli';
 import { ExplicitDescriptorDiscovery, MAKAIO_CONFIG_FILE_ENV, MAKAIO_HOME_ENV } from '@makaio/runtime-node';
 import { createMockBus } from '@makaio/test-utils';
 import { z } from 'zod';

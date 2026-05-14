@@ -6,7 +6,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 
 /**
@@ -16,7 +16,7 @@ import { z } from 'zod';
  * (create, reply, resolve) to notify subscribers that cached data
  * should be refreshed.
  */
-export const VCSEventsNamespace = MakaioBus.registerNamespace('vcs:events', {
+export const VCSEventsNamespace = createBusNamespace('vcs:events', {
   /**
    * Emitted after a comment is created or replied to.
    *

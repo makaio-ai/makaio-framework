@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { RawClientHookPayloadSchema } from '@makaio/clients-core';
-import type { SchemaRecord } from '@makaio/core';
+import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { runClientHookCommand } from '../cli/client-hook-command.js';
 
 afterEach(() => {
@@ -34,10 +34,12 @@ function registerTestClientNamespace<AdditionalSchemas extends SchemaRecord = Re
   clientId: string,
   additionalSchemas?: AdditionalSchemas,
 ) {
-  return bus.registerNamespace(`client:${clientId}`, {
-    'hook.received': RawClientHookPayloadSchema,
-    ...((additionalSchemas ?? {}) as AdditionalSchemas),
-  }).subjects;
+  return bus.registerNamespace(
+    createBusNamespace(`client:${clientId}`, {
+      'hook.received': RawClientHookPayloadSchema,
+      ...((additionalSchemas ?? {}) as AdditionalSchemas),
+    }),
+  ).subjects;
 }
 
 // ---------------------------------------------------------------------------

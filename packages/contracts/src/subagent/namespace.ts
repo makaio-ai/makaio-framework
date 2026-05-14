@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
-import type { SchemaRecord } from '@makaio/core';
+import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import {
   SubagentConfigSchema,
   SubagentStatusSchema,
@@ -205,6 +204,6 @@ export const SubagentSchemas = {
   },
 } satisfies SchemaRecord;
 
-export const SubagentNamespace = MakaioBus.registerNamespace('subagent', SubagentSchemas);
+export const SubagentNamespace = createBusNamespace('subagent', SubagentSchemas);
 
 export const SubagentSubjects = SubagentNamespace.subjects;

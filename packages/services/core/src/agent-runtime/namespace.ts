@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { AgentRuntimeSchemas } from './schemas.js';
 
 // ============================================================================
@@ -16,7 +16,7 @@ import { AgentRuntimeSchemas } from './schemas.js';
  * host-domain subjects (`PersonaRuntimeSubjects`, `ProfileRuntimeSubjects`)
  * directly.
  */
-export const AgentRuntimeNamespace = MakaioBus.registerNamespace('agentRuntime', AgentRuntimeSchemas);
+export const AgentRuntimeNamespace = createBusNamespace('agentRuntime', AgentRuntimeSchemas);
 
 /** Subject definitions for agent runtime bus RPCs. */
 export const AgentRuntimeSubjects = AgentRuntimeNamespace.subjects;

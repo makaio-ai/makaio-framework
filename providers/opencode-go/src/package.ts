@@ -1,11 +1,12 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * MakaioExtension descriptor for the OpenCode Go provider.
+ * MakaioNodeExtension<IMakaioBus> descriptor for the OpenCode Go provider.
  *
  * Wraps the existing provider definitions in the standard
- * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * `MakaioNodeExtension<IMakaioBus>` shape so the runtime coordinator can discover and
  * register this provider through the unified provider contribution surface.
  */
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { openaiProviderDefinition, anthropicProviderDefinition } from './definition.js';
 
 /**
@@ -14,7 +15,7 @@ import { openaiProviderDefinition, anthropicProviderDefinition } from './definit
  * Includes both the OpenAI-compatible and Anthropic-compatible gateway
  * variants served by the same upstream endpoint.
  */
-export const opencodeGoPackage: MakaioExtension = {
+export const opencodeGoPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'provider-opencode-go',
   displayName: 'OpenCode Go',
   version: '0.1.0',

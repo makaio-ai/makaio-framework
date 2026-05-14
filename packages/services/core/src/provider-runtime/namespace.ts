@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import type { SchemaRecord } from '@makaio/core';
 import { AIModelSchema } from '@makaio/contracts';
 
@@ -21,7 +21,7 @@ export const ProviderRuntimeSchemas = {
 /**
  * Runtime-only provider namespace.
  */
-export const ProviderRuntimeNamespace = MakaioBus.registerNamespace('providerRuntime', ProviderRuntimeSchemas);
+export const ProviderRuntimeNamespace = createBusNamespace('providerRuntime', ProviderRuntimeSchemas);
 
 /**
  * Pre-resolved provider runtime subjects for direct import.

@@ -1,15 +1,17 @@
-import { MakaioBus } from './bus.js';
+import { createBusNamespace } from '@makaio/core';
 import { LifecycleSchemas, type ConnectedPayload, type DisconnectedPayload } from './lifecycle-schemas.js';
 
 export type { ConnectedPayload, DisconnectedPayload };
 
-const LifecycleNamespace = MakaioBus.registerNamespace('bus:lifecycle', LifecycleSchemas);
+const LifecycleNamespace = createBusNamespace('bus:lifecycle', LifecycleSchemas);
 
 /**
  * Bus-level lifecycle subjects for subscribing to transport connection state changes.
  *
  * All subjects are local-only: they are never relayed across transports, as they
  * describe the local bus's own connection state.
+ *
+ * Registration happens per-context inside `createBus()`.
  * @example
  * ```typescript
  * import { BusLifecycle } from '@makaio/bus-core';

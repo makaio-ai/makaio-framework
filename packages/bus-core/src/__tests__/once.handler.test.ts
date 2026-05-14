@@ -13,24 +13,29 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 // Register test namespaces for once tests
-const { subjects: EventSubjects } = MakaioBus.registerNamespace('onceTest:events', {
-  log: z.object({ message: z.string() }),
-  error: z.object({ error: z.string() }),
-  warning: z.object({ warning: z.string() }),
-});
+const { subjects: EventSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('onceTest:events', {
+    log: z.object({ message: z.string() }),
+    error: z.object({ error: z.string() }),
+    warning: z.object({ warning: z.string() }),
+  }),
+);
 
-const { subjects: RequestSubjects } = MakaioBus.registerNamespace('onceTest:requests', {
-  getData: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ data: z.string() }),
-  },
-  processTask: {
-    request: z.object({ taskId: z.string() }),
-    response: z.object({ status: z.string() }),
-  },
-});
+const { subjects: RequestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('onceTest:requests', {
+    getData: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ data: z.string() }),
+    },
+    processTask: {
+      request: z.object({ taskId: z.string() }),
+      response: z.object({ status: z.string() }),
+    },
+  }),
+);
 
 describe('once', () => {
   beforeEach(() => {
@@ -293,9 +298,11 @@ describe('once', () => {
 
   describe('scoped bus integration', () => {
     it('should work with scoped bus and unsubscribe correctly', async () => {
-      const namespace = MakaioBus.registerNamespace('onceTest:scoped', {
-        event: z.object({ value: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('onceTest:scoped', {
+          event: z.object({ value: z.string() }),
+        }),
+      );
 
       const scopedBus = MakaioBus.scoped(namespace);
       const received: string[] = [];
@@ -357,9 +364,11 @@ describe('once', () => {
     });
 
     it('should unsubscribe filtered once handler before invoking throwing handler', async () => {
-      const namespace = MakaioBus.registerNamespace('onceTest:filtered', {
-        event: z.object({ kind: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('onceTest:filtered', {
+          event: z.object({ kind: z.string() }),
+        }),
+      );
       const filteredBus = MakaioBus.scoped(namespace).withFilter({ kind: 'match' });
       const received: string[] = [];
 

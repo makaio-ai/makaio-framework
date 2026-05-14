@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
-import {
-  AdapterSubjects,
-  type AdapterContribution,
-  type ExtensionContext,
-  type MakaioExtension,
-  createClientDefinition,
-} from '@makaio/contracts';
+import { AdapterSubjects, type AdapterContribution, createClientDefinition } from '@makaio/contracts';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
+import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import type {
   AdapterFileConfigSet,
   IAdapterConfigRepository,
@@ -25,6 +20,21 @@ import { initializeEnabledAdapters } from '../adapter-runtime-lifecycle.js';
 import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-client-refs.js';
 import type { AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
+
+const TEST_EXTENSION_CONTEXT: KernelExtensionContext = {
+  bus: MakaioBus,
+  identity: { extensionName: 'test-extension' } as KernelExtensionContext['identity'],
+  platform: process.platform,
+  homedir: '/tmp',
+  makaioHome: '/tmp/.makaio',
+  username: 'test-user',
+  dataDir: '/tmp/test-extension',
+  machineId: TEST_MACHINE_ID,
+  getService: () => undefined,
+  tryImport: async () => null,
+  signal: new AbortController().signal,
+  hasExtension: () => false,
+};
 
 class MemoryRepository implements IAdapterConfigRepository {
   public constructor(
@@ -169,7 +179,7 @@ function createContribution(
   };
 }
 
-function createExtension(name: string, adapters: readonly AdapterContribution[]): MakaioExtension {
+function createExtension(name: string, adapters: readonly AdapterContribution[]): KernelMakaioExtension {
   return {
     name,
     displayName: name,
@@ -260,7 +270,7 @@ describe('AdapterContributionProcessor rollback', () => {
               throw new Error('Injected adapter init failure');
             }),
           ]),
-          { bus: MakaioBus } as ExtensionContext,
+          TEST_EXTENSION_CONTEXT,
         ),
       ).rejects.toThrow(/Injected adapter init failure/);
 
@@ -314,7 +324,7 @@ describe('AdapterContributionProcessor rollback', () => {
             [{ definitionId: 'test-provider' }],
           ),
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       );
 
       expect(service.getLoadedAdapters()[0]?.providers[0]?.definition.availableModels).toEqual([]);
@@ -377,7 +387,7 @@ describe('AdapterContributionProcessor rollback', () => {
             [{ definitionId: 'external-provider' }],
           ),
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       );
 
       const [model] = service.getLoadedAdapters()[0]?.providers[0]?.definition.availableModels ?? [];
@@ -416,7 +426,7 @@ describe('AdapterContributionProcessor rollback', () => {
             [{ definitionId: 'missing-provider' }],
           ),
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       ),
     ).rejects.toThrow(/missing-provider.*dependencies/);
 
@@ -451,7 +461,7 @@ describe('AdapterContributionProcessor rollback', () => {
             { definitionProtocol: 'openai', manifestProtocols: ['anthropic'] },
           ),
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       ),
     ).rejects.toThrow(/protocol-mismatch-adapter.*openai.*manifest\.protocols.*anthropic/);
 
@@ -485,7 +495,7 @@ describe('AdapterContributionProcessor rollback', () => {
           { manifestProtocols: [{ openai: { endpoint: 'https://example.test/v1' } }] },
         ),
       ]),
-      { bus: MakaioBus } as ExtensionContext,
+      TEST_EXTENSION_CONTEXT,
     );
 
     expect(service.getLoadedAdapters()[0]?.protocol).toBe('openai');
@@ -517,7 +527,7 @@ describe('AdapterContributionProcessor rollback', () => {
           { manifestProtocols: ['anthropic', 'openai'] },
         ),
       ]),
-      { bus: MakaioBus } as ExtensionContext,
+      TEST_EXTENSION_CONTEXT,
     );
 
     expect(service.getLoadedAdapters()[0]?.protocol).toBeUndefined();
@@ -577,7 +587,7 @@ describe('AdapterContributionProcessor rollback', () => {
             },
           },
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       );
 
       const [defaultProvider, overrideProvider] = service.getLoadedAdapters()[0]?.providers ?? [];
@@ -705,7 +715,7 @@ describe('AdapterContributionProcessor rollback', () => {
             },
           },
         ]),
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       );
     } finally {
       offCatalog();
@@ -757,7 +767,7 @@ describe('AdapterContributionProcessor rollback', () => {
             },
           ],
         },
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       ),
     ).rejects.toThrow(/references missing client "missing-client"/);
   });
@@ -814,7 +824,7 @@ describe('AdapterContributionProcessor rollback', () => {
               },
             ],
           },
-          { bus: MakaioBus } as ExtensionContext,
+          TEST_EXTENSION_CONTEXT,
         ),
       ).rejects.toThrow(/client "claude-code" definition version 1\.2\.0 does not satisfy \^2\.0\.0/);
     } finally {
@@ -877,7 +887,7 @@ describe('AdapterContributionProcessor rollback', () => {
               },
             ],
           },
-          { bus: MakaioBus } as ExtensionContext,
+          TEST_EXTENSION_CONTEXT,
         ),
       ).rejects.toThrow(/client "claude-code" binary version 1\.5\.0 does not satisfy >=2\.0\.0/);
     } finally {
@@ -942,7 +952,7 @@ describe('AdapterContributionProcessor rollback', () => {
             },
           ],
         },
-        { bus: MakaioBus } as ExtensionContext,
+        TEST_EXTENSION_CONTEXT,
       );
 
       expect(resolveHandler).not.toHaveBeenCalled();

@@ -1,10 +1,6 @@
 export { PublicProtocolNamespaces } from './catalog.js';
-export {
-  auditProtocolExport,
-  discoverRegisteredProtocolSubjects,
-  exportProtocolManifest,
-  formatProtocolManifest,
-} from './export-manifest.js';
+export { defaultRustModelChecker } from './export-manifest-rust-checker.js';
+export { formatProtocolExportAuditIssues } from './export-manifest-audit-utils.js';
 export type {
   JsonObject,
   MakaioProtocolEventSubject,

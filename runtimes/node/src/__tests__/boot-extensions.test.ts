@@ -17,9 +17,9 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
-import { ToolSubjects, type MakaioExtension } from '@makaio/contracts';
+import { ToolSubjects } from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
-import { ExtensionCoordinator } from '@makaio/kernel';
+import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
 import { loadExtensions, mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
 import type { CoreBootOptions } from '../boot.js';
@@ -43,10 +43,10 @@ const FRAMEWORK_VERSION = '3.0.0';
 let fixtureRoot: string | undefined;
 
 /**
- * Build a minimal valid {@link MakaioExtension}.
+ * Build a minimal valid {@link KernelMakaioExtension}.
  * @param name - Package name.
  */
-const makePackage = (name: string): MakaioExtension => ({
+const makePackage = (name: string): KernelMakaioExtension => ({
   name,
   displayName: `${name} Display`,
   version: '0.1.0',
@@ -247,7 +247,7 @@ describe('session orchestrator runtime ownership', () => {
   });
 
   it('omits the framework session orchestrator when a loaded extension owns it', () => {
-    const owner: MakaioExtension = {
+    const owner: KernelMakaioExtension = {
       ...makePackage('host-runtime'),
       runtimeOwnership: { sessionOrchestrator: true },
     };
@@ -258,11 +258,11 @@ describe('session orchestrator runtime ownership', () => {
   });
 
   it('fails when multiple loaded extensions own the session orchestrator', () => {
-    const firstOwner: MakaioExtension = {
+    const firstOwner: KernelMakaioExtension = {
       ...makePackage('first-runtime'),
       runtimeOwnership: { sessionOrchestrator: true },
     };
-    const secondOwner: MakaioExtension = {
+    const secondOwner: KernelMakaioExtension = {
       ...makePackage('second-runtime'),
       runtimeOwnership: { sessionOrchestrator: true },
     };
@@ -279,7 +279,7 @@ describe('runtime boot contribution rollback', () => {
     const configureError = new Error('configure failed');
     const cleanupError = new Error('cleanup failed');
 
-    const packages: MakaioExtension[] = [
+    const packages: KernelMakaioExtension[] = [
       {
         ...makePackage('first-runtime-boot'),
         runtimeBoot: {

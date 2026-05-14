@@ -8,6 +8,7 @@ import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { validateEventPayload } from '../utils/validate-event-payload.js';
 import { mergeSortedHandlerArrays } from '../utils/handler-merging.js';
 import { executeInterceptors } from './intercept/index.js';
+import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 import type { EventHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 
 type InternalEmitOptions = EmitOptions & WithReceiveContext;
@@ -92,6 +93,8 @@ export async function emit<T extends SubjectDefinition>(
 ): Promise<void> {
   const subject = subjectDefinition.subject;
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
+
+  warnIfUnregistered(context, subjectDefinition, fullSubjectKey);
 
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId;

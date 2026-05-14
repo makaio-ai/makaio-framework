@@ -22,6 +22,7 @@ const request = vi.fn();
 const connect = vi.fn();
 const disconnect = vi.fn();
 const registerTransport = vi.fn();
+const registerNamespaces = vi.fn();
 
 vi.mock('react-dom/client', () => ({
   createRoot: createRootSpy,
@@ -40,6 +41,7 @@ vi.mock('@makaio/ui-hooks', () => ({
 }));
 
 vi.mock('@makaio/kernel', () => ({
+  BootNamespace: { name: 'kernel:boot' },
   BootSubjects: {
     complete: 'boot.complete',
     getState: 'boot.getState',
@@ -48,6 +50,8 @@ vi.mock('@makaio/kernel', () => ({
       starting: 'boot.service.starting',
     },
   },
+  ExtensionNamespace: { name: 'kernel:extension' },
+  KernelNamespace: { name: 'kernel' },
 }));
 
 vi.mock('@makaio/bus-core', async () => {
@@ -65,6 +69,7 @@ vi.mock('@makaio/bus-core', async () => {
         listenerCleanups.set(subject, cleanup);
         return cleanup;
       }),
+      registerNamespaces,
       registerTransport,
       request,
     },
@@ -76,7 +81,9 @@ vi.mock('@makaio/bus-transport-websocket', () => ({
 }));
 
 vi.mock('@makaio/ui-kernel', () => ({
+  UiNamespace: { name: 'ui' },
   UiSubjects: { ready: 'ui.ready', navigate: 'ui.navigate' },
+  WidgetNamespace: { name: 'widget' },
 }));
 
 vi.mock('@makaio/ui-views', () => ({
@@ -102,6 +109,7 @@ describe('shared renderer bootstrap', () => {
     connect.mockReset();
     disconnect.mockReset();
     registerTransport.mockReset();
+    registerNamespaces.mockReset();
     unregisterTransport.mockReset();
     registerBrowserPreferencesStorage.mockClear();
     preferencesCleanup.mockClear();
@@ -171,6 +179,38 @@ describe('shared renderer bootstrap', () => {
     expect(listenerCleanups.get('boot.service.starting')).toHaveBeenCalledTimes(1);
     expect(listenerCleanups.get('boot.progress')).toHaveBeenCalledTimes(1);
     expect(listenerCleanups.get('boot.complete')).toHaveBeenCalledTimes(1);
+  });
+
+  it('registers renderer-owned namespaces before connecting to the bus', async () => {
+    request.mockResolvedValue({
+      complete: true,
+      completedCount: 0,
+      currentService: null,
+      totalCount: 0,
+    });
+    connect.mockResolvedValue(undefined);
+
+    const { startRenderer } = await import('../src/renderer/bootstrap.js');
+    await startRenderer({
+      config: createConfig(),
+      logPrefix: 'electron-ui',
+      surface: 'electron',
+    });
+
+    expect(registerNamespaces).toHaveBeenCalledTimes(1);
+    expect(registerNamespaces.mock.calls[0]?.[0].map((namespace: { name: string }) => namespace.name)).toEqual([
+      'kernel:boot',
+      'kernel:extension',
+      'host',
+      'kernel',
+      'preferences',
+      'toast',
+      'ui',
+      'widget',
+    ]);
+    expect(registerNamespaces.mock.invocationCallOrder[0]).toBeLessThan(connect.mock.invocationCallOrder[0]);
+
+    window.dispatchEvent(new Event('unload'));
   });
 
   it('tears down an in-flight boot wait when the page unloads', async () => {

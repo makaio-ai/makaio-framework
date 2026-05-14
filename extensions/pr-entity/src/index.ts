@@ -10,7 +10,8 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { prEntityToolset } from './toolset.js';
 import { VCSPRAggregationService } from './aggregation-service.js';
 
@@ -20,7 +21,7 @@ import { VCSPRAggregationService } from './aggregation-service.js';
  * Registers the VCS:PR aggregation service and exposes the `pr_status` tool.
  * The service handles `vcs:pr.get`, `vcs:pr.list`, and `vcs:pr.refresh` subjects.
  */
-export const prEntityPackage: MakaioExtension = {
+export const prEntityPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'pr-entity',
   displayName: 'PR Entity',
   version: '0.1.0',

@@ -1,4 +1,5 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { CanonicalModelService } from './canonical-model-service.js';
 
 /**
@@ -6,7 +7,7 @@ import { CanonicalModelService } from './canonical-model-service.js';
  *
  * Canonical model resolution is surface-agnostic and framework-owned.
  */
-export const canonicalModelPackage: MakaioExtension = {
+export const canonicalModelPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'makaio.canonical-model',
   displayName: 'Canonical Model',
   version: '0.1.0',

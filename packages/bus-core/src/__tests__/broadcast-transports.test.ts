@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   localSubject,
@@ -102,16 +103,18 @@ class RecordingTransport implements BusTransport {
 // Subject registration
 // ---------------------------------------------------------------------------
 
-const { subjects: BroadcastSubjects } = MakaioBus.registerNamespace('broadcastTransportTest', {
-  remoteRequest: {
-    request: z.object({ q: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-  localRequest: localSubject({
-    request: z.object({ q: z.string() }),
-    response: z.object({ output: z.string() }),
+const { subjects: BroadcastSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('broadcastTransportTest', {
+    remoteRequest: {
+      request: z.object({ q: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+    localRequest: localSubject({
+      request: z.object({ q: z.string() }),
+      response: z.object({ output: z.string() }),
+    }),
   }),
-});
+);
 
 declare module '../index.js' {
   interface BusTransportRegistry {

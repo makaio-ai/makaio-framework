@@ -17,9 +17,10 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
-import { createBusInstance, type BusTransport } from '@makaio/bus-core';
+import { createBusInstance, type BusTransport, type IMakaioBus } from '@makaio/bus-core';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { NodeExtensionContext, ExtensionServiceLifecycle, ExtensionService } from '@makaio/contracts';
+import { createBusNamespace } from '@makaio/core';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { z } from 'zod';
 
@@ -65,7 +66,7 @@ function makeTestDescriptor(): DetachedDescriptor {
  * @param bus - Real bus instance to supply to the service.
  * @returns Minimal node extension context for testing.
  */
-function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensionContext {
+function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensionContext<IMakaioBus> {
   return {
     bus,
     machineId: 'test-machine-id',
@@ -73,7 +74,7 @@ function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensi
     config: { enabled: true },
     identity: {
       extensionName: 'test-detached',
-    } as NodeExtensionContext['identity'],
+    } as NodeExtensionContext<IMakaioBus>['identity'],
     getService: () => undefined,
     tryImport: async () => null,
     signal: new AbortController().signal,
@@ -91,9 +92,25 @@ function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensi
  * @returns Lifecycle subjects for the test detached extension.
  */
 function registerLifecycleSubjects(bus: ReturnType<typeof createBusInstance>) {
-  return bus.registerNamespace('extension.test-detached', {
-    init: {
-      request: z.object({
+  return bus.registerNamespace(
+    createBusNamespace('extension.test-detached', {
+      init: {
+        request: z.object({
+          config: z.unknown().optional(),
+          context: z
+            .object({
+              dataDir: z.string().optional(),
+              machineId: z.string().optional(),
+              makaioHome: z.string().optional(),
+              platform: z.string().optional(),
+              username: z.string().optional(),
+            })
+            .optional(),
+        }),
+        response: z.object({ ready: z.boolean() }),
+      },
+      ready: z.object({
+        ready: z.boolean(),
         config: z.unknown().optional(),
         context: z
           .object({
@@ -105,27 +122,13 @@ function registerLifecycleSubjects(bus: ReturnType<typeof createBusInstance>) {
           })
           .optional(),
       }),
-      response: z.object({ ready: z.boolean() }),
-    },
-    ready: z.object({
-      ready: z.boolean(),
-      config: z.unknown().optional(),
-      context: z
-        .object({
-          dataDir: z.string().optional(),
-          machineId: z.string().optional(),
-          makaioHome: z.string().optional(),
-          platform: z.string().optional(),
-          username: z.string().optional(),
-        })
-        .optional(),
+      destroy: {
+        request: z.object({ reason: z.string().optional() }),
+        response: z.object({ stopped: z.boolean() }),
+      },
+      stopped: z.object({ stopped: z.boolean() }),
     }),
-    destroy: {
-      request: z.object({ reason: z.string().optional() }),
-      response: z.object({ stopped: z.boolean() }),
-    },
-    stopped: z.object({ stopped: z.boolean() }),
-  }).subjects;
+  ).subjects;
 }
 
 /**
@@ -238,10 +241,12 @@ describe('detached extension integration (bus-stdio)', () => {
 
   it('routes an event through the bus to the child and receives the echo response', async () => {
     const bus = createBusInstance();
-    const { subjects: TestSubjects } = bus.registerNamespace('test', {
-      ping: z.object({ hello: z.string() }),
-      pingEcho: z.object({ hello: z.string(), echoed: z.boolean() }),
-    });
+    const { subjects: TestSubjects } = bus.registerNamespace(
+      createBusNamespace('test', {
+        ping: z.object({ hello: z.string() }),
+        pingEcho: z.object({ hello: z.string(), echoed: z.boolean() }),
+      }),
+    );
     const descriptor = makeTestDescriptor();
     const pkg = createDetachedExtensionPackage(descriptor, FIXTURES_DIR);
     const ctx = makeTestContext(bus);

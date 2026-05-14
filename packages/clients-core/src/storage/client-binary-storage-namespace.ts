@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { LatestVersionSourceStatusSchema } from '@makaio/contracts/client';
 import { z } from 'zod';
 
@@ -78,7 +78,7 @@ const ActiveVersionTransitionSchema = z.object({
  * Subjects registered here are consumed exclusively by the Drizzle handler
  * and the binary manager — they are not part of the public `client.*` namespace.
  */
-export const ClientBinaryStorageNamespace = MakaioBus.registerNamespace('client-binary:storage', {
+export const ClientBinaryStorageNamespace = createBusNamespace('client-binary:storage', {
   /** Insert a new installed-version row. */
   insertVersion: {
     request: ClientBinaryVersionRecordSchema,

@@ -1,4 +1,3 @@
-import type { MakaioExtension } from '@makaio/contracts';
 import type { BunRouteGraphFetch } from './bun-route-graph-fetch.js';
 import type { BunWebSocketHandler } from './bus-server-transport.js';
 
@@ -11,7 +10,13 @@ export interface BunHostContribution {
 }
 
 /** Extension package shape that carries Bun host hooks. */
-export interface BunHostExtensionPackage extends MakaioExtension {
+export interface BunHostExtensionPackage {
+  /** Extension package name. */
+  readonly name: string;
+  /** Human-readable extension package name. */
+  readonly displayName: string;
+  /** Extension package version. */
+  readonly version?: string;
   /** Bun-native host hooks consumed by Bun composition roots. */
   readonly bun: BunHostContribution;
 }
@@ -22,7 +27,9 @@ export interface ActiveBunHostExtensionIterator {
    * Iterate active extension packages after coordinator startup.
    * @param callback - Receives active package metadata.
    */
-  forEachActiveExtension(callback: (name: string, pkg: MakaioExtension) => void): void;
+  forEachActiveExtension(
+    callback: (name: string, pkg: Pick<BunHostExtensionPackage, 'name' | 'displayName'>) => void,
+  ): void;
 }
 
 /** Mutable router passed to `Bun.serve` before runtime boot finishes. */

@@ -4,7 +4,7 @@
  * Bus subjects for CLI tool detection and version checking.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 
 /** Detection result for a single CLI binary. */
@@ -39,7 +39,7 @@ const CLIDetectionSchemas = {
 } as const;
 
 /** CLI Detection namespace registration. */
-export const CLIDetectionNamespace = MakaioBus.registerNamespace('cliDetection', CLIDetectionSchemas);
+export const CLIDetectionNamespace = createBusNamespace('cliDetection', CLIDetectionSchemas);
 
 /** Typed subjects for CLI detection operations. */
 export const CLIDetectionSubjects = CLIDetectionNamespace.subjects;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import type { BusMessage, BusTransport } from '../index.js';
 import { createBusContext, createBusInstance } from '../bus.js';
 import { OnceTimeoutError } from '../methods/once.js';
@@ -49,9 +50,11 @@ function createRaceTestContext() {
   const bus = createBusInstance({ context: createBusContext() });
   const transport = new DeferredSubscribeTransport();
   bus.registerTransport(transport);
-  const { subjects } = bus.registerNamespace('race-test', {
-    ping: z.object({ seq: z.number() }),
-  });
+  const { subjects } = bus.registerNamespace(
+    createBusNamespace('race-test', {
+      ping: z.object({ seq: z.number() }),
+    }),
+  );
   return { bus, transport, subjects };
 }
 

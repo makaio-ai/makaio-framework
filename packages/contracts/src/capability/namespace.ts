@@ -1,6 +1,6 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { CapabilitySchemas } from './schemas.js';
 
-export const CapabilityNamespace = MakaioBus.registerNamespace('capability', CapabilitySchemas);
+export const CapabilityNamespace = createBusNamespace('capability', CapabilitySchemas);
 
 export const CapabilitySubjects = CapabilityNamespace.subjects;

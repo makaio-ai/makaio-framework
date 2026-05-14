@@ -1,10 +1,10 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { AdapterSubsystemSchemas } from './schemas.js';
 
 /**
  * Bus namespace for adapter-subsystem subjects.
  */
-export const AdapterSubsystemNamespace = MakaioBus.registerNamespace('adapterSubsystem', AdapterSubsystemSchemas);
+export const AdapterSubsystemNamespace = createBusNamespace('adapterSubsystem', AdapterSubsystemSchemas);
 
 /**
  * Pre-resolved adapter-subsystem subjects for direct import.

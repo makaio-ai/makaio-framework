@@ -7,10 +7,17 @@ import type {
   NodeExtensionContext,
   VersionLiteral,
 } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { ComponentState } from '../observability/index.js';
 
+/** Concrete Node runtime context supplied by the kernel coordinator. */
+export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
+
+/** Concrete executable extension shape loaded by the kernel coordinator. */
+export type KernelMakaioExtension = MakaioExtension<KernelExtensionContext>;
+
 /** Awaited contribution processor registered with the {@link ExtensionCoordinator}. */
-export type ContributionProcessor = ExtensionContributionProcessor<NodeExtensionContext>;
+export type ContributionProcessor = ExtensionContributionProcessor<KernelExtensionContext>;
 
 /**
  * Hosted runtime surface category used for extension/package gating.
@@ -89,7 +96,7 @@ export interface ExtensionCoordinatorOptions {
    * and assembled per extension at context-build time.
    */
   extensionContextBase?: Omit<
-    NodeExtensionContext,
+    KernelExtensionContext,
     'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
   >;
   /**
@@ -150,7 +157,7 @@ export interface ExtensionCoordinatorOptions {
  */
 export interface ExtensionEntry {
   /** The extension manifest and executable code. */
-  pkg: MakaioExtension;
+  pkg: KernelMakaioExtension;
   /** Opaque identity minted for this extension by the coordinator. */
   identity: ExtensionIdentity;
   /** Current lifecycle state. */

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import {
   ApprovalPolicySchema,
   HarnessDefinitionBaseSchema,
@@ -43,7 +43,7 @@ const HarnessListQuerySchema = z.object({
   name: z.string().optional(),
 });
 
-export const HarnessStorageNamespace = createStorageNamespace('harness', {
+export const HarnessStorageNamespace = createStorageNamespaceDefinition('harness', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),

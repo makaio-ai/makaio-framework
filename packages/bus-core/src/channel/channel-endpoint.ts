@@ -1,3 +1,4 @@
+import { createBusNamespace } from '@makaio/core';
 import type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './types.js';
 import type { MakaioBusContext } from '../types/bus.js';
 import type { RequestMessagePayload, SubjectDefinition } from '@makaio/core';
@@ -38,7 +39,7 @@ type ChannelOpenSubjectDef = SubjectDefinition<
  * @returns The `channel.open` SubjectDefinition
  */
 function ensureSystemNamespace(context: MakaioBusContext): ChannelOpenSubjectDef {
-  const ns = context.namespaceRegistry.registerNamespace(SYSTEM_NAMESPACE, SystemChannelSchemas);
+  const ns = context.namespaceRegistry.registerNamespace(createBusNamespace(SYSTEM_NAMESPACE, SystemChannelSchemas));
   // subjects are nested: 'channel.open' schema key → subjects.channel.open
   return (ns.subjects as { channel: { open: ChannelOpenSubjectDef } }).channel.open;
 }

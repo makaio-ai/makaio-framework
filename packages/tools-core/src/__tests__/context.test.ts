@@ -1,17 +1,20 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import { z } from 'zod';
 import type { MakaioContext } from '@makaio/core';
+import { createBusNamespace } from '@makaio/core';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import type { BusLike, ToolExecutionContext } from '../types.js';
 
 // Create test subjects for BusLike tests
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('toolsCoreTest', {
-  testEvent: z.object({ data: z.string() }),
-  testRequest: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ echoed: z.object({ input: z.string() }) }),
-  },
-});
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('toolsCoreTest', {
+    testEvent: z.object({ data: z.string() }),
+    testRequest: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ echoed: z.object({ input: z.string() }) }),
+    },
+  }),
+);
 
 describe('BusLike', () => {
   it('should be IMakaioBus with emit, request, and on methods', () => {

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
+    "@makaio/core": "workspace:*",
     "zod": "^4.1.13"
   },
   "inlinedDependencies": {

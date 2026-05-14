@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionDescriptorSchema, type NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { accountManagerPackage } from '../package.js';
@@ -10,9 +10,9 @@ import { AccountManager } from '../account-manager.js';
 import { hasEnabledAutoActivationSource } from '../account-manager-types.js';
 import type { AutoActivationConfig } from '../account-manager-types.js';
 
-const baseCtx: Omit<ExtensionContext, 'platform'> = {
+const baseCtx: Omit<ExtensionContext<IMakaioBus>, 'platform'> = {
   bus: MakaioBus,
-  identity: Object.freeze({ extensionName: 'account-manager' }) as ExtensionContext['identity'],
+  identity: Object.freeze({ extensionName: 'account-manager' }) as ExtensionContext<IMakaioBus>['identity'],
   homedir: '/tmp/test-home',
   makaioHome: path.join('/tmp/test-home', '.makaio'),
   dataDir: path.join('/tmp/test-home', '.makaio', 'account-manager'),

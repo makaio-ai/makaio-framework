@@ -10,13 +10,16 @@
 export { createNamespaceRegistry } from './namespace-registry.js';
 export type {
   BusValidationMode,
-  NamespaceRegistrationOptions,
   NamespaceRegistry,
   RegisteredSubjectSchema,
   SchemaViolationCallback,
   SchemaViolationReport,
   ValidationConfig,
 } from './namespace-registry.js';
+
+// NamespaceRegistrationOptions is canonical in @makaio/core; re-exported here
+// for existing consumers that import from @makaio/bus-core.
+export type { NamespaceRegistrationOptions } from '@makaio/core';
 
 // Transport registry (orthogonal responsibility)
 export { createTransportRegistry } from './transport-registry.js';

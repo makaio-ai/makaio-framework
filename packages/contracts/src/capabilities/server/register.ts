@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 import { CapabilitySubjects } from '../../capability/index.js';
 import { SERVER_CAPABILITY_ID, type IServerProvider } from './types.js';
 
@@ -10,7 +10,7 @@ export { SERVER_CAPABILITY_ID } from './types.js';
  * @param provider - The server provider instance to register.
  * @returns Promise that resolves after registration handlers have completed.
  */
-export function registerServerProvider(bus: IMakaioBus, provider: IServerProvider): Promise<void> {
+export function registerServerProvider(bus: MakaioBusLike, provider: IServerProvider): Promise<void> {
   return bus.emit(CapabilitySubjects.register, {
     capabilityId: SERVER_CAPABILITY_ID,
     provider,
@@ -23,7 +23,7 @@ export function registerServerProvider(bus: IMakaioBus, provider: IServerProvide
  * @param providerId - The provider ID to unregister.
  * @returns Promise that resolves after unregistration handlers have completed.
  */
-export function unregisterServerProvider(bus: IMakaioBus, providerId: string): Promise<void> {
+export function unregisterServerProvider(bus: MakaioBusLike, providerId: string): Promise<void> {
   return bus.emit(CapabilitySubjects.unregister, {
     capabilityId: SERVER_CAPABILITY_ID,
     providerId,

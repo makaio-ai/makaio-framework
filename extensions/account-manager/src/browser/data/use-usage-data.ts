@@ -14,7 +14,7 @@
 
 import { useCallback, useSyncExternalStore } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { AccountUsage } from '@makaio/extension-account-manager/schemas';
 import { createAccountCacheKey } from '@makaio/extension-account-manager/utils';
 

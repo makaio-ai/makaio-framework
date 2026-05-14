@@ -1,10 +1,10 @@
 /**
- * Kernel namespace registration and workflow trigger type registry.
+ * Kernel namespace definition and workflow trigger type registry.
  *
- * Registers the kernel namespace with typed subjects on the bus and
- * provides module-level state for the workflow trigger type registry.
+ * Defines the kernel subjects for explicit registration and provides
+ * module-level state for the workflow trigger type registry.
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import type { IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
 import { KernelSchemas } from './kernel-schemas.js';
 
@@ -13,7 +13,7 @@ export { KernelSchemas } from './kernel-schemas.js';
 /**
  * Kernel namespace for bus operations.
  */
-export const KernelNamespace = MakaioBus.registerNamespace('kernel', KernelSchemas);
+export const KernelNamespace = createBusNamespace('kernel', KernelSchemas);
 
 /**
  * Kernel subjects for type-safe bus operations.

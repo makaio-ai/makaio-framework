@@ -3,6 +3,7 @@ import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformat
 import { matchesFilter } from '../utils/payload-filter.js';
 import { insertSorted } from '../utils/insert-sorted.js';
 import { pushAdvertisedSubjectsToPeers } from '../registries/advertised-state.js';
+import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 import {
   type EventHandler,
   type HandlerForSubjectDefinition,
@@ -105,6 +106,10 @@ export function on<T extends SubjectDefinition>(
   const isRequest = subjectDefinition.$meta.isRequest;
   const isWildcard = subject.includes(WildcardSubjectKey) || subject.includes(':');
   const isAmbiguousWildcard = isWildcard && !isRequest;
+
+  if (!isWildcard) {
+    warnIfUnregistered(context, subjectDefinition, fullSubjectKey);
+  }
 
   // Wrap handler with filter if provided
   const effectiveHandler: EventHandler<unknown> | RequestHandler<unknown, unknown> = options?.filter

@@ -13,7 +13,7 @@ describe('createExtensionNamespace', () => {
     MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
   });
 
-  it('registers an unprefixed extension name under the extension domain', () => {
+  it('creates an unprefixed extension namespace without registering it on the singleton', () => {
     const namespace = createExtensionNamespace('bus-core-extension-namespace-test', {
       schemas: {
         changed: z.object({ value: z.string() }),
@@ -22,9 +22,10 @@ describe('createExtensionNamespace', () => {
 
     expect(namespace.domain).toBe('bus-core-extension-namespace-test');
     expect(namespace.subjects.changed.$meta.namespace).toBe('extension:bus-core-extension-namespace-test');
+    expect(MakaioBus.getContext().namespaceRegistry.getSchema(namespace.subjects.changed)).toBeUndefined();
   });
 
-  it('trims surrounding whitespace before registering the extension domain', () => {
+  it('trims surrounding whitespace before creating the extension domain', () => {
     const namespace = createExtensionNamespace(' my-extension ', {
       schemas: {
         changed: z.object({ value: z.string() }),
@@ -64,7 +65,7 @@ describe('createExtensionNamespace', () => {
     expectTypeOf(namespace.subjects.changed.$meta.namespace).toEqualTypeOf<`extension:${string}`>();
   });
 
-  it('rejects empty extension names before registering a namespace', () => {
+  it('rejects empty extension names before creating a namespace', () => {
     expect(() =>
       createExtensionNamespace('', {
         schemas: {

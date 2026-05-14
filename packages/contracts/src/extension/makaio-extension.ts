@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { ExtensionManifest, StorageManifest } from './manifest.js';
 import type { ExtensionContext, NodeExtensionContext } from './extension-context.js';
 import type { ExtensionService } from './extension-lifecycle.js';
@@ -58,7 +58,7 @@ export interface ExtensionContributionProcessor<THostContext extends ExtensionCo
  */
 export interface ExtensionRuntimeBootContext<THostContext extends ExtensionContext = NodeExtensionContext> {
   /** Runtime bus. */
-  readonly bus: IMakaioBus;
+  readonly bus: THostContext['bus'];
   /**
    * Register a contribution processor before package startup.
    * @param processor - Processor to add to the coordinator.
@@ -123,6 +123,17 @@ export interface MakaioExtension<
   THostContext extends ExtensionContext = NodeExtensionContext,
 > extends ExtensionManifest {
   /**
+   * Bus namespace definitions owned by this extension.
+   *
+   * Registered by `ExtensionCoordinator` during extension activation, before
+   * {@link create} is called, so handlers registered during construction can
+   * rely on the namespace being available.
+   *
+   * Extensions that don't own bus namespaces omit this field.
+   */
+  readonly namespaces?: readonly RegistrableBusNamespaceDefinition[];
+
+  /**
    * Factory that creates and returns the extension's service.
    *
    * Optional — window-only extensions that have no background service may omit
@@ -158,7 +169,7 @@ export interface MakaioExtension<
    * `@makaio/kernel/cli` when authoring CLI commands. This manifest stores
    * only the type-erased executable shape used after loading.
    */
-  readonly cli?: ExtensionCliContribution;
+  readonly cli?: ExtensionCliContribution<THostContext['bus']>;
   /**
    * Server-side HTTP routes.
    * Hosts that support HTTP route contributions call `mount()` on a fresh,
@@ -206,7 +217,7 @@ export interface MakaioExtension<
      *   (e.g., for machine-scoped storage registration).
      * @returns Optional cleanup function called during shutdown to unregister handlers.
      */
-    readonly registerHandlers?: (bus: IMakaioBus, db: unknown, ctx: THostContext) => (() => void) | void;
+    readonly registerHandlers?: (bus: THostContext['bus'], db: unknown, ctx: THostContext) => (() => void) | void;
   };
   /**
    * Zod schema describing this extension's configuration shape.
@@ -312,7 +323,7 @@ export interface MakaioExtension<
    * Extensions declaring triggers should depend on `'hash-trigger'` to ensure
    * the service exists when triggers are registered.
    */
-  readonly triggers?: ExtensionTriggersContribution;
+  readonly triggers?: ExtensionTriggersContribution<THostContext['bus']>;
 
   /**
    * Session event action factory for this extension.
@@ -322,7 +333,7 @@ export interface MakaioExtension<
    * `SessionEventActionService`. Unregister callbacks are stored for
    * shutdown cleanup.
    */
-  readonly sessionEventActions?: ExtensionSessionEventActionsContribution;
+  readonly sessionEventActions?: ExtensionSessionEventActionsContribution<THostContext['bus']>;
 
   /**
    * Bootstrap capability for project config import/export.
@@ -331,7 +342,7 @@ export interface MakaioExtension<
    * - Project export: extension data can be saved to `.makaio/bootstrap/`
    * - Project import: extension data can be restored from `.makaio/bootstrap/`
    */
-  readonly bootstrap?: ExtensionBootstrap;
+  readonly bootstrap?: ExtensionBootstrap<THostContext['bus']>;
 
   /**
    * Bus namespace introspection for this extension.
@@ -355,3 +366,13 @@ export interface MakaioExtension<
    */
   readonly ui?: ExtensionUiContribution;
 }
+
+/**
+ * Convenience executable extension type for Node hosts.
+ *
+ * Contracts stays independent of the concrete bus implementation; Node-based
+ * packages bind `TBus` from their host layer (for example `IMakaioBus` from
+ * `@makaio/bus-core`) when they need the full typed bus authoring surface.
+ * @typeParam TBus - Concrete bus type supplied by the Node host.
+ */
+export type MakaioNodeExtension<TBus extends MakaioBusLike> = MakaioExtension<NodeExtensionContext<TBus>>;

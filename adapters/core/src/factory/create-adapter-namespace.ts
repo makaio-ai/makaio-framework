@@ -1,5 +1,10 @@
 import { MakaioBus, type ScopedBusFor, type BusNamespace, type NamespaceRegistrationOptions } from '@makaio/bus-core';
-import type { FilterablePayloadIntersection, SchemaRecord, SubjectRecordFromSchemaRecord } from '@makaio/core';
+import {
+  createBusNamespace,
+  type FilterablePayloadIntersection,
+  type SchemaRecord,
+  type SubjectRecordFromSchemaRecord,
+} from '@makaio/core';
 
 /**
  * Adapter namespace extends BusNamespace with additional metadata for adapters.
@@ -63,7 +68,7 @@ export function createAdapterNamespace<N extends string, Schemas extends SchemaR
   FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
   Schemas
 > {
-  return MakaioBus.registerNamespace(domain, schemas, options);
+  return MakaioBus.registerNamespace(createBusNamespace(domain, schemas, options));
 }
 
 // Re-export ScopedBusFor for convenience

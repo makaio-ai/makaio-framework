@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { oncePromiseTestSetup } from './once.promise.setup.js';
 
 const setup = oncePromiseTestSetup();
@@ -12,9 +13,11 @@ describe('once - Promise overload', () => {
 
   describe('scoped bus integration', () => {
     it('should work with scoped bus', async () => {
-      const namespace = MakaioBus.registerNamespace('oncePromise:scoped', {
-        event: z.object({ value: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('oncePromise:scoped', {
+          event: z.object({ value: z.string() }),
+        }),
+      );
 
       const scopedBus = MakaioBus.scoped(namespace);
       const promise = scopedBus.once(namespace.subjects.event);
@@ -26,9 +29,11 @@ describe('once - Promise overload', () => {
     });
 
     it('should work with scoped bus and options', async () => {
-      const namespace = MakaioBus.registerNamespace('oncePromise:scopedOptions', {
-        event: z.object({ id: z.number() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('oncePromise:scopedOptions', {
+          event: z.object({ id: z.number() }),
+        }),
+      );
 
       const scopedBus = MakaioBus.scoped(namespace);
       const promise = scopedBus.once(namespace.subjects.event, {

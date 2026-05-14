@@ -11,7 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { BusContext } from '@makaio/ui-hooks';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { clearUsageCache } from '../../../data/use-usage-data.js';
 import AccountsPage from '../accounts-page.js';

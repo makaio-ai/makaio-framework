@@ -1,5 +1,6 @@
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { createChildSubagentToolset, createParentSubagentToolset } from './toolset.js';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
  * Subagent tool extension.
@@ -7,7 +8,7 @@ import { createChildSubagentToolset, createParentSubagentToolset } from './tools
  * This extension contributes stateless RPC tools. Subagent orchestration
  * remains behind `SubagentSubjects` handlers.
  */
-export const subagentPackage: MakaioExtension = {
+export const subagentPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'subagent',
   displayName: 'Subagent Tools',
   version: '0.1.0',

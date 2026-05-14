@@ -1,8 +1,8 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
+import type { ExtensionToken } from '@makaio/contracts';
 import { resolveConfig } from './resolve-config.js';
-import type { ExtensionEntry } from './types.js';
+import type { ExtensionEntry, KernelExtensionContext } from './types.js';
 
 /**
  * Coordinator surface required to resolve extension config and create extension contexts.
@@ -21,7 +21,7 @@ export interface ExtensionContextHost {
    * are assembled by `buildExtensionContext` from the host interface.
    */
   readonly extensionContextBase:
-    | Omit<NodeExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
+    | Omit<KernelExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
     | undefined;
   /** Optional stored-config loader keyed by extension name. */
   readonly loadConfig: ((name: string) => Record<string, unknown> | undefined) | undefined;
@@ -84,7 +84,7 @@ export function buildExtensionContext(
   host: ExtensionContextHost,
   entry: ExtensionEntry,
   config?: unknown,
-): NodeExtensionContext {
+): KernelExtensionContext {
   if (!host.extensionContextBase) {
     throw new Error(
       'ExtensionCoordinator: extensionContextBase is required to start extensions with a create factory. ' +

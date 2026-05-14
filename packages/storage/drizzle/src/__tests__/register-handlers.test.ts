@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext, MakaioExtension } from '@makaio/contracts';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '../register-handlers.js';
 import type { MakaioDatabase } from '../types.js';
 
@@ -9,10 +9,10 @@ import type { MakaioDatabase } from '../types.js';
  * @param bus - Bus instance exposed on the context.
  * @returns Extension context with stable test identity and platform fields.
  */
-function makeExtensionContext(bus: ExtensionContext['bus']): ExtensionContext {
+function makeExtensionContext(bus: IMakaioBus): ExtensionContext<IMakaioBus> {
   return {
     bus,
-    identity: { extensionName: 'storage-test' } as ExtensionContext['identity'],
+    identity: { extensionName: 'storage-test' } as ExtensionContext<IMakaioBus>['identity'],
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -34,7 +34,7 @@ describe('registerDrizzleHandlers', () => {
     const cleanup = vi.fn();
     const registration = vi.fn(() => cleanup);
 
-    const wrapped: NonNullable<NonNullable<MakaioExtension['storage']>['registerHandlers']> =
+    const wrapped: NonNullable<NonNullable<MakaioNodeExtension<IMakaioBus>['storage']>['registerHandlers']> =
       registerDrizzleHandlers(registration);
 
     expect(wrapped(bus, db, ctx)).toBe(cleanup);

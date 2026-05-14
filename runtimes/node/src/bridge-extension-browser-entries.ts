@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { DiscoveredExtension } from './extension-discovery.js';
 import { defaultCreateMount, type BridgeBrowserOptions } from './create-static-mount.js';
 import {
@@ -21,15 +21,15 @@ export type { BridgeBrowserOptions };
  * The URL convention is `/extensions/<name>/browser/<entry-stem>.js`.
  * Static files are served from the directory containing the browser bundle.
  * @param discovered - The discovered extensions (for descriptor access).
- * @param packages - Loaded {@link MakaioExtension} array from `loadExtensions`.
+ * @param packages - Loaded {@link KernelMakaioExtension} array from `loadExtensions`.
  * @param options - Optional injection overrides for testability.
  * @returns New array with augmented packages. Input array is not mutated.
  */
 export function bridgeExtensionBrowserEntries(
   discovered: ReadonlyArray<DiscoveredExtension>,
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   options: BridgeBrowserOptions = {},
-): MakaioExtension[] {
+): KernelMakaioExtension[] {
   const { createMount = defaultCreateMount } = options;
   const descriptorByName = new Map(discovered.map((d) => [d.descriptor.name, d]));
 

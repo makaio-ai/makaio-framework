@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
 import { BranchKindSchema } from './schemas/primitives.js';
@@ -115,7 +115,7 @@ export const SessionStorageUpdateSchema = {
  * const { sessions } = await bus.request(SessionStorageSubjects.list, { status: 'active' });
  * ```
  */
-export const SessionStorageNamespace = createStorageNamespace('session', {
+export const SessionStorageNamespace = createContractStorageNamespace('session', {
   schemas: {
     /**
      * Get a session by ID.

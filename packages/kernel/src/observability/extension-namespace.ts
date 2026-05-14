@@ -1,9 +1,9 @@
 /**
- * Extension bus namespace registration (`kernel:extension.*`).
+ * Extension bus namespace definition (`kernel:extension.*`).
  *
- * Replaces `extension/extension-subjects.ts`. Registers the kernel-owned
- * extension namespace prefix with an expanded set of subjects for full lifecycle
- * observability and enable/disable control.
+ * Replaces `extension/extension-subjects.ts`. Defines the kernel-owned
+ * extension namespace prefix with an expanded set of subjects for full
+ * lifecycle observability and enable/disable control.
  *
  * Subjects:
  * - `kernel:extension.stateChanged`      — fire-and-forget lifecycle transition event
@@ -14,8 +14,7 @@
  * - `kernel:extension.warnings.list`     — RPC listing active health warnings per extension
  * - `kernel:extension.warnings.changed`  — fire-and-forget snapshot after each health-check run
  */
-import { MakaioBus } from '@makaio/bus-core';
-import type { SchemaRecord } from '@makaio/core';
+import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { z } from 'zod';
 import { ClientDefinitionSchema, ProviderDefinitionSchema } from '@makaio/contracts';
 import { ComponentStateSchema, ExtensionInfoSchema, ExtensionWarningEntrySchema } from './shared-schemas.js';
@@ -187,7 +186,7 @@ const ExtensionSchemas = {
 /**
  * Extension namespace for bus operations.
  */
-export const ExtensionNamespace = MakaioBus.registerNamespace('kernel:extension', ExtensionSchemas);
+export const ExtensionNamespace = createBusNamespace('kernel:extension', ExtensionSchemas);
 
 /**
  * Extension subjects for type-safe bus operations.

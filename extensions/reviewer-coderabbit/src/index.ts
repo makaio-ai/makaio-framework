@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
  * \@makaio/reviewer-coderabbit
  *
@@ -8,7 +9,7 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { registerReviewerProcessor, unregisterReviewerProcessor } from '@makaio/contracts';
 import { codeRabbitProcessor } from './processor.js';
 
@@ -35,7 +36,7 @@ export {
  * extension initialization so the review service can discover and use it
  * for transforming CodeRabbit VCS data into normalized findings.
  */
-export const reviewerCodeRabbitPackage: MakaioExtension = {
+export const reviewerCodeRabbitPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'reviewer-coderabbit',
   displayName: 'CodeRabbit Reviewer Processor',
   version: '0.1.0',

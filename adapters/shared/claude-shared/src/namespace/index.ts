@@ -9,7 +9,8 @@ import {
   type SDKMessage,
 } from '@makaio/client-claude-code';
 import { createAdapterNamespace, ScopedToolApprovalSchema } from '@makaio/ai-adapters-core';
-import type { NamespaceRegistrationOptions, ScopedBusFor, SchemaViolationReport } from '@makaio/bus-core';
+import type { ScopedBusFor } from '@makaio/bus-core';
+import type { NamespaceRegistrationOptions, SchemaViolationReport } from '@makaio/core';
 
 export type { SDKMessage };
 export { SDKMessageSchema };

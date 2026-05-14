@@ -7,7 +7,9 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension, NodeExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension, NodeExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts';
+import { createBusNamespace } from '@makaio/core';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { StdioServerTransport } from '@makaio/bus-transport-stdio';
@@ -45,14 +47,16 @@ const DetachedLifecycleSchemas = {
   stopped: z.object({ stopped: z.boolean() }).passthrough(),
 };
 
+type RuntimeNodeExtensionContext = NodeExtensionContext<IMakaioBus>;
+
 /**
  * Register lifecycle protocol subjects for one detached extension.
  * @param ctx - Node extension context containing the host bus.
  * @param extensionName - Detached extension name.
  * @returns Lifecycle subject definitions scoped to the detached extension.
  */
-function registerDetachedLifecycleSubjects(ctx: NodeExtensionContext, extensionName: string) {
-  return ctx.bus.registerNamespace(`extension.${extensionName}`, DetachedLifecycleSchemas).subjects;
+function registerDetachedLifecycleSubjects(ctx: RuntimeNodeExtensionContext, extensionName: string) {
+  return ctx.bus.registerNamespace(createBusNamespace(`extension.${extensionName}`, DetachedLifecycleSchemas)).subjects;
 }
 
 type DetachedLifecycleSubjects = ReturnType<typeof registerDetachedLifecycleSubjects>;
@@ -69,7 +73,7 @@ type DetachedLifecycleSubjects = ReturnType<typeof registerDetachedLifecycleSubj
  * @returns Function that returns cached lifecycle subjects.
  */
 function createDetachedLifecycleSubjectResolver(
-  ctx: NodeExtensionContext,
+  ctx: RuntimeNodeExtensionContext,
   extensionName: string,
 ): () => DetachedLifecycleSubjects {
   let subjects: DetachedLifecycleSubjects | undefined;
@@ -84,7 +88,9 @@ function createDetachedLifecycleSubjectResolver(
  * @param ctx - Full host context.
  * @returns Detached child lifecycle context payload.
  */
-function buildDetachedLifecycleContext(ctx: NodeExtensionContext): z.infer<typeof DetachedLifecycleContextSchema> {
+function buildDetachedLifecycleContext(
+  ctx: RuntimeNodeExtensionContext,
+): z.infer<typeof DetachedLifecycleContextSchema> {
   return {
     dataDir: ctx.dataDir,
     machineId: ctx.machineId,
@@ -107,7 +113,7 @@ function buildDetachedLifecycleContext(ctx: NodeExtensionContext): z.infer<typeo
  */
 class BusStdioExtensionService implements ExtensionServiceLifecycle {
   private readonly descriptor: DetachedDescriptor;
-  private readonly ctx: NodeExtensionContext;
+  private readonly ctx: RuntimeNodeExtensionContext;
   private readonly extensionPath: string;
   private readonly getLifecycleSubjects: () => DetachedLifecycleSubjects;
   /**
@@ -122,7 +128,7 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
    * @param ctx - Runtime context supplying the host bus.
    * @param extensionPath - Absolute path to the extension directory, used as the subprocess cwd.
    */
-  public constructor(descriptor: DetachedDescriptor, ctx: NodeExtensionContext, extensionPath: string) {
+  public constructor(descriptor: DetachedDescriptor, ctx: RuntimeNodeExtensionContext, extensionPath: string) {
     this.descriptor = descriptor;
     this.ctx = ctx;
     this.extensionPath = extensionPath;
@@ -218,7 +224,7 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
  */
 class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
   private readonly descriptor: DetachedDescriptor;
-  private readonly ctx: NodeExtensionContext;
+  private readonly ctx: RuntimeNodeExtensionContext;
   private readonly extensionPath: string;
   private readonly getLifecycleSubjects: () => DetachedLifecycleSubjects;
   private lifecycle: ProcessLifecycleHandle | null = null;
@@ -228,7 +234,7 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
    * @param ctx - Runtime context supplying bus URL and lifecycle RPC access.
    * @param extensionPath - Absolute path to the extension directory, used as the subprocess cwd.
    */
-  public constructor(descriptor: DetachedDescriptor, ctx: NodeExtensionContext, extensionPath: string) {
+  public constructor(descriptor: DetachedDescriptor, ctx: RuntimeNodeExtensionContext, extensionPath: string) {
     this.descriptor = descriptor;
     this.ctx = ctx;
     this.extensionPath = extensionPath;
@@ -315,7 +321,7 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
  */
 class McpStdioExtensionService implements ExtensionServiceLifecycle {
   private readonly descriptor: DetachedDescriptor;
-  private readonly ctx: NodeExtensionContext;
+  private readonly ctx: RuntimeNodeExtensionContext;
   private readonly extensionPath: string;
   private bridge: McpClientBridgeHandle | null = null;
 
@@ -324,7 +330,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
    * @param ctx - Runtime context supplying the host bus.
    * @param extensionPath - Absolute path to the extension directory, used as the subprocess cwd.
    */
-  public constructor(descriptor: DetachedDescriptor, ctx: NodeExtensionContext, extensionPath: string) {
+  public constructor(descriptor: DetachedDescriptor, ctx: RuntimeNodeExtensionContext, extensionPath: string) {
     this.descriptor = descriptor;
     this.ctx = ctx;
     this.extensionPath = extensionPath;
@@ -381,11 +387,14 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
  *   the working directory for the spawned child process.
  * @returns Synthesized `MakaioExtension` that manages the child process lifecycle.
  */
-export function createDetachedExtensionPackage(descriptor: DetachedDescriptor, extensionPath: string): MakaioExtension {
+export function createDetachedExtensionPackage(
+  descriptor: DetachedDescriptor,
+  extensionPath: string,
+): MakaioNodeExtension<IMakaioBus> {
   return {
     ...descriptorToBasePackage(descriptor),
 
-    create(ctx: NodeExtensionContext): ExtensionServiceLifecycle {
+    create(ctx: RuntimeNodeExtensionContext): ExtensionServiceLifecycle {
       if (descriptor.transport.type === 'bus-stdio') {
         return new BusStdioExtensionService(descriptor, ctx, extensionPath);
       }

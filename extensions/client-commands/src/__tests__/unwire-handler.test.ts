@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientWiringRemoveResponseSchema } from '@makaio/clients-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { runClientUnwireCommand, type ClientUnwireCommandContext } from '../cli/unwire-handler.js';
 import { createClientWiringRemoveSubjectDef } from '../subjects.js';
@@ -62,15 +63,17 @@ function createContext(
  * @returns Subjects registered on the local test bus.
  */
 function registerTestClientWiringRemoveNamespace(bus: IMakaioBus, clientId: string) {
-  return bus.registerNamespace(`client:${clientId}`, {
-    'wiring.remove': {
-      request: z.object({
-        scope: z.string(),
-        projectDir: z.string().optional(),
-      }),
-      response: ClientWiringRemoveResponseSchema,
-    },
-  }).subjects;
+  return bus.registerNamespace(
+    createBusNamespace(`client:${clientId}`, {
+      'wiring.remove': {
+        request: z.object({
+          scope: z.string(),
+          projectDir: z.string().optional(),
+        }),
+        response: ClientWiringRemoveResponseSchema,
+      },
+    }),
+  ).subjects;
 }
 
 // ---------------------------------------------------------------------------

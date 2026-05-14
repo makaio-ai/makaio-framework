@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { type MakaioExtension } from '@makaio/contracts';
 import { TrayMenuSubjects, type TrayMenuEntry } from '@makaio/services-core/tray-menu';
+import type { KernelMakaioExtension } from './types.js';
 
 /**
  * Bridge a static extension tray manifest through the tray menu bus contract.
@@ -9,7 +9,7 @@ import { TrayMenuSubjects, type TrayMenuEntry } from '@makaio/services-core/tray
  * @returns A promise that resolves when the registration RPC completes, or
  *   resolves immediately when the extension has no tray manifest.
  */
-export async function registerPackageTrayMenuEntry(bus: IMakaioBus, pkg: MakaioExtension): Promise<void> {
+export async function registerPackageTrayMenuEntry(bus: IMakaioBus, pkg: KernelMakaioExtension): Promise<void> {
   if (!pkg.tray) return;
 
   const entry = buildTrayMenuEntry(pkg);
@@ -21,7 +21,7 @@ export async function registerPackageTrayMenuEntry(bus: IMakaioBus, pkg: MakaioE
  * @param pkg - Extension that declares a tray manifest
  * @returns Tray menu entry for the extension manifest
  */
-function buildTrayMenuEntry(pkg: MakaioExtension): TrayMenuEntry {
+function buildTrayMenuEntry(pkg: KernelMakaioExtension): TrayMenuEntry {
   const tray = pkg.tray;
   if (!tray) {
     throw new Error(`[tray-menu-entry-bridge] extension "${pkg.name}" does not declare a tray entry`);

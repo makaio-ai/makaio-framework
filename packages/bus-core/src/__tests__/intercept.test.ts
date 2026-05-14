@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('interceptTest', {
-  action: z.object({ value: z.string() }),
-});
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('interceptTest', {
+    action: z.object({ value: z.string() }),
+  }),
+);
 
 describe('bus.intercept()', () => {
   beforeEach(() => {
@@ -320,9 +323,11 @@ describe('bus.intercept()', () => {
   });
 });
 
-const scopedInterceptNamespace = MakaioBus.registerNamespace('scopedIntercept', {
-  event: z.object({ data: z.string() }),
-});
+const scopedInterceptNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedIntercept', {
+    event: z.object({ data: z.string() }),
+  }),
+);
 
 describe('scoped bus intercept', () => {
   beforeEach(() => {

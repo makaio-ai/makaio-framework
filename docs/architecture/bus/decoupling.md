@@ -43,8 +43,8 @@ abstraction.
 
 ## 1. Contract Lifting
 
-Move the schema and namespace registration to a lower shared layer so both
-sides can import it without violating the dependency grain.
+Move the schema and namespace definition to a lower shared layer so both sides
+can import it without violating the dependency grain.
 
 **When to use:** The contract is infrastructure (filesystem events, dialog
 actions, storage operations) rather than domain-specific. Both layers
@@ -58,16 +58,15 @@ Moving them from a higher-level service package to `@makaio/services-core`
 lets extensions import them directly:
 
 ```
-Before:  your-extension → @makaio/services/filesystem/register       against the grain
-After:   your-extension → @makaio/services-core/filesystem/register   with the grain
+Before:  your-extension → @makaio/services/filesystem/namespace       against the grain
+After:   your-extension → @makaio/services-core/filesystem/namespace  with the grain
 ```
 
 **Mechanics:**
-1. Copy `schemas.ts` (pure Zod) and `namespace.ts` (registration) to the lower
-   package
+1. Copy `schemas.ts` (pure Zod) and `namespace.ts` (namespace definition) to the
+   lower package
 2. Add subpath exports (e.g., `./filesystem/schemas`, `./filesystem/namespace`)
-   and a `sideEffects` glob entry covering namespace files (they call
-   `registerNamespace` at import time)
+   so consumers can import the definition without registering anything
 3. Replace the original files with re-exports from the lower package
 4. Update against-grain consumers to import from the lower package
 

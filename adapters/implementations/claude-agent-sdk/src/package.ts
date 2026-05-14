@@ -1,12 +1,13 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * MakaioExtension descriptor for the Claude Agent SDK adapter.
+ * MakaioNodeExtension<IMakaioBus> descriptor for the Claude Agent SDK adapter.
  *
  * Wraps the existing {@link adapterDefinition} in the standard
- * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * `MakaioNodeExtension<IMakaioBus>` shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
 import { dep } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { ClaudeCodeAdapterName } from './constants.js';
 
@@ -22,7 +23,7 @@ const clients = adapterDefinition.clients;
  * `anthropic` wire protocol, compatible with Anthropic-hosted and
  * proxy-compatible endpoints.
  */
-export const claudeAgentSdkPackage: MakaioExtension = {
+export const claudeAgentSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: extensionName,
   displayName,
   version: '0.1.0',

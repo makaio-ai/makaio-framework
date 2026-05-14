@@ -1,11 +1,11 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { VCSSchemas } from './schemas/index.js';
 
 /**
  * VCS namespace for MakaioBus.
  *
- * Registers the VCS capability subjects with the bus for type-safe
- * request/response handling.
+ * Defines VCS capability subjects for explicit registration by composition
+ * roots.
  * @example
  * ```typescript
  * import { VCSNamespace } from '@makaio/contracts';
@@ -22,7 +22,7 @@ import { VCSSchemas } from './schemas/index.js';
  * });
  * ```
  */
-export const VCSNamespace = MakaioBus.registerNamespace('vcs', VCSSchemas);
+export const VCSNamespace = createBusNamespace('vcs', VCSSchemas);
 
 /**
  * Type-safe subjects for VCS operations.

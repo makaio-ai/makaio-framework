@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { createHook } from '../create-hook.js';
 import { resetPreUserMessageHooks } from '../runners/pre-user-message-runner.js';
 
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('hookTest', {
-  action: z.object({ value: z.string() }),
-});
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('hookTest', {
+    action: z.object({ value: z.string() }),
+  }),
+);
 
 describe('createHook()', () => {
   beforeEach(() => {

@@ -1,9 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import '@makaio/contracts';
 import { format, resolveConfig } from 'prettier';
 import { PublicProtocolNamespaces } from '../packages/contracts/src/protocol/catalog.js';
-import { exportProtocolManifest, formatProtocolManifest } from '../packages/contracts/src/protocol/index.js';
+import { exportProtocolManifest, formatProtocolManifest } from './protocol/export-manifest.js';
 import { writePythonNamespaceModules, writePythonSubjects } from './bindings/python.js';
 import { writePythonPayloads } from './bindings/python-payloads.js';
 import { writeRustSubjects } from './bindings/rust.js';

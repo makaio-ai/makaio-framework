@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, type BusTransport, type BusMessage, type BusTransportRegistry, NoHandlerError } from '../index.js';
 import { createStubTransport } from './helpers/transport-fixtures.js';
 
@@ -18,16 +19,18 @@ import { createStubTransport } from './helpers/transport-fixtures.js';
 // Namespace registration
 // ---------------------------------------------------------------------------
 
-const { subjects: CrossDispatchSubjects } = MakaioBus.registerNamespace('crossDispatch', {
-  compute: {
-    request: z.object({ value: z.number() }),
-    response: z.object({ result: z.number() }),
-  },
-  relay: {
-    request: z.object({ data: z.string() }),
-    response: z.object({ processed: z.string() }),
-  },
-});
+const { subjects: CrossDispatchSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('crossDispatch', {
+    compute: {
+      request: z.object({ value: z.number() }),
+      response: z.object({ result: z.number() }),
+    },
+    relay: {
+      request: z.object({ data: z.string() }),
+      response: z.object({ processed: z.string() }),
+    },
+  }),
+);
 
 declare module '../index.js' {
   interface BusSubjectsNamespace {

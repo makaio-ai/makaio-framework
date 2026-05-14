@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 
 /**
  * Shared `credentials.switch` helper for browser widgets that expose account

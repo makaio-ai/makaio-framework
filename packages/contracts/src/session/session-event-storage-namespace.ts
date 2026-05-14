@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionEventSchema } from './schemas.js';
 
 /**
@@ -47,7 +47,7 @@ const SessionEventPageSchema = z.object({
  * });
  * ```
  */
-export const SessionEventStorageNamespace = createStorageNamespace('sessionEvent', {
+export const SessionEventStorageNamespace = createContractStorageNamespace('sessionEvent', {
   schemas: {
     /**
      * Append an event to storage.

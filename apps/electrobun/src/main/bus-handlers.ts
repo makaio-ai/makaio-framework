@@ -6,7 +6,7 @@ import type { ILocalNotificationProvider } from '@makaio/services-core/local-not
 import { LocalNotificationSubjects } from '@makaio/services-core/local-notification/namespace';
 import { FRAMEWORK_FALLBACK_WINDOW, registerHostNavigationHandler } from '@makaio/host-shared';
 import { KernelSubjects } from '@makaio/kernel/namespace';
-import { UiSubjects } from '@makaio/ui-kernel';
+import { UiNamespace, UiSubjects } from '@makaio/ui-kernel';
 import { registerLocalNotificationBusHandlers } from './local-notification-handler.js';
 import type { CreateWindowOptions, WindowManager } from './window-manager.js';
 import { registerVariantUpgradeHandler } from './upgrade-handler.js';
@@ -53,6 +53,8 @@ export function registerBusHandlers(options: RegisterBusHandlersOptions): void {
     showTrayPopover,
     windowManager,
   } = options;
+
+  MakaioBus.registerNamespace(UiNamespace);
 
   busHandlerCleanups.push(
     MakaioBus.on(HostSubjects.window.create, (ctx) => {

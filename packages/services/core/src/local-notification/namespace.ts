@@ -1,22 +1,21 @@
 /**
- * Local notification bus namespace registration.
+ * Local notification bus namespace definition.
  *
- * Importing this module registers the `local-notification` namespace on the bus
- * as a side effect. Import via `@makaio/services-core/local-notification/namespace`
- * at your application composition root.
+ * Import via `@makaio/services-core/local-notification/namespace` at your
+ * application composition root and register the namespace explicitly.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { LocalNotificationSchemas } from './schemas.js';
 
 /**
- * Local notification namespace registration.
+ * Local notification namespace definition.
  *
  * Provides type-safe subjects for platform-native notification operations.
  * Each platform (Electron, iOS, Android, Web) registers a single provider
  * that handles these subjects.
  */
-export const LocalNotificationNamespace = MakaioBus.registerNamespace('local-notification', LocalNotificationSchemas);
+export const LocalNotificationNamespace = createBusNamespace('local-notification', LocalNotificationSchemas);
 
 /**
  * Typed subjects for local notification operations.

@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import type { SchemaRecord } from '@makaio/core';
 import {
   ContextRuleChangedEventSchema,
@@ -24,7 +24,7 @@ const ContextRulesServiceSchemas = {
 /**
  * Registered service namespace for context-rule resolution and invalidation.
  */
-export const ContextRulesServiceNamespace = MakaioBus.registerNamespace('contextRules', ContextRulesServiceSchemas);
+export const ContextRulesServiceNamespace = createBusNamespace('contextRules', ContextRulesServiceSchemas);
 
 /**
  * Typed subjects for the context-rules service namespace.

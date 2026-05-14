@@ -3,16 +3,22 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus, NoHandlerError, type IMakaioBus } from '@makaio/bus-core';
-import type { MakaioExtension } from '@makaio/contracts';
-import type { TransportProvider } from '@makaio/kernel';
+import { MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects } from '@makaio/kernel';
-import { frameworkCorePackages, ModelRegistryToken, SessionOrchestratorToken } from '@makaio/services-core';
+import {
+  AdapterRuntimeSubjects,
+  frameworkCorePackages,
+  ModelRegistryToken,
+  SessionOrchestratorToken,
+} from '@makaio/services-core';
 import { AdapterSubsystemToken } from '@makaio/adapter-subsystem';
 import { ClientsCoreToken } from '@makaio/clients-core';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { bootMakaioRuntimeCore, type MakaioRuntime } from '../boot.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
+import { RuntimeSubjects } from '../bus/runtime/namespace.js';
 
 const { homedirMock } = vi.hoisted(() => ({
   homedirMock: vi.fn<() => string>(),
@@ -42,7 +48,7 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
  * @param pkg - Package descriptor assembled into framework boot.
  * @returns Whether the package is eligible for the default headless surface.
  */
-function isHeadlessPackage(pkg: MakaioExtension): boolean {
+function isHeadlessPackage(pkg: KernelMakaioExtension): boolean {
   return pkg.surface === undefined || pkg.surface === 'any' || pkg.surface === 'headless';
 }
 
@@ -73,7 +79,7 @@ async function filesystemDescriptorFixture(
   name: string,
   displayName: string,
   serverModuleSource: string,
-  options: { readonly surface?: MakaioExtension['surface'] } = {},
+  options: { readonly surface?: KernelMakaioExtension['surface'] } = {},
 ): Promise<DiscoveredExtension> {
   const extensionPath = path.join(rootDir, 'extensions', name.replace(/[^a-z0-9._-]/gi, '_'));
   // Convention: true means "use surface name as stem" → dist/server.mjs
@@ -138,6 +144,10 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
     const activePackageNames = extensions.filter((pkg) => pkg.state === 'active').map((pkg) => pkg.name);
 
     expect(transport.connectedWith?.machineId).toBe(runtime.machineId);
+    expect(MakaioBus.getSchema(SessionSubjects.created)).toBeDefined();
+    expect(MakaioBus.getSchema(MessageStorageSubjects.get)).toBeDefined();
+    expect(MakaioBus.getSchema(RuntimeSubjects.busPort)).toBeDefined();
+    expect(MakaioBus.getSchema(AdapterRuntimeSubjects.resolveId)).toBeDefined();
     expect(new Set(loadedPackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(new Set(activePackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(runtime.trayEntries).toEqual([]);

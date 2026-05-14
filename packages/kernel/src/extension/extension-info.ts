@@ -1,10 +1,10 @@
-import type { MakaioExtension } from '@makaio/contracts';
 import type { ComponentState, ExtensionInfo } from '../observability/shared-schemas.js';
+import type { KernelMakaioExtension } from './types.js';
 
 /** Entry fields needed to serialize public extension info. */
 interface ExtensionInfoEntry {
   /** Extension manifest. */
-  readonly pkg: MakaioExtension;
+  readonly pkg: KernelMakaioExtension;
   /** Current lifecycle state. */
   readonly state: ComponentState;
   /** Whether the extension is enabled. */

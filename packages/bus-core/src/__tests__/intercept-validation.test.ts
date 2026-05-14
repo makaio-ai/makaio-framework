@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
-const interceptValidationNamespace = MakaioBus.registerNamespace('interceptValidation', {
-  event: z.object({ value: z.string() }),
-  getData: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ data: z.string() }),
-  },
-});
+const interceptValidationNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('interceptValidation', {
+    event: z.object({ value: z.string() }),
+    getData: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ data: z.string() }),
+    },
+  }),
+);
 
 describe('intercept validation', () => {
   beforeEach(() => {

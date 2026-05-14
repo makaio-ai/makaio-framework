@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('resultGetterTest', {
-  compute: {
-    request: z.object({ input: z.number() }),
-    response: z.object({ output: z.number() }),
-  },
-});
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('resultGetterTest', {
+    compute: {
+      request: z.object({ input: z.number() }),
+      response: z.object({ output: z.number() }),
+    },
+  }),
+);
 
 describe('RequestContext.result getter', () => {
   beforeEach(() => {

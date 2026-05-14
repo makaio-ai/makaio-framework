@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   type BusBroadcastMessage,
@@ -121,12 +122,14 @@ class BroadcastResultsTransport implements BusTransport {
   }
 }
 
-const { subjects: BroadcastRelaySubjects } = MakaioBus.registerNamespace('transportBroadcastRelayTest', {
-  slowRequest: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-});
+const { subjects: BroadcastRelaySubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('transportBroadcastRelayTest', {
+    slowRequest: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+);
 
 declare module '../index.js' {
   interface BusTransportRegistry {

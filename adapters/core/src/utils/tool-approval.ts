@@ -18,29 +18,6 @@ import type { RequestContext, ScopedSubjectDefinition } from '@makaio/core';
 import { z } from 'zod';
 
 /**
- * Default deny handler for tool approval requests.
- *
- * Registered at priority -100 so any real handler (default priority 0) takes precedence.
- * When no real handler is registered, this ensures tool use is denied by default
- * rather than hanging or throwing an opaque "no handler" error.
- *
- * Bus request middleware does not auto-advance after `setResult()` unless handlers
- * explicitly call `ctx.next()`, so a normal approval handler prevents this fallback
- * from running.
- */
-MakaioBus.on(
-  AgentSubjects.toolApprove,
-  (ctx) => {
-    ctx.setResult({
-      action: 'deny',
-      message: 'No tool approval handler registered — tool use is not permitted',
-      shouldAbort: false,
-    });
-  },
-  { priority: -100 },
-);
-
-/**
  * Context required to complete a global tool approval request.
  *
  * Provides adapter identity so the approval handler knows which

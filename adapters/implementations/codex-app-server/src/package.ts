@@ -1,12 +1,13 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * MakaioExtension descriptor for the Codex App-Server adapter.
+ * MakaioNodeExtension<IMakaioBus> descriptor for the Codex App-Server adapter.
  *
  * Wraps the existing {@link adapterDefinition} in the standard
- * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * `MakaioNodeExtension<IMakaioBus>` shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
 import { dep } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { CodexAppServerAdapterName } from './constants.js';
 
@@ -19,7 +20,7 @@ const clients = adapterDefinition.clients;
  * using JSON-RPC 2.0 over JSONL. Declares the `openai` wire protocol since
  * Codex surfaces an OpenAI-compatible API.
  */
-export const codexAppServerPackage: MakaioExtension = {
+export const codexAppServerPackage: MakaioNodeExtension<IMakaioBus> = {
   name: CodexAppServerAdapterName,
   displayName: 'Codex App-Server',
   version: '0.1.0',

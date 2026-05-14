@@ -1,7 +1,8 @@
 /**
- * Variant namespace registration — has side effects (registers on the bus).
+ * Variant namespace definition.
  *
- * For pure Zod schemas without side effects, import `./schemas` instead.
+ * Import `./schemas` when only pure Zod schemas are needed. Composition roots
+ * register this namespace explicitly.
  * @example
  * ```typescript
  * // Query the current variant
@@ -20,14 +21,14 @@
  * });
  * ```
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { VariantSchemas } from './schemas.js';
 
 /**
- * Variant namespace registration.
+ * Variant namespace definition.
  * Provides typed subjects for variant detection and upgrade operations.
  */
-export const VariantNamespace = MakaioBus.registerNamespace('host:variant', VariantSchemas);
+export const VariantNamespace = createBusNamespace('host:variant', VariantSchemas);
 
 /**
  * Variant subjects for type-safe bus operations.

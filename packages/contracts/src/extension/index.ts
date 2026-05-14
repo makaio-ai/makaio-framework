@@ -86,6 +86,7 @@ export type {
   ExtensionRuntimeBootContext,
   ExtensionRuntimeBootContribution,
   MakaioExtension,
+  MakaioNodeExtension,
 } from './makaio-extension.js';
 export type { EntityUIConfig } from '../shared/ui-config.js';
 export {

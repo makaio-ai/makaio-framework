@@ -13,7 +13,7 @@
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioRuntime } from '@makaio/runtime-node';
 import { HostSubjects, registerHostNavigationHandler } from '@makaio/host-shared';
-import { UiSubjects } from '@makaio/ui-kernel';
+import { UiNamespace, UiSubjects } from '@makaio/ui-kernel';
 import { KernelSubjects } from '@makaio/kernel/namespace';
 import type { ILocalNotificationProvider } from '@makaio/services-core/local-notification';
 import type { CreateWindowOptions, WindowManager } from './window-manager.js';
@@ -109,6 +109,8 @@ export function registerAllBusHandlers(deps: BusHandlersDeps): void {
     runtime,
     onRestoreFromBackground,
   } = deps;
+
+  MakaioBus.registerNamespace(UiNamespace);
 
   cleanups.push(
     MakaioBus.on(HostSubjects.window.create, (ctx) => {

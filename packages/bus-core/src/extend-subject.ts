@@ -1,6 +1,6 @@
 import type { SubjectDefinition } from '@makaio/core';
 import type { z } from 'zod';
-import type { MakaioBusContext } from './types/bus.js';
+import type { IMakaioBus, MakaioBusContext } from './types/bus.js';
 import { getFullSubjectForSubjectDefinition } from './utils/subject-transformation.js';
 
 /**
@@ -68,6 +68,48 @@ export type ExtendedSubjectDefinition<SD extends SubjectDefinition, Ext extends 
         : SD['$meta']['payload'];
   };
 };
+
+/**
+ * Pure declaration of a subject extension.
+ *
+ * This keeps TypeScript's widened subject inference available to importers
+ * without mutating the runtime namespace registry at module import time.
+ * The owning package must call {@link DefinedSubjectExtension.register} during
+ * its activation lifecycle, after the base namespace has been registered.
+ */
+export interface DefinedSubjectExtension<SD extends SubjectDefinition, Ext extends SubjectExtension<SD>> {
+  /** Subject definition with widened payload inference. */
+  readonly subject: ExtendedSubjectDefinition<SD, Ext>;
+  /**
+   * Register the extension against the runtime bus namespace registry.
+   * @param bus - Bus instance whose namespace registry receives the extension.
+   * @returns The same subject definition with widened payload inference.
+   */
+  register(bus: Pick<IMakaioBus, 'extendSubject'>): ExtendedSubjectDefinition<SD, Ext>;
+}
+
+/**
+ * Declare a subject extension without registering it immediately.
+ *
+ * Use this for product or extension modules that export typed subjects but
+ * cannot safely mutate the namespace registry at import time. Registration
+ * remains explicit via the returned `register()` method.
+ * @param subject - Base subject definition to widen.
+ * @param extension - Additional Zod fields for the subject payload.
+ * @returns A declaration containing the widened subject and activation-time registration hook.
+ */
+export function defineSubjectExtension<SD extends SubjectDefinition, Ext extends SubjectExtension<SD>>(
+  subject: SD,
+  extension: Ext,
+): DefinedSubjectExtension<SD, Ext> {
+  const extendedSubject = subject as unknown as ExtendedSubjectDefinition<SD, Ext>;
+  return {
+    subject: extendedSubject,
+    register(bus) {
+      return bus.extendSubject(subject, extension);
+    },
+  };
+}
 
 /**
  * Extend a registered bus subject's schema with additional fields.

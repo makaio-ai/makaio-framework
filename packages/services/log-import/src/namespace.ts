@@ -1,7 +1,7 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 
 import { LogImportSchemas } from './schemas.js';
 
-export const LogImportNamespace = MakaioBus.registerNamespace('log-import', LogImportSchemas);
+export const LogImportNamespace = createBusNamespace('log-import', LogImportSchemas);
 
 export const LogImportSubjects = LogImportNamespace.subjects;

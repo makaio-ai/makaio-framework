@@ -1,11 +1,12 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * MakaioExtension descriptor for the Codex client.
+ * MakaioNodeExtension<IMakaioBus> descriptor for the Codex client.
  *
  * Wraps the existing {@link clientDefinition} in the standard
- * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * `MakaioNodeExtension<IMakaioBus>` shape so the runtime coordinator can discover and
  * register this client through the unified client contribution surface.
  */
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { clientDefinition } from './definition.js';
 
 /**
@@ -15,7 +16,7 @@ import { clientDefinition } from './definition.js';
  * coding assistant client with hook and supervisor-launch support and a
  * default `full-access` approval policy.
  */
-export const codexPackage: MakaioExtension = {
+export const codexPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'codex',
   displayName: 'Codex',
   version: '0.1.0',

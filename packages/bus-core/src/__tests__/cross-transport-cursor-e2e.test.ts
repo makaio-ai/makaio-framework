@@ -17,6 +17,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { createBusInstance, createBusContext, type BusRequestMessage, RequestError, NoHandlerError } from '../index.js';
 import { createBidirectionalTransportPair } from './helpers/transport-fixtures.js';
 
@@ -28,12 +29,24 @@ import { createBidirectionalTransportPair } from './helpers/transport-fixtures.j
 // are available to the isolated instances created in each test.
 const schemaRegistry = createBusInstance({ context: createBusContext() });
 
-const { subjects: CursorSubjects } = schemaRegistry.registerNamespace('cursorE2e', {
+const CursorNamespaceDefinition = createBusNamespace('cursorE2e', {
   compute: {
     request: z.object({ value: z.number() }),
     response: z.object({ result: z.number(), handledBy: z.string() }),
   },
 });
+
+const { subjects: CursorSubjects } = schemaRegistry.registerNamespace(CursorNamespaceDefinition);
+
+/**
+ * Register the shared cursor namespace on isolated bus instances used by tests.
+ * @param buses - Bus instances that should accept cursor test subjects.
+ */
+function registerCursorNamespace(...buses: Array<ReturnType<typeof createBusInstance>>): void {
+  for (const bus of buses) {
+    bus.registerNamespace(CursorNamespaceDefinition);
+  }
+}
 
 declare module '../index.js' {
   interface BusSubjectsNamespace {
@@ -60,19 +73,7 @@ describe('Test A: cursor in outbound request equals preceding local handler prio
     const busA = createBusInstance({ context: createBusContext() });
     const busB = createBusInstance({ context: createBusContext() });
 
-    // Register schemas on both buses (registerNamespace is idempotent for same domain+schemas).
-    busA.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
-    busB.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(busA, busB);
 
     // busA: local handler at priority 400 — delegates to next()
     const cleanupA400 = busA.on(
@@ -144,18 +145,7 @@ describe('Test B: receiver starts dispatch strictly below the cursor', () => {
     const busA = createBusInstance({ context: createBusContext() });
     const busB = createBusInstance({ context: createBusContext() });
 
-    busA.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
-    busB.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(busA, busB);
 
     // busB handlers at three priority tiers
     const cleanupB500 = busB.on(
@@ -232,18 +222,7 @@ describe('Test C: full interleaved three-hop chain busA:400 → busB:300 → bus
     const busA = createBusInstance({ context: createBusContext() });
     const busB = createBusInstance({ context: createBusContext() });
 
-    busA.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
-    busB.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(busA, busB);
 
     // busA: priority 400 — intercepts then delegates
     const cleanupA400 = busA.on(
@@ -317,24 +296,7 @@ describe('Test D: same-priority remote-to-remote entries get correct cursor', ()
     const busB = createBusInstance({ context: createBusContext() });
     const busC = createBusInstance({ context: createBusContext() });
 
-    busA.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
-    busB.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
-    busC.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(busA, busB, busC);
 
     // Create two bidirectional pairs: A↔B and A↔C
     // Each pair needs a distinct label so transport names don't collide
@@ -396,12 +358,7 @@ describe('Test E: fire-and-forget ctx.next() propagates downstream result', () =
   it('returns downstream result when handler A calls ctx.next() without await', async () => {
     const bus = createBusInstance({ context: createBusContext() });
 
-    bus.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(bus);
 
     // Handler A (priority 200): fire-and-forget next()
     const cleanupA = bus.on(
@@ -443,12 +400,7 @@ describe('Test F: fire-and-forget ctx.next() propagates downstream errors', () =
   it('rejects with RequestError when handler A fires ctx.next() without await and B throws', async () => {
     const bus = createBusInstance({ context: createBusContext() });
 
-    bus.registerNamespace('cursorE2e', {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    });
+    registerCursorNamespace(bus);
 
     // Handler A (priority 200): fire-and-forget next()
     const cleanupA = bus.on(
@@ -509,15 +461,7 @@ describe('Test G: remote NoHandlerError falls through to lower-priority local ha
     const busA = createBusInstance({ context: createBusContext() });
     const busB = createBusInstance({ context: createBusContext() });
 
-    const schemas = {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    };
-
-    busA.registerNamespace('cursorE2e', schemas);
-    busB.registerNamespace('cursorE2e', schemas);
+    registerCursorNamespace(busA, busB);
 
     // busA:400 — intercepts, delegates downstream, does NOT set a result
     const cleanupA400 = busA.on(
@@ -583,15 +527,7 @@ describe('Test G: remote NoHandlerError falls through to lower-priority local ha
     const busA = createBusInstance({ context: createBusContext() });
     const busB = createBusInstance({ context: createBusContext() });
 
-    const schemas = {
-      compute: {
-        request: z.object({ value: z.number() }),
-        response: z.object({ result: z.number(), handledBy: z.string() }),
-      },
-    };
-
-    busA.registerNamespace('cursorE2e', schemas);
-    busB.registerNamespace('cursorE2e', schemas);
+    registerCursorNamespace(busA, busB);
 
     // busB has a handler that delegates, exhausting its chain
     const cleanupB300 = busB.on(
