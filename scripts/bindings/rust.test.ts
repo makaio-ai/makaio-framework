@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import '@makaio/contracts';
 import { describe, expect, it } from 'vitest';
 import { PublicProtocolNamespaces } from '../../packages/contracts/src/protocol/catalog.js';
-import { exportProtocolManifest } from '../../packages/contracts/src/protocol/index.js';
+import { exportProtocolManifest } from '../protocol/export-manifest.js';
 import type { MakaioProtocolManifest } from '../../packages/contracts/src/protocol/types.js';
 import { RUST_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
 import {

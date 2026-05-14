@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   type BusTransport,
@@ -90,16 +91,18 @@ class PendingRequestTransport extends MockTransport {
 }
 
 // Register test subjects
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('test', {
-  // Event subject
-  testEvent: z.object({ message: z.string() }),
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('test', {
+    // Event subject
+    testEvent: z.object({ message: z.string() }),
 
-  // Request subject
-  testRequest: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-});
+    // Request subject
+    testRequest: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+);
 
 // Augment types for type safety
 declare module '../index.js' {

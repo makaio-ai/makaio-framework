@@ -1,6 +1,5 @@
 import path from 'node:path';
-import type { MakaioExtension } from '@makaio/contracts';
-import type { ExtensionEntry } from './types.js';
+import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
 /** Extension migration source passed from the coordinator to the host runtime. */
 export interface ExtensionMigrationSource {
@@ -53,7 +52,7 @@ export async function runExtensionMigrations(options: {
  * @param migrationsPath - Raw path from {@link StorageManifest.migrations}.
  * @returns Absolute migrations folder path.
  */
-function resolveMigrationPath(name: string, pkg: MakaioExtension, migrationsPath: string): string {
+function resolveMigrationPath(name: string, pkg: KernelMakaioExtension, migrationsPath: string): string {
   if (path.isAbsolute(migrationsPath)) {
     return migrationsPath;
   }

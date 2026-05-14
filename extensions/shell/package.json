@@ -9,7 +9,6 @@
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
     "./schemas": "./src/bus/schemas.ts",
-    "./register": "./src/bus/namespace.ts",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -42,7 +41,6 @@
       ".": "./dist/index.mjs",
       "./server": "./dist/server.mjs",
       "./schemas": "./dist/bus/schemas.mjs",
-      "./register": "./dist/bus/namespace.mjs",
       "./package.json": "./package.json"
     }
   }

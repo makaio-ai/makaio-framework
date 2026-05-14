@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionWarning, MakaioExtension, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
+import { createBusNamespace } from '@makaio/core';
+import type { ExtensionWarning, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import type { ToastPayload } from '@makaio/contracts/toast';
 import { ToastSubjects } from '@makaio/contracts/toast';
 import { BaseService } from '@makaio/service-base';
 import { z } from 'zod';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
+import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { WARNING_ACTION_ID } from '../extension/warning-action-dispatcher.js';
 
 // ---------------------------------------------------------------------------
@@ -392,12 +394,14 @@ describe('Extension warning emission', () => {
  * @returns Typed subjects for the registered namespace.
  */
 function registerWiringApplyNamespace(bus: IMakaioBus, clientId: string) {
-  return bus.registerNamespace(`client:${clientId}`, {
-    'wiring.apply': {
-      request: z.object({ scope: z.string(), makaioCommand: z.string() }),
-      response: z.object({ applied: z.number(), skipped: z.number() }),
-    },
-  }).subjects;
+  return bus.registerNamespace(
+    createBusNamespace(`client:${clientId}`, {
+      'wiring.apply': {
+        request: z.object({ scope: z.string(), makaioCommand: z.string() }),
+        response: z.object({ applied: z.number(), skipped: z.number() }),
+      },
+    }),
+  ).subjects;
 }
 
 // ---------------------------------------------------------------------------

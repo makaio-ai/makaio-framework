@@ -13,6 +13,7 @@ import { awaitWithTimeoutAndSignal } from './request/await-with-timeout-and-sign
 import { TimeoutError as pTimeoutError } from 'p-timeout';
 import { dispatch } from './request/dispatch.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
+import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 
 /**
  * Determine whether a request should be dispatched locally only.
@@ -66,6 +67,9 @@ export async function request<
 >(context: MakaioBusContext, subjectDefinition: T, payload: Request, options?: RequestOptions): Promise<Response> {
   const subjectKey = subjectDefinition.subject;
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
+
+  warnIfUnregistered(context, subjectDefinition, fullSubjectKey);
+
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId ?? nanoid();
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;

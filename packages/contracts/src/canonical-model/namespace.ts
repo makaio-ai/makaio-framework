@@ -1,8 +1,8 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { CanonicalModelSchemas } from './schemas.js';
 
-/** Registered bus namespace for framework canonical-model resolution. */
-export const CanonicalModelNamespace = MakaioBus.registerNamespace('canonicalModel', CanonicalModelSchemas);
+/** Bus namespace definition for framework canonical-model resolution. */
+export const CanonicalModelNamespace = createBusNamespace('canonicalModel', CanonicalModelSchemas);
 
 /** Typed subjects for canonical model bus operations. */
 export const CanonicalModelSubjects = CanonicalModelNamespace.subjects;

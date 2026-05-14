@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
  * \@makaio/reviewer-copilot
  *
@@ -13,7 +14,7 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { registerReviewerProcessor, unregisterReviewerProcessor } from '@makaio/contracts';
 import { copilotProcessor } from './processor.js';
 
@@ -25,7 +26,7 @@ export { copilotProcessor } from './processor.js';
  * On `init`, emits a capability registration event on the bus so the review
  * service can dispatch Copilot snapshots to this processor.
  */
-export const reviewerCopilotPackage: MakaioExtension = {
+export const reviewerCopilotPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'reviewer-copilot',
   displayName: 'Copilot Reviewer Processor',
   version: '0.1.0',

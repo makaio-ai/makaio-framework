@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus } from '../index.js';
 import type { BusEventMessage, BusMessage, BusRequestMessage, BusTransportRegistry, BusTransport } from '../index.js';
 
@@ -43,9 +44,11 @@ class FailingTransport extends RecordingTransport {
   }
 }
 
-const { subjects: RelayIsolationSubjects } = MakaioBus.registerNamespace('relayIsolation', {
-  event: z.object({ value: z.string() }),
-});
+const { subjects: RelayIsolationSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('relayIsolation', {
+    event: z.object({ value: z.string() }),
+  }),
+);
 
 describe('Transport relay isolation', () => {
   let source: RecordingTransport;

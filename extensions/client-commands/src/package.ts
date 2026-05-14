@@ -8,7 +8,8 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { clientCommandsCli } from './cli/contribution.js';
 
 /**
@@ -18,7 +19,7 @@ import { clientCommandsCli } from './cli/contribution.js';
  * `makaio client wiring` — CLI commands that dispatch wiring
  * requests to the Makaio runtime bus.
  */
-export const clientCommandsPackage: MakaioExtension = {
+export const clientCommandsPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'client-commands',
   displayName: 'Client Commands',
   version: '0.1.0',

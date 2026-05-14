@@ -1,4 +1,4 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import {
   attachExtensionCliContributions,
   isDescriptorFrameworkCompatible,
@@ -29,7 +29,7 @@ export interface BootExtensionLoadingResult {
   /** Packages augmented or synthesized with CLI contributions. */
   readonly extensionsWithCli: ExtensionCliAttachResult;
   /** Final extension package list before capability and enablement gating. */
-  readonly allExtensionPackages: ReadonlyArray<MakaioExtension>;
+  readonly allExtensionPackages: ReadonlyArray<KernelMakaioExtension>;
 }
 
 /**

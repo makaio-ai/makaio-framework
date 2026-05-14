@@ -1,12 +1,11 @@
 /**
- * Page bus namespace registration.
+ * Page bus namespace definition.
  *
- * Importing this module registers the `pages` namespace on the bus as a
- * side effect. Import via `@makaio/ui-kernel/pages/namespace` at your
- * application composition root.
+ * Declares the `pages` namespace subjects and schemas. Registration happens
+ * explicitly at composition roots via `bus.registerNamespace(PageNamespace)`.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { PageSchemas } from './schemas.js';
 
 /**
@@ -15,7 +14,7 @@ import { PageSchemas } from './schemas.js';
  * Provides type-safe subjects for querying page metadata over the bus.
  * Used by slash commands, navigation, and surface-aware page filtering.
  */
-export const PageNamespace = MakaioBus.registerNamespace('pages', PageSchemas);
+export const PageNamespace = createBusNamespace('pages', PageSchemas);
 
 /**
  * Page bus subjects for querying page metadata.

@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext, MakaioExtension } from '@makaio/contracts';
+import type { NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ServiceSkipError } from '../service-skip-error.js';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { ContributionProcessor } from '../extension/types.js';
+import type { ContributionProcessor, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

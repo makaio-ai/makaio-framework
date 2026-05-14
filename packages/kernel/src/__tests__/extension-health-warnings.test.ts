@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionWarning, MakaioExtension, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
+import type { ExtensionWarning, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
+import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 
 // ---------------------------------------------------------------------------

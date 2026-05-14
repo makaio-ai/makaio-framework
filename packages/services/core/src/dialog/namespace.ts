@@ -1,22 +1,21 @@
 /**
- * Dialog bus namespace registration.
+ * Dialog bus namespace definition.
  *
- * Importing this module registers the `dialog` namespace on the bus as a
- * side effect. Import via `@makaio/services-core/dialog/namespace` at your
- * application composition root.
+ * Import via `@makaio/services-core/dialog/namespace` at your application
+ * composition root and register the namespace explicitly.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { DialogSchemas } from './schemas.js';
 
 /**
- * Dialog namespace registration.
+ * Dialog namespace definition.
  *
  * Provides type-safe subjects for UI dialog operations (confirmation and
  * text-input prompts). The UI handler must keep each request open until
  * the user responds; set bus timeouts accordingly.
  */
-export const DialogNamespace = MakaioBus.registerNamespace('dialog', DialogSchemas);
+export const DialogNamespace = createBusNamespace('dialog', DialogSchemas);
 
 /**
  * Typed subjects for dialog operations.

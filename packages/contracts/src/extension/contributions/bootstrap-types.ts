@@ -1,20 +1,25 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 
-/** Context passed to bootstrap discovery and export operations. */
-export interface BootstrapDiscoverContext {
+/**
+ * Context passed to bootstrap discovery and export operations.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface BootstrapDiscoverContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Bus instance for querying the runtime. */
-  bus: IMakaioBus;
+  bus: TBus;
   /** Active project identifier. */
   projectId: string;
   /** Absolute path to the project repository. */
   repoPath: string;
 }
 
-/** Context for export operations — identical to discover context. */
-export type BootstrapExportContext = BootstrapDiscoverContext;
+/** Context for export operations - identical to discover context. */
+export type BootstrapExportContext<TBus extends MakaioBusLike = MakaioBusLike> = BootstrapDiscoverContext<TBus>;
 
-/** Context for import operations — extends discover context with the bootstrap folder path. */
-export interface BootstrapImportContext extends BootstrapDiscoverContext {
+/** Context for import operations - extends discover context with the bootstrap folder path. */
+export interface BootstrapImportContext<
+  TBus extends MakaioBusLike = MakaioBusLike,
+> extends BootstrapDiscoverContext<TBus> {
   /** Absolute path to the `.makaio/bootstrap/` folder being imported from. */
   bootstrapFolderPath: string;
 }
@@ -90,8 +95,9 @@ export interface BootstrapExportResult {
  *
  * Participates in project export (`discoverExportable` + `export`) and
  * project import (`listImportable` + `import`) workflows.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
  */
-export interface ExtensionBootstrap {
+export interface ExtensionBootstrap<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Subfolder name within `.makaio/bootstrap/` for this extension's assets. */
   folder: string;
   /**
@@ -100,20 +106,20 @@ export interface ExtensionBootstrap {
    * @param files - Files present in the bootstrap folder.
    * @returns Assets available for import.
    */
-  listImportable: (ctx: BootstrapImportContext, files: string[]) => Promise<BootstrapAsset[]>;
+  listImportable: (ctx: BootstrapImportContext<TBus>, files: string[]) => Promise<BootstrapAsset[]>;
   /**
    * Discover assets available for export from the current project.
    * @param ctx - Discovery context with bus and project info.
    * @returns Assets that can be exported.
    */
-  discoverExportable: (ctx: BootstrapDiscoverContext) => Promise<BootstrapAsset[]>;
+  discoverExportable: (ctx: BootstrapDiscoverContext<TBus>) => Promise<BootstrapAsset[]>;
   /**
    * Export a single asset and return its serialized content.
    * @param ctx - Export context with bus and project info.
    * @param asset - The asset to export.
    * @returns Serialized content string written to the bootstrap folder.
    */
-  export: (ctx: BootstrapExportContext, asset: BootstrapAsset) => Promise<string>;
+  export: (ctx: BootstrapExportContext<TBus>, asset: BootstrapAsset) => Promise<string>;
   /**
    * Import a single asset from its serialized content.
    * @param ctx - Import context with bus, project, and bootstrap folder path.
@@ -123,7 +129,7 @@ export interface ExtensionBootstrap {
    * @returns Result of the import operation.
    */
   import: (
-    ctx: BootstrapImportContext,
+    ctx: BootstrapImportContext<TBus>,
     asset: BootstrapAsset,
     content: string,
     action: 'replace' | 'skip',

@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { AgentResolutionSchemas } from './schemas.js';
 
 // ============================================================================
@@ -17,7 +17,7 @@ import { AgentResolutionSchemas } from './schemas.js';
  * violation where framework code imported host subjects
  * (PersonaSubjects, ProfileSubjects, VirtualModelSubjects) directly.
  */
-export const AgentResolutionNamespace = MakaioBus.registerNamespace('agentResolution', AgentResolutionSchemas);
+export const AgentResolutionNamespace = createBusNamespace('agentResolution', AgentResolutionSchemas);
 
 /** Subject definitions for agent resolution bus RPCs. */
 export const AgentResolutionSubjects = AgentResolutionNamespace.subjects;

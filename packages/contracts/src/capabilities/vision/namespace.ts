@@ -1,5 +1,5 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { VisionSchemas } from './schemas.js';
 
-export const VisionNamespace = MakaioBus.registerNamespace('vision', VisionSchemas);
+export const VisionNamespace = createBusNamespace('vision', VisionSchemas);
 export const VisionSubjects = VisionNamespace.subjects;

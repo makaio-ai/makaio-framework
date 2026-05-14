@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { WorkerSettingsSchemas } from '../worker/schemas.js';
 import { SettingsSchemas, AdapterInfoSchema } from './schemas.js';
 import { ExtensionConfigStorageSubjects } from './storage/extension-configs/namespace.js';
@@ -14,7 +14,7 @@ import { ExtensionConfigStorageSubjects } from './storage/extension-configs/name
  *
  * Prefix: 'settings.'
  */
-export const SettingsNamespace = MakaioBus.registerNamespace('settings', SettingsSchemas);
+export const SettingsNamespace = createBusNamespace('settings', SettingsSchemas);
 
 /** Pre-extracted subjects for direct import. */
 export const SettingsSubjects = SettingsNamespace.subjects;
@@ -23,7 +23,7 @@ export const SettingsSubjects = SettingsNamespace.subjects;
  * Worker settings namespace for worker definition CRUD.
  * Exposed for clients (e.g., WorkerService) to make typed RPC calls without registering the namespace themselves.
  */
-export const WorkerSettingsNamespace = MakaioBus.registerNamespace('settings:worker', WorkerSettingsSchemas);
+export const WorkerSettingsNamespace = createBusNamespace('settings:worker', WorkerSettingsSchemas);
 export const WorkerSettingsSubjects = WorkerSettingsNamespace.subjects;
 
 // ── Re-exported bus subjects and data contracts for external consumers ─────────

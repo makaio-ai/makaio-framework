@@ -1,5 +1,6 @@
 import { dep } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { ClaudeCodeClientService } from './claude-code-client-service.js';
 export { ClaudeCodeClientSubjects } from './namespace.js';
 export { ClaudeCodeClientService } from './claude-code-client-service.js';
@@ -24,7 +25,7 @@ export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } fr
  * creates the {@link ClaudeCodeClientService} that bridges raw hook events
  * into normalized `client.session.*` observations.
  */
-export const claudeCodeClientRuntimePackage: MakaioExtension = {
+export const claudeCodeClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'claude-code.runtime',
   displayName: 'Claude Code Client Runtime',
   version: '0.1.0',

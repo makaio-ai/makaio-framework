@@ -1,7 +1,7 @@
 /**
- * Client namespace registration.
+ * Client namespace definition.
  *
- * Registers the global `client.*` namespace for scan, account observation
+ * Defines the global `client.*` namespace for scan, account observation
  * (`client.account.observe`, `client.account.activate`, `client.account.getActive`),
  * usage ingestion/snapshot, runtime observation (`client.runtime.observe`,
  * `client.runtime.started`), observed session semantics subjects
@@ -16,13 +16,13 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ClientSchemas } from './schemas.js';
 
 /**
- * Client namespace registered under the `client` prefix.
+ * Client namespace definition under the `client` prefix.
  */
-export const ClientNamespace = MakaioBus.registerNamespace('client', ClientSchemas);
+export const ClientNamespace = createBusNamespace('client', ClientSchemas);
 
 /**
  * Typed bus subjects for the client namespace.

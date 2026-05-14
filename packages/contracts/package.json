@@ -13,6 +13,7 @@
     "./common": "./src/common/index.ts",
     "./config": "./src/config/index.ts",
     "./harness": "./src/harness/index.ts",
+    "./host": "./src/host/index.ts",
     "./extension": "./src/extension/index.ts",
     "./provider": "./src/provider/index.ts",
     "./session": "./src/session/index.ts",
@@ -25,13 +26,7 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "@makaio/bus-core": "workspace:*",
     "@makaio/core": "workspace:*",
-    "@makaio/service-base": "workspace:*",
-    "@makaio/storage-core": "workspace:*",
-    "@makaio/utils": "workspace:*",
-    "hono": "^4.12.18",
-    "merge-anything": "^6.0.6",
     "semver": "^7.8.0",
     "zod": "^4.1.13"
   },
@@ -55,6 +50,7 @@
       "./common": "./dist/common/index.mjs",
       "./config": "./dist/config/index.mjs",
       "./harness": "./dist/harness/index.mjs",
+      "./host": "./dist/host/index.mjs",
       "./extension": "./dist/extension/index.mjs",
       "./provider": "./dist/provider/index.mjs",
       "./session": "./dist/session/index.mjs",

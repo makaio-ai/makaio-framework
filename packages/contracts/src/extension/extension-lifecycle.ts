@@ -1,4 +1,3 @@
-import type { BaseService } from '@makaio/service-base';
 import type { ExtensionWarning } from './extension-warning.js';
 
 declare const extensionIdentityBrand: unique symbol;
@@ -40,5 +39,10 @@ export interface ExtensionServiceLifecycle {
   checkHealth?(): Promise<ExtensionWarning[]> | ExtensionWarning[];
 }
 
-/** Service shape returned by {@link MakaioExtension.create}. */
-export type ExtensionService = BaseService | ExtensionServiceLifecycle;
+/**
+ * Service shape returned by {@link MakaioExtension.create}.
+ *
+ * Any class that extends `BaseService` satisfies this interface structurally
+ * because `BaseService` exposes the same lifecycle methods.
+ */
+export type ExtensionService = ExtensionServiceLifecycle;

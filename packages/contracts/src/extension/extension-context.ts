@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
 
@@ -10,9 +10,9 @@ import type { ExtensionIdentity } from './extension-lifecycle.js';
  * lifecycle controls. Host-specific environment details belong on explicit
  * context extensions such as {@link NodeExtensionContext}.
  */
-export interface ExtensionContext {
+export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Bus instance for registering handlers and emitting events. */
-  readonly bus: IMakaioBus;
+  readonly bus: TBus;
   /** Coordinator-minted identity for the extension being created. */
   readonly identity: ExtensionIdentity;
   /**
@@ -82,7 +82,7 @@ export interface ExtensionContext {
  * Extensions that need these fields should opt into this context explicitly;
  * host-agnostic extensions can type themselves against {@link ExtensionContext}.
  */
-export interface NodeExtensionContext extends ExtensionContext {
+export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> extends ExtensionContext<TBus> {
   /** Current platform identifier (e.g., `'darwin'`, `'linux'`, `'win32'`). */
   readonly platform: NodeJS.Platform;
   /** User's home directory path. */

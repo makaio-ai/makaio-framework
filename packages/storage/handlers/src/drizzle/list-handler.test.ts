@@ -4,7 +4,7 @@ import { text, integer, sqliteTable } from 'drizzle-orm/sqlite-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { z } from 'zod';
 import { createTempDb, createDbCleanup, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { createDrizzleListHandler } from './list-handler.js';
 import { buildScopePredicates } from './scope-predicates.js';
 
@@ -49,7 +49,7 @@ const TestListQuerySchema = z.object({
 
 type TestListQuery = z.infer<typeof TestListQuerySchema>;
 
-const TestStorageNamespace = createStorageNamespace('test-list', {
+const TestStorageNamespace = createStorageNamespaceDefinition('test-list', {
   schemas: {
     list: {
       request: TestListQuerySchema,

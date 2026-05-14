@@ -1,19 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, channelSubject, ChannelOnlyError } from '../index.js';
 
-const ChannelTestNamespace = MakaioBus.registerNamespace('channelTest', {
-  secret: channelSubject({
-    request: z.object({ key: z.string() }),
-    response: z.object({ value: z.string() }),
+const ChannelTestNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('channelTest', {
+    secret: channelSubject({
+      request: z.object({ key: z.string() }),
+      response: z.object({ value: z.string() }),
+    }),
+    notify: channelSubject(z.object({ message: z.string() })),
+    normal: z.object({ data: z.string() }),
+    normalRequest: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ found: z.boolean() }),
+    },
   }),
-  notify: channelSubject(z.object({ message: z.string() })),
-  normal: z.object({ data: z.string() }),
-  normalRequest: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ found: z.boolean() }),
-  },
-});
+);
 
 const TestSubjects = ChannelTestNamespace.subjects;
 

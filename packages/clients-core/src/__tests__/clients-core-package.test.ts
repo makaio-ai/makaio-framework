@@ -15,8 +15,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects, createClientDefinition } from '@makaio/contracts/client';
-import type { NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
+import type { KernelExtensionContext } from '@makaio/kernel/extension';
 import { createClientsCorePackage, registerStorageHandlersWithRollback } from '../package.js';
 import type { ClientsCorePackageOptions, ClientsCoreService } from '../package.js';
 import { CLIENTS_CORE_DDL } from './test-ddl.js';
@@ -64,7 +64,7 @@ const UNMANAGED_DEFINITION = createClientDefinition({
  * @param bus - Bus instance to wire into the service
  * @returns Minimal package context
  */
-function makeTestExtensionContext(bus: IMakaioBus): ExtensionContext {
+function makeTestExtensionContext(bus: IMakaioBus): KernelExtensionContext {
   return {
     bus,
     makaioHome: '/opt/makaio/test',
@@ -75,7 +75,7 @@ function makeTestExtensionContext(bus: IMakaioBus): ExtensionContext {
     dataDir: '/opt/makaio/test/clients-core',
     identity: {
       extensionName: 'makaio.clients-core',
-    } as ExtensionContext['identity'],
+    } as KernelExtensionContext['identity'],
     getService: () => undefined,
     tryImport: async (_specifier) => null,
     signal: new AbortController().signal,

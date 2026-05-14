@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { AIModelSchema, ModelFilterModeSchema, ProtocolEndpointsSchema, ProtocolIdSchema } from '@makaio/contracts';
 import { StorageIdRequestSchema } from './shared-schemas.js';
 
@@ -48,7 +48,7 @@ export const ProviderRecordSchema = z.object({
  * - `list`: Retrieve all providers
  * - `listByProtocol`: Retrieve all providers that support a given wire protocol
  */
-export const ProviderStorageNamespace = createStorageNamespace('provider', {
+export const ProviderStorageNamespace = createStorageNamespaceDefinition('provider', {
   schemas: {
     get: {
       request: StorageIdRequestSchema,

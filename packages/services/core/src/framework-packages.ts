@@ -1,4 +1,5 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { CapabilityService } from './capability/capability-service.js';
@@ -52,7 +53,7 @@ export const CapabilityToken = extensionToken<CapabilityService>('capability');
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
 
 /** Package that registers framework session storage handlers. */
-export const sessionStoragePackage: MakaioExtension = {
+export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
   name: SessionStorageToken.name,
   displayName: 'Session Storage',
   version: '0.1.0',
@@ -103,7 +104,7 @@ export const sessionStoragePackage: MakaioExtension = {
 };
 
 /** Package that bridges agent events into session storage. */
-export const sessionBridgePackage: MakaioExtension = {
+export const sessionBridgePackage: MakaioNodeExtension<IMakaioBus> = {
   name: SessionBridgeToken.name,
   displayName: 'Session Bridge',
   version: '0.1.0',
@@ -113,7 +114,7 @@ export const sessionBridgePackage: MakaioExtension = {
 };
 
 /** Package that starts the framework session service. */
-export const sessionPackage: MakaioExtension = {
+export const sessionPackage: MakaioNodeExtension<IMakaioBus> = {
   name: SessionToken.name,
   displayName: 'Session',
   version: '0.1.0',
@@ -123,7 +124,7 @@ export const sessionPackage: MakaioExtension = {
 };
 
 /** Package that registers the framework session.sendMessage orchestrator. */
-export const sessionOrchestratorPackage: MakaioExtension = {
+export const sessionOrchestratorPackage: MakaioNodeExtension<IMakaioBus> = {
   name: SessionOrchestratorToken.name,
   displayName: 'Session Orchestrator',
   version: '0.1.0',
@@ -134,7 +135,7 @@ export const sessionOrchestratorPackage: MakaioExtension = {
 };
 
 /** Package that starts the framework tool registry. */
-export const toolRegistryPackage: MakaioExtension = {
+export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   name: ToolRegistryToken.name,
   displayName: 'Tool Registry',
   version: '0.1.0',
@@ -143,7 +144,7 @@ export const toolRegistryPackage: MakaioExtension = {
 };
 
 /** Package that starts the framework tool approval service. */
-export const toolApprovalPackage: MakaioExtension = {
+export const toolApprovalPackage: MakaioNodeExtension<IMakaioBus> = {
   name: ToolApprovalToken.name,
   displayName: 'Tool Approval',
   version: '0.1.0',
@@ -153,7 +154,7 @@ export const toolApprovalPackage: MakaioExtension = {
 };
 
 /** Package that starts the framework tray menu service. */
-export const trayMenuPackage: MakaioExtension = {
+export const trayMenuPackage: MakaioNodeExtension<IMakaioBus> = {
   name: TrayMenuToken.name,
   displayName: 'Tray Menu',
   version: '0.1.0',
@@ -162,7 +163,7 @@ export const trayMenuPackage: MakaioExtension = {
 };
 
 /** Package that starts the framework capability registry. */
-export const capabilityPackage: MakaioExtension = {
+export const capabilityPackage: MakaioNodeExtension<IMakaioBus> = {
   name: CapabilityToken.name,
   displayName: 'Capability',
   version: '0.1.0',
@@ -175,7 +176,7 @@ export const capabilityPackage: MakaioExtension = {
  * @param fetcher - Registry fetcher chain for this host.
  * @returns Model-registry package.
  */
-export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): MakaioExtension {
+export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): MakaioNodeExtension<IMakaioBus> {
   return {
     name: ModelRegistryToken.name,
     displayName: 'Model Registry',
@@ -186,7 +187,7 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
 }
 
 /** Framework packages that are independent of host-specific factories. */
-export const frameworkCorePackages: ReadonlyArray<MakaioExtension> = [
+export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
   sessionStoragePackage,
   sessionBridgePackage,
   sessionClientAccountLinkingPackage,

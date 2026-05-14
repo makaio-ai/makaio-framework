@@ -1,10 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { MakaioExtension } from '@makaio/contracts';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ComponentState } from '../observability/shared-schemas.js';
+import type { KernelMakaioExtension } from './types.js';
 
 interface TransitionEntry {
-  readonly pkg: MakaioExtension;
+  readonly pkg: KernelMakaioExtension;
   state: ComponentState;
   readonly error?: string;
 }
@@ -43,7 +43,7 @@ export interface ContributionFlags {
  * @param pkg - Extension manifest to inspect.
  * @returns Object with one boolean flag per contribution surface.
  */
-function deriveContributes(pkg: MakaioExtension): ContributionFlags {
+function deriveContributes(pkg: KernelMakaioExtension): ContributionFlags {
   return {
     adapters: !!pkg.adapters?.length,
     tools: !!pkg.tools,

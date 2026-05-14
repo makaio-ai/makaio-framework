@@ -1,6 +1,6 @@
 import type { MakaioBusContext } from '../types/index.js';
 import { z } from 'zod';
-import { getFullSubjectForSubjectDefinition, nestSubjectDefinitions } from '../utils/subject-transformation.js';
+import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
 import type { BusNamespace } from '../types/namespace.js';
 import { isChannelSchema } from '../utils/channel-schema.js';
@@ -10,7 +10,11 @@ import { unwrapSchema } from '../utils/unwrap-schema.js';
 import type { ScopedBus } from '../scoped-bus.js';
 import type {
   BaseSubjectSchema,
+  BusNamespaceDefinition,
   FilterablePayloadIntersection,
+  NamespaceRegistrationOptions,
+  RegistrableBusNamespaceDefinition,
+  SchemaViolationReport,
   SubjectDefinition,
   SubjectRecord,
   SubjectRecordFromSchemaRecord,
@@ -75,17 +79,8 @@ function compareCodePointStrings(left: string, right: string): number {
   return leftCodePoints.length - rightCodePoints.length;
 }
 
-/**
- * Report passed to the onSchemaViolation callback when lenient validation detects a schema mismatch.
- */
-export interface SchemaViolationReport {
-  /** Fully-qualified subject key (e.g., "adapter:claude-code.sdk.event") */
-  subject: string;
-  /** Raw payload that failed validation */
-  payload: unknown;
-  /** Individual Zod issues from the failed parse */
-  issues: z.ZodIssue[];
-}
+// Canonical owner: @makaio/core. Re-exported for consumers importing from @makaio/bus-core.
+export type { SchemaViolationReport };
 
 /**
  * Callback invoked when a schema violation is detected in lenient mode.
@@ -111,14 +106,6 @@ export interface ValidationConfig {
   /** Callback for lenient-mode violations (undefined for strict/skip) */
   onViolation?: SchemaViolationCallback;
 }
-
-/**
- * Options for namespace registration.
- */
-export type NamespaceRegistrationOptions =
-  | { busValidationMode?: 'strict' }
-  | { busValidationMode: 'lenient'; onSchemaViolation: SchemaViolationCallback }
-  | { busValidationMode: 'skip' };
 
 /**
  * Runtime schema metadata for one registered bus subject.
@@ -161,18 +148,81 @@ const getScopedBus = async <
 /**
  * Warn if namespace was already registered with different schemas.
  * @param domain - Namespace domain name
- * @param existingKeys - Keys from the already-registered namespace
- * @param newKeys - Keys from the new registration attempt
+ * @param existingSchemas - Schemas from the already-registered namespace.
+ * @param newSchemas - Schemas from the new registration attempt.
  */
-function warnOnSchemaCollision(domain: string, existingKeys: string[], newKeys: string[]): void {
-  const missingKeys = newKeys.filter((k) => !existingKeys.includes(k));
-  if (missingKeys.length > 0) {
-    console.warn(
-      `[MakaioBus] Namespace '${domain}' already registered with different schemas. ` +
-        `Missing subjects: ${missingKeys.join(', ')}. ` +
-        `This usually indicates a namespace collision between packages.`,
-    );
+function warnOnSchemaCollision(
+  domain: string,
+  existingSchemas: ReadonlyMap<string, BaseSubjectSchema>,
+  newSchemas: ReadonlyMap<string, BaseSubjectSchema>,
+): void {
+  const existingKeys = Array.from(existingSchemas.keys());
+  const newKeys = Array.from(newSchemas.keys());
+  const added = newKeys.filter((key) => !existingSchemas.has(key));
+  const removed = existingKeys.filter((key) => !newSchemas.has(key));
+  const changed = newKeys.filter((key) => {
+    const existing = existingSchemas.get(key);
+    const incoming = newSchemas.get(key);
+    return existing !== undefined && incoming !== undefined && !schemaDefinitionsEqual(existing, incoming);
+  });
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0) return;
+
+  const parts: string[] = [];
+  if (added.length > 0) parts.push(`new subjects: ${added.join(', ')}`);
+  if (removed.length > 0) parts.push(`missing subjects: ${removed.join(', ')}`);
+  if (changed.length > 0) parts.push(`changed schemas: ${changed.join(', ')}`);
+
+  console.warn(
+    `[MakaioBus] Namespace '${domain}' already registered with different schemas. ` +
+      `${parts.join('; ')}. ` +
+      `This usually indicates a namespace collision between packages.`,
+  );
+}
+
+/**
+ * Compare schemas by generated JSON Schema so equivalent duplicate definitions
+ * stay idempotent while same-key schema drift still warns.
+ * @param existing - Previously registered runtime schema.
+ * @param incoming - Newly registered runtime schema.
+ * @returns True when the schemas describe the same payload contract.
+ */
+function schemaDefinitionsEqual(existing: BaseSubjectSchema, incoming: BaseSubjectSchema): boolean {
+  const existingFingerprint = schemaFingerprint(existing);
+  const incomingFingerprint = schemaFingerprint(incoming);
+  if (typeof existingFingerprint === 'string' && typeof incomingFingerprint === 'string') {
+    return existingFingerprint === incomingFingerprint;
   }
+  return existing === incoming;
+}
+
+/**
+ * Convert a runtime schema to a comparable JSON fingerprint.
+ * @param schema - Runtime schema to fingerprint.
+ * @returns A stable JSON fingerprint, or the original schema when conversion fails.
+ */
+function schemaFingerprint(schema: BaseSubjectSchema): string | BaseSubjectSchema {
+  try {
+    const jsonSchema = isRequestSchema(schema)
+      ? { request: z.toJSONSchema(schema.request), response: z.toJSONSchema(schema.response) }
+      : z.toJSONSchema(schema);
+    return JSON.stringify(jsonSchema);
+  } catch {
+    return schema;
+  }
+}
+
+/**
+ * Build the comparable runtime schema map for one namespace registration.
+ * @param schemas - Raw subject schemas from a namespace definition.
+ * @returns Subject schemas keyed by canonical subject key.
+ */
+function buildNamespaceSubjectSchemas(schemas: Record<string, SubjectSchema>): ReadonlyMap<string, BaseSubjectSchema> {
+  const subjectSchemas = new Map<string, BaseSubjectSchema>();
+  for (const [subject, schema] of Object.entries(schemas)) {
+    subjectSchemas.set(subject, unwrapSchema(schema));
+  }
+  return subjectSchemas;
 }
 
 /**
@@ -215,9 +265,9 @@ function warnOnValidationConfigCollision(domain: string, existing: ValidationCon
 export const createNamespaceRegistry = () => {
   // Internal runtime registry for namespace lookup
   const namespaceRegistry = new Map<string, unknown>();
-  // Canonical flat schema keys per namespace (for example `channel.open`) so
-  // collision warnings compare schema shape rather than nested runtime tokens.
-  const namespaceSchemaKeys = new Map<string, string[]>();
+  // Canonical unwrapped schemas per namespace (for example `channel.open`) so
+  // collision warnings compare both subject keys and same-key schema drift.
+  const namespaceSubjectSchemas = new Map<string, ReadonlyMap<string, BaseSubjectSchema>>();
   // Internal registry for subject schemas (always unwrapped)
   const subjectSchemas = new Map<string, BaseSubjectSchema>();
   const registeredSubjects = new Map<string, RegisteredSubjectSchema>();
@@ -231,23 +281,23 @@ export const createNamespaceRegistry = () => {
     /**
      * Register a namespace in the runtime registry.
      *
-     * The FilterPayload type parameter is computed eagerly from the schemas,
-     * enabling type-safe filtering via withFilter().
-     * @param domain - Domain string
-     * @param schemas - SubjectNamespace object
-     * @param options - Registration options (e.g., busValidationMode)
-     * @returns The registered namespace with pre-computed FilterPayload type
+     * Accepts a {@link BusNamespaceDefinition} created by `createBusNamespace()` from
+     * `@makaio/core`. The FilterPayload type parameter is computed eagerly from the
+     * schemas, enabling type-safe filtering via `withFilter()`.
+     * @param definition - Namespace definition created by `createBusNamespace()`
+     * @returns The registered namespace with `scopedBus()` and pre-computed FilterPayload type
      */
     registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
-      domain: Domain,
-      schemas: Schemas,
-      options?: NamespaceRegistrationOptions,
+      definition: BusNamespaceDefinition<Domain, Schemas>,
     ): BusNamespace<
       Domain,
       SubjectRecordFromSchemaRecord<Schemas>,
       FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
       Schemas
     > {
+      const { name: domain, schemas, options } = definition;
+      const incomingSubjectSchemas = buildNamespaceSubjectSchemas(schemas);
+
       // Type alias for the computed FilterPayload - evaluated at registration time
       type Subjects = SubjectRecordFromSchemaRecord<Schemas>;
       type FilterPayload = FilterablePayloadIntersection<Subjects>;
@@ -256,7 +306,7 @@ export const createNamespaceRegistry = () => {
       // Check if namespace already exists - if so, return it (idempotent)
       const existing = namespaceRegistry.get(domain);
       if (existing) {
-        warnOnSchemaCollision(domain, namespaceSchemaKeys.get(domain) ?? [], Object.keys(schemas));
+        warnOnSchemaCollision(domain, namespaceSubjectSchemas.get(domain) ?? new Map(), incomingSubjectSchemas);
         warnOnValidationConfigCollision(
           domain,
           validationConfig.get(domain) ?? { mode: 'strict' },
@@ -266,15 +316,13 @@ export const createNamespaceRegistry = () => {
       }
 
       validationConfig.set(domain, validationConfigFromOptions(options));
-
-      const nestedTokens = nestSubjectDefinitions(domain, schemas);
-      namespaceSchemaKeys.set(domain, Object.keys(schemas));
+      namespaceSubjectSchemas.set(domain, incomingSubjectSchemas);
 
       for (const [subject, schema] of Object.entries(schemas)) {
         const fullSubjectKey = `${domain}.${subject}`;
         const local = isLocalSchema(schema);
         const channel = isChannelSchema(schema);
-        const unwrappedSchema = unwrapSchema(schema);
+        const unwrappedSchema = incomingSubjectSchemas.get(subject) ?? unwrapSchema(schema);
         // Store unwrapped schema so getSchema/isRequestSubject work correctly
         subjectSchemas.set(fullSubjectKey, unwrappedSchema);
         registeredSubjects.set(fullSubjectKey, {
@@ -294,7 +342,7 @@ export const createNamespaceRegistry = () => {
 
       const namespace: NamespaceType = {
         name: domain,
-        subjects: nestedTokens as NamespaceType['subjects'],
+        subjects: definition.subjects as NamespaceType['subjects'],
         scopedBus: (context) =>
           getScopedBus<Domain, Subjects, FilterPayload>(domain, context) as Promise<
             ScopedBus<Domain, Subjects, FilterPayload>
@@ -304,6 +352,24 @@ export const createNamespaceRegistry = () => {
       namespaceRegistry.set(domain, namespace);
 
       return namespace;
+    },
+
+    /**
+     * Register multiple namespaces in a single call.
+     *
+     * Iterates `definitions` and calls `registerNamespace()` for each. Useful
+     * at composition roots to register a catalog of namespace definitions in one
+     * statement:
+     *
+     * ```typescript
+     * MakaioBus.registerNamespaces(FrameworkContractNamespaces);
+     * ```
+     * @param definitions - Array of namespace definitions to register
+     */
+    registerNamespaces(definitions: readonly RegistrableBusNamespaceDefinition[]): void {
+      for (const definition of definitions) {
+        this.registerNamespace(definition as BusNamespaceDefinition<string, Record<string, SubjectSchema>>);
+      }
     },
     /**
      * Get the schema for a registered subject.
@@ -420,7 +486,7 @@ export const createNamespaceRegistry = () => {
       process.env.NODE_ENV === 'test'
         ? () => {
             namespaceRegistry.clear();
-            namespaceSchemaKeys.clear();
+            namespaceSubjectSchemas.clear();
             subjectSchemas.clear();
             registeredSubjects.clear();
             localSubjects.clear();

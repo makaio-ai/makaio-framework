@@ -25,6 +25,8 @@ export { createShutdownSequence } from './shutdown.js';
 export type {
   ContributionProcessor,
   ExtensionRuntimeSurface,
+  KernelExtensionContext,
+  KernelMakaioExtension,
   RuntimeCapability,
   RuntimeEnvironment,
 } from './extension/index.js';

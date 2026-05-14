@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, localSubject, type BusTransport } from '../index.js';
 import type { BusMessage, MakaioBusContext } from '../types/index.js';
 
@@ -31,10 +32,12 @@ describe('localSubject', () => {
 
   describe('namespace registration', () => {
     it('sets local flag on subject meta for local event', () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-local-event', {
-        normalEvent: z.object({ data: z.string() }),
-        localEvent: localSubject(z.object({ component: z.unknown() })),
-      });
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-local-event', {
+          normalEvent: z.object({ data: z.string() }),
+          localEvent: localSubject(z.object({ component: z.unknown() })),
+        }),
+      );
 
       expect(TestNamespace.subjects.normalEvent.$meta.local).toBe(false);
       expect(TestNamespace.subjects.normalEvent.$meta.channel).toBe(false);
@@ -43,16 +46,18 @@ describe('localSubject', () => {
     });
 
     it('sets local flag on subject meta for local request', () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-local-request', {
-        normalRequest: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ data: z.string() }),
-        },
-        localRequest: localSubject({
-          request: z.object({ id: z.string() }),
-          response: z.object({ render: z.unknown() }),
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-local-request', {
+          normalRequest: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ data: z.string() }),
+          },
+          localRequest: localSubject({
+            request: z.object({ id: z.string() }),
+            response: z.object({ render: z.unknown() }),
+          }),
         }),
-      });
+      );
 
       expect(TestNamespace.subjects.normalRequest.$meta.local).toBe(false);
       expect(TestNamespace.subjects.normalRequest.$meta.channel).toBe(false);
@@ -61,22 +66,26 @@ describe('localSubject', () => {
     });
 
     it('correctly identifies isRequest for wrapped schemas', () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-local-isrequest', {
-        localEvent: localSubject(z.object({ data: z.string() })),
-        localRequest: localSubject({
-          request: z.object({ id: z.string() }),
-          response: z.object({ data: z.string() }),
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-local-isrequest', {
+          localEvent: localSubject(z.object({ data: z.string() })),
+          localRequest: localSubject({
+            request: z.object({ id: z.string() }),
+            response: z.object({ data: z.string() }),
+          }),
         }),
-      });
+      );
 
       expect(TestNamespace.subjects.localEvent.$meta.isRequest).toBe(false);
       expect(TestNamespace.subjects.localRequest.$meta.isRequest).toBe(true);
     });
 
     it('returns registered subject metadata snapshots', () => {
-      MakaioBus.registerNamespace('test-local-snapshot', {
-        event: z.object({ data: z.string() }),
-      });
+      MakaioBus.registerNamespace(
+        createBusNamespace('test-local-snapshot', {
+          event: z.object({ data: z.string() }),
+        }),
+      );
 
       const registry = MakaioBus.getContext().namespaceRegistry;
       const subject = registry
@@ -122,9 +131,11 @@ describe('localSubject', () => {
     });
 
     it('local events are not sent to transports', async () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-local-emit', {
-        localEvent: localSubject(z.object({ data: z.string() })),
-      });
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-local-emit', {
+          localEvent: localSubject(z.object({ data: z.string() })),
+        }),
+      );
 
       await MakaioBus.emit(TestNamespace.subjects.localEvent, { data: 'test' });
 
@@ -132,9 +143,11 @@ describe('localSubject', () => {
     });
 
     it('normal events are sent to transports', async () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-normal-emit', {
-        normalEvent: z.object({ data: z.string() }),
-      });
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-normal-emit', {
+          normalEvent: z.object({ data: z.string() }),
+        }),
+      );
 
       await MakaioBus.emit(TestNamespace.subjects.normalEvent, { data: 'test' });
 
@@ -143,12 +156,14 @@ describe('localSubject', () => {
     });
 
     it('local requests with local handlers do not go to transports', async () => {
-      const TestNamespace = MakaioBus.registerNamespace('test-local-request-route', {
-        localRequest: localSubject({
-          request: z.object({ id: z.string() }),
-          response: z.object({ found: z.boolean() }),
+      const TestNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('test-local-request-route', {
+          localRequest: localSubject({
+            request: z.object({ id: z.string() }),
+            response: z.object({ found: z.boolean() }),
+          }),
         }),
-      });
+      );
 
       // Register local handler
       MakaioBus.on(TestNamespace.subjects.localRequest, (ctx) => {

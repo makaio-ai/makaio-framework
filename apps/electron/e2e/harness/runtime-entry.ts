@@ -21,6 +21,7 @@ import {
   ExplicitDescriptorDiscovery,
   createHonoRouteGraph,
 } from '@makaio/runtime-node';
+import { UiNamespace } from '@makaio/ui-kernel';
 
 const port = Number(process.env['MAKAIO_PORT']) || 0;
 
@@ -37,6 +38,7 @@ try {
     httpServer,
     surface: 'interactive',
     hostCapabilities: ['node'],
+    hostNamespaces: [UiNamespace],
     // Skip filesystem scanning in E2E — the workspace node_modules glob is
     // expensive and can push boot past Playwright's webServer timeout in CI.
     discovery: new ExplicitDescriptorDiscovery([]),

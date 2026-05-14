@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { createDbCleanup, createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
 import { createDrizzleCrudHandlers } from './crud-handlers.js';
 
@@ -33,7 +34,7 @@ const LifecycleEntitySchema = z.object({
   updatedAt: z.number(),
 });
 
-const LifecycleStorageNamespace = createStorageNamespace('lifecycle-test-storage', {
+const LifecycleStorageNamespace = createStorageNamespaceDefinition('lifecycle-test-storage', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),
@@ -50,11 +51,13 @@ const LifecycleStorageNamespace = createStorageNamespace('lifecycle-test-storage
   },
 });
 
-const LifecycleEventNamespace = MakaioBus.registerNamespace('lifecycle-test-events', {
-  created: LifecycleEntitySchema,
-  updated: LifecycleEntitySchema,
-  deleted: z.object({ id: z.string() }),
-});
+const LifecycleEventNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('lifecycle-test-events', {
+    created: LifecycleEntitySchema,
+    updated: LifecycleEntitySchema,
+    deleted: z.object({ id: z.string() }),
+  }),
+);
 
 const LifecycleStorageSubjects = LifecycleStorageNamespace.subjects;
 const LifecycleEventSubjects = LifecycleEventNamespace.subjects;

@@ -1,21 +1,28 @@
 import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import '../../index.js';
-import { defaultRustModelChecker } from '../export-manifest.js';
 import {
-  PublicProtocolNamespaces,
+  FrameworkContractNamespaces,
+  FrameworkStorageNamespaces,
+} from '../../packages/contracts/src/namespace-catalog.js';
+import {
+  defaultRustModelChecker,
   auditProtocolExport,
   discoverRegisteredProtocolSubjects,
   exportProtocolManifest,
-} from '../index.js';
+} from './export-manifest.js';
+
+MakaioBus.registerNamespaces(FrameworkContractNamespaces);
+MakaioBus.registerNamespaces(FrameworkStorageNamespaces);
+import { PublicProtocolNamespaces } from '../../packages/contracts/src/protocol/index.js';
 import type {
   JsonObject,
   MakaioProtocolManifest,
   MakaioProtocolSubject,
   ProtocolNamespaceCatalog,
   RustModelRepresentabilityChecker,
-} from '../index.js';
+} from '../../packages/contracts/src/protocol/index.js';
 
 function getSubject(manifest: MakaioProtocolManifest, fullSubject: string): MakaioProtocolSubject {
   const subject = manifest.subjects.find((entry) => entry.fullSubject === fullSubject);
@@ -202,7 +209,7 @@ describe('protocol manifest export', () => {
     // Catalog mode only inspects the explicit `catalog` below. This uniquely
     // named z.custom() namespace is also skipped by auto-discovery export, so
     // there is no behavior change for the auto-discovery assertions above.
-    MakaioBus.registerNamespace(namespace, schemas);
+    MakaioBus.registerNamespace(createBusNamespace(namespace, schemas));
 
     const catalog = [
       {

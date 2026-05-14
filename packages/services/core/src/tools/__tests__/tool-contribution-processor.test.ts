@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext, ExtensionToken, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionToken } from '@makaio/contracts';
+import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
 import type { Toolset } from '@makaio/tools-core';
 import { ToolRegistryToken } from '../../framework-packages.js';
@@ -35,13 +36,13 @@ function makeToolset(name: string): Toolset {
  * @param registry - Optional ToolRegistry to expose via getService.
  * @returns Minimal context stub satisfying the ExtensionContext contract.
  */
-function makeContext(registry?: ToolRegistry): ExtensionContext {
+function makeContext(registry?: ToolRegistry): KernelExtensionContext {
   const bus = createBusInstance();
   return {
     bus,
     identity: {
       extensionName: 'pkg-tools',
-    } as ExtensionContext['identity'],
+    } as KernelExtensionContext['identity'],
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -66,7 +67,7 @@ describe('createToolContributionProcessor', () => {
       displayName: 'Tools Package',
       version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha'), makeToolset('beta')] },
-    } satisfies MakaioExtension;
+    } satisfies KernelMakaioExtension;
 
     await processor.processActivated('pkg-tools', pkg, makeContext(registry));
     expect(registry.listToolsets().map((entry) => entry.name)).toEqual(['alpha', 'beta']);
@@ -95,7 +96,7 @@ describe('createToolContributionProcessor', () => {
       displayName: 'Tools Package',
       version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha'), makeToolset('beta')] },
-    } satisfies MakaioExtension;
+    } satisfies KernelMakaioExtension;
 
     await expect(processor.processActivated('pkg-tools', pkg, makeContext(registry))).rejects.toThrow('duplicate tool');
     expect(registry.listToolsets()).toEqual([]);
@@ -110,7 +111,7 @@ describe('createToolContributionProcessor', () => {
       displayName: 'Tools Package',
       version: '0.1.0',
       tools: { createToolsets: () => [makeToolset('alpha')] },
-    } satisfies MakaioExtension;
+    } satisfies KernelMakaioExtension;
 
     await expect(processor.processActivated('pkg-tools', pkg, makeContext())).rejects.toThrow(
       'ToolRegistry is not available',

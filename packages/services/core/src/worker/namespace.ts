@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { WorkerKernelSchemas } from './schemas.js';
 
 /**
@@ -9,6 +9,6 @@ import { WorkerKernelSchemas } from './schemas.js';
  * - worker.* - Runtime lifecycle (handled by WorkerService)
  */
 
-export const WorkerKernelNamespace = MakaioBus.registerNamespace('worker', WorkerKernelSchemas);
+export const WorkerKernelNamespace = createBusNamespace('worker', WorkerKernelSchemas);
 
 export const WorkerSubjects = WorkerKernelNamespace.subjects;

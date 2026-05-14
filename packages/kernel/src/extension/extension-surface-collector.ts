@@ -1,7 +1,7 @@
-import type { MakaioExtension, TrayManifest } from '@makaio/contracts';
+import type { TrayManifest } from '@makaio/contracts';
 import type { CliContribution } from '../cli/types.js';
 import type { WindowRegistry } from '../window/window-registry.js';
-import type { ExtensionEntry } from './types.js';
+import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
 /** Mutable extension surfaces collected during coordinator load. */
 export interface ExtensionSurfaceCollections {
@@ -18,7 +18,7 @@ export interface ExtensionSurfaceCollections {
  * @param collections - Surface registries owned by the coordinator.
  * @param pkg - Extension manifest whose static surfaces should be collected.
  */
-export function collectExtensionSurfaces(collections: ExtensionSurfaceCollections, pkg: MakaioExtension): void {
+export function collectExtensionSurfaces(collections: ExtensionSurfaceCollections, pkg: KernelMakaioExtension): void {
   if (pkg.windows) {
     for (const window of pkg.windows) {
       collections.windowRegistry.register(pkg.name, pkg.displayName, window);
@@ -42,9 +42,11 @@ export function collectExtensionSurfaces(collections: ExtensionSurfaceCollection
  */
 export function extensionsWithHttp(
   entries: ReadonlyMap<string, ExtensionEntry>,
-): ReadonlyArray<{ http: { prefix: string; mount: (app: unknown) => void } }> {
+): ReadonlyArray<KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> }> {
   return Array.from(entries.values())
     .filter((entry) => entry.enabled)
     .map((entry) => entry.pkg)
-    .filter((pkg): pkg is MakaioExtension & { http: NonNullable<MakaioExtension['http']> } => !!pkg.http);
+    .filter(
+      (pkg): pkg is KernelMakaioExtension & { readonly http: NonNullable<KernelMakaioExtension['http']> } => !!pkg.http,
+    );
 }

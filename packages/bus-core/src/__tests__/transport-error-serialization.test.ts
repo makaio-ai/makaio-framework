@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   type BusTransport,
@@ -59,12 +60,14 @@ class StructuredTestError extends Error {
   }
 }
 
-const { subjects: ErrorSubjects } = MakaioBus.registerNamespace('transportError', {
-  testRequest: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-});
+const { subjects: ErrorSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('transportError', {
+    testRequest: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+);
 
 declare module '../index.js' {
   interface BusTransportRegistry {

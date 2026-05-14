@@ -1,12 +1,13 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * MakaioExtension descriptor for the Claude Code CLI adapter.
+ * MakaioNodeExtension<IMakaioBus> descriptor for the Claude Code CLI adapter.
  *
  * Wraps the existing {@link adapterDefinition} in the standard
- * {@link MakaioExtension} shape so the runtime coordinator can discover and
+ * `MakaioNodeExtension<IMakaioBus>` shape so the runtime coordinator can discover and
  * register this adapter through the unified adapter contribution surface.
  */
 import { dep } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { adapterDefinition } from './definition.js';
 import { ClaudeCodeCliAdapterName } from './constants.js';
 
@@ -21,7 +22,7 @@ const clients = adapterDefinition.clients;
  * wire protocol — the same as the SDK adapter — since both target the
  * Anthropic API via different transports.
  */
-export const claudeCodeCliPackage: MakaioExtension = {
+export const claudeCodeCliPackage: MakaioNodeExtension<IMakaioBus> = {
   name: ClaudeCodeCliAdapterName,
   displayName,
   version: '0.1.0',

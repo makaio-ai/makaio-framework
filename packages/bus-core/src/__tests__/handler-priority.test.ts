@@ -1,18 +1,23 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 // Register namespaces for testing
-const { subjects: EventSubjects } = MakaioBus.registerNamespace('priorityTest', {
-  action: z.object({ value: z.string() }),
-});
+const { subjects: EventSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('priorityTest', {
+    action: z.object({ value: z.string() }),
+  }),
+);
 
-const { subjects: RequestSubjects } = MakaioBus.registerNamespace('priorityRequestTest', {
-  process: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-});
+const { subjects: RequestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('priorityRequestTest', {
+    process: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+);
 
 describe('Handler Priority', () => {
   beforeEach(() => {

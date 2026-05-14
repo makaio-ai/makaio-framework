@@ -1,6 +1,5 @@
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
-import type { SchemaRecord } from '@makaio/core';
+import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { EntityUIConfigSchema } from '../shared/ui-config.js';
 import { HarnessDefinitionCreateSchema, HarnessDefinitionSchema } from './schemas.js';
 
@@ -122,5 +121,5 @@ export const HarnessSchemas = {
   deleted: z.object({ id: z.string() }),
 } satisfies SchemaRecord;
 
-export const HarnessNamespace = MakaioBus.registerNamespace('harness', HarnessSchemas);
+export const HarnessNamespace = createBusNamespace('harness', HarnessSchemas);
 export const HarnessSubjects = HarnessNamespace.subjects;

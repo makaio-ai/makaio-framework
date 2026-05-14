@@ -1,6 +1,6 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { CompressionSchemas } from './schemas.js';
 
-export const CompressionNamespace = MakaioBus.registerNamespace('compression', CompressionSchemas);
+export const CompressionNamespace = createBusNamespace('compression', CompressionSchemas);
 
 export const CompressionSubjects = CompressionNamespace.subjects;

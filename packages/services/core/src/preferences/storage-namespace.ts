@@ -1,12 +1,11 @@
 /**
- * Preferences namespace registration — has side effects (registers on the bus).
+ * Preferences namespace definition.
  *
  * Import `./schemas` when you only need pure Zod contracts without bus
- * registration. This file exists for runtime callers that need
- * `PreferencesSubjects` at execution time.
+ * subject helpers. Composition roots register this namespace explicitly.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { PreferenceKeySchema, PreferenceValueSchema, PreferenceItemSchema, PreferencesSchemas } from './schemas.js';
 
 // Re-export schemas and types so existing runtime imports keep working while the
@@ -15,9 +14,9 @@ export type { PreferenceKey, PreferenceItem } from './schemas.js';
 export { PreferenceKeySchema, PreferenceValueSchema, PreferenceItemSchema, PreferencesSchemas };
 
 /**
- * Preferences namespace registered with the bus.
+ * Preferences namespace definition.
  */
-export const PreferencesNamespace = MakaioBus.registerNamespace('preferences', PreferencesSchemas);
+export const PreferencesNamespace = createBusNamespace('preferences', PreferencesSchemas);
 
 /**
  * Preferences subjects for bus communication.

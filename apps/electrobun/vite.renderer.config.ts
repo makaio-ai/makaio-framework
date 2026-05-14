@@ -11,9 +11,10 @@ import {
 import { viteImportMapPlugin } from '../../scripts/lib/vite-import-map-plugin.js';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { sharedRendererAliases, sharedRendererRoot } from '@makaio/host-shared/renderer/vite-assets';
+import { UiNamespace } from '@makaio/ui-kernel';
 import { buildDevHostRuntimeOptions, resolveDevHostOptions, type DevHostOptions } from '@makaio/host-shared';
 import { isValidPort, parseCliPortArg } from '../../scripts/lib/vite-port-helpers.js';
-import { buildNodeRuntimeOptions, resolveMakaioHome } from '@makaio/runtime-node';
+import { buildNodeRuntimeOptions, resolveMakaioHome, type BootMakaioRuntimeOptions } from '@makaio/runtime-node';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
@@ -36,6 +37,23 @@ interface RendererConfig {
   readonly busUrl?: string;
   /** Debug flag passed through to the Vite bus plugin. */
   readonly isDebug: boolean;
+}
+
+type ViteRuntimeOptions = Pick<
+  BootMakaioRuntimeOptions,
+  'discovery' | 'frameworkVersion' | 'hostCapabilities' | 'hostNamespaces'
+>;
+
+/**
+ * Preserve host-provided namespaces while adding the renderer UI contract.
+ * @param runtimeOptions - Runtime options resolved for the current dev mode.
+ * @returns Runtime options accepted by the Vite bus server plugin.
+ */
+function withUiNamespace(runtimeOptions: ViteRuntimeOptions): ViteRuntimeOptions {
+  return {
+    ...runtimeOptions,
+    hostNamespaces: Array.from(new Set([...(runtimeOptions.hostNamespaces ?? []), UiNamespace])),
+  };
 }
 
 /**
@@ -90,7 +108,7 @@ async function createPlugins(command: ConfigEnv['command'], config: RendererConf
     plugins.push(
       ViteBusServerPlugin({
         debug: config.isDebug,
-        runtimeOptions,
+        runtimeOptions: withUiNamespace(runtimeOptions),
       }) as PluginOption,
     );
   }

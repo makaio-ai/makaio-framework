@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { ApprovalPolicySchema } from '@makaio/contracts/harness';
 import {
   ClientBinaryCompatibilitySchema,
@@ -64,7 +64,7 @@ export type ClientRecord = z.infer<typeof ClientRecordSchema>;
  * - `list`: Retrieve all clients
  * - `listByBinaryName`: Retrieve all clients that use a given binary name
  */
-export const ClientStorageNamespace = createStorageNamespace('client', {
+export const ClientStorageNamespace = createStorageNamespaceDefinition('client', {
   schemas: {
     get: {
       request: StorageIdRequestSchema,

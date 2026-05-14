@@ -15,7 +15,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { synthesizeBrowserOnlyPackages } from '../synthesize-browser-only-packages.js';
 import { mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
@@ -219,7 +219,7 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
       createMount: makeMountSpy(mountRecords),
     });
 
-    const bundledPackages: MakaioExtension[] = [
+    const bundledPackages: KernelMakaioExtension[] = [
       {
         name: 'bundled-browser-ext',
         displayName: 'Bundled Browser Ext',
@@ -244,7 +244,7 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
 
     const { packages: synthesized } = synthesizeBrowserOnlyPackages(discovered, { createMount: () => () => {} });
 
-    const bundledPackages: MakaioExtension[] = [
+    const bundledPackages: KernelMakaioExtension[] = [
       {
         name: 'browser-ext',
         displayName: 'Bundled Browser Ext',

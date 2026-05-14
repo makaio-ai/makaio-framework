@@ -1,5 +1,19 @@
 import { z } from 'zod';
-import type { TimeoutConfig } from '@makaio/utils';
+
+/**
+ * Categories of timeouts in the adapter lifecycle.
+ */
+export type TimeoutCategory = 'initialization' | 'acknowledgement' | 'completion' | 'toolApproval' | 'eventWait';
+
+/**
+ * Complete timeout configuration where all categories are required.
+ */
+export type RequiredTimeoutConfig = Record<TimeoutCategory, number>;
+
+/**
+ * Partial timeout configuration for user overrides.
+ */
+export type TimeoutConfig = Partial<RequiredTimeoutConfig>;
 
 /**
  * Zod schema for timeout configuration validation.
@@ -8,7 +22,8 @@ import type { TimeoutConfig } from '@makaio/utils';
  * with different performance characteristics and failure modes.
  * All values are in milliseconds.
  *
- * Type is defined in `\@makaio/utils`, this schema provides runtime validation.
+ * Contracts owns this public shape so downstream consumers do not need utility
+ * implementation packages to resolve generated declarations.
  */
 export const TimeoutConfigSchema: z.ZodType<TimeoutConfig> = z.object({
   initialization: z

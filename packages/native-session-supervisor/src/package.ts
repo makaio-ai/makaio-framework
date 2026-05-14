@@ -10,7 +10,8 @@
  */
 
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { SupervisorService } from './supervisor-service.js';
 import { registerDrizzleSupervisorRuntimeStorage } from './storage/drizzle-handler.js';
 
@@ -20,7 +21,7 @@ import { registerDrizzleSupervisorRuntimeStorage } from './storage/drizzle-handl
  * Critical because the supervisor service manages process runtimes that other
  * packages depend on for native CLI attachment.
  */
-export const nativeSessionSupervisorPackage: MakaioExtension = {
+export const nativeSessionSupervisorPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'makaio.native-session-supervisor',
   displayName: 'Native Session Supervisor',
   version: '0.1.0',

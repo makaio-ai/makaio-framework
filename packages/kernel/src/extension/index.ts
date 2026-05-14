@@ -1,4 +1,11 @@
-export type { ContributionProcessor, ExtensionRuntimeSurface, RuntimeCapability, RuntimeEnvironment } from './types.js';
+export type {
+  ContributionProcessor,
+  ExtensionRuntimeSurface,
+  KernelExtensionContext,
+  KernelMakaioExtension,
+  RuntimeCapability,
+  RuntimeEnvironment,
+} from './types.js';
 /** @public */
 export type { ExtensionCoordinatorOptions } from './types.js';
 export { ExtensionCoordinator } from './extension-coordinator.js';

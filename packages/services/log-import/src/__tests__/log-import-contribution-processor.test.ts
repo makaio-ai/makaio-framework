@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext, MakaioExtension } from '@makaio/contracts';
 import type { LogOrchestratorConfig } from '@makaio/ai-adapters-core';
+import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { LogImportRegistry } from '../log-import-registry.js';
 import { LogImportRegistryToken } from '../package.js';
 import { createLogImportContributionProcessor } from '../log-import-contribution-processor.js';
@@ -12,11 +12,11 @@ import { createMockImporter } from './test-helpers.js';
  * @param registry - Optional `LogImportRegistry` to expose via `getService`.
  * @returns Minimal context stub satisfying the `ExtensionContext` contract.
  */
-function makeContext(registry?: LogImportRegistry): ExtensionContext {
+function makeContext(registry?: LogImportRegistry): KernelExtensionContext {
   const bus = createBusInstance();
   return {
     bus,
-    identity: { extensionName: 'pkg-log' } as ExtensionContext['identity'],
+    identity: { extensionName: 'pkg-log' } as KernelExtensionContext['identity'],
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -26,7 +26,7 @@ function makeContext(registry?: LogImportRegistry): ExtensionContext {
     signal: new AbortController().signal,
     tryImport: async () => null,
     getService: ((token) =>
-      token.name === LogImportRegistryToken.name ? registry : undefined) as ExtensionContext['getService'],
+      token.name === LogImportRegistryToken.name ? registry : undefined) as KernelExtensionContext['getService'],
     hasExtension: () => false,
   };
 }
@@ -70,7 +70,7 @@ class CapturingOrchestrator {
  * @param configOverrides - Optional overrides applied to the `logImport.config` shape.
  * @returns Minimal extension manifest.
  */
-function makePkg(name: string, configOverrides: Record<string, unknown> = {}): MakaioExtension {
+function makePkg(name: string, configOverrides: Record<string, unknown> = {}): KernelMakaioExtension {
   return {
     name,
     displayName: name,
@@ -119,7 +119,7 @@ describe('createLogImportContributionProcessor', () => {
   it('tags adapter packages as source=adapter and extension-only packages as source=extension', async () => {
     const processor = createLogImportContributionProcessor();
 
-    const adapterPkg: MakaioExtension = {
+    const adapterPkg: KernelMakaioExtension = {
       ...makePkg('adapter-pkg'),
       adapters: [{ manifest: {} as never, definition: {} as never }],
     };

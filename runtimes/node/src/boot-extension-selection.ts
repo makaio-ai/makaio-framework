@@ -1,9 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionConfigProvider, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionConfigProvider } from '@makaio/contracts';
 import {
   ExtensionCoordinator,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
+  type KernelMakaioExtension,
   type RuntimeCapability,
   type ExtensionRuntimeSurface,
   type RuntimeEnvironment,
@@ -107,11 +108,11 @@ export type HostCapabilityDeclaration = string | RuntimeCapability;
  * @returns Loaded extension packages eligible for coordinator boot.
  */
 export function selectBootEligibleExtensionPackages(options: {
-  readonly packages: ReadonlyArray<MakaioExtension>;
+  readonly packages: ReadonlyArray<KernelMakaioExtension>;
   readonly configProvider: ExtensionConfigProvider | undefined;
   readonly surface: ExtensionRuntimeSurface;
   readonly runtimeEnvironment: RuntimeEnvironment;
-}): ReadonlyArray<MakaioExtension> {
+}): ReadonlyArray<KernelMakaioExtension> {
   return coalesceExtensionOverrides(
     filterEligibleExtensions(
       filterPersistentlyEnabledExtensionPackages(options.packages, options.configProvider),
@@ -128,12 +129,14 @@ export function selectBootEligibleExtensionPackages(options: {
  * @returns Packages whose persisted enabled state permits boot-time contributions.
  */
 function filterPersistentlyEnabledExtensionPackages(
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   configProvider: ExtensionConfigProvider | undefined,
-): ReadonlyArray<MakaioExtension> {
+): ReadonlyArray<KernelMakaioExtension> {
   if (!configProvider) return packages;
   return packages.filter((pkg) => configProvider.loadEnabled(pkg.name) !== false);
 }
+
+type RuntimeOwnershipPackageView = Pick<KernelMakaioExtension, 'name' | 'displayName' | 'version' | 'runtimeOwnership'>;
 
 /**
  * Find loaded extensions that declare ownership of one runtime subsystem.
@@ -142,8 +145,8 @@ function filterPersistentlyEnabledExtensionPackages(
  * @returns Package names that declare the ownership field.
  */
 function findRuntimeOwners(
-  packages: ReadonlyArray<MakaioExtension>,
-  ownership: keyof NonNullable<MakaioExtension['runtimeOwnership']>,
+  packages: ReadonlyArray<RuntimeOwnershipPackageView>,
+  ownership: keyof NonNullable<KernelMakaioExtension['runtimeOwnership']>,
 ): string[] {
   return packages.filter((pkg) => pkg.runtimeOwnership?.[ownership] === true).map((pkg) => pkg.name);
 }
@@ -154,8 +157,8 @@ function findRuntimeOwners(
  * @param ownership - Runtime ownership field to inspect.
  */
 function assertSingleRuntimeOwner(
-  packages: ReadonlyArray<MakaioExtension>,
-  ownership: keyof NonNullable<MakaioExtension['runtimeOwnership']>,
+  packages: ReadonlyArray<RuntimeOwnershipPackageView>,
+  ownership: keyof NonNullable<KernelMakaioExtension['runtimeOwnership']>,
 ): void {
   const owners = findRuntimeOwners(packages, ownership);
   if (owners.length > 1) {
@@ -174,8 +177,8 @@ function assertSingleRuntimeOwner(
  * @returns Framework core packages for this boot.
  */
 export function selectFrameworkCorePackages(
-  loadedExtensionPackages: ReadonlyArray<MakaioExtension> | true,
-): ReadonlyArray<MakaioExtension> {
+  loadedExtensionPackages: ReadonlyArray<RuntimeOwnershipPackageView> | true,
+): ReadonlyArray<KernelMakaioExtension> {
   if (loadedExtensionPackages === true) {
     return frameworkCorePackages;
   }
@@ -196,7 +199,7 @@ export function selectFrameworkCorePackages(
  * @returns Cleanup callbacks for registered boot contributions.
  */
 export function registerExtensionBootContributions(
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   bus: IMakaioBus,
   coordinator: ExtensionCoordinator,
 ): readonly ShutdownStep[] {

@@ -1,5 +1,4 @@
-import type { MakaioExtension } from '@makaio/contracts';
-import type { ContributionProcessor } from '@makaio/kernel';
+import type { ContributionProcessor, KernelMakaioExtension } from '@makaio/kernel';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 
 /**
@@ -17,9 +16,9 @@ import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
  */
 export function createHttpContributionProcessor(builder: HttpRouteGraphBuilder): ContributionProcessor {
   return {
-    filter: (pkg: MakaioExtension) => !!pkg.http,
+    filter: (pkg: KernelMakaioExtension) => !!pkg.http,
 
-    async processActivated(name: string, pkg: MakaioExtension): Promise<void> {
+    async processActivated(name: string, pkg: KernelMakaioExtension): Promise<void> {
       builder.add({
         owner: name,
         phase: 'extension',

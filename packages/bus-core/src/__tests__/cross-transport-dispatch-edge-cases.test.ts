@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   NoHandlerError,
@@ -28,27 +29,31 @@ import { createStubTransport } from './helpers/transport-fixtures.js';
 // augmented BusSubjectsNamespace is available for all tests.
 // ---------------------------------------------------------------------------
 
-const EdgeNamespace = MakaioBus.registerNamespace('edgeCase', {
-  ping: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ pong: z.boolean() }),
-  },
-  localOnly: localSubject({
-    request: z.object({ id: z.string() }),
-    response: z.object({ result: z.string() }),
+const EdgeNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('edgeCase', {
+    ping: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ pong: z.boolean() }),
+    },
+    localOnly: localSubject({
+      request: z.object({ id: z.string() }),
+      response: z.object({ result: z.string() }),
+    }),
   }),
-}).subjects;
+).subjects;
 
-const AdapterNamespace = MakaioBus.registerNamespace('adapter', {
-  start: {
-    request: z.object({ name: z.string() }),
-    response: z.object({ started: z.boolean() }),
-  },
-  stop: {
-    request: z.object({ name: z.string() }),
-    response: z.object({ stopped: z.boolean() }),
-  },
-}).subjects;
+const AdapterNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('adapter', {
+    start: {
+      request: z.object({ name: z.string() }),
+      response: z.object({ started: z.boolean() }),
+    },
+    stop: {
+      request: z.object({ name: z.string() }),
+      response: z.object({ stopped: z.boolean() }),
+    },
+  }),
+).subjects;
 
 declare module '../index.js' {
   interface BusSubjectsNamespace {

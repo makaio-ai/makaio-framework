@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 import type { ToolCapability } from '../tool-capability/index.js';
 import { HarnessSubjects } from './namespace.js';
 
@@ -160,7 +160,7 @@ function emptyCapabilityResult(
  * @returns Expanded `allowedTools` and `disallowedTools` (Stance B union applied)
  */
 export async function expandProfileToolCapabilities(
-  bus: IMakaioBus,
+  bus: MakaioBusLike,
   config: ProfileToolCapabilitiesConfig,
 ): Promise<{ allowedTools?: string[]; disallowedTools?: string[] }> {
   const { allowedCapabilities, disallowedCapabilities, harnessId, allowedTools, disallowedTools } = config;

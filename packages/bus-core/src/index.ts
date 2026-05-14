@@ -117,7 +117,14 @@ export type { ConnectOptions, IMakaioBus, MakaioBusContext, TransportRegistratio
  * isolated bus contexts (e.g., in tests or multi-bus setups).
  * @public
  */
-export { extendSubjectImpl as extendSubject } from './extend-subject.js';
+export { defineSubjectExtension, extendSubjectImpl as extendSubject } from './extend-subject.js';
+export type {
+  DefinedSubjectExtension,
+  ExtendedSubjectDefinition,
+  SubjectExtension,
+  RequestSubjectExtension,
+  EventSubjectExtension,
+} from './extend-subject.js';
 
 export { createFilteredBus } from './filtered-bus.js';
 export type { IFilteredBus } from './filtered-bus.js';
@@ -167,3 +174,5 @@ export type {
   ExtensionNamespaceExtensions,
   ExtensionNamespaceFromConfig,
 } from './extension-namespace-types.js';
+
+export { __resetWarnedSubjects } from './utils/warn-unregistered.js';

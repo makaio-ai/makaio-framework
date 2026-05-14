@@ -1,10 +1,10 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { CodebaseSchemas } from './schemas.js';
 
 /**
- * Codebase namespace registration.
+ * Codebase namespace definition.
  */
-export const CodebaseNamespace = MakaioBus.registerNamespace('codebase', CodebaseSchemas);
+export const CodebaseNamespace = createBusNamespace('codebase', CodebaseSchemas);
 
 /**
  * Typed subjects for codebase operations.

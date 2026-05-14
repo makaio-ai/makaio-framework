@@ -1,14 +1,13 @@
-import type { MakaioExtension } from '@makaio/contracts';
 import { versionSatisfies } from '@makaio/contracts';
-import type { ExtensionRuntimeSurface, RuntimeEnvironment } from './types.js';
+import type { ExtensionRuntimeSurface, KernelMakaioExtension, RuntimeEnvironment } from './types.js';
 
 /**
  * Keep the last extension registered for a given name.
  * @param extensions - Eligible extensions in load priority order.
  * @returns Unique extensions with later entries winning name collisions.
  */
-export function coalesceExtensionOverrides(extensions: ReadonlyArray<MakaioExtension>): MakaioExtension[] {
-  const byName = new Map<string, MakaioExtension>();
+export function coalesceExtensionOverrides(extensions: ReadonlyArray<KernelMakaioExtension>): KernelMakaioExtension[] {
+  const byName = new Map<string, KernelMakaioExtension>();
   for (const pkg of extensions) {
     if (byName.has(pkg.name)) {
       console.info(`[ExtensionCoordinator] Extension "${pkg.name}" overrides an earlier registration`);
@@ -27,10 +26,10 @@ export function coalesceExtensionOverrides(extensions: ReadonlyArray<MakaioExten
  * @returns Extensions eligible for loading in the current host environment.
  */
 export function filterEligibleExtensions(
-  extensions: ReadonlyArray<MakaioExtension>,
+  extensions: ReadonlyArray<KernelMakaioExtension>,
   surface: ExtensionRuntimeSurface,
   env: RuntimeEnvironment | undefined,
-): MakaioExtension[] {
+): KernelMakaioExtension[] {
   const allInputNames = new Set(extensions.map((p) => p.name));
   const directlyEligible = extensions.filter((pkg) => matchesRequirements(pkg, surface, env));
   const byName = new Map(directlyEligible.map((pkg) => [pkg.name, pkg]));
@@ -62,7 +61,7 @@ export function filterEligibleExtensions(
  * @returns `true` when the extension is eligible for this runtime.
  */
 function matchesRequirements(
-  pkg: MakaioExtension,
+  pkg: KernelMakaioExtension,
   surface: ExtensionRuntimeSurface,
   env: RuntimeEnvironment | undefined,
 ): boolean {
@@ -100,6 +99,6 @@ function capabilityVersionSatisfies(env: RuntimeEnvironment, id: string, range: 
  * @param surface - Runtime surface to match.
  * @returns `true` when the extension is eligible for this runtime surface.
  */
-function matchesSurface(pkg: MakaioExtension, surface: ExtensionRuntimeSurface): boolean {
+function matchesSurface(pkg: KernelMakaioExtension, surface: ExtensionRuntimeSurface): boolean {
   return pkg.surface === undefined || pkg.surface === 'any' || pkg.surface === surface;
 }

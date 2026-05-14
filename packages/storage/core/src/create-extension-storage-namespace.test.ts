@@ -1,8 +1,14 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { MakaioBus } from '@makaio/bus-core';
 import { z } from 'zod';
 import { createExtensionStorageNamespace } from './create-extension-storage-namespace.js';
 
 describe('createExtensionStorageNamespace', () => {
+  beforeEach(() => {
+    MakaioBus.__resetHandlers?.();
+    MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+  });
+
   it('trims surrounding whitespace before creating the extension storage namespace', () => {
     const namespace = createExtensionStorageNamespace(' my-extension ', {
       schemas: {
@@ -14,6 +20,7 @@ describe('createExtensionStorageNamespace', () => {
     expect(namespace.subjects.get.$meta.namespace).toBe('storage:extension:my-extension');
     expectTypeOf(namespace.domain).toEqualTypeOf<'extension:my-extension'>();
     expectTypeOf(namespace.subjects.get.$meta.namespace).toEqualTypeOf<'storage:extension:my-extension'>();
+    expect(MakaioBus.getContext().namespaceRegistry.getSchema(namespace.subjects.get)).toBeUndefined();
   });
 
   it('keeps runtime and type-level trim behavior aligned for JavaScript trim whitespace', () => {

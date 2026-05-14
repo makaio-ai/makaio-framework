@@ -1,3 +1,25 @@
+// Bus namespace definition
+export { createBusNamespace } from './bus-namespace-definition.js';
+export type {
+  BusNamespaceDefinition,
+  NamespaceRegistrationOptions,
+  RegistrableBusNamespaceDefinition,
+  SchemaViolationReport,
+} from './bus-namespace-definition.js';
+
+// Subject helpers
+export {
+  nestSubjectDefinitions,
+  getFullSubjectForSubjectDefinition,
+  isRequestSchema,
+  localSubject,
+  isLocalSchema,
+  channelSubject,
+  isChannelSchema,
+  unwrapSchema,
+} from './subject-helpers/index.js';
+export type { BusSubjects, NestedSubjectDefinitions, FlatSubjectDefinitions } from './subject-helpers/index.js';
+
 // Context
 export type { MakaioContext } from './context/index.js';
 export { createMakaioContext } from './context/index.js';
@@ -57,4 +79,5 @@ export type {
   WildcardContext,
   WildcardSubjectDefinition,
   WildcardUnifiedHandler,
+  MakaioBusLike,
 } from './types/index.js';

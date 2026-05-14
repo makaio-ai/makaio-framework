@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { UsageEntry } from '@makaio/extension-account-manager/schemas';
 import { useEffectGuard } from '../hooks/use-effect-guard.js';
 

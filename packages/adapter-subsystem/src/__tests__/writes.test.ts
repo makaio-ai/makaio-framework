@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
 import { buildStoredCredentialRef, type AdapterFile, type ProviderConfigFile } from '@makaio/contracts/config';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
+import { AdapterSubsystemNamespace, AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { FileAdapterConfigRepository } from '../config-repository.js';
 import { rollbackSnapshotPersistenceOperation } from '../adapter-config-snapshot-persistence.js';
@@ -202,6 +202,7 @@ describe('AdapterSubsystemService writes', () => {
 
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
+    MakaioBus.registerNamespace(AdapterSubsystemNamespace);
   });
 
   afterEach(async () => {

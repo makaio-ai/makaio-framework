@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { CLIENT_RUNTIME_STATUSES } from '../client-runtime-registry-types.js';
 
@@ -40,7 +40,7 @@ export const RuntimeRecordSchema = z.object({
  * Subjects registered here are consumed exclusively by the Drizzle handler
  * and the registry — they are not part of the public `client.*` namespace.
  */
-export const ClientRuntimeStorageNamespace = MakaioBus.registerNamespace('client-runtime:storage', {
+export const ClientRuntimeStorageNamespace = createBusNamespace('client-runtime:storage', {
   upsert: {
     request: RuntimeRecordSchema,
     response: z.object({ success: z.boolean() }),

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createHttpContributionProcessor } from '../http-contribution-processor.js';
 import { createHttpRouteGraphBuilder } from '../http-route-graph-builder.js';
 import { createHonoRouteGraph } from '../hono-route-graph.js';
@@ -10,7 +10,7 @@ import { createHonoRouteGraph } from '../hono-route-graph.js';
  * @param partial - Extension fields to override.
  * @returns Typed extension manifest.
  */
-function makeTestExtension(partial: Partial<MakaioExtension> = {}): MakaioExtension {
+function makeTestExtension(partial: Partial<KernelMakaioExtension> = {}): KernelMakaioExtension {
   return {
     name: 'test-ext',
     displayName: 'Test Extension',

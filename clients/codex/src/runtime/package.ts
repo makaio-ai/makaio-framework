@@ -7,7 +7,8 @@
  */
 
 import { dep } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { CodexClientSessionService } from './codex-client-session-service.js';
 
 export { CodexClientSubjects, CODEX_CLIENT_NAMESPACE } from './namespace.js';
@@ -22,7 +23,7 @@ export type { CodexNormalizedEvent, CodexNormalizedSubject } from './hook-normal
  * `client:codex.hook.received` events into normalized `client.session.*`
  * observations when the Codex descriptor server entry activates.
  */
-export const codexClientRuntimePackage: MakaioExtension = {
+export const codexClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'codex.runtime',
   displayName: 'Codex Client Runtime',
   version: '0.1.0',

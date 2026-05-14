@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { MessageRoutingSchema } from '@makaio/contracts';
 import { messageRouting } from './schema.js';
 
@@ -9,7 +9,7 @@ import { messageRouting } from './schema.js';
  * Tracks delivery status of messages to agents in multi-agent sessions.
  * Enables querying completion status for turn coordination.
  */
-export const MessageRoutingNamespace = createStorageNamespace('messageRouting', {
+export const MessageRoutingNamespace = createStorageNamespaceDefinition('messageRouting', {
   schemas: {
     /**
      * Record routing status for a message to an agent.

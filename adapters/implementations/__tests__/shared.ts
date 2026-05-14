@@ -24,6 +24,8 @@ import {
   type ProviderContext,
   CredentialSubjects,
   McpSubjects,
+  FrameworkContractNamespaces,
+  FrameworkStorageNamespaces,
 } from '@makaio/contracts';
 import { CredentialRefSchema } from '@makaio/contracts/config';
 import { type EventContext } from '@makaio/core';
@@ -32,6 +34,11 @@ import { startHttpMcpServer } from '@makaio/mcp-http-server';
 import { createMcpTestServerLifecycle } from './mcp-test-server-lifecycle.js';
 
 // Module augmentation for vitest TaskMeta lives in framework/scripts/lib/vitest-meta.d.ts
+
+// Register framework namespaces before any bus operation so that schema
+// validation, local-subject routing, and extendSubject() are active in tests.
+MakaioBus.registerNamespaces(FrameworkContractNamespaces);
+MakaioBus.registerNamespaces(FrameworkStorageNamespaces);
 
 const unsub = MakaioBus.__onAny((context) => {
   const payload = context.payload as {

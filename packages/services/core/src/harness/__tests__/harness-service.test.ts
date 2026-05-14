@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus, RequestError, ValidationError } from '@makaio/bus-core';
-import { HarnessSubjects } from '@makaio/contracts';
+import { HarnessNamespace, HarnessSubjects } from '@makaio/contracts/harness';
 import { HarnessService } from '../harness-service.js';
 import { createHarness, createTestDb } from './shared.js';
 
@@ -10,6 +10,7 @@ describe('HarnessService', () => {
 
   beforeEach(async () => {
     MakaioBus.__resetHandlers?.();
+    MakaioBus.registerNamespace(HarnessNamespace);
     const ctx = await createTestDb();
     cleanup = ctx.cleanup;
 
@@ -18,8 +19,8 @@ describe('HarnessService', () => {
   });
 
   afterEach(() => {
-    service.destroy();
-    cleanup();
+    service?.destroy();
+    cleanup?.();
     MakaioBus.__resetHandlers?.();
   });
 

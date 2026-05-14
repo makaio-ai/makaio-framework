@@ -1,19 +1,18 @@
 /**
- * Native Session Supervisor namespace registration.
+ * Native Session Supervisor namespace definition.
  *
- * Registers the global `native-session-supervisor.*` namespace on the
- * MakaioBus, providing typed subjects for launching, attaching to, stopping,
- * and querying supervised native process runtimes.
+ * Defines the global `native-session-supervisor.*` subjects for launching,
+ * attaching to, stopping, and querying supervised native process runtimes.
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { NativeSessionSupervisorSchemas } from './schemas.js';
 
 /**
- * MakaioBus namespace registered under the `native-session-supervisor` prefix.
+ * MakaioBus namespace definition under the `native-session-supervisor` prefix.
  */
-export const NativeSessionSupervisorNamespace = MakaioBus.registerNamespace(
+export const NativeSessionSupervisorNamespace = createBusNamespace(
   'native-session-supervisor',
   NativeSessionSupervisorSchemas,
 );

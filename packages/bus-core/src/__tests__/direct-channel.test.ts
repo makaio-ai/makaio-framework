@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { createBusContext, createBusInstance, channelSubject } from '../index.js';
 import { createChannelEndpoint, openChannel } from '../channel/channel-endpoint.js';
 import type { MakaioBusContext } from '../types/bus.js';
@@ -35,17 +36,19 @@ import type { AnyMessageContext } from '@makaio/core';
  * @returns Typed subject definitions for the test suite
  */
 function registerTestNamespace(context: MakaioBusContext) {
-  return context.namespaceRegistry.registerNamespace('directChannelTest', {
-    store: channelSubject({
-      request: z.object({ key: z.string(), value: z.string() }),
-      response: z.object({ stored: z.boolean() }),
+  return context.namespaceRegistry.registerNamespace(
+    createBusNamespace('directChannelTest', {
+      store: channelSubject({
+        request: z.object({ key: z.string(), value: z.string() }),
+        response: z.object({ stored: z.boolean() }),
+      }),
+      get: channelSubject({
+        request: z.object({ key: z.string() }),
+        response: z.object({ value: z.string().nullable() }),
+      }),
+      notify: channelSubject(z.object({ message: z.string() })),
     }),
-    get: channelSubject({
-      request: z.object({ key: z.string() }),
-      response: z.object({ value: z.string().nullable() }),
-    }),
-    notify: channelSubject(z.object({ message: z.string() })),
-  });
+  );
 }
 
 async function flushTransportSubscriptions(): Promise<void> {

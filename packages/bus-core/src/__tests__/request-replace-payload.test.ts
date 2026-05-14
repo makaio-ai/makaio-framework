@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 // Register namespace for testing replacePayload in request middleware
-const { subjects: RequestSubjects } = MakaioBus.registerNamespace('replacePayloadTest', {
-  process: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-});
+const { subjects: RequestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('replacePayloadTest', {
+    process: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+);
 
 describe('Request middleware replacePayload', () => {
   beforeEach(() => {

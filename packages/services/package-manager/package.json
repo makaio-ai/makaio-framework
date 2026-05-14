@@ -7,14 +7,9 @@
     ".": "./src/index.ts",
     "./schemas": "./src/schemas.ts",
     "./namespace": "./src/namespace.ts",
-    "./register": "./src/namespace.ts",
     "./package": "./src/package.ts",
     "./package.json": "./package.json"
   },
-  "sideEffects": [
-    "./src/namespace.ts",
-    "./dist/namespace.mjs"
-  ],
   "scripts": {
     "build": "tsdown"
   },
@@ -40,7 +35,6 @@
       ".": "./dist/index.mjs",
       "./schemas": "./dist/schemas.mjs",
       "./namespace": "./dist/namespace.mjs",
-      "./register": "./dist/namespace.mjs",
       "./package": "./dist/package.mjs",
       "./package.json": "./package.json"
     }

@@ -1,10 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { z } from 'zod';
 import { ExtensionSubjects, ExtensionNamespace } from '../observability/extension-namespace.js';
 import { ComponentStateSchema } from '../observability/shared-schemas.js';
 
 describe('ExtensionSubjects', () => {
+  beforeAll(() => {
+    MakaioBus.registerNamespace(ExtensionNamespace);
+  });
+
   describe('namespace registration', () => {
     it('registers under the "kernel:extension" domain', () => {
       expect(ExtensionNamespace.name).toBe('kernel:extension');

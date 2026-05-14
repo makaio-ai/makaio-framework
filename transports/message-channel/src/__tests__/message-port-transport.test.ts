@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MessageChannel, type MessagePort } from 'node:worker_threads';
 import { createBusInstance } from '@makaio/bus-core';
 import type { BusMessage, BusEventMessage, BusSubscribeMessage } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { createMessagePortTransport } from '../message-port-transport.js';
 import type { MessagePortLike } from '../types.js';
 import { z } from 'zod';
@@ -540,33 +541,37 @@ describe('createMessagePortTransport — real MessageChannel pair', () => {
       const busA = createBusInstance();
       const busB = createBusInstance();
 
-      const { subjects: SubjectsA } = busA.registerNamespace('messageChannelTransport', {
-        ping: {
-          request: z.object({
-            input: z.string(),
+      const { subjects: SubjectsA } = busA.registerNamespace(
+        createBusNamespace('messageChannelTransport', {
+          ping: {
+            request: z.object({
+              input: z.string(),
+            }),
+            response: z.object({
+              output: z.string(),
+            }),
+          },
+          notice: z.object({
+            label: z.string(),
           }),
-          response: z.object({
-            output: z.string(),
-          }),
-        },
-        notice: z.object({
-          label: z.string(),
         }),
-      });
+      );
 
-      const { subjects: SubjectsB } = busB.registerNamespace('messageChannelTransport', {
-        ping: {
-          request: z.object({
-            input: z.string(),
+      const { subjects: SubjectsB } = busB.registerNamespace(
+        createBusNamespace('messageChannelTransport', {
+          ping: {
+            request: z.object({
+              input: z.string(),
+            }),
+            response: z.object({
+              output: z.string(),
+            }),
+          },
+          notice: z.object({
+            label: z.string(),
           }),
-          response: z.object({
-            output: z.string(),
-          }),
-        },
-        notice: z.object({
-          label: z.string(),
         }),
-      });
+      );
 
       const { port1, port2 } = new MessageChannel();
       const adaptedPort1 = adaptNodeMessagePort(port1);

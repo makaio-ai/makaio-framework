@@ -1,17 +1,20 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('extendResultTest', {
-  query: {
-    request: z.object({ id: z.string() }),
-    response: z.object({
-      name: z.string(),
-      score: z.number(),
-      tags: z.array(z.string()).optional(),
-    }),
-  },
-});
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('extendResultTest', {
+    query: {
+      request: z.object({ id: z.string() }),
+      response: z.object({
+        name: z.string(),
+        score: z.number(),
+        tags: z.array(z.string()).optional(),
+      }),
+    },
+  }),
+);
 
 describe('RequestContext.extendResult()', () => {
   beforeEach(() => {

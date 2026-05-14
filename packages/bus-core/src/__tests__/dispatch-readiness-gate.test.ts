@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   NoHandlerError,
@@ -30,16 +31,18 @@ import {
 // BusSubjectsNamespace is available for all tests in this file.
 // ---------------------------------------------------------------------------
 
-const GateNamespace = MakaioBus.registerNamespace('readinessGate', {
-  ping: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ pong: z.boolean() }),
-  },
-  localOnlyPing: localSubject({
-    request: z.object({ id: z.string() }),
-    response: z.object({ pong: z.boolean() }),
+const GateNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('readinessGate', {
+    ping: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ pong: z.boolean() }),
+    },
+    localOnlyPing: localSubject({
+      request: z.object({ id: z.string() }),
+      response: z.object({ pong: z.boolean() }),
+    }),
   }),
-}).subjects;
+).subjects;
 
 declare module '../index.js' {
   interface BusSubjectsNamespace {

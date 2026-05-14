@@ -1,44 +1,49 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 // Namespace 1: Standard patterns (events + requests, various nesting depths)
-const testNamespace = MakaioBus.registerNamespace('test', {
-  // Events - 2-level nesting
-  'tool.use': z.object({ toolName: z.string(), args: z.array(z.string()) }),
-  // Events - 4-level deep nesting
-  'agent.tool.execution.started': z.object({
-    agentId: z.string(),
-    toolName: z.string(),
-    timestamp: z.number(),
-  }),
-  // Events - for scoped bus testing
-  'stream.chunk': z.object({ content: z.string(), sequenceId: z.number() }),
-  'stream.complete': z.object({ totalChunks: z.number() }),
-  // Requests - basic request/response
-  'test.create': {
-    request: z.object({ taskName: z.string(), priority: z.number() }),
-    response: z.object({ taskId: z.string(), created: z.boolean() }),
-  },
-  // Requests - with optional field
-  'user.profile.get': {
-    request: z.object({
-      userId: z.string(),
-      includeMetadata: z.boolean().optional(),
+const testNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('test', {
+    // Events - 2-level nesting
+    'tool.use': z.object({ toolName: z.string(), args: z.array(z.string()) }),
+    // Events - 4-level deep nesting
+    'agent.tool.execution.started': z.object({
+      agentId: z.string(),
+      toolName: z.string(),
+      timestamp: z.number(),
     }),
-    response: z.object({ username: z.string(), email: z.string() }),
-  },
-});
+    // Events - for scoped bus testing
+    'stream.chunk': z.object({ content: z.string(), sequenceId: z.number() }),
+    'stream.complete': z.object({ totalChunks: z.number() }),
+    // Requests - basic request/response
+    'test.create': {
+      request: z.object({ taskName: z.string(), priority: z.number() }),
+      response: z.object({ taskId: z.string(), created: z.boolean() }),
+    },
+    // Requests - with optional field
+    'user.profile.get': {
+      request: z.object({
+        userId: z.string(),
+        includeMetadata: z.boolean().optional(),
+      }),
+      response: z.object({ username: z.string(), email: z.string() }),
+    },
+  }),
+);
 
 const { subjects: TestSubjects } = testNamespace;
 
 // Namespace 2: Hierarchical namespace (colon delimiter)
-const { subjects: AdapterSubjects } = MakaioBus.registerNamespace('adapter:validation', {
-  'tool.execute': z.object({
-    tool: z.string(),
-    params: z.object({ command: z.string() }),
+const { subjects: AdapterSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('adapter:validation', {
+    'tool.execute': z.object({
+      tool: z.string(),
+      params: z.object({ command: z.string() }),
+    }),
   }),
-});
+);
 
 /**
  * Tests for nested subject names with schema validation.
