@@ -8,18 +8,17 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
-  reactions: write
 
 jobs:
   conformance:
-    # issue_comment payloads expose PR author trust through github.event.issue,
-    # not github.event.pull_request.
+    # A trusted maintainer/owner comment is the manual approval gate. The
+    # reusable workflow separately rejects fork PRs before provider secrets are
+    # exposed to checked-out PR code.
     if: |
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/conformance') &&
       github.event.comment.user.type != 'Bot' &&
-      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association) &&
-      contains(fromJSON('["OWNER","MEMBER"]'), github.event.issue.author_association)
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
     uses: ./.github/workflows/conformance-reusable.yml
     with:
       pr_number: ${{ github.event.issue.number }}
