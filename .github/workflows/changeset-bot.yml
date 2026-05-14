@@ -4,6 +4,8 @@ on:
   issue_comment:
     types: [created, edited]
 
+permissions: {}
+
 jobs:
   resolve:
     if: github.event.issue.pull_request != null
@@ -53,6 +55,10 @@ jobs:
   run:
     needs: resolve
     if: needs.resolve.outputs.mode != ''
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/changeset-bot-reusable.yml
     secrets: inherit
     with:

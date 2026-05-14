@@ -107,4 +107,42 @@ describe('groupChangesByPackage', () => {
       { packageName: '@makaio/framework', summaries: ['Cross-cutting change.'] },
     ]);
   });
+
+  it('groups CodeRabbit summaries under real package names and skips display placeholders', () => {
+    const rows: CodeRabbitChangeRow[] = [
+      {
+        paths: ['framework/clients/...', 'framework/extensions/...'],
+        summary: 'Retypes many packages.',
+      },
+      {
+        paths: ['framework/extensions/reviewer-coderabbit/src/index.ts'],
+        summary: 'Adds reviewer extension metadata.',
+      },
+      {
+        paths: ['framework/providers/qwen/src/package.ts'],
+        summary: 'Updates Qwen provider registration.',
+      },
+      {
+        paths: ['framework/adapters/implementations/__tests__/shared.ts'],
+        summary: 'Updates shared adapter test setup.',
+      },
+    ];
+
+    const result = groupChangesByPackage(rows, 'framework');
+
+    expect(result).toEqual([
+      {
+        packageName: '@makaio/framework',
+        summaries: ['Updates shared adapter test setup.'],
+      },
+      {
+        packageName: '@makaio/provider-qwen-acp',
+        summaries: ['Updates Qwen provider registration.'],
+      },
+      {
+        packageName: '@makaio/reviewer-coderabbit',
+        summaries: ['Adds reviewer extension metadata.'],
+      },
+    ]);
+  });
 });
