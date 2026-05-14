@@ -1,0 +1,10 @@
+name: Changeset Required
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main, develop]
+
+jobs:
+  check:
+    uses: ./.github/workflows/changeset-required-reusable.yml

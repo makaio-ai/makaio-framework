@@ -93,8 +93,10 @@ asarUnpack:
   - "node_modules/**"
 
 extraResources:
-  - from: ../../dist
+  - from: ../../packages/framework/dist
     to: framework/dist
+  - from: ../../packages/framework/package.json
+    to: framework/package.json
   - from: resources/install-cli.sh
     to: install-cli.sh
   - from: resources/makaio-launcher.sh

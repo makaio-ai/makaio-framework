@@ -14,7 +14,7 @@ runGenerateDocsCli({
   title: 'Bus Subject Namespaces (Framework)',
   sourceRoot: '',
   includeTiers: ['framework', 'extension'],
-  includeProductCallsites: false,
+  includeHostCallsites: false,
   sourceBaseUrl: 'https://github.com/makaio-ai/makaio-framework/blob/{branch}',
   frontmatter: true,
   indexFileName: 'index.md',

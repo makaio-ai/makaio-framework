@@ -51,6 +51,23 @@ describe('classifyTier', () => {
     expect(classifyTier('/repo/framework/packages/contracts/src/namespace.ts', '/repo/framework')).toBe('framework');
     expect(classifyTier('/repo/framework/extensions/opencode/src/namespace.ts', '/repo/framework')).toBe('extension');
   });
+
+  it('uses host tier policy for non-distribution analysis roots', () => {
+    expect(
+      classifyTier('/repo/host/web/namespace.ts', '/repo', (relativePath) =>
+        relativePath.startsWith('host/web/') ? 'host-web' : 'host',
+      ),
+    ).toBe('host-web');
+  });
+
+  it('keeps framework paths outside the host tier policy', () => {
+    expect(classifyTier('/repo/framework/packages/contracts/src/namespace.ts', '/repo', () => 'host')).toBe(
+      'framework',
+    );
+    expect(classifyTier('/repo/framework/extensions/opencode/src/namespace.ts', '/repo', () => 'host')).toBe(
+      'extension',
+    );
+  });
 });
 
 describe('extractNamespaces', () => {
@@ -179,7 +196,7 @@ describe('extractNamespaces', () => {
     ]);
   });
 
-  it('can exclude host-owned namespace definitions for product docs', () => {
+  it('can exclude framework namespace definitions for host docs', () => {
     const root = createTempProject({
       'framework/packages/demo/namespace.ts': `
         declare const MakaioBus: {
@@ -190,12 +207,12 @@ describe('extractNamespaces', () => {
           changed: { shape: 'event' },
         });
       `,
-      'product/services/demo/namespace.ts': `
+      'host/services/demo/namespace.ts': `
         declare const MakaioBus: {
           registerNamespace(prefix: string, schemas: unknown): unknown;
         };
 
-        export const ProductNamespace = MakaioBus.registerNamespace('product.demo', {
+        export const HostNamespace = MakaioBus.registerNamespace('host.demo', {
           changed: { shape: 'event' },
         });
       `,
@@ -203,7 +220,27 @@ describe('extractNamespaces', () => {
 
     const namespaces = extractNamespaces(createAnalysisProgram(root), root, { excludePathPrefixes: ['framework/'] });
 
-    expect(namespaces.map((ns) => ns.prefix)).toEqual(['product.demo']);
+    expect(namespaces.map((ns) => ns.prefix)).toEqual(['host.demo']);
+  });
+
+  it('applies host namespace tier policy during extraction', () => {
+    const root = createTempProject({
+      'host/web/demo/namespace.ts': `
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): unknown;
+        };
+
+        export const HostNamespace = MakaioBus.registerNamespace('host.web.demo', {
+          changed: { shape: 'event' },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root, {
+      classifyNamespaceTier: (relativePath) => (relativePath.startsWith('host/web/') ? 'host-web' : 'host'),
+    });
+
+    expect(namespaces[0]?.tier).toBe('host-web');
   });
 
   it('preserves schema origin metadata through local subject wrappers', () => {
@@ -267,32 +304,32 @@ describe('findCallsites', () => {
     findCallsites(program, namespaces, root);
 
     expect(namespaces[0]?.callsites.framework).toEqual(['consumer.ts']);
-    expect(namespaces[0]?.callsites.product).toEqual([]);
+    expect(namespaces[0]?.callsites.host).toEqual([]);
   });
 
-  it('keeps framework callsites visible for product namespace docs', () => {
+  it('keeps framework callsites visible for host namespace docs', () => {
     const root = createTempProject({
-      'product/services/demo/namespace.ts': `
+      'host/services/demo/namespace.ts': `
         declare const MakaioBus: {
           registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
         };
 
-        export const ProductNamespace = MakaioBus.registerNamespace('product.demo', {
+        export const HostNamespace = MakaioBus.registerNamespace('host.demo', {
           changed: { shape: 'event' },
         });
-        export const ProductSubjects = ProductNamespace.subjects;
+        export const HostSubjects = HostNamespace.subjects;
       `,
       'framework/packages/consumer.ts': `
-        import { ProductSubjects } from '../../product/services/demo/namespace.js';
+        import { HostSubjects } from '../../host/services/demo/namespace.js';
 
-        console.log(ProductSubjects);
+        console.log(HostSubjects);
       `,
     });
     const program = createAnalysisProgram(root);
     const namespaces = extractNamespaces(program, root, { excludePathPrefixes: ['framework/'] });
 
     findCallsites(program, namespaces, root, {
-      classifyCallsiteTier: (relativePath) => (relativePath.startsWith('framework/') ? 'framework' : 'product'),
+      classifyCallsiteTier: (relativePath) => (relativePath.startsWith('framework/') ? 'framework' : 'host'),
     });
 
     expect(namespaces[0]?.callsites.framework).toEqual(['framework/packages/consumer.ts']);
@@ -300,31 +337,31 @@ describe('findCallsites', () => {
 
   it('uses the host callsite tier classifier instead of inferring workspace paths', () => {
     const root = createTempProject({
-      'product/services/demo/namespace.ts': `
+      'host/services/demo/namespace.ts': `
         declare const MakaioBus: {
           registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
         };
 
-        export const ProductNamespace = MakaioBus.registerNamespace('product.demo', {
+        export const HostNamespace = MakaioBus.registerNamespace('host.demo', {
           changed: { shape: 'event' },
         });
-        export const ProductSubjects = ProductNamespace.subjects;
+        export const HostSubjects = HostNamespace.subjects;
       `,
       'shared/consumer.ts': `
-        import { ProductSubjects } from '../product/services/demo/namespace.js';
+        import { HostSubjects } from '../host/services/demo/namespace.js';
 
-        console.log(ProductSubjects);
+        console.log(HostSubjects);
       `,
     });
     const program = createAnalysisProgram(root);
     const namespaces = extractNamespaces(program, root);
 
     findCallsites(program, namespaces, root, {
-      classifyCallsiteTier: (relativePath) => (relativePath.startsWith('shared/') ? 'framework' : 'product'),
+      classifyCallsiteTier: (relativePath) => (relativePath.startsWith('shared/') ? 'framework' : 'host'),
     });
 
     expect(namespaces[0]?.callsites.framework).toEqual(['shared/consumer.ts']);
-    expect(namespaces[0]?.callsites.product).toEqual([]);
+    expect(namespaces[0]?.callsites.host).toEqual([]);
   });
 });
 
@@ -457,14 +494,14 @@ describe('generateMarkdown', () => {
       sourceCommit: 'abc123',
       namespaces: [
         {
-          ...createNamespace('@makaio/services-demo', 'service.demo', 'product/services/demo/src/namespace.ts'),
-          tier: 'product',
+          ...createNamespace('@makaio/services-demo', 'service.demo', 'host/services/demo/src/namespace.ts'),
+          tier: 'host',
           subjects: [
             {
               key: 'changed',
               wire: 'service.demo.changed',
               type: 'event',
-              schemaFile: 'product/services/src/demo/schemas.ts',
+              schemaFile: 'host/services/src/demo/schemas.ts',
             },
           ],
         },
@@ -476,9 +513,9 @@ describe('generateMarkdown', () => {
     );
 
     expect(file?.content).toContain(
-      '[`product/services/demo/src/namespace.ts`](../../../../product/services/demo/src/namespace.ts)',
+      '[`host/services/demo/src/namespace.ts`](../../../../host/services/demo/src/namespace.ts)',
     );
-    expect(file?.content).toContain('[`schemas.ts`](../../../../product/services/src/demo/schemas.ts)');
+    expect(file?.content).toContain('[`schemas.ts`](../../../../host/services/src/demo/schemas.ts)');
   });
 
   it('renders subject descriptions even when no field table is available', () => {
@@ -599,7 +636,7 @@ function createNamespace(packageName: string, prefix: string, file = `${prefix}.
       package: packageName,
     },
     subjects: [],
-    callsites: { framework: [], product: [] },
+    callsites: { framework: [], host: [] },
   };
 }
 
@@ -613,7 +650,7 @@ function frameworkMarkdownOptions(): Parameters<typeof generateMarkdown>[1] {
     docsRoot: 'docs/subjects',
     sourceRoot: '',
     includeTiers: ['framework', 'extension'],
-    includeProductCallsites: false,
+    includeHostCallsites: false,
   };
 }
 
@@ -626,6 +663,6 @@ function hostMarkdownOptions(): Parameters<typeof generateMarkdown>[1] {
     title: 'Bus Subject Namespaces (Host)',
     docsRoot: 'docs/subjects/generated',
     sourceRoot: '',
-    includeProductCallsites: true,
+    includeHostCallsites: true,
   };
 }

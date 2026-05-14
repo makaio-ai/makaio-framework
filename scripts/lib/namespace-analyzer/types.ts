@@ -11,6 +11,12 @@ export interface SubjectField {
 /** How a namespace was registered on the bus. */
 export type NamespaceKind = 'bus' | 'storage' | 'adapter' | 'client' | 'extension' | 'extension-storage';
 
+/** Documentation tier assigned to an analyzed namespace. */
+export type NamespaceTier = 'framework' | 'host' | 'host-web' | 'extension';
+
+/** Documentation bucket assigned to a namespace callsite. */
+export type CallsiteTier = 'framework' | 'host';
+
 /** Analyzed bus namespace extracted from source. */
 export interface NamespaceEntry {
   /** Bus prefix string, e.g. 'agent', 'session', 'persona.runtime'. */
@@ -36,8 +42,8 @@ export interface NamespaceEntry {
    */
   kind: NamespaceKind;
 
-  /** framework | product | product-web | extension */
-  tier: 'framework' | 'product' | 'product-web' | 'extension';
+  /** Documentation tier for grouping generated namespace docs. */
+  tier: NamespaceTier;
 
   /** Where the namespace is defined. */
   definedIn: {
@@ -51,7 +57,7 @@ export interface NamespaceEntry {
   /** Files that reference the Subjects constant. */
   callsites: {
     framework: string[];
-    product: string[];
+    host: string[];
   };
 }
 

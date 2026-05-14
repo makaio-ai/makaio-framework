@@ -14,6 +14,7 @@ import {
   type PackageRegistryClient,
   type LocalInstallClient,
 } from '../package-manager-service.js';
+import type { FrameworkDependencySpec } from '../yarn-integration.js';
 
 /**
  * Registry stub data.
@@ -45,7 +46,7 @@ const mockRegistry: PackageRegistry = {
  * In-memory package manager stub.
  */
 class StubPackageManager implements PackageManagerClient {
-  public readonly ensuredFrameworkRanges: string[] = [];
+  public readonly ensuredFrameworkDependencies: FrameworkDependencySpec[] = [];
 
   public constructor(
     private packages: PackageInfo[],
@@ -75,8 +76,8 @@ class StubPackageManager implements PackageManagerClient {
     return this.latestVersions.get(packageName) ?? '1.0.0';
   }
 
-  public async ensureFrameworkDependency(versionRange: string): Promise<void> {
-    this.ensuredFrameworkRanges.push(versionRange);
+  public async ensureFrameworkDependency(dependency: FrameworkDependencySpec): Promise<void> {
+    this.ensuredFrameworkDependencies.push(dependency);
   }
 }
 
@@ -194,10 +195,33 @@ describe('PackageManagerService', () => {
       expect(result.packageName).toBe('@makaio/extension-github');
       expect(result.version).toBe('1.0.0');
       expect(result.restartRequired).toBe(true);
-      expect(packageManager.ensuredFrameworkRanges).toEqual(['^0.1.0']);
+      expect(packageManager.ensuredFrameworkDependencies).toEqual([{ versionRange: '^0.1.0' }]);
       expect(installedEvents).toEqual([{ packageName: '@makaio/extension-github', version: '1.0.0' }]);
 
       cleanup();
+    });
+
+    it('uses a host-provided framework package path for npm installs when available', async () => {
+      const localBus = createBusInstance({ context: createBusContext() });
+      const localYarnManager = new StubPackageManager([], new Map());
+      const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
+        yarnManager: localYarnManager,
+        localInstaller: new StubLocalInstaller(),
+        frameworkPeerRange: '^0.1.0',
+        frameworkPackagePath: '/app/node_modules/@makaio/framework',
+      });
+      await localService.init();
+
+      const result = await localBus.request(PackageSubjects.install, {
+        packageName: '@makaio/extension-github',
+      });
+
+      expect(result.success).toBe(true);
+      expect(localYarnManager.ensuredFrameworkDependencies).toEqual([
+        { versionRange: '^0.1.0', localPackagePath: '/app/node_modules/@makaio/framework' },
+      ]);
+
+      await localService.destroy();
     });
 
     it('should route source: local to LocalInstallClient', async () => {
@@ -225,7 +249,7 @@ describe('PackageManagerService', () => {
       expect(result.restartRequired).toBe(true);
       expect(localInstaller.installed).toHaveLength(1);
       expect(localInstaller.installed[0]?.sourcePath).toBe('/tmp/my-local-ext');
-      expect(localYarnManager.ensuredFrameworkRanges).toEqual([]);
+      expect(localYarnManager.ensuredFrameworkDependencies).toEqual([]);
       expect(installedEvents).toHaveLength(1);
       expect(installedEvents[0]?.packageName).toBe('local-ext-0');
 

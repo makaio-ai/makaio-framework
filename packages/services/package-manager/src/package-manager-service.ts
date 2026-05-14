@@ -9,7 +9,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import { PackageSubjects } from './namespace.js';
 import type { PackageUpdateInfo, PackageRegistry } from './namespace.js';
-import { YarnPackageManager } from './yarn-integration.js';
+import { YarnPackageManager, type FrameworkDependencySpec } from './yarn-integration.js';
 import { LocalPathInstaller } from './local-path-installer.js';
 import { parseInstallSource } from './install-source.js';
 import type { PackageInfo, PackageInstallResult, PackageUninstallResult } from './schemas.js';
@@ -45,9 +45,9 @@ export interface PackageManagerClient {
   getLatestVersion: (packageName: string) => Promise<string>;
   /**
    * Ensure `@makaio/framework` is present as a dependency with the given version range.
-   * @param versionRange - Semver range for the framework dependency (e.g. `^0.1.0`).
+   * @param dependency - Framework dependency source and compatible version range.
    */
-  ensureFrameworkDependency: (versionRange: string) => Promise<void>;
+  ensureFrameworkDependency: (dependency: FrameworkDependencySpec) => Promise<void>;
 }
 
 /**
@@ -106,6 +106,13 @@ export interface PackageManagerServiceOptions {
    * Defaults to the package-manager package version range.
    */
   frameworkPeerRange?: string;
+  /**
+   * Host-provided framework package root used by packaged apps.
+   *
+   * When present, npm installs record `@makaio/framework` as a local portal
+   * dependency so extension imports resolve to the app-provided singleton.
+   */
+  frameworkPackagePath?: string;
 }
 
 /**
@@ -141,6 +148,7 @@ export class PackageManagerService extends BaseService {
   private readonly registryService: PackageRegistryClient | undefined;
   private readonly localInstaller: LocalInstallClient;
   private readonly frameworkPeerRange: string;
+  private readonly frameworkPackagePath: string | undefined;
 
   /**
    * Create a new PackageManagerService.
@@ -154,6 +162,7 @@ export class PackageManagerService extends BaseService {
     this.registryService = options.registryService;
     this.localInstaller = options.localInstaller ?? new LocalPathInstaller(path.join(makaioHome, 'extensions'));
     this.frameworkPeerRange = options.frameworkPeerRange ?? DEFAULT_FRAMEWORK_PEER_RANGE;
+    this.frameworkPackagePath = options.frameworkPackagePath;
   }
 
   /**
@@ -322,7 +331,10 @@ export class PackageManagerService extends BaseService {
 
       try {
         try {
-          await this.yarnManager.ensureFrameworkDependency(this.frameworkPeerRange);
+          await this.yarnManager.ensureFrameworkDependency({
+            versionRange: this.frameworkPeerRange,
+            ...(this.frameworkPackagePath ? { localPackagePath: this.frameworkPackagePath } : {}),
+          });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           throw new Error(`Failed to ensure @makaio/framework dependency ${this.frameworkPeerRange}: ${message}`, {

@@ -128,6 +128,7 @@
   "exclude": [
     "**/node_modules/**/*",
     "**/dist/**/*",
+    "./packages/framework/lib/**/*",
     "**/*.browser.test.ts",
     "**/*.browser.test.tsx",
     "./runtimes/node/src/__tests__/migrate-settings-to-sqlite.test.ts",

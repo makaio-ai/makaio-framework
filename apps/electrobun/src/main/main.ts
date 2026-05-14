@@ -29,7 +29,6 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   bootMakaioRuntime as bootBunRuntime,
   BunBusServerTransportProvider,
-  BunFrameworkModuleResolver,
   createBunRouteGraphFetch,
   type MakaioRuntime,
 } from '@makaio/runtime-bun';
@@ -111,12 +110,15 @@ async function buildDesktopBaseRuntimeOptions(makaioHome: string): Promise<Parti
 function resolveDesktopFrameworkModuleResolver(
   runtimeOptions: Pick<CoreBootOptions, 'frameworkModuleResolver'>,
 ): FrameworkModuleResolver {
-  return (
-    runtimeOptions.frameworkModuleResolver ??
-    (IS_DEV
-      ? new NoopFrameworkModuleResolver()
-      : new BunFrameworkModuleResolver(path.join(__dirname, '..', 'framework', 'dist')))
-  );
+  return runtimeOptions.frameworkModuleResolver ?? new NoopFrameworkModuleResolver();
+}
+
+/**
+ * Resolve the bundled framework package root for production extension loading.
+ * @returns App-bundled `@makaio/framework` package root, or undefined in dev.
+ */
+function resolveDesktopFrameworkPackagePath(): string | undefined {
+  return IS_DEV ? undefined : path.join(PKG_ROOT, 'node_modules', '@makaio', 'framework');
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -309,6 +311,7 @@ function openDefaultWindow(): number {
       ? normalizeNodeHostCapabilities(runtimeOptions.hostCapabilities)
       : runtimeOptions.hostCapabilities;
     const frameworkModuleResolver = resolveDesktopFrameworkModuleResolver(runtimeOptions);
+    const frameworkPackagePath = resolveDesktopFrameworkPackagePath();
 
     const commonBootOptions = {
       surface: 'interactive' as const,
@@ -316,6 +319,7 @@ function openDefaultWindow(): number {
       ...(runtimeHostCapabilities !== undefined ? { hostCapabilities: runtimeHostCapabilities } : {}),
       frameworkVersion: typeof __FRAMEWORK_VERSION__ !== 'undefined' ? __FRAMEWORK_VERSION__ : undefined,
       frameworkModuleResolver,
+      frameworkPackagePath,
       onTransportReady({ host, port: readyPort }: { host: string; port: number }) {
         process.stdout.write(`MAKAIO_PORT=${readyPort}\n`);
         console.info('[electrobun] Bus transport ready on %s:%d', host, readyPort);

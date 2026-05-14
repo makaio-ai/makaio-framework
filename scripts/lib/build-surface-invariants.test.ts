@@ -19,15 +19,14 @@ function writePackage(dir: string, manifest: Record<string, unknown>): void {
 }
 
 /**
- * Writes the umbrella `framework/package.json` with the given publishConfig.exports.
- * @param root - Absolute framework root directory.
- * @param exports - Map of export keys to values for publishConfig.
+ * Writes the umbrella `packages/framework/package.json` with the given exports.
+ * @param root - Absolute framework workspace root directory.
+ * @param exports - Map of export keys to values.
  */
 function writeUmbrellaManifest(root: string, exports: Record<string, unknown>): void {
-  writeFileSync(
-    join(root, 'package.json'),
-    JSON.stringify({ name: '@makaio/framework', publishConfig: { exports } }, null, 2),
-  );
+  const dir = join(root, 'packages', 'framework');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@makaio/framework', exports }, null, 2));
 }
 
 /**
@@ -54,6 +53,7 @@ function buildFullUmbrellaExports(): Record<string, unknown> {
  * @param root - Absolute temp dir to write into.
  */
 function writeMinimalValidFixture(root: string): void {
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@makaio/framework-workspace', private: true }));
   for (const pkgName of FRAMEWORK_BUILD_PACKAGE_NAMES) {
     const safeDir = pkgName.replace('@makaio/', '').replace(/\//g, '-');
     writePackage(join(root, 'packages', safeDir), { name: pkgName });
@@ -222,6 +222,7 @@ describe('checkBuildSurface', () => {
 
   it('returns ok:false and has issues when packages are missing', () => {
     const root = makeTempDir();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@makaio/framework-workspace', private: true }));
     writeUmbrellaManifest(root, { './package.json': './package.json' });
 
     const result = checkBuildSurface(root);

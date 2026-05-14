@@ -24,11 +24,23 @@ import { buildMigrationSourceId, discoverBundledMigrationSources } from '@makaio
 import { resolveStorageMigrationsDir } from '@makaio/host-shared/build/workspace-paths';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { embeddedMigrationsPlugin } from './src/build/embedded-migrations-plugin.js';
+import {
+  frameworkExternalPackageNames,
+  rewriteFrameworkImportsInText,
+} from '@makaio/build-tooling/framework-import-map';
 import { stubAssetsPlugin } from './src/build/stub-assets-plugin.js';
 import { resolveVariantConfig } from './src/variant-config.js';
 
-/** Modules that must NOT be bundled — they are supplied by the Electrobun runtime or resolved at runtime from node_modules. */
-const EXTERNAL = ['electrobun', 'electrobun/bun', 'vite'];
+/**
+ * Modules that must NOT be bundled — they are supplied by the Electrobun
+ * runtime or resolved at runtime from node_modules.
+ *
+ * Framework public surface packages (e.g. `@makaio/bus-core`) are added
+ * dynamically by {@link frameworkExternalPackageNames} so they survive as
+ * external imports in the bundle. A post-processing step rewrites them to
+ * `@makaio/framework/*` subpath specifiers.
+ */
+const EXTERNAL = ['electrobun', 'electrobun/bun', 'vite', ...frameworkExternalPackageNames()];
 
 /**
  * CJS interop banner. Bundled `@yarnpkg/*` packages use `eval('require')`
@@ -151,6 +163,19 @@ for (const [label, result] of [
       console.error(message);
     }
     process.exit(1);
+  }
+}
+
+// Rewrite externalized workspace specifiers to @makaio/framework/* subpaths.
+// Bun.build preserves the original import specifier for external modules, so
+// this post-processing step is required to produce the final framework-subpath
+// imports that Electrobun's re-bundle and runtime resolution expect.
+for (const filename of ['index.js', 'cli.mjs'] as const) {
+  const filePath = path.join(DIST_DIR, filename);
+  const original = readFileSync(filePath, 'utf-8');
+  const rewritten = rewriteFrameworkImportsInText(original);
+  if (rewritten !== original) {
+    writeFileSync(filePath, rewritten, 'utf-8');
   }
 }
 

@@ -4022,12 +4022,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/electrobun@workspace:apps/electrobun"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server": "workspace:*"
     "@makaio/bus-server-vite": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
     "@makaio/cli": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/framework": "workspace:*"
     "@makaio/host-shared": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/preferences": "workspace:*"
@@ -4360,9 +4362,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/framework@workspace:.":
+"@makaio/framework-workspace@workspace:.":
   version: 0.0.0-use.local
-  resolution: "@makaio/framework@workspace:."
+  resolution: "@makaio/framework-workspace@workspace:."
   dependencies:
     "@agentclientprotocol/sdk": "npm:^0.21.0"
     "@eslint/js": "npm:^9.36.0"
@@ -4394,6 +4396,7 @@ __metadata:
     glob: "npm:13.0.6"
     globby: "npm:^14.1.0"
     hono: "npm:^4.12.18"
+    human-id: "npm:^4.1.3"
     jsdom: "npm:^26.1.0"
     knip: "npm:^6.10.0"
     merge-anything: "npm:^6.0.6"
@@ -4419,9 +4422,18 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     drizzle-orm: ^0.45.2
+  dependenciesMeta:
+    electron:
+      built: true
   peerDependenciesMeta:
     drizzle-orm:
       optional: true
+  languageName: unknown
+  linkType: soft
+
+"@makaio/framework@workspace:*, @makaio/framework@workspace:packages/framework":
+  version: 0.0.0-use.local
+  resolution: "@makaio/framework@workspace:packages/framework"
   languageName: unknown
   linkType: soft
 
@@ -15986,6 +15998,15 @@ __metadata:
     agent-base: "npm:^7.1.2"
     debug: "npm:4"
   checksum: 10c0/f729219bc735edb621fa30e6e84e60ee5d00802b8247aac0d7b79b0bd6d4b3294737a337b93b86a0bd9e68099d031858a39260c976dc14cdbba238ba1f8779ac
+  languageName: node
+  linkType: hard
+
+"human-id@npm:^4.1.3":
+  version: 4.1.3
+  resolution: "human-id@npm:4.1.3"
+  bin:
+    human-id: dist/cli.js
+  checksum: 10c0/c0e6aacfa71adff6e9783fc209493a7f8de92da041bea32deb3a9cd1244a4d2b89f32d5e90130e8e22da4e6fe15b61cf4e533f114927384de1418460c92b5a7a
   languageName: node
   linkType: hard
 

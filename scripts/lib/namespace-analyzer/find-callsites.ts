@@ -1,19 +1,19 @@
 import * as ts from 'typescript';
 
 import { isFrameworkDistributionRoot, matchesInventoryPathPrefix, relativeInventoryPath } from './path-utils.js';
-import type { NamespaceEntry } from './types.js';
+import type { CallsiteTier, NamespaceEntry } from './types.js';
 
 /** Options controlling callsite scanning from a TypeScript program. */
 export interface CallsiteScanOptions {
   /** POSIX path prefixes, relative to the analysis root, to skip during callsite scanning. */
   excludePathPrefixes?: readonly string[];
   /** Host policy that classifies callsite paths for documentation buckets. */
-  classifyCallsiteTier?: (relativePath: string, analysisRoot: string) => 'framework' | 'product';
+  classifyCallsiteTier?: (relativePath: string, analysisRoot: string) => CallsiteTier;
 }
 
 /**
  * Scans all source files for references to the Subjects constants exported by
- * each namespace and records them as framework or product callsites.
+ * each namespace and records them as framework or host callsites.
  * @param program - The TypeScript program covering the analysis workspace.
  * @param namespaces - Namespace entries to populate with callsite data.
  * @param analysisRoot - Absolute path to the analysis root directory.
@@ -38,11 +38,11 @@ export function findCallsites(
   if (subjectsLookup.size === 0) return;
 
   const frameworkCallsites = new Map<NamespaceEntry, Set<string>>();
-  const productCallsites = new Map<NamespaceEntry, Set<string>>();
+  const hostCallsites = new Map<NamespaceEntry, Set<string>>();
 
   for (const ns of namespaces) {
     frameworkCallsites.set(ns, new Set());
-    productCallsites.set(ns, new Set());
+    hostCallsites.set(ns, new Set());
   }
 
   let filesScanned = 0;
@@ -55,14 +55,14 @@ export function findCallsites(
     if (matchesInventoryPathPrefix(analysisRoot, sourceFile.fileName, options.excludePathPrefixes)) continue;
 
     filesScanned++;
-    scanFileForReferences(sourceFile, subjectsLookup, analysisRoot, frameworkCallsites, productCallsites, options);
+    scanFileForReferences(sourceFile, subjectsLookup, analysisRoot, frameworkCallsites, hostCallsites, options);
   }
 
   console.error(`Scanned ${filesScanned} files for callsites`);
 
   for (const ns of namespaces) {
     ns.callsites.framework = [...(frameworkCallsites.get(ns) ?? [])].sort();
-    ns.callsites.product = [...(productCallsites.get(ns) ?? [])].sort();
+    ns.callsites.host = [...(hostCallsites.get(ns) ?? [])].sort();
   }
 }
 
@@ -73,7 +73,7 @@ export function findCallsites(
  * @param subjectsLookup - Map from subjects/namespace constant name to its entry.
  * @param analysisRoot - Absolute path to the analysis root directory.
  * @param frameworkCallsites - Accumulator map for framework-tier callsites.
- * @param productCallsites - Accumulator map for product-tier callsites.
+ * @param hostCallsites - Accumulator map for host-tier callsites.
  * @param options - Callsite scan options, including host tier policy.
  */
 function scanFileForReferences(
@@ -81,7 +81,7 @@ function scanFileForReferences(
   subjectsLookup: Map<string, NamespaceEntry>,
   analysisRoot: string,
   frameworkCallsites: Map<NamespaceEntry, Set<string>>,
-  productCallsites: Map<NamespaceEntry, Set<string>>,
+  hostCallsites: Map<NamespaceEntry, Set<string>>,
   options: CallsiteScanOptions,
 ): void {
   const relPath = relativeInventoryPath(analysisRoot, sourceFile.fileName);
@@ -101,8 +101,8 @@ function scanFileForReferences(
 
       const tier = isFrameworkDistributionRoot(analysisRoot)
         ? 'framework'
-        : (options.classifyCallsiteTier?.(relPath, analysisRoot) ?? 'product');
-      const bucket = tier === 'framework' ? frameworkCallsites : productCallsites;
+        : (options.classifyCallsiteTier?.(relPath, analysisRoot) ?? 'host');
+      const bucket = tier === 'framework' ? frameworkCallsites : hostCallsites;
       bucket.get(ns)?.add(relPath);
     }
   }

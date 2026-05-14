@@ -3,7 +3,7 @@
  * @packageDocumentation
  */
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import { normalizePackageExports, type PackageExportsField } from '../../build-tooling/package-exports.js';
 
@@ -25,9 +25,7 @@ export interface FrameworkDistResult {
 type ExportValue = string | Readonly<Record<string, unknown>>;
 
 interface FrameworkPackageManifest {
-  publishConfig?: {
-    exports?: PackageExportsField;
-  };
+  exports?: PackageExportsField;
 }
 
 /**
@@ -77,15 +75,15 @@ function isLocalFileTarget(target: string): boolean {
 }
 
 /**
- * Verifies that every local target in `framework/package.json` publishConfig.exports exists.
- * @param frameworkRoot - Absolute path to the framework package root.
+ * Verifies that every local target in the `@makaio/framework` package exports exists on disk.
+ * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
  * @returns Verification result with all missing or unsafe targets.
  */
 export function verifyFrameworkDist(frameworkRoot: string): FrameworkDistResult {
   const root = resolve(frameworkRoot);
   const rootPrefix = `${root}${sep}`;
   const manifest = readJson(resolve(root, 'package.json')) as FrameworkPackageManifest;
-  const exportsMap = normalizePackageExports(manifest.publishConfig?.exports);
+  const exportsMap = normalizePackageExports(manifest.exports);
   const issues: FrameworkDistIssue[] = [];
   let checkedTargets = 0;
 
@@ -106,7 +104,13 @@ export function verifyFrameworkDist(frameworkRoot: string): FrameworkDistResult 
         continue;
       }
 
-      if (!existsSync(resolvedTarget)) {
+      let stat: ReturnType<typeof statSync> | undefined;
+      try {
+        stat = statSync(resolvedTarget);
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
         issues.push({
           exportKey,
           kind: 'missing-export-target',
@@ -116,7 +120,7 @@ export function verifyFrameworkDist(frameworkRoot: string): FrameworkDistResult 
         continue;
       }
 
-      if (!statSync(resolvedTarget).isFile()) {
+      if (!stat.isFile()) {
         issues.push({
           exportKey,
           kind: 'export-target-not-file',
@@ -128,4 +132,15 @@ export function verifyFrameworkDist(frameworkRoot: string): FrameworkDistResult 
   }
 
   return { checkedTargets, issues, ok: issues.length === 0 };
+}
+
+/**
+ * Returns whether a filesystem error indicates a missing export target.
+ * @param error - Error thrown while checking an export target.
+ * @returns Whether the error should be reported as a missing built file.
+ */
+function isMissingPathError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
 }

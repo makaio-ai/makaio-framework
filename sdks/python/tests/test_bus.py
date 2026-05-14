@@ -1194,7 +1194,7 @@ class ConnectLifecycleTest(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.Future()
 
-        client = BusClient("ws://test", websocket_factory=factory, connect_timeout_ms=25)
+        client = BusClient("ws://test", auth=False, websocket_factory=factory, connect_timeout_ms=25)
 
         with self.assertRaises(asyncio.TimeoutError):
             await client.connect()

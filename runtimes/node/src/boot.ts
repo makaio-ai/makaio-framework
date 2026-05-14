@@ -60,6 +60,7 @@ import {
   registerConfigHandlers,
 } from './boot-config.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
+import { ensureFrameworkPackageLink } from './framework-package-link.js';
 import {
   buildRuntimeEnvironment,
   collectHostCleanups,
@@ -254,6 +255,11 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 6.5. Framework module resolver (published extension support)
     // -----------------------------------------------------------------------
+    if (options.frameworkPackagePath) {
+      await ensureFrameworkPackageLink({ makaioHome, frameworkPackagePath: options.frameworkPackagePath });
+      console.info('[boot] Framework package linked for extension resolution');
+    }
+
     const frameworkModuleResolver = options.frameworkModuleResolver;
     if (frameworkModuleResolver) {
       try {
@@ -347,7 +353,12 @@ export async function bootMakaioRuntimeCore(
     ];
 
     if (options.enablePackageManager !== false) {
-      frameworkPackages.push(createPackageManagerPackage({ frameworkPeerRange: `^${runtimeFrameworkVersion}` }));
+      frameworkPackages.push(
+        createPackageManagerPackage({
+          frameworkPeerRange: `^${runtimeFrameworkVersion}`,
+          frameworkPackagePath: options.frameworkPackagePath,
+        }),
+      );
     }
 
     frameworkPackages.push(

@@ -1,0 +1,96 @@
+name: Changeset Required Reusable
+
+on:
+  workflow_call:
+    inputs:
+      framework_root:
+        required: false
+        type: string
+        default: '.'
+        description: 'Path to the framework root relative to the repository root.'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  changeset-required:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted
+          fetch-depth: 0
+
+      - name: Check for skip-changeset label
+        id: skip
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const labels = context.payload.pull_request?.labels ?? [];
+            const skip = labels.some(l => l.name === 'skip-changeset');
+            core.setOutput('skip', skip ? 'true' : 'false');
+            if (skip) core.info('skip-changeset label found — skipping check.');
+
+      - name: Fetch PR head
+        if: steps.skip.outputs.skip != 'true'
+        run: git fetch --no-tags "${{ github.event.pull_request.head.repo.clone_url }}" "${{ github.event.pull_request.head.sha }}"
+        working-directory: trusted
+
+      - name: Resolve trusted checker
+        id: checker
+        if: steps.skip.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          framework_root="${{ inputs.framework_root }}"
+          if [ "$framework_root" = "." ]; then
+            checker_path="scripts/changeset-required.ts"
+          else
+            checker_path="${framework_root%/}/scripts/changeset-required.ts"
+          fi
+
+          if [ -f "$checker_path" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "path=$checker_path" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if ! git cat-file -e "$base:$checker_path" 2>/dev/null && git cat-file -e "$head:$checker_path" 2>/dev/null; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Trusted changeset checker is being introduced by this PR; skipping the bootstrap check for this run."
+            exit 0
+          fi
+
+          echo "::error::Trusted changeset checker is missing from the base checkout at $checker_path."
+          exit 1
+        working-directory: trusted
+
+      - name: Setup Node
+        if: steps.skip.outputs.skip != 'true' && steps.checker.outputs.available == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        if: steps.skip.outputs.skip != 'true' && steps.checker.outputs.available == 'true'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.skip.outputs.skip != 'true' && steps.checker.outputs.available == 'true'
+        run: yarn install --frozen-lockfile
+        working-directory: trusted
+
+      - name: Check changeset
+        if: steps.skip.outputs.skip != 'true' && steps.checker.outputs.available == 'true'
+        run: |
+          yarn tsx "${{ steps.checker.outputs.path }}" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
+        working-directory: trusted

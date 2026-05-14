@@ -100,17 +100,21 @@ import { registerVariantUpgradeHandler } from '../src/main/upgrade-handler.js';
 const BASE_VARIANT_CONFIG: VariantConfig = {
   variant: 'base',
   releaseTrack: 'stable',
-  updateChannel: 'stable',
+  electrobunBuildEnv: 'stable',
   bundleCEF: false,
   defaultRenderer: 'native',
+  buildFolder: 'build/base-stable',
+  artifactFolder: 'artifacts/base-stable',
 };
 
 const CEF_VARIANT_CONFIG: VariantConfig = {
   variant: 'cef',
   releaseTrack: 'stable',
-  updateChannel: 'cef',
+  electrobunBuildEnv: 'stable',
   bundleCEF: true,
   defaultRenderer: 'cef',
+  buildFolder: 'build/cef-stable',
+  artifactFolder: 'artifacts/cef-stable',
 };
 
 const SAMPLE_VERSION_JSON = {

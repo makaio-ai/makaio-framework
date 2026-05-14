@@ -9,7 +9,10 @@
  * @packageDocumentation
  */
 
-import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
+import {
+  FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS,
+  type FrameworkPublicPackageSubpath,
+} from '@makaio/build-tooling/framework-public-surface';
 
 /**
  * Describes a single workspace-package → umbrella-subpath rewrite rule.
@@ -93,4 +96,16 @@ export function rewriteFrameworkImportsInText(sourceText: string): string {
     regex.lastIndex = 0;
     return text.replace(regex, (_match, quote: string, suffix: string) => `${quote}${replacement}${suffix}${quote}`);
   }, sourceText);
+}
+
+/**
+ * Deduplicated list of workspace package names that belong to the framework
+ * public surface. Used by host build scripts to populate `external` arrays.
+ * @param mapping - The framework public package subpath mapping.
+ * @returns Deduplicated array of workspace package names.
+ */
+export function frameworkExternalPackageNames(
+  mapping: readonly FrameworkPublicPackageSubpath[] = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS,
+): string[] {
+  return [...new Set(mapping.map((entry) => entry.packageName))];
 }

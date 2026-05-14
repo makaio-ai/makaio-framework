@@ -14,6 +14,10 @@ export interface PackageManagerPackageOptions {
    * Framework peer dependency range installed alongside npm-sourced extensions.
    */
   readonly frameworkPeerRange?: string;
+  /**
+   * Host-provided `@makaio/framework` package root used by packaged apps.
+   */
+  readonly frameworkPackagePath?: string;
 }
 
 /**
@@ -34,6 +38,7 @@ export function createPackageManagerPackage(options: PackageManagerPackageOption
       new PackageManagerService(ctx.bus, ctx.makaioHome, {
         registryService: options.registryService,
         frameworkPeerRange: options.frameworkPeerRange,
+        frameworkPackagePath: options.frameworkPackagePath,
       }),
   };
 }

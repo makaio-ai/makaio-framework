@@ -15,9 +15,9 @@
     "build:all": "yarn build && yarn build:renderer",
     "package": "tsx ../host-shared/src/build/prepare-framework-dist.ts && yarn build:all && electrobun package",
     "package:base": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=stable yarn build:all && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=stable electrobun build --env=stable",
-    "package:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable electrobun build --env=cef",
+    "package:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable electrobun build --env=stable",
     "package:canary:base": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=canary yarn build:all && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=canary electrobun build --env=canary",
-    "package:canary:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary electrobun build --env=cef-canary",
+    "package:canary:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary electrobun build --env=canary",
     "package:all-variants": "yarn package:base && yarn package:cef"
   },
   "dependencies": {
@@ -25,6 +25,7 @@
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/cli": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/framework": "workspace:*",
     "@makaio/host-shared": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/preferences": "workspace:*",
@@ -49,6 +50,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-server": "workspace:*",
     "@makaio/bus-server-vite": "workspace:*",
     "@types/node": "^24.3.0",

@@ -2,11 +2,11 @@
  * Unified framework distribution build.
  *
  * Builds all framework packages in three grouped tsdown passes that output
- * directly into `./dist/` matching the `publishConfig.exports` layout.
+ * directly into `./dist/` matching the package `exports` layout.
  *
  * Usage:
- *   tsx build.ts                  (from framework/)
- *   tsx framework/build.ts        (from repo root)
+ *   tsx build.ts                  (from packages/framework/)
+ *   tsx packages/framework/build.ts  (from framework workspace root)
  *
  * Groups:
  *   1. bus    — `@makaio/bus-core` bundles all deps inline (singleton root)
@@ -14,7 +14,7 @@
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
 
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { build, type UserConfig } from 'tsdown';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
@@ -30,8 +30,16 @@ import {
   type PackageExportsField,
 } from '@makaio/build-tooling/package-exports';
 
-const FRAMEWORK_ROOT = import.meta.dirname;
-const DIST = join(FRAMEWORK_ROOT, 'dist');
+/** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
+const PACKAGE_DIR = import.meta.dirname;
+
+/** Framework workspace root — source packages are resolved relative to this. */
+const FRAMEWORK_ROOT = resolve(PACKAGE_DIR, '..', '..');
+
+const DIST = join(PACKAGE_DIR, 'dist');
+
+/** Runtime-only distribution — `dist/` minus type declarations (`.d.mts`). */
+const LIB = join(PACKAGE_DIR, 'lib');
 
 const BUS_PACKAGES = new Set(['@makaio/bus-core']);
 const REACT_PACKAGES = new Set(['@makaio/ui-hooks', '@makaio/ui-components', '@makaio/ui-views']);
@@ -166,6 +174,19 @@ try {
 } finally {
   process.chdir(previousCwd);
 }
+
+// ---------------------------------------------------------------------------
+// Assemble runtime-only lib/ (dist/ minus type declarations)
+// ---------------------------------------------------------------------------
+
+if (existsSync(LIB)) {
+  rmSync(LIB, { recursive: true });
+}
+
+cpSync(DIST, LIB, {
+  recursive: true,
+  filter: (src) => !src.endsWith('.d.mts'),
+});
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
 console.info(`\n[build] Framework distribution built in ${totalElapsed}s`);

@@ -1,5 +1,5 @@
 {
-  "name": "@makaio/framework",
+  "name": "@makaio/framework-workspace",
   "version": "0.1.0",
   "private": true,
   "description": "Typed, bus-centric framework for building and orchestrating AI agents with tools, sessions, and events",
@@ -37,10 +37,10 @@
     "ui/*"
   ],
   "scripts": {
-    "build": "tsx build.ts",
-    "build:framework": "tsx build.ts",
-    "build:framework:assemble": "tsx scripts/verify-framework-dist.ts",
-    "build:extensions": "tsx scripts/build-extensions.ts",
+    "build": "bun packages/framework/build.ts",
+    "build:framework": "bun packages/framework/build.ts",
+    "build:framework:assemble": "bun scripts/verify-framework-dist.ts",
+    "build:extensions": "bun scripts/build-extensions.ts",
     "docs:bus": "tsx scripts/analyze-bus-namespaces.ts --no-callsites -o docs/subjects/data/namespaces.json --summary && tsx scripts/generate-bus-docs.ts -i docs/subjects/data/namespaces.json -o docs/subjects --branch develop",
     "docs:bus:release": "tsx scripts/analyze-bus-namespaces.ts --no-callsites -o docs/subjects/data/namespaces.json --summary && tsx scripts/generate-bus-docs.ts -i docs/subjects/data/namespaces.json -o docs/subjects --branch main",
     "dev": "yarn workspace @makaio/electron dev:renderer",
@@ -96,6 +96,11 @@
       "optional": true
     }
   },
+  "dependenciesMeta": {
+    "electron": {
+      "built": true
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
     "@makaio/build-tooling": "workspace:*",
@@ -118,6 +123,7 @@
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsdoc": "^60.7.1",
     "eslint-plugin-tsdoc": "^0.4.0",
+    "human-id": "^4.1.3",
     "jsdom": "^26.1.0",
     "knip": "^6.10.0",
     "minimatch": "^10.0.3",
@@ -140,226 +146,5 @@
     "printWidth": 120,
     "semi": true,
     "singleQuote": true
-  },
-  "publishConfig": {
-    "exports": {
-      "./package.json": "./package.json",
-      "./bus": {
-        "types": "./dist/bus/index.d.mts",
-        "default": "./dist/bus/index.mjs"
-      },
-      "./core": {
-        "types": "./dist/core/index.d.mts",
-        "default": "./dist/core/index.mjs"
-      },
-      "./utils": {
-        "types": "./dist/utils/index.d.mts",
-        "default": "./dist/utils/index.mjs"
-      },
-      "./service-base": {
-        "types": "./dist/service-base/index.d.mts",
-        "default": "./dist/service-base/index.mjs"
-      },
-      "./hooks": {
-        "types": "./dist/hooks/index.d.mts",
-        "default": "./dist/hooks/index.mjs"
-      },
-      "./providers": {
-        "types": "./dist/providers/index.d.mts",
-        "default": "./dist/providers/index.mjs"
-      },
-      "./contracts": {
-        "types": "./dist/contracts/index.d.mts",
-        "default": "./dist/contracts/index.mjs"
-      },
-      "./contracts/common": {
-        "types": "./dist/contracts/common/index.d.mts",
-        "default": "./dist/contracts/common/index.mjs"
-      },
-      "./contracts/config": {
-        "types": "./dist/contracts/config/index.d.mts",
-        "default": "./dist/contracts/config/index.mjs"
-      },
-      "./contracts/harness": {
-        "types": "./dist/contracts/harness/index.d.mts",
-        "default": "./dist/contracts/harness/index.mjs"
-      },
-      "./contracts/session": {
-        "types": "./dist/contracts/session/index.d.mts",
-        "default": "./dist/contracts/session/index.mjs"
-      },
-      "./contracts/shared": {
-        "types": "./dist/contracts/shared/index.d.mts",
-        "default": "./dist/contracts/shared/index.mjs"
-      },
-      "./kernel": {
-        "types": "./dist/kernel/index.d.mts",
-        "default": "./dist/kernel/index.mjs"
-      },
-      "./kernel/extension": {
-        "types": "./dist/kernel/extension/index.d.mts",
-        "default": "./dist/kernel/extension/index.mjs"
-      },
-      "./kernel/observability": {
-        "types": "./dist/kernel/observability/index.d.mts",
-        "default": "./dist/kernel/observability/index.mjs"
-      },
-      "./kernel/providers": {
-        "types": "./dist/kernel/providers/index.d.mts",
-        "default": "./dist/kernel/providers/index.mjs"
-      },
-      "./kernel/window": {
-        "types": "./dist/kernel/window/index.d.mts",
-        "default": "./dist/kernel/window/index.mjs"
-      },
-      "./clients": {
-        "types": "./dist/clients/index.d.mts",
-        "default": "./dist/clients/index.mjs"
-      },
-      "./services": {
-        "types": "./dist/services/index.d.mts",
-        "default": "./dist/services/index.mjs"
-      },
-      "./services/capability": {
-        "types": "./dist/services/capability/index.d.mts",
-        "default": "./dist/services/capability/index.mjs"
-      },
-      "./services/model-registry": {
-        "types": "./dist/services/model-registry/index.d.mts",
-        "default": "./dist/services/model-registry/index.mjs"
-      },
-      "./services/provider-context": {
-        "types": "./dist/services/provider-context/index.d.mts",
-        "default": "./dist/services/provider-context/index.mjs"
-      },
-      "./services/session": {
-        "types": "./dist/services/session/index.d.mts",
-        "default": "./dist/services/session/index.mjs"
-      },
-      "./services/session/handlers": {
-        "types": "./dist/services/session/handlers/index.d.mts",
-        "default": "./dist/services/session/handlers/index.mjs"
-      },
-      "./services/session/testing": {
-        "types": "./dist/services/session/testing/index.d.mts",
-        "default": "./dist/services/session/testing/index.mjs"
-      },
-      "./services/session/testing/orchestrator-shared": {
-        "types": "./dist/services/session/testing/orchestrator-shared.d.mts",
-        "default": "./dist/services/session/testing/orchestrator-shared.mjs"
-      },
-      "./services/session/orchestrator-testing": {
-        "types": "./dist/services/session/orchestrator-testing/index.d.mts",
-        "default": "./dist/services/session/orchestrator-testing/index.mjs"
-      },
-      "./services/session/messages/namespace": {
-        "types": "./dist/services/session/messages/namespace.d.mts",
-        "default": "./dist/services/session/messages/namespace.mjs"
-      },
-      "./services/session/session-events/namespace": {
-        "types": "./dist/services/session/session-events/namespace.d.mts",
-        "default": "./dist/services/session/session-events/namespace.mjs"
-      },
-      "./services/session/storage/namespace": {
-        "types": "./dist/services/session/storage/namespace.d.mts",
-        "default": "./dist/services/session/storage/namespace.mjs"
-      },
-      "./services/tool-approval": {
-        "types": "./dist/services/tool-approval/index.d.mts",
-        "default": "./dist/services/tool-approval/index.mjs"
-      },
-      "./services/log-import": {
-        "types": "./dist/services/log-import/index.d.mts",
-        "default": "./dist/services/log-import/index.mjs"
-      },
-      "./services/tools": {
-        "types": "./dist/services/tools/index.d.mts",
-        "default": "./dist/services/tools/index.mjs"
-      },
-      "./storage": {
-        "types": "./dist/storage/index.d.mts",
-        "default": "./dist/storage/index.mjs"
-      },
-      "./storage/drizzle": {
-        "types": "./dist/storage/drizzle/index.d.mts",
-        "default": "./dist/storage/drizzle/index.mjs"
-      },
-      "./storage/handlers": {
-        "types": "./dist/storage/handlers/index.d.mts",
-        "default": "./dist/storage/handlers/index.mjs"
-      },
-      "./storage/handlers/drizzle": {
-        "types": "./dist/storage/handlers/drizzle/index.d.mts",
-        "default": "./dist/storage/handlers/drizzle/index.mjs"
-      },
-      "./adapters": {
-        "types": "./dist/adapters/index.d.mts",
-        "default": "./dist/adapters/index.mjs"
-      },
-      "./adapters/config": {
-        "types": "./dist/adapters/config/index.d.mts",
-        "default": "./dist/adapters/config/index.mjs"
-      },
-      "./adapters/node": {
-        "types": "./dist/adapters/node.d.mts",
-        "default": "./dist/adapters/node.mjs"
-      },
-      "./adapters/stream-session": {
-        "types": "./dist/adapters/stream-session/index.d.mts",
-        "default": "./dist/adapters/stream-session/index.mjs"
-      },
-      "./adapters/stream-session/testing": {
-        "types": "./dist/adapters/stream-session/testing/index.d.mts",
-        "default": "./dist/adapters/stream-session/testing/index.mjs"
-      },
-      "./adapters/acp-client": {
-        "types": "./dist/adapters/acp-client/index.d.mts",
-        "default": "./dist/adapters/acp-client/index.mjs"
-      },
-      "./tools": {
-        "types": "./dist/tools/index.d.mts",
-        "default": "./dist/tools/index.mjs"
-      },
-      "./tools/testing": {
-        "types": "./dist/tools/testing/index.d.mts",
-        "default": "./dist/tools/testing/index.mjs"
-      },
-      "./node/bus-server": {
-        "types": "./dist/node/bus-server/index.d.mts",
-        "default": "./dist/node/bus-server/index.mjs"
-      },
-      "./node/bus-server/server-lifecycle": {
-        "types": "./dist/node/bus-server/server-lifecycle.d.mts",
-        "default": "./dist/node/bus-server/server-lifecycle.mjs"
-      },
-      "./node/transports": {
-        "types": "./dist/node/transports/index.d.mts",
-        "default": "./dist/node/transports/index.mjs"
-      },
-      "./node/machine-identity": {
-        "types": "./dist/node/machine-identity/index.d.mts",
-        "default": "./dist/node/machine-identity/index.mjs"
-      },
-      "./testing": {
-        "types": "./dist/testing/index.d.mts",
-        "default": "./dist/testing/index.mjs"
-      },
-      "./ui-kernel": {
-        "types": "./dist/ui-kernel/index.d.mts",
-        "default": "./dist/ui-kernel/index.mjs"
-      },
-      "./ui-components": {
-        "types": "./dist/ui-components/index.d.mts",
-        "default": "./dist/ui-components/index.mjs"
-      },
-      "./ui-hooks": {
-        "types": "./dist/ui-hooks/index.d.mts",
-        "default": "./dist/ui-hooks/index.mjs"
-      },
-      "./ui-views": {
-        "types": "./dist/ui-views/index.d.mts",
-        "default": "./dist/ui-views/index.mjs"
-      }
-    }
   }
 }
