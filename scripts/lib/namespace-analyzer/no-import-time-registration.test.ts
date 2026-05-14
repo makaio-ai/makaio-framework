@@ -1,20 +1,21 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const repoRoot = new URL('../../../../', import.meta.url).pathname;
+const frameworkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
 const allowedFiles = new Set([
-  'framework/adapters/core/src/factory/create-adapter-namespace.ts',
-  'framework/packages/bus-core/src/bus.ts',
-  'framework/packages/bus-core/src/channel/channel-endpoint.ts',
-  'framework/packages/clients-core/src/create-client-namespace.ts',
-  'framework/packages/storage/core/src/create-storage-namespace.ts',
+  'adapters/core/src/factory/create-adapter-namespace.ts',
+  'packages/bus-core/src/bus.ts',
+  'packages/bus-core/src/channel/channel-endpoint.ts',
+  'packages/clients-core/src/create-client-namespace.ts',
+  'packages/storage/core/src/create-storage-namespace.ts',
 ]);
 
 const extensionFactoryFiles = {
-  createExtensionNamespace: 'framework/packages/bus-core/src/create-extension-namespace.ts',
-  createExtensionStorageNamespace: 'framework/packages/storage/core/src/create-extension-storage-namespace.ts',
+  createExtensionNamespace: 'packages/bus-core/src/create-extension-namespace.ts',
+  createExtensionStorageNamespace: 'packages/storage/core/src/create-extension-storage-namespace.ts',
 } as const;
 const extensionFactoryNames = ['createExtensionNamespace', 'createExtensionStorageNamespace'] as const;
 
@@ -33,12 +34,10 @@ function listSourceFiles(dir: string): string[] {
 
 describe('namespace registration side effects', () => {
   it('does not register static namespaces at module import time', () => {
-    const roots = ['framework', 'product'].map((dir) => join(repoRoot, dir));
     const sideEffectfulExtensionFactories = getSideEffectfulExtensionFactories();
-    const violations = roots
-      .flatMap(listSourceFiles)
+    const violations = listSourceFiles(frameworkRoot)
       .map((file) => ({ file, source: stripComments(readFileSync(file, 'utf8')) }))
-      .filter(({ file }) => !allowedFiles.has(relative(repoRoot, file)))
+      .filter(({ file }) => !allowedFiles.has(relative(frameworkRoot, file)))
       .filter(({ source }) => {
         return (
           /MakaioBus\.registerNamespace\s*\(\s*createBusNamespace/.test(source) ||
@@ -50,7 +49,7 @@ describe('namespace registration side effects', () => {
             /createExtensionStorageNamespace\s*\(/.test(source))
         );
       })
-      .map(({ file }) => relative(repoRoot, file));
+      .map(({ file }) => relative(frameworkRoot, file));
 
     expect(violations).toEqual([]);
   });
@@ -59,7 +58,7 @@ describe('namespace registration side effects', () => {
     // Pure re-export barrels that happen to use "register" in their subpath
     // for domain reasons (e.g., "register CLI commands"), not namespace side-effects.
     const allowedRegisterExports = new Set(['./kernel/cli/register']);
-    const packageFiles = ['framework', 'product'].map((dir) => join(repoRoot, dir)).flatMap(listPackageFiles);
+    const packageFiles = listPackageFiles(frameworkRoot);
 
     const violations = packageFiles.flatMap((file) => {
       const source = readFileSync(file, 'utf8');
@@ -74,7 +73,7 @@ describe('namespace registration side effects', () => {
       const sideEffects =
         Array.isArray(pkg.sideEffects) && pkg.sideEffects.some((entry) => String(entry).includes('namespace'));
 
-      return exportKeys.length > 0 || sideEffects ? [relative(repoRoot, file)] : [];
+      return exportKeys.length > 0 || sideEffects ? [relative(frameworkRoot, file)] : [];
     });
 
     expect(violations).toEqual([]);
@@ -90,7 +89,7 @@ function getSideEffectfulExtensionFactories(): Set<keyof typeof extensionFactory
 
   for (const factoryName of extensionFactoryNames) {
     const file = extensionFactoryFiles[factoryName];
-    const source = stripComments(readFileSync(join(repoRoot, file), 'utf8'));
+    const source = stripComments(readFileSync(join(frameworkRoot, file), 'utf8'));
     if (/MakaioBus\.registerNamespace\s*\(/.test(source) || /createStorageNamespace\s*\(/.test(source)) {
       sideEffectfulFactories.add(factoryName);
     }
