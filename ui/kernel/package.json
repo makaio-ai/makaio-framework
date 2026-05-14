@@ -11,10 +11,6 @@
     "./pages/schemas": "./src/pages/schemas.ts",
     "./package.json": "./package.json"
   },
-  "sideEffects": [
-    "./src/pages/namespace.ts",
-    "./dist/pages/namespace.mjs"
-  ],
   "scripts": {
     "build": "tsdown"
   },

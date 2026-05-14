@@ -1,8 +1,9 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { dep, parseExtensionConfig, type MakaioExtension } from '@makaio/contracts';
+import { dep, parseExtensionConfig, type MakaioNodeExtension } from '@makaio/contracts';
 import { AccountManager } from './account-manager.js';
 import { ClaudeCodeSource } from './sources/claude-code-source.js';
 import { CodexSource } from './sources/codex-source.js';
@@ -17,6 +18,7 @@ import {
 } from './storage/index.js';
 import { accountManagerCli } from './cli/index.js';
 import { hasEnabledAutoActivationSource, type AutoActivationConfig } from './account-manager-types.js';
+import { AccountManagerNamespace } from './bus/namespace.js';
 
 const USAGE_MIN_FETCH_INTERVAL_MS = 60_000;
 const USAGE_ACTIVE_INTERVAL_MS = 2 * 60_000;
@@ -49,11 +51,12 @@ const AccountManagerConfigSchema = z.object({
  * selection, source construction, and store instantiation are based on
  * the platform context provided by the host runtime.
  */
-export const accountManagerPackage: MakaioExtension = {
+export const accountManagerPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'account-manager',
   displayName: 'Makaio Account Manager',
   version: '0.1.0',
   dependencies: [dep('makaio.clients-core')],
+  namespaces: [AccountManagerNamespace],
   storage: {
     migrations: 'drizzle',
     packageRoot: PACKAGE_ROOT,

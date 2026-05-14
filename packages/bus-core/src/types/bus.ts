@@ -1,23 +1,16 @@
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines: ["error", { "max": 610 }] */ // Bumped for extendSubject + IMakaioBus.reconnect()
+/* eslint max-lines: ["error", { "max": 630 }] */ // Bumped for registerNamespaces() + registerNamespace(BusNamespaceDefinition)
 
-import type { TransportRegistry, NamespaceRegistry, NamespaceRegistrationOptions } from '../registries/index.js';
-import type { OnceOptions } from '../methods/once.js';
-import type { BusTransport } from './transports.js';
-import type { BroadcastResult } from '../methods/broadcast.js';
-
-import type { ScopedBus } from '../scoped-bus.js';
-import type { IFilteredBus } from '../filtered-bus.js';
-import type { BusNamespace } from './namespace.js';
-import type { EmitOptions, OnOptions, RequestOptions } from './options.js';
-
+import type { TransportRegistry, NamespaceRegistry } from '../registries/index.js';
 import type {
   AnyHandler,
+  BusNamespaceDefinition,
   EventHandler,
   FilterablePayloadIntersection,
   HandlerForSubjectDefinition,
   OptionalResult,
   PayloadFilter,
+  RegistrableBusNamespaceDefinition,
   RequestHandler,
   SubjectDefinition,
   SubjectRecord,
@@ -26,6 +19,14 @@ import type {
   TypedPayloadFilter,
   WildcardSubject,
 } from '@makaio/core';
+import type { OnceOptions } from '../methods/once.js';
+import type { BusTransport } from './transports.js';
+import type { BroadcastResult } from '../methods/broadcast.js';
+
+import type { ScopedBus } from '../scoped-bus.js';
+import type { IFilteredBus } from '../filtered-bus.js';
+import type { BusNamespace } from './namespace.js';
+import type { EmitOptions, OnOptions, RequestOptions } from './options.js';
 
 import type { HandlerEntry } from './handler-entry.js';
 import type { InterceptOptions, InterceptorEntry, InterceptorHandler } from './interceptor.js';
@@ -567,16 +568,32 @@ export type IMakaioBus<
 
   getContext(): MakaioBusContext;
 
+  /**
+   * Register a namespace from a `BusNamespaceDefinition` created by `createBusNamespace()`.
+   *
+   * Returns a `BusNamespace` that extends the definition with a `scopedBus()` method.
+   * @param definition - Namespace definition created by `createBusNamespace()` from `@makaio/core`
+   * @returns Registered namespace with `scopedBus()` and pre-computed FilterPayload type
+   */
   registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
-    domain: Domain,
-    schemas: Schemas,
-    options?: NamespaceRegistrationOptions,
+    definition: BusNamespaceDefinition<Domain, Schemas>,
   ): BusNamespace<
     Domain,
     SubjectRecordFromSchemaRecord<Schemas>,
     FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
     Schemas
   >;
+
+  /**
+   * Register multiple namespaces in a single call.
+   *
+   * Convenience wrapper for composition roots that register a catalog of namespaces at boot:
+   * ```typescript
+   * MakaioBus.registerNamespaces(FrameworkContractNamespaces);
+   * ```
+   * @param definitions - Array of namespace definitions to register
+   */
+  registerNamespaces(definitions: readonly RegistrableBusNamespaceDefinition[]): void;
 
   /** Get the schema for a registered subject, or undefined if not found. */
   getSchema<T extends SubjectDefinition>(subject: T | string): SubjectSchema | undefined;

@@ -1,18 +1,18 @@
 /**
- * CLI bus namespace registration.
+ * CLI bus namespace definition.
  *
- * Registers the `cli` top-level namespace with the bus. Subjects are
+ * Defines the `kernel:cli` namespace subjects. Subjects are
  * accessed via {@link CliRpcSubjects} (e.g. `CliRpcSubjects.listContributions`).
  *
  * Named `CliRpcSubjects` (not `CliSubjects`) to avoid collision with the
  * existing `CliSubjects` type export if one exists, and to clarify these
  * are bus RPC subjects, not CLI type definitions.
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { CliSchemas } from './schemas.js';
 
 /** CLI bus namespace — `cli.*` subjects. */
-export const CliNamespace = MakaioBus.registerNamespace('kernel:cli', CliSchemas);
+export const CliNamespace = createBusNamespace('kernel:cli', CliSchemas);
 
 /**
  * Typed subjects for CLI RPC operations.

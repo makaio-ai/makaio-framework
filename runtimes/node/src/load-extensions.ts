@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { versionSatisfies } from '@makaio/contracts';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { CliContribution, CliSubcommandEntry } from '@makaio/kernel/cli';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DiscoveredExtension } from './extension-discovery.js';
@@ -29,7 +29,7 @@ export type AttachExtensionCliContributionsOptions = Pick<LoadExtensionsOptions,
  */
 export interface ExtensionLoadResult {
   /** Successfully loaded packages ready for `coordinator.load()`. */
-  readonly packages: MakaioExtension[];
+  readonly packages: KernelMakaioExtension[];
   /**
    * Config defaults from descriptors, keyed by extension name.
    *
@@ -45,7 +45,7 @@ export interface ExtensionLoadResult {
  */
 export interface ExtensionCliAttachResult {
   /** Packages augmented or synthesized with executable CLI contributions. */
-  readonly packages: MakaioExtension[];
+  readonly packages: KernelMakaioExtension[];
   /**
    * Config defaults from descriptors of CLI-only synthesized packages, keyed
    * by extension name.
@@ -67,7 +67,7 @@ export interface DescriptorSourcePackageGroup {
   /** Stable source label for diagnostics, such as `workspace-descriptors`. */
   readonly descriptorSource: string;
   /** Packages produced from this descriptor. */
-  readonly packages: ReadonlyArray<MakaioExtension>;
+  readonly packages: ReadonlyArray<KernelMakaioExtension>;
 }
 
 /**
@@ -94,7 +94,7 @@ export async function loadExtensions(
   options: LoadExtensionsOptions,
 ): Promise<ExtensionLoadResult> {
   const { frameworkVersion, importModule = defaultImport } = options;
-  const packages: MakaioExtension[] = [];
+  const packages: KernelMakaioExtension[] = [];
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   let createDetachedExtensionPackage:
@@ -111,7 +111,7 @@ export async function loadExtensions(
 
     // Gate: execution mode — synthesize a managed package for detached extensions
     if (descriptor.execution === 'detached') {
-      let detachedPkg: MakaioExtension;
+      let detachedPkg: KernelMakaioExtension;
       try {
         createDetachedExtensionPackage ??= (await import('./detached-extension-handle.js'))
           .createDetachedExtensionPackage;
@@ -132,7 +132,9 @@ export async function loadExtensions(
 
     // Gate: server entrypoint required
     if (!descriptor.entrypoints.server) {
-      console.warn(`${label}: no server entrypoint declared, skipping`);
+      if (!descriptor.entrypoints.browser && !descriptor.entrypoints.cli) {
+        console.warn(`${label}: no executable entrypoint declared, skipping`);
+      }
       continue;
     }
 
@@ -180,9 +182,13 @@ export async function loadExtensions(
  * @param label - Log prefix for warnings.
  * @returns Normalized package list, or `undefined` when invalid.
  */
-function normalizePackageExport(value: unknown, descriptorName: string, label: string): MakaioExtension[] | undefined {
+function normalizePackageExport(
+  value: unknown,
+  descriptorName: string,
+  label: string,
+): KernelMakaioExtension[] | undefined {
   if (Array.isArray(value)) {
-    const packages: MakaioExtension[] = [];
+    const packages: KernelMakaioExtension[] = [];
     const seenNames = new Set<string>();
     for (const item of value) {
       if (!isMakaioExtensionLike(item)) {
@@ -251,7 +257,7 @@ function normalizePackageExport(value: unknown, descriptorName: string, label: s
  */
 export async function attachExtensionCliContributions(
   discovered: ReadonlyArray<DiscoveredExtension>,
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   options: AttachExtensionCliContributionsOptions,
 ): Promise<ExtensionCliAttachResult> {
   const { importModule = defaultImport, frameworkVersion } = options;
@@ -278,9 +284,10 @@ export async function attachExtensionCliContributions(
       continue;
     }
 
-    if (mod.default.name !== ext.descriptor.name) {
+    const expectedCliName = ext.descriptor.cli?.name ?? ext.descriptor.name;
+    if (mod.default.name !== expectedCliName) {
       console.warn(
-        `${label}: imported CLI contribution name '${mod.default.name}' does not match descriptor name '${ext.descriptor.name}', skipping`,
+        `${label}: imported CLI contribution name '${mod.default.name}' does not match descriptor CLI name '${expectedCliName}', skipping`,
       );
       continue;
     }
@@ -328,7 +335,7 @@ function resolveEligibleCliEntrypoint(ext: DiscoveredExtension, frameworkVersion
  * @param cli - Executable CLI contribution imported from the descriptor entrypoint.
  * @returns A minimal {@link MakaioExtension} carrying descriptor gates and CLI handlers.
  */
-function createCliOnlyExtensionPackage(ext: DiscoveredExtension, cli: CliContribution): MakaioExtension {
+function createCliOnlyExtensionPackage(ext: DiscoveredExtension, cli: CliContribution): KernelMakaioExtension {
   return { ...descriptorToBasePackage(ext.descriptor), cli };
 }
 
@@ -402,10 +409,10 @@ async function importCliModule(
  */
 export function mergePackagesByDescriptorSourcePriority(
   groups: ReadonlyArray<DescriptorSourcePackageGroup>,
-): MakaioExtension[] {
+): KernelMakaioExtension[] {
   const sourceByDescriptorName = new Map<string, string>();
   const sourceByPackageName = new Map<string, string>();
-  const merged: MakaioExtension[] = [];
+  const merged: KernelMakaioExtension[] = [];
 
   for (const group of groups) {
     const existingDescriptorSource = sourceByDescriptorName.get(group.descriptorName);
@@ -443,7 +450,7 @@ export function mergePackagesByDescriptorSourcePriority(
  * @param value - The default export to check.
  * @returns Whether the value is a valid {@link MakaioExtension} shape.
  */
-export function isMakaioExtensionLike(value: unknown): value is MakaioExtension {
+export function isMakaioExtensionLike(value: unknown): value is KernelMakaioExtension {
   if (typeof value !== 'object' || value === null) return false;
   const obj = value as Record<string, unknown>;
   return (

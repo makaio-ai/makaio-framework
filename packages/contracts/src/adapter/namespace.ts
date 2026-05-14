@@ -1,6 +1,6 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { AdapterSchemas } from './schemas.js';
 
-export const AdapterNamespace = MakaioBus.registerNamespace('adapter', AdapterSchemas);
+export const AdapterNamespace = createBusNamespace('adapter', AdapterSchemas);
 
 export const AdapterSubjects = AdapterNamespace.subjects;

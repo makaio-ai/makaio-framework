@@ -1,5 +1,5 @@
+import { createBusNamespace } from '@makaio/core';
 import type { SchemaRecord } from '@makaio/core';
-import { MakaioBus } from '@makaio/bus-core';
 import {
   // File watcher schemas
   FsChangedSchema,
@@ -84,9 +84,9 @@ const FsSchemas = {
 } satisfies SchemaRecord;
 
 /**
- * Unified filesystem namespace registration.
+ * Unified filesystem namespace definition.
  */
-export const FsNamespace = MakaioBus.registerNamespace('fs', FsSchemas);
+export const FsNamespace = createBusNamespace('fs', FsSchemas);
 
 /**
  * Typed subjects for filesystem operations.

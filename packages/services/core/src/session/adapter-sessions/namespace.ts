@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import {
   AdapterSessionStatusSchema,
   CompressSessionLineageSchema,
@@ -88,7 +88,7 @@ export type CreateAndLinkMetadata = z.infer<typeof CreateAndLinkMetadataSchema>;
  * Adapter sessions track sessions discovered from external adapter logs
  * (e.g., Claude Code) and maintain lineage information for fork detection.
  */
-export const AdapterSessionStorageNamespace = createStorageNamespace('adapterSession', {
+export const AdapterSessionStorageNamespace = createStorageNamespaceDefinition('adapterSession', {
   schemas: {
     /**
      * Upsert an adapter session record.

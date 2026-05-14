@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from 'node:http';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
 import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
@@ -180,6 +181,16 @@ export interface CoreBootOptions {
    * ```
    */
   readonly hostCapabilities?: readonly HostCapabilityDeclaration[];
+
+  /**
+   * Host-owned bus namespace definitions registered during the core bus boot
+   * phase before any handlers, services, or remote clients can use them.
+   *
+   * Use this for surface-specific contracts owned outside runtime-node, such as
+   * desktop UI namespaces, without making the generic runtime depend on those
+   * packages.
+   */
+  readonly hostNamespaces?: readonly RegistrableBusNamespaceDefinition[];
 
   /**
    * Host-provided package config defaults keyed by package name.

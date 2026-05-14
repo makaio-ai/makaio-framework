@@ -1,15 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MakaioExtension } from '@makaio/contracts';
 import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
 import { runExtensionMigrations } from '../extension/extension-migration-runner.js';
-import type { ExtensionEntry } from '../extension/types.js';
+import type { ExtensionEntry, KernelMakaioExtension } from '../extension/types.js';
 
 /**
  * Build the minimum coordinator entry required by the migration runner.
  * @param pkg - Extension manifest to wrap.
  * @returns Extension entry with discovered state.
  */
-function makeEntry(pkg: MakaioExtension): ExtensionEntry {
+function makeEntry(pkg: KernelMakaioExtension): ExtensionEntry {
   return {
     pkg,
     identity: createExtensionIdentity(pkg.name),
@@ -32,7 +31,7 @@ describe('runExtensionMigrations', () => {
 
   it('rejects relative migration paths that escape storage.packageRoot', async () => {
     const runMigrations = vi.fn(async () => {});
-    const pkg: MakaioExtension = {
+    const pkg: KernelMakaioExtension = {
       name: 'escaping-extension',
       displayName: 'Escaping extension',
       version: '0.1.0',

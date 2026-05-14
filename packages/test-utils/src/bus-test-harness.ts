@@ -43,6 +43,7 @@ interface MockBusShape {
   __onAny: Mock;
   getContext: Mock;
   registerNamespace: Mock;
+  registerNamespaces: Mock;
   getSchema: Mock;
   extendSubject: Mock;
   registerTransport: Mock;
@@ -214,6 +215,7 @@ export function createMockBus(): MockBusResult {
     __onAny: vi.fn(),
     getContext: vi.fn(),
     registerNamespace: vi.fn(),
+    registerNamespaces: vi.fn(),
     getSchema: vi.fn(),
     extendSubject: vi.fn().mockImplementation((subject: unknown) => subject),
     registerTransport: vi.fn().mockImplementation(() => createTransportRegistrationMock()),
@@ -243,6 +245,8 @@ export interface MockGlobalBusResult extends MockBusResult {
   getContext: Mock;
   /** Mock for bus.registerNamespace() */
   registerNamespace: Mock;
+  /** Mock for bus.registerNamespaces() */
+  registerNamespaces: Mock;
   /** Mock for bus.getSchema() */
   getSchema: Mock;
 }
@@ -266,6 +270,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
   const __onAny = vi.fn().mockReturnValue(() => {});
   const getContext = vi.fn();
   const registerNamespace = vi.fn();
+  const registerNamespaces = vi.fn();
   const getSchema = vi.fn();
   const transportMethods = createMockTransportMethods();
   const setReady = createSetReady(transportMethods);
@@ -284,6 +289,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
     __onAny,
     getContext,
     registerNamespace,
+    registerNamespaces,
     getSchema,
     extendSubject: vi.fn().mockImplementation((subject: unknown) => subject),
     registerTransport: vi.fn().mockImplementation(() => createTransportRegistrationMock()),
@@ -309,6 +315,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
     __onAny,
     getContext,
     registerNamespace,
+    registerNamespaces,
     getSchema,
   };
 }

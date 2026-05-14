@@ -17,7 +17,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import { PreferencesSubjects } from '@makaio/services-core/preferences';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { BusContext } from '@makaio/ui-hooks';

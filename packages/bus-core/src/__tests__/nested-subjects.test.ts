@@ -1,69 +1,89 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
-import type { RequestContext } from '@makaio/core';
+import { createBusNamespace, type RequestContext } from '@makaio/core';
 import { ValidationError } from '../errors/validation-error.js';
 
 // Register all namespaces used in this test file
-const { subjects: _Nested1Subjects } = MakaioBus.registerNamespace('nested1', {
-  'tool.use': z.object({ toolName: z.string() }),
-  'tool.result': z.object({ output: z.string() }),
-});
+const { subjects: _Nested1Subjects } = MakaioBus.registerNamespace(
+  createBusNamespace('nested1', {
+    'tool.use': z.object({ toolName: z.string() }),
+    'tool.result': z.object({ output: z.string() }),
+  }),
+);
 
-const { subjects: _Nested2Subjects } = MakaioBus.registerNamespace('nested2', {
-  'stream.chunk.partial': z.object({ content: z.string() }),
-  'stream.chunk.complete': z.object({ content: z.string() }),
-});
+const { subjects: _Nested2Subjects } = MakaioBus.registerNamespace(
+  createBusNamespace('nested2', {
+    'stream.chunk.partial': z.object({ content: z.string() }),
+    'stream.chunk.complete': z.object({ content: z.string() }),
+  }),
+);
 
-const { subjects: _Nested3Subjects } = MakaioBus.registerNamespace('nested3', {
-  'agent.tool.execution.started': z.object({ toolName: z.string() }),
-});
+const { subjects: _Nested3Subjects } = MakaioBus.registerNamespace(
+  createBusNamespace('nested3', {
+    'agent.tool.execution.started': z.object({ toolName: z.string() }),
+  }),
+);
 
-const _ScopedNamespace = MakaioBus.registerNamespace('scopedNested', {
-  'tool.use': z.object({ toolName: z.string() }),
-  'stream.chunk.partial': z.object({ content: z.string() }),
-});
+const _ScopedNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedNested', {
+    'tool.use': z.object({ toolName: z.string() }),
+    'stream.chunk.partial': z.object({ content: z.string() }),
+  }),
+);
 
 const { subjects: _ScopedSubjects } = _ScopedNamespace;
 
-const { subjects: _RequestNestedSubjects } = MakaioBus.registerNamespace('requestNested', {
-  'tool.execute': {
-    request: z.object({ toolName: z.string() }),
-    response: z.object({ result: z.string() }),
-  },
-});
+const { subjects: _RequestNestedSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('requestNested', {
+    'tool.execute': {
+      request: z.object({ toolName: z.string() }),
+      response: z.object({ result: z.string() }),
+    },
+  }),
+);
 
-const _ScopedRequestNamespace = MakaioBus.registerNamespace('scopedRequestNested', {
-  'tool.execute': {
-    request: z.object({ toolName: z.string() }),
-    response: z.object({ result: z.string() }),
-  },
-});
+const _ScopedRequestNamespace = MakaioBus.registerNamespace(
+  createBusNamespace('scopedRequestNested', {
+    'tool.execute': {
+      request: z.object({ toolName: z.string() }),
+      response: z.object({ result: z.string() }),
+    },
+  }),
+);
 
 const { subjects: _ScopedRequestSubjects } = _ScopedRequestNamespace;
 
-const { subjects: _RequestNested2Subjects } = MakaioBus.registerNamespace('requestNested2', {
-  'test.create.requested': {
-    request: z.object({ taskName: z.string() }),
-    response: z.object({ taskId: z.string() }),
-  },
-});
+const { subjects: _RequestNested2Subjects } = MakaioBus.registerNamespace(
+  createBusNamespace('requestNested2', {
+    'test.create.requested': {
+      request: z.object({ taskName: z.string() }),
+      response: z.object({ taskId: z.string() }),
+    },
+  }),
+);
 
-const { subjects: _AdapterClaudeCodeSubjects } = MakaioBus.registerNamespace('adapter:claudeCode', {
-  'tool.use': z.object({ toolName: z.string() }),
-  'stream.chunk': z.object({ content: z.string() }),
-});
+const { subjects: _AdapterClaudeCodeSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('adapter:claudeCode', {
+    'tool.use': z.object({ toolName: z.string() }),
+    'stream.chunk': z.object({ content: z.string() }),
+  }),
+);
 
-const _AdapterOpenAINamespace = MakaioBus.registerNamespace('adapter:openai', {
-  'tool.call': z.object({ functionName: z.string() }),
-  'stream.delta': z.object({ text: z.string() }),
-});
+const _AdapterOpenAINamespace = MakaioBus.registerNamespace(
+  createBusNamespace('adapter:openai', {
+    'tool.call': z.object({ functionName: z.string() }),
+    'stream.delta': z.object({ text: z.string() }),
+  }),
+);
 
 const { subjects: _AdapterOpenAISubjects } = _AdapterOpenAINamespace;
 
-const { subjects: _AdapterClaudeCodeSdkSubjects } = MakaioBus.registerNamespace('adapter:claudeCode:sdk', {
-  'stream.thinking.content': z.object({ text: z.string() }),
-});
+const { subjects: _AdapterClaudeCodeSdkSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('adapter:claudeCode:sdk', {
+    'stream.thinking.content': z.object({ text: z.string() }),
+  }),
+);
 
 /**
  * Tests for nested subject names (subject keys containing dots).

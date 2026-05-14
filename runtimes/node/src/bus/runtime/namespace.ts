@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { RuntimeSchemas } from './schemas.js';
 
 /**
@@ -7,7 +7,7 @@ import { RuntimeSchemas } from './schemas.js';
  * Provides typed subjects for querying runtime-specific resources.
  * Registered globally so lifecycle files can import subjects.
  */
-export const RuntimeNamespace = MakaioBus.registerNamespace('runtime', RuntimeSchemas);
+export const RuntimeNamespace = createBusNamespace('runtime', RuntimeSchemas);
 
 /**
  * Runtime subjects for type-safe bus operations.

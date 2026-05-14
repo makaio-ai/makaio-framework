@@ -1,12 +1,13 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
- * Contribution processor for `MakaioExtension.logImport` surfaces.
+ * Contribution processor for `MakaioNodeExtension<IMakaioBus>.logImport` surfaces.
  *
  * Wires package-declared log importers into {@link LogImportRegistry} during
  * extension activation and tears them down during shutdown or disable.
  * @packageDocumentation
  */
 
-import type { ExtensionContext, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionContext, MakaioNodeExtension } from '@makaio/contracts';
 import type { LogImportConfig, LogImportOrchestrator, LogOrchestratorConfig } from '@makaio/ai-adapters-core';
 import type { ContributionProcessor } from '@makaio/kernel';
 import type { OrchestratorFactory } from './types.js';
@@ -14,9 +15,9 @@ import { LogImportRegistryToken } from './package.js';
 import { classifyLogImporterSource } from './log-import-source.js';
 
 /**
- * Narrowed shape of the `logImport.config` field on a {@link MakaioExtension}.
+ * Narrowed shape of the `logImport.config` field on a `MakaioNodeExtension<IMakaioBus>`.
  *
- * {@link MakaioExtension.logImport} keeps `config` as `unknown` to avoid a
+ * {@link MakaioNodeExtension.logImport} keeps `config` as `unknown` to avoid a
  * contracts-layer dependency on `@makaio/ai-adapters-core`. This processor-
  * local interface describes the actual shape expected at wiring time, mirroring
  * `LogImportRegistration` from `@makaio/ai-adapters-core`.
@@ -92,7 +93,7 @@ function buildOrchestratorFactory(
 }
 
 /**
- * Create a {@link ContributionProcessor} that wires `MakaioExtension.logImport`
+ * Create a {@link ContributionProcessor} that wires `MakaioNodeExtension<IMakaioBus>.logImport`
  * surfaces into the {@link LogImportRegistry}.
  *
  * The returned processor:
@@ -112,9 +113,13 @@ export function createLogImportContributionProcessor(): ContributionProcessor {
   const cleanups = new Map<string, () => Promise<void>>();
 
   return {
-    filter: (pkg: MakaioExtension): boolean => !!pkg.logImport,
+    filter: (pkg: MakaioNodeExtension<IMakaioBus>): boolean => !!pkg.logImport,
 
-    processActivated: async (name: string, pkg: MakaioExtension, ctx: ExtensionContext): Promise<void> => {
+    processActivated: async (
+      name: string,
+      pkg: MakaioNodeExtension<IMakaioBus>,
+      ctx: ExtensionContext,
+    ): Promise<void> => {
       const { logImport } = pkg;
       if (!logImport) return;
 

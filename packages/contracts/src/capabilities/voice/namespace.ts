@@ -1,13 +1,13 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { VoiceSchemas } from './schemas.js';
 
 /**
- * Registered MakaioBus namespace for voice session events and RPCs.
+ * MakaioBus namespace definition for voice session events and RPCs.
  *
  * This is the canonical public namespace definition for the `voice.*`
  * contract and should be imported by all producers/consumers.
  */
-export const VoiceNamespace = MakaioBus.registerNamespace('voice', VoiceSchemas);
+export const VoiceNamespace = createBusNamespace('voice', VoiceSchemas);
 
 /**
  * Typed subject tree for the voice namespace.

@@ -1,7 +1,8 @@
 /**
- * Toast namespace registration — has side effects (registers on the bus).
+ * Toast namespace definition.
  *
- * For pure Zod schemas without side effects, import `./schemas` instead.
+ * Import `./schemas` when only pure Zod schemas are needed. Composition roots
+ * register this namespace explicitly.
  * @example
  * ```typescript
  * // Show a toast
@@ -29,14 +30,14 @@
  * });
  * ```
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ToastSchemas } from './schemas.js';
 
 /**
- * Toast namespace registration.
+ * Toast namespace definition.
  * Provides typed subjects for toast notification operations.
  */
-export const ToastNamespace = MakaioBus.registerNamespace('toast', ToastSchemas);
+export const ToastNamespace = createBusNamespace('toast', ToastSchemas);
 
 /**
  * Toast subjects for type-safe bus operations.

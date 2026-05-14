@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { MakaioSessionAgentSchema, AgentStatusSchema } from '@makaio/contracts';
 import { agents } from './schema.js';
 
@@ -15,7 +15,7 @@ import { agents } from './schema.js';
  * const { agent } = await bus.request(AgentStorageSubjects.get, { agentId: '123' });
  * ```
  */
-export const AgentStorageNamespace = createStorageNamespace('agent', {
+export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
   schemas: {
     /**
      * Get an agent by ID.

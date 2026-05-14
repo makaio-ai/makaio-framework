@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import type { PageComponentProps } from '@makaio/ui-kernel';
 import { displayLabel, displayMeta } from '@makaio/extension-account-manager/utils';

@@ -12,7 +12,8 @@
  * adapters are initialized.
  */
 
-import { extensionToken, type CapabilityToken, type MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import { extensionToken, type CapabilityToken, type MakaioNodeExtension } from '@makaio/contracts';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { ExtensionCoordinator } from '@makaio/kernel';
 import { AdapterSubsystemService } from './adapter-subsystem-service.js';
@@ -56,7 +57,9 @@ export interface CreateAdapterSubsystemPackageOptions {
  * @param options - Package-scoped dependencies including the coordinator.
  * @returns Critical Makaio extension for the adapter subsystem.
  */
-export function createAdapterSubsystemPackage(options: CreateAdapterSubsystemPackageOptions): MakaioExtension {
+export function createAdapterSubsystemPackage(
+  options: CreateAdapterSubsystemPackageOptions,
+): MakaioNodeExtension<IMakaioBus> {
   return {
     name: AdapterSubsystemToken.name,
     displayName: 'Adapter Subsystem',

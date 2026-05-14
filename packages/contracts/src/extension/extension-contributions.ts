@@ -1,5 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
-import type { SubjectSchema } from '@makaio/core';
+import type { MakaioBusLike, SubjectSchema } from '@makaio/core';
 import type { Toolset } from '@makaio/tools-core';
 import type { AdapterManifest } from './contribution-manifest.js';
 import type { AdapterDefinitionContract } from './adapter-definition.js';
@@ -69,24 +68,30 @@ export interface ExtensionToolsContribution<THostContext extends ExtensionContex
   readonly createToolsets: (ctx: THostContext) => Toolset[];
 }
 
-/** Hash trigger contribution surface declared by an extension. */
-export interface ExtensionTriggersContribution {
+/**
+ * Hash trigger contribution surface declared by an extension.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface ExtensionTriggersContribution<TBus extends MakaioBusLike = MakaioBusLike> {
   /**
    * Create hash triggers for this extension.
    * @param bus - The bus instance for trigger operations.
    * @returns Array of hash triggers to register with `HashTriggerService`.
    */
-  readonly createTriggers: (bus: IMakaioBus) => HashTrigger[];
+  readonly createTriggers: (bus: TBus) => HashTrigger<TBus>[];
 }
 
-/** Session event action contribution surface declared by an extension. */
-export interface ExtensionSessionEventActionsContribution {
+/**
+ * Session event action contribution surface declared by an extension.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface ExtensionSessionEventActionsContribution<TBus extends MakaioBusLike = MakaioBusLike> {
   /**
    * Create session event actions for this extension.
    * @param ctx - Context with bus instance and extension metadata.
    * @returns Map of action ID to registration result (declaration + unregister).
    */
-  readonly createActions: (ctx: SessionEventActionContext) => Record<string, CreateSessionEventActionResult>;
+  readonly createActions: (ctx: SessionEventActionContext<TBus>) => Record<string, CreateSessionEventActionResult>;
 }
 
 /** Bus namespace introspection surface declared by an extension. */

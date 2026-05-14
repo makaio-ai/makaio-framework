@@ -7,7 +7,7 @@
  *
  * Startup sequence:
  *  1. Config resolution via FileConfigStorage + NodeRuntimeProvider
- *  2. Bus creation (MakaioBus singleton) + busCreated phase event
+ *  2. Bus creation (MakaioBus singleton) + namespace registration + busCreated phase event
  *  3. Transport — BusServerTransportProvider (WebSocket bus server on provided HTTP server)
  *  4. Storage — initializeNodeDatabase (SQLite init) + RuntimeSubjects.database exposure
  *  5. Identity — loadOrCreateMachineIdentity + platform bus handler registration
@@ -24,8 +24,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MakaioBus } from '@makaio/bus-core';
-import { ExtensionCoordinator, createShutdownSequence } from '@makaio/kernel';
-import { RuntimeSubjects } from './bus/runtime/namespace.js';
+import {
+  ExtensionCoordinator,
+  createShutdownSequence,
+  BootNamespace,
+  ExtensionNamespace,
+  KernelNamespace,
+} from '@makaio/kernel';
+import { CliNamespace } from '@makaio/kernel/cli';
+import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
 import { FileConfigStorage } from './file-config-storage.js';
 import { NodeRuntimeProvider } from './node-runtime-provider.js';
@@ -41,7 +48,11 @@ import {
   FileAdapterConfigRepository,
   type AdapterSubsystemService,
 } from '@makaio/adapter-subsystem';
-import { createModelRegistryPackage, createToolContributionProcessor } from '@makaio/services-core';
+import {
+  createModelRegistryPackage,
+  createToolContributionProcessor,
+  FrameworkServicesCoreNamespaces,
+} from '@makaio/services-core';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
@@ -74,6 +85,7 @@ import { loadBootExtensions } from './boot-extension-loading.js';
 import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
+import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -163,9 +175,20 @@ export async function bootMakaioRuntimeCore(
     console.info('[boot] Config resolved (mode=%s)', config.mode);
 
     // -----------------------------------------------------------------------
-    // 2. Bus + busCreated phase
+    // 2. Bus — namespace registration + busCreated phase
+    //
+    // Namespaces are registered before any bus operation so that schema
+    // validation, local-subject routing, and extendSubject() are active
+    // from the first emit/on call. Storage namespace definitions carry
+    // Zod schemas; their runtime handlers are wired by storage packages.
     // -----------------------------------------------------------------------
     const bus = MakaioBus;
+
+    bus.registerNamespaces(FrameworkContractNamespaces);
+    bus.registerNamespaces(FrameworkStorageNamespaces);
+    bus.registerNamespaces([BootNamespace, CliNamespace, ExtensionNamespace, KernelNamespace, RuntimeNamespace]);
+    bus.registerNamespaces(FrameworkServicesCoreNamespaces);
+    bus.registerNamespaces(options.hostNamespaces ?? []);
 
     if (process.env['MAKAIO_DEBUG'] === 'true') {
       const disposeDebugHook = bus.__onAny((context) => {

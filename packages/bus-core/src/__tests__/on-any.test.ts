@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
-import type { AnyMessageContext } from '@makaio/core';
+import { createBusNamespace, type AnyMessageContext } from '@makaio/core';
 
 describe('__onAny', () => {
   beforeEach(() => {
@@ -10,13 +10,17 @@ describe('__onAny', () => {
 
   describe('event tracking', () => {
     it('captures all events across namespaces', async () => {
-      const namespace1 = MakaioBus.registerNamespace('testOnAny:ns1', {
-        event1: z.object({ value: z.number() }),
-      });
+      const namespace1 = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:ns1', {
+          event1: z.object({ value: z.number() }),
+        }),
+      );
 
-      const namespace2 = MakaioBus.registerNamespace('testOnAny:ns2', {
-        event2: z.object({ text: z.string() }),
-      });
+      const namespace2 = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:ns2', {
+          event2: z.object({ text: z.string() }),
+        }),
+      );
 
       const captured: AnyMessageContext[] = [];
       MakaioBus.__onAny((ctx) => {
@@ -42,9 +46,11 @@ describe('__onAny', () => {
     });
 
     it('fires even when no regular handlers registered', async () => {
-      const namespace = MakaioBus.registerNamespace('testOnAny:orphan', {
-        orphanEvent: z.object({ id: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:orphan', {
+          orphanEvent: z.object({ id: z.string() }),
+        }),
+      );
 
       const captured: AnyMessageContext[] = [];
       MakaioBus.__onAny((ctx) => {
@@ -60,12 +66,14 @@ describe('__onAny', () => {
 
   describe('request tracking', () => {
     it('captures all requests', async () => {
-      const namespace = MakaioBus.registerNamespace('testOnAny:req', {
-        compute: {
-          request: z.object({ input: z.number() }),
-          response: z.object({ result: z.number() }),
-        },
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:req', {
+          compute: {
+            request: z.object({ input: z.number() }),
+            response: z.object({ result: z.number() }),
+          },
+        }),
+      );
 
       const captured: AnyMessageContext[] = [];
       MakaioBus.__onAny((ctx) => {
@@ -91,9 +99,11 @@ describe('__onAny', () => {
 
   describe('unsubscribe', () => {
     it('returns working unsubscribe function', async () => {
-      const namespace = MakaioBus.registerNamespace('testOnAny:unsub', {
-        tick: z.object({ count: z.number() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:unsub', {
+          tick: z.object({ count: z.number() }),
+        }),
+      );
 
       const captured: AnyMessageContext[] = [];
       const unsubscribe = MakaioBus.__onAny((ctx) => {
@@ -112,9 +122,11 @@ describe('__onAny', () => {
 
   describe('multiple handlers', () => {
     it('invokes all registered __onAny handlers', async () => {
-      const namespace = MakaioBus.registerNamespace('testOnAny:multi', {
-        signal: z.object({ id: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:multi', {
+          signal: z.object({ id: z.string() }),
+        }),
+      );
 
       const captured1: AnyMessageContext[] = [];
       const captured2: AnyMessageContext[] = [];
@@ -137,9 +149,11 @@ describe('__onAny', () => {
 
   describe('metadata', () => {
     it('includes messageId and correlationId', async () => {
-      const namespace = MakaioBus.registerNamespace('testOnAny:meta', {
-        trace: z.object({ step: z.string() }),
-      });
+      const namespace = MakaioBus.registerNamespace(
+        createBusNamespace('testOnAny:meta', {
+          trace: z.object({ step: z.string() }),
+        }),
+      );
 
       const captured: AnyMessageContext[] = [];
       MakaioBus.__onAny((ctx) => {

@@ -12,8 +12,9 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts/extension';
-import { registerPinStorage } from './storage.js';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
+import { PinStorageNamespace, registerPinStorage } from './storage.js';
 import { createActions } from './actions.js';
 
 /**
@@ -23,10 +24,11 @@ import { createActions } from './actions.js';
  * The `create` factory registers in-memory pin storage handlers on the
  * provided bus and returns a service whose `destroy` cleans them up.
  */
-export const PinMessagePackage: MakaioExtension = {
+export const PinMessagePackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'pin-message',
   displayName: 'Pin Message',
   version: '0.1.0',
+  namespaces: [PinStorageNamespace],
 
   /**
    * Creates the package service.

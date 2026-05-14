@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import type { NodeExtensionContext } from '@makaio/contracts/extension';
+import type { KernelExtensionContext } from '@makaio/kernel/extension';
 import subagentPackage from '../server.js';
 
-const testContext: NodeExtensionContext = {
+const testContext: KernelExtensionContext = {
   bus: MakaioBus,
-  identity: { extensionName: 'subagent' } as NodeExtensionContext['identity'],
+  identity: { extensionName: 'subagent' } as KernelExtensionContext['identity'],
   dataDir: '/tmp/makaio-subagent-test',
   machineId: 'test-machine',
   getService: () => undefined,

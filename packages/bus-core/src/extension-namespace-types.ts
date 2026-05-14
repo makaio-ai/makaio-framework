@@ -1,5 +1,5 @@
-import type { BusNamespace } from './types/namespace.js';
 import type {
+  BusNamespaceDefinition,
   FilterablePayloadIntersection,
   SchemaRecord,
   SubjectRecord,
@@ -27,9 +27,10 @@ import type {
 export interface ExtensionNamespaceExtensions {}
 
 /**
- * Extension namespace combines bus namespace with extensible extension-specific properties.
+ * Extension namespace combines a pure bus namespace definition with
+ * extensible extension-specific properties.
  *
- * Wraps BusNamespace with:
+ * Wraps BusNamespaceDefinition with:
  * - Automatic 'extension:' prefix for domain naming
  * - Extension point for extension metadata via declaration merging
  * @typeParam N - Extension name (without 'extension:' prefix)
@@ -40,11 +41,11 @@ export interface ExtensionNamespaceExtensions {}
  */
 export interface ExtensionNamespace<
   N extends string = string,
-  Subjects extends SubjectRecord = SubjectRecord,
-  FilterPayload = unknown,
+  _Subjects extends SubjectRecord = SubjectRecord,
+  _FilterPayload = unknown,
   Ext extends ExtensionNamespaceExtensions = ExtensionNamespaceExtensions,
   Schemas extends SchemaRecord = SchemaRecord,
-> extends BusNamespace<`extension:${N}`, Subjects, FilterPayload, Schemas> {
+> extends BusNamespaceDefinition<`extension:${N}`, Schemas> {
   /**
    * Extension name (without 'extension:' prefix).
    */

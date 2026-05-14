@@ -3,8 +3,8 @@ import { BaseService } from '@makaio/service-base';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import { ProviderDefinitionSchema } from '@makaio/contracts';
-import type { ExtensionContext, MakaioExtension } from '@makaio/contracts';
 import type { ExtensionCoordinator } from '@makaio/kernel';
+import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { AdapterConfigStore } from './adapter-config-store.js';
 import { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import { AdapterProviderConfigService } from './adapter-provider-config-service.js';
@@ -274,8 +274,8 @@ export class AdapterSubsystemService extends BaseService {
    */
   public async processAdapterContributions(
     packageName: string,
-    pkg: MakaioExtension,
-    ctx: ExtensionContext,
+    pkg: KernelMakaioExtension,
+    ctx: KernelExtensionContext,
   ): Promise<void> {
     await this.contributionProcessor.onPackageActivated(packageName, pkg, ctx);
   }

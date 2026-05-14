@@ -1,10 +1,9 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import '@makaio/contracts';
 import { describe, expect, it } from 'vitest';
 import { PublicProtocolNamespaces } from '../../packages/contracts/src/protocol/catalog.js';
 import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../packages/contracts/src/protocol/types.js';
-import { exportProtocolManifest } from '../../packages/contracts/src/protocol/index.js';
+import { exportProtocolManifest } from '../protocol/export-manifest.js';
 import { PYTHON_GENERATED_DIR, PYTHON_PAYLOADS_DIR, PYTHON_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
 import { generatePythonNamespaceModule, generatePythonSubjects, toPythonConstantName } from './python.js';
 import { generatePythonPayloadsModule, groupByNamespace } from './python-payloads.js';

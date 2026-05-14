@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import {
   MakaioBus,
   type BusTransport,
@@ -65,12 +66,14 @@ function createRecordedRelayTransport(
   };
 }
 
-const TestSubjects = MakaioBus.registerNamespace('relayTest', {
-  testRequest: {
-    request: z.object({ input: z.string() }),
-    response: z.object({ output: z.string() }),
-  },
-}).subjects;
+const TestSubjects = MakaioBus.registerNamespace(
+  createBusNamespace('relayTest', {
+    testRequest: {
+      request: z.object({ input: z.string() }),
+      response: z.object({ output: z.string() }),
+    },
+  }),
+).subjects;
 
 declare module '../index.js' {
   interface BusTransportRegistry {

@@ -15,12 +15,6 @@
     "./schemas": "./src/schemas.ts",
     "./package.json": "./package.json"
   },
-  "sideEffects": [
-    "./src/namespace.ts",
-    "./src/log-import.ts",
-    "./dist/namespace.mjs",
-    "./dist/log-import.mjs"
-  ],
   "scripts": {
     "build": "tsdown"
   },

@@ -1,6 +1,9 @@
-import type { StorageNamespace, StorageNamespaceConfig, StorageNamespaceExtensions } from './types.js';
-import { createStorageNamespace } from './create-storage-namespace.js';
-import type { FilterablePayloadIntersection, SchemaRecord, SubjectRecordFromSchemaRecord } from '@makaio/core';
+import type { StorageNamespaceConfig, StorageNamespaceExtensions } from './types.js';
+import {
+  createStorageNamespaceDefinition,
+  type StorageNamespaceDefinition,
+} from './create-storage-namespace-definition.js';
+import type { SchemaRecord } from '@makaio/core';
 
 type Whitespace =
   | ' '
@@ -35,12 +38,16 @@ type Trim<T extends string> = string extends T ? string : TrimLeft<TrimRight<T>>
 /**
  * Creates a storage namespace for an extension with typed subject definitions.
  *
- * Thin wrapper around createStorageNamespace that:
- * - Automatically prepends 'extension:' to the extension name before creating storage namespace
- * - Results in namespaces like 'storage:extension:terminal'
- * - Preserves all storage namespace capabilities (ORM extensions, type-safe filtering)
- * @param extensionName - Extension name (e.g., 'terminal' becomes 'storage:extension:terminal')
- * @param config - Storage namespace configuration with schemas and optional extensions
+ * Pure wrapper around {@link createStorageNamespaceDefinition} that:
+ * - Automatically prepends `'extension:'` to the extension name before
+ *   creating the storage namespace
+ * - Results in namespaces like `'storage:extension:terminal'`
+ * - Preserves all storage namespace capabilities (ORM extensions, type-safe
+ *   filtering)
+ * @param extensionName - Extension name (e.g., `'terminal'` becomes
+ *   `'storage:extension:terminal'`)
+ * @param config - Storage namespace configuration with schemas and optional
+ *   extensions
  * @returns Storage namespace with typed subjects and extensions
  * @example
  * ```typescript
@@ -68,17 +75,15 @@ export function createExtensionStorageNamespace<
 >(
   extensionName: N,
   config: StorageNamespaceConfig<Schemas, Ext>,
-): StorageNamespace<
-  `extension:${Trim<N>}`,
-  SubjectRecordFromSchemaRecord<Schemas>,
-  FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
-  Ext,
-  Schemas
-> {
+): StorageNamespaceDefinition<`extension:${Trim<N>}`, Schemas, Ext> {
   const normalizedExtensionName = extensionName.trim();
   if (normalizedExtensionName.length === 0 || normalizedExtensionName.startsWith('extension:')) {
     throw new Error('Invalid extensionName: expected a non-empty extension name without the "extension:" prefix.');
   }
 
-  return createStorageNamespace(`extension:${normalizedExtensionName}` as `extension:${Trim<N>}`, config);
+  const definition = createStorageNamespaceDefinition(
+    `extension:${normalizedExtensionName}` as `extension:${Trim<N>}`,
+    config,
+  );
+  return definition;
 }

@@ -1,8 +1,8 @@
 /**
  * Storage namespace for native session supervisor runtimes.
  *
- * Registers the `storage:supervisor-runtime` bus namespace and provides
- * typed subjects for CRUD operations on supervised runtime metadata.
+ * Defines the `storage:supervisor-runtime` bus namespace and provides typed
+ * subjects for CRUD operations on supervised runtime metadata.
  *
  * Consumers emit these subjects to read/write supervisor runtime state;
  * the Drizzle handler registered in `drizzle-handler.ts` processes them.
@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { SupervisorSessionStatusSchema } from '@makaio/contracts/native-session-supervisor';
 import { supervisorRuntimes } from './schema.js';
 
@@ -53,7 +53,7 @@ const SupervisorRuntimeUpdateSchema = z.object({
  * Native session supervisor runtime storage namespace.
  *
  * Provides typed bus subjects for managing supervised runtime metadata.
- * Registered under `storage:supervisor-runtime` on the Makaio bus.
+ * Runtime composition roots register it under `storage:supervisor-runtime`.
  *
  * Storage backends register handlers; consumers communicate through
  * subjects only, never importing directly from storage implementations.
@@ -67,7 +67,7 @@ const SupervisorRuntimeUpdateSchema = z.object({
  * });
  * ```
  */
-export const SupervisorRuntimeStorageNamespace = createStorageNamespace('supervisor-runtime', {
+export const SupervisorRuntimeStorageNamespace = createStorageNamespaceDefinition('supervisor-runtime', {
   schemas: {
     /**
      * Get a single supervisor runtime by any correlation key.

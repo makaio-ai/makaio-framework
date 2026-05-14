@@ -87,10 +87,9 @@ const wiringSchema = z.object({
  * `wiring`.
  */
 export const clientCommandsCli: CliContribution = {
-  // Must match descriptor.json "name" — the extension loader validates
-  // `contribution.name === descriptor.name`. The user-facing CLI
-  // root command is declared separately in descriptor.json "cli.name".
-  name: 'client-commands',
+  // Must match descriptor.json "cli.name"; the package identity remains
+  // `client-commands`, but the user-facing root command is `makaio client`.
+  name: 'client',
   description: 'Manage AI client integrations',
   subcommands: [
     defineCliSubcommand('wire', "Install Makaio hooks into a client's native config", wireSchema, handleClientWire),

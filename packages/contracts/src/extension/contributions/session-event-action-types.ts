@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 import type { MakaioSessionEvent } from '../../session/types.js';
 import type { SessionMessage } from '../../session/schemas/message.js';
 import { SESSION_EVENT_TYPES } from '../../session/schemas/event.js';
@@ -77,10 +77,13 @@ export interface StructuralEventFilter {
 /** Union of message and structural event filters. */
 export type EventFilter = MessageEventFilter | StructuralEventFilter;
 
-/** Context passed to a session event action factory. */
-export interface SessionEventActionContext {
+/**
+ * Context passed to a session event action factory.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface SessionEventActionContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Bus instance for registering action handlers. */
-  bus: IMakaioBus;
+  bus: TBus;
   /** Name of the extension registering the action. */
   extensionName: string;
   /**
@@ -93,22 +96,33 @@ export interface SessionEventActionContext {
    * @returns Serializable declaration plus unregister hook.
    */
   createAction: <TMode extends 'single' | 'multi', TRoles extends MessageRole[]>(
-    options: SessionEventActionOptions<TMode, TRoles>,
+    options: SessionEventActionOptions<TMode, TRoles, TBus>,
   ) => CreateSessionEventActionResult;
 }
 
-/** Context passed to a session event action's `when` predicate. */
-export interface WhenContext<TRoles extends MessageRole[] = MessageRole[]> {
+/**
+ * Context passed to a session event action's `when` predicate.
+ * @typeParam TRoles - Message roles accepted by the action entrypoint.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface WhenContext<TRoles extends MessageRole[] = MessageRole[], TBus extends MakaioBusLike = MakaioBusLike> {
   /** The message event that triggered the predicate check. */
   message: SessionMessage & { role: TRoles[number] };
   /** Active session identifier. */
   sessionId: string;
   /** Bus instance for runtime queries. */
-  bus: IMakaioBus;
+  bus: TBus;
 }
 
-/** Context passed to a session event action's `onPickerOpen` callback. */
-export interface PickerOpenContext<TRoles extends MessageRole[] = MessageRole[]> {
+/**
+ * Context passed to a session event action's `onPickerOpen` callback.
+ * @typeParam TRoles - Message roles accepted by the action entrypoint.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface PickerOpenContext<
+  TRoles extends MessageRole[] = MessageRole[],
+  TBus extends MakaioBusLike = MakaioBusLike,
+> {
   /** Entrypoint information for the action. */
   entrypoint: {
     /** The message that was actioned. */
@@ -121,7 +135,7 @@ export interface PickerOpenContext<TRoles extends MessageRole[] = MessageRole[]>
   /** Active project identifier. */
   projectId?: string;
   /** Bus instance for runtime queries. */
-  bus: IMakaioBus;
+  bus: TBus;
 }
 
 /** Configuration returned by `onPickerOpen` to control the event picker UI. */
@@ -134,8 +148,11 @@ export interface PickerConfig {
   title?: string;
 }
 
-/** Context passed to a session event action's `onSelectionChange` callback. */
-export interface SelectionChangeContext {
+/**
+ * Context passed to a session event action's `onSelectionChange` callback.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface SelectionChangeContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Currently selected session events. */
   selectedEvents: MakaioSessionEvent[];
   /** Entrypoint information for the action. */
@@ -148,7 +165,7 @@ export interface SelectionChangeContext {
   /** Active session identifier. */
   sessionId: string;
   /** Bus instance for runtime queries. */
-  bus: IMakaioBus;
+  bus: TBus;
 }
 
 /** Feedback returned by `onSelectionChange` to inform the picker UI. */
@@ -165,6 +182,7 @@ export interface SelectionFeedback {
 export interface ExecuteContext<
   TMode extends 'single' | 'multi' = 'single' | 'multi',
   TRoles extends MessageRole[] = MessageRole[],
+  TBus extends MakaioBusLike = MakaioBusLike,
 > {
   /** Entrypoint information for the action. */
   entrypoint: {
@@ -180,7 +198,7 @@ export interface ExecuteContext<
   /** Active project identifier. */
   projectId?: string;
   /** Bus instance for runtime queries. */
-  bus: IMakaioBus;
+  bus: TBus;
 }
 
 /** Result returned by a session event action's `onExecute` callback. */
@@ -201,6 +219,7 @@ export interface EntrypointConfig<TRoles extends MessageRole[] = MessageRole[]> 
 export interface SessionEventActionOptions<
   TMode extends 'single' | 'multi' = 'single' | 'multi',
   TRoles extends MessageRole[] = MessageRole[],
+  TBus extends MakaioBusLike = MakaioBusLike,
 > {
   /** Unique action identifier within the registering package. */
   id: string;
@@ -221,14 +240,14 @@ export interface SessionEventActionOptions<
    * @param ctx - Context with the triggering message.
    * @returns `true` when the action should be shown.
    */
-  when?: (ctx: WhenContext<TRoles>) => Promise<boolean>;
+  when?: (ctx: WhenContext<TRoles, TBus>) => Promise<boolean>;
   /**
    * Optional callback invoked when the event picker opens.
    * @param ctx - Context with entrypoint and session info.
    * @returns Picker configuration, `false` to cancel, or `void`.
    */
   onPickerOpen?: TMode extends 'multi'
-    ? (ctx: PickerOpenContext<TRoles>) => Promise<PickerConfig | false | void>
+    ? (ctx: PickerOpenContext<TRoles, TBus>) => Promise<PickerConfig | false | void>
     : never;
   /**
    * Optional callback invoked when the event selection changes.
@@ -236,7 +255,7 @@ export interface SessionEventActionOptions<
    * @returns Selection feedback to display in the picker.
    */
   onSelectionChange?: TMode extends 'multi'
-    ? (ctx: SelectionChangeContext) => Promise<SelectionFeedback | void>
+    ? (ctx: SelectionChangeContext<TBus>) => Promise<SelectionFeedback | void>
     : never;
   /** Category grouping for this action. */
   category?: ActionCategory;
@@ -247,7 +266,7 @@ export interface SessionEventActionOptions<
    * @param ctx - Context with entrypoint, selected events, and bus.
    * @returns Execution result, or `void` on success.
    */
-  onExecute: (ctx: ExecuteContext<TMode, TRoles>) => Promise<ExecuteResult | void>;
+  onExecute: (ctx: ExecuteContext<TMode, TRoles, TBus>) => Promise<ExecuteResult | void>;
 }
 
 /** Serializable declaration stored in registries and emitted over the bus. */

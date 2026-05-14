@@ -17,6 +17,7 @@
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",

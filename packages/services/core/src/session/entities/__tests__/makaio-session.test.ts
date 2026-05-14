@@ -3,16 +3,19 @@ import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioSession, type MakaioSessionConfig } from '../makaio-session.js';
 import { Turn } from '../turn.js';
 
 // Register a test namespace for emit helper tests
-const { subjects: TestSubjects } = MakaioBus.registerNamespace('makaioSessionTest', {
-  testEvent: z.object({
-    sessionId: z.string(),
-    foo: z.string(),
+const { subjects: TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('makaioSessionTest', {
+    testEvent: z.object({
+      sessionId: z.string(),
+      foo: z.string(),
+    }),
   }),
-});
+);
 
 describe('MakaioSession', () => {
   beforeEach(() => {

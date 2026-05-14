@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
 import {
@@ -147,7 +147,7 @@ describe('buildRuntimeEnvironment → ExtensionCoordinator integration', () => {
    * as `active` after `startAll`, so the test only needs to observe whether the
    * package appears in {@link ExtensionCoordinator.list}.
    */
-  const nodeGatedPackage: MakaioExtension = {
+  const nodeGatedPackage: KernelMakaioExtension = {
     name: 'node-feature',
     displayName: 'Node Feature',
     version: '0.1.0',
@@ -191,7 +191,7 @@ describe('buildRuntimeEnvironment → ExtensionCoordinator integration', () => {
     const runtimeEnvironment = buildRuntimeEnvironment('linux', ['node']);
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
-    const linuxOnlyPackage: MakaioExtension = {
+    const linuxOnlyPackage: KernelMakaioExtension = {
       name: 'linux-feature',
       displayName: 'Linux Feature',
       version: '0.1.0',
@@ -212,7 +212,7 @@ describe('buildRuntimeEnvironment → ExtensionCoordinator integration', () => {
     const runtimeEnvironment = buildRuntimeEnvironment('linux', normalizeNodeHostCapabilities());
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
-    const nodeHostPackage: MakaioExtension = {
+    const nodeHostPackage: KernelMakaioExtension = {
       name: 'node-host-feature',
       displayName: 'Linux Feature',
       version: '0.1.0',
@@ -233,7 +233,7 @@ describe('buildRuntimeEnvironment → ExtensionCoordinator integration', () => {
     const runtimeEnvironment = buildRuntimeEnvironment('darwin', ['node']);
     const bus = createBusInstance();
     const coordinator = new ExtensionCoordinator(bus, { runtimeEnvironment });
-    const linuxOnlyPackage: MakaioExtension = {
+    const linuxOnlyPackage: KernelMakaioExtension = {
       name: 'linux-feature',
       displayName: 'Linux Feature',
       version: '0.1.0',

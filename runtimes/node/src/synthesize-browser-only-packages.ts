@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DiscoveredExtension } from './extension-discovery.js';
 import { defaultCreateMount, type BridgeBrowserOptions } from './create-static-mount.js';
@@ -21,8 +21,8 @@ export interface SynthesizeBrowserOnlyOptions extends BridgeBrowserOptions {
  * Result returned by {@link synthesizeBrowserOnlyPackages}.
  */
 export interface SynthesizedBrowserOnlyResult {
-  /** Synthesized {@link MakaioExtension} entries for browser-only extensions. */
-  readonly packages: MakaioExtension[];
+  /** Synthesized {@link KernelMakaioExtension} entries for browser-only extensions. */
+  readonly packages: KernelMakaioExtension[];
   /**
    * Config defaults from descriptors, keyed by extension name.
    *
@@ -34,7 +34,7 @@ export interface SynthesizedBrowserOnlyResult {
 }
 
 /**
- * Synthesize MakaioExtension objects for browser-only extensions.
+ * Synthesize KernelMakaioExtension objects for browser-only extensions.
  *
  * Extensions that declare `entrypoints.browser` but not `entrypoints.server`
  * cannot be loaded by `loadExtensions` (which requires a server entry).
@@ -53,7 +53,7 @@ export function synthesizeBrowserOnlyPackages(
   options: SynthesizeBrowserOnlyOptions = {},
 ): SynthesizedBrowserOnlyResult {
   const { createMount = defaultCreateMount, frameworkVersion } = options;
-  const packages: MakaioExtension[] = [];
+  const packages: KernelMakaioExtension[] = [];
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   for (const ext of discovered) {

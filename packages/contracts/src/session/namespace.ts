@@ -1,6 +1,6 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { SessionSchemas } from './schemas.js';
 
-export const SessionNamespace = MakaioBus.registerNamespace('session', SessionSchemas);
+export const SessionNamespace = createBusNamespace('session', SessionSchemas);
 
 export const SessionSubjects = SessionNamespace.subjects;

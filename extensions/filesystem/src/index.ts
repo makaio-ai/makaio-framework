@@ -1,5 +1,6 @@
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { filesystemToolset } from './toolset.js';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
  * Filesystem tool extension.
@@ -7,7 +8,7 @@ import { filesystemToolset } from './toolset.js';
  * Contributes the `filesystem` toolset to the runtime `ToolRegistry` while
  * keeping filesystem helper APIs available for composition roots and tests.
  */
-export const filesystemPackage: MakaioExtension = {
+export const filesystemPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'filesystem',
   displayName: 'Filesystem Tools',
   version: '0.1.0',

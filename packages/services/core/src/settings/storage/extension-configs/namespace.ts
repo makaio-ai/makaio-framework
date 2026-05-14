@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 
 /** Extension configuration data model. */
 const ExtensionConfigSchema = z.object({
@@ -56,7 +56,7 @@ const ExtensionConfigSetEnabledSchema = z.object({
  * The drizzle schema extension is attached by the host-tier storage wiring,
  * not here — this file defines only the bus contract.
  */
-export const ExtensionConfigStorageNamespace = createStorageNamespace('extensionConfig', {
+export const ExtensionConfigStorageNamespace = createStorageNamespaceDefinition('extensionConfig', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),

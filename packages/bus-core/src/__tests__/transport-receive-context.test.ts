@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { createBusContext, createBusInstance } from '../index.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
 describe('transport receive context', () => {
   it('threads trusted transport context into request handlers', async () => {
     const bus = createBusInstance({ context: createBusContext() });
-    const namespace = bus.registerNamespace('receiveContextTest', {
-      read: {
-        request: z.object({ value: z.string() }),
-        response: z.object({ principalId: z.string().optional() }),
-      },
-    });
+    const namespace = bus.registerNamespace(
+      createBusNamespace('receiveContextTest', {
+        read: {
+          request: z.object({ value: z.string() }),
+          response: z.object({ principalId: z.string().optional() }),
+        },
+      }),
+    );
     const transport = new MockTransport('context-transport');
     bus.registerTransport(transport);
 
@@ -51,9 +54,11 @@ describe('transport receive context', () => {
 
   it('threads trusted transport context into event handlers', async () => {
     const bus = createBusInstance({ context: createBusContext() });
-    const namespace = bus.registerNamespace('receiveContextEventTest', {
-      changed: z.object({ value: z.string() }),
-    });
+    const namespace = bus.registerNamespace(
+      createBusNamespace('receiveContextEventTest', {
+        changed: z.object({ value: z.string() }),
+      }),
+    );
     const transport = new MockTransport('context-transport');
     bus.registerTransport(transport);
 
@@ -86,12 +91,14 @@ describe('transport receive context', () => {
 
   it('threads trusted transport context into broadcast handlers', async () => {
     const bus = createBusInstance({ context: createBusContext() });
-    const namespace = bus.registerNamespace('receiveContextBroadcastTest', {
-      collect: {
-        request: z.object({ value: z.string() }),
-        response: z.object({ principalId: z.string().optional() }),
-      },
-    });
+    const namespace = bus.registerNamespace(
+      createBusNamespace('receiveContextBroadcastTest', {
+        collect: {
+          request: z.object({ value: z.string() }),
+          response: z.object({ principalId: z.string().optional() }),
+        },
+      }),
+    );
     const transport = new MockTransport('context-transport');
     bus.registerTransport(transport);
 

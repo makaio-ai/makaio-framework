@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { text, integer, sqliteTable, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { createTempDb, createDbCleanup, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { createDrizzleCrudHandlers } from './crud-handlers.js';
 import type { DrizzleCrudConfig } from './types.js';
 
@@ -47,7 +48,7 @@ const TestEntityInputSchema = z.object({
   value: z.number().optional(),
 });
 
-const TestStorageNamespace = createStorageNamespace('test', {
+const TestStorageNamespace = createStorageNamespaceDefinition('test', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),
@@ -394,7 +395,7 @@ const ConflictTargetInputSchema = z.object({
   scope: z.string(),
 });
 
-const ConflictTargetNamespace = createStorageNamespace('conflict-target-test', {
+const ConflictTargetNamespace = createStorageNamespaceDefinition('conflict-target-test', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),
@@ -540,7 +541,7 @@ describe('createDrizzleCrudHandlers with conflictTarget', () => {
       // This proves the handler writes [idField] in the SET clause independently.
       cleanup();
 
-      const NoPkNamespace = createStorageNamespace('conflict-target-no-pk-test', {
+      const NoPkNamespace = createStorageNamespaceDefinition('conflict-target-no-pk-test', {
         schemas: {
           get: {
             request: z.object({ id: z.string() }),
@@ -670,11 +671,13 @@ describe('createDrizzleCrudHandlers with conflictTarget', () => {
 
   describe('construction-time guard', () => {
     it('throws synchronously when both conflictTarget and lifecycle are provided', () => {
-      const LifecycleEventNamespace = MakaioBus.registerNamespace('conflict-target-lifecycle-guard-test', {
-        created: ConflictTargetEntitySchema,
-        updated: ConflictTargetEntitySchema,
-        deleted: z.object({ id: z.string() }),
-      });
+      const LifecycleEventNamespace = MakaioBus.registerNamespace(
+        createBusNamespace('conflict-target-lifecycle-guard-test', {
+          created: ConflictTargetEntitySchema,
+          updated: ConflictTargetEntitySchema,
+          deleted: z.object({ id: z.string() }),
+        }),
+      );
 
       expect(() =>
         createDrizzleCrudHandlers({

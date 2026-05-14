@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { z } from 'zod';
-import { ExtensionSubjects } from '../observability/extension-namespace.js';
+import { ExtensionNamespace, ExtensionSubjects } from '../observability/extension-namespace.js';
 
 describe('ExtensionSubjects.warnings', () => {
+  beforeAll(() => {
+    MakaioBus.registerNamespace(ExtensionNamespace);
+  });
+
   describe('warnings.list subject', () => {
     it('exposes warnings.list subject', () => {
       expect(ExtensionSubjects.warnings.list).toBeDefined();

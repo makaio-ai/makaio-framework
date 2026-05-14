@@ -1,5 +1,7 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { PackageManagerService, type PackageRegistryClient } from './package-manager-service.js';
+import { PackageManagementNamespace } from './namespace.js';
 
 /**
  * Options for creating the framework package-manager runtime package.
@@ -28,12 +30,15 @@ export interface PackageManagerPackageOptions {
  * @param options - Optional package-manager dependencies.
  * @returns Runtime extension package for the package manager service.
  */
-export function createPackageManagerPackage(options: PackageManagerPackageOptions = {}): MakaioExtension {
+export function createPackageManagerPackage(
+  options: PackageManagerPackageOptions = {},
+): MakaioNodeExtension<IMakaioBus> {
   return {
     name: 'makaio.package-manager',
     displayName: 'Package Manager',
     version: '0.1.0',
     critical: true,
+    namespaces: [PackageManagementNamespace],
     create: (ctx) =>
       new PackageManagerService(ctx.bus, ctx.makaioHome, {
         registryService: options.registryService,

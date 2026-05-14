@@ -1,4 +1,5 @@
-import type { MakaioExtension, ExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { ExtensionContext, ExtensionServiceLifecycle, MakaioNodeExtension } from '@makaio/contracts/extension';
 import { resolvePackageRoot } from '@makaio/utils/package-root';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { CapabilityToken } from '@makaio/services-core';
@@ -17,7 +18,7 @@ const PACKAGE_ROOT = resolvePackageRoot(import.meta);
  * - `review_findings` tool for agent interaction with findings
  * - `review.*` bus namespace handlers (fetch, list, start, update_status, submit, sources)
  */
-export const reviewPackage: MakaioExtension = {
+export const reviewPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'review',
   displayName: 'Review Findings',
   version: '0.1.0',
@@ -35,7 +36,7 @@ export const reviewPackage: MakaioExtension = {
      * @param _ctx - Runtime extension context (reserved for config-driven toolset composition).
      * @returns Toolsets contributed by this package.
      */
-    createToolsets: (_ctx: ExtensionContext) => [reviewToolset],
+    createToolsets: (_ctx: ExtensionContext<IMakaioBus>) => [reviewToolset],
   },
 
   /**
@@ -47,7 +48,7 @@ export const reviewPackage: MakaioExtension = {
    * @param ctx - Runtime extension context with bus, getService, and config.
    * @returns Package service lifecycle.
    */
-  create(ctx: ExtensionContext): ExtensionServiceLifecycle {
+  create(ctx: ExtensionContext<IMakaioBus>): ExtensionServiceLifecycle {
     let service: ReviewFindingsService | undefined;
 
     const init = async (): Promise<void> => {

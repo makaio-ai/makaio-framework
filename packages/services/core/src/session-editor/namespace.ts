@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { SessionEditorSchemas } from './schemas.js';
 
 /**
@@ -6,7 +6,7 @@ import { SessionEditorSchemas } from './schemas.js';
  *
  * Provides subjects for session editor actions and pipeline operations.
  */
-export const SessionEditorNamespace = MakaioBus.registerNamespace('session-editor', SessionEditorSchemas);
+export const SessionEditorNamespace = createBusNamespace('session-editor', SessionEditorSchemas);
 
 /**
  * Session editor subject definitions.

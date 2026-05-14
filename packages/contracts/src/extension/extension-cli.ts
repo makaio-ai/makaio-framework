@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 import type { CliManifest } from './manifest.js';
 
 /**
@@ -18,7 +18,7 @@ export interface ExtensionCliOutputWriter {
  *
  * Runtime code provides the fully typed variant in `@makaio/kernel/cli`.
  */
-export interface ExtensionCliHandlerContext {
+export interface ExtensionCliHandlerContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Parsed and validated command arguments/options. */
   readonly args: unknown;
   /**
@@ -27,7 +27,7 @@ export interface ExtensionCliHandlerContext {
    * `null` when the bus is unavailable and the contribution's `beforeRun`
    * hook opted into offline execution.
    */
-  readonly bus: IMakaioBus | null;
+  readonly bus: TBus | null;
   /** Output channel for writing to stdout and stderr. */
   readonly output: ExtensionCliOutputWriter;
   /** Abort signal triggered when the invocation is cancelled. */
@@ -42,14 +42,14 @@ export interface ExtensionCliHandlerContext {
 /**
  * Interactive entry context stored in the contracts layer.
  */
-export interface ExtensionCliInteractiveContext {
+export interface ExtensionCliInteractiveContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /**
    * Bus client connected to the running Makaio instance.
    *
    * `null` when the bus is unavailable and the contribution's `beforeRun`
    * hook opted into bus-optional execution.
    */
-  readonly bus: IMakaioBus | null;
+  readonly bus: TBus | null;
 }
 
 /**
@@ -58,7 +58,7 @@ export interface ExtensionCliInteractiveContext {
  * See `@makaio/kernel/cli` for the full typed API including
  * `defineCliSubcommand`.
  */
-export interface ExtensionCliSubcommandEntry {
+export interface ExtensionCliSubcommandEntry<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Subcommand name. */
   readonly name: string;
   /** One-line description shown in help text. */
@@ -66,19 +66,19 @@ export interface ExtensionCliSubcommandEntry {
   /** Minimal parse-only schema contract kept free of runtime Zod APIs. */
   readonly schema: { parse(v: unknown): unknown };
   /** Handler invoked with the type-erased CLI execution context. */
-  readonly handler: (ctx: ExtensionCliHandlerContext) => Promise<void>;
+  readonly handler: (ctx: ExtensionCliHandlerContext<TBus>) => Promise<void>;
 }
 
 /**
  * Type-erased context for the {@link ExtensionCliContribution.beforeRun} gate.
  */
-export interface ExtensionCliBeforeRunContext {
+export interface ExtensionCliBeforeRunContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Subcommand name, or `'__interactive__'` for bare interactive invocations. */
   readonly subcommandName: string;
   /** Parsed and validated arguments for the subcommand. */
   readonly args: Record<string, unknown>;
   /** Bus client, or `null` when the server is unreachable. */
-  readonly bus: IMakaioBus | null;
+  readonly bus: TBus | null;
 }
 
 /**
@@ -94,19 +94,19 @@ export type ExtensionCliBeforeRunResult =
  * Full implementation types live in `@makaio/kernel/cli`. This contract
  * keeps the extension layer on the executable shape only.
  */
-export interface ExtensionCliContribution extends CliManifest {
+export interface ExtensionCliContribution<TBus extends MakaioBusLike = MakaioBusLike> extends CliManifest {
   /**
    * Interactive TUI launched when the command is invoked without a subcommand.
    */
-  readonly interactive?: (ctx: ExtensionCliInteractiveContext) => Promise<void>;
+  readonly interactive?: (ctx: ExtensionCliInteractiveContext<TBus>) => Promise<void>;
   /** Declared subcommands exposed by this contribution. */
-  readonly subcommands: ReadonlyArray<ExtensionCliSubcommandEntry>;
+  readonly subcommands: ReadonlyArray<ExtensionCliSubcommandEntry<TBus>>;
   /**
    * Pre-execution gate that replaces the default bus-required check.
    * @param context - Subcommand name, parsed args, and bus availability.
    * @returns Whether to proceed or block with a message.
    */
   readonly beforeRun?: (
-    context: ExtensionCliBeforeRunContext,
+    context: ExtensionCliBeforeRunContext<TBus>,
   ) => ExtensionCliBeforeRunResult | Promise<ExtensionCliBeforeRunResult>;
 }

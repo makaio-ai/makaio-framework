@@ -1,11 +1,11 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ReviewSchemas } from './schemas.js';
 
 /**
  * Review namespace for MakaioBus.
  *
- * Registers the review capability subjects with the bus for type-safe
- * request/response handling.
+ * Defines review capability subjects for explicit registration by composition
+ * roots.
  * @example
  * ```typescript
  * import { ReviewSubjects } from '@makaio/contracts';
@@ -17,7 +17,7 @@ import { ReviewSchemas } from './schemas.js';
  * const { findings } = await ReviewSubjects['findings.list']({ target });
  * ```
  */
-export const ReviewNamespace = MakaioBus.registerNamespace('review', ReviewSchemas);
+export const ReviewNamespace = createBusNamespace('review', ReviewSchemas);
 
 /**
  * Type-safe subjects for review operations.

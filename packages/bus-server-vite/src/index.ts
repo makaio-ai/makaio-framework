@@ -61,7 +61,10 @@ export interface ViteBusServerPluginOptions {
    * Only the host-configurable subset of {@link BootMakaioRuntimeOptions} is
    * exposed here. Transport, auth, and surface are owned by the plugin.
    */
-  runtimeOptions?: Pick<BootMakaioRuntimeOptions, 'discovery' | 'frameworkVersion' | 'hostCapabilities'>;
+  runtimeOptions?: Pick<
+    BootMakaioRuntimeOptions,
+    'discovery' | 'frameworkVersion' | 'hostCapabilities' | 'hostNamespaces'
+  >;
 }
 
 /**
@@ -74,11 +77,12 @@ export function createViteRuntimeBootOptions(options: {
   readonly auth?: HmacAuth;
   readonly runtimeOptions?: ViteBusServerPluginOptions['runtimeOptions'];
 }): BootMakaioRuntimeOptions {
-  const { discovery, frameworkVersion, hostCapabilities } = options.runtimeOptions ?? {};
+  const { discovery, frameworkVersion, hostCapabilities, hostNamespaces } = options.runtimeOptions ?? {};
 
   return {
     ...(discovery !== undefined ? { discovery } : {}),
     ...(frameworkVersion !== undefined ? { frameworkVersion } : {}),
+    ...(hostNamespaces !== undefined ? { hostNamespaces } : {}),
     httpServer: options.httpServer,
     auth: options.auth,
     loopbackName: 'vite',

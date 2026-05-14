@@ -1,5 +1,5 @@
-import type { MakaioExtension } from '@makaio/contracts';
 import { versionSatisfies } from '@makaio/contracts';
+import type { KernelMakaioExtension } from './types.js';
 
 /**
  * Topological sort using Kahn's algorithm.
@@ -11,7 +11,7 @@ import { versionSatisfies } from '@makaio/contracts';
  *   dependency is missing from the loaded set, or a circular dependency
  *   is detected
  */
-export function topoSort(packages: ReadonlyArray<MakaioExtension>): string[] {
+export function topoSort(packages: ReadonlyArray<KernelMakaioExtension>): string[] {
   const nodes = collectUniqueNames(packages);
   const byName = new Map(packages.map((pkg) => [pkg.name, pkg] as const));
 
@@ -28,7 +28,7 @@ export function topoSort(packages: ReadonlyArray<MakaioExtension>): string[] {
  * @param packages - Extensions to inspect.
  * @returns Unique package names.
  */
-function collectUniqueNames(packages: ReadonlyArray<MakaioExtension>): Set<string> {
+function collectUniqueNames(packages: ReadonlyArray<KernelMakaioExtension>): Set<string> {
   const nodes = new Set<string>();
   for (const p of packages) {
     if (nodes.has(p.name)) {
@@ -46,9 +46,9 @@ function collectUniqueNames(packages: ReadonlyArray<MakaioExtension>): Set<strin
  * @param byName - Loaded packages keyed by name.
  */
 function validateDependencies(
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   nodes: ReadonlySet<string>,
-  byName: ReadonlyMap<string, MakaioExtension>,
+  byName: ReadonlyMap<string, KernelMakaioExtension>,
 ): void {
   for (const p of packages) {
     validatePackageDependencies(p, nodes, byName);
@@ -62,9 +62,9 @@ function validateDependencies(
  * @param byName - Loaded packages keyed by name.
  */
 function validatePackageDependencies(
-  pkg: MakaioExtension,
+  pkg: KernelMakaioExtension,
   nodes: ReadonlySet<string>,
-  byName: ReadonlyMap<string, MakaioExtension>,
+  byName: ReadonlyMap<string, KernelMakaioExtension>,
 ): void {
   const dependencies = pkg.dependencies ?? [];
   const missing = dependencies.filter((dep) => !dep.optional && !nodes.has(dep.name));
@@ -93,7 +93,7 @@ function validatePackageDependencies(
  * @returns Map from package name to unresolved dependency names.
  */
 function buildRemainingDependencyMap(
-  packages: ReadonlyArray<MakaioExtension>,
+  packages: ReadonlyArray<KernelMakaioExtension>,
   nodes: ReadonlySet<string>,
 ): Map<string, Set<string>> {
   const remainingDeps = new Map<string, Set<string>>();

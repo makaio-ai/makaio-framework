@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 /**
  * OpenCode Package.
  *
@@ -10,7 +11,7 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { OpenCodeLogImporter } from './importer.js';
 
 /**
@@ -19,7 +20,7 @@ import { OpenCodeLogImporter } from './importer.js';
  * Declares log import capability for OpenCode.
  * No storage, triggers, tools, or UI — just log import.
  */
-export const opencodePackage: MakaioExtension = {
+export const opencodePackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'opencode',
   displayName: 'OpenCode',
   version: '0.1.0',
@@ -46,7 +47,7 @@ export const opencodePackage: MakaioExtension = {
   },
 };
 
-// Default exports stay on the MakaioExtension contract.
+// Default exports stay on the MakaioNodeExtension<IMakaioBus> contract.
 export default opencodePackage;
 
 // Public API exports

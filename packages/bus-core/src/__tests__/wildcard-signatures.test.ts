@@ -10,16 +10,19 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 // Register test subjects
-const { subjects: _TestSubjects } = MakaioBus.registerNamespace('wildcardSignatureTest', {
-  log: z.object({ message: z.string() }),
-  error: z.object({ error: z.string() }),
-  getInfo: {
-    request: z.object({ id: z.string() }),
-    response: z.object({ data: z.string() }),
-  },
-});
+const { subjects: _TestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('wildcardSignatureTest', {
+    log: z.object({ message: z.string() }),
+    error: z.object({ error: z.string() }),
+    getInfo: {
+      request: z.object({ id: z.string() }),
+      response: z.object({ data: z.string() }),
+    },
+  }),
+);
 
 // Augment BusSubjectsNamespace
 declare module '../index.js' {

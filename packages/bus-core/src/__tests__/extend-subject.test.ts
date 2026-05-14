@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 
 describe('MakaioBus.extendSubject()', () => {
   beforeEach(() => {
@@ -10,12 +11,14 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('request subjects', () => {
     it('extends request payload with additional fields', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubReq', {
-        list: {
-          request: z.object({ limit: z.number().optional() }),
-          response: z.object({ items: z.array(z.string()), total: z.number() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubReq', {
+          list: {
+            request: z.object({ limit: z.number().optional() }),
+            response: z.object({ items: z.array(z.string()), total: z.number() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.list, {
         request: { projectId: z.string().optional() },
@@ -34,12 +37,14 @@ describe('MakaioBus.extendSubject()', () => {
     });
 
     it('passes validation with extended fields in dev mode', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubVal', {
-        get: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ name: z.string() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubVal', {
+          get: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ name: z.string() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.get, {
         request: { includeArchived: z.boolean().optional() },
@@ -55,12 +60,14 @@ describe('MakaioBus.extendSubject()', () => {
     });
 
     it('original subject still works without extended fields', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubOrig', {
-        get: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ name: z.string() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubOrig', {
+          get: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ name: z.string() }),
+          },
+        }),
+      );
 
       MakaioBus.extendSubject(subjects.get, {
         request: { projectId: z.string().optional() },
@@ -76,12 +83,14 @@ describe('MakaioBus.extendSubject()', () => {
     });
 
     it('extends response payload', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubResp', {
-        query: {
-          request: z.object({ q: z.string() }),
-          response: z.object({ hits: z.number() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubResp', {
+          query: {
+            request: z.object({ q: z.string() }),
+            response: z.object({ hits: z.number() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.query, {
         response: { debugInfo: z.string().optional() },
@@ -98,9 +107,11 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('event subjects', () => {
     it('extends event payload with additional fields', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubEvt', {
-        happened: z.object({ source: z.string() }),
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubEvt', {
+          happened: z.object({ source: z.string() }),
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.happened, {
         projectId: z.string().optional(),
@@ -122,12 +133,14 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('successive extensions', () => {
     it('accumulates fields from multiple extendSubject calls', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubMulti', {
-        list: {
-          request: z.object({ limit: z.number().optional() }),
-          response: z.object({ items: z.array(z.string()) }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubMulti', {
+          list: {
+            request: z.object({ limit: z.number().optional() }),
+            response: z.object({ items: z.array(z.string()) }),
+          },
+        }),
+      );
 
       // First extension adds projectId
       const withProject = MakaioBus.extendSubject(subjects.list, {
@@ -153,12 +166,14 @@ describe('MakaioBus.extendSubject()', () => {
     });
 
     it('higher-priority handler with extended subject delegates to default handler via next()', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubFw', {
-        list: {
-          request: z.object({ limit: z.number().optional(), status: z.string().optional() }),
-          response: z.object({ count: z.number() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubFw', {
+          list: {
+            request: z.object({ limit: z.number().optional(), status: z.string().optional() }),
+            response: z.object({ count: z.number() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.list, {
         request: { projectId: z.string().optional() },
@@ -198,12 +213,14 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('schema validation', () => {
     it('without extendSubject, only declared fields reach the handler', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubStrip', {
-        get: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ name: z.string() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubStrip', {
+          get: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ name: z.string() }),
+          },
+        }),
+      );
 
       let receivedPayload: Record<string, unknown> = {};
       MakaioBus.on(subjects.get, (ctx) => {
@@ -217,12 +234,14 @@ describe('MakaioBus.extendSubject()', () => {
     });
 
     it('with extendSubject, extended fields survive Zod validation', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubSurvive', {
-        get: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ name: z.string() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubSurvive', {
+          get: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ name: z.string() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.get, {
         request: { projectId: z.string().optional() },
@@ -241,12 +260,14 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('error handling', () => {
     it('throws when extending an unregistered subject', () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubErr', {
-        real: {
-          request: z.object({ id: z.string() }),
-          response: z.object({ ok: z.boolean() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubErr', {
+          real: {
+            request: z.object({ id: z.string() }),
+            response: z.object({ ok: z.boolean() }),
+          },
+        }),
+      );
 
       // Reset namespaces so the subject is no longer registered
       MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
@@ -259,12 +280,14 @@ describe('MakaioBus.extendSubject()', () => {
 
   describe('routing identity', () => {
     it('extended subject routes to the same bus subject as the original', async () => {
-      const { subjects } = MakaioBus.registerNamespace('extSubRoute', {
-        ping: {
-          request: z.object({ msg: z.string() }),
-          response: z.object({ pong: z.string() }),
-        },
-      });
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRoute', {
+          ping: {
+            request: z.object({ msg: z.string() }),
+            response: z.object({ pong: z.string() }),
+          },
+        }),
+      );
 
       const extended = MakaioBus.extendSubject(subjects.ping, {
         request: { tag: z.string().optional() },

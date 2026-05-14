@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ExtensionEntrypoints, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionEntrypoints } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { attachExtensionCliContributions, loadExtensions, isWithinDirectory } from '../load-extensions.js';
@@ -12,10 +13,10 @@ const FRAMEWORK_VERSION = '3.0.0';
 let fixtureRoot: string | undefined;
 
 /**
- * Minimal valid MakaioExtension fixture.
+ * Minimal valid KernelMakaioExtension fixture.
  * @param name - Package name used as both `name` and `displayName` base.
  */
-const makePackage = (name: string): MakaioExtension => ({
+const makePackage = (name: string): KernelMakaioExtension => ({
   name,
   displayName: `${name} Display`,
   version: '0.1.0',
@@ -689,6 +690,27 @@ describe('attachExtensionCliContributions', () => {
       name: 'test-ext',
       subcommands: [expect.objectContaining({ name: 'doctor', description: 'test-ext CLI doctor' })],
     });
+  });
+
+  it('allows descriptor CLI command name to differ from extension package name', async () => {
+    const basePackage = makePackage('client-hooks');
+    const ext = makeExtension({
+      descriptorOverrides: {
+        name: 'client-hooks',
+        displayName: 'Client Hook Bridge',
+        entrypoints: { server: true as const, cli: true as const },
+        cli: { name: 'hook', description: 'Bridge client hook events to the bus' },
+      },
+    });
+
+    const result = await attachExtensionCliContributions([ext], [basePackage], {
+      frameworkVersion: FRAMEWORK_VERSION,
+      importModule: async () => ({ default: makeCliContribution('hook') }),
+    });
+
+    expect(result.packages).toHaveLength(1);
+    expect(result.packages[0]?.cli).toMatchObject({ name: 'hook' });
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('synthesizes a CLI-only package when no server entry exists', async () => {

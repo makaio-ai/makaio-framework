@@ -1,12 +1,11 @@
 /**
- * Boot bus namespace registration.
+ * Boot bus namespace definition.
  *
- * Registers the `kernel:boot` namespace with typed event schemas for
- * service lifecycle and boot progress observability.
- * Import this module to ensure the namespace is registered before use.
+ * Defines the `kernel:boot` namespace with typed event schemas for service
+ * lifecycle and boot progress observability. Composition roots register the
+ * namespace explicitly before use.
  */
-import { MakaioBus } from '@makaio/bus-core';
-import type { SchemaRecord } from '@makaio/core';
+import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { z } from 'zod';
 
 /** Shared identity fields emitted in all per-service lifecycle events. */
@@ -137,7 +136,7 @@ const BootSchemas = {
 /**
  * Boot namespace for bus operations.
  */
-export const BootNamespace = MakaioBus.registerNamespace('kernel:boot', BootSchemas);
+export const BootNamespace = createBusNamespace('kernel:boot', BootSchemas);
 
 /**
  * Boot subjects for type-safe bus operations.

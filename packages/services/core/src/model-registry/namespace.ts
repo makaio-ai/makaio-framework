@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ModelRegistrySchemas } from './schemas.js';
 
 /**
@@ -33,7 +33,7 @@ import { ModelRegistrySchemas } from './schemas.js';
  * });
  * ```
  */
-export const ModelRegistryNamespace = MakaioBus.registerNamespace('modelRegistry', ModelRegistrySchemas);
+export const ModelRegistryNamespace = createBusNamespace('modelRegistry', ModelRegistrySchemas);
 
 /**
  * Pre-extracted subjects for direct import.

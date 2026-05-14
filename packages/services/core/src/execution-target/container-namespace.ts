@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import type { SchemaRecord } from '@makaio/core';
 import {
   SpawnRequestSchema,
@@ -35,7 +35,7 @@ const DockerSchemas = {
 /**
  * Canonical Docker namespace.
  */
-export const DockerNamespace = MakaioBus.registerNamespace('docker', DockerSchemas);
+export const DockerNamespace = createBusNamespace('docker', DockerSchemas);
 
 /**
  * Typed Docker subjects.

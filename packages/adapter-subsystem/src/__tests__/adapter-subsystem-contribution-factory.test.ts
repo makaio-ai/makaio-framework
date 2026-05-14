@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AdapterContribution, NodeExtensionContext as ExtensionContext, MakaioExtension } from '@makaio/contracts';
+import { createBusInstance } from '@makaio/bus-core';
+import type { AdapterContribution } from '@makaio/contracts';
+import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createAdapterSubsystemContributionProcessor } from '../adapter-subsystem-contribution-factory.js';
 import type { AdapterSubsystemService } from '../adapter-subsystem-service.js';
 
@@ -31,7 +33,7 @@ const TEST_ADAPTER_CONTRIBUTION = {
 } satisfies AdapterContribution;
 
 /** Minimal extension manifest that satisfies the adapter filter. */
-const PKG_WITH_ADAPTERS: MakaioExtension = {
+const PKG_WITH_ADAPTERS: KernelMakaioExtension = {
   name: 'test-adapter-pkg',
   displayName: 'Test Adapter Package',
   version: '0.1.0',
@@ -39,9 +41,9 @@ const PKG_WITH_ADAPTERS: MakaioExtension = {
 };
 
 /** Minimal extension context stub. */
-const STUB_CTX: ExtensionContext = {
-  bus: {} as ExtensionContext['bus'],
-  identity: Object.freeze({ extensionName: 'test-adapter-pkg' }) as ExtensionContext['identity'],
+const STUB_CTX: KernelExtensionContext = {
+  bus: createBusInstance(),
+  identity: Object.freeze({ extensionName: 'test-adapter-pkg' }) as KernelExtensionContext['identity'],
   platform: process.platform,
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',
@@ -70,7 +72,7 @@ describe('createAdapterSubsystemContributionProcessor', () => {
         getAdapterSubsystemService: () => undefined,
       });
 
-      const pkgWithoutAdapters: MakaioExtension = {
+      const pkgWithoutAdapters: KernelMakaioExtension = {
         name: 'no-adapters',
         displayName: 'No Adapters',
         version: '0.1.0',
@@ -83,7 +85,7 @@ describe('createAdapterSubsystemContributionProcessor', () => {
         getAdapterSubsystemService: () => undefined,
       });
 
-      const pkgEmptyAdapters: MakaioExtension = {
+      const pkgEmptyAdapters: KernelMakaioExtension = {
         name: 'empty-adapters',
         displayName: 'Empty Adapters',
         version: '0.1.0',

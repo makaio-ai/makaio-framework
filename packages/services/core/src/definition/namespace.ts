@@ -1,5 +1,5 @@
 /**
- * Definition namespace registration — has side effects (registers on the bus).
+ * Definition namespace definition.
  *
  * Provides bus subjects for querying JSON Schema descriptions of a
  * provider definition's config and credential fields.  The definition ID
@@ -8,7 +8,8 @@
  *
  * Prefix: `definition.`
  *
- * For pure Zod schemas without side effects, import `./schemas` instead.
+ * Import `./schemas` when only pure Zod schemas are needed. Composition roots
+ * register this namespace explicitly.
  * @example
  * ```typescript
  * // Get the config JSON Schema for a definition
@@ -20,11 +21,11 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { DefinitionSchemas } from './schemas.js';
 
-/** Provider definition introspection namespace registered under the `definition` prefix. */
-export const DefinitionNamespace = MakaioBus.registerNamespace('definition', DefinitionSchemas);
+/** Provider definition introspection namespace under the `definition` prefix. */
+export const DefinitionNamespace = createBusNamespace('definition', DefinitionSchemas);
 
 /** Pre-extracted definition bus subjects for direct import. */
 export const DefinitionSubjects = DefinitionNamespace.subjects;

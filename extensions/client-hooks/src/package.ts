@@ -7,7 +7,8 @@
  * @packageDocumentation
  */
 
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { clientHooksCli } from './cli/index.js';
 
 /**
@@ -17,7 +18,7 @@ import { clientHooksCli } from './cli/index.js';
  * requirements. It exposes the `hook` command that any native client tool can
  * invoke to forward hook events into the bus.
  */
-export const clientHooksPackage: MakaioExtension = {
+export const clientHooksPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'client-hooks',
   displayName: 'Client Hook Bridge',
   version: '0.1.0',

@@ -1,12 +1,6 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
-import type {
-  MakaioExtension,
-  ExtensionService,
-  ExtensionToken,
-  NodeExtensionContext,
-  TrayManifest,
-} from '@makaio/contracts';
+import type { ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import type { CliContribution } from '../cli/types.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
@@ -24,6 +18,8 @@ import type {
   ExtensionCoordinatorOptions,
   ExtensionEntry,
   ExtensionRuntimeSurface,
+  KernelExtensionContext,
+  KernelMakaioExtension,
   RuntimeEnvironment,
 } from './types.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
@@ -71,7 +67,7 @@ export class ExtensionCoordinator {
   private readonly surface: ExtensionRuntimeSurface;
   private readonly db: unknown;
   private readonly extensionContextBase:
-    | Omit<NodeExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
+    | Omit<KernelExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
     | undefined;
   private readonly runtimeEnvironment: RuntimeEnvironment | undefined;
 
@@ -191,7 +187,7 @@ export class ExtensionCoordinator {
    *   or if dependency sorting fails.
    */
   public load(
-    packages: ReadonlyArray<MakaioExtension>,
+    packages: ReadonlyArray<KernelMakaioExtension>,
     configDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
   ): void {
     if (this.loaded) {
@@ -219,7 +215,12 @@ export class ExtensionCoordinator {
         const defaults = configDefaults.get(name);
         if (defaults) entry.configDefaults = defaults;
       }
+      // Namespace definitions are static package surface. Register them during
+      // load so activation and re-enable lifecycles cannot fail on registration.
       this.entries.set(name, entry);
+      if (pkg.namespaces) {
+        this.bus.registerNamespaces(pkg.namespaces);
+      }
       collectExtensionSurfaces(
         {
           windowRegistry: this.windowRegistry,
@@ -361,7 +362,7 @@ export class ExtensionCoordinator {
    * @param name - Extension name.
    * @returns The extension, or `undefined` if not loaded.
    */
-  public getExtension(name: string): MakaioExtension | undefined {
+  public getExtension(name: string): KernelMakaioExtension | undefined {
     return this.entries.get(name)?.pkg;
   }
 
@@ -374,7 +375,7 @@ export class ExtensionCoordinator {
    *   and a per-extension `NodeExtensionContext`.
    */
   public forEachActiveExtension(
-    callback: (name: string, pkg: MakaioExtension, ctx: NodeExtensionContext) => void,
+    callback: (name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) => void,
   ): void {
     const contextHost = this.createExtensionContextHost();
     for (const name of this.loadOrder) {
@@ -398,7 +399,7 @@ export class ExtensionCoordinator {
    */
   public forExtension(
     name: string,
-    callback: (name: string, pkg: MakaioExtension, ctx: NodeExtensionContext) => void,
+    callback: (name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) => void,
   ): void {
     const entry = this.entries.get(name);
     if (!entry || entry.state !== 'active') return;

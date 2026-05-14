@@ -1,4 +1,4 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioBusLike } from '@makaio/core';
 
 /** Pipeline stage a hash trigger participates in. */
 export type HashTriggerStage = 'gather' | 'transform' | 'action';
@@ -39,8 +39,11 @@ export interface GatheredContext {
   entries: ReadonlyMap<string, GatheredEntry>;
 }
 
-/** Context passed to a hash trigger's suggest and execute methods. */
-export interface HashTriggerContext {
+/**
+ * Context passed to a hash trigger's suggest and execute methods.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
+ */
+export interface HashTriggerContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Active session identifier, if any. */
   sessionId?: string;
   /** Active project identifier, if any. */
@@ -48,7 +51,7 @@ export interface HashTriggerContext {
   /** Current message text. */
   message?: string;
   /** Bus instance for trigger operations. */
-  bus: IMakaioBus;
+  bus: TBus;
   /** Optional abort signal for cancellable operations. */
   signal?: AbortSignal;
   /** Entries gathered by earlier gather-stage triggers. */
@@ -86,8 +89,9 @@ export interface HashTriggerSuggestResult {
  * Implement this interface and return instances from
  * `MakaioExtension.triggers.createTriggers` so the runtime registers them
  * with the HashTriggerService.
+ * @typeParam TBus - Host bus shape supplied by the runtime.
  */
-export interface HashTrigger {
+export interface HashTrigger<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Static descriptor used for registration and pipeline ordering. */
   metadata: HashTriggerMetadata;
   /**
@@ -96,7 +100,7 @@ export interface HashTrigger {
    * @param context - Runtime context for this suggestion request.
    * @returns Suggestion list with optional pagination metadata.
    */
-  suggest(query: string, context: HashTriggerContext): Promise<HashTriggerSuggestResult>;
+  suggest(query: string, context: HashTriggerContext<TBus>): Promise<HashTriggerSuggestResult>;
   /**
    * Execute the selected value (optional).
    *
@@ -105,5 +109,5 @@ export interface HashTrigger {
    * @param context - Runtime context for this execution.
    * @returns Resolved content string inserted into the message.
    */
-  execute?(value: string, context: HashTriggerContext): Promise<string>;
+  execute?(value: string, context: HashTriggerContext<TBus>): Promise<string>;
 }

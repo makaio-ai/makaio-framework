@@ -11,11 +11,8 @@
     "./extension-validation": "./src/extension-validation.ts",
     "./makaio-config": "./src/makaio-config.ts",
     "./runtime/schemas": "./src/bus/runtime/schemas.ts",
-    "./runtime/register": "./src/bus/runtime/namespace.ts"
+    "./runtime/namespace": "./src/bus/runtime/namespace.ts"
   },
-  "sideEffects": [
-    "./src/bus/runtime/namespace.ts"
-  ],
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@makaio/adapter-subsystem": "workspace:*",
@@ -26,6 +23,7 @@
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/clients-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/machine-identity": "workspace:*",
     "@makaio/mcp-http-server": "workspace:*",

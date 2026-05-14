@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ExtensionEntrypoints, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionEntrypoints } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { bridgeExtensionBrowserEntries } from '../bridge-extension-browser-entries.js';
 
@@ -11,14 +12,14 @@ import { bridgeExtensionBrowserEntries } from '../bridge-extension-browser-entri
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal valid {@link MakaioExtension} fixture.
+ * Minimal valid {@link KernelMakaioExtension} fixture.
  * @param name - Package name used as both `name` and `displayName` base.
  * @param overrides - Optional fields merged into the package.
  */
 // Test fixtures are intentionally co-located rather than shared with
 // synthesize-browser-only-packages.test.ts — each suite's helpers are
 // semantically distinct and inline keeps intent transparent.
-const makePackage = (name: string, overrides: Partial<MakaioExtension> = {}): MakaioExtension => ({
+const makePackage = (name: string, overrides: Partial<KernelMakaioExtension> = {}): KernelMakaioExtension => ({
   name,
   displayName: `${name} Display`,
   version: '0.1.0',
@@ -242,7 +243,7 @@ describe('bridgeExtensionBrowserEntries', () => {
 
   it('does not mutate the input packages array', () => {
     const pkg = makePackage('my-ext');
-    const input: MakaioExtension[] = [pkg];
+    const input: KernelMakaioExtension[] = [pkg];
     const discovered = makeDiscovered('my-ext', 'browser/index');
 
     bridgeExtensionBrowserEntries([discovered], input, {

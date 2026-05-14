@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { useEffectGuard } from '../hooks/use-effect-guard.js';
 

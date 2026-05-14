@@ -1,5 +1,6 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { AUTO_LAUNCH_CAPABILITY_ID, CapabilitySubjects, registerAutoLaunchProvider } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 import {
   MacOSAutoLaunchProvider,
   resolveMacOSAutoLaunchTarget,
@@ -23,7 +24,7 @@ export interface PlatformMacOSPackageOptions {
  * @param options - Host-owned platform capability policy.
  * @returns A Darwin-gated Makaio extension.
  */
-export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions = {}): MakaioExtension {
+export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions = {}): MakaioNodeExtension<IMakaioBus> {
   return {
     name: 'platform-macos',
     displayName: 'Platform: macOS',
@@ -66,4 +67,4 @@ export function createPlatformMacOSPackage(options: PlatformMacOSPackageOptions 
  *
  * Gated to macOS via `requires: [{ type: 'host', id: 'darwin' }]`.
  */
-export const platformMacOSPackage: MakaioExtension = createPlatformMacOSPackage();
+export const platformMacOSPackage: MakaioNodeExtension<IMakaioBus> = createPlatformMacOSPackage();

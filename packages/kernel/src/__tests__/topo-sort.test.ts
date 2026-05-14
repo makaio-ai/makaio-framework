@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { ExtensionDependency, MakaioExtension } from '@makaio/contracts';
+import type { ExtensionDependency } from '@makaio/contracts';
+import type { KernelMakaioExtension } from '../extension/types.js';
 import { topoSort } from '../extension/topo-sort.js';
 
 /**
@@ -18,7 +19,7 @@ function dep(name: string, version = '>=0.1.0'): ExtensionDependency {
  * @param dependencies - Optional declared structured dependencies.
  * @param version - Package version.
  */
-function makePackage(name: string, dependencies?: ExtensionDependency[], version = '1.0.0'): MakaioExtension {
+function makePackage(name: string, dependencies?: ExtensionDependency[], version = '1.0.0'): KernelMakaioExtension {
   return { name, displayName: name, version, ...(dependencies ? { dependencies } : {}) };
 }
 

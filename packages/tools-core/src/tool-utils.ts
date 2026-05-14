@@ -32,7 +32,7 @@ export function validateSessionId(
  * @param payload - Event payload matching the subject's schema
  * @example
  * ```typescript
- * import { TaskSubjects } from '@makaio/tools-tasks/register';
+ * import { TaskSubjects } from '@makaio/tools-tasks/subjects';
  *
  * await emitEvent(context, TaskSubjects.created, {
  *   taskId: '123',

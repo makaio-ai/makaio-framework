@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { SkillRecordInputSchema, SkillRecordSchema, SkillQuerySchema, type SkillRecordInput } from './schemas.js';
 
 /**
@@ -8,7 +8,7 @@ import { SkillRecordInputSchema, SkillRecordSchema, SkillQuerySchema, type Skill
  * Discovery remains internal to the platform skill service. These subjects only
  * expose persistence for explicit database-backed records.
  */
-export const SkillStorageNamespace = createStorageNamespace('skill', {
+export const SkillStorageNamespace = createContractStorageNamespace('skill', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),

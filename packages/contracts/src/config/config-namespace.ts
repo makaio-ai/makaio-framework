@@ -1,9 +1,9 @@
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ConfigSchemas } from './config-subjects.js';
 
 /**
- * Config namespace registration.
- * Registers the 'config' namespace with the bus.
+ * Config namespace definition.
+ * Defines the `config` subjects for explicit registration by composition roots.
  * @example
  * ```typescript
  * // Get current config
@@ -14,7 +14,7 @@ import { ConfigSchemas } from './config-subjects.js';
  * await bus.request(ConfigSubjects.update, { config: newConfig });
  * ```
  */
-export const ConfigNamespace = MakaioBus.registerNamespace('config', ConfigSchemas);
+export const ConfigNamespace = createBusNamespace('config', ConfigSchemas);
 
 /**
  * Config subjects for type-safe bus communication.

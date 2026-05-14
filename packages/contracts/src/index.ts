@@ -571,6 +571,7 @@ export type {
   HashTriggerSuggestResult,
   LoaderContext,
   MakaioExtension,
+  MakaioNodeExtension,
   MakaioWebUiActions,
   MakaioWebUiComponentProps,
   MakaioWebUiRoute,
@@ -686,3 +687,4 @@ export {
 // barrel to avoid adding another namespace registration side effect
 // — the root barrel already pulls in some (config, session) but we
 // are not making that worse.
+export { FrameworkContractNamespaces, FrameworkStorageNamespaces } from './namespace-catalog.js';

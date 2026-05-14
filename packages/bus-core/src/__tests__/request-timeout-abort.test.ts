@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, type BusMessage, type BusRequestMessage, type BusTransport } from '../index.js';
 
 class PendingRequestTransport implements BusTransport {
@@ -34,12 +35,14 @@ class PendingRequestTransport implements BusTransport {
   }
 }
 
-const { subjects: RequestTimeoutSubjects } = MakaioBus.registerNamespace('requestTimeoutAbort', {
-  wait: {
-    request: z.object({ value: z.string() }),
-    response: z.object({ ok: z.boolean() }),
-  },
-});
+const { subjects: RequestTimeoutSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('requestTimeoutAbort', {
+    wait: {
+      request: z.object({ value: z.string() }),
+      response: z.object({ ok: z.boolean() }),
+    },
+  }),
+);
 
 declare module '../index.js' {
   interface BusTransportRegistry {

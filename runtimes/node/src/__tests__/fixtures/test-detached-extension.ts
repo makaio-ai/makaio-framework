@@ -15,14 +15,31 @@
 
 import { createBusInstance } from '@makaio/bus-core';
 import { StdioClientTransport } from '@makaio/bus-transport-stdio';
+import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 
 const transport = new StdioClientTransport({ name: 'test-detached-child' });
 const bus = createBusInstance({ transports: [transport] });
 
-const { subjects: LifecycleSubjects } = bus.registerNamespace('extension.test-detached', {
-  init: {
-    request: z.object({
+const { subjects: LifecycleSubjects } = bus.registerNamespace(
+  createBusNamespace('extension.test-detached', {
+    init: {
+      request: z.object({
+        config: z.unknown().optional(),
+        context: z
+          .object({
+            dataDir: z.string().optional(),
+            machineId: z.string().optional(),
+            makaioHome: z.string().optional(),
+            platform: z.string().optional(),
+            username: z.string().optional(),
+          })
+          .optional(),
+      }),
+      response: z.object({ ready: z.boolean() }),
+    },
+    ready: z.object({
+      ready: z.boolean(),
       config: z.unknown().optional(),
       context: z
         .object({
@@ -34,32 +51,20 @@ const { subjects: LifecycleSubjects } = bus.registerNamespace('extension.test-de
         })
         .optional(),
     }),
-    response: z.object({ ready: z.boolean() }),
-  },
-  ready: z.object({
-    ready: z.boolean(),
-    config: z.unknown().optional(),
-    context: z
-      .object({
-        dataDir: z.string().optional(),
-        machineId: z.string().optional(),
-        makaioHome: z.string().optional(),
-        platform: z.string().optional(),
-        username: z.string().optional(),
-      })
-      .optional(),
+    destroy: {
+      request: z.object({ reason: z.string().optional() }),
+      response: z.object({ stopped: z.boolean() }),
+    },
+    stopped: z.object({ stopped: z.boolean() }),
   }),
-  destroy: {
-    request: z.object({ reason: z.string().optional() }),
-    response: z.object({ stopped: z.boolean() }),
-  },
-  stopped: z.object({ stopped: z.boolean() }),
-});
+);
 
-const { subjects: TestSubjects } = bus.registerNamespace('test', {
-  ping: z.object({ hello: z.string() }),
-  pingEcho: z.object({ hello: z.string(), echoed: z.boolean() }),
-});
+const { subjects: TestSubjects } = bus.registerNamespace(
+  createBusNamespace('test', {
+    ping: z.object({ hello: z.string() }),
+    pingEcho: z.object({ hello: z.string(), echoed: z.boolean() }),
+  }),
+);
 
 bus.on(LifecycleSubjects.init, async (request) => {
   await bus.emit(LifecycleSubjects.ready, {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { SessionMessageSchema, SessionMessageBlockSchema, SessionMessageOriginSchema } from './schemas/message.js';
 
 /**
@@ -34,7 +34,7 @@ export type MessagePageCursor = z.infer<typeof MessagePageCursorSchema>;
  * const { results } = await bus.request(MessageStorageSubjects.ftsSearch, { query: 'auth' });
  * ```
  */
-export const MessageStorageNamespace = createStorageNamespace('message', {
+export const MessageStorageNamespace = createContractStorageNamespace('message', {
   schemas: {
     /**
      * Append a message to a turn.

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { ContextRuleInputSchema, ContextRuleListQuerySchema, ContextRuleSchema } from './schemas.js';
 
 /**
@@ -9,7 +9,7 @@ import { ContextRuleInputSchema, ContextRuleListQuerySchema, ContextRuleSchema }
  * resolution, sorting, evaluation, rendering, and grouping belong to the
  * service layer.
  */
-export const ContextRulesStorageNamespace = createStorageNamespace('contextRules', {
+export const ContextRulesStorageNamespace = createStorageNamespaceDefinition('contextRules', {
   schemas: {
     get: {
       request: z.object({ id: z.string() }),

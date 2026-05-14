@@ -1,4 +1,4 @@
-import { MakaioBus } from './bus.js';
+import { createBusNamespace } from '@makaio/core';
 import type {
   ExtensionNamespace,
   ExtensionNamespaceConfig,
@@ -39,7 +39,7 @@ type Trim<T extends string> = string extends T ? string : TrimLeft<TrimRight<T>>
 /**
  * Creates an extension namespace with typed subject definitions.
  *
- * Thin wrapper around MakaioBus.registerNamespace that:
+ * Pure wrapper around {@link createBusNamespace} that:
  * - Automatically prepends 'extension:' to the domain name
  * - Provides extension point for extension-specific metadata via declaration merging
  * - Preserves type-safe filtering capabilities
@@ -87,7 +87,7 @@ export function createExtensionNamespace<
   const normalizedName = normalizedExtensionName as Trim<N>;
   const fullDomain = `extension:${normalizedName}` as const;
 
-  const busNamespace = MakaioBus.registerNamespace(fullDomain, config.schemas);
+  const busNamespace = createBusNamespace(fullDomain, config.schemas);
 
   return {
     ...busNamespace,

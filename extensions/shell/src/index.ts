@@ -1,15 +1,18 @@
-import type { MakaioExtension } from '@makaio/contracts/extension';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { shellToolset } from './toolset.js';
 import { ShellService } from './shell-service.js';
+import { ShellNamespace } from './bus/namespace.js';
 
 /**
  * Shell tool extension.
  */
-export const shellPackage: MakaioExtension = {
+export const shellPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'shell',
   displayName: 'Shell Tools',
   version: '0.1.0',
   surface: 'headless',
+  namespaces: [ShellNamespace],
   tools: {
     /**
      * Create shell toolsets.

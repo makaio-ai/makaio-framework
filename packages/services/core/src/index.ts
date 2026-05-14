@@ -234,6 +234,7 @@ export {
   trayMenuPackage,
   TrayMenuToken,
 } from './framework-packages.js';
+export { FrameworkServicesCoreNamespaces } from './namespace-catalog.js';
 export {
   AdapterIdentityRegistry,
   AdapterRuntimeNamespace,

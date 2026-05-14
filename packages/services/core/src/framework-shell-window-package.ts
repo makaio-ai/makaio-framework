@@ -1,4 +1,5 @@
-import type { MakaioExtension } from '@makaio/contracts';
+import type { MakaioNodeExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
  * Framework-level window registration for the dashboard shell.
@@ -8,7 +9,7 @@ import type { MakaioExtension } from '@makaio/contracts';
  * extension is loaded, the host can choose its own default window and
  * this window remains available as a fallback.
  */
-export const frameworkShellWindowPackage: MakaioExtension = {
+export const frameworkShellWindowPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'framework-shell',
   displayName: 'Shell',
   version: '0.1.0',

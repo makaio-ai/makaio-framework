@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { RuntimeSubjects } from '@makaio/runtime-node/runtime/register';
+import { RuntimeSubjects } from '@makaio/runtime-node';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { startCliServe } from './harness/spawn-serve.js';
 import { connectTestBus, waitForBoot, waitForRuntimeReady } from './harness/bus-helpers.js';

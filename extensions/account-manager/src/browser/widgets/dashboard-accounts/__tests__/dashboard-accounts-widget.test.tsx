@@ -13,7 +13,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { BusContext } from '@makaio/ui-hooks';
 import { dashboardAccountsWidgetDefinition } from '../dashboard-accounts-widget.js';

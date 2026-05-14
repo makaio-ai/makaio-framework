@@ -1,10 +1,10 @@
 /**
- * Package Management Bus Namespace — has side effects (registers on the bus).
+ * Package Management Bus Namespace — pure namespace definition.
  *
- * For pure Zod schemas without side effects, import `./schemas` instead.
+ * For Zod schemas only, import `./schemas` instead.
  * @packageDocumentation
  */
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import {
   PackageInstallResultSchema,
   PackageUninstallResultSchema,
@@ -36,9 +36,9 @@ export {
 };
 
 /**
- * Package Management namespace registration.
+ * Pure bus namespace definition for package management subjects.
  */
-export const PackageManagementNamespace = MakaioBus.registerNamespace('packages', PackageManagementSchemas);
+export const PackageManagementNamespace = createBusNamespace('packages', PackageManagementSchemas);
 
 /**
  * Typed subjects for package management operations.

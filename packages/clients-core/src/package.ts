@@ -1,8 +1,9 @@
 import * as path from 'node:path';
+import type { IMakaioBus } from '@makaio/bus-core';
 import {
   extensionToken,
   type ClientDefinition,
-  type MakaioExtension,
+  type MakaioNodeExtension,
   type ExtensionServiceLifecycle,
 } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
@@ -11,6 +12,8 @@ import { ClientBinaryManager } from './client-binary-manager.js';
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
 import { registerDrizzleRuntimeStorage } from './storage/runtime-drizzle-handler.js';
 import { registerDrizzleClientBinaryStorage } from './storage/client-binary-drizzle-handler.js';
+import { ClientBinaryStorageNamespace } from './storage/client-binary-storage-namespace.js';
+import { ClientRuntimeStorageNamespace } from './storage/runtime-storage-namespace.js';
 import type { StrategyDependencies } from './binary-strategies/index.js';
 import type { PostInstallHandler } from './client-binary-manager-types.js';
 
@@ -175,7 +178,7 @@ export function registerStorageHandlersWithRollback(registrations: ReadonlyArray
  *   strategy I/O dependencies, and post-install handlers
  * @returns Configured MakaioExtension manifest
  */
-export function createClientsCorePackage(options: ClientsCorePackageOptions = {}): MakaioExtension {
+export function createClientsCorePackage(options: ClientsCorePackageOptions = {}): MakaioNodeExtension<IMakaioBus> {
   const { definitions = [], strategyDependencies, postInstallHandlers } = options;
   const definitionSnapshot = [...definitions];
 
@@ -184,6 +187,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
     displayName: 'Clients Core',
     version: '0.1.0',
     critical: true,
+    namespaces: [ClientBinaryStorageNamespace, ClientRuntimeStorageNamespace],
     storage: {
       /**
        * Register all persistence handlers (runtime + client binary) on the bus.

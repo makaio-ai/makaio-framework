@@ -3,15 +3,14 @@ import type {
   AdapterContribution,
   AdapterProviderDefinitionContract,
   AdapterProviderRef,
-  ExtensionContext,
-  MakaioExtension,
   ProtocolId,
   ProviderAIModel,
   ProviderDefinitionInput,
 } from '@makaio/contracts';
 import type { ProtocolRef } from '@makaio/contracts/extension';
 import { ExtensionSubjects } from '@makaio/kernel';
-import type { ContributionProcessor, ExtensionCoordinator } from '@makaio/kernel';
+import type { ExtensionCoordinator } from '@makaio/kernel';
+import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
 import type { z } from 'zod';
@@ -176,8 +175,12 @@ export class AdapterContributionProcessor {
    */
   public register(addCleanup: (fn: () => void) => void): void {
     const processor: ContributionProcessor = {
-      filter: (pkg: MakaioExtension): boolean => !!pkg.adapters?.length,
-      processActivated: async (name: string, pkg: MakaioExtension, ctx: ExtensionContext): Promise<void> => {
+      filter: (pkg: KernelMakaioExtension): boolean => !!pkg.adapters?.length,
+      processActivated: async (
+        name: string,
+        pkg: KernelMakaioExtension,
+        ctx: KernelExtensionContext,
+      ): Promise<void> => {
         await this.onPackageActivated(name, pkg, ctx);
       },
       processStopped: async (name: string): Promise<void> => {
@@ -205,7 +208,11 @@ export class AdapterContributionProcessor {
    * @param pkg - Extension manifest with `adapters` contributions.
    * @param ctx - Per-extension context containing the boot bus.
    */
-  public async onPackageActivated(packageName: string, pkg: MakaioExtension, ctx: ExtensionContext): Promise<void> {
+  public async onPackageActivated(
+    packageName: string,
+    pkg: KernelMakaioExtension,
+    ctx: KernelExtensionContext,
+  ): Promise<void> {
     const contributions = pkg.adapters ?? [];
     const activated: string[] = [];
     const completed: LoadedAdapter[] = [];

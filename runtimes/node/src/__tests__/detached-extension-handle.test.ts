@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { NodeExtensionContext } from '@makaio/contracts';
 import type { DetachedDescriptor, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
@@ -209,7 +209,7 @@ describe('createDetachedExtensionPackage', () => {
         }),
         FAKE_EXTENSION_PATH,
       );
-      const mockCtx: NodeExtensionContext = {
+      const mockCtx: NodeExtensionContext<IMakaioBus> = {
         bus,
         busUrl: 'ws://127.0.0.1:1234/bus',
         config: { enabled: true },
@@ -217,7 +217,7 @@ describe('createDetachedExtensionPackage', () => {
         getService: () => undefined,
         hasExtension: () => false,
         homedir: '/tmp',
-        identity: { extensionName: 'my-ws-ext' } as NodeExtensionContext['identity'],
+        identity: { extensionName: 'my-ws-ext' } as NodeExtensionContext<IMakaioBus>['identity'],
         machineId: 'machine-1',
         makaioHome: '/tmp/.makaio',
         platform: process.platform,

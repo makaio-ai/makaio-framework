@@ -32,7 +32,7 @@
  */
 
 import { z } from 'zod';
-import { MakaioBus, channelSubject, localSubject } from '@makaio/bus-core';
+import { createBusNamespace, channelSubject, localSubject } from '@makaio/core';
 import { CredentialRefSchema } from '../config/credential-ref.js';
 import { CredentialChangeSequenceSchema } from './change-sequence.js';
 
@@ -169,7 +169,7 @@ const CredentialSchemas = {
 };
 
 /** Credential service namespace registered under the `credential` prefix. */
-export const CredentialNamespace = MakaioBus.registerNamespace('credential', CredentialSchemas);
+export const CredentialNamespace = createBusNamespace('credential', CredentialSchemas);
 
 /** Pre-extracted credential bus subjects for direct import. */
 export const CredentialSubjects = CredentialNamespace.subjects;

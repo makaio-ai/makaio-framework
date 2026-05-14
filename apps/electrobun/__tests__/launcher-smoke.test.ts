@@ -12,15 +12,16 @@
  * not depend on test file execution order or on stale local artifacts.
  *
  * Execution tests (--version, --help) require runtime-consumable
- * `@makaio/framework` output (`yarn build:framework`). When both lib and dist
- * are absent, these tests are skipped — the bundle contains externalized
- * framework imports that Bun cannot resolve without the assembled package.
+ * `@makaio/framework` output (`yarn build:framework`). When required framework
+ * exports are absent from the assembled output, these tests are skipped — the
+ * bundle contains externalized framework imports that Bun cannot resolve without
+ * a current assembled package.
  *
  * The test uses `execFileSync` (not `execSync`) to avoid shell interpretation
  * of the bundle path and to keep argument handling explicit.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { acquireElectrobunBuildLock } from './build-test-lock.js';
@@ -28,11 +29,11 @@ import { acquireElectrobunBuildLock } from './build-test-lock.js';
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
 const CLI_BUNDLE = path.join(PACKAGE_ROOT, 'dist', 'cli.mjs');
 const FRAMEWORK_PACKAGE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..', 'packages', 'framework');
-const FRAMEWORK_LIB = path.join(FRAMEWORK_PACKAGE_ROOT, 'lib');
 const FRAMEWORK_DIST = path.join(FRAMEWORK_PACKAGE_ROOT, 'dist');
 const FRAMEWORK_PACKAGE_LINK = path.join(PACKAGE_ROOT, 'node_modules', '@makaio', 'framework');
-const hasFrameworkPackage = existsSync(FRAMEWORK_LIB) || existsSync(FRAMEWORK_DIST);
-const itRequiresFramework = hasFrameworkPackage ? it : it.skip;
+const REQUIRED_FRAMEWORK_EXPORT = 'FrameworkContractNamespaces';
+const hasFrameworkRuntimeOutput = frameworkOutputExports(FRAMEWORK_DIST, REQUIRED_FRAMEWORK_EXPORT);
+const itRequiresFramework = hasFrameworkRuntimeOutput ? it : it.skip;
 let releaseBuildLock: (() => void) | undefined;
 let createdFrameworkPackageLink = false;
 
@@ -57,7 +58,7 @@ describe('CLI launcher smoke test', () => {
         stdio: 'inherit',
         timeout: 120_000,
       });
-      if (hasFrameworkPackage) {
+      if (hasFrameworkRuntimeOutput) {
         ensureLocalFrameworkPackageLink();
       }
     } catch (error) {
@@ -102,6 +103,54 @@ describe('CLI launcher smoke test', () => {
 function releaseBuildLockNow(): void {
   releaseBuildLock?.();
   releaseBuildLock = undefined;
+}
+
+/**
+ * Check whether assembled framework output contains a runtime export.
+ * @param outputRoot - Candidate framework output root (`lib` or `dist`).
+ * @param exportName - Runtime export name required by the launcher bundle.
+ * @returns True when the output's contracts entrypoint exports the name.
+ */
+function frameworkOutputExports(outputRoot: string, exportName: string): boolean {
+  const entrypoint = path.join(outputRoot, 'contracts', 'index.mjs');
+  if (!existsSync(entrypoint)) return false;
+  return sourceExportsName(readFileSync(entrypoint, 'utf8'), exportName);
+}
+
+/**
+ * Escape a string for use inside a regular expression.
+ * @param value - Literal string to escape.
+ * @returns Regex-safe version of the value.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Check whether source text actually exports a given name.
+ * @param source - JavaScript module source to inspect.
+ * @param exportName - Exported name to find.
+ * @returns True when the source declares or re-exports `exportName`.
+ */
+function sourceExportsName(source: string, exportName: string): boolean {
+  const escapedExportName = escapeRegExp(exportName);
+  if (new RegExp(`\\bexport\\s+(?:const|let|var|function|class)\\s+${escapedExportName}\\b`).test(source)) {
+    return true;
+  }
+  if (new RegExp(`\\bexport\\s+default\\s+${escapedExportName}\\b`).test(source)) {
+    return true;
+  }
+
+  for (const match of source.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
+    const exportList = match[1] ?? '';
+    for (const specifier of exportList.split(',')) {
+      const parts = specifier.trim().split(/\s+as\s+/);
+      const exportedName = parts.length > 1 ? parts.at(-1)?.trim() : parts[0]?.trim();
+      if (exportedName === exportName) return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -160,3 +209,16 @@ function pathExists(targetPath: string): boolean {
 function isNodeNotFoundError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT';
 }
+
+describe('framework output export detection', () => {
+  it('matches real ES export syntax only', () => {
+    expect(sourceExportsName('export const FrameworkContractNamespaces = [];', REQUIRED_FRAMEWORK_EXPORT)).toBe(true);
+    expect(
+      sourceExportsName('const Fa = []; export { Fa as FrameworkContractNamespaces };', REQUIRED_FRAMEWORK_EXPORT),
+    ).toBe(true);
+    expect(sourceExportsName('const FrameworkContractNamespaces = [];', REQUIRED_FRAMEWORK_EXPORT)).toBe(false);
+    expect(sourceExportsName('export { FrameworkContractNamespaces as OtherName };', REQUIRED_FRAMEWORK_EXPORT)).toBe(
+      false,
+    );
+  });
+});

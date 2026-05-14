@@ -10,6 +10,7 @@ import type { InterceptorEntry, InterceptorHandler } from './types/interceptor.j
 import { createNamespaceRegistry, createTransportRegistry } from './registries/index.js';
 import { validateMessage } from './utils/message-safeguards.js';
 import { extendSubjectImpl } from './extend-subject.js';
+import { createBusNamespace } from '@makaio/core';
 import type { EventHandler, PayloadFilter, RequestHandler, SubjectDefinition } from '@makaio/core';
 import { LifecycleSchemas } from './lifecycle-schemas.js';
 import { wireLifecycleEmitter } from './utils/wire-lifecycle-emitter.js';
@@ -504,7 +505,8 @@ export function createBusInstance<Namespace extends string | undefined = undefin
     ...transportMethods,
     getContext: () => context,
     getSchema: (subject) => context.namespaceRegistry.getSchema(subject),
-    registerNamespace: (domain, schemas, opts) => context.namespaceRegistry.registerNamespace(domain, schemas, opts),
+    registerNamespace: (definition) => context.namespaceRegistry.registerNamespace(definition),
+    registerNamespaces: (definitions) => context.namespaceRegistry.registerNamespaces(definitions),
     extendSubject: (subject, extensions) => {
       if (namespace && subject.$meta.namespace !== namespace)
         throw new Error(
@@ -540,7 +542,7 @@ export function createBusInstance<Namespace extends string | undefined = undefin
   });
 
   // Wire lifecycle emission: transport connect/disconnect fire BusLifecycle events (local-only).
-  wireLifecycleEmitter(context, bus.registerNamespace('bus:lifecycle', LifecycleSchemas).subjects);
+  wireLifecycleEmitter(context, bus.registerNamespace(createBusNamespace('bus:lifecycle', LifecycleSchemas)).subjects);
 
   for (const transport of transports ?? []) {
     bus.registerTransport(transport);

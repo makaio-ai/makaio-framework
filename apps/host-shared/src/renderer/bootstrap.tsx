@@ -6,9 +6,13 @@ import { MakaioBus } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type { WebSocketLike } from '@makaio/bus-transport-websocket';
-import type { UiReadyEvent } from '@makaio/ui-kernel';
+import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
+import { HostNamespace } from '@makaio/contracts/host';
+import { ToastNamespace } from '@makaio/contracts/toast';
+import { UiNamespace, WidgetNamespace, type UiReadyEvent } from '@makaio/ui-kernel';
 import { registerBrowserPreferencesStorage } from '@makaio/preferences/browser';
-import { BootSubjects } from '@makaio/kernel';
+import { BootNamespace, BootSubjects, ExtensionNamespace, KernelNamespace } from '@makaio/kernel';
+import { PreferencesNamespace } from '@makaio/services-core/preferences/storage-namespace';
 import { useWindowContext } from '@makaio/ui-hooks';
 import { App, resetReadySurface } from './App.js';
 
@@ -40,6 +44,16 @@ export interface RendererBootstrapOptions {
 
 /** Maximum time to wait for service boot before mounting React anyway. */
 const BOOT_TIMEOUT_MS = 15_000;
+const HOST_RENDERER_NAMESPACES = [
+  BootNamespace,
+  ExtensionNamespace,
+  HostNamespace,
+  KernelNamespace,
+  PreferencesNamespace,
+  ToastNamespace,
+  UiNamespace,
+  WidgetNamespace,
+] as readonly RegistrableBusNamespaceDefinition[];
 let activeRendererCleanup: (() => void) | null = null;
 let activeRendererIdentity: { readonly projectId: string | null; readonly windowId: string | null } | null = null;
 let activeBootstrapIdentity: { readonly projectId: string | null; readonly windowId: string | null } | null = null;
@@ -355,6 +369,7 @@ export async function bootstrapRenderer(options: RendererBootstrapOptions): Prom
 
   setLoadingLabel('Connecting to bus...');
 
+  MakaioBus.registerNamespaces(HOST_RENDERER_NAMESPACES);
   seedWindowContext(config);
   activeRendererIdentity = rendererIdentity;
 

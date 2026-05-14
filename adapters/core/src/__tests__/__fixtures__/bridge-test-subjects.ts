@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 
 /**
  * Test namespace for bridge/mapper tests that need global subjects.
@@ -12,56 +13,58 @@ import { MakaioBus } from '@makaio/bus-core';
  * - orchestration.*: Flow control events (pause, resume, event)
  * - workspace.*: Workspace operations (getContext, query requests)
  */
-const { subjects: BridgeTestSubjects } = MakaioBus.registerNamespace('bridgeTest', {
-  // Agent domain subjects
-  'agent.thinking': z.object({
-    text: z.string(),
-  }),
-
-  'agent.delta': z.object({
-    type: z.string(),
-    content: z.string(),
-  }),
-
-  'agent.tool': z.object({
-    text: z.string(),
-  }),
-
-  // Orchestration domain subjects
-  // Note: Different payload shapes from local adapter subjects to test transformation logic
-  'orchestration.pause': z.object({
-    message: z.string(), // Different from local 'reason?: string'
-  }),
-
-  'orchestration.resume': z.object({
-    resumeId: z.string(), // Different from local 'fromState?: string'
-  }),
-
-  'orchestration.event': z.object({
-    name: z.string(), // Different from local 'eventType: string'
-    payload: z.record(z.string(), z.unknown()).optional(), // Different from local 'data?: object'
-  }),
-
-  // Workspace domain requests
-  // Note: Different payload shapes to test request/response transformation
-  'workspace.getContext': {
-    request: z.object({
-      path: z.string(), // Different from local 'sessionId: string'
+const { subjects: BridgeTestSubjects } = MakaioBus.registerNamespace(
+  createBusNamespace('bridgeTest', {
+    // Agent domain subjects
+    'agent.thinking': z.object({
+      text: z.string(),
     }),
-    response: z.object({
-      fileContent: z.string(), // Different from local 'context: string'
-    }),
-  },
 
-  'workspace.query': {
-    request: z.object({
-      searchTerm: z.string(), // Different from local 'query: string'
+    'agent.delta': z.object({
+      type: z.string(),
+      content: z.string(),
     }),
-    response: z.object({
-      items: z.array(z.record(z.string(), z.unknown())), // Different from local 'results: Array<object>'
+
+    'agent.tool': z.object({
+      text: z.string(),
     }),
-  },
-});
+
+    // Orchestration domain subjects
+    // Note: Different payload shapes from local adapter subjects to test transformation logic
+    'orchestration.pause': z.object({
+      message: z.string(), // Different from local 'reason?: string'
+    }),
+
+    'orchestration.resume': z.object({
+      resumeId: z.string(), // Different from local 'fromState?: string'
+    }),
+
+    'orchestration.event': z.object({
+      name: z.string(), // Different from local 'eventType: string'
+      payload: z.record(z.string(), z.unknown()).optional(), // Different from local 'data?: object'
+    }),
+
+    // Workspace domain requests
+    // Note: Different payload shapes to test request/response transformation
+    'workspace.getContext': {
+      request: z.object({
+        path: z.string(), // Different from local 'sessionId: string'
+      }),
+      response: z.object({
+        fileContent: z.string(), // Different from local 'context: string'
+      }),
+    },
+
+    'workspace.query': {
+      request: z.object({
+        searchTerm: z.string(), // Different from local 'query: string'
+      }),
+      response: z.object({
+        items: z.array(z.record(z.string(), z.unknown())), // Different from local 'results: Array<object>'
+      }),
+    },
+  }),
+);
 
 /**
  * Individual subject references for convenient importing.

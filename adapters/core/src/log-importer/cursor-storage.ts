@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 
 import type { ImportCursorPosition } from './types.js';
 
@@ -70,7 +70,7 @@ export const ImportCursorPositionSchema = z.object({
  * ```
  * @see {@link ImportCursorPosition} - Type definition for cursor positions
  */
-export const ImportCursorStorageNamespace = createStorageNamespace('importCursor', {
+export const ImportCursorStorageNamespace = createStorageNamespaceDefinition('importCursor', {
   schemas: {
     /**
      * Get the cursor position for a log file.

@@ -11,3 +11,4 @@ export type {
 export { toCliArgManifests } from './schema-introspection.js';
 export { getMeta, isBooleanSchema, isNumberSchema } from './schema-utils.js';
 export type { FieldSchema } from './schema-utils.js';
+export { CliNamespace, CliRpcSubjects } from '../bus/cli/namespace.js';

@@ -1,5 +1,6 @@
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import type { MakaioExtension } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { MakaioNodeExtension } from '@makaio/contracts';
 import { registerHybridPreferencesStorage } from './storage/hybrid-handler.js';
 
 /**
@@ -8,7 +9,7 @@ import { registerHybridPreferencesStorage } from './storage/hybrid-handler.js';
  * Registers the hybrid (localStorage + SQLite) storage handler for preference
  * entities. No background service is started (`create` is intentionally absent).
  */
-export const preferencesStoragePackage: MakaioExtension = {
+export const preferencesStoragePackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'preferences-storage',
   displayName: 'Preferences Storage',
   version: '0.1.0',

@@ -13,9 +13,8 @@ import { pathToFileURL } from 'node:url';
 import { Command, CommanderError, InvalidOptionArgumentError } from 'commander';
 import type { CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { toCliArgManifests } from '@makaio/kernel/cli';
+import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
 import type { CliContribution } from '@makaio/kernel/cli';
-import { CliRpcSubjects } from '@makaio/kernel/cli/register';
 import { resolveConventionEntrypoint, type ExtensionDiscovery } from '@makaio/runtime-node';
 import { registerContribution } from './schema-adapter.js';
 import {

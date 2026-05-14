@@ -12,7 +12,7 @@ import { createElement, type ReactNode } from 'react';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { AccountManagerSubjects } from '@makaio/extension-account-manager/register';
+import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, AccountUsage, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { BusContext } from '@makaio/ui-hooks';
 import { clearUsageCache } from '../../../data/use-usage-data.js';

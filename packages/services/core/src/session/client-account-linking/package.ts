@@ -1,5 +1,5 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import { dep, extensionToken, type MakaioExtension } from '@makaio/contracts';
+import { dep, extensionToken, type MakaioNodeExtension } from '@makaio/contracts';
 import { ClientSessionAccountObserveSchema, ClientSubjects } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { createSessionClientAccountObserveHandler } from './handlers.js';
@@ -39,7 +39,7 @@ export class SessionClientAccountLinkingService extends BaseService {
 /**
  * Runtime package for the session-side client account linker.
  */
-export const sessionClientAccountLinkingPackage: MakaioExtension = {
+export const sessionClientAccountLinkingPackage: MakaioNodeExtension<IMakaioBus> = {
   name: SESSION_CLIENT_ACCOUNT_LINKING_PACKAGE_NAME,
   displayName: 'Session Client Account Linking',
   version: '0.1.0',

@@ -3,14 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import {
   createClientDefinition,
   type ExtensionDependency,
-  type MakaioExtension,
   type NodeExtensionContext as ExtensionContext,
   type ProviderDefinition,
   type TrayManifest,
 } from '@makaio/contracts';
+import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { TrayMenuEntrySchema, TrayMenuSubjects, TrayMenuEntry } from '@makaio/services-core/tray-menu';
 import { extensionToken } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
@@ -234,6 +235,43 @@ describe('ExtensionCoordinator', () => {
     // discovered -> initializing, then initializing -> active
     expect(extEvents).toContainEqual({ name: 'my-ext', from: 'discovered', to: 'initializing' });
     expect(extEvents).toContainEqual({ name: 'my-ext', from: 'initializing', to: 'active' });
+  });
+
+  it('registers extension namespaces before storage, create, and init lifecycles run', async () => {
+    const namespace = createBusNamespace('test-extension:lifecycle', {
+      ping: z.object({ id: z.string() }),
+    });
+    const observed: string[] = [];
+    const expectNamespaceRegistered = (stage: string): void => {
+      observed.push(stage);
+      expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
+    };
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      db: {},
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('namespaced-extension', {
+        namespaces: [namespace],
+        storage: {
+          registerHandlers: () => {
+            expectNamespaceRegistered('storage');
+          },
+        },
+        create: (ctx) => {
+          expectNamespaceRegistered('create');
+          return makeMockService(ctx.bus, () => {
+            expectNamespaceRegistered('init');
+          });
+        },
+      }),
+    ]);
+
+    expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
+    await coordinator.startAll();
+
+    expect(observed).toEqual(['storage', 'create', 'init']);
   });
 
   // 3. Failed state on init error
@@ -907,6 +945,52 @@ describe('ExtensionCoordinator', () => {
     await bus.request(ExtensionSubjects.setEnabled, { name: 're-storage-pkg', enabled: true });
 
     expect(registerHandlers).toHaveBeenCalledTimes(2);
+
+    await coordinator.shutdown();
+  });
+
+  it('registers namespaces before enabling a package skipped at boot', async () => {
+    const namespace = createBusNamespace('test-extension:reenable', {
+      ping: z.object({ id: z.string() }),
+    });
+    const observed: string[] = [];
+    const expectNamespaceRegistered = (stage: string): void => {
+      observed.push(stage);
+      expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
+    };
+    const coordinator = new ExtensionCoordinator(bus, {
+      db: {},
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: () => false,
+    });
+
+    coordinator.load([
+      makePackage('reenable-namespaced-pkg', {
+        namespaces: [namespace],
+        storage: {
+          registerHandlers: () => {
+            expectNamespaceRegistered('storage');
+          },
+        },
+        create: (ctx) => {
+          expectNamespaceRegistered('create');
+          return makeMockService(ctx.bus, () => {
+            expectNamespaceRegistered('init');
+          });
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'reenable-namespaced-pkg',
+      enabled: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(observed).toEqual(['storage', 'create', 'init']);
 
     await coordinator.shutdown();
   });
