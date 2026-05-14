@@ -16,8 +16,8 @@ export interface MarkdownGenerationOptions {
   sourceRoot: string;
   /** Optional namespace tiers to include. Omit to include every namespace in the analysis. */
   includeTiers?: readonly NamespaceEntry['tier'][];
-  /** Whether product callsites should be rendered. */
-  includeProductCallsites: boolean;
+  /** Whether host callsites should be rendered. */
+  includeHostCallsites: boolean;
   /**
    * When set, source-file links become absolute URLs under this base
    * (e.g. `https://github.com/org/repo/blob/<commit>`).
@@ -316,8 +316,8 @@ function renderNamespaceFile(ns: NamespaceEntry, docFilePath: string, options: M
   }
 
   const fwCallsites = ns.callsites.framework;
-  const prodCallsites = options.includeProductCallsites ? ns.callsites.product : [];
-  const totalCallsites = fwCallsites.length + prodCallsites.length;
+  const hostCallsites = options.includeHostCallsites ? ns.callsites.host : [];
+  const totalCallsites = fwCallsites.length + hostCallsites.length;
 
   if (totalCallsites > 0) {
     lines.push('## Callsites', '');
@@ -330,9 +330,9 @@ function renderNamespaceFile(ns: NamespaceEntry, docFilePath: string, options: M
       lines.push('');
     }
 
-    if (prodCallsites.length > 0) {
-      lines.push('**Product:**', '');
-      for (const cs of prodCallsites) {
+    if (hostCallsites.length > 0) {
+      lines.push('**Host:**', '');
+      for (const cs of hostCallsites) {
         lines.push(`- \`${cs}\``);
       }
       lines.push('');

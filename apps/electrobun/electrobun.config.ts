@@ -8,7 +8,7 @@
  *
  * The `dev` script runs `bun build.ts` automatically before `electrobun dev`.
  *
- * Renderer backend (`bundleCEF`, `defaultRenderer`) and update channel are resolved at build time
+ * Renderer backend (`bundleCEF`, `defaultRenderer`) and build environment are resolved at build time
  * from the `MAKAIO_VARIANT` and `MAKAIO_RELEASE_TRACK` environment variables via {@link resolveVariantConfig}.
  * Set `MAKAIO_VARIANT=cef` to produce a CEF-bundled distributable; omit or set
  * to `base` for a system-WebView build.
@@ -43,9 +43,11 @@ const config: ElectrobunConfig = {
     version: pkg.version,
   },
   build: {
+    buildFolder: variant.buildFolder,
+    artifactFolder: variant.artifactFolder,
     bun: {
       entrypoint: './dist/index.js',
-      external: ['electrobun', 'vite'],
+      external: ['electrobun', 'vite', '@makaio/framework'],
       banner: 'var require=import.meta.require;',
     },
     copy: {
@@ -55,7 +57,8 @@ const config: ElectrobunConfig = {
       './resources/makaio-launcher-linux.sh': 'Resources/makaio-launcher-linux.sh',
       './resources/makaio.cmd': 'Resources/makaio.cmd',
       './resources/install-cli.sh': 'Resources/install-cli.sh',
-      '../../dist': 'Resources/app/framework/dist',
+      '../../packages/framework/lib': 'Resources/app/node_modules/@makaio/framework/dist',
+      '../../packages/framework/package.json': 'Resources/app/node_modules/@makaio/framework/package.json',
       '../../../static/model-registry.yaml': 'Resources/app/dist/static/model-registry.yaml',
     },
     mac: { ...rendererConfig, icons: 'icon.iconset', ...macSigningConfig },

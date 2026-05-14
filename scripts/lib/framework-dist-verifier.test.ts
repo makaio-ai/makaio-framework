@@ -42,16 +42,14 @@ describe('verifyFrameworkDist', () => {
     }
   });
 
-  it('passes when every publishConfig export target exists', () => {
+  it('passes when every export target exists', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
-      publishConfig: {
-        exports: {
-          './package.json': './package.json',
-          './core': {
-            types: './dist/core/index.d.mts',
-            default: './dist/core/index.mjs',
-          },
+      exports: {
+        './package.json': './package.json',
+        './core': {
+          types: './dist/core/index.d.mts',
+          default: './dist/core/index.mjs',
         },
       },
     });
@@ -67,12 +65,10 @@ describe('verifyFrameworkDist', () => {
   it('reports missing built export targets', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
-      publishConfig: {
-        exports: {
-          './core': {
-            types: './dist/core/index.d.mts',
-            default: './dist/core/index.mjs',
-          },
+      exports: {
+        './core': {
+          types: './dist/core/index.d.mts',
+          default: './dist/core/index.mjs',
         },
       },
     });
@@ -90,13 +86,23 @@ describe('verifyFrameworkDist', () => {
     ]);
   });
 
+  it('rethrows non-missing stat failures while checking export targets', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: {
+        './core': './dist/core/index.mjs/child.mjs',
+      },
+    });
+    writeBuiltFile(join(root, 'dist/core/index.mjs'));
+
+    expect(() => verifyFrameworkDist(root)).toThrow();
+  });
+
   it('reports local export targets outside the framework root', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
-      publishConfig: {
-        exports: {
-          './escape': '../outside.mjs',
-        },
+      exports: {
+        './escape': '../outside.mjs',
       },
     });
 
@@ -115,10 +121,8 @@ describe('verifyFrameworkDist', () => {
   it('reports export targets that resolve to directories', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
-      publishConfig: {
-        exports: {
-          './core': './dist/core',
-        },
+      exports: {
+        './core': './dist/core',
       },
     });
     mkdirSync(join(root, 'dist/core'), { recursive: true });

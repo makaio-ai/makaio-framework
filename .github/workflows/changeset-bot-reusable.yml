@@ -1,0 +1,107 @@
+name: Changeset Bot Reusable
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+        description: '"post-config" or "generate"'
+      pr_number:
+        required: true
+        type: number
+      comment_id:
+        required: false
+        type: number
+        default: 0
+      framework_root:
+        required: false
+        type: string
+        default: '.'
+        description: 'Path to the framework root relative to the repository root.'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: changeset-bot-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  changeset-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve PR head branch
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ inputs.pr_number }},
+            });
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_repo', pr.head.repo.full_name);
+            core.setOutput(
+              'same_repo',
+              pr.head.repo.full_name === `${context.repo.owner}/${context.repo.repo}` ? 'true' : 'false',
+            );
+
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          path: trusted
+          fetch-depth: 0
+
+      - name: Reject fork changeset commits
+        if: inputs.mode == 'generate' && steps.pr.outputs.same_repo != 'true'
+        run: |
+          echo "::error::Changeset generation commits are only supported for branches in this repository."
+          exit 1
+
+      - name: Checkout target PR branch
+        if: inputs.mode == 'generate'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: ${{ steps.pr.outputs.head_repo }}
+          ref: ${{ steps.pr.outputs.head_ref }}
+          path: target
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+        working-directory: trusted
+
+      - name: Configure git
+        if: inputs.mode == 'generate'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        working-directory: target
+
+      - name: Run changeset bot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ARGS=("${{ inputs.mode }}" "--pr" "${{ inputs.pr_number }}" "--repo" "${{ github.repository }}")
+          if [ "${{ inputs.mode }}" = "generate" ] && [ "${{ inputs.comment_id }}" != "0" ]; then
+            ARGS+=("--comment-id" "${{ inputs.comment_id }}")
+          fi
+          if [ "${{ inputs.mode }}" = "generate" ]; then
+            ARGS+=("--target-root" "$GITHUB_WORKSPACE/target")
+          fi
+          yarn tsx "${{ inputs.framework_root }}/scripts/changeset-bot.ts" "${ARGS[@]}"
+        working-directory: trusted

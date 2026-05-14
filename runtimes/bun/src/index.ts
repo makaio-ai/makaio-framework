@@ -66,7 +66,6 @@ export {
 } from '@makaio/runtime-node';
 
 // Bun-specific overrides
-export { BunFrameworkModuleResolver } from './framework-module-resolver.js';
 export {
   BunBusServerTransportProvider,
   type BunBusServerTransportOptions,

@@ -2,7 +2,7 @@ import * as ts from 'typescript';
 
 import { matchesInventoryPathPrefix, relativeInventoryPath } from './path-utils.js';
 import { classifyTier, resolvePackageName } from './program.js';
-import type { NamespaceEntry, NamespaceKind } from './types.js';
+import type { NamespaceEntry, NamespaceKind, NamespaceTier } from './types.js';
 import { extractSubjects, isRegisterNamespaceCall, type RawNamespaceHit } from './extract-subjects.js';
 
 /** Options controlling namespace extraction from a TypeScript program. */
@@ -11,6 +11,8 @@ export interface NamespaceExtractionOptions {
   excludePathPrefixes?: readonly string[];
   /** Named field types to expand in generated subject field docs. */
   subjectFieldTypeExpansions?: readonly string[];
+  /** Host policy that classifies namespace definition paths for documentation tiers. */
+  classifyNamespaceTier?: (relativePath: string, analysisRoot: string) => NamespaceTier;
 }
 
 /**
@@ -121,13 +123,13 @@ export function extractNamespaces(
       subjectsConstant,
       schemaRecordName: hit.schemaRecordName,
       kind: hit.kind,
-      tier: classifyTier(hit.filePath, analysisRoot),
+      tier: classifyTier(hit.filePath, analysisRoot, options.classifyNamespaceTier),
       definedIn: {
         file: relativeInventoryPath(analysisRoot, hit.filePath),
         package: resolvePackageName(hit.filePath),
       },
       subjects,
-      callsites: { framework: [], product: [] },
+      callsites: { framework: [], host: [] },
     });
   }
 

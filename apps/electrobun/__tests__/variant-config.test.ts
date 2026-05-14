@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveVariantConfig,
+  resolveVariantReleaseChannel,
   resolveVariantRendererConfig,
-  resolveVariantUpdateChannel,
 } from '../src/variant-config.js';
 
 describe('resolveVariantConfig', () => {
@@ -11,7 +11,7 @@ describe('resolveVariantConfig', () => {
     expect(config.bundleCEF).toBe(false);
     expect(config.defaultRenderer).toBe('native');
     expect(config.releaseTrack).toBe('stable');
-    expect(config.updateChannel).toBe('stable');
+    expect(config.electrobunBuildEnv).toBe('stable');
     expect(config.variant).toBe('base');
   });
 
@@ -20,7 +20,7 @@ describe('resolveVariantConfig', () => {
     expect(config.bundleCEF).toBe(false);
     expect(config.defaultRenderer).toBe('native');
     expect(config.releaseTrack).toBe('stable');
-    expect(config.updateChannel).toBe('stable');
+    expect(config.electrobunBuildEnv).toBe('stable');
     expect(config.variant).toBe('base');
   });
 
@@ -29,7 +29,7 @@ describe('resolveVariantConfig', () => {
     expect(config.bundleCEF).toBe(true);
     expect(config.defaultRenderer).toBe('cef');
     expect(config.releaseTrack).toBe('stable');
-    expect(config.updateChannel).toBe('cef');
+    expect(config.electrobunBuildEnv).toBe('stable');
     expect(config.variant).toBe('cef');
   });
 
@@ -38,26 +38,44 @@ describe('resolveVariantConfig', () => {
     expect(config.bundleCEF).toBe(false);
     expect(config.defaultRenderer).toBe('native');
     expect(config.releaseTrack).toBe('stable');
-    expect(config.updateChannel).toBe('stable');
+    expect(config.electrobunBuildEnv).toBe('stable');
     expect(config.variant).toBe('base');
   });
 
-  it('maps base canary builds to the canary channel', () => {
+  it('maps canary release track to canary build env', () => {
     const config = resolveVariantConfig('base', 'canary');
     expect(config.bundleCEF).toBe(false);
     expect(config.defaultRenderer).toBe('native');
     expect(config.releaseTrack).toBe('canary');
-    expect(config.updateChannel).toBe('canary');
+    expect(config.electrobunBuildEnv).toBe('canary');
     expect(config.variant).toBe('base');
   });
 
-  it('maps CEF canary builds to the cef-canary channel', () => {
+  it('maps CEF canary to canary build env with CEF renderer', () => {
     const config = resolveVariantConfig('cef', 'canary');
     expect(config.bundleCEF).toBe(true);
     expect(config.defaultRenderer).toBe('cef');
     expect(config.releaseTrack).toBe('canary');
-    expect(config.updateChannel).toBe('cef-canary');
+    expect(config.electrobunBuildEnv).toBe('canary');
     expect(config.variant).toBe('cef');
+  });
+
+  it('separates variants via buildFolder and artifactFolder', () => {
+    const base = resolveVariantConfig('base', 'stable');
+    const cef = resolveVariantConfig('cef', 'stable');
+    expect(base.buildFolder).toBe('build/base-stable');
+    expect(base.artifactFolder).toBe('artifacts/base-stable');
+    expect(cef.buildFolder).toBe('build/cef-stable');
+    expect(cef.artifactFolder).toBe('artifacts/cef-stable');
+  });
+
+  it('separates canary variants via folders', () => {
+    const base = resolveVariantConfig('base', 'canary');
+    const cef = resolveVariantConfig('cef', 'canary');
+    expect(base.buildFolder).toBe('build/base-canary');
+    expect(base.artifactFolder).toBe('artifacts/base-canary');
+    expect(cef.buildFolder).toBe('build/cef-canary');
+    expect(cef.artifactFolder).toBe('artifacts/cef-canary');
   });
 
   it('throws on unknown variant', () => {
@@ -76,39 +94,43 @@ describe('resolveVariantConfig', () => {
     expect(() => resolveVariantConfig('base', 'toString')).toThrow('Unknown release track');
   });
 
-  it('produces serializable metadata for base variant', () => {
+  it('produces the full config shape for base variant', () => {
     expect(resolveVariantConfig('base')).toEqual({
       variant: 'base',
       releaseTrack: 'stable',
-      updateChannel: 'stable',
+      electrobunBuildEnv: 'stable',
       bundleCEF: false,
       defaultRenderer: 'native',
+      buildFolder: 'build/base-stable',
+      artifactFolder: 'artifacts/base-stable',
     });
   });
 
-  it('produces serializable metadata for cef variant', () => {
+  it('produces the full config shape for cef variant', () => {
     expect(resolveVariantConfig('cef')).toEqual({
       variant: 'cef',
       releaseTrack: 'stable',
-      updateChannel: 'cef',
+      electrobunBuildEnv: 'stable',
       bundleCEF: true,
       defaultRenderer: 'cef',
+      buildFolder: 'build/cef-stable',
+      artifactFolder: 'artifacts/cef-stable',
     });
   });
 });
 
-describe('resolveVariantUpdateChannel', () => {
-  it('maps the base host variant to Electrobun stable channel', () => {
-    expect(resolveVariantUpdateChannel('base')).toBe('stable');
+describe('resolveVariantReleaseChannel', () => {
+  it('maps base/stable to the stable release channel', () => {
+    expect(resolveVariantReleaseChannel('base')).toBe('stable');
   });
 
-  it('maps the cef host variant to the cef update channel', () => {
-    expect(resolveVariantUpdateChannel('cef')).toBe('cef');
+  it('maps cef/stable to the cef release channel', () => {
+    expect(resolveVariantReleaseChannel('cef')).toBe('cef');
   });
 
-  it('maps canary variants to canary-specific update channels', () => {
-    expect(resolveVariantUpdateChannel('base', 'canary')).toBe('canary');
-    expect(resolveVariantUpdateChannel('cef', 'canary')).toBe('cef-canary');
+  it('maps canary variants to canary-specific release channels', () => {
+    expect(resolveVariantReleaseChannel('base', 'canary')).toBe('canary');
+    expect(resolveVariantReleaseChannel('cef', 'canary')).toBe('cef-canary');
   });
 });
 

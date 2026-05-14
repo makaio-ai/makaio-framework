@@ -71,7 +71,7 @@ describe('check-markdown-links', () => {
       root: '/repo',
       listGitFiles: (args) => {
         if (args.includes('--cached')) {
-          return 'docs/staged.md\nproduct/app.ts\n';
+          return 'docs/staged.md\nhost/app.ts\n';
         }
         if (args.includes('--others')) {
           return 'docs/new-page.md\n';

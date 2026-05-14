@@ -57,6 +57,39 @@ describe('YarnPackageManager', () => {
     expect(typeof pm.ensureFrameworkDependency).toBe('function');
   });
 
+  it('uses a portal range for a host-provided framework package path', async () => {
+    const { resolveFrameworkDependencyRange } = await import('../yarn-integration.js');
+    const localPackagePath = path.join(tempDir, 'app', 'node_modules', '@makaio', 'framework');
+    const expectedPortablePath =
+      process.platform === 'win32'
+        ? localPackagePath.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '/$1:')
+        : localPackagePath;
+
+    expect(
+      resolveFrameworkDependencyRange({
+        versionRange: '^0.1.0',
+        localPackagePath,
+      }),
+    ).toBe(`portal:${expectedPortablePath}`);
+  });
+
+  it('uses Yarn portable path format for Windows portal ranges', async () => {
+    const { resolveFrameworkDependencyRange } = await import('../yarn-integration.js');
+
+    expect(
+      resolveFrameworkDependencyRange({
+        versionRange: '^0.1.0',
+        localPackagePath: 'C:\\Users\\makaio\\AppData\\Local\\Makaio\\node_modules\\@makaio\\framework',
+      }),
+    ).toBe('portal:/C:/Users/makaio/AppData/Local/Makaio/node_modules/@makaio/framework');
+  });
+
+  it('uses the registry range when no host framework package path is provided', async () => {
+    const { resolveFrameworkDependencyRange } = await import('../yarn-integration.js');
+
+    expect(resolveFrameworkDependencyRange({ versionRange: '^0.1.0' })).toBe('^0.1.0');
+  });
+
   it('should not overwrite existing package.json on initialize', async () => {
     const existing = { name: 'existing', version: '2.0.0', private: true, dependencies: { foo: '1.0.0' } };
     await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify(existing));

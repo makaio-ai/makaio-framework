@@ -16,6 +16,8 @@ export interface AnalyzeNamespacesCliConfig {
   namespaceExcludePathPrefixes?: readonly string[];
   /** Optional named field types to expand in subject field docs for this docs surface. */
   subjectFieldTypeExpansions?: readonly string[];
+  /** Host policy that classifies namespace definition paths for documentation tiers. */
+  classifyNamespaceTier?: NamespaceExtractionOptions['classifyNamespaceTier'];
   /** Optional path prefixes to skip during callsite scanning. */
   callsiteExcludePathPrefixes?: readonly string[];
   /** Host policy that classifies callsite paths for documentation buckets. */
@@ -29,8 +31,8 @@ export interface GenerateDocsCliConfig {
   sourceRoot: string;
   /** Optional namespace tiers to include. Omit to include all namespaces in the analysis. */
   includeTiers?: readonly NamespaceEntry['tier'][];
-  /** Whether product callsites should be rendered. */
-  includeProductCallsites: boolean;
+  /** Whether host callsites should be rendered. */
+  includeHostCallsites: boolean;
   /**
    * When set, source-file links become absolute URLs under this base
    * (e.g. `https://github.com/org/repo/blob/<commit>`).
@@ -57,6 +59,7 @@ export function runAnalyzeNamespacesCli(config: AnalyzeNamespacesCliConfig): voi
   const namespaceOptions: NamespaceExtractionOptions = {
     excludePathPrefixes: config.namespaceExcludePathPrefixes,
     subjectFieldTypeExpansions: config.subjectFieldTypeExpansions,
+    classifyNamespaceTier: config.classifyNamespaceTier,
   };
   const callsiteOptions: CallsiteScanOptions = {
     excludePathPrefixes: config.callsiteExcludePathPrefixes,
@@ -122,7 +125,7 @@ export function runGenerateDocsCli(config: GenerateDocsCliConfig): void {
     docsRoot: opts.out,
     sourceRoot: config.sourceRoot,
     includeTiers: config.includeTiers,
-    includeProductCallsites: config.includeProductCallsites,
+    includeHostCallsites: config.includeHostCallsites,
     sourceBaseUrl: resolvedSourceBaseUrl,
     frontmatter: config.frontmatter,
     indexFileName: config.indexFileName,
@@ -189,7 +192,7 @@ function isNamespaceEntryPayload(value: unknown): value is NamespaceEntry {
     callsites?: unknown;
   };
   const definedIn = candidate.definedIn as { file?: unknown } | undefined;
-  const callsites = candidate.callsites as { framework?: unknown; product?: unknown } | undefined;
+  const callsites = candidate.callsites as { framework?: unknown; host?: unknown } | undefined;
 
   return (
     typeof candidate.prefix === 'string' &&
@@ -201,7 +204,7 @@ function isNamespaceEntryPayload(value: unknown): value is NamespaceEntry {
     !!callsites &&
     typeof callsites === 'object' &&
     Array.isArray(callsites.framework) &&
-    Array.isArray(callsites.product)
+    Array.isArray(callsites.host)
   );
 }
 
@@ -269,7 +272,7 @@ function parseGenerateCli(): GenerateCliOptions {
  * @param namespaces - The fully-populated namespace entries to summarize.
  */
 function printSummary(namespaces: NamespaceEntry[]): void {
-  const tiers = { framework: 0, product: 0, 'product-web': 0, extension: 0 };
+  const tiers: Record<NamespaceEntry['tier'], number> = { framework: 0, host: 0, 'host-web': 0, extension: 0 };
   let totalSubjects = 0;
   let events = 0;
   let rpcs = 0;
@@ -286,14 +289,14 @@ function printSummary(namespaces: NamespaceEntry[]): void {
   console.error('\n--- Summary ---');
   console.error(`Namespaces: ${namespaces.length}`);
   console.error(`  framework:   ${tiers.framework}`);
-  console.error(`  product:     ${tiers.product}`);
-  console.error(`  product-web: ${tiers['product-web']}`);
+  console.error(`  host:        ${tiers.host}`);
+  console.error(`  host-web:    ${tiers['host-web']}`);
   console.error(`  extension:   ${tiers.extension}`);
   console.error(`Subjects: ${totalSubjects} (${events} events, ${rpcs} RPCs)`);
 
   console.error('\n--- Per Namespace ---');
   for (const ns of namespaces) {
-    const callsiteCount = ns.callsites.framework.length + ns.callsites.product.length;
+    const callsiteCount = ns.callsites.framework.length + ns.callsites.host.length;
     console.error(
       `  ${ns.prefix.padEnd(30)} ${ns.tier.padEnd(12)} ${String(ns.subjects.length).padStart(3)} subjects  ${String(callsiteCount).padStart(3)} callsites  ${ns.definedIn.package ?? ns.definedIn.file}`,
     );

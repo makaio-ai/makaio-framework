@@ -10,8 +10,15 @@ import type { MakaioVariant } from '@makaio/contracts/variant';
 /** Release track selected at package time. */
 export type ReleaseTrack = 'stable' | 'canary';
 
-/** Electrobun update channel used in `version.json` and release artifact names. */
-export type UpdateChannel = 'stable' | 'cef' | 'canary' | 'cef-canary';
+/**
+ * Valid Electrobun build environment values.
+ *
+ * Electrobun's CLI only accepts `dev`, `canary`, and `stable`. Any other value
+ * silently falls back to `dev`, producing a dev-named app bundle. Our variant
+ * (base/cef) is orthogonal to the build environment and is separated via
+ * `buildFolder` / `artifactFolder` instead.
+ */
+export type ElectrobunBuildEnv = 'dev' | 'canary' | 'stable';
 
 /**
  * Resolved configuration for a specific build variant.
@@ -24,12 +31,16 @@ export interface VariantConfig {
   readonly variant: MakaioVariant;
   /** Release track selected for this packaged build. */
   readonly releaseTrack: ReleaseTrack;
-  /** Electrobun update channel that carries artifacts for this variant. */
-  readonly updateChannel: UpdateChannel;
+  /** Valid Electrobun `--env` value derived from the release track. */
+  readonly electrobunBuildEnv: ElectrobunBuildEnv;
   /** Whether to bundle the Chromium Embedded Framework into the distributable. */
   readonly bundleCEF: boolean;
   /** Default renderer backend selected when no explicit override is provided. */
   readonly defaultRenderer: 'native' | 'cef';
+  /** Electrobun `build.buildFolder` — separates variant/track outputs. */
+  readonly buildFolder: string;
+  /** Electrobun `build.artifactFolder` — separates variant/track artifacts. */
+  readonly artifactFolder: string;
 }
 
 /** Renderer backend fields consumed by `electrobun.config.ts`. */
@@ -45,38 +56,60 @@ const VARIANTS: Record<MakaioVariant, Pick<VariantConfig, 'bundleCEF' | 'default
   cef: { bundleCEF: true, defaultRenderer: 'cef' },
 };
 
-const UPDATE_CHANNELS: Record<ReleaseTrack, Record<MakaioVariant, UpdateChannel>> = {
-  stable: {
-    base: 'stable',
-    cef: 'cef',
-  },
-  canary: {
-    base: 'canary',
-    cef: 'cef-canary',
-  },
+/**
+ * Release-server channel identifier used by the upgrade handler.
+ *
+ * This is NOT an Electrobun build environment — it is a release-server concept
+ * that routes the Electrobun updater to the correct variant artifact set.
+ * The upgrade handler rewrites `version.json`'s `channel` field to this value
+ * so the updater fetches `{baseUrl}/{releaseChannel}-{os}-{arch}-update.json`.
+ */
+export type ReleaseChannel = 'stable' | 'cef' | 'canary' | 'cef-canary';
+
+const RELEASE_CHANNELS: Record<ReleaseTrack, Record<MakaioVariant, ReleaseChannel>> = {
+  stable: { base: 'stable', cef: 'cef' },
+  canary: { base: 'canary', cef: 'cef-canary' },
 };
 
 /**
- * Resolve the Electrobun update channel that carries a variant.
+ * Resolve the release-server channel for a variant and release track.
  *
- * The public host variant is `base`, but Electrobun's `stable` build
- * environment is the only channel that preserves the production app name
- * (`Makaio.app`) instead of producing `Makaio-base.app`.
+ * Used by the upgrade handler to rewrite `version.json` so the Electrobun
+ * updater fetches the correct variant's artifacts from the release server.
  * @param variant - Host variant identifier.
  * @param releaseTrack - Release track for the packaged app.
- * @returns Electrobun update channel used by version.json and release artifacts.
+ * @returns Release channel string written to `version.json`.
  */
-export function resolveVariantUpdateChannel(
+export function resolveVariantReleaseChannel(
   variant: MakaioVariant,
   releaseTrack: ReleaseTrack = 'stable',
-): UpdateChannel {
-  return UPDATE_CHANNELS[releaseTrack][variant];
+): ReleaseChannel {
+  return RELEASE_CHANNELS[releaseTrack][variant];
+}
+
+/** Maps release track to the valid Electrobun `--env` value. */
+const RELEASE_TRACK_TO_BUILD_ENV: Record<ReleaseTrack, ElectrobunBuildEnv> = {
+  stable: 'stable',
+  canary: 'canary',
+};
+
+/**
+ * Resolve the valid Electrobun build environment for a release track.
+ * @param releaseTrack - Release track for the packaged app.
+ * @returns Electrobun `--env` value (`stable` or `canary`).
+ */
+export function resolveElectrobunBuildEnv(releaseTrack: ReleaseTrack): ElectrobunBuildEnv {
+  return RELEASE_TRACK_TO_BUILD_ENV[releaseTrack];
 }
 
 /**
  * Resolves the build variant and release track from package-time env vars.
  *
- * Defaults to `'base'` (no CEF, system WebView) when unset or empty.
+ * Defaults to `'base'` variant and `'stable'` release track when unset.
+ *
+ * Electrobun only accepts `dev | canary | stable` as `--env` values; anything
+ * else silently falls back to `dev`. Our variant dimension (base/cef) is
+ * separated via per-variant `buildFolder` and `artifactFolder` paths instead.
  * @param variantEnv - Raw value of `process.env.MAKAIO_VARIANT`, or `undefined`.
  * @param releaseTrackEnv - Raw value of `process.env.MAKAIO_RELEASE_TRACK`, or `undefined`.
  * @returns The fully resolved {@link VariantConfig} for the requested variant and track.
@@ -92,14 +125,21 @@ export function resolveVariantConfig(
   }
 
   const releaseTrack: ReleaseTrack = releaseTrackEnv ? (releaseTrackEnv as ReleaseTrack) : 'stable';
-  if (!Object.hasOwn(UPDATE_CHANNELS, releaseTrack)) {
-    throw new Error(`Unknown release track "${releaseTrack}". Valid: ${Object.keys(UPDATE_CHANNELS).join(', ')}`);
+  if (!Object.hasOwn(RELEASE_TRACK_TO_BUILD_ENV, releaseTrack)) {
+    throw new Error(
+      `Unknown release track "${releaseTrackEnv}". Valid: ${Object.keys(RELEASE_TRACK_TO_BUILD_ENV).join(', ')}`,
+    );
   }
+
+  const electrobunBuildEnv = resolveElectrobunBuildEnv(releaseTrack);
+  const folderSuffix = `${variant}-${releaseTrack}`;
 
   return {
     variant,
     releaseTrack,
-    updateChannel: resolveVariantUpdateChannel(variant, releaseTrack),
+    electrobunBuildEnv,
+    buildFolder: `build/${folderSuffix}`,
+    artifactFolder: `artifacts/${folderSuffix}`,
     ...VARIANTS[variant],
   };
 }

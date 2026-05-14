@@ -2,7 +2,7 @@
  * Build surface invariant checker for the `@makaio/framework` umbrella package.
  *
  * Validates that the three sources of truth — `FRAMEWORK_BUILD_PACKAGE_NAMES`,
- * `FRAMEWORK_DIST_SUBPATHS`, and `framework/package.json publishConfig.exports` —
+ * `FRAMEWORK_DIST_SUBPATHS`, and `packages/framework/package.json exports` —
  * remain consistent as the workspace grows.
  * @packageDocumentation
  */
@@ -157,8 +157,8 @@ function checkTsdownPublishConfigParity(manifests: ReadonlyMap<string, PackageMa
 
 /**
  * Verifies every `FRAMEWORK_DIST_SUBPATHS` entry has a corresponding key in
- * the umbrella `publishConfig.exports`.
- * @param umbrellaExportKeys - Set of keys from framework/package.json publishConfig.exports.
+ * the `@makaio/framework` package exports.
+ * @param umbrellaExportKeys - Set of keys from `packages/framework/package.json` exports.
  * @param issues - Mutable issues array to push into.
  */
 function checkDistSubpathsInUmbrella(umbrellaExportKeys: Set<string>, issues: SurfaceIssue[]): void {
@@ -166,7 +166,7 @@ function checkDistSubpathsInUmbrella(umbrellaExportKeys: Set<string>, issues: Su
     if (!umbrellaExportKeys.has(`./${entry.subpath}`)) {
       issues.push({
         kind: 'dist-subpath-not-in-umbrella',
-        message: `FRAMEWORK_DIST_SUBPATHS entry "./${entry.subpath}" (${entry.packageName}) has no matching publishConfig.exports key in framework/package.json`,
+        message: `FRAMEWORK_DIST_SUBPATHS entry "./${entry.subpath}" (${entry.packageName}) has no matching exports key in packages/framework/package.json`,
       });
     }
   }
@@ -175,7 +175,7 @@ function checkDistSubpathsInUmbrella(umbrellaExportKeys: Set<string>, issues: Su
 /**
  * Verifies every `./dist/...` target in the umbrella exports is rooted under
  * a known dist subpath from `FRAMEWORK_DIST_SUBPATHS`.
- * @param umbrellaExports - The full umbrella publishConfig.exports map.
+ * @param umbrellaExports - The full `@makaio/framework` package exports map.
  * @param issues - Mutable issues array to push into.
  */
 function checkUmbrellaExportRoots(umbrellaExports: ExportMap, issues: SurfaceIssue[]): void {
@@ -203,10 +203,10 @@ function checkUmbrellaExportRoots(umbrellaExports: ExportMap, issues: SurfaceIss
  * 2. For tsdown-based packages, every buildable source export key has a matching
  *    `publishConfig.exports` entry.
  * 3. Every `FRAMEWORK_DIST_SUBPATHS` entry has a corresponding export root in
- *    `framework/package.json publishConfig.exports`.
- * 4. Every `./dist/...` entry in the umbrella `publishConfig.exports` is rooted
- *    under a known dist subpath from `FRAMEWORK_DIST_SUBPATHS`.
- * @param frameworkRoot - Absolute path to the framework package root.
+ *    the `@makaio/framework` package exports.
+ * 4. Every `./dist/...` entry in the umbrella exports is rooted under a known
+ *    dist subpath from `FRAMEWORK_DIST_SUBPATHS`.
+ * @param frameworkRoot - Absolute path to the framework workspace root.
  * @returns Structured result with all discovered issues.
  */
 export function checkBuildSurface(frameworkRoot: string): BuildSurfaceResult {
@@ -229,8 +229,10 @@ export function checkBuildSurface(frameworkRoot: string): BuildSurfaceResult {
   checkMissingWorkspaces(workspaceByName, issues);
   checkTsdownPublishConfigParity(manifestsByPath, issues);
 
-  const umbrellaManifest = readJson(join(frameworkRoot, 'package.json')) as PackageManifest;
-  const umbrellaExports = normalizePackageExports(umbrellaManifest.publishConfig?.exports);
+  const umbrellaManifestPath = join(frameworkRoot, 'packages', 'framework', 'package.json');
+  const umbrellaManifest =
+    manifestsByPath.get(umbrellaManifestPath) ?? (readJson(umbrellaManifestPath) as PackageManifest);
+  const umbrellaExports = normalizePackageExports(umbrellaManifest.exports);
   const umbrellaExportKeys = new Set(Object.keys(umbrellaExports));
 
   checkDistSubpathsInUmbrella(umbrellaExportKeys, issues);

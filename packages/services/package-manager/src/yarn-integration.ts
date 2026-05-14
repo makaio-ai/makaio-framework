@@ -11,6 +11,15 @@ import { ExtensionDescriptorSchema } from '@makaio/contracts';
 import type { PackageInfo } from './schemas.js';
 
 const NODE_LINKER_SETTING = 'nodeLinker: node-modules';
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+
+/** Framework dependency declaration used for extension installs. */
+export interface FrameworkDependencySpec {
+  /** Semver range used when the framework is resolved from the registry. */
+  readonly versionRange: string;
+  /** Optional host-provided package root used by packaged apps. */
+  readonly localPackagePath?: string;
+}
 
 /**
  * Lazily imported Yarn library bundle.
@@ -330,26 +339,27 @@ export class YarnPackageManager {
   }
 
   /**
-   * Ensure `@makaio/framework` is present as a dependency with the given version range.
+   * Ensure `@makaio/framework` is present as a dependency.
    *
    * Called before installing published extension packages so the host provides
    * the framework package that extensions declare as a peer dependency.
-   * @param versionRange - Semver range for the framework dependency (e.g. `^0.1.0`).
+   * @param dependency - Framework dependency source and compatible version range.
    */
-  public async ensureFrameworkDependency(versionRange: string): Promise<void> {
+  public async ensureFrameworkDependency(dependency: FrameworkDependencySpec): Promise<void> {
+    const range = resolveFrameworkDependencyRange(dependency);
     try {
       const { structUtils } = await loadYarnLibs();
       const { configuration, project, cache } = await this.loadYarnState();
-      const descriptor = structUtils.makeDescriptor(structUtils.parseIdent('@makaio/framework'), versionRange);
+      const descriptor = structUtils.makeDescriptor(structUtils.parseIdent('@makaio/framework'), range);
 
       const existing = project.topLevelWorkspace.manifest.dependencies.get(descriptor.identHash);
-      if (existing?.range === versionRange) return;
+      if (existing?.range === range) return;
 
       project.topLevelWorkspace.manifest.dependencies.set(descriptor.identHash, descriptor);
       await this.runProjectInstall(configuration, project, cache);
-      console.info('[YarnPackageManager] Ensured @makaio/framework@%s', versionRange);
+      console.info('[YarnPackageManager] Ensured @makaio/framework@%s', range);
     } catch (error) {
-      throw new Error(`Failed to ensure @makaio/framework@${versionRange}`, { cause: error });
+      throw new Error(`Failed to ensure @makaio/framework@${range}`, { cause: error });
     }
   }
 
@@ -429,6 +439,29 @@ export class YarnPackageManager {
     }
     return { hasDescriptor: true };
   }
+}
+
+/**
+ * Resolve the Yarn dependency range for the framework singleton.
+ * @param dependency - Desired framework dependency source.
+ * @returns Registry semver range or local package portal range.
+ */
+export function resolveFrameworkDependencyRange(dependency: FrameworkDependencySpec): string {
+  if (dependency.localPackagePath) {
+    return `portal:${toYarnPortablePath(dependency.localPackagePath)}`;
+  }
+  return dependency.versionRange;
+}
+
+/**
+ * Convert a native package path into the portable path form expected by Yarn ranges.
+ * @param packagePath - Native absolute or relative filesystem path.
+ * @returns Portable path with forward slashes and Windows drive paths prefixed by `/`.
+ */
+function toYarnPortablePath(packagePath: string): string {
+  const resolved = WINDOWS_ABSOLUTE_PATH.test(packagePath) ? packagePath : path.resolve(packagePath);
+  const slashNormalized = resolved.replace(/\\/g, '/');
+  return WINDOWS_ABSOLUTE_PATH.test(slashNormalized) ? `/${slashNormalized}` : slashNormalized;
 }
 
 /**

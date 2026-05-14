@@ -227,6 +227,15 @@ export interface CoreBootOptions {
   readonly frameworkModuleResolver?: FrameworkModuleResolver;
 
   /**
+   * Host-provided `@makaio/framework` package root.
+   *
+   * Packaged hosts can pass the app-bundled framework package here so installed
+   * extensions and package-manager installs resolve framework imports to the
+   * same physical package instance as the host process.
+   */
+  readonly frameworkPackagePath?: string;
+
+  /**
    * Host-provided managed-binary I/O implementation.
    *
    * The shared boot core only wires the seam through. Concrete hosts supply

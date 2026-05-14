@@ -21,7 +21,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { Updater, type UpdateStatusType } from 'electrobun/bun';
 import { VariantSubjects } from '@makaio/contracts/variant';
 import type { VariantConfig, MakaioVariant } from '../variant-config.js';
-import { resolveVariantUpdateChannel } from '../variant-config.js';
+import { resolveVariantReleaseChannel } from '../variant-config.js';
 import type { VariantUpgradeStatus } from '@makaio/contracts/variant';
 
 /**
@@ -256,7 +256,7 @@ export function registerVariantUpgradeHandler(cleanups: Array<() => void>, varia
       // Rewrite version.json to route the Updater at the target variant on the current release track.
       const updatedVersion: VersionJson = {
         ...originalVersion,
-        channel: resolveVariantUpdateChannel(targetVariant, variantConfig.releaseTrack),
+        channel: resolveVariantReleaseChannel(targetVariant, variantConfig.releaseTrack),
       };
       try {
         writeVersionJsonAtomic(versionPath, JSON.stringify(updatedVersion, null, 2));

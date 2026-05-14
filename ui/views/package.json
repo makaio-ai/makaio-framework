@@ -5,6 +5,9 @@
   "type": "module",
   "private": true,
   "license": "CC-BY-NC-4.0",
+  "sideEffects": [
+    "./dist/style.css"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json",

@@ -14,8 +14,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyFrameworkDist } from './lib/framework-dist-verifier.js';
 
-const frameworkRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const result = verifyFrameworkDist(frameworkRoot);
+const frameworkPackageRoot = join(dirname(fileURLToPath(import.meta.url)), '..', 'packages', 'framework');
+const result = verifyFrameworkDist(frameworkPackageRoot);
 
 if (result.ok) {
   console.info(`framework-dist: ok (${result.checkedTargets} export targets)`);

@@ -78,10 +78,10 @@ describe('variant build smoke — fast', () => {
       expect(scripts['package:base']).toContain('--env=stable');
     });
 
-    it('package:cef invokes electrobun build with the cef env flag', () => {
+    it('package:cef invokes electrobun build with the stable env flag', () => {
       const { scripts } = readPackageJson();
       expect(scripts['package:cef']).toContain('electrobun build');
-      expect(scripts['package:cef']).toContain('--env=cef');
+      expect(scripts['package:cef']).toContain('--env=stable');
     });
   });
 
@@ -93,9 +93,11 @@ describe('variant build smoke — fast', () => {
       expect(parsed).toEqual({
         variant: 'base',
         releaseTrack: 'stable',
-        updateChannel: 'stable',
+        electrobunBuildEnv: 'stable',
         bundleCEF: false,
         defaultRenderer: 'native',
+        buildFolder: 'build/base-stable',
+        artifactFolder: 'artifacts/base-stable',
       });
     });
 
@@ -106,9 +108,11 @@ describe('variant build smoke — fast', () => {
       expect(parsed).toEqual({
         variant: 'cef',
         releaseTrack: 'stable',
-        updateChannel: 'cef',
+        electrobunBuildEnv: 'stable',
         bundleCEF: true,
         defaultRenderer: 'cef',
+        buildFolder: 'build/cef-stable',
+        artifactFolder: 'artifacts/cef-stable',
       });
     });
 
@@ -187,9 +191,11 @@ describe.skipIf(!process.env['CI_FULL'])(
       expect(readDistVariantJson()).toEqual({
         variant: 'base',
         releaseTrack: 'stable',
-        updateChannel: 'stable',
+        electrobunBuildEnv: 'stable',
         bundleCEF: false,
         defaultRenderer: 'native',
+        buildFolder: 'build/base-stable',
+        artifactFolder: 'artifacts/base-stable',
       });
     });
 
@@ -198,9 +204,11 @@ describe.skipIf(!process.env['CI_FULL'])(
       expect(readDistVariantJson()).toEqual({
         variant: 'cef',
         releaseTrack: 'stable',
-        updateChannel: 'cef',
+        electrobunBuildEnv: 'stable',
         bundleCEF: true,
         defaultRenderer: 'cef',
+        buildFolder: 'build/cef-stable',
+        artifactFolder: 'artifacts/cef-stable',
       });
     });
   },

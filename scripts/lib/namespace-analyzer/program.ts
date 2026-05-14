@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as ts from 'typescript';
 
 import { isFrameworkDistributionRoot, relativeInventoryPath } from './path-utils.js';
+import type { NamespaceTier } from './types.js';
 
 /**
  * Creates a TS program from the analysis root tsconfig.json.
@@ -66,26 +67,29 @@ export function resolvePackageName(filePath: string): string | null {
 }
 
 /**
- * Classifies a file path into a tier based on its position in the repo.
+ * Classifies a file path into a documentation tier.
  * @param filePath - Absolute path to the source file being classified.
  * @param analysisRoot - Absolute path to the analysis root directory.
- * @returns The tier string: `'framework'`, `'product'`, `'product-web'`, or `'extension'`.
+ * @param classifyHostTier - Optional host-owned policy for non-distribution roots.
+ * @returns The tier string: `'framework'`, `'host'`, `'host-web'`, or `'extension'`.
  */
 export function classifyTier(
   filePath: string,
   analysisRoot: string,
-): 'framework' | 'product' | 'product-web' | 'extension' {
+  classifyHostTier?: (relativePath: string, analysisRoot: string) => NamespaceTier,
+): NamespaceTier {
   const rel = relativeInventoryPath(analysisRoot, filePath);
 
   if (isFrameworkDistributionRoot(analysisRoot)) {
     return rel.startsWith('extensions/') ? 'extension' : 'framework';
   }
 
-  if (rel.startsWith('product/web/')) return 'product-web';
-  if (rel.startsWith('product/extensions/')) return 'extension';
-  if (rel.startsWith('product/')) return 'product';
   if (rel.startsWith('framework/extensions/')) return 'extension';
   if (rel.startsWith('framework/')) return 'framework';
 
-  return 'product';
+  if (classifyHostTier) {
+    return classifyHostTier(rel, analysisRoot);
+  }
+
+  return 'host';
 }
