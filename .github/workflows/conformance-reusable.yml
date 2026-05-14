@@ -113,7 +113,8 @@ jobs:
 
       - name: Run openai-node reference smoke
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          MAKAIO_CONFORMANCE_PROVIDER: opencode-go
         run: |
           mkdir -p conformance-artifacts
           yarn test:conformance \
@@ -170,7 +171,8 @@ jobs:
 
       - name: Run openai-node reference rest
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          MAKAIO_CONFORMANCE_PROVIDER: opencode-go
         run: |
           mkdir -p conformance-artifacts
           yarn test:conformance \

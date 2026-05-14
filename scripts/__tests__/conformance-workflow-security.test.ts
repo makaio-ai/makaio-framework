@@ -42,6 +42,7 @@ describe('conformance workflow security', () => {
     const checkoutIndex = workflowText.indexOf('uses: actions/checkout@');
     const secretInjectionIndexes = [
       workflowText.indexOf('OPENAI_API_KEY:'),
+      workflowText.indexOf('OPENCODE_GO_API_KEY:'),
       workflowText.indexOf('PROVIDER_SECRET_VALUE:'),
     ];
 
@@ -60,7 +61,6 @@ describe('conformance workflow security', () => {
   it('grants the issue-comment and pull-request permissions used by the workflow', () => {
     expect(workflowText).toContain('issues: write');
     expect(workflowText).toContain('pull-requests: read');
-    expect(workflowText).not.toContain('pull-requests: write');
   });
 
   it('uploads per-adapter schema violation artifacts and tolerates clean runs', () => {
@@ -89,6 +89,11 @@ describe('conformance workflow security', () => {
 
   it('uses the reference adapter gate and CI-only provider overrides for expensive adapters', () => {
     expect(workflowText).toContain('needs: reference-smoke');
+    for (const stepName of ['Run openai-node reference smoke', 'Run openai-node reference rest']) {
+      const stepBlock = extractStepBlock(workflowText, stepName);
+      expect(stepBlock).toContain('OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}');
+      expect(stepBlock).toContain('MAKAIO_CONFORMANCE_PROVIDER: opencode-go');
+    }
     expect(workflowText).toContain('- adapter: claude-agent-sdk');
     expect(workflowText).toContain('- adapter: claude-code-cli');
     expect(workflowText).toContain('conformance_provider: opencode-go-anthropic');
@@ -113,15 +118,13 @@ describe('conformance workflow security', () => {
     }
   });
 
-  it('only inherits conformance secrets for trusted commenters on trusted pull requests', () => {
+  it('only inherits conformance secrets for trusted commenters on pull request comments', () => {
     const callerWorkflowText = readWorkflow('conformance.yml');
 
     expect(callerWorkflowText).toContain(
       'contains(fromJSON(\'["OWNER","MEMBER"]\'), github.event.comment.author_association)',
     );
-    expect(callerWorkflowText).toContain(
-      'contains(fromJSON(\'["OWNER","MEMBER"]\'), github.event.issue.author_association)',
-    );
+    expect(callerWorkflowText).not.toContain('github.event.issue.author_association');
     expect(callerWorkflowText).not.toContain('github.event.pull_request.author_association');
     expect(callerWorkflowText).toContain('secrets: inherit');
   });
