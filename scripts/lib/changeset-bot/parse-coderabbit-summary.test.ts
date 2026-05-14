@@ -145,4 +145,24 @@ Summary.
     const rows = parseCodeRabbitChanges(comment);
     expect(rows[0].summary).toBe('Bold summary with  tag.');
   });
+
+  it('escapes incomplete HTML tags from summary cells', () => {
+    const comment = `<!-- walkthrough_start -->
+<details>
+<summary>📝 Walkthrough</summary>
+
+## Walkthrough
+Summary.
+
+## Changes
+
+|File|Summary|
+|---|---|
+|**Code** <br> \`src/foo.ts\`|Adds incomplete <script payload.|
+
+</details>`;
+
+    const rows = parseCodeRabbitChanges(comment);
+    expect(rows[0].summary).toBe('Adds incomplete &lt;script payload.');
+  });
 });

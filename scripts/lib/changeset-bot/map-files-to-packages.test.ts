@@ -24,6 +24,12 @@ describe('mapFilesToPackages', () => {
     expect(mapFilesToPackages(['providers/openai/src/definition.ts'])).toEqual(['@makaio/provider-openai']);
   });
 
+  it('uses real package names when directory conventions differ from package.json names', () => {
+    expect(
+      mapFilesToPackages(['extensions/reviewer-coderabbit/src/index.ts', 'providers/qwen/src/package.ts']),
+    ).toEqual(['@makaio/provider-qwen-acp', '@makaio/reviewer-coderabbit']);
+  });
+
   it('maps extensions to @makaio/extension-<name>', () => {
     expect(mapFilesToPackages(['extensions/prompt/src/index.ts'])).toEqual(['@makaio/extension-prompt']);
   });
@@ -58,6 +64,12 @@ describe('mapFilesToPackages', () => {
 
   it('maps adapters/core/ to @makaio/framework', () => {
     expect(mapFilesToPackages(['adapters/core/src/adapter.ts'])).toEqual(['@makaio/framework']);
+  });
+
+  it('does not turn CodeRabbit display placeholders into package names', () => {
+    expect(
+      mapFilesToPackages(['clients/...', 'extensions/...', 'adapters/implementations/__tests__/shared.ts']),
+    ).toEqual(['@makaio/framework']);
   });
 
   it('maps adapters/shared/ to @makaio/framework', () => {

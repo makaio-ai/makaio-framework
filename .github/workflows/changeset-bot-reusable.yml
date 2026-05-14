@@ -63,33 +63,50 @@ jobs:
           echo "::error::Changeset generation commits are only supported for branches in this repository."
           exit 1
 
-      - name: Checkout target PR branch
-        if: inputs.mode == 'generate'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
-        with:
-          repository: ${{ steps.pr.outputs.head_repo }}
-          ref: ${{ steps.pr.outputs.head_ref }}
-          path: target
-          fetch-depth: 0
-
       - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
 
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            trusted/.yarn/cache
+            trusted/.yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('trusted/yarn.lock') }}
+          restore-keys: yarn-cache-
+
+      - name: Restore node_modules
+        id: nm-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: "trusted/**/node_modules"
+          key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
+
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: yarn install --immutable
         working-directory: trusted
 
-      - name: Configure git
-        if: inputs.mode == 'generate'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        working-directory: target
+      - name: Save Yarn cache
+        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            trusted/.yarn/cache
+            trusted/.yarn/install-state.gz
+          key: yarn-cache-${{ hashFiles('trusted/yarn.lock') }}
+
+      - name: Save node_modules
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: "trusted/**/node_modules"
+          key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
 
       - name: Run changeset bot
         env:
@@ -99,9 +116,6 @@ jobs:
           ARGS=("${{ inputs.mode }}" "--pr" "${{ inputs.pr_number }}" "--repo" "${{ github.repository }}")
           if [ "${{ inputs.mode }}" = "generate" ] && [ "${{ inputs.comment_id }}" != "0" ]; then
             ARGS+=("--comment-id" "${{ inputs.comment_id }}")
-          fi
-          if [ "${{ inputs.mode }}" = "generate" ]; then
-            ARGS+=("--target-root" "$GITHUB_WORKSPACE/target")
           fi
           yarn tsx "${{ inputs.framework_root }}/scripts/changeset-bot.ts" "${ARGS[@]}"
         working-directory: trusted

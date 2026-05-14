@@ -10,9 +10,9 @@
  * summary, maps paths to publishable packages, and posts the interactive
  * checkbox comment.
  *
- * **generate** — Parse the config comment on a PR and commit a changeset file.
- * Finds the config comment, extracts bump types and summary, writes the
- * `.changeset/*.md` file, commits it, and resets the Generate checkbox.
+ * **generate** — Parse the config comment on a PR and create a changeset
+ * commit through the GitHub Contents API. The workflow never checks out or
+ * executes PR branch code.
  *
  * Both modes support `--dry-run` which prints the output to stdout without
  * touching GitHub or git.
@@ -27,14 +27,11 @@
  * # Generate changeset:
  * tsx scripts/changeset-bot.ts generate --pr 889 --repo makaio-ai/makaio
  *
- * # Generate changeset into a separate PR checkout while running trusted script code:
- * tsx scripts/changeset-bot.ts generate --pr 889 --repo makaio-ai/makaio --target-root ../pr-checkout
+ * # Generate changeset:
+ * tsx scripts/changeset-bot.ts generate --pr 889 --repo makaio-ai/makaio
  * ```
  */
 
-import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, join } from 'node:path';
 import { Octokit } from '@octokit/rest';
 import { resolveGithubToken } from './lib/github-auth.js';
 import { resolveFrameworkPrefix } from './lib/changeset-bot/resolve-framework-prefix.js';
@@ -62,7 +59,6 @@ interface GenerateOptions {
   owner: string;
   repo: string;
   commentId: number | null;
-  targetRoot: string;
   dryRun: boolean;
 }
 
@@ -83,7 +79,7 @@ function extractFlags(argv: string[]): RawFlags {
   const mode = argv[0];
   if (mode !== 'post-config' && mode !== 'generate') {
     throw new Error(
-      'Usage: changeset-bot <post-config|generate> --pr <number> --repo <owner/repo> [--comment-id <id>] [--target-root <path>] [--dry-run]',
+      'Usage: changeset-bot <post-config|generate> --pr <number> --repo <owner/repo> [--comment-id <id>] [--dry-run]',
     );
   }
   const flagArgs = argv.slice(1);
@@ -130,8 +126,7 @@ function parseArgs(argv: string[]): CliOptions {
     if (rawCommentId && (!commentId || !Number.isInteger(commentId))) {
       throw new Error('--comment-id must be an integer');
     }
-    const targetRoot = resolve(flags.get('target-root') ?? process.cwd());
-    return { mode, pr, owner, repo, commentId, targetRoot, dryRun };
+    return { mode, pr, owner, repo, commentId, dryRun };
   }
 
   return { mode, pr, owner, repo, dryRun };
@@ -153,6 +148,52 @@ async function fetchPrComments(octokit: Octokit, owner: string, repo: string, pr
     repo,
     issue_number: pr,
     per_page: 100,
+  });
+}
+
+/**
+ * Resolves the same-repository PR head branch that can receive generated commits.
+ * @param octokit - Authenticated client.
+ * @param opts - Generate options.
+ * @returns Head branch ref.
+ */
+async function resolveSameRepoHeadBranch(octokit: Octokit, opts: GenerateOptions): Promise<string> {
+  const { data: pr } = await octokit.pulls.get({
+    owner: opts.owner,
+    repo: opts.repo,
+    pull_number: opts.pr,
+  });
+
+  if (pr.head.repo?.full_name !== `${opts.owner}/${opts.repo}`) {
+    throw new Error('Changeset generation commits are only supported for branches in this repository.');
+  }
+
+  return pr.head.ref;
+}
+
+/**
+ * Commits generated changeset content to a PR head branch without checking out
+ * the branch in the privileged workflow.
+ * @param octokit - Authenticated client.
+ * @param opts - Generate options.
+ * @param branch - Same-repository PR head branch.
+ * @param filename - Generated changeset filename.
+ * @param content - Generated changeset markdown.
+ */
+async function commitChangesetFile(
+  octokit: Octokit,
+  opts: GenerateOptions,
+  branch: string,
+  filename: string,
+  content: string,
+): Promise<void> {
+  await octokit.repos.createOrUpdateFileContents({
+    owner: opts.owner,
+    repo: opts.repo,
+    branch,
+    path: `.changeset/${filename}`,
+    message: `chore: add changeset for PR #${opts.pr}`,
+    content: Buffer.from(content).toString('base64'),
   });
 }
 
@@ -208,8 +249,8 @@ async function postConfig(octokit: Octokit, opts: PostConfigOptions): Promise<vo
 }
 
 /**
- * Finds or fetches the config comment, generates a changeset file,
- * commits it, and resets the Generate checkbox.
+ * Finds or fetches the config comment, generates a changeset file, commits it
+ * through the GitHub API, and resets the Generate checkbox.
  * @param octokit - Authenticated client.
  * @param opts - CLI options.
  */
@@ -255,20 +296,9 @@ async function generate(octokit: Octokit, opts: GenerateOptions): Promise<void> 
     return;
   }
 
-  const changesetDir = resolve(opts.targetRoot, '.changeset');
-  mkdirSync(changesetDir, { recursive: true });
-
-  const filePath = join(changesetDir, filename);
-  writeFileSync(filePath, content, 'utf-8');
-  console.info(`Generated changeset: .changeset/${filename}`);
-
-  execFileSync('git', ['add', filePath], { cwd: opts.targetRoot, stdio: 'inherit' });
-  execFileSync('git', ['commit', '-m', `chore: add changeset for PR #${opts.pr}`], {
-    cwd: opts.targetRoot,
-    stdio: 'inherit',
-  });
-  execFileSync('git', ['push'], { cwd: opts.targetRoot, stdio: 'inherit' });
-  console.info('Committed and pushed changeset.');
+  const branch = await resolveSameRepoHeadBranch(octokit, opts);
+  await commitChangesetFile(octokit, opts, branch, filename, content);
+  console.info(`Committed generated changeset: .changeset/${filename}.`);
 
   await octokit.issues.updateComment({
     owner: opts.owner,

@@ -75,6 +75,8 @@ function cleanSummaryCell(cell: string): string {
   return cell
     .replace(/\*\*/g, '')
     .replace(/<[^>]+>/g, '')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
     .trim();
 }
 
