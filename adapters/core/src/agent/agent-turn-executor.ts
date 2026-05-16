@@ -25,7 +25,7 @@ export interface AgentTurnExecutorConfig {
   /** Completion/lifecycle tracker hook. */
   onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
   /** Side-effect callback to mark agent status active before dispatch. */
-  onBeforeDispatch?: () => void;
+  onBeforeDispatch?: () => void | Promise<void>;
   /** When true, PreUserMessage hooks are skipped. */
   ephemeral?: boolean;
 }
@@ -56,7 +56,7 @@ export class AgentTurnExecutor {
   private readonly getConnector: () => AIAgentConnector;
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
   private readonly onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
-  private readonly onBeforeDispatch?: () => void;
+  private readonly onBeforeDispatch?: () => void | Promise<void>;
   private readonly ephemeral: boolean;
 
   public constructor(config: AgentTurnExecutorConfig) {
@@ -77,7 +77,7 @@ export class AgentTurnExecutor {
    * @returns Resolved messageId from connector handle
    */
   public async executeSendMessage(payload: SendMessageRequestPayload): Promise<{ messageId: string }> {
-    this.onBeforeDispatch?.();
+    await this.onBeforeDispatch?.();
 
     const connector = this.getConnector();
     const parsedSessionContext = payload.sessionContext
@@ -121,7 +121,7 @@ export class AgentTurnExecutor {
     systemPrompt: StartAgentOptions['systemPrompt'],
     responseSchema?: Record<string, unknown>,
   ): Promise<AgentStartResult> {
-    this.onBeforeDispatch?.();
+    await this.onBeforeDispatch?.();
 
     const connector = this.getConnector();
     const parsedSessionContext = options?.sessionContext

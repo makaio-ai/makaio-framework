@@ -37,6 +37,32 @@ describe('McpTransportConfigSchema', () => {
     expect(sse.success).toBe(true);
     expect(http.success).toBe(true);
   });
+
+  it('rejects duplicate per-tool policy names for URL transports', () => {
+    const result = McpTransportConfigSchema.safeParse({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      tools: [
+        { name: 'search', permission_policy: 'always_allow' },
+        { name: 'search', permission_policy: 'always_deny' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts unique per-tool policy names for URL transports', () => {
+    const result = McpTransportConfigSchema.safeParse({
+      type: 'sse',
+      url: 'https://example.com/sse',
+      tools: [
+        { name: 'search', permission_policy: 'always_allow' },
+        { name: 'read', permission_policy: 'always_ask' },
+      ],
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('MCP pattern constraints', () => {

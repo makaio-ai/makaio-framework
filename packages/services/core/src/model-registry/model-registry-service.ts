@@ -1,4 +1,5 @@
 import type { AIModel, ProviderAIModel } from '@makaio/contracts';
+import { ModelRegistryPublicSubjects, type ModelRegistrySupportedModel } from '@makaio/contracts/model-registry';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import { ModelRegistrySubjects } from './namespace.js';
@@ -119,6 +120,11 @@ export class ModelRegistryService extends BaseService {
       const { registry, index } = await this.ensureRegistryWithIndex();
       const models = this.resolveAllProviderModels(registry, index, providerId);
       ctx.setResult({ models });
+    });
+
+    this.registerHandler(ModelRegistryPublicSubjects.supportedModels, async (ctx) => {
+      const { registry, index } = await this.ensureRegistryWithIndex();
+      ctx.setResult({ models: this.resolveSupportedModels(registry, index) });
     });
 
     this.registerHandler(ModelRegistrySubjects.checkModelInProviders, async (ctx) => {
@@ -399,6 +405,33 @@ export class ModelRegistryService extends BaseService {
     }
 
     return models;
+  }
+
+  /**
+   * Resolve SDK-safe model descriptors across every provider.
+   * @param registry - The current model registry.
+   * @param index - Lab model index coherent with the registry.
+   * @returns Provider-tagged model descriptors for SDK introspection.
+   */
+  private resolveSupportedModels(registry: ModelRegistry, index: Map<string, AIModel>): ModelRegistrySupportedModel[] {
+    const models: ModelRegistrySupportedModel[] = [];
+
+    for (const providerId of Object.keys(registry.providers)) {
+      for (const model of this.resolveAllProviderModels(registry, index, providerId)) {
+        models.push({
+          name: model.name,
+          ...(model.friendlyName !== undefined && { friendlyName: model.friendlyName }),
+          contextWindowSize: model.contextWindowSize,
+          provider: providerId,
+        });
+      }
+    }
+
+    return models.sort((a, b) => {
+      if (a.provider !== b.provider) return a.provider < b.provider ? -1 : 1;
+      if (a.name === b.name) return 0;
+      return a.name < b.name ? -1 : 1;
+    });
   }
 
   /**

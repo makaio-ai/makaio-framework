@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { MessageInputSchema } from '../../shared/index.js';
 import { AgentRoleSchema } from '../../session/schemas.js';
 import { SessionContextSchema } from '../../session/session-context.js';
-import { McpSessionContextSchema } from '../../mcp/schemas.js';
+import { McpRuntimeSessionContextSchema, McpSessionContextSchema } from '../../mcp/schemas.js';
 import { AIReasoningLevelSchema } from '../../model/index.js';
 import { AdapterRuntimeOptionsSchema } from './runtime-options.js';
 import { ProviderContextSchema } from './provider-context.js';
@@ -49,7 +49,7 @@ const StartAgentBaseSchema = z
      * MCP session context with resolved servers and tools.
      * Passes direct/discoverable tool information to adapter.
      */
-    mcpSessionContext: McpSessionContextSchema.optional(),
+    mcpSessionContext: z.union([McpSessionContextSchema, McpRuntimeSessionContextSchema]).optional(),
 
     /**
      * Unresolved provider context (credential refs, not plaintext).

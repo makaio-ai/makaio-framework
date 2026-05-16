@@ -14,6 +14,7 @@ import { HarnessStorageNamespace } from './harness/storage/namespace.js';
 import { CLIDetectionNamespace } from './cli-detection/namespace.js';
 import { LocalNotificationNamespace } from './local-notification/namespace.js';
 import { ModelRegistryNamespace } from './model-registry/namespace.js';
+import { ModelRegistryPublicNamespace } from '@makaio/contracts/model-registry';
 import { PreferencesNamespace } from './preferences/storage-namespace.js';
 import { ProviderRuntimeNamespace } from './provider-runtime/namespace.js';
 import { SessionEditorNamespace } from './session-editor/namespace.js';
@@ -55,6 +56,7 @@ export const FrameworkServicesCoreNamespaces = [
   LocalNotificationNamespace,
   MessageRoutingNamespace,
   ModelRegistryNamespace,
+  ModelRegistryPublicNamespace,
   PreferencesNamespace,
   ProviderRuntimeNamespace,
   ProviderStorageNamespace,

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AIReasoningLevelSchema } from '../../model/index.js';
+import { McpRuntimeSessionContextSchema } from '../../mcp/schemas.js';
 import { SystemPromptSchema } from '../../shared/index.js';
 
 // ============================================================================
@@ -78,6 +79,12 @@ export const AgentSelectionBaseSchema = z.looseObject({
 
   /** Disallowed tool names (adapter-specific). Takes precedence over allowedTools. */
   disallowedTools: z.array(z.string()).optional(),
+
+  /** Environment variables to pass to agent execution. */
+  env: z.record(z.string(), z.string()).optional(),
+
+  /** MCP session context with caller-provided servers and tools. */
+  mcpSessionContext: McpRuntimeSessionContextSchema.optional(),
 
   /**
    * Directory restrictions for file-system tool execution.

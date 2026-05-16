@@ -3,10 +3,13 @@ import {
   AgentSubjects,
   AdapterSubjects,
   type AIReasoningLevel,
+  type McpRuntimeSessionContext,
+  type McpSessionContext,
   type ReasoningLevelMap,
   type ProviderContext,
   type SystemPrompt,
 } from '@makaio/contracts';
+import type { LedgerSessionContext } from './session-tool-ledger.js';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -102,6 +105,7 @@ export function createAgentTurnExecutor(config: {
   getConnector: () => AIAgentConnector;
   shouldUseNativeResume: (sessionContext?: StartAgentOptions['sessionContext']) => boolean;
   onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
+  onBeforeDispatch?: () => void | Promise<void>;
   ephemeral?: boolean;
 }): AgentTurnExecutor {
   return new AgentTurnExecutor(config);
@@ -118,12 +122,20 @@ export function createAgentRuntimeMutationManager(config: {
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
   swapConnector: (
-    configOverrides?: Partial<{ cwd: string; model: string; providerContext: ProviderContext }>,
+    configOverrides?: Partial<{
+      cwd: string;
+      model: string;
+      providerContext: ProviderContext;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+    }>,
   ) => Promise<void>;
   emitGlobal: AgentPayloadEmitter['emitGlobal'];
   getProviderContext: () => ProviderContext | undefined;
   setProviderContext: (providerContext: ProviderContext) => void;
   setReasoningEffort: (reasoningEffort: AIReasoningLevel | undefined) => void;
+  setMcpSessionContext: (
+    mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext | undefined,
+  ) => void;
   resolveSupportedReasoningLevels: (model: string) => ReasoningLevelMap | undefined;
 }): AgentRuntimeMutationManager {
   return new AgentRuntimeMutationManager({
@@ -141,6 +153,7 @@ export function createAgentRuntimeMutationManager(config: {
     getProviderContext: config.getProviderContext,
     setProviderContext: config.setProviderContext,
     setReasoningEffort: config.setReasoningEffort,
+    setMcpSessionContext: config.setMcpSessionContext,
     resolveSupportedReasoningLevels: config.resolveSupportedReasoningLevels,
   });
 }
@@ -161,6 +174,7 @@ export function createAgentConnectorLifecycleManager<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ) => ConfigFactoryInput<TBus>;
   configFactory: (input: ConfigFactoryInput<TBus>) => Promise<BaseAgentConnectorConfig<TBus> & { adapterId: string }>;

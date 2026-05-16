@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { BaseSdkMessageSchema } from './base.js';
 
+const KNOWN_SYSTEM_SUBTYPES = ['init', 'compact_boundary'] as const;
+
 /**
  * API key source for authentication
  *
@@ -59,11 +61,26 @@ export const SDKSystemCompactBoundaryMessageSchema = BaseSdkMessageSchema.extend
 });
 
 /**
- * Discriminated union of all system message types
+ * Discriminated union of system messages with typed handling.
  */
-export const SDKSystemMessageSchema = z.discriminatedUnion('subtype', [
+export const SDKKnownSystemMessageSchema = z.discriminatedUnion('subtype', [
   SDKSystemInitMessageSchema,
   SDKSystemCompactBoundaryMessageSchema,
 ]);
+
+/**
+ * Raw passthrough for SDK system messages whose subtype is not yet modeled.
+ *
+ * Claude Code emits operational system records such as hook lifecycle and
+ * status updates. They should remain observable on `sdk.event` without being
+ * consumed by typed routing logic.
+ */
+export const SDKUnknownSystemMessageSchema = BaseSdkMessageSchema.extend({
+  type: z.literal('system'),
+  subtype: z.string().refine((subtype) => !KNOWN_SYSTEM_SUBTYPES.some((known) => known === subtype)),
+}).passthrough();
+
+/** Union of all accepted system message shapes. */
+export const SDKSystemMessageSchema = z.union([SDKKnownSystemMessageSchema, SDKUnknownSystemMessageSchema]);
 
 export type SDKSystemMessage = z.infer<typeof SDKSystemMessageSchema>;

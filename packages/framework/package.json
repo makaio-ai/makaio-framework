@@ -64,6 +64,10 @@
       "types": "./dist/contracts/extension/index.d.mts",
       "default": "./dist/contracts/extension/index.mjs"
     },
+    "./contracts/model-registry": {
+      "types": "./dist/contracts/model-registry/index.d.mts",
+      "default": "./dist/contracts/model-registry/index.mjs"
+    },
     "./contracts/harness": {
       "types": "./dist/contracts/harness/index.d.mts",
       "default": "./dist/contracts/harness/index.mjs"

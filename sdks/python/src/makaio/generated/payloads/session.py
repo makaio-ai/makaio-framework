@@ -53,6 +53,7 @@ class SessionSendMessageRequest:
     extension_id: str | None = None
     origin: Literal["voice", "text", "compact"] | None = None
     origin_window_id: str | None = None
+    response_schema: dict[str, Any] | None = None
     session_context: SessionSendMessageRequestSessionContext | None = None
     skip_connector_swap_warning: bool | None = None
     source: Literal["extension", "user", "system"] | None = None

@@ -73,6 +73,31 @@ describe('SessionOrchestrator - Routing', () => {
       expect(sentToAgents).toEqual(['agent-lead']);
     });
 
+    it('forwards responseSchema to agent.sendMessage', async () => {
+      const sessionId = 'session-response-schema';
+      const responseSchema = { type: 'object', properties: { answer: { type: 'string' } } };
+      let capturedResponseSchema: Record<string, unknown> | undefined;
+      sessions.set(
+        sessionId,
+        createMockSession({
+          sessionId,
+          agents: [createMockAgent('agent-lead', { role: 'lead' })],
+          leadAgentId: 'agent-lead',
+        }),
+      );
+      unsubscribers.push(
+        registerSendMessageHandler((payload) => {
+          capturedResponseSchema = payload.responseSchema;
+        }),
+      );
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+
+      await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'Hello!', responseSchema });
+      await waitForAsync();
+
+      expect(capturedResponseSchema).toEqual(responseSchema);
+    });
+
     it('throws error when lead agent not found', async () => {
       const sessionId = 'session-no-lead';
       sessions.set(

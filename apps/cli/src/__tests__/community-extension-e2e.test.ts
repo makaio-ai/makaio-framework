@@ -155,15 +155,13 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe('descriptor-backed extension e2e — handler dispatch', () => {
-  let originalExitCode: number | undefined;
-
   beforeEach(() => {
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     vi.restoreAllMocks();
   });
 

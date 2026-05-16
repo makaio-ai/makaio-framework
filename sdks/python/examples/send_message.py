@@ -51,6 +51,13 @@ async def main() -> None:
 
         await client.subscribe("session.*", on_session_event)
 
+        async def on_agent_event(ctx: EventContext[object]) -> None:
+            if isinstance(ctx.payload, dict) and ctx.payload.get("sessionId") != session_id:
+                return
+            print(f"{ctx.subject}: {ctx.payload}")
+
+        await client.subscribe("agent.*", on_agent_event)
+
         turn_task = asyncio.create_task(
             client.once(
                 session.turn_completed,
@@ -86,6 +93,11 @@ async def main() -> None:
             if not isinstance(turn, SessionTurnCompletedPayload):
                 raise TypeError(f"Expected SessionTurnCompletedPayload, got {type(turn).__name__}")
             print(f"turn completed — success={turn.success}, turn={turn.turn_number}")
+            try:
+                await client.request("session.close", {"sessionId": session_id}, timeout_ms=30_000)
+            except RequestTimeoutError:
+                print("Timed out waiting for session.close acknowledgement", file=sys.stderr)
+                raise SystemExit(1)
         except OnceTimeoutError:
             print("Timed out waiting for session.turn.completed", file=sys.stderr)
             raise SystemExit(1)

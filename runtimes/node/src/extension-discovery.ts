@@ -1,12 +1,12 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { glob } from 'glob';
-import { type ExtensionDescriptor, parseExtensionDescriptor, type MakaioExtension } from '@makaio/contracts';
+import { type ExtensionDescriptor, parseExtensionDescriptor } from '@makaio/contracts';
 
 /** Preloaded server entry module used by bundled hosts. */
 export interface ExtensionEntrypointModule {
-  /** Server entry default export. */
-  readonly default: MakaioExtension | ReadonlyArray<MakaioExtension>;
+  /** Server entry default export, validated by the extension loader. */
+  readonly default: unknown;
 }
 
 /**

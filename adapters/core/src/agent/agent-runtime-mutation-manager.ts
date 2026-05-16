@@ -1,6 +1,4 @@
-import type { ExtractSubjectPayload } from '@makaio/core';
 import {
-  AgentSubjects,
   SessionSubjects,
   type MakaioSessionAgent,
   type AIReasoningLevel,
@@ -13,62 +11,21 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { AIAgentConnector } from '../connector/index.js';
 import { CredentialChangeSequencer } from './credential-change-sequencer.js';
 import { confirmModelChange } from './model-change-warning.js';
+import { AgentMcpServersMutationManager } from './agent-mcp-servers-mutation-manager.js';
+import type {
+  AgentRuntimeConnectorOverrides,
+  AgentRuntimeMutationManagerConfig,
+} from './agent-runtime-mutation-manager-config.js';
 import type {
   AgentModelChangeRequestPayload,
   AgentModelChangeResponsePayload,
+  AgentMcpServersSetRequestPayload,
+  AgentMcpServersSetResponsePayload,
   AgentCwdChangeRequestPayload,
   AgentCwdChangeResponsePayload,
   AgentCredentialChangeRequestPayload,
   AgentCredentialChangeResponsePayload,
 } from './types.js';
-
-/**
- * Dependencies for runtime mutation handling.
- */
-export interface AgentRuntimeMutationManagerConfig {
-  /** Stable agent identifier. */
-  agentId: string;
-  /** Optional Makaio session identifier. */
-  sessionId?: string;
-  /** Global bus for persistence and events. */
-  globalBus: IMakaioBus;
-  /** Read current connector. */
-  getConnector: () => AIAgentConnector;
-  /** Swap connector with runtime overrides. */
-  swapConnector: (
-    configOverrides?: Partial<{ cwd: string; model: string; providerContext: ProviderContext }>,
-  ) => Promise<void>;
-  /** Emit cwd.changed payload. */
-  emitCwdChanged: (
-    payload: Omit<
-      ExtractSubjectPayload<typeof AgentSubjects.cwd.changed>,
-      'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId'
-    >,
-  ) => Promise<void>;
-  /** Emit model.changed payload. */
-  emitModelChanged: (
-    payload: Omit<
-      ExtractSubjectPayload<typeof AgentSubjects.model.changed>,
-      'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId'
-    >,
-  ) => Promise<void>;
-  /**
-   * Read the agent's current provider context for no-op detection.
-   * Returns undefined during rehydration or when the orchestrator has not yet
-   * resolved credentials for this agent.
-   */
-  getProviderContext: () => ProviderContext | undefined;
-  /**
-   * Persist provider context changes on agent config for sequential swaps.
-   * Called after a connector swap driven by a provider change so subsequent
-   * `buildConfigInput` calls carry the updated context.
-   */
-  setProviderContext: (providerContext: ProviderContext) => void;
-  /** Persist reasoning effort changes on agent config for sequential swaps. */
-  setReasoningEffort: (reasoningEffort: AIReasoningLevel | undefined) => void;
-  /** Resolve supported reasoning levels for a model from the agent's available models. */
-  resolveSupportedReasoningLevels: (model: string) => ReasoningLevelMap | undefined;
-}
 
 /**
  * Handles runtime mutation requests for AIAgent (cwd/model/credential changes).
@@ -78,16 +35,17 @@ export class AgentRuntimeMutationManager {
   private readonly sessionId?: string;
   private readonly globalBus: IMakaioBus;
   private readonly getConnector: () => AIAgentConnector;
-  private readonly swapConnector: (
-    configOverrides?: Partial<{ cwd: string; model: string; providerContext: ProviderContext }>,
-  ) => Promise<void>;
+  private readonly swapConnector: (configOverrides?: Partial<AgentRuntimeConnectorOverrides>) => Promise<void>;
   private readonly emitCwdChanged: AgentRuntimeMutationManagerConfig['emitCwdChanged'];
   private readonly emitModelChanged: AgentRuntimeMutationManagerConfig['emitModelChanged'];
   private readonly getProviderContext: () => ProviderContext | undefined;
   private readonly setProviderContext: (providerContext: ProviderContext) => void;
   private readonly setReasoningEffort: (reasoningEffort: AIReasoningLevel | undefined) => void;
+  private readonly setMcpSessionContext: AgentRuntimeMutationManagerConfig['setMcpSessionContext'];
   private readonly resolveSupportedReasoningLevels: (model: string) => ReasoningLevelMap | undefined;
+  private readonly mcpServersMutationManager: AgentMcpServersMutationManager;
   private readonly credentialChangeSequencer = new CredentialChangeSequencer();
+  private stagedModelChange?: AgentModelChangeRequestPayload;
 
   public constructor(config: AgentRuntimeMutationManagerConfig) {
     this.agentId = config.agentId;
@@ -100,7 +58,13 @@ export class AgentRuntimeMutationManager {
     this.getProviderContext = config.getProviderContext;
     this.setProviderContext = config.setProviderContext;
     this.setReasoningEffort = config.setReasoningEffort;
+    this.setMcpSessionContext = config.setMcpSessionContext;
     this.resolveSupportedReasoningLevels = config.resolveSupportedReasoningLevels;
+    this.mcpServersMutationManager = new AgentMcpServersMutationManager({
+      getConnector: this.getConnector,
+      swapConnector: this.swapConnector,
+      setMcpSessionContext: this.setMcpSessionContext,
+    });
   }
 
   /**
@@ -116,9 +80,7 @@ export class AgentRuntimeMutationManager {
       return { success: true };
     }
 
-    if (connector.getProcessingState() !== 'idle') {
-      return { success: false, reason: 'turn_active' };
-    }
+    if (connector.getProcessingState() !== 'idle') return { success: false, reason: 'turn_active' };
 
     try {
       const previousCwd = connector.cwd;
@@ -136,6 +98,41 @@ export class AgentRuntimeMutationManager {
     } catch (error) {
       return { success: false, reason: `cwd_change_failed: ${(error as Error).message}` };
     }
+  }
+
+  /**
+   * Apply staged runtime mutations before dispatching the next user turn.
+   *
+   * Staged changes are accepted while a turn is active, but they must not touch
+   * the live connector until the next turn boundary. The turn executor calls
+   * this before handing a new message to the connector, when the connector is
+   * expected to be idle.
+   */
+  public async applyStagedMutations(): Promise<void> {
+    const connector = this.getConnector();
+    if (connector.getProcessingState() !== 'idle') return;
+
+    const stagedModelChange = this.stagedModelChange;
+    if (stagedModelChange !== undefined) {
+      this.stagedModelChange = undefined;
+      const result = await this.handleModelChange(stagedModelChange);
+      if (!result.success) {
+        throw new Error(`Failed to apply staged model change: ${result.reason ?? 'unknown error'}`);
+      }
+    }
+
+    await this.mcpServersMutationManager.applyStagedMutation();
+  }
+
+  /**
+   * Handle `agent.mcp.servers.set` request.
+   * @param payload - MCP server replacement request payload
+   * @returns MCP mutation response payload
+   */
+  public async handleMcpServersSet(
+    payload: AgentMcpServersSetRequestPayload,
+  ): Promise<AgentMcpServersSetResponsePayload> {
+    return this.mcpServersMutationManager.handleMcpServersSet(payload);
   }
 
   /**
@@ -167,6 +164,19 @@ export class AgentRuntimeMutationManager {
       return { success: true, swapped: false };
     }
 
+    if (connector.getProcessingState() !== 'idle') {
+      if (payload.turnActiveBehavior === 'stageForNextTurn') {
+        this.stagedModelChange = { ...payload, turnActiveBehavior: 'reject' };
+        return {
+          success: true,
+          swapped: false,
+          staged: true,
+          ...(rawNewModel !== undefined && { model: rawNewModel }),
+        };
+      }
+      return { success: false, reason: 'turn_active' };
+    }
+
     if (!rawNewModel && !isProviderChange) {
       return this.handleReasoningOnlyChange(connector, currentModel, previousReasoningEffort, reasoningEffort!);
     }
@@ -177,10 +187,6 @@ export class AgentRuntimeMutationManager {
         return this.handleReasoningOnlyChange(connector, currentModel, previousReasoningEffort, reasoningEffort);
       }
       return { success: true, swapped: false };
-    }
-
-    if (connector.getProcessingState() !== 'idle') {
-      return { success: false, reason: 'turn_active' };
     }
 
     return this.handleModelSwap({

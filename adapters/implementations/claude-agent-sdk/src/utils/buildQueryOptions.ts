@@ -62,6 +62,7 @@ function toSdkServerConfig(server: McpResolvedServer): McpServerConfig {
       command: transport.command,
       ...(transport.args !== undefined && { args: transport.args }),
       ...(transport.env !== undefined && { env: transport.env }),
+      ...(transport.alwaysLoad !== undefined && { alwaysLoad: transport.alwaysLoad }),
     };
     return config;
   }
@@ -70,6 +71,8 @@ function toSdkServerConfig(server: McpResolvedServer): McpServerConfig {
       type: 'sse',
       url: transport.url,
       ...(transport.headers !== undefined && { headers: transport.headers }),
+      ...(transport.tools !== undefined && { tools: transport.tools }),
+      ...(transport.alwaysLoad !== undefined && { alwaysLoad: transport.alwaysLoad }),
     };
     return config;
   }
@@ -78,6 +81,8 @@ function toSdkServerConfig(server: McpResolvedServer): McpServerConfig {
       type: 'http',
       url: transport.url,
       ...(transport.headers !== undefined && { headers: transport.headers }),
+      ...(transport.tools !== undefined && { tools: transport.tools }),
+      ...(transport.alwaysLoad !== undefined && { alwaysLoad: transport.alwaysLoad }),
     };
     return config;
   }

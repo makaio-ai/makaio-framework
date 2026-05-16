@@ -32,6 +32,9 @@ import type { RequestSessionAccountObservation } from './account-observation-req
 const SDK_METADATA_KEYS = ['agentId', 'adapterId', 'adapterSessionId', 'adapterName'] as const;
 type ConnectorSdkEventPayload = Omit<SDKMessage, (typeof SDK_METADATA_KEYS)[number]>;
 
+const hasMcpResolutionScope = (context: unknown): context is McpSessionContext =>
+  context !== null && typeof context === 'object' && 'projectId' in context && 'profileId' in context;
+
 type ClaudeConnectorConfig = ClaudeAgentConfig & {
   clientId: string;
   requestSessionAccountObservation: RequestSessionAccountObservation;
@@ -283,8 +286,8 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * left unchanged rather than breaking the connector.
    */
   private async refreshMcpServers(): Promise<void> {
-    const mcpSessionContext = this.config.mcpSessionContext as McpSessionContext | undefined;
-    if (!this.session || !mcpSessionContext) {
+    const mcpSessionContext = this.config.mcpSessionContext;
+    if (!this.session || !hasMcpResolutionScope(mcpSessionContext)) {
       return;
     }
 

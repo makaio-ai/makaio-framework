@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { ModelRegistryPublicSubjects } from '@makaio/contracts/model-registry';
 import { ModelRegistryService } from '../model-registry-service.js';
 import { ModelRegistrySubjects } from '../namespace.js';
 import { ModelRegistrySchema, type ModelRegistry } from '../schemas.js';
@@ -506,6 +507,40 @@ describe('ModelRegistryService', () => {
           providerId: 'anthropic',
         }),
       ).rejects.toThrow(/Mock fetch failed/);
+    });
+  });
+
+  describe('modelRegistry:public.supportedModels', () => {
+    it('returns SDK-safe model descriptors across providers', async () => {
+      const result = await MakaioBus.request(ModelRegistryPublicSubjects.supportedModels, {});
+
+      expect(result.models).toEqual([
+        {
+          name: 'claude-haiku-4-5',
+          friendlyName: 'Claude Haiku 4.5',
+          contextWindowSize: 200_000,
+          provider: 'anthropic',
+        },
+        {
+          name: 'claude-sonnet-4-6',
+          friendlyName: 'Claude Sonnet 4.6',
+          contextWindowSize: 200_000,
+          provider: 'anthropic',
+        },
+        {
+          name: 'claude-sonnet-4-6',
+          friendlyName: 'Claude Sonnet 4.6',
+          contextWindowSize: 200_000,
+          provider: 'openrouter',
+        },
+        {
+          name: 'gpt-4o',
+          friendlyName: 'GPT-4o',
+          contextWindowSize: 128_000,
+          provider: 'openrouter',
+        },
+      ]);
+      expect(fetcher.fetchCount).toBe(1);
     });
   });
 

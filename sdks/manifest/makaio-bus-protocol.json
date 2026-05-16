@@ -439,6 +439,412 @@
       }
     },
     {
+      "kind": "request",
+      "namespace": "agent",
+      "subject": "interrupt",
+      "fullSubject": "agent.interrupt",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterId": {
+            "type": "string"
+          },
+          "adapterName": {
+            "type": "string"
+          },
+          "adapterSessionId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "number"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": ["agentId", "adapterId", "adapterName", "adapterSessionId"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "success": {
+                "const": true,
+                "type": "boolean"
+              }
+            },
+            "required": ["success"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "success": {
+                "const": false,
+                "type": "boolean"
+              }
+            },
+            "required": ["success", "reason"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "request",
+      "namespace": "agent",
+      "subject": "mcp.servers.set",
+      "fullSubject": "agent.mcp.servers.set",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterId": {
+            "type": "string"
+          },
+          "adapterName": {
+            "type": "string"
+          },
+          "adapterSessionId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "mcpSessionContext": {
+            "additionalProperties": false,
+            "properties": {
+              "directTools": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": "string"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "enabledAt": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "enabledBy": {
+                      "enum": ["discovery", "toolset"],
+                      "type": "string"
+                    },
+                    "exposed": {
+                      "type": "boolean"
+                    },
+                    "exposureMode": {
+                      "enum": ["direct", "discovery", "hidden"],
+                      "type": "string"
+                    },
+                    "fullName": {
+                      "type": "string"
+                    },
+                    "inputSchema": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "originalName": {
+                      "type": "string"
+                    },
+                    "serverName": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fullName",
+                    "originalName",
+                    "serverName",
+                    "inputSchema",
+                    "exposureMode",
+                    "enabled",
+                    "exposed"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "discoverableTools": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": "string"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "enabledAt": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "enabledBy": {
+                      "enum": ["discovery", "toolset"],
+                      "type": "string"
+                    },
+                    "exposed": {
+                      "type": "boolean"
+                    },
+                    "exposureMode": {
+                      "enum": ["direct", "discovery", "hidden"],
+                      "type": "string"
+                    },
+                    "fullName": {
+                      "type": "string"
+                    },
+                    "inputSchema": {
+                      "additionalProperties": {},
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "originalName": {
+                      "type": "string"
+                    },
+                    "serverName": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "fullName",
+                    "originalName",
+                    "serverName",
+                    "inputSchema",
+                    "exposureMode",
+                    "enabled",
+                    "exposed"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "servers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "exposureMode": {
+                      "enum": ["direct", "discovery"],
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "transport": {
+                      "oneOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            },
+                            "args": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "type": "array"
+                            },
+                            "command": {
+                              "type": "string"
+                            },
+                            "env": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "type": {
+                              "const": "stdio",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["type", "command"],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            },
+                            "headers": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "tools": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "permission_policy": {
+                                    "enum": ["always_allow", "always_ask", "always_deny"],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["name", "permission_policy"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "type": {
+                              "const": "sse",
+                              "type": "string"
+                            },
+                            "url": {
+                              "format": "uri",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url", "type"],
+                          "type": "object"
+                        },
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "alwaysLoad": {
+                              "type": "boolean"
+                            },
+                            "headers": {
+                              "additionalProperties": {
+                                "type": "string"
+                              },
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "tools": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "permission_policy": {
+                                    "enum": ["always_allow", "always_ask", "always_deny"],
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["name", "permission_policy"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "type": {
+                              "const": "http",
+                              "type": "string"
+                            },
+                            "url": {
+                              "format": "uri",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url", "type"],
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["name", "transport", "exposureMode"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "sessionId": {
+                "type": "string"
+              }
+            },
+            "required": ["sessionId", "servers", "directTools", "discoverableTools"],
+            "type": "object"
+          },
+          "messageId": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "number"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "turnActiveBehavior": {
+            "enum": ["reject", "stageForNextTurn"],
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": ["agentId", "adapterId", "adapterName", "adapterSessionId", "mcpSessionContext"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "staged": {
+            "type": "boolean"
+          },
+          "success": {
+            "type": "boolean"
+          },
+          "swapped": {
+            "type": "boolean"
+          }
+        },
+        "required": ["success"],
+        "type": "object"
+      }
+    },
+    {
       "kind": "event",
       "namespace": "agent",
       "subject": "message",
@@ -632,6 +1038,10 @@
           "skipWarning": {
             "type": "boolean"
           },
+          "turnActiveBehavior": {
+            "enum": ["reject", "stageForNextTurn"],
+            "type": "string"
+          },
           "turnId": {
             "type": "string"
           }
@@ -651,6 +1061,9 @@
           },
           "reason": {
             "type": "string"
+          },
+          "staged": {
+            "type": "boolean"
           },
           "success": {
             "type": "boolean"
@@ -4390,9 +4803,281 @@
                     },
                     "type": "array"
                   },
+                  "env": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "kind": {
                     "const": "adapter",
                     "type": "string"
+                  },
+                  "mcpSessionContext": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "directTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "discoverableTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "servers": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exposureMode": {
+                              "enum": ["direct", "discovery"],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "transport": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "args": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "command": {
+                                      "type": "string"
+                                    },
+                                    "env": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "type": {
+                                      "const": "stdio",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "command"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "sse",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "http",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["name", "transport", "exposureMode"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["sessionId", "servers", "directTools", "discoverableTools"],
+                    "type": "object"
                   },
                   "model": {
                     "type": "string"
@@ -4453,9 +5138,281 @@
                     },
                     "type": "array"
                   },
+                  "env": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "kind": {
                     "const": "canonical-model",
                     "type": "string"
+                  },
+                  "mcpSessionContext": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "directTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "discoverableTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "servers": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exposureMode": {
+                              "enum": ["direct", "discovery"],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "transport": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "args": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "command": {
+                                      "type": "string"
+                                    },
+                                    "env": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "type": {
+                                      "const": "stdio",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "command"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "sse",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "http",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["name", "transport", "exposureMode"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["sessionId", "servers", "directTools", "discoverableTools"],
+                    "type": "object"
                   },
                   "model": {
                     "minLength": 1,
@@ -4517,9 +5474,281 @@
                     },
                     "type": "array"
                   },
+                  "env": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "kind": {
                     "pattern": "^(?!(?:adapter|canonical-model)$).+$",
                     "type": "string"
+                  },
+                  "mcpSessionContext": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "directTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "discoverableTools": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "description": {
+                              "type": "string"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "enabledAt": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "enabledBy": {
+                              "enum": ["discovery", "toolset"],
+                              "type": "string"
+                            },
+                            "exposed": {
+                              "type": "boolean"
+                            },
+                            "exposureMode": {
+                              "enum": ["direct", "discovery", "hidden"],
+                              "type": "string"
+                            },
+                            "fullName": {
+                              "type": "string"
+                            },
+                            "inputSchema": {
+                              "additionalProperties": {},
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "type": "object"
+                            },
+                            "originalName": {
+                              "type": "string"
+                            },
+                            "serverName": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "fullName",
+                            "originalName",
+                            "serverName",
+                            "inputSchema",
+                            "exposureMode",
+                            "enabled",
+                            "exposed"
+                          ],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "servers": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "exposureMode": {
+                              "enum": ["direct", "discovery"],
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "transport": {
+                              "oneOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "args": {
+                                      "items": {
+                                        "type": "string"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "command": {
+                                      "type": "string"
+                                    },
+                                    "env": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "type": {
+                                      "const": "stdio",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["type", "command"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "sse",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                },
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "alwaysLoad": {
+                                      "type": "boolean"
+                                    },
+                                    "headers": {
+                                      "additionalProperties": {
+                                        "type": "string"
+                                      },
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "type": "object"
+                                    },
+                                    "tools": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "permission_policy": {
+                                            "enum": ["always_allow", "always_ask", "always_deny"],
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["name", "permission_policy"],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "type": {
+                                      "const": "http",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "format": "uri",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["url", "type"],
+                                  "type": "object"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["name", "transport", "exposureMode"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["sessionId", "servers", "directTools", "discoverableTools"],
+                    "type": "object"
                   },
                   "model": {
                     "type": "string"
@@ -5096,6 +6325,13 @@
           },
           "originWindowId": {
             "type": "string"
+          },
+          "responseSchema": {
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
           },
           "sessionContext": {
             "additionalProperties": false,

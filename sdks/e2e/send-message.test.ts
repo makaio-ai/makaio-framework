@@ -24,7 +24,7 @@ import { connectTestBus, waitForBoot, waitForRuntimeReady } from '../../apps/cli
 const execFileAsync = promisify(execFile);
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..');
-const CLI_SERVE_ENTRY = path.resolve(REPO_ROOT, 'apps/cli/e2e/harness/cli-serve-entry.ts');
+const CLI_SERVE_ENTRY = path.resolve(REPO_ROOT, 'apps/cli/e2e/harness/cli-serve-claude-live-entry.ts');
 const PYTHON_SDK_ROOT = path.resolve(REPO_ROOT, 'sdks/python');
 const PYTHON_SEND_MESSAGE = path.resolve(PYTHON_SDK_ROOT, 'examples/send_message.py');
 const PYTHON_REQUIREMENTS = path.resolve(PYTHON_SDK_ROOT, 'requirements.txt');

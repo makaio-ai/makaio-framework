@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IMakaioSession } from '@makaio/contracts';
+import { SessionEventStorageSubjects } from './session-events/namespace.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import { registerAgentAddedHandler, registerAgentRemovedHandler } from './session-service-agent-handlers.js';
 
@@ -7,8 +8,8 @@ import { registerAgentAddedHandler, registerAgentRemovedHandler } from './sessio
  * Dependencies required to register the framework-core session service handlers.
  *
  * Intentionally minimal — no `contextTracker` or host-layer concerns.
- * Host-specific handlers (search, update, archive, purge, context window, etc.)
- * are registered separately via the host session service.
+ * Host-specific handlers (search, resume, context window, etc.) are registered
+ * separately via the host session service.
  */
 interface CoreSessionServiceHandlerDeps {
   /** The event bus used for handler registration and storage dispatch. */
@@ -16,14 +17,14 @@ interface CoreSessionServiceHandlerDeps {
 }
 
 /**
- * Registers the six framework-core session service handlers:
+ * Registers the framework-core session service handlers:
  * `session.create`, `session.get`, `session.list`, `session.close`,
+ * `session.update`, `session.archive`, `session.purge`,
  * `session.agent.added`, and `session.agent.removed`.
  *
  * These handlers cover the minimal, load-bearing session contract for the
- * framework SDK. Host-specific handlers (search, update, resume, archive,
- * purge, analytics, context window) are registered by the host session
- * service at a higher priority.
+ * framework SDK. Host-specific handlers (search, resume, analytics, context
+ * window) are registered by the host session service at a higher priority.
  *
  * Persistence degrades gracefully when no storage handlers are registered:
  * `session.get` / `session.list` / `session.close` all delegate to
@@ -37,6 +38,9 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerGetHandler(deps),
     registerListHandler(deps),
     registerCloseHandler(deps),
+    registerCoreUpdateHandler(deps),
+    registerCoreArchiveHandler(deps),
+    registerCorePurgeHandler(deps),
     registerAgentAddedHandler(deps.bus),
     registerAgentRemovedHandler(deps.bus),
   ];
@@ -185,5 +189,128 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
     await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
     await bus.emit(SessionSubjects.closed, { sessionId });
     ctx.setResult({ success: true });
+  });
+}
+
+/**
+ * Handle generic session update requests.
+ *
+ * Updates framework-owned session fields from the public `session.update`
+ * contract and emits `session.updated` for fields present in a successful
+ * update request.
+ * Host interceptors may strip or handle extended payload fields before
+ * delegating to this handler.
+ * @param deps - Core handler dependencies
+ * @returns Cleanup function
+ */
+function registerCoreUpdateHandler(deps: CoreSessionServiceHandlerDeps): () => void {
+  const { bus } = deps;
+  return bus.on(SessionSubjects.update, async (ctx) => {
+    const { sessionId, executionTargetId, approvalPolicyOverride, title } = ctx.payload;
+
+    const updateResult = await bus.requestOptional(SessionStorageSubjects.update, {
+      sessionId,
+      executionTargetId,
+      approvalPolicyOverride,
+      title,
+    });
+    const success = updateResult.handled ? updateResult.data.success : false;
+
+    if (success) {
+      const changedProperties: string[] = [];
+      if (executionTargetId !== undefined) changedProperties.push('executionTargetId');
+      if (approvalPolicyOverride !== undefined) changedProperties.push('approvalPolicyOverride');
+      if (title !== undefined) changedProperties.push('title');
+
+      if (changedProperties.length > 0) {
+        await bus.emit(SessionSubjects.updated, { sessionId, changedProperties });
+      }
+    }
+
+    ctx.setResult({ success });
+  });
+}
+
+/**
+ * Handle session archive requests.
+ *
+ * Implements the core state transition `closed → archived`. Already archived
+ * sessions are successful idempotent responses; other states return
+ * `{ success: false }` without changing storage.
+ * @param deps - Core handler dependencies
+ * @returns Cleanup function
+ */
+function registerCoreArchiveHandler(deps: CoreSessionServiceHandlerDeps): () => void {
+  const { bus } = deps;
+  return bus.on(SessionSubjects.archive, async (ctx) => {
+    const { sessionId } = ctx.payload;
+    const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const session = getResult.handled ? getResult.data.session : null;
+    if (!session) {
+      ctx.setResult({ success: false });
+      return;
+    }
+    if (session.status === 'archived') {
+      // Idempotent archive keeps delete flows race-safe across windows/processes.
+      ctx.setResult({ success: true });
+      return;
+    }
+    if (session.status !== 'closed') {
+      ctx.setResult({ success: false });
+      return;
+    }
+
+    session.status = 'archived';
+    session.lastActivityAt = Date.now();
+    await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
+    await bus.emit(SessionSubjects.archived, { sessionId });
+    ctx.setResult({ success: true });
+  });
+}
+
+/**
+ * Handle session purge requests.
+ *
+ * Permanently deletes archived sessions, removes their event history, and
+ * detaches any direct child sessions from the deleted parent.
+ * @param deps - Core handler dependencies
+ * @returns Cleanup function
+ */
+function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => void {
+  const { bus } = deps;
+  return bus.on(SessionSubjects.purge, async (ctx) => {
+    const { sessionId } = ctx.payload;
+    const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const session = getResult.handled ? getResult.data.session : null;
+    if (!session) {
+      ctx.setResult({ success: false, error: 'Session not found' });
+      return;
+    }
+
+    if (session.status !== 'archived') {
+      ctx.setResult({ success: false, error: 'Cannot purge session unless archived. Call close then archive first.' });
+      return;
+    }
+
+    const listResult = await bus.requestOptional(SessionStorageSubjects.list, { status: 'all' });
+    const sessions = listResult.handled ? listResult.data.sessions : [];
+    for (const child of sessions) {
+      if (child.parentSessionId === sessionId) {
+        await bus.requestOptional(SessionStorageSubjects.set, {
+          sessionId: child.sessionId,
+          session: { ...child, parentSessionId: undefined },
+        });
+      }
+    }
+
+    const eventsResult = await bus.requestOptional(SessionEventStorageSubjects.getEvents, {
+      sessionId,
+      options: { limit: 1 },
+    });
+    const eventsDeleted = eventsResult.handled ? eventsResult.data.totalCount : 0;
+    await bus.requestOptional(SessionEventStorageSubjects.deleteBySession, { sessionId });
+    await bus.requestOptional(SessionStorageSubjects.delete, { sessionId });
+    await bus.emit(SessionSubjects.purged, { sessionId });
+    ctx.setResult({ success: true, eventsDeleted });
   });
 }

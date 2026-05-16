@@ -353,14 +353,12 @@ describe('registerManifestCommand', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerManifestCommand — error handling', () => {
-  let originalExitCode: number | undefined;
-
   beforeEach(() => {
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
   });
 
   afterEach(() => {
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -495,7 +493,7 @@ describe('registerManifestCommand — error handling', () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: null }));
-    expect(process.exitCode).toBe(originalExitCode);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it('blocks execution when beforeRun returns proceed: false', async () => {
@@ -632,7 +630,7 @@ describe('registerManifestCommand — error handling', () => {
     );
 
     await expect(program.parseAsync(['greet', 'say', 'hi'], { from: 'user' })).rejects.toThrow();
-    expect(process.exitCode).toBe(originalExitCode);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it('logs a user-friendly error when contribution has no interactive handler (resolveAndExecuteInteractive)', async () => {
@@ -674,17 +672,16 @@ describe('registerManifestCommand — error handling', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerManifestCommand — interactive TTY guard', () => {
-  let originalExitCode: number | undefined;
   const ttyFixture = createTestTTYFixture();
 
   beforeEach(() => {
     ttyFixture.snapshot();
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
   });
 
   afterEach(() => {
     ttyFixture.restore();
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     vi.clearAllMocks();
   });
 
@@ -848,7 +845,6 @@ describe('registerManifestCommand — command-tree merge', () => {
 // ---------------------------------------------------------------------------
 
 describe('registerManifestCommand — interactive error paths', () => {
-  let originalExitCode: number | undefined;
   const ttyFixture = createTestTTYFixture();
 
   const interactiveManifest: CliManifest = {
@@ -858,14 +854,14 @@ describe('registerManifestCommand — interactive error paths', () => {
   };
 
   beforeEach(() => {
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
     ttyFixture.snapshot();
     ttyFixture.set({ stdoutIsTTY: true, stdinIsTTY: true });
   });
 
   afterEach(() => {
     ttyFixture.restore();
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });

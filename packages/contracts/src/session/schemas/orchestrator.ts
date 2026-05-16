@@ -157,6 +157,11 @@ export const OrchestratorSchemas = {
        * Agent uses this to decide: native resume vs fresh with history.
        */
       sessionContext: SessionContextSchema.optional(),
+      /**
+       * JSON Schema for structured output.
+       * Forwarded to agent.sendMessage for adapters that support constrained responses.
+       */
+      responseSchema: z.record(z.string(), z.unknown()).optional(),
       /** Source of the request (for audit trail). */
       source: z.enum(['extension', 'user', 'system']).optional(),
       /** Extension ID if source is 'extension' (for audit trail). */

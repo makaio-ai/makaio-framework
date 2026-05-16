@@ -3504,7 +3504,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@makaio/adapter-anthropic-sdk@workspace:adapters/implementations/anthropic-sdk":
+"@makaio/adapter-anthropic-sdk@workspace:*, @makaio/adapter-anthropic-sdk@workspace:adapters/implementations/anthropic-sdk":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-anthropic-sdk@workspace:adapters/implementations/anthropic-sdk"
   dependencies:
@@ -3524,7 +3524,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-claude-agent-sdk@workspace:adapters/implementations/claude-agent-sdk":
+"@makaio/adapter-claude-agent-sdk@workspace:*, @makaio/adapter-claude-agent-sdk@workspace:adapters/implementations/claude-agent-sdk":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-claude-agent-sdk@workspace:adapters/implementations/claude-agent-sdk"
   dependencies:
@@ -3548,7 +3548,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-claude-code-cli@workspace:adapters/implementations/claude-code-cli":
+"@makaio/adapter-claude-code-cli@workspace:*, @makaio/adapter-claude-code-cli@workspace:adapters/implementations/claude-code-cli":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-claude-code-cli@workspace:adapters/implementations/claude-code-cli"
   dependencies:
@@ -3567,7 +3567,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-codex-app-server@workspace:adapters/implementations/codex-app-server":
+"@makaio/adapter-codex-app-server@workspace:*, @makaio/adapter-codex-app-server@workspace:adapters/implementations/codex-app-server":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-codex-app-server@workspace:adapters/implementations/codex-app-server"
   dependencies:
@@ -3588,7 +3588,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-gemini-sdk@workspace:adapters/implementations/gemini-sdk":
+"@makaio/adapter-gemini-sdk@workspace:*, @makaio/adapter-gemini-sdk@workspace:adapters/implementations/gemini-sdk":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-gemini-sdk@workspace:adapters/implementations/gemini-sdk"
   dependencies:
@@ -3615,7 +3615,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-github-copilot-sdk@workspace:adapters/implementations/github-copilot-sdk":
+"@makaio/adapter-github-copilot-sdk@workspace:*, @makaio/adapter-github-copilot-sdk@workspace:adapters/implementations/github-copilot-sdk":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-github-copilot-sdk@workspace:adapters/implementations/github-copilot-sdk"
   dependencies:
@@ -3642,7 +3642,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-openai-node@workspace:adapters/implementations/openai-node":
+"@makaio/adapter-openai-node@workspace:*, @makaio/adapter-openai-node@workspace:adapters/implementations/openai-node":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-openai-node@workspace:adapters/implementations/openai-node"
   dependencies:
@@ -3668,7 +3668,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-pi-sdk@workspace:adapters/implementations/pi-sdk":
+"@makaio/adapter-pi-sdk@workspace:*, @makaio/adapter-pi-sdk@workspace:adapters/implementations/pi-sdk":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-pi-sdk@workspace:adapters/implementations/pi-sdk"
   dependencies:
@@ -3693,7 +3693,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/adapter-qwen-acp@workspace:adapters/implementations/qwen-acp":
+"@makaio/adapter-qwen-acp@workspace:*, @makaio/adapter-qwen-acp@workspace:adapters/implementations/qwen-acp":
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-qwen-acp@workspace:adapters/implementations/qwen-acp"
   dependencies:
@@ -3723,6 +3723,58 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@makaio/services-core": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/agent-sdk@workspace:sdks/agent-sdk":
+  version: 0.0.0-use.local
+  resolution: "@makaio/agent-sdk@workspace:sdks/agent-sdk"
+  dependencies:
+    "@makaio/adapter-anthropic-sdk": "workspace:*"
+    "@makaio/adapter-claude-agent-sdk": "workspace:*"
+    "@makaio/adapter-claude-code-cli": "workspace:*"
+    "@makaio/adapter-codex-app-server": "workspace:*"
+    "@makaio/adapter-gemini-sdk": "workspace:*"
+    "@makaio/adapter-github-copilot-sdk": "workspace:*"
+    "@makaio/adapter-openai-node": "workspace:*"
+    "@makaio/adapter-pi-sdk": "workspace:*"
+    "@makaio/adapter-qwen-acp": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/bus-transport-websocket": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/extension-filesystem": "workspace:*"
+    "@makaio/extension-shell": "workspace:*"
+    "@makaio/extension-subagent": "workspace:*"
+    "@makaio/framework": "workspace:*"
+    "@makaio/kernel": "workspace:*"
+    "@makaio/provider-alibaba": "workspace:*"
+    "@makaio/provider-anthropic": "workspace:*"
+    "@makaio/provider-github-copilot": "workspace:*"
+    "@makaio/provider-google": "workspace:*"
+    "@makaio/provider-kimi": "workspace:*"
+    "@makaio/provider-nanogpt": "workspace:*"
+    "@makaio/provider-openai": "workspace:*"
+    "@makaio/provider-openai-codex": "workspace:*"
+    "@makaio/provider-opencode-go": "workspace:*"
+    "@makaio/provider-openrouter": "workspace:*"
+    "@makaio/provider-qwen-acp": "workspace:*"
+    "@makaio/provider-z-ai": "workspace:*"
+    "@makaio/runtime-node": "workspace:*"
+    "@makaio/sdk": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
+    "@makaio/utils": "workspace:*"
+    "@modelcontextprotocol/sdk": "npm:^1.29.0"
+    tsdown: "npm:0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.0.16"
+    zod: "npm:^3.24.0"
+    zod-to-json-schema: "npm:^3.25.1"
+  peerDependencies:
+    "@anthropic-ai/claude-agent-sdk": ">=0.2.50"
+  peerDependenciesMeta:
+    "@anthropic-ai/claude-agent-sdk":
+      optional: true
   languageName: unknown
   linkType: soft
 
@@ -4208,7 +4260,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/extension-filesystem@workspace:extensions/filesystem":
+"@makaio/extension-filesystem@workspace:*, @makaio/extension-filesystem@workspace:extensions/filesystem":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-filesystem@workspace:extensions/filesystem"
   dependencies:
@@ -4306,7 +4358,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/extension-shell@workspace:extensions/shell":
+"@makaio/extension-shell@workspace:*, @makaio/extension-shell@workspace:extensions/shell":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-shell@workspace:extensions/shell"
   dependencies:
@@ -4329,7 +4381,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/extension-subagent@workspace:extensions/subagent":
+"@makaio/extension-subagent@workspace:*, @makaio/extension-subagent@workspace:extensions/subagent":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-subagent@workspace:extensions/subagent"
   dependencies:
@@ -4558,7 +4610,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-anthropic@workspace:providers/anthropic":
+"@makaio/provider-anthropic@workspace:*, @makaio/provider-anthropic@workspace:providers/anthropic":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-anthropic@workspace:providers/anthropic"
   dependencies:
@@ -4566,7 +4618,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-github-copilot@workspace:providers/github-copilot":
+"@makaio/provider-github-copilot@workspace:*, @makaio/provider-github-copilot@workspace:providers/github-copilot":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-github-copilot@workspace:providers/github-copilot"
   dependencies:
@@ -4574,7 +4626,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-google@workspace:providers/google":
+"@makaio/provider-google@workspace:*, @makaio/provider-google@workspace:providers/google":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-google@workspace:providers/google"
   dependencies:
@@ -4582,7 +4634,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-kimi@workspace:providers/kimi":
+"@makaio/provider-kimi@workspace:*, @makaio/provider-kimi@workspace:providers/kimi":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-kimi@workspace:providers/kimi"
   dependencies:
@@ -4598,7 +4650,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-openai-codex@workspace:providers/openai-codex":
+"@makaio/provider-openai-codex@workspace:*, @makaio/provider-openai-codex@workspace:providers/openai-codex":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-openai-codex@workspace:providers/openai-codex"
   dependencies:
@@ -4630,7 +4682,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/provider-qwen-acp@workspace:providers/qwen":
+"@makaio/provider-qwen-acp@workspace:*, @makaio/provider-qwen-acp@workspace:providers/qwen":
   version: 0.0.0-use.local
   resolution: "@makaio/provider-qwen-acp@workspace:providers/qwen"
   dependencies:
@@ -4745,6 +4797,22 @@ __metadata:
     ws: "npm:^8.18.0"
     yaml: "npm:^2.9.0"
     zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/sdk@workspace:*, @makaio/sdk@workspace:sdks/typescript":
+  version: 0.0.0-use.local
+  resolution: "@makaio/sdk@workspace:sdks/typescript"
+  dependencies:
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/bus-transport-websocket": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/utils": "workspace:*"
+    tsdown: "npm:0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.0.16"
+    ws: "npm:^8.16.0"
   languageName: unknown
   linkType: soft
 
@@ -8156,7 +8224,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@standard-schema/spec@npm:^1.1.0":
+"@standard-schema/spec@npm:^1.0.0, @standard-schema/spec@npm:^1.1.0":
   version: 1.1.0
   resolution: "@standard-schema/spec@npm:1.1.0"
   checksum: 10c0/d90f55acde4b2deb983529c87e8025fa693de1a5e8b49ecc6eb84d1fd96328add0e03d7d551442156c7432fd78165b2c26ff561b970a9a881f046abb78d6a526
@@ -9268,6 +9336,20 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@vitest/expect@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/expect@npm:4.0.16"
+  dependencies:
+    "@standard-schema/spec": "npm:^1.0.0"
+    "@types/chai": "npm:^5.2.2"
+    "@vitest/spy": "npm:4.0.16"
+    "@vitest/utils": "npm:4.0.16"
+    chai: "npm:^6.2.1"
+    tinyrainbow: "npm:^3.0.3"
+  checksum: 10c0/add4dde3548b6f65b6d7d364607713f9db258642add248a23805fa1172e48d76a7822080249efb882120b408772684569b2e78581ed3d5f282e215d7f21be183
+  languageName: node
+  linkType: hard
+
 "@vitest/expect@npm:4.1.5":
   version: 4.1.5
   resolution: "@vitest/expect@npm:4.1.5"
@@ -9279,6 +9361,25 @@ __metadata:
     chai: "npm:^6.2.2"
     tinyrainbow: "npm:^3.1.0"
   checksum: 10c0/5184682304db471aa20024c1154210ad3d6d590afb61646201ce1a15297259f9a35f92f8fad4435bc8a82135e307ddd27c8495f72417d72d9aa139eb281d9e06
+  languageName: node
+  linkType: hard
+
+"@vitest/mocker@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/mocker@npm:4.0.16"
+  dependencies:
+    "@vitest/spy": "npm:4.0.16"
+    estree-walker: "npm:^3.0.3"
+    magic-string: "npm:^0.30.21"
+  peerDependencies:
+    msw: ^2.4.9
+    vite: ^6.0.0 || ^7.0.0-0
+  peerDependenciesMeta:
+    msw:
+      optional: true
+    vite:
+      optional: true
+  checksum: 10c0/cf4469a4745e3cdd46e8ee4e20aa04369e7f985d40175d974d3a6f6d331bf9d8610f9638c5a18f7ff59a30ff04b19f4b823457b4c79142186fe463fa4cee80c5
   languageName: node
   linkType: hard
 
@@ -9301,12 +9402,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@vitest/pretty-format@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/pretty-format@npm:4.0.16"
+  dependencies:
+    tinyrainbow: "npm:^3.0.3"
+  checksum: 10c0/11243e9c2d2d011ae23825c6b7464a4385a4a4efc4ceb28b7854bb9d73491f440b89d12f62c5c9737d26375cf9585b11bc20183d4dea4e983e79d5e162407eb9
+  languageName: node
+  linkType: hard
+
 "@vitest/pretty-format@npm:4.1.5":
   version: 4.1.5
   resolution: "@vitest/pretty-format@npm:4.1.5"
   dependencies:
     tinyrainbow: "npm:^3.1.0"
   checksum: 10c0/42b5e9b75e87c0a884d36bee364e2d07ee45e96f413377737a74993e077d90c3a12aa36743855aee5e4e28b78fae20e3e6de5eef8d5344b9aba2bc1e1d5537a1
+  languageName: node
+  linkType: hard
+
+"@vitest/runner@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/runner@npm:4.0.16"
+  dependencies:
+    "@vitest/utils": "npm:4.0.16"
+    pathe: "npm:^2.0.3"
+  checksum: 10c0/7f4614a9fe5e9f3683d30fb82d1489796c669df45fbc0beb22d39539e4b12ebef462062705545ca04391a0406af62088cbf1d613a812ecc9ea753a0edbfd5d26
   languageName: node
   linkType: hard
 
@@ -9317,6 +9437,17 @@ __metadata:
     "@vitest/utils": "npm:4.1.5"
     pathe: "npm:^2.0.3"
   checksum: 10c0/6a03b313a121155f6dd9e32eeb103c0e12440f586bc4ba1f0d77444e44c6df4652a44443718552037463115635b8378e11f35902d90ce1326f77743219fca056
+  languageName: node
+  linkType: hard
+
+"@vitest/snapshot@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/snapshot@npm:4.0.16"
+  dependencies:
+    "@vitest/pretty-format": "npm:4.0.16"
+    magic-string: "npm:^0.30.21"
+    pathe: "npm:^2.0.3"
+  checksum: 10c0/4fa63ffa4f30c909078210a1edcb059dbfa3ec3deaebb8f93637f65a7efae9a2d7714129bae0cf615512a683e925cf31f281fc4cb02f1fdc4c72f68ce21ca11f
   languageName: node
   linkType: hard
 
@@ -9332,10 +9463,27 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@vitest/spy@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/spy@npm:4.0.16"
+  checksum: 10c0/2502918e703d60ef64854d0fa83ebf94da64b80e81b80c319568feee3d86069fd46e24880a768edba06c8caba13801e44005e17a0f16d9b389486f24d539f0bf
+  languageName: node
+  linkType: hard
+
 "@vitest/spy@npm:4.1.5":
   version: 4.1.5
   resolution: "@vitest/spy@npm:4.1.5"
   checksum: 10c0/fda6b1ee0a2fec1a152d8041aba7a79744c3876863b244d1ed406d02b36e8ccc997edb2e3963d1027d728d3dc5a33813e11bef53a0a14fc7de4de5e721d0f591
+  languageName: node
+  linkType: hard
+
+"@vitest/utils@npm:4.0.16":
+  version: 4.0.16
+  resolution: "@vitest/utils@npm:4.0.16"
+  dependencies:
+    "@vitest/pretty-format": "npm:4.0.16"
+    tinyrainbow: "npm:^3.0.3"
+  checksum: 10c0/bba35b4e102be03e106ced227809437573aa5c5f64d512301ca8de127dcb91cbedc11a2e823305f8ba82528c909c10510ec8c7e3d92b3d6d1c1aec33e143572a
   languageName: node
   linkType: hard
 
@@ -11226,7 +11374,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"chai@npm:^6.2.2":
+"chai@npm:^6.2.1, chai@npm:^6.2.2":
   version: 6.2.2
   resolution: "chai@npm:6.2.2"
   checksum: 10c0/e6c69e5f0c11dffe6ea13d0290936ebb68fcc1ad688b8e952e131df6a6d5797d5e860bc55cef1aca2e950c3e1f96daf79e9d5a70fb7dbaab4e46355e2635ed53
@@ -13263,6 +13411,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"es-module-lexer@npm:^1.7.0":
+  version: 1.7.0
+  resolution: "es-module-lexer@npm:1.7.0"
+  checksum: 10c0/4c935affcbfeba7fb4533e1da10fa8568043df1e3574b869385980de9e2d475ddc36769891936dbb07036edb3c3786a8b78ccf44964cd130dedc1f2c984b6c7b
+  languageName: node
+  linkType: hard
+
 "es-module-lexer@npm:^2.0.0":
   version: 2.1.0
   resolution: "es-module-lexer@npm:2.1.0"
@@ -14118,7 +14273,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"expect-type@npm:^1.3.0":
+"expect-type@npm:^1.2.2, expect-type@npm:^1.3.0":
   version: 1.3.0
   resolution: "expect-type@npm:1.3.0"
   checksum: 10c0/8412b3fe4f392c420ab41dae220b09700e4e47c639a29ba7ba2e83cc6cffd2b4926f7ac9e47d7e277e8f4f02acda76fd6931cb81fd2b382fa9477ef9ada953fd
@@ -22654,6 +22809,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"std-env@npm:^3.10.0":
+  version: 3.10.0
+  resolution: "std-env@npm:3.10.0"
+  checksum: 10c0/1814927a45004d36dde6707eaf17552a546769bc79a6421be2c16ce77d238158dfe5de30910b78ec30d95135cc1c59ea73ee22d2ca170f8b9753f84da34c427f
+  languageName: node
+  linkType: hard
+
 "std-env@npm:^4.0.0-rc.1":
   version: 4.1.0
   resolution: "std-env@npm:4.1.0"
@@ -23278,7 +23440,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tinyrainbow@npm:^3.1.0":
+"tinyrainbow@npm:^3.0.3, tinyrainbow@npm:^3.1.0":
   version: 3.1.0
   resolution: "tinyrainbow@npm:3.1.0"
   checksum: 10c0/f11cf387a26c5c9255bec141a90ac511b26172981b10c3e50053bc6700ea7d2336edcc4a3a21dbb8412fe7c013477d2ba4d7e4877800f3f8107be5105aad6511
@@ -24343,6 +24505,61 @@ __metadata:
   languageName: node
   linkType: hard
 
+"vite@npm:^6.0.0 || ^7.0.0":
+  version: 7.3.3
+  resolution: "vite@npm:7.3.3"
+  dependencies:
+    esbuild: "npm:^0.27.0"
+    fdir: "npm:^6.5.0"
+    fsevents: "npm:~2.3.3"
+    picomatch: "npm:^4.0.3"
+    postcss: "npm:^8.5.6"
+    rollup: "npm:^4.43.0"
+    tinyglobby: "npm:^0.2.15"
+  peerDependencies:
+    "@types/node": ^20.19.0 || >=22.12.0
+    jiti: ">=1.21.0"
+    less: ^4.0.0
+    lightningcss: ^1.21.0
+    sass: ^1.70.0
+    sass-embedded: ^1.70.0
+    stylus: ">=0.54.8"
+    sugarss: ^5.0.0
+    terser: ^5.16.0
+    tsx: ^4.8.1
+    yaml: ^2.4.2
+  dependenciesMeta:
+    fsevents:
+      optional: true
+  peerDependenciesMeta:
+    "@types/node":
+      optional: true
+    jiti:
+      optional: true
+    less:
+      optional: true
+    lightningcss:
+      optional: true
+    sass:
+      optional: true
+    sass-embedded:
+      optional: true
+    stylus:
+      optional: true
+    sugarss:
+      optional: true
+    terser:
+      optional: true
+    tsx:
+      optional: true
+    yaml:
+      optional: true
+  bin:
+    vite: bin/vite.js
+  checksum: 10c0/44fed2591d5d0a9d1f6313e0a4330659b7f1eec57e542558f12a924c53b450a84b9fad6d57ac28ec739eca1cf5ff0f62e41b965e3806c47eefdbbe13b74ec9ae
+  languageName: node
+  linkType: hard
+
 "vite@npm:^6.0.0 || ^7.0.0 || ^8.0.0":
   version: 8.0.10
   resolution: "vite@npm:8.0.10"
@@ -24607,6 +24824,65 @@ __metadata:
   bin:
     vitest: vitest.mjs
   checksum: 10c0/196eaf5e95b45a3f6d3001a2408d7dc6f146c29c873ed4e42e1ad4c9327122934fb3793a12b6ce3b7c25d355e738b20123acc0894ce30358c3370b15f4bd0865
+  languageName: node
+  linkType: hard
+
+"vitest@npm:4.0.16":
+  version: 4.0.16
+  resolution: "vitest@npm:4.0.16"
+  dependencies:
+    "@vitest/expect": "npm:4.0.16"
+    "@vitest/mocker": "npm:4.0.16"
+    "@vitest/pretty-format": "npm:4.0.16"
+    "@vitest/runner": "npm:4.0.16"
+    "@vitest/snapshot": "npm:4.0.16"
+    "@vitest/spy": "npm:4.0.16"
+    "@vitest/utils": "npm:4.0.16"
+    es-module-lexer: "npm:^1.7.0"
+    expect-type: "npm:^1.2.2"
+    magic-string: "npm:^0.30.21"
+    obug: "npm:^2.1.1"
+    pathe: "npm:^2.0.3"
+    picomatch: "npm:^4.0.3"
+    std-env: "npm:^3.10.0"
+    tinybench: "npm:^2.9.0"
+    tinyexec: "npm:^1.0.2"
+    tinyglobby: "npm:^0.2.15"
+    tinyrainbow: "npm:^3.0.3"
+    vite: "npm:^6.0.0 || ^7.0.0"
+    why-is-node-running: "npm:^2.3.0"
+  peerDependencies:
+    "@edge-runtime/vm": "*"
+    "@opentelemetry/api": ^1.9.0
+    "@types/node": ^20.0.0 || ^22.0.0 || >=24.0.0
+    "@vitest/browser-playwright": 4.0.16
+    "@vitest/browser-preview": 4.0.16
+    "@vitest/browser-webdriverio": 4.0.16
+    "@vitest/ui": 4.0.16
+    happy-dom: "*"
+    jsdom: "*"
+  peerDependenciesMeta:
+    "@edge-runtime/vm":
+      optional: true
+    "@opentelemetry/api":
+      optional: true
+    "@types/node":
+      optional: true
+    "@vitest/browser-playwright":
+      optional: true
+    "@vitest/browser-preview":
+      optional: true
+    "@vitest/browser-webdriverio":
+      optional: true
+    "@vitest/ui":
+      optional: true
+    happy-dom:
+      optional: true
+    jsdom:
+      optional: true
+  bin:
+    vitest: vitest.mjs
+  checksum: 10c0/b195c272198f7957c11186eb70ee78e2ec0f4524b4b5306ca8f05e41b3d84c6a4a15d02fca58d82f2b32ba61f610ae8a2a23d463a8336d7323e4832db5eef223
   languageName: node
   linkType: hard
 
@@ -25160,7 +25436,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^3.24.1, zod@npm:^3.25.76":
+"zod@npm:^3.24.0, zod@npm:^3.24.1, zod@npm:^3.25.76":
   version: 3.25.76
   resolution: "zod@npm:3.25.76"
   checksum: 10c0/5718ec35e3c40b600316c5b4c5e4976f7fee68151bc8f8d90ec18a469be9571f072e1bbaace10f1e85cf8892ea12d90821b200e980ab46916a6166a4260a983c

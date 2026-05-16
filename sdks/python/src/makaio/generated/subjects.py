@@ -7,6 +7,8 @@ AGENT_CWD_CHANGE = "agent.cwd.change"
 AGENT_CWD_CHANGED = "agent.cwd.changed"
 AGENT_GET_CAPABILITIES = "agent.getCapabilities"
 AGENT_IDLE = "agent.idle"
+AGENT_INTERRUPT = "agent.interrupt"
+AGENT_MCP_SERVERS_SET = "agent.mcp.servers.set"
 AGENT_MESSAGE = "agent.message"
 AGENT_MESSAGE_DELTA = "agent.message_delta"
 AGENT_MODEL_CHANGE = "agent.model.change"
@@ -54,6 +56,8 @@ ALL_SUBJECTS = (
     AGENT_CWD_CHANGED,
     AGENT_GET_CAPABILITIES,
     AGENT_IDLE,
+    AGENT_INTERRUPT,
+    AGENT_MCP_SERVERS_SET,
     AGENT_MESSAGE,
     AGENT_MESSAGE_DELTA,
     AGENT_MODEL_CHANGE,

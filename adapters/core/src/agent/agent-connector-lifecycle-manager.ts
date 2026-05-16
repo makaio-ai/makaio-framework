@@ -1,5 +1,6 @@
 import type { ScopedBus } from '@makaio/bus-core';
-import type { ProviderContext, SystemPrompt } from '@makaio/contracts';
+import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext, SystemPrompt } from '@makaio/contracts';
+import type { LedgerSessionContext } from './session-tool-ledger.js';
 import type { ConfigFactoryInput } from '../adapter/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -21,6 +22,7 @@ export interface AgentConnectorLifecycleManagerConfig<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ) => ConfigFactoryInput<TBus>;
   /** Adapter config factory from AIAgent config. */
@@ -108,7 +110,12 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * @param configOverrides - Optional runtime override fields
    */
   public async swapConnector(
-    configOverrides?: Partial<{ cwd: string; model: string; providerContext: ProviderContext }>,
+    configOverrides?: Partial<{
+      cwd: string;
+      model: string;
+      providerContext: ProviderContext;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+    }>,
   ): Promise<void> {
     const currentConnector = this.config.getConnector();
     if (currentConnector.getProcessingState() !== 'idle') {
@@ -119,6 +126,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       cwd: configOverrides?.cwd ?? currentConnector.cwd,
       model: configOverrides?.model ?? currentConnector.model,
       ...(configOverrides?.providerContext && { providerContext: configOverrides.providerContext }),
+      ...(configOverrides?.mcpSessionContext && { mcpSessionContext: configOverrides.mcpSessionContext }),
       adapterSessionId: crypto.randomUUID(),
     });
 

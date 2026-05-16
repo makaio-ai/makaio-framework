@@ -110,6 +110,8 @@ export class AgentLifecycleEmitter {
   public emitSessionClosed(reason?: string): void {
     if (this.sessionClosedEmitted) return;
     this.sessionClosedEmitted = true;
-    void this.config.emitSessionClosed({ reason });
+    void this.config.emitSessionClosed({ reason }).catch((error) => {
+      console.warn(`[AIAgent] Failed to emit session.closed for agent ${this.config.agentId}:`, error);
+    });
   }
 }

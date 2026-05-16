@@ -8,7 +8,7 @@ import {
   MessageHandle,
   MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { McpResolvedServer, McpSessionContext, SystemPrompt } from '@makaio/contracts';
+import type { McpResolvedServer, McpRuntimeSessionContext, McpSessionContext, SystemPrompt } from '@makaio/contracts';
 
 /**
  * Result returned after SDK stream consumption completes.
@@ -49,8 +49,8 @@ export interface ClaudeSpecificConfig {
  * Configuration for a Claude SDK connector session.
  *
  * Uses BaseAgentConnectorConfig with ClaudeSpecificConfig for provider-specific options.
- * Overrides the inherited `mcpSessionContext` to the full {@link McpSessionContext} shape
- * so the adapter can access `servers` for native-passthrough MCP configuration.
+ * Overrides the inherited `mcpSessionContext` so the adapter can access
+ * `servers` for native-passthrough MCP configuration.
  */
 export type ClaudeAgentConfig = Omit<
   BaseAgentConnectorConfig<ClaudeCodeConnectorBus, ClaudeSpecificConfig>,
@@ -59,11 +59,11 @@ export type ClaudeAgentConfig = Omit<
   /** Adapter instance ID (required by AIAgentConnector) */
   adapterId: string;
   /**
-   * Full resolved MCP session context including upstream server configs.
-   * Overrides the narrower `LedgerSessionContext` from `BaseAgentConnectorConfig`
-   * so upstream servers can be extracted for SDK query configuration.
+   * MCP session context including upstream server configs.
+   * Full host-resolved contexts support refresh; runtime contexts are enough
+   * for SDK-provided dynamic server configuration.
    */
-  mcpSessionContext?: McpSessionContext;
+  mcpSessionContext?: McpRuntimeSessionContext | McpSessionContext;
   /**
    * Port of the in-process HTTP MCP server.
    * Populated from the `mcp.session.register` bus RPC response when the bridge
