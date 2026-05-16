@@ -100,7 +100,9 @@ describe('conformance workflow security', () => {
     expect(workflowText).toContain('adapter_matrix');
     for (const stepName of ['Run openai-node reference smoke', 'Run openai-node reference rest']) {
       const stepBlock = extractStepBlock(workflowText, stepName);
-      expect(stepBlock).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ needs.preflight.outputs.openai_conformance_provider }}');
+      expect(stepBlock).toContain(
+        'MAKAIO_CONFORMANCE_PROVIDER: ${{ needs.preflight.outputs.openai_conformance_provider }}',
+      );
       expect(stepBlock).toContain(
         'MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ needs.preflight.outputs.openai_primary_model }}',
       );
@@ -135,10 +137,16 @@ describe('conformance workflow security', () => {
       expect(stepBlock).toContain('exit 1');
     }
     expect(adapterWorkflowText).toContain('provider_secret_name:');
-    expect(adapterWorkflowText).toContain('PROVIDER_SECRET_NAME: ${{ inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME }}');
+    expect(adapterWorkflowText).toContain(
+      'PROVIDER_SECRET_NAME: ${{ inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME }}',
+    );
     expect(adapterWorkflowText).toContain('PROVIDER_ENV_VAR: ${{ inputs.provider_env_var || vars.PROVIDER_ENV_VAR }}');
-    expect(adapterWorkflowText).toContain('PROVIDER_API_KEY: ${{ secrets[inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME] }}');
-    expect(adapterWorkflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ inputs.conformance_provider || vars.MAKAIO_CONFORMANCE_PROVIDER }}');
+    expect(adapterWorkflowText).toContain(
+      'PROVIDER_API_KEY: ${{ secrets[inputs.provider_secret_name || vars.PROVIDER_SECRET_NAME] }}',
+    );
+    expect(adapterWorkflowText).toContain(
+      'MAKAIO_CONFORMANCE_PROVIDER: ${{ inputs.conformance_provider || vars.MAKAIO_CONFORMANCE_PROVIDER }}',
+    );
     expect(adapterWorkflowText).toContain(
       'MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ inputs.primary_model || vars.MAKAIO_CONFORMANCE_PRIMARY_MODEL }}',
     );

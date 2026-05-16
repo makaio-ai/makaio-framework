@@ -1,20 +1,15 @@
-import { mkdir, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import path from 'path';
 import os from 'node:os';
 import { UserConsoleLog } from 'vitest';
 import { LogItem, SchemaViolation } from './types.js';
 
-const conformanceLogDirEnv = 'MAKAIO_CONFORMANCE_LOG_DIR';
-
 /**
- * Creates a log file path for parsed conformance output.
+ * Creates a temp file path for log output.
  * @returns Path to a unique temp file
  */
-async function getLogFile() {
-  const configuredLogDir = process.env[conformanceLogDirEnv]?.trim();
-  const logDir = configuredLogDir || os.tmpdir();
-  await mkdir(logDir, { recursive: true });
-  return path.join(logDir, `${crypto.randomUUID()}.json`);
+function getTempFile() {
+  return path.join(os.tmpdir(), `${crypto.randomUUID()}.json`);
 }
 
 export interface RawLog {
@@ -228,7 +223,7 @@ function redactRawMessage(message: string): string {
 export async function parseAndWriteLogs(rawLogs: RawLog[]): Promise<string | undefined> {
   if (!rawLogs.length) return undefined;
 
-  const logFile = await getLogFile();
+  const logFile = getTempFile();
   const logs: LogItem[] = [];
   const splitLogs = splitRawLogs(rawLogs);
 

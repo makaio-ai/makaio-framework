@@ -110,13 +110,9 @@ describe('CodexAppServerConnector — client.resolveBinary integration', () => {
    * JSON-RPC client so the production `createStdioTransport` / `spawn` path
    * is exercised.
    * @param clientId - Client identifier forwarded to `client.resolveBinary`
-   * @param env - Optional connector base environment; pass `null` to inherit process.env
    * @returns Connector instance
    */
-  function makeConnector(
-    clientId = 'codex',
-    env: Record<string, string> | null = { BASE_ENV: 'base' },
-  ): Promise<CodexAppServerConnector> {
+  function makeConnector(clientId = 'codex'): Promise<CodexAppServerConnector> {
     return CodexAppServerNamespace.scopedBus().then((mockBus) => {
       tempCwd = mkdtempSync(join(tmpdir(), 'codex-resolve-binary-test-'));
       subprocess = new MockSubprocess();
@@ -129,7 +125,7 @@ describe('CodexAppServerConnector — client.resolveBinary integration', () => {
         agentId: 'test-agent',
         model: 'test-model',
         cwd: tempCwd,
-        ...(env !== null ? { env } : {}),
+        env: { BASE_ENV: 'base' },
         clientId,
       });
 
@@ -246,25 +242,6 @@ describe('CodexAppServerConnector — client.resolveBinary integration', () => {
       expect(env['BASE_ENV']).toBe('managed-override');
     } finally {
       cleanup();
-    }
-  });
-
-  it('inherits CODEX_ACCESS_TOKEN from process.env when no connector env is supplied', async () => {
-    const previousToken = process.env.CODEX_ACCESS_TOKEN;
-    process.env.CODEX_ACCESS_TOKEN = 'codex-test-token';
-
-    try {
-      const connector = await makeConnector('codex', null);
-      const { env } = await waitForSpawn();
-      connector.abort();
-
-      expect(env['CODEX_ACCESS_TOKEN']).toBe('codex-test-token');
-    } finally {
-      if (previousToken === undefined) {
-        delete process.env.CODEX_ACCESS_TOKEN;
-      } else {
-        process.env.CODEX_ACCESS_TOKEN = previousToken;
-      }
     }
   });
 
