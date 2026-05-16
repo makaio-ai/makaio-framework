@@ -208,7 +208,7 @@ export abstract class AIAdapter<
     await Promise.all(
       agentsToEvict.map((agentId) =>
         this.registry
-          .evict(agentId)
+          .evict(agentId, { emitSessionClosed: false })
           .catch((error) =>
             console.error(`[AIAdapter:${this.name}] Failed to evict agent ${agentId} after session.closed:`, error),
           ),

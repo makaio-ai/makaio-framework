@@ -31,6 +31,7 @@ import type { TurnCompleteCallback } from '../session-turn-manager.js';
  * @param deliveryMode - How to deliver the message to the agent
  * @param onTurnComplete - Callback invoked when the turn completes (all agents done)
  * @param sessionContext - Optional shared session context forwarded to all agents
+ * @param responseSchema - Optional JSON schema for structured responses
  */
 export async function routeToAgentsCore(
   bus: IMakaioBus,
@@ -42,6 +43,7 @@ export async function routeToAgentsCore(
   deliveryMode: 'enqueue' | 'immediate' | undefined,
   onTurnComplete: TurnCompleteCallback,
   sessionContext?: SessionContext,
+  responseSchema?: Record<string, unknown>,
 ): Promise<void> {
   const routingPromises = agents.map(async (agent) => {
     try {
@@ -54,6 +56,7 @@ export async function routeToAgentsCore(
         turnId: turn.turnId,
         sessionId: session.sessionId,
         sessionContext,
+        ...(responseSchema !== undefined && { responseSchema }),
       });
 
       await bus.emit(SessionSubjects.user_message.acknowledged, {

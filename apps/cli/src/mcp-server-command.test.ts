@@ -61,14 +61,14 @@ function collectOutput(spy: ReturnType<typeof vi.spyOn>): string {
  * @returns Spies for stdout/stderr and a `restore` callback for `afterEach`.
  */
 function setupProcessIoSpies() {
-  const originalExitCode = process.exitCode;
+  process.exitCode = undefined;
   const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
   return {
     stdoutSpy,
     stderrSpy,
     restore: () => {
-      process.exitCode = originalExitCode;
+      process.exitCode = undefined;
       stdoutSpy.mockRestore();
       stderrSpy.mockRestore();
     },

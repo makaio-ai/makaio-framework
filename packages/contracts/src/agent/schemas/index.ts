@@ -38,6 +38,7 @@ export {
 
 // Request/response schemas
 export { SendMessageSchema, type SendMessageRequest, type SendMessageResponse } from './send-message.js';
+export { AgentInterruptSchema, type AgentInterruptRequest, type AgentInterruptResponse } from './interrupt.js';
 export { AgentToolApproveSchema, type AgentToolApproveRequest, type AgentToolApproveResponse } from './tool-approve.js';
 export {
   AgentGetCapabilitiesSchema,
@@ -51,7 +52,14 @@ export {
   type CwdChangeResponse,
   type CwdChanged,
 } from './cwd-change.js';
-export { ModelChangeSchema, type ModelChangeRequest, type ModelChangeResponse } from './model-change.js';
+export {
+  ModelChangeSchema,
+  TurnActiveBehaviorSchema,
+  type ModelChangeRequest,
+  type ModelChangeResponse,
+  type TurnActiveBehavior,
+} from './model-change.js';
+export { McpServersSetSchema, type McpServersSetRequest, type McpServersSetResponse } from './mcp-servers-set.js';
 export {
   CredentialChangeSchema,
   type CredentialChangeRequest,

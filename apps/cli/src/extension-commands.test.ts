@@ -54,16 +54,14 @@ function expectedWorkspaceLink(scaffoldRoot: string, frameworkRelativePath: stri
 
 describe('extension init builtin', () => {
   const tempDirs: string[] = [];
-  let originalExitCode: typeof process.exitCode;
 
   beforeEach(() => {
-    originalExitCode = process.exitCode;
     process.exitCode = undefined;
     vi.restoreAllMocks();
   });
 
   afterEach(async () => {
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
 
     while (tempDirs.length > 0) {
       const tempDir = tempDirs.pop();

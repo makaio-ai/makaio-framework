@@ -149,6 +149,55 @@ describe('AIAgent Model change handler', () => {
     expect(ctx.agent.currentConnector.model).toBe('test-model-1');
   });
 
+  it('model.change can stage the latest active-turn request for the next dispatch', async () => {
+    ctx.agent = createTestableAgent({
+      agentId: 'test-agent-model',
+      mockConnectorFactory: ctx.mockFactory,
+      initialModel: 'test-model-1',
+      initialCwd: '/test/cwd',
+      providerContext: TEST_PROVIDER_CONTEXT,
+    });
+    await ctx.agent.init();
+    const initialConnector = ctx.createdConnectors[0]!;
+    initialConnector.setProcessingState('processing_started');
+
+    const changedEvents: Array<{ previousModel: string; newModel: string }> = [];
+    ctx.cleanupFns.push(
+      MakaioBus.withFilter({ agentId: 'test-agent-model' }).on(AgentSubjects.model.changed, (evtCtx) => {
+        changedEvents.push({ previousModel: evtCtx.payload.previousModel, newModel: evtCtx.payload.newModel });
+      }),
+    );
+
+    const response = await MakaioBus.request(AgentSubjects.model.change, {
+      agentId: 'test-agent-model',
+      adapterId: 'test-adapter',
+      adapterName: 'test',
+      adapterSessionId: 'test-session-id',
+      newModel: 'test-model-2',
+      providerContext: TEST_PROVIDER_CONTEXT,
+      turnActiveBehavior: 'stageForNextTurn',
+    });
+
+    expect(response).toEqual({ success: true, swapped: false, staged: true, model: 'test-model-2' });
+    expect(ctx.createdConnectors).toHaveLength(1);
+    expect(ctx.agent.currentConnector.model).toBe('test-model-1');
+    expect(changedEvents).toHaveLength(0);
+
+    initialConnector.setProcessingState('idle');
+    await MakaioBus.request(AgentSubjects.sendMessage, {
+      agentId: 'test-agent-model',
+      adapterId: 'test-adapter',
+      message: 'next turn',
+    });
+
+    expect(ctx.createdConnectors).toHaveLength(2);
+    expect(initialConnector.closeCalled).toBe(true);
+    expect(ctx.agent.currentConnector.model).toBe('test-model-2');
+    expect(initialConnector.sentMessages).toHaveLength(0);
+    expect(ctx.agent.currentConnector.sentMessages).toHaveLength(1);
+    expect(changedEvents).toEqual([{ previousModel: 'test-model-1', newModel: 'test-model-2' }]);
+  });
+
   it('model.change with same model is a no-op (success: true, no swap)', async () => {
     ctx.agent = createTestableAgent({
       agentId: 'test-agent-model',

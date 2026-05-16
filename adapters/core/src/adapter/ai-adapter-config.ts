@@ -14,7 +14,7 @@ import type { ScopedBus } from '@makaio/bus-core';
 import type { AIReasoningLevel, ReasoningLevelMap } from '../types/ai-model.js';
 import type { BaseAgentConnectorConfig } from '../agent/types.js';
 import type { TimeoutConfig } from '@makaio/utils';
-import type { McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext } from '@makaio/contracts';
 import type { LedgerSessionContext, ISessionToolLedger } from '../agent/session-tool-ledger.js';
 
 /**
@@ -77,7 +77,7 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
    * Resolved MCP session context including upstream server configs.
    * When present, native-passthrough adapters use `servers` to configure SDK MCP connections.
    */
-  mcpSessionContext?: LedgerSessionContext | McpSessionContext;
+  mcpSessionContext?: LedgerSessionContext | McpRuntimeSessionContext | McpSessionContext;
   /**
    * Session-scoped MCP tool ledger.
    * Passed through unchanged so connectors can track injection and mcp_call usage.

@@ -2,11 +2,19 @@ import { vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { AIAgent } from '../../ai-agent.js';
-import type { AIAgentConfig } from '../../types.js';
+import type {
+  AgentStartResult,
+  AIAgentConfig,
+  ConnectorSendMessageOptions,
+  ConnectorStartOptions,
+} from '../../types.js';
 import type { AIAgentConnector } from '../../../connector/agent-connector.js';
+import { MessageHandle } from '../../../message-handle/index.js';
 import type { ProcessingState } from '../../../message-handle/types.js';
 import type { AIModel, AIReasoningLevel, ReasoningLevelMap } from '../../../types/ai-model.js';
-import type { ProviderContext } from '@makaio/contracts';
+import type { NormalizedMessageInput } from '../../../utils/index.js';
+import type { McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type { LedgerSessionContext } from '../../session-tool-ledger.js';
 
 /**
  * Mock connector that satisfies the AIAgentConnector interface for testing.
@@ -17,8 +25,12 @@ export class MockConnector implements Partial<AIAgentConnector> {
   public cwd: string;
   public currentReasoningEffort?: AIReasoningLevel;
   public supportedReasoningLevels?: ReasoningLevelMap;
+  public mcpSessionContext?: McpSessionContext | LedgerSessionContext;
+  public startedMessages: NormalizedMessageInput[] = [];
+  public sentMessages: NormalizedMessageInput[] = [];
   private processingState: ProcessingState = 'idle';
   public closeCalled = false;
+  public interruptCalled = false;
   private processingStateListeners: Array<(state: ProcessingState) => void> = [];
 
   /** Whether changeModelInPlace returns true (native path) or false (swap path) */
@@ -34,17 +46,20 @@ export class MockConnector implements Partial<AIAgentConnector> {
    * @param cwd - The working directory
    * @param reasoningEffort - Optional reasoning effort carried on the connector
    * @param supportedReasoningLevels - Reasoning levels supported by the active model
+   * @param mcpSessionContext - Optional MCP session context carried into the connector config
    */
   public constructor(
     model: string,
     cwd: string,
     reasoningEffort?: AIReasoningLevel,
     supportedReasoningLevels?: ReasoningLevelMap,
+    mcpSessionContext?: McpSessionContext | LedgerSessionContext,
   ) {
     this.model = model;
     this.cwd = cwd;
     this.currentReasoningEffort = reasoningEffort;
     this.supportedReasoningLevels = supportedReasoningLevels;
+    this.mcpSessionContext = mcpSessionContext;
   }
 
   /**
@@ -90,6 +105,13 @@ export class MockConnector implements Partial<AIAgentConnector> {
   }
 
   /**
+   * Interrupt the mock connector.
+   */
+  public async interrupt(): Promise<void> {
+    this.interruptCalled = true;
+  }
+
+  /**
    * Mock implementation of in-place model change.
    * @param _newModel - The model to switch to (unused in mock)
    * @returns The configured result (default: false → swap required)
@@ -131,6 +153,54 @@ export class MockConnector implements Partial<AIAgentConnector> {
   public async initialize(): Promise<void> {
     // No-op: real connectors set adapterSessionId here
   }
+
+  /**
+   * Start a mock session and return an acknowledged message handle.
+   * @param message - Normalized user message
+   * @param options - Optional connector start options
+   * @returns Mock start result
+   */
+  public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
+    this.startedMessages.push(message);
+    return {
+      adapterSessionId: 'test-session-id',
+      agentId: 'test-agent',
+      messageHandle: this.createMessageHandle(message, options),
+    };
+  }
+
+  /**
+   * Send a mock follow-up message and return an acknowledged handle.
+   * @param message - Normalized user message
+   * @param options - Optional connector send options
+   * @returns Mock message handle
+   */
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    this.sentMessages.push(message);
+    return this.createMessageHandle(message, options);
+  }
+
+  /**
+   * Create a mock message handle with adapter session and acknowledgement set.
+   * @param message - Normalized user message
+   * @param options - Optional connector send options
+   * @returns Prepared message handle
+   */
+  private createMessageHandle(message: NormalizedMessageInput, options?: ConnectorSendMessageOptions): MessageHandle {
+    const handle = new MessageHandle(
+      options?.messageId ?? 'mock-message-id',
+      message,
+      options?.deliveryMode ?? 'enqueue',
+      options?.messageHistory,
+      options?.turnContext,
+    );
+    handle.adapterSessionId = 'test-session-id';
+    handle.markAcknowledged(true);
+    return handle;
+  }
 }
 
 /**
@@ -156,6 +226,7 @@ export class TestableAgent extends AIAgent {
     cwd: string;
     reasoningEffort?: AIReasoningLevel;
     supportedReasoningLevels?: ReasoningLevelMap;
+    mcpSessionContext?: McpSessionContext | LedgerSessionContext;
   }) => MockConnector;
 
   /**
@@ -170,6 +241,7 @@ export class TestableAgent extends AIAgent {
       cwd: string;
       reasoningEffort?: AIReasoningLevel;
       supportedReasoningLevels?: ReasoningLevelMap;
+      mcpSessionContext?: McpSessionContext | LedgerSessionContext;
     }) => MockConnector,
   ) {
     super(config);
@@ -198,6 +270,7 @@ export interface CreateTestableAgentOptions {
     cwd: string;
     reasoningEffort?: AIReasoningLevel;
     supportedReasoningLevels?: ReasoningLevelMap;
+    mcpSessionContext?: McpSessionContext | LedgerSessionContext;
   }) => MockConnector;
   /** Initial model (optional, defaults to 'test-model') */
   initialModel?: string;
@@ -211,6 +284,8 @@ export interface CreateTestableAgentOptions {
   initialReasoningEffort?: AIReasoningLevel;
   /** Initial provider context persisted on the agent config. */
   providerContext?: ProviderContext;
+  /** Initial MCP session context persisted on the agent config. */
+  mcpSessionContext?: McpSessionContext | LedgerSessionContext;
 }
 
 /**
@@ -228,6 +303,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     availableModels,
     initialReasoningEffort,
     providerContext,
+    mcpSessionContext,
   } = options;
   const { bus: mockBus } = createMockScopedBus();
   const resolveSupportedReasoningLevels = (model: string): ReasoningLevelMap | undefined =>
@@ -247,6 +323,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
     reasoningEffort: initialReasoningEffort,
     availableModels,
     providerContext,
+    mcpSessionContext,
     configFactory: async (input) => ({
       bus: mockBus,
       agentId,
@@ -256,6 +333,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
       cwd: input.cwd ?? initialCwd,
       reasoningEffort: input.reasoningEffort ?? initialReasoningEffort,
       supportedReasoningLevels: resolveSupportedReasoningLevels(input.model ?? initialModel),
+      mcpSessionContext: input.mcpSessionContext,
     }),
     connectorFactory: async (factoryConfig) => {
       // MockConnector satisfies the runtime contract for all exercised methods
@@ -265,6 +343,7 @@ export function createTestableAgent(options: CreateTestableAgentOptions): Testab
           cwd: factoryConfig.cwd,
           reasoningEffort: factoryConfig.reasoningEffort,
           supportedReasoningLevels: factoryConfig.supportedReasoningLevels,
+          mcpSessionContext: factoryConfig.mcpSessionContext,
         }),
       );
     },
@@ -295,6 +374,7 @@ export interface AgentTestLifecycle {
         cwd: string;
         reasoningEffort?: AIReasoningLevel;
         supportedReasoningLevels?: ReasoningLevelMap;
+        mcpSessionContext?: McpSessionContext | LedgerSessionContext;
       }) => MockConnector
     >
   >;
@@ -322,6 +402,7 @@ export function createAgentTestLifecycle(): AgentTestLifecycle {
         config.cwd,
         config.reasoningEffort,
         config.supportedReasoningLevels,
+        config.mcpSessionContext,
       );
       ctx.createdConnectors.push(connector);
       return connector;

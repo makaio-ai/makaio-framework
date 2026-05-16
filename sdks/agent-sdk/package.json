@@ -1,0 +1,87 @@
+{
+  "name": "@makaio/agent-sdk",
+  "version": "0.1.0",
+  "description": "Claude Agent SDK-compatible interface to all Makaio adapters",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/shared/index.ts",
+    "./core": "./src/core/index.ts",
+    "./runtime": "./src/runtime/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/shared/index.d.mts",
+        "import": "./dist/shared/index.mjs"
+      },
+      "./core": {
+        "types": "./dist/core/index.d.mts",
+        "import": "./dist/core/index.mjs"
+      },
+      "./runtime": {
+        "types": "./dist/runtime/index.d.mts",
+        "import": "./dist/runtime/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.2.50"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@makaio/adapter-anthropic-sdk": "workspace:*",
+    "@makaio/adapter-claude-agent-sdk": "workspace:*",
+    "@makaio/adapter-claude-code-cli": "workspace:*",
+    "@makaio/adapter-codex-app-server": "workspace:*",
+    "@makaio/adapter-gemini-sdk": "workspace:*",
+    "@makaio/adapter-github-copilot-sdk": "workspace:*",
+    "@makaio/adapter-openai-node": "workspace:*",
+    "@makaio/adapter-pi-sdk": "workspace:*",
+    "@makaio/adapter-qwen-acp": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/bus-transport-websocket": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/extension-filesystem": "workspace:*",
+    "@makaio/extension-shell": "workspace:*",
+    "@makaio/extension-subagent": "workspace:*",
+    "@makaio/framework": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/provider-alibaba": "workspace:*",
+    "@makaio/provider-anthropic": "workspace:*",
+    "@makaio/provider-github-copilot": "workspace:*",
+    "@makaio/provider-google": "workspace:*",
+    "@makaio/provider-kimi": "workspace:*",
+    "@makaio/provider-nanogpt": "workspace:*",
+    "@makaio/provider-openai": "workspace:*",
+    "@makaio/provider-openai-codex": "workspace:*",
+    "@makaio/provider-opencode-go": "workspace:*",
+    "@makaio/provider-openrouter": "workspace:*",
+    "@makaio/provider-qwen-acp": "workspace:*",
+    "@makaio/provider-z-ai": "workspace:*",
+    "@makaio/runtime-node": "workspace:*",
+    "@makaio/sdk": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.24.0",
+    "zod-to-json-schema": "^3.25.1"
+  },
+  "devDependencies": {
+    "@makaio/test-utils": "workspace:*",
+    "tsdown": "0.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.0.16"
+  }
+}

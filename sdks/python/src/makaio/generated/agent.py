@@ -14,6 +14,10 @@ from makaio.generated.payloads.agent import (
     AgentGetCapabilitiesRequest,
     AgentGetCapabilitiesResponse,
     AgentIdlePayload,
+    AgentInterruptRequest,
+    AgentInterruptResponse,
+    AgentMcpServersSetRequest,
+    AgentMcpServersSetResponse,
     AgentMessagePayload,
     AgentMessageDeltaPayload,
     AgentModelChangeRequest,
@@ -50,6 +54,8 @@ cwd_change: RequestSubject[AgentCwdChangeRequest, AgentCwdChangeResponse] = Requ
 cwd_changed: EventSubject[AgentCwdChangedPayload] = EventSubject("agent.cwd.changed", payload_type=AgentCwdChangedPayload)
 get_capabilities: RequestSubject[AgentGetCapabilitiesRequest, AgentGetCapabilitiesResponse] = RequestSubject("agent.getCapabilities", request_type=AgentGetCapabilitiesRequest, response_type=AgentGetCapabilitiesResponse)
 idle: EventSubject[AgentIdlePayload] = EventSubject("agent.idle", payload_type=AgentIdlePayload)
+interrupt: RequestSubject[AgentInterruptRequest, AgentInterruptResponse] = RequestSubject("agent.interrupt", request_type=AgentInterruptRequest, response_type=AgentInterruptResponse)
+mcp_servers_set: RequestSubject[AgentMcpServersSetRequest, AgentMcpServersSetResponse] = RequestSubject("agent.mcp.servers.set", request_type=AgentMcpServersSetRequest, response_type=AgentMcpServersSetResponse)
 message: EventSubject[AgentMessagePayload] = EventSubject("agent.message", payload_type=AgentMessagePayload)
 message_delta: EventSubject[AgentMessageDeltaPayload] = EventSubject("agent.message_delta", payload_type=AgentMessageDeltaPayload)
 model_change: RequestSubject[AgentModelChangeRequest, AgentModelChangeResponse] = RequestSubject("agent.model.change", request_type=AgentModelChangeRequest, response_type=AgentModelChangeResponse)

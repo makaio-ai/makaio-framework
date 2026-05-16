@@ -1,20 +1,23 @@
 /**
  * Component tests for MakaioSessionService - Framework-core lifecycle operations.
  *
- * Tests the six framework-core handlers: session.create, session.get,
- * session.list, session.close, session.agent.added, session.agent.removed.
+ * Tests the framework-core handlers: session.create, session.get,
+ * session.list, session.close, session.update, session.archive,
+ * session.purge, session.agent.added, and session.agent.removed.
  *
- * All tests use real bus requests against in-memory storage backends.
+ * Most tests use real bus requests against in-memory storage backends; the
+ * ephemeral-mode regression uses an isolated bus without storage handlers.
  *
  * Host-specific handler tests (session.update with workstream validation,
- * session.resume, session.archive, session.purge, branching operations) live
- * in the host test layer.
+ * session.resume, and branching operations) live in the host test layer.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
+import type { SessionUpdatedEvent } from '@makaio/contracts';
 import { MakaioSessionService } from '../session-service.js';
+import { registerCoreSessionServiceHandlers } from '../session-service-handlers-core.js';
 import { registerMemorySessionStorage } from '../storage/memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 
@@ -302,6 +305,70 @@ describe('MakaioSessionService - Lifecycle', () => {
   });
 
   // ===========================================================================
+  // Session Update Tests
+  // ===========================================================================
+
+  describe('session.update', () => {
+    it('renames a session and emits title in changedProperties', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {
+        title: 'Original title',
+      });
+
+      const capturedEvents: SessionUpdatedEvent[] = [];
+      const cleanup = MakaioBus.on(SessionSubjects.updated, (ctx) => {
+        capturedEvents.push(ctx.payload);
+      });
+
+      try {
+        const { success } = await MakaioBus.request(SessionSubjects.update, {
+          sessionId,
+          title: 'Renamed title',
+        });
+
+        expect(success).toBe(true);
+
+        const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+        expect(session?.title).toBe('Renamed title');
+        expect(capturedEvents).toEqual([{ sessionId, changedProperties: ['title'] }]);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  // ===========================================================================
+  // Session Archive / Purge Tests
+  // ===========================================================================
+
+  describe('session.archive and session.purge', () => {
+    it('archives a closed session in framework-only mode', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      await MakaioBus.request(SessionSubjects.close, { sessionId });
+
+      const { success } = await MakaioBus.request(SessionSubjects.archive, { sessionId });
+
+      expect(success).toBe(true);
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+      expect(session?.status).toBe('archived');
+    });
+
+    it('purges an archived session in framework-only mode', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {});
+      await MakaioBus.request(SessionSubjects.close, { sessionId });
+      await MakaioBus.request(SessionSubjects.archive, { sessionId });
+
+      const { success, eventsDeleted } = await MakaioBus.request(SessionSubjects.purge, { sessionId });
+
+      expect(success).toBe(true);
+      expect(eventsDeleted).toBe(0);
+
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+      expect(session).toBeNull();
+    });
+  });
+
+  // ===========================================================================
   // Service Lifecycle Tests
   // ===========================================================================
 
@@ -369,5 +436,32 @@ describe('MakaioSessionService - Lifecycle', () => {
       // Destroy should not throw
       expect(() => freshService.destroy()).not.toThrow();
     });
+  });
+});
+
+describe('registerCoreSessionServiceHandlers - ephemeral mode', () => {
+  it('returns unhandled-storage results without throwing for update, archive, and purge', async () => {
+    const bus = createBusInstance();
+    const cleanups = registerCoreSessionServiceHandlers({ bus });
+
+    try {
+      await expect(
+        bus.request(SessionSubjects.update, {
+          sessionId: 'session-1',
+          title: 'Updated title',
+        }),
+      ).resolves.toEqual({ success: false });
+
+      await expect(bus.request(SessionSubjects.archive, { sessionId: 'session-1' })).resolves.toEqual({
+        success: false,
+      });
+
+      await expect(bus.request(SessionSubjects.purge, { sessionId: 'session-1' })).resolves.toEqual({
+        success: false,
+        error: 'Session not found',
+      });
+    } finally {
+      for (const cleanup of cleanups) cleanup();
+    }
   });
 });

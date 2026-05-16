@@ -103,10 +103,8 @@ describe('isDiscoveryFreeBuiltin', () => {
 const emptyDiscovery = new ExplicitDescriptorDiscovery([]);
 
 describe('main — remote manifest behavior', () => {
-  let originalExitCode: typeof process.exitCode;
-
   beforeEach(() => {
-    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     vi.clearAllMocks();
     vi.mocked(busClientMocks.isAuthConnectionError).mockImplementation((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -115,7 +113,7 @@ describe('main — remote manifest behavior', () => {
   });
 
   afterEach(() => {
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     vi.restoreAllMocks();
   });
 

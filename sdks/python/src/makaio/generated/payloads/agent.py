@@ -130,6 +130,131 @@ class AgentIdlePayload:
 
 
 @dataclass(frozen=True)
+class AgentInterruptRequest:
+    adapter_id: str
+    adapter_name: str
+    adapter_session_id: str
+    agent_id: str
+    client_id: str | None = None
+    message_id: str | None = None
+    occurred_at: float | None = None
+    provider_config_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentInterruptResponse:
+    pass
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextDirectToolsItem:
+    enabled: bool
+    exposed: bool
+    exposure_mode: Literal["direct", "discovery", "hidden"]
+    full_name: str
+    input_schema: dict[str, Any]
+    original_name: str
+    server_name: str
+    description: str | None = None
+    enabled_at: int | None = None
+    enabled_by: Literal["discovery", "toolset"] | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextDiscoverableToolsItem:
+    enabled: bool
+    exposed: bool
+    exposure_mode: Literal["direct", "discovery", "hidden"]
+    full_name: str
+    input_schema: dict[str, Any]
+    original_name: str
+    server_name: str
+    description: str | None = None
+    enabled_at: int | None = None
+    enabled_by: Literal["discovery", "toolset"] | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantA:
+    command: str
+    type: Literal["stdio"]
+    always_load: bool | None = None
+    args: list[str] | None = None
+    env: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantBToolsItem:
+    name: str
+    permission_policy: Literal["always_allow", "always_ask", "always_deny"]
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantB:
+    type: Literal["sse"]
+    url: str
+    always_load: bool | None = None
+    headers: dict[str, Any] | None = None
+    tools: list[AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantBToolsItem] | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantCToolsItem:
+    name: str
+    permission_policy: Literal["always_allow", "always_ask", "always_deny"]
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantC:
+    type: Literal["http"]
+    url: str
+    always_load: bool | None = None
+    headers: dict[str, Any] | None = None
+    tools: list[AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantCToolsItem] | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContextServersItem:
+    exposure_mode: Literal["direct", "discovery"]
+    name: str
+    transport: Union[AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantA, AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantB, AgentMcpServersSetRequestMcpSessionContextServersItemTransportVariantC]
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequestMcpSessionContext:
+    direct_tools: list[AgentMcpServersSetRequestMcpSessionContextDirectToolsItem]
+    discoverable_tools: list[AgentMcpServersSetRequestMcpSessionContextDiscoverableToolsItem]
+    servers: list[AgentMcpServersSetRequestMcpSessionContextServersItem]
+    session_id: str
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetRequest:
+    adapter_id: str
+    adapter_name: str
+    adapter_session_id: str
+    agent_id: str
+    mcp_session_context: AgentMcpServersSetRequestMcpSessionContext
+    client_id: str | None = None
+    message_id: str | None = None
+    occurred_at: float | None = None
+    provider_config_id: str | None = None
+    session_id: str | None = None
+    turn_active_behavior: Literal["reject", "stageForNextTurn"] | None = None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentMcpServersSetResponse:
+    success: bool
+    reason: str | None = None
+    staged: bool | None = None
+    swapped: bool | None = None
+
+
+@dataclass(frozen=True)
 class AgentMessagePayload:
     adapter_id: str
     adapter_name: str
@@ -190,6 +315,7 @@ class AgentModelChangeRequest:
     reasoning_effort: Literal["none", "low", "medium", "high", "extra-high"] | None = None
     session_id: str | None = None
     skip_warning: bool | None = None
+    turn_active_behavior: Literal["reject", "stageForNextTurn"] | None = None
     turn_id: str | None = None
 
 
@@ -199,6 +325,7 @@ class AgentModelChangeResponse:
     applied_reasoning_effort: Literal["none", "low", "medium", "high", "extra-high"] | None = None
     model: str | None = None
     reason: str | None = None
+    staged: bool | None = None
     supported_reasoning_levels: dict[str, Any] | None = None
     swapped: bool | None = None
 

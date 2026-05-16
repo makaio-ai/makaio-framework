@@ -66,6 +66,16 @@ export {
   parseCanonicalModel,
   VIRTUAL_NAME_RE,
 } from './canonical-model/index.js';
+export {
+  ModelRegistryPublicNamespace,
+  ModelRegistryPublicSubjects,
+  ModelRegistrySupportedModelSchema,
+} from './model-registry/index.js';
+export type {
+  ModelRegistrySupportedModel,
+  ModelRegistrySupportedModelsRequest,
+  ModelRegistrySupportedModelsResponse,
+} from './model-registry/index.js';
 export type {
   CanonicalModelResolvedSelection,
   CanonicalModelSelection,
@@ -265,6 +275,7 @@ export {
   McpExposureModeSchema,
   McpNonHiddenExposureModeSchema,
   McpProfileConfigSchema,
+  McpRuntimeSessionContextSchema,
   McpSubjects,
   McpToolPatternSchema,
   McpTransportConfigSchema,
@@ -275,6 +286,7 @@ export type {
   McpExposureMode,
   McpProfileConfig,
   McpResolvedServer,
+  McpRuntimeSessionContext,
   McpSessionContext,
   McpToolState,
   McpTransportConfig,

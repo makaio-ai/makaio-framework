@@ -176,6 +176,10 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             ...(adapterKindSelection.disallowedTools !== undefined && {
               disallowedTools: adapterKindSelection.disallowedTools,
             }),
+            ...(adapterKindSelection.env !== undefined && { env: adapterKindSelection.env }),
+            ...(adapterKindSelection.mcpSessionContext !== undefined && {
+              mcpSessionContext: adapterKindSelection.mcpSessionContext,
+            }),
             ...(adapterKindSelection.allowedDirectories !== undefined && {
               allowedDirectories: adapterKindSelection.allowedDirectories,
             }),
@@ -330,6 +334,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           deliveryMode,
           this.completeTurn.bind(this),
           routingContext,
+          ctx.payload.responseSchema,
         );
 
         // 9. Return result

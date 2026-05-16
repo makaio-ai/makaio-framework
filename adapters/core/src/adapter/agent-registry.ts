@@ -102,12 +102,30 @@ export class AgentRegistry<
   /**
    * Evict an agent from memory and mark as dead in storage.
    * @param agentId - Agent identifier
+   * @param options - Optional lifecycle emission controls for session-driven eviction
    */
-  public async evict(agentId: string): Promise<void> {
+  public async evict(agentId: string, options: { emitSessionClosed?: boolean } = {}): Promise<void> {
     const entry = this.entries.get(agentId);
     this.entries.delete(agentId);
-    if (entry) await entry.agent.close();
-    await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+    let closeError: unknown;
+    if (entry) {
+      try {
+        await entry.agent.close({ emitSessionClosed: options.emitSessionClosed });
+      } catch (error) {
+        closeError = error;
+      }
+    }
+    try {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+    } catch (error) {
+      if (closeError === undefined) {
+        throw error;
+      }
+      console.warn(`[AgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
+    }
+    if (closeError !== undefined) {
+      throw closeError;
+    }
   }
 
   /**

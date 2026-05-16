@@ -51,18 +51,16 @@ function makeProgram(): InstanceType<typeof Command> {
 // ---------------------------------------------------------------------------
 
 describe('registerContribution — interactive TTY guard', () => {
-  /** Saved `process.exitCode` so we can restore it after each test. */
-  let originalExitCode: number | undefined;
   const ttyFixture = createTestTTYFixture();
 
   beforeEach(() => {
     ttyFixture.snapshot();
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
   });
 
   afterEach(() => {
     ttyFixture.restore();
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
   });
 
   // -------------------------------------------------------------------------
@@ -261,17 +259,16 @@ describe('registerContribution — interactive TTY guard', () => {
 });
 
 describe('registerContribution — connection handling', () => {
-  let originalExitCode: number | undefined;
   const ttyFixture = createTestTTYFixture();
 
   beforeEach(() => {
     ttyFixture.snapshot();
-    originalExitCode = process.exitCode as number | undefined;
+    process.exitCode = undefined;
   });
 
   afterEach(() => {
     ttyFixture.restore();
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
   });
 
   it('sets exitCode=1 when bus is null for a subcommand', async () => {

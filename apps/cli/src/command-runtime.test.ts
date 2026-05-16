@@ -84,7 +84,7 @@ describe('createProcessCommandContext', () => {
 
   it('setExitCode() updates process.exitCode', () => {
     const { bus } = createMockBus();
-    const original = process.exitCode;
+    process.exitCode = undefined;
     const { context, cleanup } = createProcessCommandContext({}, bus);
 
     try {
@@ -92,7 +92,7 @@ describe('createProcessCommandContext', () => {
       expect(process.exitCode).toBe(42);
     } finally {
       cleanup();
-      process.exitCode = original;
+      process.exitCode = undefined;
     }
   });
 });

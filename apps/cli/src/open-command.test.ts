@@ -22,7 +22,6 @@ import { registerOpenCommand } from './open-command.js';
 
 describe('registerOpenCommand', () => {
   const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-  const originalExitCode = process.exitCode;
   const originalLocalAppData = process.env['LOCALAPPDATA'];
   const originalMakaioApp = process.env['MAKAIO_APP'];
   const tempPaths: string[] = [];
@@ -40,7 +39,7 @@ describe('registerOpenCommand', () => {
     if (originalPlatform) {
       Object.defineProperty(process, 'platform', originalPlatform);
     }
-    process.exitCode = originalExitCode;
+    process.exitCode = undefined;
     if (originalLocalAppData === undefined) {
       delete process.env['LOCALAPPDATA'];
     } else {

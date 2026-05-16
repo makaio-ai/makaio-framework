@@ -229,12 +229,13 @@ export function registerSendMessageHandler(
     message: MessageInput;
     messageId: string;
     sessionContext?: unknown;
+    responseSchema?: Record<string, unknown>;
   }) => void,
 ): UnsubscribeFunction {
   return MakaioBus.on(AgentSubjects.sendMessage, (ctx) => {
-    const { agentId, adapterId, message, messageId, sessionContext } = ctx.payload;
+    const { agentId, adapterId, message, messageId, sessionContext, responseSchema } = ctx.payload;
     const resolvedMessageId = messageId ?? `msg-${crypto.randomUUID().slice(0, 8)}`;
-    onSend?.({ agentId, adapterId, message, messageId: resolvedMessageId, sessionContext });
+    onSend?.({ agentId, adapterId, message, messageId: resolvedMessageId, sessionContext, responseSchema });
     ctx.setResult({ messageId: resolvedMessageId });
   });
 }
