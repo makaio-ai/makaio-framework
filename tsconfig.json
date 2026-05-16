@@ -86,6 +86,7 @@
       "@makaio/contracts/client": ["./packages/contracts/src/client/index.ts"],
       "@makaio/contracts/config": ["./packages/contracts/src/config/index.ts"],
       "@makaio/contracts/provider": ["./packages/contracts/src/provider/index.ts"],
+      "@makaio/sdk": ["./sdks/typescript/src/index.ts"],
       "@makaio/hooks": ["./packages/hooks/src/index.ts"],
       "@makaio/mcp-http-server": ["./packages/mcp-http-server/src/index.ts"],
       "@makaio/test-utils": ["./packages/test-utils/src/index.ts"],

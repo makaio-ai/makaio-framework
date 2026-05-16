@@ -1,5 +1,13 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
-import type { JsonValue, Message, ProviderContext, SessionContext, SystemPrompt } from '@makaio/contracts';
+import type {
+  JsonValue,
+  McpRuntimeSessionContext,
+  McpSessionContext,
+  Message,
+  ProviderContext,
+  SessionContext,
+  SystemPrompt,
+} from '@makaio/contracts';
 import type { LedgerSessionContext, ISessionToolLedger } from './session-tool-ledger.js';
 import type { TrackedTimeoutConfig } from '@makaio/utils';
 import type { AIReasoningLevel, AIModel, ReasoningLevelMap } from '../types/ai-model.js';
@@ -146,7 +154,7 @@ export interface BaseAgentConnectorConfig<
    * resolution keys / servers) re-declare this field via Omit + intersection
    * in their own config types (e.g. BaseStreamConnectorConfig, ClaudeAgentConfig).
    */
-  mcpSessionContext?: LedgerSessionContext;
+  mcpSessionContext?: LedgerSessionContext | McpRuntimeSessionContext | McpSessionContext;
 
   /**
    * Session-scoped tool ledger for tracking injection, discovery, and call history.
@@ -208,7 +216,7 @@ export interface AIAgentConfig<
    * MCP session context resolved by the orchestrator.
    * Passed through to the connector config so adapters can inject direct tools.
    */
-  mcpSessionContext?: LedgerSessionContext;
+  mcpSessionContext?: LedgerSessionContext | McpRuntimeSessionContext;
   /**
    * Session-scoped ledger tracking MCP injection/discovery/call history.
    * Created once per agent session and passed through unchanged on connector swaps.
@@ -320,6 +328,10 @@ export type ConnectorStartOptions = ConnectorSendMessageOptions;
 export type SendMessageRequestPayload = ExtractSubjectPayload<typeof AgentSubjects.sendMessage>;
 /** Response type for `agent.sendMessage` requests. */
 export type SendMessageResponsePayload = ExtractSubjectResponse<typeof AgentSubjects.sendMessage>;
+/** Payload type for `agent.interrupt` requests. */
+export type AgentInterruptRequestPayload = ExtractSubjectPayload<typeof AgentSubjects.interrupt>;
+/** Response type for `agent.interrupt` requests. */
+export type AgentInterruptResponsePayload = ExtractSubjectResponse<typeof AgentSubjects.interrupt>;
 /** Response type for `agent.getCapabilities` requests. */
 export type GetCapabilitiesResponsePayload = ExtractSubjectResponse<typeof AgentSubjects.getCapabilities>;
 
@@ -332,6 +344,11 @@ export type AgentCwdChangeResponsePayload = ExtractSubjectResponse<typeof AgentS
 export type AgentModelChangeRequestPayload = ExtractSubjectPayload<typeof AgentSubjects.model.change>;
 /** Response type for `agent.model.change` requests. */
 export type AgentModelChangeResponsePayload = ExtractSubjectResponse<typeof AgentSubjects.model.change>;
+
+/** Payload type for `agent.mcp.servers.set` requests. */
+export type AgentMcpServersSetRequestPayload = ExtractSubjectPayload<typeof AgentSubjects.mcp.servers.set>;
+/** Response type for `agent.mcp.servers.set` requests. */
+export type AgentMcpServersSetResponsePayload = ExtractSubjectResponse<typeof AgentSubjects.mcp.servers.set>;
 
 /** Payload type for `agent.credential.change` requests. */
 export type AgentCredentialChangeRequestPayload = ExtractSubjectPayload<typeof AgentSubjects.credential.change>;

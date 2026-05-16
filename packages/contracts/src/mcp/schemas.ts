@@ -4,18 +4,45 @@ import { ToolExecutionContextOverridesSchema } from '../tool/schemas.js';
 
 // === Config types ===
 
+/** Per-tool permission policy for remote MCP server tools. */
+export const McpServerToolPolicySchema = z.object({
+  name: z.string(),
+  permission_policy: z.enum(['always_allow', 'always_ask', 'always_deny']),
+});
+
+/** Per-server permission policies keyed by unique remote tool name. */
+export const McpServerToolPoliciesSchema = z.array(McpServerToolPolicySchema).superRefine((tools, ctx) => {
+  const seenNames = new Set<string>();
+
+  tools.forEach((tool, index) => {
+    if (seenNames.has(tool.name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [index, 'name'],
+        message: `Duplicate MCP tool policy name "${tool.name}"`,
+      });
+      return;
+    }
+
+    seenNames.add(tool.name);
+  });
+});
+
 /** MCP transport configuration for stdio servers */
 const McpStdioTransportSchema = z.object({
   type: z.literal('stdio'),
   command: z.string(),
   args: z.array(z.string()).optional(),
   env: z.record(z.string(), z.string()).optional(),
+  alwaysLoad: z.boolean().optional(),
 });
 
 /** MCP transport configuration for SSE servers */
 const McpUrlTransportBaseSchema = z.object({
   url: z.string().url(),
   headers: z.record(z.string(), z.string()).optional(),
+  tools: McpServerToolPoliciesSchema.optional(),
+  alwaysLoad: z.boolean().optional(),
 });
 const McpSseTransportSchema = McpUrlTransportBaseSchema.extend({
   type: z.literal('sse'),
@@ -175,6 +202,17 @@ export const McpSessionContextSchema = z.object({
   discoverableTools: z.array(McpToolStateSchema),
 });
 
+/**
+ * Session context shape safe for public SDK protocol surfaces.
+ *
+ * Runtime callers that provide MCP servers directly do not need host-resolved
+ * scope keys; the adapter only needs the session ID, servers, and tool sets.
+ */
+export const McpRuntimeSessionContextSchema = McpSessionContextSchema.omit({
+  projectId: true,
+  profileId: true,
+});
+
 // === Agent context ===
 
 /**
@@ -199,6 +237,8 @@ export const McpAgentContextSchema = z.object({
 
 /** Inferred TypeScript type for `McpAgentContextSchema`. */
 export type McpAgentContext = z.infer<typeof McpAgentContextSchema>;
+/** Inferred TypeScript type for `McpRuntimeSessionContextSchema`. */
+export type McpRuntimeSessionContext = z.infer<typeof McpRuntimeSessionContextSchema>;
 
 // === Bus Subjects ===
 
@@ -365,6 +405,8 @@ export const McpSchemas = {
 // === Type exports ===
 
 export type McpTransportConfig = z.infer<typeof McpTransportConfigSchema>;
+export type McpServerToolPolicy = z.infer<typeof McpServerToolPolicySchema>;
+export type McpServerToolPolicies = z.infer<typeof McpServerToolPoliciesSchema>;
 export type McpExposureMode = z.infer<typeof McpExposureModeSchema>;
 export type McpNonHiddenExposureMode = z.infer<typeof McpNonHiddenExposureModeSchema>;
 export type McpServerDefinition = z.infer<typeof McpServerDefinitionSchema>;

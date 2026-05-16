@@ -91,6 +91,26 @@ pub mod agent {
         const SUBJECT: &'static str = IDLE;
     }
 
+    pub const INTERRUPT: &str = "agent.interrupt";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Interrupt;
+    impl RequestSubject for Interrupt {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = INTERRUPT;
+    }
+
+    pub const MCP_SERVERS_SET: &str = "agent.mcp.servers.set";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct McpServersSet;
+    impl RequestSubject for McpServersSet {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = MCP_SERVERS_SET;
+    }
+
     pub const MESSAGE: &str = "agent.message";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,6 +517,18 @@ pub const SUBJECTS: &[ProtocolSubject] = &[
         namespace: "agent",
         subject: "idle",
         full_subject: agent::IDLE,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "agent",
+        subject: "interrupt",
+        full_subject: agent::INTERRUPT,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "agent",
+        subject: "mcp.servers.set",
+        full_subject: agent::MCP_SERVERS_SET,
     },
     ProtocolSubject {
         kind: SubjectKind::Event,

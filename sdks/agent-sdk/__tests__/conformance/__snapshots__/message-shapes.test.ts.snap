@@ -1,0 +1,207 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`agent.complete maps to result message > maps a successful completion to subtype "success" 1`] = `
+{
+  "duration_ms": 0,
+  "is_error": false,
+  "num_turns": 1,
+  "result": "Task finished.",
+  "session_id": "s1",
+  "subtype": "success",
+  "total_cost_usd": 0,
+  "type": "result",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+  },
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.complete maps to result message > maps an error outcome to subtype "error" 1`] = `
+{
+  "duration_ms": 0,
+  "is_error": true,
+  "num_turns": 1,
+  "result": "Rate limit exceeded.",
+  "session_id": "s1",
+  "subtype": "error",
+  "total_cost_usd": 0,
+  "type": "result",
+  "usage": {
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+  },
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.contextWindow.updated maps to compact boundary message > emits again when the level escalates from warn to critical 1`] = `
+{
+  "level": "critical",
+  "percentage": 95,
+  "session_id": "s1",
+  "subtype": "compact",
+  "type": "system",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.contextWindow.updated maps to compact boundary message > produces a "critical" level message 1`] = `
+{
+  "level": "critical",
+  "percentage": 95,
+  "session_id": "s1",
+  "subtype": "compact",
+  "type": "system",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.contextWindow.updated maps to compact boundary message > produces a system/compact message with level and percentage 1`] = `
+{
+  "level": "warn",
+  "percentage": 75,
+  "session_id": "s1",
+  "subtype": "compact",
+  "type": "system",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.message_delta maps to assistant text message > produces a text ContentBlock inside an assistant message 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "text": "Hello, world!",
+        "type": "text",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.message_delta maps to assistant text message > propagates an empty text delta 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "text": "",
+        "type": "text",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.reasoning_delta maps to assistant thinking message > produces a thinking ContentBlock inside an assistant message 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "thinking": "Let me reason about this...",
+        "type": "thinking",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.started maps to system init message > produces an SDKSystemMessage with subtype "init" 1`] = `
+{
+  "cwd": "/tmp",
+  "model": "sonnet",
+  "session_id": "s1",
+  "subtype": "init",
+  "tools": [],
+  "type": "system",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.started maps to system init message > uses the model and cwd from the payload 1`] = `
+{
+  "cwd": "/workspace/project",
+  "model": "opus",
+  "session_id": "s1",
+  "subtype": "init",
+  "tools": [],
+  "type": "system",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.tool.output maps to assistant tool_result message > produces a tool_result ContentBlock with content and id 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "content": "export function hello() {}",
+        "id": "tc-42",
+        "type": "tool_result",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.tool.use maps to assistant tool_use message > handles an empty args object 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "id": "tc-43",
+        "input": {},
+        "name": "list_directory",
+        "type": "tool_use",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;
+
+exports[`agent.tool.use maps to assistant tool_use message > produces a tool_use ContentBlock with name, id, and input 1`] = `
+{
+  "message": {
+    "content": [
+      {
+        "id": "tc-42",
+        "input": {
+          "path": "/src/index.ts",
+        },
+        "name": "read_file",
+        "type": "tool_use",
+      },
+    ],
+    "role": "assistant",
+  },
+  "session_id": "s1",
+  "type": "assistant",
+  "uuid": "m1",
+}
+`;

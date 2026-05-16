@@ -52,12 +52,7 @@ export {
 } from './handlers/index.js';
 
 // Optional lifecycle helpers for host composition.
-export {
-  registerGetStatusCountsHandler,
-  registerResumeHandler,
-  registerArchiveHandler,
-  registerPurgeHandler,
-} from './handlers/lifecycle-handlers.js';
+export { registerGetStatusCountsHandler, registerResumeHandler } from './handlers/lifecycle-handlers.js';
 export {
   registerListActionsHandler,
   actionRegistry,

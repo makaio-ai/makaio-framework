@@ -157,7 +157,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error);
     }
 
-    bus.close().await?;
+    let session_close_result = bus
+        .request("session.close", json!({ "sessionId": session_id }))
+        .await;
+    let bus_close_result = bus.close().await;
+
+    if let Err(error) = session_close_result {
+        return Err(Box::<dyn std::error::Error>::from(error));
+    }
+    bus_close_result?;
 
     Ok(())
 }

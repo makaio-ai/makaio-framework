@@ -178,7 +178,7 @@ session/
 │   ├── compress-handler.ts           # Context compression
 │   ├── abandon-handler.ts            # Session abandonment
 │   ├── attach-handler.ts             # Agent attachment
-│   └── lifecycle-handlers.ts         # Status counts, resume, archive, purge
+│   └── lifecycle-handlers.ts         # Status counts, resume
 ├── context/                          # Projection-based context assembly
 ├── context-window/                   # Per-session token tracking
 ├── storage/                          # Session + agent CRUD storage

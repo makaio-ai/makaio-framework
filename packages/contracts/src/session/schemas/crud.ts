@@ -289,6 +289,12 @@ export const CrudSchemas = {
    *   sessionId: 'abc123',
    *   approvalPolicyOverride: 'full-access',
    * });
+   *
+   * // Rename session
+   * const { success } = await bus.request(SessionSubjects.update, {
+   *   sessionId: 'abc123',
+   *   title: 'My renamed session',
+   * });
    * ```
    */
   update: {
@@ -299,6 +305,8 @@ export const CrudSchemas = {
       executionTargetId: z.string().nullable().optional(),
       /** Approval policy override (null to clear and revert to cascade) */
       approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+      /** Session title for sidebar display (renames the session) */
+      title: z.string().optional(),
     }),
     response: z.object({
       /** Whether the update succeeded */

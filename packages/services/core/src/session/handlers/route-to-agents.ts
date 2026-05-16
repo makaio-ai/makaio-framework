@@ -81,6 +81,7 @@ interface RouteToSingleAgentInput {
   onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
   agent: MakaioSessionAgent;
   agentContext?: SessionContext;
+  responseSchema?: Record<string, unknown>;
 }
 
 /**
@@ -176,7 +177,8 @@ function buildAgentContext(input: PerAgentContextInput): SessionContext | undefi
  * @param input - Routing payload and lifecycle dependencies for one agent
  */
 async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void> {
-  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, agentContext } = input;
+  const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, agentContext, responseSchema } =
+    input;
 
   try {
     await bus.request(AgentSubjects.sendMessage, {
@@ -188,6 +190,7 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
       turnId: turn.turnId,
       sessionId: session.sessionId,
       sessionContext: agentContext,
+      ...(responseSchema !== undefined && { responseSchema }),
     });
 
     await bus.emit(SessionSubjects.user_message.acknowledged, {
@@ -256,6 +259,7 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
  * @param swappedAgentIds - Set of agent IDs that swapped connector due to cwd mismatch
  * @param swappedAgentCwd - Previous/new cwd metadata keyed by agent ID
  * @param freshMessageHistory - Curated history for agents forced into fresh mode
+ * @param responseSchema - Optional JSON schema for structured responses
  */
 export async function routeToAgents(
   bus: IMakaioBus,
@@ -274,6 +278,7 @@ export async function routeToAgents(
   swappedAgentIds?: ReadonlySet<string>,
   swappedAgentCwd?: ReadonlyMap<string, CwdSwapMeta>,
   freshMessageHistory?: Message[],
+  responseSchema?: Record<string, unknown>,
 ): Promise<void> {
   const forkEnrichedContext = await assembleForkContext(bus, session, session.sessionId, sessionContext, isNewTurn);
 
@@ -317,6 +322,7 @@ export async function routeToAgents(
       onTurnComplete,
       agent,
       agentContext,
+      responseSchema,
     });
   });
 

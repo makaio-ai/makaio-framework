@@ -6,8 +6,12 @@ import type {
   AgentCredentialChangeResponsePayload,
   AgentCwdChangeRequestPayload,
   AgentCwdChangeResponsePayload,
+  AgentInterruptRequestPayload,
+  AgentInterruptResponsePayload,
   AgentModelChangeRequestPayload,
   AgentModelChangeResponsePayload,
+  AgentMcpServersSetRequestPayload,
+  AgentMcpServersSetResponsePayload,
   GetCapabilitiesResponsePayload,
   SendMessageRequestPayload,
   SendMessageResponsePayload,
@@ -23,6 +27,8 @@ export interface AgentBusHandlerRegistrarConfig {
   agentId: string;
   /** Handler for `agent.sendMessage`. */
   onSendMessage: (ctx: RequestContext<SendMessageRequestPayload, SendMessageResponsePayload>) => Promise<void>;
+  /** Handler for `agent.interrupt`. */
+  onInterrupt: (ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>) => Promise<void>;
   /** Provider for `agent.getCapabilities` response payload. */
   getCapabilities: () => GetCapabilitiesResponsePayload;
   /** Handler for `agent.cwd.change`. */
@@ -30,6 +36,10 @@ export interface AgentBusHandlerRegistrarConfig {
   /** Handler for `agent.model.change`. */
   onModelChange: (
     ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>,
+  ) => Promise<void>;
+  /** Handler for `agent.mcp.servers.set`. */
+  onMcpServersSet: (
+    ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
   ) => Promise<void>;
   /** Handler for `agent.credential.change`. */
   onCredentialChange: (
@@ -47,11 +57,13 @@ export function registerAgentBusHandlers(config: AgentBusHandlerRegistrarConfig)
 
   return [
     filteredBus.on(AgentSubjects.sendMessage, config.onSendMessage),
+    filteredBus.on(AgentSubjects.interrupt, config.onInterrupt),
     filteredBus.on(AgentSubjects.getCapabilities, (ctx) => {
       ctx.setResult(config.getCapabilities());
     }),
     filteredBus.on(AgentSubjects.cwd.change, config.onCwdChange),
     filteredBus.on(AgentSubjects.model.change, config.onModelChange),
+    filteredBus.on(AgentSubjects.mcp.servers.set, config.onMcpServersSet),
     filteredBus.on(AgentSubjects.credential.change, config.onCredentialChange),
   ];
 }

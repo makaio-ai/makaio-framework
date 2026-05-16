@@ -3,6 +3,9 @@ import { AIReasoningLevelSchema, ReasoningLevelMapSchema } from '../../model/ind
 import { BaseAgentEventSchema } from './base-event.js';
 import { ProviderContextSchema } from '../../adapter/schemas/provider-context.js';
 
+export const TurnActiveBehaviorSchema = z.enum(['reject', 'stageForNextTurn']);
+export type TurnActiveBehavior = z.infer<typeof TurnActiveBehaviorSchema>;
+
 /**
  * Request to change the agent model.
  *
@@ -28,6 +31,14 @@ export const ModelChangeSchema = {
     skipWarning: z.boolean().optional(),
 
     /**
+     * How to handle mutation requests while a turn is active.
+     *
+     * - `reject`: return `{ success: false, reason: 'turn_active' }`
+     * - `stageForNextTurn`: store the latest request and apply it before the next user turn dispatch
+     */
+    turnActiveBehavior: TurnActiveBehaviorSchema.optional(),
+
+    /**
      * Unresolved provider context (credential refs, not plaintext).
      * Connectors resolve credentials locally via `resolveConnectorCredentials()`.
      */
@@ -40,6 +51,8 @@ export const ModelChangeSchema = {
     reason: z.string().optional(),
     /** Whether the connector was swapped (true) or model changed natively in-place (false). Absent on failure. */
     swapped: z.boolean().optional(),
+    /** Whether the change was accepted but deferred until the next turn boundary. */
+    staged: z.boolean().optional(),
     /** Current model identifier after the change. Absent on failure. */
     model: z.string().optional(),
     /** Reasoning effort level that is now active. Absent on failure or when unchanged. */

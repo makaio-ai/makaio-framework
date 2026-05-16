@@ -9,8 +9,12 @@ import type {
   AgentCredentialChangeResponsePayload,
   AgentCwdChangeRequestPayload,
   AgentCwdChangeResponsePayload,
+  AgentInterruptRequestPayload,
+  AgentInterruptResponsePayload,
   AgentModelChangeRequestPayload,
   AgentModelChangeResponsePayload,
+  AgentMcpServersSetRequestPayload,
+  AgentMcpServersSetResponsePayload,
   AIAgentConfig,
   ContextWindowInput,
   GetCapabilitiesResponsePayload,
@@ -40,6 +44,8 @@ import {
   type AgentStarted,
   AgentSubjects,
   type MessageInput,
+  type McpRuntimeSessionContext,
+  type McpSessionContext,
   McpSubjects,
   type ReasoningLevelMap,
   type ProviderContext,
@@ -57,6 +63,7 @@ import { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
 import type { AIModel } from '../types/ai-model.js';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import type { LedgerSessionContext } from './session-tool-ledger.js';
 import { AgentEventBridge } from './agent-event-bridge.js';
 import { AgentTurnExecutor } from './agent-turn-executor.js';
 import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
@@ -194,6 +201,7 @@ export abstract class AIAgent<
       getConnector: () => this.connector,
       shouldUseNativeResume: this.shouldUseNativeResume.bind(this),
       onMessageHandle: this.onMessageHandle.bind(this),
+      onBeforeDispatch: () => this.runtimeMutationManager.applyStagedMutations(),
       ephemeral: this.config.ephemeral,
     });
     this.runtimeMutationManager = createAgentRuntimeMutationManager({
@@ -204,12 +212,9 @@ export abstract class AIAgent<
       swapConnector: this.swapConnector.bind(this),
       emitGlobal: this.payloadEmitter.emitGlobal.bind(this.payloadEmitter),
       getProviderContext: () => this.config.providerContext,
-      setProviderContext: (providerContext: ProviderContext) => {
-        this.config.providerContext = providerContext;
-      },
-      setReasoningEffort: (reasoningEffort) => {
-        this.config.reasoningEffort = reasoningEffort;
-      },
+      setProviderContext: (providerContext: ProviderContext) => void (this.config.providerContext = providerContext),
+      setReasoningEffort: (reasoningEffort) => void (this.config.reasoningEffort = reasoningEffort),
+      setMcpSessionContext: (mcpSessionContext) => (this.config.mcpSessionContext = mcpSessionContext),
       resolveSupportedReasoningLevels: (model: string) => {
         return this.getSupportedReasoningLevels(model);
       },
@@ -325,6 +330,9 @@ export abstract class AIAgent<
         onSendMessage: async (ctx: RequestContext<SendMessageRequestPayload, SendMessageResponsePayload>) => {
           await this.sendMessage(ctx);
         },
+        onInterrupt: async (ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>) => {
+          await this.handleInterrupt(ctx);
+        },
         getCapabilities: (): GetCapabilitiesResponsePayload => ({
           capabilities: this.capabilities,
           nativeTools: this.nativeTools,
@@ -335,6 +343,11 @@ export abstract class AIAgent<
         },
         onModelChange: async (ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>) => {
           await this.handleModelChange(ctx);
+        },
+        onMcpServersSet: async (
+          ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
+        ) => {
+          await this.handleMcpServersSet(ctx);
         },
         onCredentialChange: async (
           ctx: RequestContext<AgentCredentialChangeRequestPayload, AgentCredentialChangeResponsePayload>,
@@ -566,6 +579,23 @@ export abstract class AIAgent<
       throw error;
     }
   }
+
+  /**
+   * Handle agent.interrupt request.
+   * Delegates to the connector's native interrupt behavior.
+   * @param ctx - Request context with interrupt payload
+   */
+  private async handleInterrupt(
+    ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>,
+  ): Promise<void> {
+    try {
+      await this.ensureConnector().interrupt();
+      ctx.setResult({ success: true });
+    } catch (error) {
+      ctx.setResult({ success: false, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   /**
    * Register a cleanup function for connector wiring.
    * These cleanups are cleared on connector swap but preserved across bus handler changes.
@@ -601,13 +631,21 @@ export abstract class AIAgent<
    * @throws Error if connector is currently processing a turn
    */
   public async swapConnector(
-    configOverrides?: Partial<{ cwd: string; model: string; providerContext: ProviderContext }>,
+    configOverrides?: Partial<{
+      cwd: string;
+      model: string;
+      providerContext: ProviderContext;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+    }>,
   ): Promise<void> {
     await this.connectorLifecycleManager.swapConnector(configOverrides);
     if (configOverrides?.providerContext !== undefined) {
       // Persist successful provider overrides so later swaps rebuild from the
       // latest credential/env/endpoint context instead of the start-time config.
       this.config.providerContext = configOverrides.providerContext;
+    }
+    if (configOverrides?.mcpSessionContext !== undefined) {
+      this.config.mcpSessionContext = configOverrides.mcpSessionContext;
     }
   }
 
@@ -639,6 +677,7 @@ export abstract class AIAgent<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ): ConfigFactoryInput<TBus> {
     const cfg = this.config;
@@ -672,7 +711,7 @@ export abstract class AIAgent<
       allowedTools: cfg.allowedTools,
       disallowedTools: cfg.disallowedTools,
       allowedDirectories: cfg.allowedDirectories,
-      mcpSessionContext: cfg.mcpSessionContext,
+      mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
       toolLedger: cfg.toolLedger,
       clientId: cfg.clientId,
       errorHandler: (error: Error, _terminate: boolean) => {
@@ -717,6 +756,17 @@ export abstract class AIAgent<
     ctx: RequestContext<AgentModelChangeRequestPayload, AgentModelChangeResponsePayload>,
   ): Promise<void> {
     const result = await this.runtimeMutationManager.handleModelChange(ctx.payload);
+    ctx.setResult(result);
+  }
+
+  /**
+   * Handle agent.mcp.servers.set request — rebuilds immediately when idle or stages for the next turn.
+   * @param ctx - Request context with replacement MCP session context
+   */
+  private async handleMcpServersSet(
+    ctx: RequestContext<AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload>,
+  ): Promise<void> {
+    const result = await this.runtimeMutationManager.handleMcpServersSet(ctx.payload);
     ctx.setResult(result);
   }
 

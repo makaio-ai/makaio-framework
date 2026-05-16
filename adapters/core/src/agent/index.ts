@@ -28,7 +28,7 @@ export { AgentLifecycleEmitter, type AgentLifecycleEmitterConfig } from './agent
 export { AgentPayloadEmitter, type AgentPayloadEmitterConfig } from './agent-payload-emitter.js';
 export { registerAgentBusHandlers, type AgentBusHandlerRegistrarConfig } from './agent-bus-handler-registrar.js';
 export { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js';
-export type { AgentRuntimeMutationManagerConfig } from './agent-runtime-mutation-manager.js';
+export type { AgentRuntimeMutationManagerConfig } from './agent-runtime-mutation-manager-config.js';
 export { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 export { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
 export { SessionToolLedger } from './session-tool-ledger.js';

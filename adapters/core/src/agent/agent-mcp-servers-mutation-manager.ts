@@ -1,0 +1,76 @@
+import type { McpRuntimeSessionContext, McpSessionContext, ProviderContext } from '@makaio/contracts';
+import type { AIAgentConnector } from '../connector/index.js';
+import type { AgentMcpServersSetRequestPayload, AgentMcpServersSetResponsePayload } from './types.js';
+import type { LedgerSessionContext } from './session-tool-ledger.js';
+
+/** Dependencies for runtime MCP server replacement handling. */
+export interface AgentMcpServersMutationManagerConfig {
+  /** Read current connector. */
+  getConnector: () => AIAgentConnector;
+  /** Swap connector with runtime overrides. */
+  swapConnector: (
+    configOverrides?: Partial<{
+      cwd: string;
+      model: string;
+      providerContext: ProviderContext;
+      mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
+    }>,
+  ) => Promise<void>;
+  /** Persist MCP session context changes on agent config for sequential swaps. */
+  setMcpSessionContext: (
+    mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext | undefined,
+  ) => void;
+}
+
+/** Handles `agent.mcp.servers.set` runtime mutation state. */
+export class AgentMcpServersMutationManager {
+  private readonly getConnector: () => AIAgentConnector;
+  private readonly swapConnector: AgentMcpServersMutationManagerConfig['swapConnector'];
+  private readonly setMcpSessionContext: AgentMcpServersMutationManagerConfig['setMcpSessionContext'];
+  private stagedMcpServersSet?: AgentMcpServersSetRequestPayload;
+
+  public constructor(config: AgentMcpServersMutationManagerConfig) {
+    this.getConnector = config.getConnector;
+    this.swapConnector = config.swapConnector;
+    this.setMcpSessionContext = config.setMcpSessionContext;
+  }
+
+  /** Apply the latest staged MCP replacement when the connector is idle. */
+  public async applyStagedMutation(): Promise<void> {
+    const staged = this.stagedMcpServersSet;
+    if (staged === undefined) return;
+
+    this.stagedMcpServersSet = undefined;
+    const result = await this.handleMcpServersSet(staged);
+    if (!result.success) {
+      throw new Error(`Failed to apply staged MCP server replacement: ${result.reason ?? 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Handle `agent.mcp.servers.set` request.
+   * @param payload - MCP server replacement request payload.
+   * @returns MCP mutation response payload.
+   */
+  public async handleMcpServersSet(
+    payload: AgentMcpServersSetRequestPayload,
+  ): Promise<AgentMcpServersSetResponsePayload> {
+    const connector = this.getConnector();
+
+    if (connector.getProcessingState() !== 'idle') {
+      if (payload.turnActiveBehavior === 'stageForNextTurn') {
+        this.stagedMcpServersSet = { ...payload, turnActiveBehavior: 'reject' };
+        return { success: true, swapped: false, staged: true };
+      }
+      return { success: false, reason: 'turn_active' };
+    }
+
+    try {
+      await this.swapConnector({ mcpSessionContext: payload.mcpSessionContext });
+      this.setMcpSessionContext(payload.mcpSessionContext);
+      return { success: true, swapped: true };
+    } catch (error) {
+      return { success: false, reason: `mcp_servers_set_failed: ${(error as Error).message}` };
+    }
+  }
+}
