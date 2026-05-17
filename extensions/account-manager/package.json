@@ -14,7 +14,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
+    "build": "bun build.ts",
     "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
     "prepare:portable-package": "tsx ./scripts/prepare-portable-package.ts",
     "db:generate": "tsx $(yarn bin drizzle-kit) generate",
@@ -68,11 +68,26 @@
   },
   "publishConfig": {
     "exports": {
-      "./browser": "./dist/browser.mjs",
-      "./schemas": "./dist/bus/schemas.mjs",
-      "./subjects": "./dist/bus/namespace.mjs",
-      "./cli": "./dist/cli.mjs",
-      "./server": "./dist/server.mjs",
+      "./browser": {
+        "types": "./dist/browser/index.d.ts",
+        "default": "./dist/browser.mjs"
+      },
+      "./schemas": {
+        "types": "./dist/bus/schemas.d.ts",
+        "default": "./dist/bus/schemas.mjs"
+      },
+      "./subjects": {
+        "types": "./dist/bus/namespace.d.ts",
+        "default": "./dist/bus/namespace.mjs"
+      },
+      "./cli": {
+        "types": "./dist/cli.d.ts",
+        "default": "./dist/cli.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      },
       "./package.json": "./package.json"
     }
   }

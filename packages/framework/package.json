@@ -88,6 +88,10 @@
       "types": "./dist/contracts/toast/index.d.mts",
       "default": "./dist/contracts/toast/index.mjs"
     },
+    "./contracts/timeout": {
+      "types": "./dist/contracts/timeout/index.d.mts",
+      "default": "./dist/contracts/timeout/index.mjs"
+    },
     "./contracts/variant": {
       "types": "./dist/contracts/variant/index.d.mts",
       "default": "./dist/contracts/variant/index.mjs"

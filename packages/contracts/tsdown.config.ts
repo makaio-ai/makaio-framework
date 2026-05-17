@@ -3,6 +3,7 @@ import { frameworkPreset } from '@makaio/build-tooling/tsdown-framework-preset';
 
 export default defineConfig({
   ...frameworkPreset,
+  dts: false,
   entry: [
     './src/adapter/index.ts',
     './src/adapter/schemas/session-lineage.ts',

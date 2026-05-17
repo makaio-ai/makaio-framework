@@ -7,7 +7,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun",
+    "build": "bun build.ts",
     "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts"
   },
   "peerDependencies": {
@@ -42,6 +42,7 @@
     "directory": "node_modules/.makaio-publish",
     "exports": {
       "./cli": {
+        "types": "./dist/cli.d.ts",
         "default": "./dist/cli.mjs"
       },
       "./package.json": "./package.json"

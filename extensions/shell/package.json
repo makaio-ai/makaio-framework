@@ -12,7 +12,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "bun build.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -38,9 +38,18 @@
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/index.mjs",
-      "./server": "./dist/server.mjs",
-      "./schemas": "./dist/bus/schemas.mjs",
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      },
+      "./schemas": {
+        "types": "./dist/bus/schemas.d.ts",
+        "default": "./dist/bus/schemas.mjs"
+      },
       "./package.json": "./package.json"
     }
   }
