@@ -1,18 +1,17 @@
-import { execSync } from 'node:child_process';
-import { createLocalBinPathEnv } from '@makaio/build-tooling/process-env';
+import { build } from 'tsdown';
+import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
 import { emitDeclarations } from '@makaio/build-tooling/tsgo-declarations';
 
-const start = performance.now();
-const buildEnv = createLocalBinPathEnv({ startDir: import.meta.dirname });
-
-console.info('[build] Bundling JS via tsdown…');
-execSync('tsdown --config-loader unrun', {
-  stdio: 'inherit',
-  cwd: import.meta.dirname,
-  env: { ...buildEnv, MAKAIO_EXTENSION_MODE: 'repo-dev' },
+await build({
+  ...defineAdapterConfig({
+    entry: {
+      browser: './src/browser/index.ts',
+      server: './src/server.ts',
+      cli: './src/cli.ts',
+    },
+    external: ['ink', 'react'],
+  }),
+  dts: false,
 });
 
 emitDeclarations({ packageDir: import.meta.dirname });
-
-const elapsed = ((performance.now() - start) / 1000).toFixed(1);
-console.info(`[build] Done in ${elapsed}s`);
