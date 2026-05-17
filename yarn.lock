@@ -4259,6 +4259,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    "@makaio/utils": "workspace:*"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft

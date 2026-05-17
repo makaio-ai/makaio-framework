@@ -47,6 +47,67 @@ function killServer(serverName: string): void {
   }
 }
 
+/**
+ * Run a tmux command on the test server.
+ * @param serverName - The tmux socket name.
+ * @param args - tmux subcommand arguments.
+ * @returns Trimmed stdout from tmux.
+ */
+function tmuxExec(serverName: string, args: string[]): string {
+  return execFileSync('tmux', ['-L', serverName, ...args], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+/**
+ * Create a managed tmux session fixture with explicit owner metadata.
+ * @param serverName - The tmux socket name.
+ * @param sessionName - Session name to create.
+ * @param ownerPid - Owner PID to record.
+ */
+function createManagedSessionFixture(serverName: string, sessionName: string, ownerPid: number): void {
+  execFileSync(
+    'tmux',
+    [
+      '-L',
+      serverName,
+      'new-session',
+      '-d',
+      '-s',
+      sessionName,
+      '/bin/cat',
+      ';',
+      'set-option',
+      '-t',
+      sessionName,
+      '@makaio-managed',
+      '1',
+      ';',
+      'set-option',
+      '-t',
+      sessionName,
+      '@makaio-owner-pid',
+      String(ownerPid),
+    ],
+    { stdio: 'ignore' },
+  );
+}
+
+/**
+ * List session names currently present on the test server.
+ * @param serverName - The tmux socket name.
+ * @returns Session names, or an empty array when the server is absent.
+ */
+function listSessionNames(serverName: string): string[] {
+  try {
+    const output = tmuxExec(serverName, ['list-sessions', '-F', '#{session_name}']);
+    return output ? output.split('\n') : [];
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -86,6 +147,41 @@ describeWithTmux('TmuxBackend — real tmux integration', () => {
     expect(proc.process).toBe('/bin/echo');
     expect(proc.cols).toBe(80);
     expect(proc.rows).toBe(24);
+  });
+
+  it('spawn marks tmux sessions with Makaio owner metadata', async () => {
+    const proc = await backend.spawn('/bin/cat', [], { cols: 80, rows: 24 });
+    spawned.push(proc);
+
+    const metadata = tmuxExec(serverName, [
+      'list-sessions',
+      '-F',
+      '#{session_name}\t#{@makaio-managed}\t#{@makaio-owner-pid}',
+    ]);
+
+    expect(metadata).toContain('\t1\t');
+    expect(metadata).toContain(`\t${process.pid}`);
+  });
+
+  it('constructor removes stale Makaio-owned sessions only', async () => {
+    await backend.dispose();
+
+    const staleSession = `makaio-stale-${randomBytes(3).toString('hex')}`;
+    const liveSession = `makaio-live-${randomBytes(3).toString('hex')}`;
+    const unmarkedSession = `makaio-unmarked-${randomBytes(3).toString('hex')}`;
+
+    createManagedSessionFixture(serverName, staleSession, 1_000_000_000);
+    createManagedSessionFixture(serverName, liveSession, process.pid);
+    execFileSync('tmux', ['-L', serverName, 'new-session', '-d', '-s', unmarkedSession, '/bin/cat'], {
+      stdio: 'ignore',
+    });
+
+    backend = new TmuxBackend({ serverName, pollIntervalMs: 50 });
+
+    const sessions = listSessionNames(serverName);
+    expect(sessions).not.toContain(staleSession);
+    expect(sessions).toContain(liveSession);
+    expect(sessions).toContain(unmarkedSession);
   });
 
   // ── write ──────────────────────────────────────────────────────────────────

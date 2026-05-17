@@ -49,9 +49,13 @@ class MockSubprocess {
 }
 
 const mockSpawn = vi.fn();
-vi.mock('node:child_process', () => ({
-  spawn: (...args: unknown[]) => mockSpawn(...args),
-}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...original,
+    spawn: (...args: unknown[]) => mockSpawn(...args),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

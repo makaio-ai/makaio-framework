@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./health-probe": "./src/health-probe.ts",
+    "./keychain": "./src/keychain.ts",
     "./package-root": "./src/resolve-package-root.ts",
     "./workspace-root": "./src/workspace-root.ts",
     "./package.json": "./package.json"
@@ -27,6 +28,7 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./health-probe": "./dist/health-probe.mjs",
+      "./keychain": "./dist/keychain.mjs",
       "./package-root": "./dist/resolve-package-root.mjs",
       "./workspace-root": "./dist/workspace-root.mjs",
       "./package.json": "./package.json"

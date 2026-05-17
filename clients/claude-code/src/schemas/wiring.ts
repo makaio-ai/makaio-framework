@@ -100,6 +100,11 @@ export const ClaudeCodeWiringSchemas = {
          * settings are written here instead of the globally-resolved config path.
          */
         configDir: AbsolutePathSchema.optional(),
+        /**
+         * Suppress Claude Code's one-time prompt for
+         * `--dangerously-skip-permissions` in this isolated settings scope.
+         */
+        skipDangerousModePermissionPrompt: z.boolean().optional(),
       })
       .refine((data) => data.scope === 'user' || data.projectDir !== undefined, {
         message: 'projectDir is required when scope is project or local',

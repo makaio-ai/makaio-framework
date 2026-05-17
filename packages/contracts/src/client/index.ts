@@ -153,11 +153,15 @@ export {
   ClientSessionConfigSchemas,
   SessionConfigEnvSchema,
   SessionConfigIdSchema,
+  SessionConfigInheritanceSchema,
   SessionConfigSetupRequestSchema,
   SessionConfigSetupResponseSchema,
+  SessionConfigTeardownRequestSchema,
+  SessionConfigTeardownResponseSchema,
 } from './profile.js';
 export type {
   ClientProfile,
+  SessionConfigInheritance,
   ProfileCreateRequest,
   ProfileCreateResponse,
   ProfileListRequest,
@@ -178,4 +182,6 @@ export type {
   SessionConfigCleanupResponse,
   SessionConfigSetupRequest,
   SessionConfigSetupResponse,
+  SessionConfigTeardownRequest,
+  SessionConfigTeardownResponse,
 } from './profile.js';

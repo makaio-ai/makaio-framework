@@ -34,6 +34,8 @@ export async function prepareLaunchPrerequisites(
     clientId: 'claude-code',
     sessionId: sid,
     profileName: options.clientProfileName,
+    projectDir: options.projectDir,
+    configInheritance: 'auth-only',
   });
   if (!sc.handled) {
     throw new Error(

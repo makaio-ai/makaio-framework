@@ -13,9 +13,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from '../wiring.js';
 import type { ClaudeCodeWiringSettings } from '../wiring.js';
+import { ClaudeCodeClientSettings } from '../client-settings.js';
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -59,6 +63,7 @@ function createMockSettings(
       applied: { type: 'command', command: 'makaio claude statusline' },
     }),
     removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+    setSkipDangerousModePermissionPrompt: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -161,6 +166,31 @@ describe('applyClaudeCodeWiring', () => {
       scope: 'user',
       value: { type: 'command', command: 'makaio claude statusline' },
     });
+  });
+
+  it('acknowledges the dangerous skip permissions prompt when requested', async () => {
+    await applyClaudeCodeWiring(settings, 'user', 'makaio', undefined, {
+      skipDangerousModePermissionPrompt: true,
+    });
+
+    expect(settings.setSkipDangerousModePermissionPrompt).toHaveBeenCalledWith({ scope: 'user', enabled: true });
+  });
+
+  it('persists dangerous skip permissions acknowledgement through real settings I/O', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-code-wiring-settings-'));
+    try {
+      const realSettings = new ClaudeCodeClientSettings({ configDir });
+
+      await applyClaudeCodeWiring(realSettings, 'user', 'makaio', undefined, {
+        skipDangerousModePermissionPrompt: true,
+      });
+
+      const settingsPath = path.join(configDir, 'settings.json');
+      const persisted = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as Record<string, unknown>;
+      expect(persisted['skipDangerousModePermissionPrompt']).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 
   it('quotes shell-sensitive Makaio paths in the statusline command', async () => {
@@ -376,6 +406,7 @@ describe('applyClaudeCodeWiring', () => {
         .fn()
         .mockResolvedValue({ previous: null, applied: { type: 'command', command: 'makaio claude statusline' } }),
       removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+      setSkipDangerousModePermissionPrompt: vi.fn().mockResolvedValue(undefined),
     };
 
     const result = await applyClaudeCodeWiring(staleSettings, 'user', 'makaio');

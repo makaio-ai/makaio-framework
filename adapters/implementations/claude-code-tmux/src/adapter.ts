@@ -24,11 +24,20 @@ import { ClaudeCodeTmuxConnectorNamespace, type ClaudeCodeTmuxConnectorBus } fro
 import { ClaudeCodeTmuxConfig } from './config.js';
 import { ADAPTER_NAME } from './constants.js';
 import type { ClaudeCodeTmuxAgentConfig } from './types.js';
+import type { ClaudeCodeTmuxProviderConfig } from './schemas.js';
 
 /**
  * Configuration for the Claude Code tmux adapter.
  */
-export type ClaudeCodeTmuxAdapterConfig = Partial<AIAdapterConfig>;
+export type ClaudeCodeTmuxAdapterConfig = Partial<AIAdapterConfig> & {
+  /**
+   * Adapter-scoped provider defaults merged into each agent config.
+   *
+   * Runtime provider config wins over these defaults. Test hosts use this to
+   * isolate spawned tmux sessions without changing production defaults.
+   */
+  providerConfigDefaults?: Partial<ClaudeCodeTmuxProviderConfig>;
+};
 
 /**
  * Claude Code tmux adapter.
@@ -48,13 +57,26 @@ export class ClaudeCodeTmuxAdapter extends AIAdapter<
    * @param config - Optional adapter configuration overrides merged with tmux defaults.
    */
   public constructor(config?: ClaudeCodeTmuxAdapterConfig) {
+    const { providerConfigDefaults, ...adapterConfig } = config ?? {};
     super({
       name: ADAPTER_NAME,
       capabilities: ['tools', 'systemPrompt:override', 'systemPrompt:append'],
-      ...config,
+      ...adapterConfig,
       namespace: ClaudeCodeTmuxConnectorNamespace,
       agentFactory: (agentConfig) => new ClaudeCodeTmuxAgent(agentConfig),
-      configFactory: ClaudeCodeTmuxConfig.getConfig,
+      configFactory: async (input) => {
+        const resolved = await ClaudeCodeTmuxConfig.getConfig(input);
+        if (!providerConfigDefaults) {
+          return resolved;
+        }
+        return {
+          ...resolved,
+          providerConfig: {
+            ...providerConfigDefaults,
+            ...resolved.providerConfig,
+          },
+        };
+      },
       connectorFactory: (fullConfig) => {
         const typedConfig = fullConfig as ClaudeCodeTmuxAgentConfig;
         return new ClaudeCodeTmuxConnector({
@@ -62,7 +84,7 @@ export class ClaudeCodeTmuxAdapter extends AIAdapter<
           mcpUpstreamServers: typedConfig.mcpSessionContext?.servers,
         });
       },
-      definitionProviders: config?.definitionProviders,
+      definitionProviders: adapterConfig.definitionProviders,
     });
   }
 }

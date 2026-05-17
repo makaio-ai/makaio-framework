@@ -24,7 +24,15 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, SessionConfigIdSchema } from '@makaio/contracts/client';
+import {
+  ClientSubjects,
+  SessionConfigIdSchema,
+  type SessionConfigInheritance,
+  type SessionConfigSetupRequest,
+  type SessionConfigSetupResponse,
+  type SessionConfigTeardownRequest,
+  type SessionConfigTeardownResponse,
+} from '@makaio/contracts/client';
 import { SessionSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
 import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
@@ -42,10 +50,14 @@ type SessionConfigSetupPayload = RequestMessagePayload<
     sessionDir: string;
     /** Absolute path to the profile's base config directory used as the source. */
     baseConfigDir: string;
+    /** Project directory the client process will start in, when relevant. */
+    projectDir?: string;
     /** Host operating system platform. */
-    platform: NodeJS.Platform;
+    platform: SessionConfigSetupRequest['platform'];
+    /** Policy for inheriting settings and auth from the resolved base config. */
+    configInheritance: SessionConfigInheritance;
   },
-  { env?: Record<string, string> }
+  SessionConfigSetupResponse
 >;
 
 type SessionConfigSetupSubjectRecord = SubjectRecord<'sessionConfig.setup', SessionConfigSetupPayload>;
@@ -60,6 +72,16 @@ type SessionConfigSetupSubjectRecord = SubjectRecord<'sessionConfig.setup', Sess
 type ClientSessionConfigSetupSubjectDef = SubjectDefinition<
   SessionConfigSetupSubjectRecord,
   'sessionConfig.setup',
+  `client:${string}`
+>;
+
+type SessionConfigTeardownPayload = RequestMessagePayload<SessionConfigTeardownRequest, SessionConfigTeardownResponse>;
+
+type SessionConfigTeardownSubjectRecord = SubjectRecord<'sessionConfig.destroy', SessionConfigTeardownPayload>;
+
+type ClientSessionConfigTeardownSubjectDef = SubjectDefinition<
+  SessionConfigTeardownSubjectRecord,
+  'sessionConfig.destroy',
   `client:${string}`
 >;
 
@@ -86,6 +108,24 @@ function createClientSessionConfigSetupSubjectDef(clientId: string): ClientSessi
   } as ClientSessionConfigSetupSubjectDef;
 }
 
+/**
+ * Build a non-owning typed {@link SubjectDefinition} for
+ * `client:<clientId>.sessionConfig.destroy`.
+ * @param clientId - Stable client identifier, already canonicalized.
+ * @returns Non-owning typed subject definition for the per-client teardown subject.
+ */
+function createClientSessionConfigTeardownSubjectDef(clientId: string): ClientSessionConfigTeardownSubjectDef {
+  return {
+    subject: 'sessionConfig.destroy',
+    $meta: {
+      namespace: `client:${clientId}`,
+      isRequest: true,
+      local: false,
+      channel: false,
+    },
+  } as ClientSessionConfigTeardownSubjectDef;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -95,6 +135,18 @@ const SESSION_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
 
 // Default `getNow` implementation — evaluated lazily via the parameter default.
 const defaultGetNow = (): number => Date.now();
+
+/**
+ * Resolve the current host platform to the session config contract subset.
+ * @returns Platform identifier accepted by client-owned setup/teardown handlers.
+ */
+function resolveSessionConfigPlatform(): SessionConfigSetupPayload['request']['platform'] {
+  const platform = os.platform();
+  if (platform === 'darwin' || platform === 'linux' || platform === 'win32') {
+    return platform;
+  }
+  throw new Error(`client.sessionConfig does not support platform '${platform}'`);
+}
 
 /**
  * Resolve a session directory and verify it remains under the expected root.
@@ -142,7 +194,14 @@ export class ClientSessionConfigService extends BaseService {
    */
   protected override async onInit(): Promise<void> {
     this.registerHandler(ClientSubjects.sessionConfig.create, async (ctx) => {
-      const { clientId, sessionId, profileName, baseConfigDir: explicitBaseConfigDir } = ctx.payload;
+      const {
+        clientId,
+        sessionId,
+        profileName,
+        baseConfigDir: explicitBaseConfigDir,
+        projectDir,
+        configInheritance = 'full',
+      } = ctx.payload;
       const canonicalId = canonicalizeClientId(clientId, 'sessionConfig.create');
 
       const sessionDir = this.resolveClientSessionDir(canonicalId, sessionId, 'sessionConfig.create');
@@ -161,7 +220,9 @@ export class ClientSessionConfigService extends BaseService {
       const setupResult = await this.bus.requestOptional(setupSubject, {
         sessionDir,
         baseConfigDir,
-        platform: os.platform(),
+        projectDir,
+        platform: resolveSessionConfigPlatform(),
+        configInheritance,
       });
 
       const env = setupResult.handled ? (setupResult.data.env ?? {}) : {};
@@ -172,7 +233,7 @@ export class ClientSessionConfigService extends BaseService {
       const { clientId, sessionId } = ctx.payload;
       const canonicalId = canonicalizeClientId(clientId, 'sessionConfig.destroy');
       const sessionDir = this.resolveClientSessionDir(canonicalId, sessionId, 'sessionConfig.destroy');
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await this.destroyClientSessionDir(canonicalId, sessionDir);
       ctx.setResult({ success: true });
     });
 
@@ -269,7 +330,7 @@ export class ClientSessionConfigService extends BaseService {
               // birthtimeMs as 0.
               const createdAt = stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.ctimeMs;
               if (stat.isDirectory() && now - createdAt > SESSION_MAX_AGE_MS && !(await this.isActiveSession(entry))) {
-                await fs.rm(entryPath, { recursive: true, force: true });
+                await this.destroyClientSessionDir(id, entryPath);
                 removed.push(entryPath);
               }
             } catch {
@@ -296,9 +357,34 @@ export class ClientSessionConfigService extends BaseService {
     await Promise.all(
       clientIds.map(async (clientId) => {
         const sessionDir = this.resolveClientSessionDir(clientId, sessionId, 'session.closed');
-        await fs.rm(sessionDir, { recursive: true, force: true });
+        await this.destroyClientSessionDir(clientId, sessionDir);
       }),
     );
+  }
+
+  /**
+   * Run client-owned session config teardown before removing the directory.
+   * @param clientId - Canonical client identifier.
+   * @param sessionDir - Absolute session config directory to destroy.
+   */
+  private async destroyClientSessionDir(clientId: string, sessionDir: string): Promise<void> {
+    const exists = await fs.stat(sessionDir).then(
+      (stat) => stat.isDirectory(),
+      (error: unknown) => {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+        throw error;
+      },
+    );
+    if (!exists) {
+      return;
+    }
+
+    await this.bus.requestOptional(createClientSessionConfigTeardownSubjectDef(clientId), {
+      sessionDir,
+      platform: resolveSessionConfigPlatform(),
+    });
+    await fs.rm(sessionDir, { recursive: true, force: true });
   }
 
   /**

@@ -37,6 +37,23 @@ export const ClaudeCodeTmuxProviderConfigSchema = z.object({
     description:
       'Pass --dangerously-skip-permissions to Claude Code. Defaults to true because tool approval is handled by the Makaio harness via MCP.',
   }),
+
+  /**
+   * tmux server name passed via `tmux -L`.
+   *
+   * Defaults to the adapter's production server. Tests use this seam to isolate
+   * each Vitest worker from stale tmux sessions left by interrupted runs.
+   */
+  tmuxServerName: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]+$/, 'tmuxServerName may contain only letters, digits, dot, underscore, and hyphen')
+    .min(1)
+    .max(64, 'tmuxServerName must be 64 characters or fewer')
+    .optional()
+    .meta({
+      title: 'tmux Server Name',
+      description: 'tmux server name passed with -L. Defaults to the adapter-managed server.',
+    }),
 });
 
 /** Inferred TypeScript type from the provider config schema. */

@@ -10,14 +10,21 @@
  */
 
 import type { SchemaRecord } from '@makaio/core';
-import { SessionConfigSetupRequestSchema, SessionConfigSetupResponseSchema } from '@makaio/contracts/client';
+import {
+  SessionConfigSetupRequestSchema,
+  SessionConfigSetupResponseSchema,
+  SessionConfigTeardownRequestSchema,
+  SessionConfigTeardownResponseSchema,
+} from '@makaio/contracts/client';
 
 /**
  * Bus schema definitions for the `sessionConfig.*` delegation subject.
  *
  * Subjects:
- * - `sessionConfig.setup` — seed a session-scoped directory with Claude Code
- *   native config files copied from the base config directory.
+ * - `sessionConfig.setup` — seed a session-scoped directory with the requested
+ *   Claude Code settings/auth inheritance policy.
+ * - `sessionConfig.destroy` — clear native session credential material before
+ *   the session-scoped directory is removed.
  */
 export const ClaudeCodeSessionConfigSchemas = {
   /**
@@ -25,13 +32,19 @@ export const ClaudeCodeSessionConfigSchemas = {
    * native files.
    *
    * Dispatched by {@link ClientSessionConfigService} after creating the session
-   * directory.  The handler copies `settings.json` (or creates an empty one)
-   * and `settings.local.json` (when present) from `baseConfigDir`.  On
-   * Linux/Windows it also symlinks `.credentials.json` so the process can
-   * authenticate without user interaction.
+   * directory.  The handler applies `configInheritance` to decide whether to
+   * inherit settings plus auth, auth only, or an empty config shell.
    */
   'sessionConfig.setup': {
     request: SessionConfigSetupRequestSchema,
     response: SessionConfigSetupResponseSchema,
+  },
+  /**
+   * Clear native credential material associated with a session-scoped config
+   * directory before the generic lifecycle service removes the directory.
+   */
+  'sessionConfig.destroy': {
+    request: SessionConfigTeardownRequestSchema,
+    response: SessionConfigTeardownResponseSchema,
   },
 } satisfies SchemaRecord;

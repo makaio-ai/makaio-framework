@@ -158,6 +158,16 @@ export class TmuxSession {
   }
 
   /**
+   * Record a SessionStart hook that was observed before the full hook
+   * subscription could be attached to this tmux session.
+   * @param sessionId - Claude Code session ID from the hook payload.
+   */
+  public observeSessionStart(sessionId: string): void {
+    this.claudeSessionId = sessionId;
+    this.sessionStartDeferred.resolve();
+  }
+
+  /**
    * Kill the underlying PTY process.
    */
   public kill(): void {
@@ -180,8 +190,7 @@ export class TmuxSession {
   public subscribeToHooks(callbacks: HookEventCallbacks): () => void {
     const wrappedCallbacks: HookEventCallbacks = {
       onSessionStart: (sessionId, model) => {
-        this.claudeSessionId = sessionId;
-        this.sessionStartDeferred.resolve();
+        this.observeSessionStart(sessionId);
         return callbacks.onSessionStart(sessionId, model);
       },
       onUserPromptSubmit: callbacks.onUserPromptSubmit,

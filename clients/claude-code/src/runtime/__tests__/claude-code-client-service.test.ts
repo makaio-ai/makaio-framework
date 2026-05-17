@@ -1,3 +1,6 @@
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/clients-core';
@@ -31,6 +34,7 @@ interface TestActiveIdentity {
 describe('ClaudeCodeClientService', () => {
   let bus: IMakaioBus;
   let service: ClaudeCodeClientService;
+  const tempDirs: string[] = [];
 
   beforeEach(async () => {
     bus = createBusInstance();
@@ -40,7 +44,23 @@ describe('ClaudeCodeClientService', () => {
 
   afterEach(async () => {
     await service.destroy();
+    let dir = tempDirs.pop();
+    while (dir !== undefined) {
+      await fs.rm(dir, { recursive: true, force: true });
+      dir = tempDirs.pop();
+    }
   });
+
+  /**
+   * Create and track a temporary directory.
+   * @param prefix - Directory name prefix.
+   * @returns Temporary directory path.
+   */
+  async function makeTempDir(prefix: string): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
 
   it('emits client.session.started when SessionStart hook is received', async () => {
     const received: unknown[] = [];
@@ -63,6 +83,19 @@ describe('ClaudeCodeClientService', () => {
       observedAt: RECEIVED_AT,
       adapterSessionId: SESSION_ID,
     });
+  });
+
+  it('clears native session credentials when sessionConfig.destroy is requested', async () => {
+    const sessionDir = await makeTempDir('makaio-claude-session-');
+    await fs.writeFile(path.join(sessionDir, '.credentials.json'), '{"token":"stale"}', 'utf-8');
+
+    const result = await bus.request(ClaudeCodeClientSubjects.sessionConfig.destroy, {
+      sessionDir,
+      platform: 'linux',
+    });
+
+    expect(result.success).toBe(true);
+    await expect(fs.access(path.join(sessionDir, '.credentials.json'))).rejects.toThrow();
   });
 
   it('emits client.session.userPrompt.submitted with prompt text', async () => {

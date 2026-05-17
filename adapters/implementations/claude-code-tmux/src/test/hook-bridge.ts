@@ -37,6 +37,7 @@ export interface AgentContext {
   readonly adapterId: string;
   readonly adapterName: string;
   readonly adapterSessionId: string;
+  readonly projectDir: string;
 }
 
 /**
@@ -57,6 +58,7 @@ export interface HookBridgeHandle {
 
 /** Module-level agent context map: claudeSessionId → AgentContext. */
 const agentContextMap = new Map<string, AgentContext>();
+const agentContextByProjectDir = new Map<string, AgentContext>();
 
 /**
  * Start an HTTP hook bridge server on a random port.
@@ -89,12 +91,23 @@ export async function startHookBridge(): Promise<HookBridgeHandle> {
     port,
     registerAgentContext: (ctx) => {
       agentContextMap.set(ctx.adapterSessionId, ctx);
+      agentContextByProjectDir.set(ctx.projectDir, ctx);
     },
     close: async () => {
       agentContextMap.clear();
+      agentContextByProjectDir.clear();
       await closeServer(server);
     },
   };
+}
+
+/**
+ * Resolve the registered agent context for a project directory.
+ * @param projectDir - Project directory used by the connector.
+ * @returns Registered agent context, if any.
+ */
+export function resolveAgentContextForProject(projectDir: string): AgentContext | undefined {
+  return agentContextByProjectDir.get(projectDir);
 }
 
 /**
@@ -123,6 +136,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           return;
         }
 
+        console.log(
+          `[claude-code-tmux:test] hook received eventName=${eventName} sessionId=${String(payload.session_id ?? '')}`,
+        );
         await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
           eventName,
           receivedAt: Date.now(),
@@ -232,6 +248,9 @@ async function handlePreToolUseApproval(payload: Record<string, unknown>): Promi
  * @param payload - Raw hook payload.
  */
 async function emitRawHook(eventName: string, payload: Record<string, unknown>): Promise<void> {
+  console.log(
+    `[claude-code-tmux:test] hook received eventName=${eventName} sessionId=${String(payload.session_id ?? '')}`,
+  );
   await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
     eventName,
     receivedAt: Date.now(),

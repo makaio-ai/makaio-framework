@@ -9,7 +9,8 @@
  */
 
 import type { ClaudeCodeHookDefinition, ClaudeCodeHookMatcherGroup } from '../schemas/config.js';
-import { getRawHooksMap, hooksAreIdentical, isHookMatcherGroup } from './client-settings-guards.js';
+import { getRawHooksMap, hooksAreIdentical, isHookMatcherGroup, isStatuslineValue } from './client-settings-guards.js';
+import { extractUpstreamCommand, HOOK_COMMAND_SENTINEL, STATUSLINE_COMMAND_SENTINEL } from './managed-wiring.js';
 
 // ---------------------------------------------------------------------------
 // Hook add
@@ -155,4 +156,73 @@ export function applyHookRemoval(current: Record<string, unknown>, req: HookRemo
   }
 
   return { updated: { ...current, hooks: updatedHooksMap }, removed };
+}
+
+// ---------------------------------------------------------------------------
+// Managed wiring scrub
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove stale Makaio-managed wiring from a raw Claude Code settings object.
+ *
+ * This operates at file level instead of through scoped settings paths so it
+ * can be applied to copied `settings.json` and `settings.local.json` alike.
+ * Non-Makaio hooks, statuslines, and unknown keys are preserved.
+ * @param current - Current raw settings object from the file.
+ * @returns Updated settings object; same reference when no managed wiring was present.
+ */
+export function scrubManagedClaudeCodeWiring(current: Record<string, unknown>): Record<string, unknown> {
+  let updated = current;
+  const hooksMap = getRawHooksMap(current['hooks']);
+  if (hooksMap !== null) {
+    let nextHooksMap: Record<string, unknown> | undefined;
+
+    for (const [eventName, eventEntries] of Object.entries(hooksMap)) {
+      if (!Array.isArray(eventEntries)) continue;
+
+      const remainingGroups: unknown[] = [];
+      let removedFromEvent = false;
+      for (const group of eventEntries) {
+        if (!isHookMatcherGroup(group)) {
+          remainingGroups.push(group);
+          continue;
+        }
+
+        const remainingHooks = group.hooks.filter((hook) => !hook.command.includes(HOOK_COMMAND_SENTINEL));
+        if (remainingHooks.length !== group.hooks.length) {
+          removedFromEvent = true;
+        }
+        if (remainingHooks.length > 0) {
+          remainingGroups.push({ ...group, hooks: remainingHooks });
+        }
+      }
+
+      if (removedFromEvent) {
+        nextHooksMap ??= { ...hooksMap };
+        if (remainingGroups.length > 0) {
+          nextHooksMap[eventName] = remainingGroups;
+        } else {
+          delete nextHooksMap[eventName];
+        }
+      }
+    }
+
+    if (nextHooksMap !== undefined) {
+      updated = { ...updated, hooks: nextHooksMap };
+    }
+  }
+
+  const statusLine = updated['statusLine'];
+  if (isStatuslineValue(statusLine) && statusLine.command.includes(STATUSLINE_COMMAND_SENTINEL)) {
+    const upstreamCommand = extractUpstreamCommand(statusLine.command);
+    if (upstreamCommand !== null) {
+      updated = { ...updated, statusLine: { ...statusLine, command: upstreamCommand } };
+    } else {
+      const next = { ...updated };
+      delete next['statusLine'];
+      updated = next;
+    }
+  }
+
+  return updated;
 }

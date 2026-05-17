@@ -62,8 +62,6 @@
  * @packageDocumentation
  */
 
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
 import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
@@ -75,6 +73,7 @@ import { normalizeClaudeCodeHook } from './hook-normalizer.js';
 import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
+import { clearClaudeCodeNativeCredentialsForSession } from './native-credentials.js';
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
 
 /** Stable client ID for Claude Code — used to filter `client.runtime.started` events. */
@@ -226,77 +225,10 @@ export class ClaudeCodeClientService extends BaseService {
       await this.handleStatuslineReceived(payload);
     });
 
-    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.list, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.listStatusline());
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.set, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.setStatusline(ctx.payload));
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.list, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.listHooks(ctx.payload));
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.add, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.addHook(ctx.payload));
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.remove, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.removeHook(ctx.payload));
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.config.plugins.list, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.listPlugins());
-    });
-
+    this.registerConfigHandlers();
     this.registerSessionConfigHandler();
     this.registerMcpServersHandlers();
-
-    this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      // envPairs is part of the wiring request contract so dev-mode hooks can
-      // launch the CLI with the same runtime config as the host process.
-      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand, ctx.payload.envPairs));
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
-        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
-      }
-      const configDir = ctx.payload.configDir ?? (await this.resolveConfigDir());
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      // envPairs must flow through to generated hook/statusline commands; the
-      // helper owns shell construction, so the service forwards them unchanged.
-      ctx.setResult(
-        await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand, ctx.payload.envPairs),
-      );
-    });
-
-    this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
-        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
-      }
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await removeClaudeCodeWiring(settings, ctx.payload.scope));
-    });
+    this.registerWiringHandlers();
   }
 
   /**
@@ -308,6 +240,77 @@ export class ClaudeCodeClientService extends BaseService {
     this.sessionIdentityCacheEpoch += 1;
     this.sessionIdentityCache.clear();
     this.cachedConfigDir = undefined;
+  }
+
+  /**
+   * Register Claude Code native config handlers.
+   */
+  private registerConfigHandlers(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.list, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).listStatusline());
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.statusline.set, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).setStatusline(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.list, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).listHooks(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.add, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).addHook(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.hooks.remove, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).removeHook(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.plugins.list, async (ctx) => {
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).listPlugins());
+    });
+  }
+
+  /**
+   * Register Claude Code wiring handlers.
+   */
+  private registerWiringHandlers(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      const settings = await this.createSettings(ctx.payload.projectDir);
+      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand, ctx.payload.envPairs));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
+        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
+      }
+      const configDir = ctx.payload.configDir ?? (await this.resolveConfigDir());
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(
+        await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand, ctx.payload.envPairs, {
+          skipDangerousModePermissionPrompt: ctx.payload.skipDangerousModePermissionPrompt,
+        }),
+      );
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
+      assertAbsoluteProjectDir(ctx.payload.projectDir);
+      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
+        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
+      }
+      ctx.setResult(await removeClaudeCodeWiring(await this.createSettings(ctx.payload.projectDir), ctx.payload.scope));
+    });
+  }
+
+  /**
+   * Create a settings instance for the resolved global config directory.
+   * @param projectDir - Optional project directory for project-scoped settings.
+   * @returns Settings instance bound to the resolved config directory.
+   */
+  private async createSettings(projectDir?: string): Promise<ClaudeCodeClientSettings> {
+    return new ClaudeCodeClientSettings({ projectDir, configDir: await this.resolveConfigDir() });
   }
 
   /**
@@ -371,21 +374,22 @@ export class ClaudeCodeClientService extends BaseService {
   /**
    * Register the `sessionConfig.setup` handler.
    *
-   * Applies the `~/.claude` fallback when `baseConfigDir` equals `sessionDir`,
-   * which the framework sets when no profile was found.  The handler returns the
-   * `CLAUDE_CONFIG_DIR` env var so the spawned process inherits the isolated
-   * session directory as its configuration root.
+   * Delegates setup to the client-owned session config handler. The handler
+   * owns Claude Code's native fallback when no profile base exists and returns
+   * the `CLAUDE_CONFIG_DIR` env var so the spawned process inherits the
+   * isolated session directory as its configuration root.
    *
    * Extracted from {@link onInit} to keep the init method within the
    * max-lines-per-function lint threshold.
    */
   private registerSessionConfigHandler(): void {
     this.registerHandler(ClaudeCodeClientSubjects.sessionConfig.setup, async (ctx) => {
-      const payload = ctx.payload;
-      const effectiveBase =
-        payload.baseConfigDir === payload.sessionDir ? path.join(os.homedir(), '.claude') : payload.baseConfigDir;
-      const result = await handleClaudeCodeSessionConfigSetup({ ...payload, baseConfigDir: effectiveBase });
+      const result = await handleClaudeCodeSessionConfigSetup(ctx.payload);
       ctx.setResult(result);
+    });
+    this.registerHandler(ClaudeCodeClientSubjects.sessionConfig.destroy, async (ctx) => {
+      await clearClaudeCodeNativeCredentialsForSession(ctx.payload);
+      ctx.setResult({ success: true });
     });
   }
 
@@ -397,21 +401,15 @@ export class ClaudeCodeClientService extends BaseService {
    */
   private registerMcpServersHandlers(): void {
     this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.list, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.listMcpServers());
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).listMcpServers());
     });
 
     this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.add, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.addMcpServer(ctx.payload));
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).addMcpServer(ctx.payload));
     });
 
     this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.remove, async (ctx) => {
-      const configDir = await this.resolveConfigDir();
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(await settings.removeMcpServer(ctx.payload));
+      ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).removeMcpServer(ctx.payload));
     });
   }
 
