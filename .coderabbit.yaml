@@ -14,7 +14,7 @@ reviews:
     labels:
       - '!wip'
       - '!skip:review'
-      - '!skip:ci'
+      - '!skip:all'
   finishing_touches:
     docstrings:
       enabled: false
