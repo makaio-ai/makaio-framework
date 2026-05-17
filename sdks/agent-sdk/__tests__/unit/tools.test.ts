@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { tool } from '../../src/shared/tools.js';
