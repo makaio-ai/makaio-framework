@@ -1,0 +1,77 @@
+name: PR Quick CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-quick-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    name: Quick Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore Yarn cache
+        id: yarn-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            yarn-cache-${{ runner.os }}-node-24-
+            yarn-cache-
+
+      - name: Restore ESLint cache
+        id: eslint-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: .eslintcache
+          key: eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs', 'scripts/eslint-base.mjs') }}-${{ github.sha }}
+          restore-keys: |
+            eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs', 'scripts/eslint-base.mjs') }}-
+            eslint-cache-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Save Yarn cache
+        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+
+      - name: Run combined validator
+        run: yarn tsx scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json
+
+      - name: Check SDK codegen drift
+        run: yarn validate:sdk-codegen
+
+      - name: Save ESLint cache
+        if: always() && steps.eslint-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: .eslintcache
+          key: eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs', 'scripts/eslint-base.mjs') }}-${{ github.sha }}

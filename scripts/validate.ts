@@ -185,6 +185,12 @@ function applyKnownOption(arg: string, args: string[], index: number, state: Cli
     state.fix = false;
     return { handled: true, nextIndex: index };
   }
+  if (arg === '--cache') {
+    return { handled: true, nextIndex: index };
+  }
+  if (arg === '--no-cache') {
+    return { handled: true, nextIndex: index };
+  }
   return { handled: false, nextIndex: index };
 }
 
@@ -222,7 +228,7 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
   return {
     flags: {
       json: flags.includes('--json'),
-      cache: flags.includes('--cache'),
+      cache: !args.includes('--no-cache'),
       showActions: flags.includes('--show-actions'),
       verbose: flags.includes('--verbose'),
       help: flags.includes('--help'),
@@ -247,7 +253,8 @@ ${chalk.bold('Options:')}
   --json         Output results as JSON
   --fix          Apply auto-fixable changes (default: true)
   --no-fix       Report issues without modifying files
-  --cache        Enable ESLint caching for faster subsequent runs (default: false)
+  --cache        Enable validator caches (default: true)
+  --no-cache     Disable validator caches
   --profile      Validation topology: standalone or full-workspace
   --tsconfig     Explicit tsconfig.json path for TypeScript validation
   --tool         Run one validation tool: prettier, eslint, stylelint, typescript

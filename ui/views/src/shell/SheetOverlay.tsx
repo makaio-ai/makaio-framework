@@ -139,24 +139,12 @@ function SheetOverlayContent({
   }
 
   return (
-    <div
-      ref={panelRef}
-      aria-labelledby={titleId}
-      aria-modal
-      className={styles.panel}
-      role="dialog"
-      tabIndex={-1}
-    >
+    <div ref={panelRef} aria-labelledby={titleId} aria-modal className={styles.panel} role="dialog" tabIndex={-1}>
       <header className={styles.header}>
         <h2 className={styles.title} id={titleId}>
           {definition.name}
         </h2>
-        <button
-          aria-label="Close"
-          className={styles.closeButton}
-          onClick={onClose}
-          type="button"
-        >
+        <button aria-label="Close" className={styles.closeButton} onClick={onClose} type="button">
           <CloseIcon size={16} />
         </button>
       </header>

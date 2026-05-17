@@ -257,7 +257,9 @@ describe('WidgetGrid — activation', () => {
       ],
     });
 
-    const innerButton = screen.getAllByRole('button', { name: 'Inner action' }).find((element) => element.tagName === 'BUTTON');
+    const innerButton = screen
+      .getAllByRole('button', { name: 'Inner action' })
+      .find((element) => element.tagName === 'BUTTON');
     expect(innerButton).toBeDefined();
     fireEvent.click(innerButton!);
 
