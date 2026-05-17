@@ -1,15 +1,19 @@
 {
   "name": "@makaio/provider-anthropic",
   "version": "1.0.0-dev-1779048017991",
-  "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "providers/anthropic"
+  },
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "bun build.ts"
   },
   "peerDependencies": {
     "@makaio/framework": "^0.1.0"
@@ -26,12 +30,10 @@
     "dist",
     "descriptor.json",
     "LICENSE",
-    "README.md",
-    "package.json"
+    "README.md"
   ],
   "publishConfig": {
     "access": "public",
-    "directory": "node_modules/.makaio-publish",
     "exports": {
       ".": "./dist/index.mjs",
       "./server": "./dist/server.mjs"
