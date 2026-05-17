@@ -55,8 +55,9 @@ describe('TokenEfficientReporter', () => {
   });
 
   it('keeps the final process exit status clean when a later hook dirties it', () => {
+    const reporterUrl = new URL('./token-efficient-reporter.ts', import.meta.url).href;
     const script = `
-      import TokenEfficientReporter from './framework/scripts/lib/token-efficient-reporter.ts';
+      import TokenEfficientReporter from ${JSON.stringify(reporterUrl)};
       const reporter = new TokenEfficientReporter();
       reporter.onInit();
       process.stdout.write = () => true;
