@@ -123,6 +123,7 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Restore Yarn cache
+        if: github.event_name != 'deployment'
         id: yarn-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -133,6 +134,7 @@ jobs:
           restore-keys: yarn-cache-
 
       - name: Restore node_modules
+        if: github.event_name != 'deployment'
         id: nm-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -143,7 +145,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Save Yarn cache
-        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        if: github.event_name != 'deployment' && steps.yarn-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
@@ -152,7 +154,7 @@ jobs:
           key: yarn-cache-${{ hashFiles('yarn.lock') }}
 
       - name: Save node_modules
-        if: steps.nm-cache.outputs.cache-hit != 'true'
+        if: github.event_name != 'deployment' && steps.nm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: '**/node_modules'
@@ -217,9 +219,11 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-issues: write
+          permission-pull-requests: write
 
       - name: Comment on PR
         if: steps.request.outputs.pr-number != ''
+        continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           PR_NUMBER: ${{ steps.request.outputs.pr-number }}
