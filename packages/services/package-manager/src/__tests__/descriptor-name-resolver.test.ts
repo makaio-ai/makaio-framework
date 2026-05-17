@@ -104,20 +104,33 @@ async function findWorkspaceFile(startDir: string, relativePath: string): Promis
   throw new Error(`Could not find ${relativePath} from ${workspaceRoot}.`);
 }
 
+/**
+ * Load registry metadata from the current checkout layout.
+ *
+ * The framework may run inside the full monorepo (`registry/` beside
+ * `framework/`) or as a standalone checkout. Support both checked-in registry
+ * layouts, then fall back to the local fixture for standalone CI.
+ */
 async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
   const packageRoot = await findPackageRoot(import.meta.dirname);
   const workspaceRoot = path.resolve(packageRoot, '../../..');
-  const monorepoRegistryPath = path.join(workspaceRoot, '../registry/packages.json');
+  const registryPaths = [
+    path.join(workspaceRoot, 'registry/packages.json'),
+    path.join(workspaceRoot, '../registry/packages.json'),
+  ];
 
-  try {
-    const registryRaw = JSON.parse(await fs.readFile(monorepoRegistryPath, 'utf-8')) as unknown;
-    return PackageRegistrySchema.parse(registryRaw);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-      return registry;
+  for (const registryPath of registryPaths) {
+    try {
+      const registryRaw = JSON.parse(await fs.readFile(registryPath, 'utf-8')) as unknown;
+      return PackageRegistrySchema.parse(registryRaw);
+    } catch (error) {
+      if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOENT') {
+        throw error;
+      }
     }
-    throw error;
   }
+
+  return registry;
 }
 
 describe('DescriptorNameResolver', () => {
