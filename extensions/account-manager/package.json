@@ -1,8 +1,10 @@
 {
   "name": "@makaio/extension-account-manager",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./schemas": "./src/bus/schemas.ts",

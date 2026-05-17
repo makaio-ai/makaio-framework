@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "types": "dist/index.d.ts",
   "type": "module",
-  "private": true,
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./src/index.ts",
     "./adapter": "./src/adapter/index.ts",

@@ -2,6 +2,7 @@
   "name": "@makaio/bus-transport-stdio",
   "description": "Stdio JSONL transport for @makaio/bus-core enabling cross-process bus communication.",
   "version": "0.0.1",
+  "private": true,
   "type": "module",
   "types": "src/index.ts",
   "exports": {

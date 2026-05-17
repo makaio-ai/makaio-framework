@@ -4,7 +4,9 @@
   "description": "Claude Agent SDK-compatible interface to all Makaio adapters",
   "license": "MIT",
   "type": "module",
-  "private": true,
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": "./src/shared/index.ts",
     "./core": "./src/core/index.ts",
