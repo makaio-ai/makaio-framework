@@ -16,6 +16,8 @@
  */
 
 import fs from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import {
   type ConformanceTestConfig,
@@ -31,6 +33,8 @@ import {
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
   CLAUDE_CODE_HOOK_POST_TOOL_USE,
   CLAUDE_CODE_HOOK_STOP,
+  clearClaudeCodeNativeCredentialsForSession,
+  handleClaudeCodeSessionConfigSetup,
 } from '@makaio/client-claude-code/runtime';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { isRecord } from '@makaio/utils';
@@ -41,7 +45,7 @@ import { ClaudeCodeTmuxConfig } from '../config.js';
 import { createClaudeCodeTmuxAdapter } from '../adapter.js';
 import type { ClaudeCodeTmuxConnector } from '../connector.js';
 import type { ClaudeCodeTmuxAgent } from '../agent.js';
-import { startHookBridge, type HookBridgeHandle } from './hook-bridge.js';
+import { resolveAgentContextForProject, startHookBridge, type HookBridgeHandle } from './hook-bridge.js';
 
 /** Hook event names that require wiring for the tmux adapter lifecycle. */
 const HOOK_EVENT_NAMES = [
@@ -54,6 +58,14 @@ const HOOK_EVENT_NAMES = [
 
 let sharedHookBridge: HookBridgeHandle | undefined;
 let sharedWiringUnsub: (() => void) | undefined;
+let sharedSessionConfigRoot: string | undefined;
+let sharedSessionConfigUnsub: (() => void) | undefined;
+let sharedSessionConfigDestroyUnsub: (() => void) | undefined;
+const createdProjectDirs = new Set<string>();
+let sharedTmuxServerPrepared = false;
+
+/** Test-owned tmux server name for this Vitest worker process. */
+const TEST_TMUX_SERVER_NAME = `makaio-test-${process.pid}-${process.env.VITEST_WORKER_ID ?? '0'}`;
 
 /**
  * Build a curl command that posts the hook's stdin JSON to the bridge server.
@@ -61,10 +73,13 @@ let sharedWiringUnsub: (() => void) | undefined;
  * Claude Code pipes JSON to hook command stdin; `curl -d @-` reads it.
  * @param port - Hook bridge server port.
  * @param eventName - Claude Code hook event name.
+ * @param sessionId - Claude Code session ID to embed for SessionStart hooks.
  * @returns Shell command string for `.claude/settings.json`.
  */
-function buildCurlHookCommand(port: number, eventName: string): string {
-  return `curl -s -X POST http://127.0.0.1:${port}/hook/${eventName} -H 'Content-Type: application/json' -d @- || true`;
+function buildCurlHookCommand(port: number, eventName: string, sessionId: string | undefined): string {
+  const dataArg =
+    eventName === CLAUDE_CODE_HOOK_SESSION_START && sessionId ? `-d '{"session_id":"${sessionId}"}'` : '-d @-';
+  return `curl -s -X POST http://127.0.0.1:${port}/hook/${eventName} -H 'Content-Type: application/json' ${dataArg} || true`;
 }
 
 /**
@@ -79,19 +94,59 @@ function buildCurlStatuslineCommand(port: number): string {
 /**
  * Build the `.claude/settings.json` content with curl-based hook commands.
  * @param port - Hook bridge server port.
+ * @param sessionId - Claude Code session ID to embed for SessionStart hooks.
+ * @param skipDangerousModePermissionPrompt - Whether to acknowledge dangerous-mode launch consent.
  * @returns Settings JSON object to write.
  */
-function buildHookSettings(port: number): Record<string, unknown> {
+function buildHookSettings(
+  port: number,
+  sessionId: string | undefined,
+  skipDangerousModePermissionPrompt: boolean | undefined,
+): Record<string, unknown> {
   const hooks: Record<string, unknown[]> = {};
   for (const eventName of HOOK_EVENT_NAMES) {
     hooks[eventName] = [
       {
         matcher: '',
-        hooks: [{ type: 'command', command: buildCurlHookCommand(port, eventName) }],
+        hooks: [{ type: 'command', command: buildCurlHookCommand(port, eventName, sessionId) }],
       },
     ];
   }
-  return { hooks, statusLine: { type: 'command', command: buildCurlStatuslineCommand(port) } };
+  return {
+    hooks,
+    statusLine: { type: 'command', command: buildCurlStatuslineCommand(port) },
+    ...(skipDangerousModePermissionPrompt === true ? { skipDangerousModePermissionPrompt: true } : {}),
+  };
+}
+
+/**
+ * Resolve the current platform to the subset supported by the session config
+ * setup contract.
+ * @returns Platform identifier accepted by `SessionConfigSetupRequestSchema`.
+ */
+function resolveSessionConfigPlatform(): 'darwin' | 'linux' | 'win32' {
+  const platform = os.platform();
+  if (platform === 'darwin' || platform === 'linux' || platform === 'win32') {
+    return platform;
+  }
+  throw new Error(`Claude Code tmux conformance does not support session config setup on platform '${platform}'`);
+}
+
+/**
+ * Check whether a file exists without leaking file contents into test logs.
+ * @param filePath - Absolute path to check.
+ * @returns `true` when the path exists.
+ */
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -127,9 +182,13 @@ function registerTestWiringHandler(bridgePort: number): () => void {
       // File doesn't exist or is invalid — start fresh.
     }
 
-    const hookSettings = buildHookSettings(bridgePort);
+    const adapterSessionId = projectDir ? resolveAgentContextForProject(projectDir)?.adapterSessionId : undefined;
+    const hookSettings = buildHookSettings(bridgePort, adapterSessionId, ctx.payload.skipDangerousModePermissionPrompt);
     const merged = { ...existing, ...hookSettings };
     await fs.writeFile(settingsPath, JSON.stringify(merged, null, 2), 'utf-8');
+    console.log(
+      `[claude-code-tmux:test] wired hooks settingsPath=${settingsPath} bridgePort=${bridgePort} adapterSessionId=${adapterSessionId ?? ''}`,
+    );
 
     ctx.setResult({ applied: HOOK_EVENT_NAMES.length, skipped: 0 });
   });
@@ -166,6 +225,100 @@ async function cleanupSharedHookBridge(): Promise<void> {
 }
 
 /**
+ * Kill the isolated tmux server used by this Vitest worker.
+ *
+ * The production adapter defaults to the shared `makaio` server; conformance
+ * tests override it with {@link TEST_TMUX_SERVER_NAME}. Killing that whole
+ * server is therefore scoped to this worker and cannot interrupt other runs.
+ */
+function cleanupTestTmuxServer(): void {
+  try {
+    execFileSync('tmux', ['-L', TEST_TMUX_SERVER_NAME, 'kill-server'], { stdio: 'ignore' });
+  } catch {
+    // The server is absent when no tmux session was spawned or cleanup already ran.
+  }
+}
+
+/**
+ * Ensure the worker's tmux server starts empty.
+ */
+function ensureTestTmuxServerPrepared(): void {
+  if (sharedTmuxServerPrepared) {
+    return;
+  }
+  sharedTmuxServerPrepared = true;
+  cleanupTestTmuxServer();
+}
+
+/**
+ * Ensure the worker process can materialize session-scoped Claude Code config.
+ *
+ * Production gets this from `makaio.clients-core` plus the Claude Code runtime
+ * package. Conformance runs in a single in-process bus, so the tmux test entry
+ * point supplies the same contract with temp-backed directories.
+ */
+async function ensureSharedSessionConfig(): Promise<void> {
+  if (sharedSessionConfigUnsub && sharedSessionConfigDestroyUnsub) {
+    return;
+  }
+  sharedSessionConfigRoot ??= await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-tmux-session-config-'));
+  sharedSessionConfigUnsub = MakaioBus.on(ClientSubjects.sessionConfig.create, async (ctx) => {
+    const sessionDir = path.join(sharedSessionConfigRoot!, ctx.payload.clientId, 'sessions', ctx.payload.sessionId);
+    await fs.mkdir(sessionDir, { recursive: true });
+    const configInheritance = ctx.payload.configInheritance ?? 'auth-only';
+    const setup = await handleClaudeCodeSessionConfigSetup({
+      sessionDir,
+      baseConfigDir: ctx.payload.baseConfigDir ?? sessionDir,
+      projectDir: ctx.payload.projectDir,
+      platform: resolveSessionConfigPlatform(),
+      configInheritance,
+    });
+    const authStateExists = await fileExists(path.join(sessionDir, '.claude.json'));
+    console.log(
+      `[claude-code-tmux:test] session config created sessionDir=${sessionDir} configInheritance=${configInheritance} authState=${authStateExists}`,
+    );
+    ctx.setResult({ sessionDir, env: { ...(setup.env ?? {}), CLAUDE_CONFIG_DIR: sessionDir } });
+  });
+  sharedSessionConfigDestroyUnsub = MakaioBus.on(ClientSubjects.sessionConfig.destroy, async (ctx) => {
+    const sessionDir = path.join(sharedSessionConfigRoot!, ctx.payload.clientId, 'sessions', ctx.payload.sessionId);
+    await clearClaudeCodeNativeCredentialsForSession({ sessionDir, platform: resolveSessionConfigPlatform() });
+    await fs.rm(sessionDir, { recursive: true, force: true });
+    ctx.setResult({ success: true });
+  });
+}
+
+/** Remove worker-scoped session config handlers and temp files. */
+async function cleanupSharedSessionConfig(): Promise<void> {
+  sharedSessionConfigUnsub?.();
+  sharedSessionConfigUnsub = undefined;
+  sharedSessionConfigDestroyUnsub?.();
+  sharedSessionConfigDestroyUnsub = undefined;
+  const root = sharedSessionConfigRoot;
+  sharedSessionConfigRoot = undefined;
+  if (root) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Resolve an isolated project directory for generic conformance runs.
+ *
+ * The shared conformance harness passes `os.tmpdir()` by default, but Claude Code
+ * also reads project-scope `.claude/settings.json`; using the global temp dir can
+ * pick up stale hook commands from previous tmux runs.
+ * @param requestedCwd - Requested connector working directory, if any.
+ */
+async function resolveTestProjectDir(requestedCwd: string | undefined): Promise<string> {
+  if (requestedCwd !== undefined && path.resolve(requestedCwd) !== path.resolve(os.tmpdir())) {
+    return requestedCwd;
+  }
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-tmux-project-'));
+  createdProjectDirs.add(projectDir);
+  console.log(`[claude-code-tmux:test] isolated project cwd=${projectDir}`);
+  return projectDir;
+}
+
+/**
  * Create a test configuration for conformance testing.
  *
  * Starts the HTTP hook bridge, registers the test wiring handler, and returns
@@ -178,6 +331,7 @@ export const createTestConfig = async (
 ): Promise<ConformanceTestConfig<ClaudeCodeTmuxConnectorBus, ClaudeCodeTmuxConnector, ClaudeCodeTmuxAgent>> => {
   const { scopedBus } = ClaudeCodeTmuxConnectorNamespace;
   const bus = await scopedBus();
+  ensureTestTmuxServerPrepared();
 
   const testPreset = resolveConformanceTestPreset({
     adapterName: ADAPTER_NAME,
@@ -188,25 +342,28 @@ export const createTestConfig = async (
   });
 
   const hookBridge = await ensureSharedHookBridge();
+  await ensureSharedSessionConfig();
 
   const { ClaudeCodeTmuxConnector } = await import('../connector.js');
 
-  /** Session IDs created via sessionConfig.create; destroyed during cleanup. */
+  /** Native Claude session IDs used for sessionConfig.create; destroyed during cleanup. */
   const createdSessionIds: string[] = [];
 
   return {
     createConnector: async (connectorOptions) => {
-      const resolvedConfig = resolveTestConfig(connectorOptions, bus, testPreset.provider, testPreset.providers);
-
-      // Determine the session ID the connector will use for config isolation
-      // (mirrors the connector's own logic: sessionId ?? agentId). Track it
-      // so the session config directory is destroyed during cleanup even when
-      // the connector's own teardown is skipped.
-      const sessionId = connectorOptions?.sessionId ?? resolvedConfig.agentId;
-      createdSessionIds.push(sessionId);
+      const cwd = await resolveTestProjectDir(connectorOptions?.cwd);
+      const resolvedConfig = {
+        ...resolveTestConfig(connectorOptions, bus, testPreset.provider, testPreset.providers),
+        cwd,
+        providerConfig: {
+          tmuxServerName: TEST_TMUX_SERVER_NAME,
+          ...(connectorOptions?.providerConfig ?? {}),
+        },
+      };
 
       const baseConfig = await ClaudeCodeTmuxConfig.getConfig(resolvedConfig);
       const connector = new ClaudeCodeTmuxConnector(baseConfig);
+      createdSessionIds.push(connector.adapterSessionId!);
 
       // Register the agent context with the hook bridge so PreToolUse
       // tool approval can correlate hook events to the right agent.
@@ -216,6 +373,7 @@ export const createTestConfig = async (
         adapterId: connector.adapterId,
         adapterName: connector.getAdapterName(),
         adapterSessionId: connector.adapterSessionId!,
+        projectDir: cwd,
       });
 
       return connector;
@@ -234,7 +392,11 @@ export const createTestConfig = async (
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
-    createAdapter: async (adapterOptions) => createClaudeCodeTmuxAdapter(adapterOptions),
+    createAdapter: async (adapterOptions) =>
+      createClaudeCodeTmuxAdapter({
+        ...adapterOptions,
+        providerConfigDefaults: { tmuxServerName: TEST_TMUX_SERVER_NAME },
+      }),
     adapterName: ADAPTER_NAME,
     testProviderContext: testPreset.providerContext,
     cleanup: async () => {
@@ -248,6 +410,10 @@ export const createTestConfig = async (
           ),
         );
       } finally {
+        await cleanupSharedSessionConfig();
+        await Promise.allSettled([...createdProjectDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
+        createdProjectDirs.clear();
+        cleanupTestTmuxServer();
         await cleanupSharedHookBridge();
       }
     },

@@ -270,6 +270,23 @@ export class ClaudeCodeClientSettings {
     return { previous, removed };
   }
 
+  /**
+   * Set Claude Code's native dangerous-mode prompt acknowledgement.
+   *
+   * This only acknowledges the prompt shown when the process is launched with
+   * `--dangerously-skip-permissions`; it does not enable that launch mode by
+   * itself.
+   * @param req - Target scope and acknowledgement value.
+   */
+  public async setSkipDangerousModePermissionPrompt(req: { scope: ClaudeCodeScope; enabled: boolean }): Promise<void> {
+    await this.modifyScope(req.scope, (current) => {
+      if (current['skipDangerousModePermissionPrompt'] === req.enabled) {
+        return current;
+      }
+      return { ...current, skipDangerousModePermissionPrompt: req.enabled };
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Public API — Hooks
   // -------------------------------------------------------------------------

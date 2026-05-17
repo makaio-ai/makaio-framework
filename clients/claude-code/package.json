@@ -15,6 +15,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   }
 }

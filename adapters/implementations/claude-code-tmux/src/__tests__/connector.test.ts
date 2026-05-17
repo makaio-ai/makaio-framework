@@ -10,7 +10,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { IPtyProcess } from '@makaio/native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
-import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
+import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { HookEventCallbacks } from '../utils/hook-event-router.js';
 
@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => ({
   clearInput: vi.fn<() => void>(),
   kill: vi.fn(),
   dispose: vi.fn(),
+  observeSessionStart: vi.fn<(sessionId: string) => void>(),
   isAlive: vi.fn().mockReturnValue(true),
   subscribeUnsubscribe: vi.fn(),
   tmuxAvailable: true,
@@ -76,6 +77,10 @@ vi.mock('../session.js', () => {
     public waitForSessionStart(): Promise<void> {
       mockState.callOrder.push('waitForSessionStart');
       return Promise.resolve();
+    }
+    public observeSessionStart(sessionId: string): void {
+      mockState.callOrder.push('observeSessionStart');
+      mockState.observeSessionStart(sessionId);
     }
     public subscribeToHooks(callbacks: HookEventCallbacks): () => void {
       mockState.callOrder.push('subscribeToHooks');
@@ -206,6 +211,7 @@ describe('ClaudeCodeTmuxConnector', () => {
     mockState.hooks.onPreToolUse = undefined;
     mockState.hooks.onPostToolUse = undefined;
     mockState.hooks.onStop = undefined;
+    mockState.observeSessionStart.mockClear();
     mockState.tmuxAvailable = true;
     mockState.callOrder = [];
   });
@@ -226,6 +232,32 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       expect(mockSpawn).toHaveBeenCalledOnce();
       expect(mockState.subscribeUnsubscribe).toBeDefined();
+    });
+
+    it('captures SessionStart when Claude emits it during spawn', async () => {
+      const connector = await makeConnector();
+      const claudeSessionId = connector.adapterSessionId;
+      mockSpawn.mockImplementationOnce(async () => {
+        await MakaioBus.emit(ClaudeCodeClientSubjects.hook.received, {
+          eventName: CLAUDE_CODE_HOOK_SESSION_START,
+          receivedAt: Date.now(),
+          payload: { session_id: claudeSessionId, model: 'claude-sonnet' },
+        });
+        return {
+          pid: 1234,
+          process: 'claude',
+          cols: 80,
+          rows: 24,
+          write: vi.fn(),
+          resize: vi.fn(),
+          kill: vi.fn(),
+          onData: vi.fn(() => ({ dispose: vi.fn() })),
+          onExit: vi.fn(() => ({ dispose: vi.fn() })),
+        } as IPtyProcess;
+      });
+
+      await expect(connector.initialize()).resolves.toBeUndefined();
+      expect(mockState.observeSessionStart).toHaveBeenCalledWith(claudeSessionId);
     });
 
     it('is idempotent — calling it twice does not re-spawn', async () => {
@@ -351,6 +383,35 @@ describe('ClaudeCodeTmuxConnector', () => {
         scope: 'user',
         projectDir: TEST_CWD,
         configDir: '/tmp/isolated-claude-config',
+        skipDangerousModePermissionPrompt: true,
+      });
+    });
+
+    it('requests auth-only session config inheritance', async () => {
+      MakaioBus.__resetHandlers?.();
+      const connector = await makeConnector({ sessionId: 'makaio-session-auth-only' });
+      const sessionConfigRequests: unknown[] = [];
+
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        sessionConfigRequests.push(ctx.payload);
+        ctx.setResult({
+          sessionDir: '/tmp/isolated-claude-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
+        });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        ctx.setResult({ applied: 1, skipped: 0 });
+      });
+      fireSessionStart();
+
+      await connector.initialize();
+
+      expect(sessionConfigRequests).toHaveLength(1);
+      expect(sessionConfigRequests.at(-1)).toMatchObject({
+        clientId: 'claude-code',
+        sessionId: connector.adapterSessionId,
+        projectDir: TEST_CWD,
+        configInheritance: 'auth-only',
       });
     });
 
@@ -761,7 +822,7 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
       expect(mockBackendDispose).toHaveBeenCalled();
-      expect(destroyedSessionIds).toEqual(['makaio-session-close-failure']);
+      expect(destroyedSessionIds).toEqual([connector.adapterSessionId]);
     });
 
     it('is safe to call without initialization', async () => {

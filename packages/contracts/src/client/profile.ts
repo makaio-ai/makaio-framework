@@ -67,6 +67,13 @@ export type ClientProfile = z.infer<typeof ClientProfileSchema>;
 export const SessionConfigEnvSchema = z.record(z.string(), z.string());
 
 /**
+ * Policy for materializing a session config directory from a base client config.
+ */
+export const SessionConfigInheritanceSchema = z.enum(['auth-only', 'full', 'empty']);
+
+export type SessionConfigInheritance = z.infer<typeof SessionConfigInheritanceSchema>;
+
+/**
  * Request and response schemas for `client.profile.*` operations.
  *
  * Provides typed bus subjects for creating, listing, retrieving, updating,
@@ -200,6 +207,10 @@ export const ClientSessionConfigSchemas = {
       profileName: ClientProfileNameSchema.optional(),
       /** Override for the base config directory used during setup. */
       baseConfigDir: AbsolutePathSchema.optional(),
+      /** Project directory the client process will start in, when relevant. */
+      projectDir: AbsolutePathSchema.optional(),
+      /** Policy for inheriting settings and auth from the resolved base config. */
+      configInheritance: SessionConfigInheritanceSchema.optional(),
     }),
     response: z.object({
       /** Absolute path to the isolated session config directory. */
@@ -256,11 +267,40 @@ export const SessionConfigSetupRequestSchema = z.object({
   sessionDir: AbsolutePathSchema,
   /** Absolute path to the profile's base config directory used as the source. */
   baseConfigDir: AbsolutePathSchema,
+  /** Project directory the client process will start in, when relevant. */
+  projectDir: AbsolutePathSchema.optional(),
+  /** Host operating system platform. */
+  platform: z.enum(['darwin', 'linux', 'win32']),
+  /** Policy for inheriting settings and auth from the resolved base config. */
+  configInheritance: SessionConfigInheritanceSchema,
+});
+
+export type SessionConfigSetupRequest = z.infer<typeof SessionConfigSetupRequestSchema>;
+
+/**
+ * Schema for the teardown-delegation request passed to client-owned session
+ * config destroy handlers.
+ *
+ * Each client's destroy handler receives the concrete session directory before
+ * `clients-core` removes it and is responsible for cleaning any native
+ * credential material associated with that directory.
+ */
+export const SessionConfigTeardownRequestSchema = z.object({
+  /** Absolute path to the isolated session config directory being destroyed. */
+  sessionDir: AbsolutePathSchema,
   /** Host operating system platform. */
   platform: z.enum(['darwin', 'linux', 'win32']),
 });
 
-export type SessionConfigSetupRequest = z.infer<typeof SessionConfigSetupRequestSchema>;
+export type SessionConfigTeardownRequest = z.infer<typeof SessionConfigTeardownRequestSchema>;
+
+/** Response schema for the teardown-delegation request. */
+export const SessionConfigTeardownResponseSchema = z.object({
+  /** `true` when the client-owned teardown completed successfully. */
+  success: z.boolean(),
+});
+
+export type SessionConfigTeardownResponse = z.infer<typeof SessionConfigTeardownResponseSchema>;
 
 /**
  * Response schema for the setup-delegation request.

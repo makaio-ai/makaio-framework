@@ -25,8 +25,9 @@ import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
  * - `wiring.list` — list all wiring entries with installation status.
  * - `wiring.apply` — install wiring entries into the target scope.
  * - `wiring.remove` — uninstall wiring entries from the target scope.
- * - `sessionConfig.setup` — seed a session-scoped directory with native
- *   config files copied from the base config directory.
+ * - `sessionConfig.setup` — seed a session-scoped directory with the requested
+ *   native config inheritance policy.
+ * - `sessionConfig.destroy` — clear native session credential material.
  *
  * All subjects live in `client:claude-code.*` and are never promoted to
  * the global `client.*` namespace directly.  Downstream normalizers translate

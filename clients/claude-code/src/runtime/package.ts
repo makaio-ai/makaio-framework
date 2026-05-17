@@ -19,6 +19,19 @@ export { normalizeClaudeCodeHook } from './hook-normalizer.js';
 export type { ClaudeCodeNormalizedEvent, ClaudeCodeNormalizedSubject } from './hook-normalizer.js';
 export { resolveClaudeCodeSettingsPaths } from './settings-paths.js';
 export type { ClaudeCodeSettingsPath, ResolveClaudeCodeSettingsPathsOptions } from './settings-paths.js';
+export { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
+export {
+  buildClaudeCodeCredentialsKeychainService,
+  clearClaudeCodeNativeCredentialsForSession,
+  cloneClaudeCodeNativeCredentialsForSession,
+  inheritClaudeCodeNativeCredentialsForSession,
+  removeClaudeCodeNativeCredentialsForSession,
+} from './native-credentials.js';
+export type {
+  ClaudeCodeNativeCredentialClearRequest,
+  ClaudeCodeNativeCredentialInheritanceRequest,
+  ClaudeCodeNativeCredentialPreparationResult,
+} from './native-credentials.js';
 
 /**
  * Runtime package that registers Claude Code client-native namespaces and

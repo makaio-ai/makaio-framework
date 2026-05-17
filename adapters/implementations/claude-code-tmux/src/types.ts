@@ -35,13 +35,8 @@ export interface ITmuxPtyProcess extends IPtyProcess {
   captureVisible(): string | null;
 }
 
-/**
- * tmux-specific provider configuration for the connector.
- */
-export interface ClaudeCodeTmuxSpecificConfig {
-  /** Absolute path to the `claude` CLI binary. */
-  binaryPath?: string;
-}
+/** tmux-specific provider configuration for the connector. */
+export type ClaudeCodeTmuxSpecificConfig = ClaudeCodeTmuxProviderConfig;
 
 /**
  * Configuration for a Claude Code tmux connector.

@@ -26,6 +26,7 @@ import { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } f
 import { clientDefinition } from '../definition.js';
 import type { ClaudeCodeClientSettings } from './client-settings.js';
 import type { ClaudeCodeScope } from '../schemas/config.js';
+import { extractUpstreamCommand, HOOK_COMMAND_SENTINEL, STATUSLINE_COMMAND_SENTINEL } from './managed-wiring.js';
 
 /**
  * Minimal settings API required by Claude Code wiring helpers.
@@ -46,28 +47,9 @@ export interface ClaudeCodeWiringSettings {
   setStatusline: ClaudeCodeClientSettings['setStatusline'];
   /** Remove the statusline for a scope. */
   removeStatusline: ClaudeCodeClientSettings['removeStatusline'];
+  /** Acknowledge Claude Code's dangerous-mode launch prompt for a scope. */
+  setSkipDangerousModePermissionPrompt?: ClaudeCodeClientSettings['setSkipDangerousModePermissionPrompt'];
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/**
- * Sentinel string embedded in every hook command written by Makaio.
- *
- * Used both to generate commands and to detect / remove previously installed
- * hooks via a substring match.
- */
-const HOOK_COMMAND_SENTINEL = 'hook received claude-code';
-
-/**
- * Sentinel string embedded in the statusline command written by Makaio.
- *
- * Used both to generate the command and to detect whether the effective
- * statusline is a Makaio-managed one, regardless of which binary prefix was
- * used.
- */
-const STATUSLINE_COMMAND_SENTINEL = 'claude statusline';
 
 // ---------------------------------------------------------------------------
 // Derived wiring descriptors (module-scoped, computed once)
@@ -168,112 +150,6 @@ function isHookInstalled(effective: Record<string, unknown[]>, eventName: string
   return findManagedHookCommand(effective, eventName, sentinel) !== null;
 }
 
-/**
- * Extract the original upstream shell command from a Makaio-managed statusline.
- *
- * The statusline bridge embeds the previous command as:
- * `... --upstream-args-json '["-c","<original>"]'`
- *
- * The JSON array may be followed by additional flags, so the extraction locates
- * the opening `[` and scans forward to find the matching `]`, respecting nested
- * brackets and JSON string escapes.
- *
- * Returns `null` when no upstream was embedded (pure Makaio statusline with
- * no previous command to restore).
- * @param command - Full Makaio-managed statusline command string.
- * @returns The original shell command, or `null`.
- */
-function extractUpstreamCommand(command: string): string | null {
-  const marker = '--upstream-args-json';
-  const idx = command.indexOf(marker);
-  if (idx === -1) return null;
-
-  let tail = command.slice(idx + marker.length).trim();
-
-  // Strip optional single-quote wrapping added by renderShellArg. The closing
-  // quote is NOT necessarily at end-of-string when extra flags follow.
-  if (tail.startsWith("'")) {
-    tail = tail.slice(1);
-    const closeQuote = findClosingSingleQuote(tail);
-    if (closeQuote !== -1) {
-      tail = tail.slice(0, closeQuote).replaceAll("'\\''", "'");
-    }
-  }
-
-  const jsonPart = extractJsonArray(tail);
-  if (jsonPart === null) return null;
-
-  try {
-    const parsed: unknown = JSON.parse(jsonPart);
-    if (
-      Array.isArray(parsed) &&
-      parsed.length >= 2 &&
-      (parsed[0] === '-c' || parsed[0] === '/c') &&
-      typeof parsed[1] === 'string'
-    ) {
-      return parsed[1];
-    }
-  } catch {
-    // Malformed JSON — cannot extract upstream.
-  }
-  return null;
-}
-
-/**
- * Find the index of the closing single quote, skipping shell-escaped
- * sequences (`'\''`).
- * @param s - String starting immediately after the opening single quote.
- * @returns Index of the closing `'`, or -1.
- */
-function findClosingSingleQuote(s: string): number {
-  let i = 0;
-  while (i < s.length) {
-    if (s[i] === "'" && s.slice(i, i + 4) === "'\\''") {
-      i += 4;
-      continue;
-    }
-    if (s[i] === "'") return i;
-    i++;
-  }
-  return -1;
-}
-
-/**
- * Extract the first balanced JSON array substring from `s`.
- *
- * Scans from the first `[` and counts bracket depth, respecting JSON string
- * literals (double-quoted, with `\"` escapes).
- * @param s - Input string potentially containing a JSON array.
- * @returns The balanced `[...]` substring, or `null`.
- */
-function extractJsonArray(s: string): string | null {
-  const start = s.indexOf('[');
-  if (start === -1) return null;
-
-  let depth = 0;
-  let inString = false;
-  for (let i = start; i < s.length; i++) {
-    const ch = s[i]!;
-    if (inString) {
-      if (ch === '\\') {
-        i++;
-        continue;
-      }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '[') {
-      depth++;
-    } else if (ch === ']') {
-      depth--;
-      if (depth === 0) return s.slice(start, i + 1);
-    }
-  }
-  return null;
-}
-
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -352,6 +228,7 @@ export async function buildClaudeCodeWiringList(
  *   commands and the statusline command (e.g. `'makaio'`).
  * @param envPairs - Optional `KEY=value` pairs prepended before the executable
  *   in every generated command string.
+ * @param options - Optional launch-related settings to persist with the wiring.
  * @returns Counts of entries applied and skipped.
  */
 export async function applyClaudeCodeWiring(
@@ -359,9 +236,14 @@ export async function applyClaudeCodeWiring(
   scope: ClaudeCodeScope,
   makaioCommand: string,
   envPairs?: readonly string[],
+  options?: { skipDangerousModePermissionPrompt?: boolean },
 ): Promise<{ applied: number; skipped: number }> {
   let applied = 0;
   let skipped = 0;
+
+  if (options?.skipDangerousModePermissionPrompt === true) {
+    await settings.setSkipDangerousModePermissionPrompt?.({ scope, enabled: true });
+  }
 
   const { perScope } = await settings.listHooks();
   const scopeRecord = perScope.find((s) => s.scope === scope);

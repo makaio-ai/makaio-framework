@@ -56,6 +56,18 @@ describe('TmuxSession', () => {
     unsubscribe();
   });
 
+  it('can observe a SessionStart hook before the full hook subscription is attached', async () => {
+    const session = new TmuxSession({
+      ptyProcess: makePtyProcess(),
+      expectedClaudeSessionId: 'claude-session-123',
+    });
+
+    session.observeSessionStart('claude-session-123');
+
+    await expect(session.waitForSessionStart()).resolves.toBeUndefined();
+    expect(session.getClaudeSessionId()).toBe('claude-session-123');
+  });
+
   it('sends Escape via tmux named-key delivery', () => {
     const ptyProcess = makePtyProcess();
     const session = new TmuxSession({

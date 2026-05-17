@@ -53,6 +53,15 @@ export interface TmuxBackendOptions {
    * Defaults to `2000`.
    */
   exitPollIntervalMs?: number;
+
+  /**
+   * Whether construction should remove tmux sessions previously created by
+   * Makaio whose recorded owner process is no longer alive.
+   *
+   * Defaults to `true`. Cleanup is limited to sessions carrying Makaio-owned
+   * tmux metadata on this backend's server and never kills the server itself.
+   */
+  cleanupStaleOwnedSessions?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +140,68 @@ const DEAD_PANE_SENTINEL_RE = /\nPane is dead \([^\n]*\)\n?$/;
  */
 function stripDeadPaneSentinel(capture: string): string {
   return capture.replace(DEAD_PANE_SENTINEL_RE, '');
+}
+
+const MANAGED_SESSION_OPTION = '@makaio-managed';
+const OWNER_PID_OPTION = '@makaio-owner-pid';
+
+/**
+ * Parse a positive integer from tmux user-option output.
+ * @param value - Raw tmux format value.
+ * @returns Parsed positive integer, or `undefined` when invalid.
+ */
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (!value || !/^[1-9]\d*$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+/**
+ * Check whether an owner process is still alive.
+ * @param pid - Process identifier recorded in tmux metadata.
+ * @returns `true` when the process exists or cannot be signalled due to permissions.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Remove stale Makaio-owned tmux sessions from a server.
+ *
+ * Only sessions carrying both the managed marker and an owner PID are eligible.
+ * Unmarked user sessions and sessions owned by a live process are preserved.
+ * @param serverName - Tmux server socket name.
+ */
+function cleanupStaleOwnedTmuxSessions(serverName: string): void {
+  const raw = tmuxExecSafe(serverName, [
+    'list-sessions',
+    '-F',
+    `#{session_name}\t#{${MANAGED_SESSION_OPTION}}\t#{${OWNER_PID_OPTION}}`,
+  ]);
+  if (!raw) {
+    return;
+  }
+
+  for (const line of raw.split('\n')) {
+    const [sessionName, managedMarker, ownerPidRaw] = line.split('\t');
+    if (!sessionName || managedMarker !== '1') {
+      continue;
+    }
+
+    const ownerPid = parsePositiveInteger(ownerPidRaw);
+    if (ownerPid === undefined || isProcessAlive(ownerPid)) {
+      continue;
+    }
+
+    tmuxExecSafe(serverName, ['kill-session', '-t', sessionName]);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +678,9 @@ export class TmuxBackend implements IPtyBackend {
     this.serverName = options.serverName ?? 'makaio';
     this.pollIntervalMs = options.pollIntervalMs ?? 200;
     this.exitPollIntervalMs = options.exitPollIntervalMs ?? 2000;
+    if (options.cleanupStaleOwnedSessions !== false) {
+      cleanupStaleOwnedTmuxSessions(this.serverName);
+    }
   }
 
   /**
@@ -675,7 +749,24 @@ export class TmuxBackend implements IPtyBackend {
     // Chain `set-option remain-on-exit on` in the same tmux invocation.
     // tmux treats `;` (as a separate argv element) as a command separator,
     // which is safe with execFileSync since no shell interpretation occurs.
-    newSessionArgs.push(';', 'set-option', 'remain-on-exit', 'on');
+    newSessionArgs.push(
+      ';',
+      'set-option',
+      '-t',
+      sessionName,
+      MANAGED_SESSION_OPTION,
+      '1',
+      ';',
+      'set-option',
+      '-t',
+      sessionName,
+      OWNER_PID_OPTION,
+      String(process.pid),
+      ';',
+      'set-option',
+      'remain-on-exit',
+      'on',
+    );
 
     let pid: number;
     try {

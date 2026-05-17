@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { dep, parseExtensionConfig, type MakaioNodeExtension } from '@makaio/contracts';
+import { buildClaudeCodeCredentialsKeychainService } from '@makaio/client-claude-code/runtime';
 import { AccountManager } from './account-manager.js';
 import { ClaudeCodeSource } from './sources/claude-code-source.js';
 import { CodexSource } from './sources/codex-source.js';
@@ -77,7 +78,7 @@ export const accountManagerPackage: MakaioNodeExtension<IMakaioBus> = {
 
     const claudeBackend =
       ctx.platform === 'darwin'
-        ? new SecurityCliBackend('Claude Code-credentials', ctx.username)
+        ? new SecurityCliBackend(buildClaudeCodeCredentialsKeychainService(), ctx.username)
         : new FileBackend(join(claudeHome, '.credentials.json'));
 
     const codexBackend = new FileBackend(join(codexHome, 'auth.json'));

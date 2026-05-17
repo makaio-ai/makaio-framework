@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
+import { ClientSessionConfigSchemas, ClientSubjects, SessionConfigSetupRequestSchema } from '@makaio/contracts/client';
 import { SessionSubjects } from '@makaio/contracts/session';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
@@ -62,6 +62,45 @@ describe('ClientSessionConfigService', () => {
   // -------------------------------------------------------------------------
 
   describe('sessionConfig.create', () => {
+    it('accepts only known config inheritance policies', () => {
+      const createSchema = ClientSessionConfigSchemas['sessionConfig.create'].request;
+
+      expect(
+        createSchema.safeParse({
+          clientId: 'claude-code',
+          sessionId: 'session-policy',
+          projectDir: path.join(baseDir, 'project'),
+          configInheritance: 'auth-only',
+        }).success,
+      ).toBe(true);
+      expect(
+        createSchema.safeParse({
+          clientId: 'claude-code',
+          sessionId: 'session-policy',
+          configInheritance: 'plugins-only',
+        }).success,
+      ).toBe(false);
+    });
+
+    it('requires config inheritance on client-owned setup delegation', () => {
+      expect(
+        SessionConfigSetupRequestSchema.safeParse({
+          sessionDir: path.join(baseDir, 'session'),
+          baseConfigDir: path.join(baseDir, 'base'),
+          projectDir: path.join(baseDir, 'project'),
+          platform: 'darwin',
+          configInheritance: 'full',
+        }).success,
+      ).toBe(true);
+      expect(
+        SessionConfigSetupRequestSchema.safeParse({
+          sessionDir: path.join(baseDir, 'session'),
+          baseConfigDir: path.join(baseDir, 'base'),
+          platform: 'darwin',
+        }).success,
+      ).toBe(false);
+    });
+
     it('creates the session directory and returns its path', async () => {
       const result = await bus.request(ClientSubjects.sessionConfig.create, {
         clientId: 'claude-code',
@@ -107,6 +146,96 @@ describe('ClientSessionConfigService', () => {
       });
 
       expect(result.env).toEqual({ CUSTOM_VAR: result.sessionDir });
+    });
+
+    it('defaults config inheritance to full when delegating setup', async () => {
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: z.object({
+            sessionDir: z.string(),
+            baseConfigDir: z.string(),
+            platform: z.string(),
+            configInheritance: z.enum(['auth-only', 'full', 'empty']),
+          }),
+          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+        },
+      });
+
+      let observedPolicy: string | undefined;
+      bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
+        observedPolicy = ctx.payload.configInheritance;
+        ctx.setResult({ env: {} });
+      });
+
+      await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-default-policy',
+      });
+
+      expect(observedPolicy).toBe('full');
+    });
+
+    it('forwards explicit config inheritance to setup', async () => {
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: z.object({
+            sessionDir: z.string(),
+            baseConfigDir: z.string(),
+            platform: z.string(),
+            configInheritance: z.enum(['auth-only', 'full', 'empty']),
+          }),
+          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+        },
+      });
+
+      const observedPolicies: string[] = [];
+      bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
+        observedPolicies.push(ctx.payload.configInheritance);
+        ctx.setResult({ env: {} });
+      });
+
+      await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-auth-only-policy',
+        configInheritance: 'auth-only',
+      });
+      await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-empty-policy',
+        configInheritance: 'empty',
+      });
+
+      expect(observedPolicies).toEqual(['auth-only', 'empty']);
+    });
+
+    it('forwards projectDir to setup when supplied', async () => {
+      const projectDir = path.join(baseDir, 'workspace');
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: z.object({
+            sessionDir: z.string(),
+            baseConfigDir: z.string(),
+            projectDir: z.string().optional(),
+            platform: z.string(),
+            configInheritance: z.enum(['auth-only', 'full', 'empty']),
+          }),
+          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+        },
+      });
+
+      let observedProjectDir: string | undefined;
+      bus.on(testNs.subjects.sessionConfig.setup, (ctx) => {
+        observedProjectDir = ctx.payload.projectDir;
+        ctx.setResult({ env: {} });
+      });
+
+      await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-project-dir',
+        projectDir,
+      });
+
+      expect(observedProjectDir).toBe(projectDir);
     });
 
     it('returns an empty env map for unknown clients', async () => {
@@ -242,6 +371,44 @@ describe('ClientSessionConfigService', () => {
       await expect(fs.access(created.sessionDir)).rejects.toThrow();
     });
 
+    it('delegates client-owned teardown before removing the session directory', async () => {
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+
+      const observed: Array<{ sessionDir: string; existsDuringTeardown: boolean }> = [];
+      bus.on(testNs.subjects.sessionConfig.destroy, async (ctx) => {
+        observed.push({
+          sessionDir: ctx.payload.sessionDir,
+          existsDuringTeardown: await fs
+            .access(ctx.payload.sessionDir)
+            .then(() => true)
+            .catch(() => false),
+        });
+        ctx.setResult({ success: true });
+      });
+
+      const created = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-teardown-handler',
+      });
+
+      const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
+        clientId: 'claude-code',
+        sessionId: 'session-teardown-handler',
+      });
+
+      expect(result.success).toBe(true);
+      expect(observed).toEqual([{ sessionDir: created.sessionDir, existsDuringTeardown: true }]);
+      await expect(fs.access(created.sessionDir)).rejects.toThrow();
+    });
+
     it('is idempotent: destroy on a non-existent directory still succeeds', async () => {
       const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
         clientId: 'claude-code',
@@ -268,6 +435,38 @@ describe('ClientSessionConfigService', () => {
 
       expect(first.success).toBe(true);
       expect(second.success).toBe(true);
+    });
+
+    it('does not run client-owned teardown after the session directory disappeared', async () => {
+      const testNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.destroy': {
+          request: z.object({
+            sessionDir: z.string(),
+            platform: z.enum(['darwin', 'linux', 'win32']),
+          }),
+          response: z.object({ success: z.boolean() }),
+        },
+      });
+
+      let teardownCalls = 0;
+      bus.on(testNs.subjects.sessionConfig.destroy, (ctx) => {
+        teardownCalls += 1;
+        ctx.setResult({ success: true });
+      });
+
+      const created = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-disappears-before-destroy',
+      });
+      await fs.rm(created.sessionDir, { recursive: true, force: true });
+
+      const result = await bus.request(ClientSubjects.sessionConfig.destroy, {
+        clientId: 'claude-code',
+        sessionId: 'session-disappears-before-destroy',
+      });
+
+      expect(result.success).toBe(true);
+      expect(teardownCalls).toBe(0);
     });
   });
 
