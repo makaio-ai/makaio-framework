@@ -45,6 +45,18 @@ import {
 } from './lib/changeset-bot/config-comment.js';
 import { generateChangesetContent, generateChangesetFilename } from './lib/changeset-bot/generate-changeset-content.js';
 
+const CHANGESET_DIR = '.changeset';
+
+/**
+ * Resolves the repository-relative path for a generated changeset file.
+ * @param filename - Generated changeset filename.
+ * @returns Resolved repository-relative path.
+ */
+function resolveChangesetPath(filename: string): string {
+  const frameworkPrefix = resolveFrameworkPrefix(import.meta.dirname);
+  return [frameworkPrefix, CHANGESET_DIR, filename].filter((part): part is string => Boolean(part)).join('/');
+}
+
 interface PostConfigOptions {
   mode: 'post-config';
   pr: number;
@@ -187,11 +199,13 @@ async function commitChangesetFile(
   filename: string,
   content: string,
 ): Promise<void> {
+  const changesetPath = resolveChangesetPath(filename);
+
   await octokit.repos.createOrUpdateFileContents({
     owner: opts.owner,
     repo: opts.repo,
     branch,
-    path: `.changeset/${filename}`,
+    path: changesetPath,
     message: `chore: add changeset for PR #${opts.pr}`,
     content: Buffer.from(content).toString('base64'),
   });
@@ -289,16 +303,17 @@ async function generate(octokit: Octokit, opts: GenerateOptions): Promise<void> 
 
   const content = generateChangesetContent(state.packages);
   const filename = generateChangesetFilename();
+  const changesetPath = resolveChangesetPath(filename);
 
   if (opts.dryRun) {
-    console.info(`Would generate: .changeset/${filename}`);
+    console.info(`Would generate: ${changesetPath}`);
     process.stdout.write(content);
     return;
   }
 
   const branch = await resolveSameRepoHeadBranch(octokit, opts);
   await commitChangesetFile(octokit, opts, branch, filename, content);
-  console.info(`Committed generated changeset: .changeset/${filename}.`);
+  console.info(`Committed generated changeset: ${changesetPath}.`);
 
   await octokit.issues.updateComment({
     owner: opts.owner,

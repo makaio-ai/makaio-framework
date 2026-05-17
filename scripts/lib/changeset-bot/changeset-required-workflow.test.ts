@@ -25,14 +25,18 @@ describe('changeset-required reusable workflow', () => {
     it(`keeps the trusted checker bootstrap guard in ${workflowPath}`, () => {
       const workflow = readWorkflow(workflowPath);
       const fetchIndex = workflow.indexOf('- name: Fetch PR head');
+      const detectIndex = workflow.indexOf('- name: Detect package release changeset');
       const checkerIndex = workflow.indexOf('- name: Resolve trusted checker');
       const installIndex = workflow.indexOf('- name: Install dependencies');
       const checkIndex = workflow.indexOf('- name: Check changeset');
 
       expect(fetchIndex).toBeGreaterThanOrEqual(0);
-      expect(checkerIndex).toBeGreaterThan(fetchIndex);
+      expect(detectIndex).toBeGreaterThan(fetchIndex);
+      expect(checkerIndex).toBeGreaterThan(detectIndex);
       expect(installIndex).toBeGreaterThan(checkerIndex);
       expect(checkIndex).toBeGreaterThan(installIndex);
+      expect(workflow).toContain("steps.head_changeset.outputs.present != 'true'");
+      expect(workflow).toContain('changeset_prefix="${framework_root%/}/.changeset/"');
       expect(workflow).toContain("steps.checker.outputs.available == 'true'");
       expect(workflow).toContain('! git cat-file -e "$base:$checker_path"');
       expect(workflow).toContain('git cat-file -e "$head:$checker_path"');
