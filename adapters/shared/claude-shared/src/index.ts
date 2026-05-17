@@ -3,7 +3,11 @@
  *
  * Provides the agent layer, turn state machine, content block handlers,
  * tool approval utilities, and log-importer infrastructure that are shared
- * between the claude-code and anthropic-sdk adapters.
+ * between Claude adapter implementations.
+ *
+ * Pure process utilities (system prompt building, env resolution, reasoning
+ * level parsing) live in `@makaio/ai-adapters-claude-process-shared` to keep
+ * that surface free of bus dependencies.
  *
  * The namespace (bus subjects/schemas) is exposed separately via the
  * namespace barrel to allow namespace-only consumers to avoid the agent
@@ -27,14 +31,10 @@ export type { ClaudeConnectorBus, ClaudeConnectorNamespace, SDKMessage } from '.
 export { claudeReasoningLevels } from './provider/index.js';
 export {
   blocksToContentBlocks,
-  buildSystemPrompt,
   decodeBase64Text,
   extractTextFromMessage,
-  parseReasoningLevel,
   parseResultError,
   prependContextBlock,
-  readClaudeProviderBaseUrl,
-  resolveClaudeProcessEnv,
   sdkUserMessageFromNormalized,
   unwrapBlockFromMessage,
 } from './utils/index.js';

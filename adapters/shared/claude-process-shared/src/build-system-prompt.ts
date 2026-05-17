@@ -7,7 +7,7 @@ import type { SystemPrompt } from '@makaio/contracts';
  * accepts raw strings, prompt-part arrays, and the preset object including
  * `excludeDynamicSections`, so this type must stay aligned with that surface.
  */
-type ProviderSystemPrompt =
+export type ProviderSystemPrompt =
   | string
   | string[]
   | {

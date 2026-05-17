@@ -378,6 +378,13 @@ export const McpSchemas = {
     request: McpAgentContextSchema.extend({
       /** Execution context overrides forwarded to every tool execute request. */
       contextOverrides: ToolExecutionContextOverridesSchema,
+      /**
+       * When `true` the session is exempt from idle TTL eviction.
+       * Only an explicit `mcp.session.unregister` removes a pinned session.
+       * Intended for long-lived adapter sessions (e.g. tmux-based Claude Code)
+       * that must not be swept by the 30-minute idle TTL.
+       */
+      pinned: z.boolean().optional(),
     }),
     response: z.object({
       /** OS-assigned port the singleton HTTP MCP server is listening on. */

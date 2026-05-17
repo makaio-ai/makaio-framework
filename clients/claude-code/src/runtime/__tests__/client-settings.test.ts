@@ -653,6 +653,189 @@ describe('ClaudeCodeClientSettings', () => {
   });
 
   // -------------------------------------------------------------------------
+  // MCP Servers (.mcp.json)
+  // -------------------------------------------------------------------------
+
+  describe('listMcpServers', () => {
+    it('returns empty map when .mcp.json does not exist', async () => {
+      const projectDir = path.join(tmpDir, 'no-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.listMcpServers();
+      expect(result.servers).toEqual({});
+    });
+
+    it('returns servers from existing .mcp.json', async () => {
+      const projectDir = path.join(tmpDir, 'with-mcp');
+      await writeSettings(path.join(projectDir, '.mcp.json'), {
+        mcpServers: {
+          'my-server': { type: 'http', url: 'http://localhost:3000' },
+          'stdio-server': { type: 'stdio', command: 'node', args: ['server.js'] },
+        },
+      });
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.listMcpServers();
+      expect(Object.keys(result.servers)).toEqual(['my-server', 'stdio-server']);
+      expect(result.servers['my-server']).toEqual({ type: 'http', url: 'http://localhost:3000' });
+    });
+
+    it('throws when projectDir was not provided', async () => {
+      const settings = new ClaudeCodeClientSettings();
+      await expect(settings.listMcpServers()).rejects.toThrow(/projectDir/);
+    });
+  });
+
+  describe('addMcpServer', () => {
+    it('creates .mcp.json when it does not exist', async () => {
+      const projectDir = path.join(tmpDir, 'new-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.addMcpServer({
+        name: 'makaio',
+        server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+      });
+      expect(result).toEqual({ added: true, replaced: false });
+
+      const onDisk = await readSettings(path.join(projectDir, '.mcp.json'));
+      expect(onDisk).toEqual({
+        mcpServers: { makaio: { type: 'http', url: 'http://127.0.0.1:8080/mcp' } },
+      });
+    });
+
+    it('appends to existing .mcp.json without overwriting other servers', async () => {
+      const projectDir = path.join(tmpDir, 'append-mcp');
+      await writeSettings(path.join(projectDir, '.mcp.json'), {
+        mcpServers: { existing: { type: 'stdio', command: 'node' } },
+      });
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      await settings.addMcpServer({
+        name: 'makaio',
+        server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+      });
+
+      const onDisk = await readSettings(path.join(projectDir, '.mcp.json'));
+      const servers = onDisk['mcpServers'] as Record<string, unknown>;
+      expect(Object.keys(servers)).toEqual(['existing', 'makaio']);
+    });
+
+    it('is idempotent for structurally equal entries', async () => {
+      const projectDir = path.join(tmpDir, 'idem-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const server = { type: 'http', url: 'http://127.0.0.1:8080/mcp' };
+
+      const first = await settings.addMcpServer({ name: 'makaio', server });
+      expect(first).toEqual({ added: true, replaced: false });
+
+      const second = await settings.addMcpServer({ name: 'makaio', server });
+      expect(second).toEqual({ added: false, replaced: false });
+    });
+
+    it('replaces an existing entry when definition differs', async () => {
+      const projectDir = path.join(tmpDir, 'replace-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+
+      await settings.addMcpServer({
+        name: 'makaio',
+        server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+      });
+      const result = await settings.addMcpServer({
+        name: 'makaio',
+        server: { type: 'http', url: 'http://127.0.0.1:9090/mcp' },
+      });
+      expect(result).toEqual({ added: true, replaced: true });
+
+      const onDisk = await readSettings(path.join(projectDir, '.mcp.json'));
+      const servers = onDisk['mcpServers'] as Record<string, Record<string, unknown>>;
+      expect(servers['makaio']!['url']).toBe('http://127.0.0.1:9090/mcp');
+    });
+
+    it('preserves non-mcpServers keys in .mcp.json', async () => {
+      const projectDir = path.join(tmpDir, 'preserve-mcp');
+      await writeSettings(path.join(projectDir, '.mcp.json'), {
+        mcpServers: {},
+        customKey: 'should-survive',
+      });
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      await settings.addMcpServer({
+        name: 'makaio',
+        server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+      });
+
+      const onDisk = await readSettings(path.join(projectDir, '.mcp.json'));
+      expect(onDisk['customKey']).toBe('should-survive');
+    });
+
+    it('handles arbitrary server names as own map keys', async () => {
+      const projectDir = path.join(tmpDir, 'special-key-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+
+      await expect(
+        settings.addMcpServer({
+          name: 'constructor',
+          server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+        }),
+      ).resolves.toEqual({ added: true, replaced: false });
+      await expect(
+        settings.addMcpServer({
+          name: '__proto__',
+          server: { type: 'http', url: 'http://127.0.0.1:9090/mcp' },
+        }),
+      ).resolves.toEqual({ added: true, replaced: false });
+
+      const listed = await settings.listMcpServers();
+      expect(Object.hasOwn(listed.servers, 'constructor')).toBe(true);
+      expect(Object.hasOwn(listed.servers, '__proto__')).toBe(true);
+      expect(Object.getPrototypeOf(listed.servers)).toBeNull();
+    });
+  });
+
+  describe('removeMcpServer', () => {
+    it('removes a server by name', async () => {
+      const projectDir = path.join(tmpDir, 'rm-mcp');
+      await writeSettings(path.join(projectDir, '.mcp.json'), {
+        mcpServers: {
+          makaio: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+          other: { type: 'stdio', command: 'node' },
+        },
+      });
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.removeMcpServer({ name: 'makaio' });
+      expect(result).toEqual({ removed: true });
+
+      const onDisk = await readSettings(path.join(projectDir, '.mcp.json'));
+      const servers = onDisk['mcpServers'] as Record<string, unknown>;
+      expect(Object.keys(servers)).toEqual(['other']);
+    });
+
+    it('returns removed: false when server does not exist', async () => {
+      const projectDir = path.join(tmpDir, 'rm-missing-mcp');
+      await writeSettings(path.join(projectDir, '.mcp.json'), {
+        mcpServers: { other: { type: 'stdio', command: 'node' } },
+      });
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.removeMcpServer({ name: 'nonexistent' });
+      expect(result).toEqual({ removed: false });
+    });
+
+    it('returns removed: false when .mcp.json does not exist', async () => {
+      const projectDir = path.join(tmpDir, 'rm-no-file');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      const result = await settings.removeMcpServer({ name: 'makaio' });
+      expect(result).toEqual({ removed: false });
+    });
+
+    it('removes own special-key servers without reading inherited properties', async () => {
+      const projectDir = path.join(tmpDir, 'rm-special-key-mcp');
+      const settings = new ClaudeCodeClientSettings({ projectDir });
+      await settings.addMcpServer({
+        name: 'constructor',
+        server: { type: 'http', url: 'http://127.0.0.1:8080/mcp' },
+      });
+
+      await expect(settings.removeMcpServer({ name: 'constructor' })).resolves.toEqual({ removed: true });
+      await expect(settings.removeMcpServer({ name: 'toString' })).resolves.toEqual({ removed: false });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Error handling
   // -------------------------------------------------------------------------
 

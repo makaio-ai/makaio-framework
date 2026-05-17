@@ -1,0 +1,50 @@
+{
+  "name": "claude-code-tmux",
+  "displayName": "Claude Code (tmux)",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "dependencies": [
+    {
+      "type": "extension",
+      "name": "provider-anthropic",
+      "version": ">=0.1.0"
+    },
+    {
+      "type": "extension",
+      "name": "claude-code",
+      "version": ">=0.1.0"
+    },
+    {
+      "type": "extension",
+      "name": "client-hooks",
+      "version": ">=0.1.0"
+    },
+    {
+      "type": "extension",
+      "name": "claude-code-statusline",
+      "version": ">=0.1.0"
+    }
+  ],
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "claude-code-tmux",
+        "displayName": "Claude Code (tmux)",
+        "description": "Claude Code integration via interactive tmux sessions with hook-driven orchestration",
+        "clients": [
+          {
+            "id": "claude-code",
+            "version": "^0.1.0",
+            "binaryVersion": ">=1.0.0"
+          }
+        ],
+        "protocols": ["anthropic"]
+      }
+    ]
+  }
+}

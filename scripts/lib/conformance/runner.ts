@@ -78,6 +78,7 @@ export async function runAdapterTests(
     // Use adapter concurrency to control vitest's worker pool directly
     // instead of layering a userland PQueue on top.
     maxWorkers: maxWorkers ?? concurrency,
+    fileParallelism: (maxWorkers ?? concurrency) > 1,
     include: [],
     testNamePattern,
     env: {

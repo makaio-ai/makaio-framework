@@ -9,6 +9,7 @@
  */
 
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 import { atomicModifyFile } from '@makaio/clients-core';
 import type {
@@ -16,6 +17,7 @@ import type {
   ClaudeCodeStatuslineValue,
   ClaudeCodeHookDefinition,
   ClaudeCodePluginEntry,
+  ClaudeCodeMcpServerEntry,
 } from '../schemas/config.js';
 import { coerceHooksMap, isStatuslineValue } from './client-settings-guards.js';
 import { applyHookAddition, applyHookRemoval } from './client-settings-modifiers.js';
@@ -29,6 +31,9 @@ export type {
   HookAddResult,
   HookRemoveResult,
   HooksListResult,
+  McpServerAddResult,
+  McpServerRemoveResult,
+  McpServersListResult,
   PluginsListResult,
   StatuslineListResult,
   StatuslineRemoveResult,
@@ -38,6 +43,9 @@ import type {
   HookAddResult,
   HookRemoveResult,
   HooksListResult,
+  McpServerAddResult,
+  McpServerRemoveResult,
+  McpServersListResult,
   PluginsListResult,
   StatuslineListResult,
   StatuslineRemoveResult,
@@ -396,4 +404,221 @@ export class ClaudeCodeClientSettings {
 
     return { plugins: Array.from(effectivePlugins.values()) };
   }
+
+  // -------------------------------------------------------------------------
+  // Public API — MCP Servers (`.mcp.json`)
+  // -------------------------------------------------------------------------
+
+  /**
+   * List MCP servers defined in the project's `.mcp.json`.
+   *
+   * Returns an empty map when the file does not exist or contains no
+   * `mcpServers` key.  Requires `projectDir` to have been supplied at
+   * construction.
+   * @returns MCP server entries keyed by server name.
+   */
+  public async listMcpServers(): Promise<McpServersListResult> {
+    const mcpJson = await this.readMcpJson();
+    return { servers: coerceMcpServersMap(mcpJson?.['mcpServers']) };
+  }
+
+  /**
+   * Add an MCP server to the project's `.mcp.json`.
+   *
+   * Idempotent: when a server with the same name already exists and its
+   * definition is structurally equal, no write is performed.  When the name
+   * exists but the definition differs, the entry is overwritten.
+   * @param req - Server name and definition to persist.
+   * @returns Whether the file was written and whether an existing entry was replaced.
+   */
+  public async addMcpServer(req: { name: string; server: ClaudeCodeMcpServerEntry }): Promise<McpServerAddResult> {
+    let added = false;
+    let replaced = false;
+
+    await this.modifyMcpJson((current) => {
+      const servers = coerceMcpServersMap(current['mcpServers']);
+      const existing = Object.hasOwn(servers, req.name) ? servers[req.name] : undefined;
+
+      if (existing !== undefined && areMcpServerEntriesEqual(existing, req.server)) {
+        return current;
+      }
+
+      replaced = existing !== undefined;
+      added = true;
+      const updatedServers = cloneMcpServersMap(servers);
+      updatedServers[req.name] = req.server;
+      return { ...current, mcpServers: updatedServers };
+    });
+
+    return { added, replaced };
+  }
+
+  /**
+   * Remove an MCP server from the project's `.mcp.json`.
+   * @param req - Server name to remove.
+   * @returns Whether a server was actually removed.
+   */
+  public async removeMcpServer(req: { name: string }): Promise<McpServerRemoveResult> {
+    let removed = false;
+
+    await this.modifyMcpJson((current) => {
+      const servers = coerceMcpServersMap(current['mcpServers']);
+      if (!Object.hasOwn(servers, req.name)) {
+        return current;
+      }
+      removed = true;
+      const updated = cloneMcpServersMap(servers);
+      delete updated[req.name];
+      return { ...current, mcpServers: updated };
+    });
+
+    return { removed };
+  }
+
+  // -------------------------------------------------------------------------
+  // Private — `.mcp.json` file I/O
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the absolute path to the project's `.mcp.json`.
+   * @returns Absolute path to `.mcp.json`.
+   * @throws When no `projectDir` was supplied at construction.
+   */
+  private resolveMcpJsonPath(): string {
+    const projectEntry = this.scopePaths.find((p) => p.scope === 'project');
+    if (projectEntry === undefined) {
+      throw new Error('Cannot resolve .mcp.json: no projectDir was provided at construction.');
+    }
+    // projectEntry.path is `<projectDir>/.claude/settings.json` — go up two levels.
+    return path.join(path.dirname(path.dirname(projectEntry.path)), '.mcp.json');
+  }
+
+  /**
+   * Read and parse the project's `.mcp.json`.
+   * @returns Parsed JSON object or `null` when the file does not exist.
+   */
+  private async readMcpJson(): Promise<Record<string, unknown> | null> {
+    const mcpPath = this.resolveMcpJsonPath();
+    try {
+      const content = await fs.readFile(mcpPath, 'utf-8');
+      const parsed: unknown = JSON.parse(content);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return null;
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Apply a modifier to the project's `.mcp.json` and persist atomically.
+   * @param modifier - Function receiving the current object and returning the updated object.
+   *   Return the same reference to skip the write.
+   */
+  private async modifyMcpJson(modifier: (current: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
+    const mcpPath = this.resolveMcpJsonPath();
+    await atomicModifyFile<Record<string, unknown>, void>(
+      mcpPath,
+      {},
+      writeMutex,
+      (raw) => {
+        if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+          return {};
+        }
+        return raw as Record<string, unknown>;
+      },
+      (current) => {
+        const updated = modifier(current);
+        return { content: updated, changed: updated !== current, result: undefined };
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MCP server helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Coerce an unknown value into a `Record<string, ClaudeCodeMcpServerEntry>`.
+ *
+ * Returns an empty object when the input is not a non-array object.  Individual
+ * entries are passed through without deep validation — the Zod schema at the
+ * bus boundary already validated the caller's input, and on-disk entries are
+ * treated permissively to tolerate newer Claude Code versions adding fields.
+ * @param raw - Value read from the `mcpServers` key of `.mcp.json`.
+ * @returns Coerced server map.
+ */
+function coerceMcpServersMap(raw: unknown): Record<string, ClaudeCodeMcpServerEntry> {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return createMcpServersMap();
+  }
+  const result = createMcpServersMap();
+  for (const [name, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
+      result[name] = entry as ClaudeCodeMcpServerEntry;
+    }
+  }
+  return result;
+}
+
+/**
+ * Create a prototype-free MCP server map for arbitrary server names.
+ * @returns Empty map safe for names such as `constructor` or `__proto__`.
+ */
+function createMcpServersMap(): Record<string, ClaudeCodeMcpServerEntry> {
+  return Object.create(null) as Record<string, ClaudeCodeMcpServerEntry>;
+}
+
+/**
+ * Clone an MCP server map without reintroducing `Object.prototype`.
+ * @param source - Source server map.
+ * @returns Prototype-free copy.
+ */
+function cloneMcpServersMap(
+  source: Record<string, ClaudeCodeMcpServerEntry>,
+): Record<string, ClaudeCodeMcpServerEntry> {
+  const result = createMcpServersMap();
+  for (const [name, entry] of Object.entries(source)) {
+    result[name] = entry;
+  }
+  return result;
+}
+
+/**
+ * Produce a deterministic JSON string by recursively sorting object keys.
+ *
+ * Handles nested objects (e.g. `env` records inside MCP server entries) so
+ * that key-insertion-order differences do not cause false inequality.
+ * Arrays are serialized in their original order — array element order is
+ * semantically significant in MCP server entries (e.g. `args`).
+ * @param value - Value to serialize.
+ * @returns Deterministic JSON string.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map(stableStringify).join(',') + ']';
+  }
+  const record = value as Record<string, unknown>;
+  const sortedKeys = Object.keys(record).sort();
+  return '{' + sortedKeys.map((k) => JSON.stringify(k) + ':' + stableStringify(record[k])).join(',') + '}';
+}
+
+/**
+ * Deep-compare two MCP server entries for structural equality.
+ *
+ * Uses recursive key-sorted JSON serialization so that entries with nested
+ * records (e.g. `env: { B: '1', A: '2' }` vs `env: { A: '2', B: '1' }`)
+ * compare as equal regardless of key-insertion order.
+ * @param a - First entry.
+ * @param b - Second entry.
+ * @returns `true` when both entries are structurally equal.
+ */
+function areMcpServerEntriesEqual(a: ClaudeCodeMcpServerEntry, b: ClaudeCodeMcpServerEntry): boolean {
+  return stableStringify(a) === stableStringify(b);
 }

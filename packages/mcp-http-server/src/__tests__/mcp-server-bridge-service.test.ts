@@ -13,6 +13,10 @@
  * - Session unregistration succeeds without error
  * - Unregistering an unknown session is a no-op (no throw)
  * - `requestOptional` returns `{ handled: false }` after the service is destroyed
+ * - Pinned session survives past the TTL sweep
+ * - Pinned session survives LRU count-based eviction (stored outside the QuickLRU)
+ * - Non-pinned sessions still get evicted by the TTL sweep
+ * - Pinned sessions can still be explicitly unregistered
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -35,6 +39,8 @@ interface RegisterPayload {
   adapterName: string;
   sessionId: string;
   contextOverrides: ToolExecutionContextOverrides;
+  /** When true the session is exempt from idle TTL eviction. */
+  pinned?: boolean;
 }
 
 /**
@@ -232,6 +238,70 @@ describe('McpServerBridgeService', () => {
       }
     });
 
+    it('uses the latest unpinned registration after the same adapter session was pinned', async () => {
+      const captured: ToolExecutionContextOverrides[] = [];
+      const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            {
+              name: 'echo',
+              description: 'Echo tool',
+              toolsetName: 'test-tools',
+              inputSchema: { type: 'object' },
+            },
+          ],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+        captured.push(ctx.payload.contextOverrides ?? {});
+        ctx.setResult({ success: true, data: { ok: true } });
+      });
+
+      try {
+        const firstRegistration = await bus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: 'pin-state-upsert-session',
+            sessionId: 'session-pinned-first',
+            pinned: true,
+            contextOverrides: {
+              cwd: '/tmp/pinned-first',
+              sessionId: 'session-pinned-first',
+            },
+          }),
+        );
+        const secondRegistration = await bus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: 'pin-state-upsert-session',
+            sessionId: 'session-unpinned-second',
+            pinned: false,
+            contextOverrides: {
+              cwd: '/tmp/unpinned-second',
+              sessionId: 'session-unpinned-second',
+            },
+          }),
+        );
+
+        const { client, transport } = await createMcpClient(secondRegistration.port, 'pin-state-upsert-session');
+        try {
+          await client.callTool({ name: 'echo', arguments: { value: 'after-upsert' } });
+        } finally {
+          await client.close();
+          await transport.close();
+        }
+
+        expect(secondRegistration.port).toBe(firstRegistration.port);
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.cwd).toBe('/tmp/unpinned-second');
+        expect(captured[0]?.sessionId).toBe('session-unpinned-second');
+      } finally {
+        cleanupExecute();
+        cleanupList();
+      }
+    });
+
     it('evicts LRU-capped sessions and falls back to process-level context', async () => {
       // QuickLRU uses a two-cache swap strategy: it maintains an "old" and "new"
       // internal cache, each of size maxSize. When the new cache fills up, it
@@ -311,6 +381,77 @@ describe('McpServerBridgeService', () => {
       }
     });
 
+    it('pinned session survives LRU count-based eviction', async () => {
+      // This test verifies that a pinned session is NOT evicted when the LRU
+      // fills up with unpinned sessions. It would FAIL on the old code where
+      // pinned sessions were stored in the same QuickLRU as unpinned ones.
+      const PINNED_SESSION_ID = 'lru-pinned-survivor';
+      const FILLER_COUNT = 2 * MAX_SESSION_COUNT; // guarantees LRU threshold crossed
+
+      const captured: ToolExecutionContextOverrides[] = [];
+      const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            {
+              name: 'echo',
+              description: 'Echo tool',
+              toolsetName: 'test-tools',
+              inputSchema: { type: 'object' },
+            },
+          ],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+        captured.push(ctx.payload.contextOverrides ?? {});
+        ctx.setResult({ success: true, data: { ok: true } });
+      });
+
+      try {
+        // Step 1: Register the pinned session with a distinctive cwd.
+        const registration = await bus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: PINNED_SESSION_ID,
+            sessionId: 'session-pinned-lru',
+            pinned: true,
+            contextOverrides: {
+              cwd: '/tmp/lru-pinned-survivor',
+              sessionId: 'session-pinned-lru',
+            },
+          }),
+        );
+
+        // Step 2: Flood the LRU with unpinned sessions to cross the eviction threshold.
+        for (let i = 0; i < FILLER_COUNT; i++) {
+          await bus.request(
+            McpSubjects.session.register,
+            makeRegisterPayload({
+              adapterSessionId: `lru-pinned-filler-${i}`,
+              sessionId: `filler-session-${i}`,
+            }),
+          );
+        }
+
+        // Step 3: The pinned session must still serve its stored overrides —
+        // it was never placed in the LRU so count-based eviction cannot touch it.
+        const { client, transport } = await createMcpClient(registration.port, PINNED_SESSION_ID);
+        try {
+          await client.callTool({ name: 'echo', arguments: { value: 'after-lru-flood' } });
+        } finally {
+          await client.close();
+          await transport.close();
+        }
+
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.cwd).toBe('/tmp/lru-pinned-survivor');
+        expect(captured[0]?.sessionId).toBe('session-pinned-lru');
+      } finally {
+        cleanupExecute();
+        cleanupList();
+      }
+    });
+
     it('evicts stale sessions via TTL sweep and falls back to process-level context', async () => {
       vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
       vi.setSystemTime(new Date('2026-03-25T00:00:00.000Z'));
@@ -368,6 +509,195 @@ describe('McpServerBridgeService', () => {
         expect(captured).toHaveLength(1);
         expect(captured[0]?.cwd).toBe(process.cwd());
         expect(captured[0]?.sessionId).not.toBe('session-before-sweep');
+      } finally {
+        cleanupExecute();
+        cleanupList();
+        await localService.destroy();
+        vi.useRealTimers();
+      }
+    });
+
+    it('pinned session survives past the TTL sweep', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-03-25T00:00:00.000Z'));
+
+      const localBus = createBusInstance();
+      const localService = new McpServerBridgeService(localBus);
+      await localService.init();
+
+      const captured: ToolExecutionContextOverrides[] = [];
+      const cleanupList = localBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            {
+              name: 'echo',
+              description: 'Echo tool',
+              toolsetName: 'test-tools',
+              inputSchema: { type: 'object' },
+            },
+          ],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = localBus.on(ToolSubjects.execute, (ctx) => {
+        captured.push(ctx.payload.contextOverrides ?? {});
+        ctx.setResult({ success: true, data: { ok: true } });
+      });
+
+      try {
+        const registration = await localBus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: 'pinned-session',
+            sessionId: 'session-pinned',
+            pinned: true,
+            contextOverrides: {
+              cwd: '/tmp/pinned-session',
+              sessionId: 'session-pinned',
+            },
+          }),
+        );
+
+        // Advance time past the 30-minute TTL and trigger a sweep.
+        vi.setSystemTime(new Date('2026-03-25T00:31:00.000Z'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // The pinned session must still serve its stored overrides.
+        const { client, transport } = await createMcpClient(registration.port, 'pinned-session');
+        try {
+          await client.callTool({ name: 'echo', arguments: { value: 'after-sweep' } });
+        } finally {
+          await client.close();
+          await transport.close();
+        }
+
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.cwd).toBe('/tmp/pinned-session');
+        expect(captured[0]?.sessionId).toBe('session-pinned');
+      } finally {
+        cleanupExecute();
+        cleanupList();
+        await localService.destroy();
+        vi.useRealTimers();
+      }
+    });
+
+    it('non-pinned session is still evicted normally by TTL sweep', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-03-25T00:00:00.000Z'));
+
+      const localBus = createBusInstance();
+      const localService = new McpServerBridgeService(localBus);
+      await localService.init();
+
+      const captured: ToolExecutionContextOverrides[] = [];
+      const cleanupList = localBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            { name: 'echo', description: 'Echo tool', toolsetName: 'test-tools', inputSchema: { type: 'object' } },
+          ],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = localBus.on(ToolSubjects.execute, (ctx) => {
+        captured.push(ctx.payload.contextOverrides ?? {});
+        ctx.setResult({ success: true, data: { ok: true } });
+      });
+
+      try {
+        const registration = await localBus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: 'unpinned-session',
+            sessionId: 'session-unpinned',
+            // pinned is intentionally omitted (defaults to undefined/false)
+            contextOverrides: {
+              cwd: '/tmp/unpinned-session',
+              sessionId: 'session-unpinned',
+            },
+          }),
+        );
+
+        vi.setSystemTime(new Date('2026-03-25T00:31:00.000Z'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        const { client, transport } = await createMcpClient(registration.port, 'unpinned-session');
+        try {
+          await client.callTool({ name: 'echo', arguments: { value: 'after-sweep' } });
+        } finally {
+          await client.close();
+          await transport.close();
+        }
+
+        // The session was evicted — overrides fall back to process-level defaults.
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.cwd).toBe(process.cwd());
+        expect(captured[0]?.sessionId).not.toBe('session-unpinned');
+      } finally {
+        cleanupExecute();
+        cleanupList();
+        await localService.destroy();
+        vi.useRealTimers();
+      }
+    });
+
+    it('pinned session can still be explicitly unregistered', async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-03-25T00:00:00.000Z'));
+
+      const localBus = createBusInstance();
+      const localService = new McpServerBridgeService(localBus);
+      await localService.init();
+
+      const captured: ToolExecutionContextOverrides[] = [];
+      const cleanupList = localBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            { name: 'echo', description: 'Echo tool', toolsetName: 'test-tools', inputSchema: { type: 'object' } },
+          ],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = localBus.on(ToolSubjects.execute, (ctx) => {
+        captured.push(ctx.payload.contextOverrides ?? {});
+        ctx.setResult({ success: true, data: { ok: true } });
+      });
+
+      try {
+        const registration = await localBus.request(
+          McpSubjects.session.register,
+          makeRegisterPayload({
+            adapterSessionId: 'pinned-to-remove',
+            sessionId: 'session-pinned-removable',
+            pinned: true,
+            contextOverrides: {
+              cwd: '/tmp/pinned-to-remove',
+              sessionId: 'session-pinned-removable',
+            },
+          }),
+        );
+
+        // Advance past TTL — pinned session must survive the sweep.
+        vi.setSystemTime(new Date('2026-03-25T00:31:00.000Z'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // Explicit unregister must remove it regardless of the pinned flag.
+        await localBus.request(McpSubjects.session.unregister, {
+          adapterSessionId: 'pinned-to-remove',
+        });
+
+        // After explicit unregister the session context falls back to process defaults.
+        const { client, transport } = await createMcpClient(registration.port, 'pinned-to-remove');
+        try {
+          await client.callTool({ name: 'echo', arguments: { value: 'after-explicit-unregister' } });
+        } finally {
+          await client.close();
+          await transport.close();
+        }
+
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.cwd).toBe(process.cwd());
+        expect(captured[0]?.sessionId).not.toBe('session-pinned-removable');
       } finally {
         cleanupExecute();
         cleanupList();

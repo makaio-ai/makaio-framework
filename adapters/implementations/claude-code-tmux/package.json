@@ -1,0 +1,64 @@
+{
+  "name": "@makaio/adapter-claude-code-tmux",
+  "description": "Claude Code tmux adapter for the Makaio framework.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "adapters/implementations/claude-code-tmux"
+  },
+  "bugs": {
+    "url": "https://github.com/makaio-ai/makaio-framework/issues"
+  },
+  "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "type": "module",
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "package.json",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
+  },
+  "devDependencies": {
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*",
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/ai-adapters-stream-session": "workspace:*",
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/clients-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/native-session-supervisor": "workspace:*",
+    "@makaio/utils": "workspace:*",
+    "@types/node": "^24.3.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

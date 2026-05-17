@@ -18,6 +18,9 @@ import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
  * - `config.hooks.add` — append a hook to a given scope and event.
  * - `config.hooks.remove` — remove hooks matching a command substring.
  * - `config.extensions.list` — list installed extensions with enabled state.
+ * - `config.mcpServers.list` — list MCP servers from `.mcp.json`.
+ * - `config.mcpServers.add` — add/replace an MCP server in `.mcp.json`.
+ * - `config.mcpServers.remove` — remove an MCP server from `.mcp.json`.
  * - `wiring.list` — list all wiring entries with installation status.
  * - `wiring.apply` — install wiring entries into the target scope.
  * - `wiring.remove` — uninstall wiring entries from the target scope.
