@@ -1,6 +1,6 @@
 {
   "name": "@makaio/adapter-gemini-sdk",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "description": "Gemini SDK adapter for Makaio AI framework",
   "license": "MIT",
   "repository": {

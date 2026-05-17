@@ -1,6 +1,6 @@
 {
   "name": "@makaio/rules",
-  "version": "0.0.1",
+  "version": "1.0.0-dev-1779048017991",
   "types": "src/index.ts",
   "type": "module",
   "private": true,

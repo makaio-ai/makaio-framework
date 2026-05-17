@@ -1,7 +1,7 @@
 {
   "name": "@makaio/adapter-claude-code-tmux",
   "description": "Claude Code tmux adapter for the Makaio framework.",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "license": "MIT",
   "repository": {
     "type": "git",

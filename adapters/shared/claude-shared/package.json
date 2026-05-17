@@ -1,7 +1,7 @@
 {
   "name": "@makaio/ai-adapters-claude-shared",
   "description": "Internal shared infrastructure for Claude protocol AI adapter implementations.",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "type": "module",

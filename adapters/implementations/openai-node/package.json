@@ -1,7 +1,7 @@
 {
   "name": "@makaio/adapter-openai-node",
   "description": "OpenAI adapter using the official OpenAI Node SDK for agentic chat completions.",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "license": "MIT",
   "repository": {
     "type": "git",

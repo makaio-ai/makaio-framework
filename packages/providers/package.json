@@ -1,7 +1,7 @@
 {
   "name": "@makaio/providers",
   "description": "Provider implementations for platform-specific capabilities.",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "types": "dist/index.d.ts",
   "type": "module",
   "private": true,

@@ -1,7 +1,7 @@
 {
   "name": "@makaio/service-base",
   "description": "Abstract base class for Makaio bus services.",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "type": "module",
   "types": "src/index.ts",
   "private": true,

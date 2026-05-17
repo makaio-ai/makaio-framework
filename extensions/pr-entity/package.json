@@ -1,6 +1,6 @@
 {
   "name": "@makaio/extension-pr-entity",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "main": "src/index.ts",
   "source": "src/index.ts",
   "types": "src/index.ts",
