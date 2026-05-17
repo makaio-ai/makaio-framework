@@ -25,7 +25,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/v3';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { AgentComplete } from '@makaio/contracts';
