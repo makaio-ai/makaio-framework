@@ -1,14 +1,27 @@
 {
   "name": "@makaio/extension-pin-message",
   "version": "1.0.0-dev-1779048017991",
-  "main": "src/index.ts",
-  "source": "src/index.ts",
-  "types": "src/index.ts",
   "type": "module",
-  "private": true,
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "bun build.ts"
+  },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/pin-message"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
@@ -16,6 +29,23 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@types/node": "^24.3.0"
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      }
+    }
   }
 }

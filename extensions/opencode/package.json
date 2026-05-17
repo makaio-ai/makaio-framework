@@ -1,14 +1,29 @@
 {
   "name": "@makaio/extension-opencode",
   "version": "1.0.0-dev-1779048017991",
-  "private": true,
   "type": "module",
-  "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
     "./browser": "./src/browser.ts",
     "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "build": "bun build.ts"
+  },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/opencode"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
@@ -18,7 +33,32 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3",
     "vitest": "4.1.5"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      },
+      "./browser": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.mjs"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts",
+        "default": "./dist/testing.mjs"
+      }
+    }
   }
 }
