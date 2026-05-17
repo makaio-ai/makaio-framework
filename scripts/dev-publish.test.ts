@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   buildAnnotatedTag,
@@ -8,6 +10,27 @@ import {
   resolveDevPublishPlan,
   stripPrerelease,
 } from './dev-publish.js';
+
+const REPOSITORY_URL = 'https://github.com/makaio-ai/makaio-framework';
+const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', '__tests__']);
+
+function findPackageJsonDirs(rootDir: string): string[] {
+  const dirs: string[] = [];
+  for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || SKIPPED_DIRS.has(entry.name)) continue;
+
+    const dir = join(rootDir, entry.name);
+    if (existsSync(join(dir, 'package.json'))) {
+      dirs.push(dir);
+    }
+    dirs.push(...findPackageJsonDirs(dir));
+  }
+  return dirs;
+}
+
+function toRepositoryDirectory(packageDir: string): string {
+  return relative(process.cwd(), packageDir).split(sep).join('/');
+}
 
 describe('parsePackageNames', () => {
   it('accepts explicit Makaio package names and removes duplicates', () => {
@@ -97,6 +120,34 @@ describe('buildPublishArgs', () => {
       'public',
       '--provenance',
     ]);
+  });
+});
+
+describe('publishable package metadata', () => {
+  it('declares repository metadata required by npm provenance', () => {
+    const failures: string[] = [];
+    for (const packageDir of findPackageJsonDirs(process.cwd())) {
+      const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+        name?: string;
+        private?: boolean;
+        repository?: {
+          url?: string;
+          directory?: string;
+        };
+        version?: string;
+      };
+
+      if (packageJson.private || !packageJson.name?.startsWith('@makaio/') || !packageJson.version) {
+        continue;
+      }
+
+      const directory = toRepositoryDirectory(packageDir);
+      if (packageJson.repository?.url !== REPOSITORY_URL || packageJson.repository.directory !== directory) {
+        failures.push(`${packageJson.name}: expected ${REPOSITORY_URL}#${directory}`);
+      }
+    }
+
+    expect(failures).toEqual([]);
   });
 });
 
