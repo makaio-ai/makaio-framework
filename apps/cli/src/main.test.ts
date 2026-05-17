@@ -127,7 +127,7 @@ describe('main — remote manifest behavior', () => {
   });
 
   it('runs extension init locally without probing the server first', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-main-extension-'));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-extension-'));
     const targetDir = path.join(tempRoot, 'local-ext');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -143,7 +143,7 @@ describe('main — remote manifest behavior', () => {
   });
 
   it('passes config-derived discovery, launcher command, and package defaults to serve', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-main-config-'));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-config-'));
     const extensionRoot = path.join(tempRoot, 'extensions', 'config-cli-extension');
     const configPath = path.join(tempRoot, 'makaio.config.json');
 
@@ -204,7 +204,7 @@ describe('main — remote manifest behavior', () => {
   });
 
   it('uses env-selected config to discover local source-tree commands', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-main-env-config-'));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-env-config-'));
     const extensionRoot = path.join(tempRoot, 'extensions', 'account-manager');
     const configPath = path.join(tempRoot, 'makaio.config.json');
     const entryPath = path.join(extensionRoot, 'dist', 'cli.mjs');
@@ -821,7 +821,7 @@ describe('toCliModuleImportSpecifier', () => {
   it('supports local extension execution through the generated file URL', async () => {
     vi.clearAllMocks();
     const { bus } = createMockBus();
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-main-local-import-'));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-local-import-'));
     const entryPath = path.join(tempRoot, 'dist', 'cli.mjs');
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const originalStdoutIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');

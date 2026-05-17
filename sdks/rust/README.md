@@ -3,7 +3,7 @@
 Rust SDK for participating in the Makaio bus protocol over WebSocket or stdio transports.
 
 The crate is named `makaio-sdk` and is currently unpublished (`publish = false`). Use it from
-`framework/sdks/rust` in this source workspace.
+`sdks/rust` in this source workspace.
 
 This client exposes the protocol bus surface for WebSocket and newline-delimited stdio
 transports:
@@ -12,7 +12,7 @@ transports:
   `subscribe`, `unsubscribe`, `subscribe-sync-complete`, and HMAC auth frames
 - an async `BusClient` with `connect`, `connect_with_options`, `from_stdio`, `close`, `emit`, `request`,
   `subscribe`, and `on_request`
-- generated subject constants and typed subject descriptors from `framework/sdks/manifest/makaio-bus-protocol.json`
+- generated subject constants and typed subject descriptors from `sdks/manifest/makaio-bus-protocol.json`
 - typed structs for stable payloads, while intentionally open JSON fields remain `serde_json::Value`
 
 ## Connection Options
@@ -70,6 +70,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Development
 
 ```bash
-cd framework/sdks/rust
+cd sdks/rust
 cargo test
 ```

@@ -54,7 +54,7 @@ describe('ExtensionManifestSchema', () => {
           },
         ],
       },
-      storage: { migrations: 'drizzle', migrationSourceId: 'framework/packages/my-extension/drizzle' },
+      storage: { migrations: 'drizzle', migrationSourceId: 'packages/my-extension/drizzle' },
       // BrowserEntrypointSchema uses `entrypoint` (not `path`) — see browser-entrypoint.ts
       browser: { entrypoint: '/extensions/my-extension/browser/index.js' },
     });

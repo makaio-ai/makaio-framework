@@ -29,7 +29,7 @@ describe('isSharedBrowserExternal', () => {
   it('rejects unsupported bare specifiers and subpaths', () => {
     expect(isSharedBrowserExternal('react-dom/client')).toBe(false);
     expect(isSharedBrowserExternal('@makaio/ui-kernel/testing')).toBe(false);
-    expect(isSharedBrowserExternal('@makaio/web-framework')).toBe(false);
+    expect(isSharedBrowserExternal('@makaio/web-framework')).toBe(false); // makaio-boundary-allow-line: negative fixture for rejecting legacy browser externals
     expect(isSharedBrowserExternal('zod')).toBe(false);
   });
 });

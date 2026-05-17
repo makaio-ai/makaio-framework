@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { resolveFrameworkDistBuildPlan } from '../src/build/prepare-framework-dist.js';
 
 describe('resolveFrameworkDistBuildPlan', () => {
-  it('uses the stable framework dist scripts from the parent workspace root', () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'makaio-parent-workspace-'));
+  it('uses the stable framework dist scripts from the prefixed workspace root', () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'makaio-prefixed-workspace-'));
     try {
       const packageRoot = path.join(root, 'framework/apps/electron');
       mkdirSync(packageRoot, { recursive: true });

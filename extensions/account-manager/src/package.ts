@@ -26,7 +26,9 @@ const USAGE_ACTIVE_INTERVAL_MS = 2 * 60_000;
 const USAGE_INACTIVE_INTERVAL_MS = 5 * 60_000;
 const USAGE_JITTER_MS = 5_000;
 const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
-const MIGRATION_SOURCE_ID = 'framework/extensions/account-manager/src/drizzle';
+// Source IDs are package-root-relative so bundled migration lookups stay
+// identical in package-root and prefixed source layouts.
+const MIGRATION_SOURCE_ID = 'extensions/account-manager/src/drizzle';
 
 const AccountManagerConfigSchema = z.object({
   /**

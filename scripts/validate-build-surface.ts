@@ -5,7 +5,7 @@
  * Exits with code 0 on success, 1 when invariant violations are found.
  * @example
  * ```bash
- * tsx framework/scripts/validate-build-surface.ts
+ * tsx scripts/validate-build-surface.ts
  * ```
  * @packageDocumentation
  */

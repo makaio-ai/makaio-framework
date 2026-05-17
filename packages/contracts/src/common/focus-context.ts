@@ -12,6 +12,6 @@
  * Represents the different focus areas available in the web/app interface.
  * Used by slash commands, navigation results, and the focus store.
  *
- * The focus store implementation is in web/framework/src/stores/focusStore.ts
+ * The focus store implementation is in `@makaio/ui-hooks`.
  */
 export type FocusContext = 'chat' | 'git' | 'review' | 'planning' | 'settings';

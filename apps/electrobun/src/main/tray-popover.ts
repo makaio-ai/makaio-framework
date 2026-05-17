@@ -2,7 +2,7 @@
  * Tray Popover — frameless SPA panel shown when the user clicks the tray icon
  * or presses the global hotkey (Alt+Cmd+M).
  *
- * Mirrors `framework/apps/electron/src/main/tray-popover.ts` for the
+ * Mirrors `apps/electron/src/main/tray-popover.ts` for the
  * Electrobun host. Key differences from the Electron implementation:
  * - Config is injected via URL query parameters (no preload/contextBridge).
  * - `hidden: true` in the constructor suppresses the initial `showWindow` call;

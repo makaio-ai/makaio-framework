@@ -5,7 +5,7 @@
  * Exits with code 0 on success, 1 when built export targets are missing.
  * @example
  * ```bash
- * tsx framework/scripts/verify-framework-dist.ts
+ * tsx scripts/verify-framework-dist.ts
  * ```
  * @packageDocumentation
  */

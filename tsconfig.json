@@ -136,7 +136,7 @@
     "./packages/services/log-import/src/__tests__/**/*",
     "./extensions/loop/src/__tests__/**/*",
     // The validator preserves files with a nearer tsconfig, so account-manager
-    // is still typechecked via framework/extensions/account-manager/tsconfig.json.
+    // is still typechecked via extensions/account-manager/tsconfig.json.
     "./extensions/account-manager/**/*",
     "./ui/vitest.browser.config.ts"
   ]

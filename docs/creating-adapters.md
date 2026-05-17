@@ -435,7 +435,7 @@ The framework ships a shared conformance test suite that validates the full
 orchestration pipeline for any adapter:
 
 ```bash
-MAKAIO_TEST_ADAPTER=openai-node yarn test framework/adapters/implementations/__tests__
+MAKAIO_TEST_ADAPTER=openai-node yarn test adapters/implementations/__tests__
 ```
 
 Tests live at `../adapters/implementations/__tests__/` and cover:
@@ -585,7 +585,7 @@ active protocol.
 ### 5. Run Conformance Tests
 
 ```bash
-MAKAIO_TEST_ADAPTER=my-provider yarn test framework/adapters/implementations/__tests__
+MAKAIO_TEST_ADAPTER=my-provider yarn test adapters/implementations/__tests__
 ```
 
 If your adapter passes the conformance suite, it works with the full

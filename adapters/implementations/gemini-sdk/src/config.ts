@@ -6,7 +6,7 @@ import { GeminiSdkProviderConfigSchema } from './schemas.js';
 export const GeminiSdkConfig = createAdapterConfigFactory<GeminiConnectorConfig>(() => ({
   adapterName: GeminiSdkAdapterName,
   adapterDefaults: {
-    // Default model sourced from the google provider definition (framework/providers/google/src/definition.ts)
+    // Default model sourced from the google provider definition (providers/google/src/definition.ts).
     model: 'gemini-2.5-pro',
   },
   schema: GeminiSdkProviderConfigSchema,

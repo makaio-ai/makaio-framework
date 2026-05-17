@@ -45,6 +45,12 @@ function normalizeMigrationSourceId(migrationSourceId: string): string {
   return migrationSourceId.replace(/\\/g, '/');
 }
 
+function toPublicMigrationSourceId(relativeMigrationsDir: string): string {
+  const normalized = normalizeMigrationSourceId(relativeMigrationsDir);
+  const prefix = 'framework/';
+  return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+}
+
 function assertJournalEntry(value: unknown, journalPath: string, index: number): JournalEntry {
   if (typeof value !== 'object' || value === null) {
     throw new Error(`[embedded-migrations] Invalid journal entry ${index} in ${journalPath}: expected object.`);
@@ -107,12 +113,12 @@ function readMigrationJournal(migrationsDir: string): ReadonlyArray<JournalEntry
 /**
  * Build a stable bundled-host migration source id from a workspace path.
  *
- * The source id is the normalized workspace-relative `drizzle/` directory so
- * packaged hosts can preserve migration identity even when runtime paths
- * collapse into `dist/` or archive layouts.
+ * The source id is the normalized public `drizzle/` directory so packaged hosts
+ * preserve migration identity even when runtime paths collapse into `dist/` or
+ * archive layouts.
  * @param workspaceRoot - Absolute workspace root.
  * @param migrationsDir - Absolute `drizzle/` directory inside the workspace.
- * @returns Stable workspace-relative migration source id.
+ * @returns Stable public migration source id.
  * @throws If `migrationsDir` is outside `workspaceRoot`.
  */
 export function buildMigrationSourceId(workspaceRoot: string, migrationsDir: string): string {
@@ -131,7 +137,7 @@ export function buildMigrationSourceId(workspaceRoot: string, migrationsDir: str
     );
   }
 
-  return relativeMigrationsDir.replace(/\\/g, '/');
+  return toPublicMigrationSourceId(relativeMigrationsDir);
 }
 
 /**

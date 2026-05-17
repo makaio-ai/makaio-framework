@@ -9,7 +9,7 @@
  * Exits with code 0 when all packages pass, 1 when any violation is found.
  * @example
  * ```bash
- * tsx framework/scripts/validate-npm-packlists.ts
+ * tsx scripts/validate-npm-packlists.ts
  * ```
  * @packageDocumentation
  */

@@ -3,14 +3,14 @@ import path from 'node:path';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 
 /**
- * Resolve the storage-migrations drizzle directory across both supported repo layouts.
+ * Resolve the storage-migrations drizzle directory across both supported source layouts.
  *
- * The framework may live under a nested `framework/` directory while being
- * synced, or at the repository root after sync. This helper accepts either layout
- * and returns the first existing migrations directory.
+ * The framework may live at the repository root or under a source-tree prefix
+ * during local development. This helper accepts either layout and returns the
+ * first existing migrations directory.
  * @param packageRoot - Absolute path to the host package root.
  * @returns Absolute path to the framework storage-migrations drizzle folder.
- * @throws If neither supported repo layout contains the migrations directory.
+ * @throws If neither supported source layout contains the migrations directory.
  */
 export function resolveStorageMigrationsDir(packageRoot: string): string {
   const workspaceRoot = resolveWorkspaceRoot(packageRoot);

@@ -6,8 +6,8 @@ import type { FocusContext } from './focus-context.js';
  * Action handlers return an `ActionIntent` rather than executing effects directly.
  * The framework's intent executor interprets and dispatches each kind.
  *
- * SEAM: New intent kinds are added here. The executor in `web/framework` gains a
- * corresponding case. Platform services return intents without depending on execution.
+ * SEAM: New intent kinds are added here. UI executors add the corresponding
+ * cases without leaking renderer dependencies into service packages.
  * @example
  * ```typescript
  * const intent: ActionIntent = { kind: 'clipboard', text: commit.hash };

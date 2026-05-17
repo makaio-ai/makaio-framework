@@ -5,7 +5,7 @@ import { z } from 'zod';
 // ─────────────────────────────────────────────────────────
 
 /**
- * Builtin widget types provided by web/components
+ * Builtin widget types provided by the UI components package
  * - tags: Comma-separated input that converts to array
  * - textarea-array: Multi-line textarea that converts to array
  * - password: Password input field

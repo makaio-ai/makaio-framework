@@ -12,7 +12,7 @@ server-side.
 
 ```bash
 # Development (editable install from workspace root)
-python -m pip install -e framework/sdks/python
+python -m pip install -e sdks/python
 ```
 
 ## Quick start

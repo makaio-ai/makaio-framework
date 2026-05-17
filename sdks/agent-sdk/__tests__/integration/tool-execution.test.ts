@@ -18,9 +18,9 @@
  *
  * To run the env-gated tests locally:
  * ```
- * MAKAIO_TEST_RUNTIME=1 yarn test framework/sdks/agent-sdk
+ * MAKAIO_TEST_RUNTIME=1 yarn test sdks/agent-sdk
  * # or with direct Anthropic credentials:
- * ANTHROPIC_API_KEY=sk-... yarn test framework/sdks/agent-sdk
+ * ANTHROPIC_API_KEY=sk-... yarn test sdks/agent-sdk
  * ```
  */
 

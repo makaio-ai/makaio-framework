@@ -23,8 +23,8 @@ const YAML_REGISTRY_UPDATED_AT = '1970-01-01T00:00:00.000Z';
  * @example
  * ```typescript
  * const fetcher = new YamlRegistryFetcher(
- *   path.join(workspaceRoot, 'framework/providers/labs'),
- *   path.join(workspaceRoot, 'framework/providers/providers'),
+ *   path.join(workspaceRoot, 'providers/labs'),
+ *   path.join(workspaceRoot, 'providers/providers'),
  * );
  * const registry = await fetcher.fetch();
  * ```

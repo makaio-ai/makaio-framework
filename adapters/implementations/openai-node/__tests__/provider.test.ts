@@ -36,7 +36,7 @@ describe('NanoGPT definition schema conformance', () => {
 
   // Model catalog data (TTS, STT, pricing) is YAML-sourced and no longer declared
   // in static provider definitions. These are populated by the registry service at
-  // boot time from framework/providers/providers/nanogpt.yaml.
+  // boot time from providers/providers/nanogpt.yaml.
 });
 
 describe('OpenRouter definition schema conformance', () => {

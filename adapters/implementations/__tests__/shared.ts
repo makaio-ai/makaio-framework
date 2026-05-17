@@ -33,7 +33,7 @@ import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
 import { startHttpMcpServer } from '@makaio/mcp-http-server';
 import { createMcpTestServerLifecycle } from './mcp-test-server-lifecycle.js';
 
-// Module augmentation for vitest TaskMeta lives in framework/scripts/lib/vitest-meta.d.ts
+// Module augmentation for vitest TaskMeta lives in scripts/lib/vitest-meta.d.ts.
 
 // Register framework namespaces before any bus operation so that schema
 // validation, local-subject routing, and extendSubject() are active in tests.

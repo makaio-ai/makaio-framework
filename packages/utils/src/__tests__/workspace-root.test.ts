@@ -13,11 +13,11 @@ describe('resolveWorkspaceRoot', () => {
     }
   });
 
-  it('resolves the root in the parent workspace layout (3 levels deep)', () => {
+  it('resolves the root in the prefixed source layout (3 levels deep)', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
     tempDirs.push(root);
 
-    // Nested-layout marker: root/framework/package.json
+    // Prefixed-layout marker: root/framework/package.json
     const frameworkDir = path.join(root, 'framework');
     mkdirSync(frameworkDir, { recursive: true });
     writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
@@ -30,11 +30,11 @@ describe('resolveWorkspaceRoot', () => {
     expect(resolveWorkspaceRoot(packageDir)).toBe(root);
   });
 
-  it('resolves the root in the parent workspace layout (4 levels deep)', () => {
+  it('resolves the root in the prefixed source layout (4 levels deep)', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
     tempDirs.push(root);
 
-    // Nested-layout marker: root/framework/package.json
+    // Prefixed-layout marker: root/framework/package.json
     // framework/ itself also has package.json, which must NOT be matched.
     const frameworkDir = path.join(root, 'framework');
     mkdirSync(frameworkDir, { recursive: true });
@@ -61,7 +61,7 @@ describe('resolveWorkspaceRoot', () => {
 
   it('does not overshoot to a parent directory that also has package.json', () => {
     // Simulate: /parent/root where parent/ has package.json but root/ is the
-    // actual repo root with framework/package.json.
+    // actual workspace root with framework/package.json.
     const parent = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
     tempDirs.push(parent);
 

@@ -11,7 +11,7 @@ describe('parseInstallSource', () => {
   });
 
   it('should detect absolute path', () => {
-    expect(parseInstallSource('/Users/chris/my-ext').kind).toBe('local');
+    expect(parseInstallSource('/home/user/my-ext').kind).toBe('local');
   });
 
   it('should detect Windows absolute paths', () => {

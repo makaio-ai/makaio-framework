@@ -6,7 +6,7 @@ const RELATIVE_MD_RE = /^\.{1,2}\//;
 /**
  * Remark plugin that strips `.md` / `.mdx` extensions from relative links.
  *
- * Markdown files in `framework/docs/` use `.md` hrefs so links work on GitHub.
+ * Markdown files in `docs/` use `.md` hrefs so links work on GitHub.
  * Starlight routes don't include the extension, so this plugin rewrites them
  * at build time. Absolute URLs, anchors, and non-relative paths are untouched.
  *

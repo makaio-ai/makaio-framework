@@ -3,14 +3,14 @@ import * as path from 'path';
 import type { ValidatorContext } from '../util/validator-context.js';
 import type { StylelintApi } from '../util/tool-loader.js';
 
-/** Candidate theme file for the current framework UI topology. */
-const THEME_FILES = ['framework/ui/theme/themes/aura.scss'] as const;
+/** Candidate theme files for the supported source-tree topologies. */
+const THEME_FILES = ['ui/theme/themes/aura.scss', 'framework/ui/theme/themes/aura.scss'] as const;
 
 /** Theme custom property prefixes that must exist in the theme file */
 const THEME_VAR_PREFIXES = ['--color-', '--glass-', '--font-', '--shadow-', '--radius-', '--z-'] as const;
 
 /** Directories to ignore when scanning for SCSS files */
-const IGNORE_DIRS = ['framework/ui/theme', 'node_modules', 'dist'];
+const IGNORE_DIRS = ['ui/theme', 'framework/ui/theme', 'node_modules', 'dist'];
 
 /**
  * Extracts CSS custom property names from an SCSS theme file.
