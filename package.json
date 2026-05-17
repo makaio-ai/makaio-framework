@@ -18,9 +18,17 @@
   },
   "type": "module",
   "resolutions": {
-    "@anthropic-ai/sdk": "0.91.1",
+    "@anthropic-ai/sdk": "0.94.0",
+    "@github/copilot": "1.0.45",
+    "@opentelemetry/exporter-prometheus": "0.217.0",
+    "@opentelemetry/sdk-node": "0.217.0",
     "@tootallnate/once": "3.0.1",
-    "ip-address": "10.2.0"
+    "devalue": "5.8.1",
+    "hono": "4.12.18",
+    "ip-address": "10.2.0",
+    "protobufjs@npm:8.0.0": "npm:8.0.2",
+    "protobufjs@npm:8.0.1": "npm:8.0.2",
+    "systeminformation": "5.31.6"
   },
   "workspaces": [
     "build-tooling",

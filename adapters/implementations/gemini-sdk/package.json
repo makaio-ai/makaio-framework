@@ -58,7 +58,7 @@
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5",
-    "vitest": "*"
+    "vitest": "4.1.5"
   },
   "publishConfig": {
     "access": "public",
