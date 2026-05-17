@@ -1,49 +1,109 @@
-name: Publish npm Packages
+name: Publish dev npm packages
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'npm dist-tag (dev, canary, latest)'
-        required: true
-        default: 'dev'
-        type: choice
-        options:
-          - dev
-          - canary
-          - latest
-      dry-run:
-        description: 'Dry run (skip actual publish)'
-        required: false
-        default: false
-        type: boolean
-  workflow_call:
-    inputs:
-      tag:
-        description: 'npm dist-tag'
+      packages:
+        description: 'Space-separated @makaio/* package names'
         required: true
         type: string
       dry-run:
-        description: 'Dry run'
+        description: 'Pack only, do not publish or tag'
         required: false
-        default: false
+        default: true
         type: boolean
+  issue_comment:
+    types: [created]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: npm-dev-publish-${{ github.event.issue.number || github.ref }}
+  cancel-in-progress: false
 
 env:
   BUN_VERSION: 1.3.12
+  YARN_NPM_REGISTRY_SERVER: https://registry.npmjs.org
 
 jobs:
-  publish:
+  publish-dev:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.issue.pull_request &&
+        startsWith(github.event.comment.body, '/publish-dev')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: ${{ inputs.tag == 'latest' && 'production' || 'canary' }}
+    environment: canary
+    env:
+      DEV_PUBLISH_MANIFEST: ${{ runner.temp }}/dev-publish-packages.json
+      DEV_PUBLISH_SUMMARY: ${{ runner.temp }}/dev-publish-summary.md
 
     steps:
+      - name: Resolve request
+        id: request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('packages', core.getInput('packages', { required: true }));
+              core.setOutput('dry-run', core.getInput('dry-run') || 'true');
+              core.setOutput('ref', context.sha);
+              core.setOutput('source-sha', context.sha);
+              core.setOutput('pr-number', '');
+              return;
+            }
+
+            const comment = context.payload.comment;
+            const body = comment.body.trim();
+            const [command, ...packageNames] = body.split(/\s+/);
+
+            if (command !== '/publish-dev') {
+              core.setFailed('This workflow only handles /publish-dev comments.');
+              return;
+            }
+            if (!context.payload.issue.pull_request) {
+              core.setFailed('/publish-dev can only be used on pull requests.');
+              return;
+            }
+            if (!['OWNER', 'MEMBER'].includes(comment.author_association)) {
+              core.setFailed('/publish-dev can only be used by repository owners or members.');
+              return;
+            }
+            if (packageNames.length === 0) {
+              core.setFailed('Usage: /publish-dev @makaio/package-name [@makaio/another-package]');
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: context.payload.issue.number,
+            });
+
+            const baseRepository = `${owner}/${repo}`;
+            const headRepository = pr.head.repo.full_name;
+            if (headRepository !== baseRepository) {
+              core.setFailed('/publish-dev rejects fork PRs before checkout because publishing runs PR code.');
+              return;
+            }
+
+            core.setOutput('packages', packageNames.join(' '));
+            core.setOutput('dry-run', 'false');
+            core.setOutput('ref', pr.head.sha);
+            core.setOutput('source-sha', pr.head.sha);
+            core.setOutput('pr-number', String(pr.number));
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.request.outputs.ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
         with:
@@ -93,118 +153,55 @@ jobs:
           path: '**/node_modules'
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
-      - name: Build all packages
+      - name: Prepare dev package versions
         run: |
-          yarn build:framework
-          yarn build:adapters
-          yarn build:providers
-          yarn build:clients
-          yarn build:extensions
+          timestamp="$(node -p 'Date.now().toString()')"
+          yarn tsx scripts/dev-publish.ts prepare \
+            --packages "${{ steps.request.outputs.packages }}" \
+            --timestamp "$timestamp" \
+            --out "$DEV_PUBLISH_MANIFEST"
 
-      - name: Discover publishable packages
-        id: packages
+      - name: Build selected package closure
         run: |
-          node -e "
-            const { execSync } = require('child_process');
-            const { readFileSync } = require('fs');
-            const { join, dirname } = require('path');
+          from="$(node -e "const pkgs = JSON.parse(require('fs').readFileSync(process.env.DEV_PUBLISH_MANIFEST, 'utf8')); console.log('{' + pkgs.map((pkg) => pkg.name).join(',') + '}');")"
+          yarn workspaces foreach -Rpt --from "$from" run build
 
-            const output = execSync('yarn workspaces list --json', { encoding: 'utf8' });
-            const workspaces = output.trim().split('\n').map(line => JSON.parse(line));
+      - name: Pack selected packages
+        run: yarn tsx scripts/dev-publish.ts pack --manifest "$DEV_PUBLISH_MANIFEST"
 
-            const publishable = [];
-            for (const ws of workspaces) {
-              if (ws.location === '.') continue;
-              const pkgPath = join(ws.location, 'package.json');
-              let pkg;
-              try {
-                pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-              } catch (err) {
-                console.error('Failed to read ' + pkgPath + ': ' + err.message);
-                process.exit(1);
-              }
-              if (pkg.private) continue;
-              if (!pkg.name || !pkg.name.startsWith('@makaio/')) continue;
-              publishable.push({ name: pkg.name, version: pkg.version, dir: ws.location });
-            }
+      - name: Publish selected packages
+        if: steps.request.outputs.dry-run != 'true'
+        run: yarn tsx scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
 
-            console.log(JSON.stringify(publishable));
-          " > /tmp/packages.json
-
-          echo "packages=$(cat /tmp/packages.json)" >> "$GITHUB_OUTPUT"
-
-          echo "Publishable packages:"
-          node -e "
-            JSON.parse(require('fs').readFileSync('/tmp/packages.json', 'utf8'))
-              .forEach(p => console.log('  ' + p.name + '@' + p.version + ' (' + p.dir + ')'));
-          "
-
-      - name: Publish packages
-        if: inputs.dry-run == false
-        env:
-          NPM_TAG: ${{ inputs.tag }}
-          PACKAGES: ${{ steps.packages.outputs.packages }}
+      - name: Push annotated dev tags
+        if: steps.request.outputs.dry-run != 'true'
         run: |
-          node -e "
-            const pkgs = JSON.parse(process.env.PACKAGES);
-            const { spawnSync } = require('child_process');
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          yarn tsx scripts/dev-publish.ts tag \
+            --manifest "$DEV_PUBLISH_MANIFEST" \
+            --source-sha "${{ steps.request.outputs.source-sha }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-            const order = ['@makaio/contracts', '@makaio/framework'];
-            const sorted = [
-              ...pkgs.filter(p => order.includes(p.name)).sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)),
-              ...pkgs.filter(p => !order.includes(p.name))
-            ];
-
-            let failed = 0;
-            for (const pkg of sorted) {
-              const check = spawnSync('npm', ['view', pkg.name + '@' + pkg.version, 'version'], {
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'pipe'],
-              });
-              if (check.status === 0 && check.stdout.trim() === pkg.version) {
-                console.log('⊘ ' + pkg.name + '@' + pkg.version + ' already published, skipping');
-                continue;
-              }
-
-              console.log('Publishing ' + pkg.name + '@' + pkg.version + '…');
-              const result = spawnSync(
-                'npm',
-                ['publish', '--tag', process.env.NPM_TAG, '--access', 'public', '--provenance'],
-                { cwd: pkg.dir, stdio: 'inherit', env: process.env }
-              );
-
-              if (result.status !== 0) {
-                console.error('✗ ' + pkg.name + ' failed with exit code ' + result.status);
-                failed++;
-              } else {
-                console.log('✓ ' + pkg.name);
-              }
-            }
-
-            if (failed > 0) {
-              console.error(failed + ' package(s) failed to publish');
-              process.exit(1);
-            }
-          "
-
-      - name: Dry run — pack only
-        if: inputs.dry-run == true
-        env:
-          PACKAGES: ${{ steps.packages.outputs.packages }}
+      - name: Write publish summary
         run: |
-          node -e "
-            const pkgs = JSON.parse(process.env.PACKAGES);
-            const { spawnSync } = require('child_process');
-            for (const pkg of pkgs) {
-              console.log('Packing ' + pkg.name + '…');
-              const result = spawnSync('npm', ['pack', '--dry-run'], { cwd: pkg.dir, stdio: 'inherit' });
-              if (result.error) {
-                console.error('Failed to pack ' + pkg.name + ': ' + result.error.message);
-                process.exit(1);
-              }
-              if (result.status !== 0) {
-                console.error('Failed to pack ' + pkg.name + ' with exit code ' + result.status);
-                process.exit(result.status || 1);
-              }
-            }
-          "
+          yarn tsx scripts/dev-publish.ts summary \
+            --manifest "$DEV_PUBLISH_MANIFEST" \
+            --source-sha "${{ steps.request.outputs.source-sha }}" \
+            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --dry-run "${{ steps.request.outputs.dry-run }}" \
+            --out "$DEV_PUBLISH_SUMMARY"
+          cat "$DEV_PUBLISH_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: steps.request.outputs.pr-number != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const fs = require('fs');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ steps.request.outputs.pr-number }}'),
+              body: fs.readFileSync(process.env.DEV_PUBLISH_SUMMARY, 'utf8'),
+            });
