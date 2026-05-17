@@ -46,8 +46,12 @@ async function makeSession(
     onTurnStart: vi.fn(),
     onTurnComplete: vi.fn(),
     emitTurnCompleted: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-    emitToolUseStarted: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-    emitToolUseFinished: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    emitToolUseStarted: vi
+      .fn<(payload: { toolName: string; toolUseId: string; toolInput: unknown }) => Promise<void>>()
+      .mockResolvedValue(undefined),
+    emitToolUseFinished: vi
+      .fn<(payload: { toolName: string; toolUseId: string; toolResult: unknown; isError?: boolean }) => Promise<void>>()
+      .mockResolvedValue(undefined),
     interruptSettleMs: 1,
     ...overrides,
   });

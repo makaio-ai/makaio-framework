@@ -24,6 +24,8 @@ export const TmuxToolUseStartedSchema = z.object({
   toolUseId: z.string(),
   /** Name of the tool being invoked. */
   toolName: z.string(),
+  /** Raw tool input from the PreToolUse hook. */
+  toolInput: z.unknown().optional(),
 });
 
 /** Payload for `tool_use.finished` — metadata from the PostToolUse hook. */
@@ -32,6 +34,10 @@ export const TmuxToolUseFinishedSchema = z.object({
   toolUseId: z.string(),
   /** Name of the tool that completed. */
   toolName: z.string(),
+  /** Raw tool result or error payload from the PostToolUse hook. */
+  toolResult: z.unknown().optional(),
+  /** Whether Claude Code reported the tool call as failed. */
+  isError: z.boolean().optional(),
 });
 
 /**

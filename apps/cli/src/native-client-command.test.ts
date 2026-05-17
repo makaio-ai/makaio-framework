@@ -675,6 +675,56 @@ describe('integration — real bus round-trip', () => {
     expect(output).toContain('4242');
   });
 
+  it('launch: forwards --profile through a real bus request', async () => {
+    const bus = createBusInstance();
+    let capturedPayload: unknown;
+
+    const cleanup = bus.on(NativeSessionSupervisorSubjects.launch, (ctx) => {
+      capturedPayload = ctx.payload;
+      ctx.setResult({ supervisorSessionId: 'real-sup-profile-001', pid: 4243 });
+    });
+
+    const program = makeProgram();
+    registerNativeClientCommand(program, makeCtx(bus));
+
+    await program.parseAsync(['node', 'makaio', 'client', 'launch', 'claude-code', '--profile', 'work']);
+
+    cleanup();
+
+    expect(capturedPayload).toStrictEqual({
+      clientId: 'claude-code',
+      cwd: process.cwd(),
+      command: 'claude',
+      args: [],
+      clientProfileName: 'work',
+    });
+  });
+
+  it('top-level shortcut: forwards --profile through a real bus request', async () => {
+    const bus = createBusInstance();
+    let capturedPayload: unknown;
+
+    const cleanup = bus.on(NativeSessionSupervisorSubjects.launch, (ctx) => {
+      capturedPayload = ctx.payload;
+      ctx.setResult({ supervisorSessionId: 'real-sup-profile-002', pid: 4244 });
+    });
+
+    const program = makeProgram();
+    registerNativeClientCommand(program, makeCtx(bus));
+
+    await program.parseAsync(['node', 'makaio', 'claude-code', '--profile', 'work']);
+
+    cleanup();
+
+    expect(capturedPayload).toStrictEqual({
+      clientId: 'claude-code',
+      cwd: process.cwd(),
+      command: 'claude',
+      args: [],
+      clientProfileName: 'work',
+    });
+  });
+
   it('attach: handler receives supervisorSessionId locator and CLI prints confirmation', async () => {
     const bus = createBusInstance();
     let capturedPayload: unknown;

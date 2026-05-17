@@ -6,6 +6,7 @@ import { McpRuntimeSessionContextSchema, McpSessionContextSchema } from '../../m
 import { AIReasoningLevelSchema } from '../../model/index.js';
 import { AdapterRuntimeOptionsSchema } from './runtime-options.js';
 import { ProviderContextSchema } from './provider-context.js';
+import { ClientProfileNameSchema } from '../../client/profile.js';
 
 type StartAgentMode = 'create' | 'resume' | 'fork';
 
@@ -23,6 +24,9 @@ const StartAgentBaseSchema = z
 
     /** Client package identifier for client-scoped harness resolution. */
     clientId: z.string().optional(),
+
+    /** Client profile name for session-scoped config isolation. */
+    clientProfileName: ClientProfileNameSchema.optional(),
 
     /** Initial message to send to the agent. Omit for idle agent creation. */
     initialMessage: MessageInputSchema.optional(),

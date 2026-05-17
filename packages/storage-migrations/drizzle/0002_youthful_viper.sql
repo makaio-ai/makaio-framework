@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `uq_client_profiles_default` ON `client_profiles` (`client_id`) WHERE "client_profiles"."is_default" = 1;

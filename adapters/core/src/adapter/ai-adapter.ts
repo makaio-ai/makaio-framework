@@ -329,6 +329,7 @@ export abstract class AIAdapter<
         resumeAdapterSessionId,
         harnessId,
         clientId,
+        clientProfileName: request.clientProfileName,
         mcpSessionContext,
         toolLedger,
         ephemeral,

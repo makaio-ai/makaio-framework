@@ -127,9 +127,14 @@ export interface TmuxConnectorSessionConfig {
   /** Emits assistant completion text. */
   emitTurnCompleted: (payload: { message: string }) => Promise<void>;
   /** Emits tool-start metadata. */
-  emitToolUseStarted: (payload: { toolName: string; toolUseId: string }) => Promise<void>;
+  emitToolUseStarted: (payload: { toolName: string; toolUseId: string; toolInput: unknown }) => Promise<void>;
   /** Emits tool-finish metadata. */
-  emitToolUseFinished: (payload: { toolName: string; toolUseId: string }) => Promise<void>;
+  emitToolUseFinished: (payload: {
+    toolName: string;
+    toolUseId: string;
+    toolResult: unknown;
+    isError?: boolean;
+  }) => Promise<void>;
   /** Time in milliseconds to let Claude Code settle after sending ESC. */
   interruptSettleMs: number;
 }

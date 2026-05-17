@@ -25,10 +25,18 @@
  * @packageDocumentation
  */
 
-import { AIAgent, type NormalizedCallUsage } from '@makaio/ai-adapters-core';
+import {
+  AIAgent,
+  type AgentStartResult,
+  type NormalizedCallUsage,
+  type NormalizedMessageInput,
+  type StartAgentOptions,
+} from '@makaio/ai-adapters-core';
 import type { ClaudeCodeStatuslineRawPayload } from '@makaio/client-claude-code';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type MessageInput } from '@makaio/contracts';
+import { ClientSubjects } from '@makaio/contracts/client';
+import { isRecord } from '@makaio/utils';
 import { ClaudeCodeTmuxConnector } from './connector.js';
 import { ClaudeCodeTmuxConnectorSubjects, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 
@@ -48,6 +56,7 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    * Cleared at `turn_started` so each turn tracks only its own emissions.
    */
   private readonly statuslineUsageKeys = new Set<string>();
+  private lastRuntimeObservationKey: string | undefined;
 
   /**
    * Claude Code manages its own conversation context across turns.
@@ -67,6 +76,32 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
     this.wireTurnLifecycleEvents(connector);
     this.wireToolUseEvents(connector);
     this.wireStatuslineUsageEvents(connector);
+  }
+
+  /**
+   * Initialize the connector and publish runtime evidence once the tmux-backed
+   * Claude Code session ID is known.
+   * @param options - Optional initialization options.
+   */
+  public override async initialize(options?: StartAgentOptions): Promise<void> {
+    await super.initialize(options);
+    this.observeCurrentRuntime();
+  }
+
+  /**
+   * Start the first turn and publish runtime evidence for the tmux-backed
+   * Claude Code session.
+   * @param message - Initial user message.
+   * @param options - Optional start options.
+   * @returns Agent start result from the connector.
+   */
+  public override async start(
+    message: NormalizedMessageInput | MessageInput,
+    options?: StartAgentOptions,
+  ): Promise<AgentStartResult> {
+    const result = await super.start(message, options);
+    this.observeCurrentRuntime();
+    return result;
   }
 
   /**
@@ -104,19 +139,21 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    */
   private wireToolUseEvents(connector: ClaudeCodeTmuxConnector): void {
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.started, async (ctx) => {
-      const { toolName, toolUseId } = ctx.payload;
-      await this.emitToolUse(toolName, {}, toolUseId);
+      const { toolName, toolUseId, toolInput } = ctx.payload;
+      const args = normalizeToolInput(toolInput);
+      await this.emitToolUse(toolName, args, toolUseId);
       await this.emitStepStarted('tool_use', { type: 'tool_use', toolName, toolCallId: toolUseId });
     });
 
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.finished, async (ctx) => {
-      const { toolName, toolUseId } = ctx.payload;
-      await this.emitToolOutput('', { nativeId: toolUseId, toolName });
+      const { toolName, toolUseId, toolResult, isError } = ctx.payload;
+      const output = normalizeToolOutput(toolResult);
+      const resolved = await this.emitToolOutput(output, { nativeId: toolUseId, toolName });
       await this.emitStepFinished('tool_use', {
         type: 'tool_output',
-        toolCallId: toolUseId,
-        output: '',
-        isError: false,
+        toolCallId: resolved.toolCallId,
+        output,
+        isError: isError ?? false,
       });
     });
   }
@@ -203,5 +240,76 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
     }
     this.statuslineUsageKeys.add(key);
     return true;
+  }
+
+  /**
+   * Publish best-effort runtime evidence for the current tmux-backed connector.
+   */
+  private observeCurrentRuntime(): void {
+    const adapterSessionId = this.connector?.adapterSessionId;
+    if (!adapterSessionId) {
+      return;
+    }
+
+    const clientId = this.config.clientId ?? 'claude-code';
+    const observationKey = `${clientId}:${this.sessionId ?? ''}:${adapterSessionId}`;
+    if (observationKey === this.lastRuntimeObservationKey) {
+      return;
+    }
+    this.lastRuntimeObservationKey = observationKey;
+
+    void this.globalBus
+      .requestOptional(ClientSubjects.runtime.observe, {
+        clientId,
+        source: { layer: 'adapter', producer: 'claude-code-tmux' },
+        observedAt: Date.now(),
+        adapterSessionId,
+        ...(this.sessionId !== undefined && { sessionId: this.sessionId }),
+        cwd: this.connector.cwd,
+      })
+      .then((result) => {
+        if (!result.handled && this.lastRuntimeObservationKey === observationKey) {
+          this.lastRuntimeObservationKey = undefined;
+        }
+      })
+      .catch(() => {
+        if (this.lastRuntimeObservationKey === observationKey) {
+          this.lastRuntimeObservationKey = undefined;
+        }
+      });
+  }
+}
+
+/**
+ * Normalize Claude Code hook tool input into the existing agent.tool.use args schema.
+ * @param toolInput - Raw PreToolUse input payload.
+ * @returns Record-shaped tool arguments.
+ */
+function normalizeToolInput(toolInput: unknown): Record<string, unknown> {
+  if (isRecord(toolInput)) {
+    return toolInput;
+  }
+  if (toolInput === undefined) {
+    return {};
+  }
+  return { input: toolInput };
+}
+
+/**
+ * Normalize Claude Code hook tool result/error into the existing tool output schema.
+ * @param toolResult - Raw PostToolUse result or error payload.
+ * @returns String output for agent.tool.output and tool_output step content.
+ */
+function normalizeToolOutput(toolResult: unknown): string {
+  if (toolResult === undefined || toolResult === null) {
+    return '';
+  }
+  if (typeof toolResult === 'string') {
+    return toolResult;
+  }
+  try {
+    return JSON.stringify(toolResult);
+  } catch {
+    return String(toolResult);
   }
 }

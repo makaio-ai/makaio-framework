@@ -11,6 +11,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
+import { ClientSubjects } from '@makaio/contracts/client';
 import { LazyNodePtyBackend, SupervisorService } from '../supervisor-service.js';
 import type { PtyRuntimeFactory } from '../supervisor-service.js';
 import { PtyRuntime } from '../pty/pty-runtime.js';
@@ -66,18 +67,21 @@ let nextPid = 10000;
 function createMockBackend(): {
   backend: IPtyBackend;
   getLastProcess: () => ReturnType<typeof createMockProcess> | null;
+  getLastSpawnOptions: () => IPtySpawnOptions | null;
 } {
   let lastProcess: ReturnType<typeof createMockProcess> | null = null;
+  let lastSpawnOptions: IPtySpawnOptions | null = null;
 
   const backend: IPtyBackend = {
     spawn: (_file: string, _args: string[], _options: IPtySpawnOptions) => {
+      lastSpawnOptions = _options;
       const proc = createMockProcess(nextPid++);
       lastProcess = proc;
       return Promise.resolve(proc);
     },
   };
 
-  return { backend, getLastProcess: () => lastProcess };
+  return { backend, getLastProcess: () => lastProcess, getLastSpawnOptions: () => lastSpawnOptions };
 }
 
 /**
@@ -103,6 +107,7 @@ describe('SupervisorService', () => {
   let storageCleanup: (() => void) | undefined;
   let service: SupervisorService;
   let getLastProcess: () => ReturnType<typeof createMockProcess> | null;
+  let getLastSpawnOptions: () => IPtySpawnOptions | null;
 
   beforeEach(async () => {
     ({ db, close: dbClose } = await createTestDb());
@@ -110,6 +115,7 @@ describe('SupervisorService', () => {
 
     const mock = createMockBackend();
     getLastProcess = mock.getLastProcess;
+    getLastSpawnOptions = mock.getLastSpawnOptions;
 
     const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(mock.backend, handlers);
 
@@ -144,6 +150,7 @@ describe('SupervisorService', () => {
 
       const mock = createMockBackend();
       getLastProcess = mock.getLastProcess;
+      getLastSpawnOptions = mock.getLastSpawnOptions;
       const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(mock.backend, handlers);
 
       service = new SupervisorService(MakaioBus, factory);
@@ -201,6 +208,75 @@ describe('SupervisorService', () => {
 
       expect(service.getRegistry().getBySessionId('sess_abc')?.supervisorSessionId).toBe(supervisorSessionId);
       expect(service.getRegistry().getByAdapterSessionId('adp_xyz')?.supervisorSessionId).toBe(supervisorSessionId);
+    });
+
+    it('materializes a client profile into launch env when requested', async () => {
+      let observedSessionConfigRequest: unknown;
+      const unsubscribe = MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        observedSessionConfigRequest = ctx.payload;
+        ctx.setResult({
+          sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile' },
+        });
+      });
+
+      try {
+        await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-code',
+          cwd: '/home/user',
+          command: '/bin/bash',
+          args: [],
+          env: { EXISTING: '1' },
+          sessionId: 'sess_profile',
+          clientProfileName: 'work',
+        });
+      } finally {
+        unsubscribe();
+      }
+
+      expect(observedSessionConfigRequest).toEqual({
+        clientId: 'claude-code',
+        sessionId: 'sess_profile',
+        profileName: 'work',
+      });
+      expect(getLastSpawnOptions()?.env).toEqual({
+        EXISTING: '1',
+        CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+      });
+    });
+
+    it('destroys materialized session config when a launched runtime stops', async () => {
+      const destroyed: Array<{ clientId: string; sessionId: string }> = [];
+      const cleanups = [
+        MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+          ctx.setResult({
+            sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile_cleanup',
+            env: {},
+          });
+        }),
+        MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+          destroyed.push(ctx.payload);
+          ctx.setResult({ success: true });
+        }),
+      ];
+
+      let supervisorSessionId: string;
+      try {
+        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-code',
+          cwd: '/home/user',
+          command: '/bin/bash',
+          args: [],
+          sessionId: 'sess_profile_cleanup',
+          clientProfileName: 'work',
+        }));
+
+        await MakaioBus.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId });
+      } finally {
+        for (const cleanup of cleanups) cleanup();
+      }
+
+      expect(destroyed).toContainEqual({ clientId: 'claude-code', sessionId: 'sess_profile_cleanup' });
     });
 
     it('kills the spawned PTY and clears pendingExits when registry.register() throws', async () => {

@@ -90,6 +90,12 @@ export interface NativeClientCommandContext {
   readonly clients?: readonly NativeClientCliDefinition[];
 }
 
+/** Options accepted by native client launch commands. */
+interface LaunchCommandOptions {
+  /** Optional client profile name to materialize before launch. */
+  readonly profile?: string;
+}
+
 /**
  * Register the built-in `client` command tree on the root Commander program.
  *
@@ -136,8 +142,9 @@ function registerLaunchSubcommand(parent: CommandInstance, ctx: NativeClientComm
   parent
     .command('launch <clientId>')
     .description('Launch a client via the supervisor')
-    .action(async (clientId: string) => {
-      await handleLaunch(resolveNativeClientDefinition(clientId, ctx.clients ?? []), ctx);
+    .option('--profile <name>', 'Use a named client profile for session config')
+    .action(async (clientId: string, options: LaunchCommandOptions) => {
+      await handleLaunch(resolveNativeClientDefinition(clientId, ctx.clients ?? []), ctx, options);
     });
 }
 
@@ -157,8 +164,9 @@ function registerNativeClientShortcut(
   const clientCmd = program
     .command(client.clientId)
     .description(`Launch and manage ${client.displayName} via the native session supervisor`)
-    .action(async () => {
-      await handleLaunch(client, ctx);
+    .option('--profile <name>', 'Use a named client profile for session config')
+    .action(async (options: LaunchCommandOptions) => {
+      await handleLaunch(client, ctx, options);
     });
 
   registerAttachSubcommand(clientCmd, ctx);
@@ -264,8 +272,13 @@ function requireConnectedBus(ctx: NativeClientCommandContext): IMakaioBus | null
  * Execute the `launch` operation by sending a supervisor launch request.
  * @param client - Native client launch metadata.
  * @param ctx - Bus and error context.
+ * @param options - Parsed launch options.
  */
-async function handleLaunch(client: NativeClientCliDefinition, ctx: NativeClientCommandContext): Promise<void> {
+async function handleLaunch(
+  client: NativeClientCliDefinition,
+  ctx: NativeClientCommandContext,
+  options: LaunchCommandOptions = {},
+): Promise<void> {
   const bus = requireConnectedBus(ctx);
   if (!bus) return;
 
@@ -274,6 +287,7 @@ async function handleLaunch(client: NativeClientCliDefinition, ctx: NativeClient
     cwd: process.cwd(),
     command: client.command,
     args: [],
+    ...(options.profile !== undefined ? { clientProfileName: options.profile } : {}),
   };
 
   try {

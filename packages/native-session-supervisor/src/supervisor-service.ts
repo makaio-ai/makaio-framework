@@ -167,6 +167,7 @@ export class SupervisorService extends BaseService {
   private readonly registry: RuntimeRegistry;
   private readonly ptyRuntime: PtyRuntime;
   private readonly pendingExits = new Map<string, PtyExitEvent>();
+  private readonly sessionConfigBindings = new Map<string, { clientId: string; sessionId: string }>();
   #destroyed = false;
 
   /**
@@ -216,6 +217,7 @@ export class SupervisorService extends BaseService {
     this.#destroyed = true;
     await this.ptyRuntime.destroy();
     this.pendingExits.clear();
+    this.sessionConfigBindings.clear();
   }
 
   /**
@@ -237,20 +239,33 @@ export class SupervisorService extends BaseService {
   private async _handleLaunch(
     ctx: ContextForSubjectDefinition<typeof NativeSessionSupervisorSubjects.launch>,
   ): Promise<void> {
-    const { clientId, cwd, command, args, env, sessionId, adapterSessionId, metadata } = ctx.payload;
+    const { clientId, cwd, command, args, env, sessionId, clientProfileName, adapterSessionId, metadata } = ctx.payload;
 
     const supervisorSessionId = randomUUID();
     const startedAt = Date.now();
-
-    const { pid } = await this.ptyRuntime.spawn({
+    const sessionConfig = await this.prepareSessionConfig({
       supervisorSessionId,
-      file: command,
-      args,
-      options: {
-        cwd,
-        ...(env !== undefined && { env }),
-      },
+      clientId,
+      sessionId,
+      profileName: clientProfileName,
+      env,
     });
+
+    let pid: number;
+    try {
+      ({ pid } = await this.ptyRuntime.spawn({
+        supervisorSessionId,
+        file: command,
+        args,
+        options: {
+          cwd,
+          ...(sessionConfig.env !== undefined && { env: sessionConfig.env }),
+        },
+      }));
+    } catch (error) {
+      await this.destroySessionConfig(supervisorSessionId);
+      throw error;
+    }
 
     try {
       await this.registry.register({
@@ -260,7 +275,7 @@ export class SupervisorService extends BaseService {
         cwd,
         command,
         args,
-        ...(env !== undefined && { env }),
+        ...(sessionConfig.env !== undefined && { env: sessionConfig.env }),
         ...(sessionId !== undefined && { sessionId }),
         ...(adapterSessionId !== undefined && { adapterSessionId }),
         ...(metadata !== undefined && { metadata }),
@@ -268,6 +283,7 @@ export class SupervisorService extends BaseService {
       });
     } catch (error) {
       this.ptyRuntime.kill(supervisorSessionId, 'SIGTERM');
+      await this.destroySessionConfig(supervisorSessionId);
       // Race note: a PTY exit event arriving after this delete would re-add to
       // pendingExits. This window is extremely narrow (kill is synchronous, exit
       // callback is async) and a leaked entry is harmless — it will be checked
@@ -384,6 +400,7 @@ export class SupervisorService extends BaseService {
       pid: null,
       stoppedAt: Date.now(),
     });
+    await this.destroySessionConfig(supervisorSessionId);
 
     ctx.setResult({ success: true });
   }
@@ -457,6 +474,58 @@ export class SupervisorService extends BaseService {
       pid: null,
       stoppedAt: Date.now(),
     });
+    await this.destroySessionConfig(evt.supervisorSessionId);
+  }
+
+  /**
+   * Materialize session-scoped client config when the client config service is available.
+   * @param options - Launch identity and environment fields.
+   * @returns Environment to pass to the spawned process.
+   */
+  private async prepareSessionConfig(options: {
+    supervisorSessionId: string;
+    clientId: string;
+    sessionId: string | undefined;
+    profileName: string | undefined;
+    env: Record<string, string> | undefined;
+  }): Promise<{ env: Record<string, string> | undefined }> {
+    const configSessionId = options.sessionId ?? options.supervisorSessionId;
+    const result = await this.bus.requestOptional(ClientSubjects.sessionConfig.create, {
+      clientId: options.clientId,
+      sessionId: configSessionId,
+      profileName: options.profileName,
+    });
+
+    if (!result.handled) {
+      if (options.profileName !== undefined) {
+        throw new Error('Client profile launch requires client.sessionConfig.create support');
+      }
+      return { env: options.env };
+    }
+
+    this.sessionConfigBindings.set(options.supervisorSessionId, {
+      clientId: options.clientId,
+      sessionId: configSessionId,
+    });
+    return { env: { ...(options.env ?? {}), ...result.data.env } };
+  }
+
+  /**
+   * Destroy materialized session config for a supervised runtime, if present.
+   * @param supervisorSessionId - Supervisor runtime identity.
+   */
+  private async destroySessionConfig(supervisorSessionId: string): Promise<void> {
+    const binding = this.sessionConfigBindings.get(supervisorSessionId);
+    if (binding === undefined) {
+      return;
+    }
+    this.sessionConfigBindings.delete(supervisorSessionId);
+    await this.bus
+      .requestOptional(ClientSubjects.sessionConfig.destroy, {
+        clientId: binding.clientId,
+        sessionId: binding.sessionId,
+      })
+      .catch(() => {});
   }
 
   /**

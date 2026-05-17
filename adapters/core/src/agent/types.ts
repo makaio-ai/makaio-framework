@@ -134,6 +134,9 @@ export interface BaseAgentConnectorConfig<
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
   clientId?: string;
 
+  /** Client profile name for session-scoped config isolation. */
+  clientProfileName?: string;
+
   /** Callback when a user message is enqueued */
   onMessageSent?: (messageHandle: MessageHandle) => void;
 
@@ -192,6 +195,8 @@ export interface AIAgentConfig<
   harnessId?: string;
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
   clientId?: string;
+  /** Client profile name for session-scoped config isolation. */
+  clientProfileName?: string;
   /** Global bus instance (defaults to MakaioBus singleton) */
   globalBus?: IMakaioBus;
   /** Scoped bus for adapter-specific events */

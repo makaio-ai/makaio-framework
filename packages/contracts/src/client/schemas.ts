@@ -41,6 +41,7 @@ import {
   ClientSessionUserPromptSubmittedSchema,
   ClientWiringEntrySchema,
 } from './session-observed.js';
+import { ClientProfileSchemas, ClientSessionConfigSchemas } from './profile.js';
 
 export { ClientExecutionContextSchema, ClientResolveBinarySchema } from './binary-resolution.js';
 export type {
@@ -155,4 +156,8 @@ export const ClientSchemas = {
   'version.changed': ClientVersionChangedSchema,
   // Binary resolution
   resolveBinary: ClientResolveBinarySchema,
+  // Profile management
+  ...ClientProfileSchemas,
+  // Session config isolation
+  ...ClientSessionConfigSchemas,
 } satisfies SchemaRecord;

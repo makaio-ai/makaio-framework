@@ -11,8 +11,13 @@
  * wiring aggregator (`client.wiring.list`), the binary management
  * subjects (`client.list`, `client.install`, `client.uninstall`,
  * `client.update`, `client.setActive`, `client.installJob.progress`,
- * `client.installJob.completed`, `client.version.changed`), and the binary
- * resolution command (`client.resolveBinary`).
+ * `client.installJob.completed`, `client.version.changed`), the binary
+ * resolution command (`client.resolveBinary`), the profile management
+ * subjects (`client.profile.create`, `client.profile.list`,
+ * `client.profile.get`, `client.profile.update`, `client.profile.delete`,
+ * `client.profile.setDefault`), and the session config lifecycle subjects
+ * (`client.sessionConfig.create`, `client.sessionConfig.destroy`,
+ * `client.sessionConfig.cleanup`).
  * @packageDocumentation
  */
 

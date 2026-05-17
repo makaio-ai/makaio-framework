@@ -714,6 +714,7 @@ export abstract class AIAgent<
       mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
       toolLedger: cfg.toolLedger,
       clientId: cfg.clientId,
+      clientProfileName: cfg.clientProfileName,
       errorHandler: (error: Error, _terminate: boolean) => {
         const errorCategory = extractErrorCategory(error);
         this.emitError({ error: error.message, ...(errorCategory && { errorCategory }) });

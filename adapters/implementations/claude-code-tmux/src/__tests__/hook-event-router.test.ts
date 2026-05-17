@@ -70,7 +70,39 @@ describe('createHookEventRouter', () => {
       }),
     );
 
-    expect(cb.onPostToolUse).toHaveBeenCalledWith(SESSION_ID, 'Bash', 'tu_123', 'file1.ts\nfile2.ts');
+    expect(cb.onPostToolUse).toHaveBeenCalledWith(SESSION_ID, 'Bash', 'tu_123', 'file1.ts\nfile2.ts', undefined);
+  });
+
+  it('dispatches PostToolUse with tool error and failed status', () => {
+    const cb = makeCallbacks();
+    const router = createHookEventRouter(() => SESSION_ID, cb);
+    router(
+      makeRaw('PostToolUse', {
+        session_id: SESSION_ID,
+        tool_name: 'Bash',
+        tool_use_id: 'tu_123',
+        tool_error: 'permission denied',
+        exit_code: 1,
+      }),
+    );
+
+    expect(cb.onPostToolUse).toHaveBeenCalledWith(SESSION_ID, 'Bash', 'tu_123', 'permission denied', true);
+  });
+
+  it('preserves an explicit null PostToolUse result', () => {
+    const cb = makeCallbacks();
+    const router = createHookEventRouter(() => SESSION_ID, cb);
+    router(
+      makeRaw('PostToolUse', {
+        session_id: SESSION_ID,
+        tool_name: 'Bash',
+        tool_use_id: 'tu_123',
+        tool_result: null,
+        tool_error: 'should not replace null result',
+      }),
+    );
+
+    expect(cb.onPostToolUse).toHaveBeenCalledWith(SESSION_ID, 'Bash', 'tu_123', null, true);
   });
 
   it('dispatches Stop with last_assistant_message', () => {

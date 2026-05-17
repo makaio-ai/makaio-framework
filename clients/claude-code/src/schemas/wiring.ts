@@ -95,6 +95,11 @@ export const ClaudeCodeWiringSchemas = {
          * env vars that the hook subprocess needs.
          */
         envPairs: z.array(z.string()).optional(),
+        /**
+         * Session-scoped config directory override. When provided, user-scope
+         * settings are written here instead of the globally-resolved config path.
+         */
+        configDir: AbsolutePathSchema.optional(),
       })
       .refine((data) => data.scope === 'user' || data.projectDir !== undefined, {
         message: 'projectDir is required when scope is project or local',

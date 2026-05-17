@@ -11,7 +11,8 @@
   "makaio": {
     "drizzleSchema": [
       "./src/storage/runtime-schema.ts",
-      "./src/storage/client-binary-schema.ts"
+      "./src/storage/client-binary-schema.ts",
+      "./src/storage/profile-schema.ts"
     ]
   },
   "dependencies": {

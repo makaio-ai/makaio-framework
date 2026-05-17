@@ -97,7 +97,7 @@ describe('createClientsCorePackage (integration)', () => {
     dbCtx = await createPluginTestDb({
       name: 'clients-core-package',
       schemas: CLIENTS_CORE_DDL,
-      tables: ['client_binary_versions', 'client_binary_state', 'client_runtimes'],
+      tables: ['client_binary_versions', 'client_binary_state', 'client_runtimes', 'client_profiles'],
       registerHandlers: () => () => {},
     });
   });

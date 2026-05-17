@@ -11,6 +11,7 @@ import type { IPtyProcess } from '@makaio/native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
+import { ClientSubjects } from '@makaio/contracts/client';
 import type { HookEventCallbacks } from '../utils/hook-event-router.js';
 
 // ---------------------------------------------------------------------------
@@ -25,11 +26,15 @@ const mockState = vi.hoisted(() => ({
   dispose: vi.fn(),
   isAlive: vi.fn().mockReturnValue(true),
   subscribeUnsubscribe: vi.fn(),
+  tmuxAvailable: true,
+  callOrder: [] as string[],
   hooks: {
     onSessionStart: undefined as ((sessionId: string, model: string) => void) | undefined,
     onUserPromptSubmit: undefined as ((sessionId: string) => Promise<void> | void) | undefined,
     onPreToolUse: undefined as ((sessionId: string, tool: string, id: string, input: unknown) => void) | undefined,
-    onPostToolUse: undefined as ((sessionId: string, tool: string, id: string, result: unknown) => void) | undefined,
+    onPostToolUse: undefined as
+      | ((sessionId: string, tool: string, id: string, result: unknown, isError?: boolean) => void)
+      | undefined,
     onStop: undefined as ((sessionId: string, lastMessage: string) => void) | undefined,
   },
 }));
@@ -69,9 +74,11 @@ vi.mock('../session.js', () => {
       return undefined;
     }
     public waitForSessionStart(): Promise<void> {
+      mockState.callOrder.push('waitForSessionStart');
       return Promise.resolve();
     }
     public subscribeToHooks(callbacks: HookEventCallbacks): () => void {
+      mockState.callOrder.push('subscribeToHooks');
       mockState.hooks.onSessionStart = callbacks.onSessionStart;
       mockState.hooks.onUserPromptSubmit = callbacks.onUserPromptSubmit;
       mockState.hooks.onPreToolUse = callbacks.onPreToolUse;
@@ -103,6 +110,7 @@ vi.mock('@makaio/native-session-supervisor', async (importOriginal) => {
 
   class TmuxBackend {
     public async spawn(file: string, args: string[], opts: unknown): Promise<IPtyProcess> {
+      mockState.callOrder.push('spawn');
       return mockSpawn(file, args, opts);
     }
     public async dispose(): Promise<void> {
@@ -110,7 +118,7 @@ vi.mock('@makaio/native-session-supervisor', async (importOriginal) => {
     }
   }
 
-  return { ...original, TmuxBackend };
+  return { ...original, TmuxBackend, isTmuxAvailable: () => mockState.tmuxAvailable };
 });
 
 vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
@@ -183,12 +191,23 @@ describe('ClaudeCodeTmuxConnector', () => {
     MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
       ctx.setResult({ applied: 1, skipped: 0 });
     });
+    MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+      ctx.setResult({
+        sessionDir: '/tmp/claude-session-config',
+        env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+      });
+    });
+    MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+      ctx.setResult({ success: true });
+    });
     // Reset hook registry between tests.
     mockState.hooks.onSessionStart = undefined;
     mockState.hooks.onUserPromptSubmit = undefined;
     mockState.hooks.onPreToolUse = undefined;
     mockState.hooks.onPostToolUse = undefined;
     mockState.hooks.onStop = undefined;
+    mockState.tmuxAvailable = true;
+    mockState.callOrder = [];
   });
 
   afterEach(() => {
@@ -284,14 +303,98 @@ describe('ClaudeCodeTmuxConnector', () => {
 
     it('fails early when Claude Code wiring support is missing', async () => {
       MakaioBus.__resetHandlers?.();
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/claude-session-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+        });
+      });
       const connector = await makeConnector();
 
       await expect(connector.initialize()).rejects.toThrow('requires active Claude Code wiring support');
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
+    it('fails closed when session config isolation is unavailable', async () => {
+      MakaioBus.__resetHandlers?.();
+      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        ctx.setResult({ applied: 1, skipped: 0 });
+      });
+      const connector = await makeConnector();
+
+      await expect(connector.initialize()).rejects.toThrow('requires session-scoped Claude Code config support');
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('wires hooks into the session config directory using user scope', async () => {
+      MakaioBus.__resetHandlers?.();
+      const connector = await makeConnector({ sessionId: 'makaio-session-1' });
+      const wiringRequests: unknown[] = [];
+
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/isolated-claude-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
+        });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        wiringRequests.push(ctx.payload);
+        ctx.setResult({ applied: 1, skipped: 0 });
+      });
+      fireSessionStart();
+
+      await connector.initialize();
+
+      expect(wiringRequests).toHaveLength(1);
+      expect(wiringRequests.at(-1)).toMatchObject({
+        scope: 'user',
+        projectDir: TEST_CWD,
+        configDir: '/tmp/isolated-claude-config',
+      });
+    });
+
+    it('checks tmux availability before spawning', async () => {
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/claude-session-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+        });
+      });
+      const connector = await makeConnector();
+      mockState.tmuxAvailable = false;
+
+      await expect(connector.initialize()).rejects.toThrow('Claude Code tmux adapter requires tmux on PATH');
+
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('subscribes to hooks before waiting for SessionStart after spawn', async () => {
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/claude-session-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+        });
+      });
+      const connector = await makeConnector();
+      fireSessionStart();
+
+      await connector.initialize();
+
+      expect(mockState.callOrder).toEqual(expect.arrayContaining(['spawn', 'subscribeToHooks', 'waitForSessionStart']));
+      expect(mockState.callOrder.indexOf('subscribeToHooks')).toBeLessThan(
+        mockState.callOrder.indexOf('waitForSessionStart'),
+      );
+    });
+
     it('waits for MCP prerequisite cleanup when hook wiring fails first', async () => {
       MakaioBus.__resetHandlers?.();
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/claude-session-config',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config' },
+        });
+      });
       const connector = await makeConnector();
       const unregisters: unknown[] = [];
       const removals: unknown[] = [];
@@ -617,6 +720,48 @@ describe('ClaudeCodeTmuxConnector', () => {
       expect(removals[0]).toMatchObject({ projectDir: TEST_CWD });
       expect((removals[0] as { name: string }).name).toMatch(/^makaio-/);
       expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
+    });
+
+    it('disposes backend and destroys session config when MCP removal fails', async () => {
+      MakaioBus.__resetHandlers?.();
+      const connector = await makeConnector({ sessionId: 'makaio-session-close-failure' });
+      const destroyedSessionIds: string[] = [];
+      const unregisters: unknown[] = [];
+
+      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        ctx.setResult({ applied: 1, skipped: 0 });
+      });
+      MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
+        ctx.setResult({
+          sessionDir: '/tmp/claude-session-config-close',
+          env: { CLAUDE_CONFIG_DIR: '/tmp/claude-session-config-close' },
+        });
+      });
+      MakaioBus.on(ClientSubjects.sessionConfig.destroy, (ctx) => {
+        destroyedSessionIds.push(ctx.payload.sessionId);
+        ctx.setResult({ success: true });
+      });
+      MakaioBus.on(McpSubjects.session.register, (ctx) => {
+        ctx.setResult({ port: 4123 });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        ctx.setResult({ added: true, replaced: false });
+      });
+      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, () => {
+        throw new Error('settings removal failed');
+      });
+      MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+        unregisters.push(ctx.payload);
+        ctx.setResult({});
+      });
+      fireSessionStart();
+      await connector.initialize();
+
+      await expect(connector.close()).rejects.toThrow('settings removal failed');
+
+      expect(unregisters).toEqual([{ adapterSessionId: connector.adapterSessionId }]);
+      expect(mockBackendDispose).toHaveBeenCalled();
+      expect(destroyedSessionIds).toEqual(['makaio-session-close-failure']);
     });
 
     it('is safe to call without initialization', async () => {
