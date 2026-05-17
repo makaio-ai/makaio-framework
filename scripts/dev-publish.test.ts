@@ -85,7 +85,7 @@ describe('buildAnnotatedTag', () => {
 });
 
 describe('buildPublishArgs', () => {
-  it('publishes dev packages without provenance for deployment-triggered releases', () => {
+  it('publishes dev packages with provenance', () => {
     expect(buildPublishArgs('@makaio/contracts')).toEqual([
       'workspace',
       '@makaio/contracts',
@@ -95,6 +95,7 @@ describe('buildPublishArgs', () => {
       'dev',
       '--access',
       'public',
+      '--provenance',
     ]);
   });
 });

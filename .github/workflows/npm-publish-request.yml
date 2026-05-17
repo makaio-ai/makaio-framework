@@ -55,6 +55,7 @@ jobs:
             }
 
             core.setOutput('packages', packageNames.join(' '));
+            core.setOutput('checkout-ref', pullRequest.head.ref);
             core.setOutput('source-sha', pullRequest.head.sha);
             core.setOutput('pr-number', String(pullRequest.number));
             core.setOutput('comment-id', String(comment.id));
@@ -76,6 +77,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           PACKAGES: ${{ steps.request.outputs.packages }}
+          CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
           SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
           PR_NUMBER: ${{ steps.request.outputs.pr-number }}
           COMMENT_ID: ${{ steps.request.outputs.comment-id }}
@@ -86,7 +88,7 @@ jobs:
             const { data: deployment } = await github.rest.repos.createDeployment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: process.env.SOURCE_SHA,
+              ref: process.env.CHECKOUT_REF,
               environment: 'canary',
               description: `Publish dev npm packages for PR #${process.env.PR_NUMBER}`,
               auto_merge: false,
@@ -100,6 +102,7 @@ jobs:
                 comment_id: Number(process.env.COMMENT_ID),
                 comment_url: process.env.COMMENT_URL,
                 requested_by: context.actor,
+                checkout_ref: process.env.CHECKOUT_REF,
                 source_sha: process.env.SOURCE_SHA,
               },
             });
@@ -126,6 +129,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           PACKAGES: ${{ steps.request.outputs.packages }}
+          CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
           SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
           PR_NUMBER: ${{ steps.request.outputs.pr-number }}
         with:
@@ -137,6 +141,8 @@ jobs:
               issue_number: Number(process.env.PR_NUMBER),
               body: [
                 `Requested canary deployment for \`${process.env.SOURCE_SHA}\`.`,
+                '',
+                `Ref: \`${process.env.CHECKOUT_REF}\``,
                 '',
                 `Packages: \`${process.env.PACKAGES}\``,
                 '',
