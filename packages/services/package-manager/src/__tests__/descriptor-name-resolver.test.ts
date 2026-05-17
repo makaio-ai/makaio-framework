@@ -48,17 +48,31 @@ const registry: PackageRegistry = {
 
 const frameworkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../');
 
+/**
+ * Load registry metadata from the current checkout layout.
+ *
+ * The framework may run inside the full monorepo (`registry/` beside
+ * `framework/`) or as a standalone checkout. Support both checked-in registry
+ * layouts, then fall back to the local fixture for standalone CI.
+ */
 async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
-  const monorepoRegistryPath = path.join(path.dirname(frameworkRoot), 'registry/packages.json');
-  try {
-    const registryRaw = JSON.parse(await fs.readFile(monorepoRegistryPath, 'utf-8')) as unknown;
-    return PackageRegistrySchema.parse(registryRaw);
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
-      return registry;
+  const registryPaths = [
+    path.join(frameworkRoot, 'registry/packages.json'),
+    path.join(path.dirname(frameworkRoot), 'registry/packages.json'),
+  ];
+
+  for (const registryPath of registryPaths) {
+    try {
+      const registryRaw = JSON.parse(await fs.readFile(registryPath, 'utf-8')) as unknown;
+      return PackageRegistrySchema.parse(registryRaw);
+    } catch (error) {
+      if (typeof error !== 'object' || error === null || !('code' in error) || error.code !== 'ENOENT') {
+        throw error;
+      }
     }
-    throw error;
   }
+
+  return registry;
 }
 
 describe('DescriptorNameResolver', () => {
