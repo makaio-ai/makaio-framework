@@ -36,7 +36,7 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@makaio/ai-adapters-claude-process-shared": "workspace:*",

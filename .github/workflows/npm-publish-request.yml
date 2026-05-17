@@ -1,0 +1,145 @@
+name: Request dev npm package publish
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: npm-dev-publish-request-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  request-dev-publish:
+    if: |
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/publish-dev') &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Resolve publish request
+        id: request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const comment = context.payload.comment;
+            const body = comment.body.trim();
+            const [command, ...packageNames] = body.split(/\s+/);
+
+            if (command !== '/publish-dev') {
+              core.setFailed('This workflow only handles /publish-dev comments.');
+              return;
+            }
+            if (packageNames.length === 0) {
+              core.setFailed('Usage: /publish-dev @makaio/package-name [@makaio/another-package]');
+              return;
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+
+            const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
+            const headRepository = pullRequest.head.repo?.full_name;
+            if (headRepository !== baseRepository) {
+              core.setFailed('/publish-dev rejects fork PRs because publishing runs PR code.');
+              return;
+            }
+
+            core.setOutput('packages', packageNames.join(' '));
+            core.setOutput('source-sha', pullRequest.head.sha);
+            core.setOutput('pr-number', String(pullRequest.number));
+            core.setOutput('comment-id', String(comment.id));
+            core.setOutput('comment-url', comment.html_url);
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-deployments: write
+          permission-issues: write
+
+      - name: Create gated canary deployment
+        id: deployment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PACKAGES: ${{ steps.request.outputs.packages }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
+          COMMENT_URL: ${{ steps.request.outputs.comment-url }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.SOURCE_SHA,
+              environment: 'canary',
+              description: `Publish dev npm packages for PR #${process.env.PR_NUMBER}`,
+              auto_merge: false,
+              required_contexts: [],
+              transient_environment: true,
+              production_environment: false,
+              payload: {
+                packages: process.env.PACKAGES,
+                dry_run: false,
+                pr_number: Number(process.env.PR_NUMBER),
+                comment_id: Number(process.env.COMMENT_ID),
+                comment_url: process.env.COMMENT_URL,
+                requested_by: context.actor,
+                source_sha: process.env.SOURCE_SHA,
+              },
+            });
+
+            core.setOutput('deployment-id', String(deployment.id));
+
+      - name: React to comment
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: 'rocket',
+            });
+
+      - name: Comment on PR
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PACKAGES: ${{ steps.request.outputs.packages }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: [
+                `Requested canary deployment for \`${process.env.SOURCE_SHA}\`.`,
+                '',
+                `Packages: \`${process.env.PACKAGES}\``,
+                '',
+                `Deployment: ${{ github.server_url }}/${{ github.repository }}/deployments/activity_log?environment=canary`,
+              ].join('\n'),
+            });
