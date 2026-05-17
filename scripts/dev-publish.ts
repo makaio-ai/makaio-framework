@@ -288,13 +288,11 @@ export function renderSummary(
 
 /**
  * Builds the Yarn publish command arguments for a dev package.
- * npm provenance currently requires an OIDC source ref that deployment-triggered
- * workflows do not provide, so the deployment-gated dev lane publishes without it.
  * @param packageName - Workspace package to publish.
  * @returns Arguments passed to `yarn`.
  */
 export function buildPublishArgs(packageName: string): string[] {
-  return ['workspace', packageName, 'npm', 'publish', '--tag', 'dev', '--access', 'public'];
+  return ['workspace', packageName, 'npm', 'publish', '--tag', 'dev', '--access', 'public', '--provenance'];
 }
 
 /**
