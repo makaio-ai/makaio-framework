@@ -36,7 +36,10 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain('ref: ${{ steps.request.outputs.ref }}');
     expect(workflow).toContain('yarn tsx scripts/dev-publish.ts publish');
     expect(workflow).toContain('permission-issues: write');
+    expect(workflow).toContain('permission-pull-requests: write');
     expect(workflow).toContain('github-token: ${{ steps.app-token.outputs.token }}');
+    expect(workflow).toContain("if: github.event_name != 'deployment'");
+    expect(workflow).toContain('continue-on-error: true');
     expect(workflow).not.toContain('issue_comment:');
     expect(workflow).not.toContain('/publish-dev');
   });
