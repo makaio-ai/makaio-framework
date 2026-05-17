@@ -27,3 +27,8 @@ sdks/rust/target/
 
 # Bus subject analysis intermediate (generated Markdown is committed)
 docs/subjects/data/
+
+.agents
+.claude
+AGENTS.md
+CLAUDE.md
