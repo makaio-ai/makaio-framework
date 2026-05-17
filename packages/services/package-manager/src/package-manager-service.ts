@@ -8,27 +8,29 @@ import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import { PackageSubjects } from './namespace.js';
-import type { PackageUpdateInfo, PackageRegistry } from './namespace.js';
+import type { PackageUpdateInfo } from './namespace.js';
 import { YarnPackageManager, type FrameworkDependencySpec } from './yarn-integration.js';
 import { LocalPathInstaller } from './local-path-installer.js';
 import { parseInstallSource } from './install-source.js';
 import type { PackageInfo, PackageInstallResult, PackageUninstallResult } from './schemas.js';
+import { DependencyResolver, type ResolutionResult, type DependencyPackageManager } from './dependency-resolver.js';
+import { DescriptorNameResolver } from './descriptor-name-resolver.js';
+import { RegistryService } from './registry-service.js';
+import type { PackageRegistryClient } from './registry-client.js';
 import * as semver from 'semver';
 import packageMetadata from '../package.json' with { type: 'json' };
 
 /**
  * Package manager client interface.
+ *
+ * Extends {@link DependencyPackageManager} so the Yarn manager satisfies both
+ * the service layer and the dependency resolver without separate adapters.
  */
-export interface PackageManagerClient {
+export interface PackageManagerClient extends DependencyPackageManager {
   /**
    * Initialize package manager storage.
    */
   initialize: () => Promise<void>;
-  /**
-   * Install a package and return its version.
-   * @param packageName - Package to install
-   */
-  installPackage: (packageName: string) => Promise<string>;
   /**
    * Uninstall a package.
    * @param packageName - Package to uninstall
@@ -51,13 +53,22 @@ export interface PackageManagerClient {
 }
 
 /**
- * Package registry client interface.
+ * Dependency resolver client used by the service layer.
+ *
+ * Narrowed to the single method consumed by the install handler so tests can
+ * supply lightweight fakes without implementing the full resolver.
  */
-export interface PackageRegistryClient {
+export interface DependencyResolverClient {
   /**
-   * Fetch package registry data.
+   * Resolve and install root packages with all transitive descriptor dependencies.
+   * @param roots - Ordered list of root npm package names to install.
+   * @param options - Optional resolution control flags.
+   * @returns Aggregate resolution result.
    */
-  getRegistry: () => Promise<PackageRegistry>;
+  resolve: (
+    roots: readonly string[],
+    options?: { readonly force?: boolean; readonly snapshot?: unknown | null },
+  ) => Promise<ResolutionResult>;
 }
 
 /**
@@ -90,14 +101,21 @@ export interface PackageManagerServiceOptions {
   yarnManager?: PackageManagerClient;
   /**
    * Registry service for package discovery.
-   * When not provided, the `getRegistry` subject remains unhandled so products
-   * can own registry policy explicitly.
+   * When not provided, the framework-owned static registry client is used.
    */
   registryService?: PackageRegistryClient;
   /**
    * Local installer for extensions installed from the filesystem.
    */
   localInstaller?: LocalInstallClient;
+  /**
+   * Dependency resolver for npm installs.
+   *
+   * When not provided, the service constructs a {@link DependencyResolver}
+   * from the Yarn manager and a {@link DescriptorNameResolver} backed by either
+   * the injected `registryService` or a default {@link RegistryService}.
+   */
+  dependencyResolver?: DependencyResolverClient;
   /**
    * Framework peer dependency range for npm-installed extensions.
    *
@@ -137,7 +155,7 @@ const DEFAULT_FRAMEWORK_PEER_RANGE = resolveDefaultFrameworkPeerRange();
  * - packages.install - Install a package (npm or local path)
  * - packages.uninstall - Uninstall a package
  * - packages.getLatestVersion - Check npm registry for latest version
- * - packages.getRegistry - Get package registry (empty when no registry service provided)
+ * - packages.getRegistry - Get package registry from the configured or default registry service
  * - packages.checkUpdates - Check for available updates
  *
  * All npm operations use Yarn Berry against the makaio home directory.
@@ -145,8 +163,9 @@ const DEFAULT_FRAMEWORK_PEER_RANGE = resolveDefaultFrameworkPeerRange();
  */
 export class PackageManagerService extends BaseService {
   private readonly yarnManager: PackageManagerClient;
-  private readonly registryService: PackageRegistryClient | undefined;
+  private readonly registryService: PackageRegistryClient;
   private readonly localInstaller: LocalInstallClient;
+  private readonly dependencyResolver: DependencyResolverClient;
   private readonly frameworkPeerRange: string;
   private readonly frameworkPackagePath: string | undefined;
 
@@ -159,10 +178,13 @@ export class PackageManagerService extends BaseService {
   public constructor(bus: IMakaioBus, makaioHome: string, options: PackageManagerServiceOptions = {}) {
     super(bus);
     this.yarnManager = options.yarnManager ?? new YarnPackageManager(makaioHome);
-    this.registryService = options.registryService;
+    this.registryService = options.registryService ?? new RegistryService();
     this.localInstaller = options.localInstaller ?? new LocalPathInstaller(path.join(makaioHome, 'extensions'));
     this.frameworkPeerRange = options.frameworkPeerRange ?? DEFAULT_FRAMEWORK_PEER_RANGE;
     this.frameworkPackagePath = options.frameworkPackagePath;
+    this.dependencyResolver =
+      options.dependencyResolver ??
+      new DependencyResolver(this.yarnManager, new DescriptorNameResolver(this.registryService));
   }
 
   /**
@@ -297,21 +319,120 @@ export class PackageManagerService extends BaseService {
   }
 
   /**
+   * Ensure the framework peer dependency is present before installing extensions.
+   * @throws When `yarnManager.ensureFrameworkDependency` fails.
+   */
+  private async ensureFrameworkPeer(): Promise<void> {
+    try {
+      await this.yarnManager.ensureFrameworkDependency({
+        versionRange: this.frameworkPeerRange,
+        ...(this.frameworkPackagePath ? { localPackagePath: this.frameworkPackagePath } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to ensure @makaio/framework dependency ${this.frameworkPeerRange}: ${message}`, {
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * Install a batch of npm packages through the dependency resolver and emit
+   * `packages.installed` for each newly-installed package.
+   * @param names - Normalized npm package names.
+   * @param force - When `true`, bypass inverse-dependency version checks.
+   * @returns Resolved install result payload.
+   */
+  private async installNpmPackages(names: readonly string[], force?: boolean): Promise<PackageInstallResult> {
+    const snapshot = await this.yarnManager.readManifestSnapshot();
+    let resolution: ResolutionResult;
+    try {
+      await this.ensureFrameworkPeer();
+      resolution = await this.dependencyResolver.resolve(names, { force, snapshot: null });
+    } catch (error) {
+      try {
+        await this.yarnManager.writeManifestAndReinstall(snapshot);
+      } catch (rollbackError) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new AggregateError([error, rollbackError], `Package install failed and rollback failed: ${message}`);
+      }
+      throw error;
+    }
+    for (const resolved of resolution.installed) {
+      if (resolved.source !== 'already-present') {
+        await this.emitInstalled(resolved.npmName, resolved.version);
+      }
+    }
+    const first = resolution.installed[0];
+    return {
+      success: true,
+      packageName: first?.npmName ?? names[0] ?? '',
+      version: first?.version,
+      restartRequired: true,
+      installed: [...resolution.installed],
+      skipped: [...resolution.skipped],
+      warnings: [...resolution.warnings],
+    };
+  }
+
+  /**
    * Register the package installation handler.
+   *
+   * Local installs are restricted to a single entry; npm installs go through the
+   * dependency resolver for transitive resolution and rollback support.
    */
   private registerInstallHandler(): void {
     this.registerHandler(PackageSubjects.install, async (ctx) => {
-      const packageName = this.validatePackageNamePayload(ctx.payload.packageName, () => {
+      const packageNames =
+        ctx.payload.packageNames ?? (ctx.payload.packageName !== undefined ? [ctx.payload.packageName] : []);
+      const normalizedNames = packageNames
+        .map((name) => this.normalizePackageName(name))
+        .filter((name): name is string => name !== null);
+
+      if (normalizedNames.length !== packageNames.length || normalizedNames.length === 0) {
         ctx.setResult(this.createInvalidPackageNameResult());
-      });
-      if (!packageName) {
         return;
       }
 
-      const source = ctx.payload.source === undefined ? parseInstallSource(packageName) : { kind: ctx.payload.source };
+      let source: { kind: 'npm' | 'local' | 'git' };
+      if (ctx.payload.source !== undefined) {
+        source = { kind: ctx.payload.source };
+      } else {
+        const sources = normalizedNames.map((name) => parseInstallSource(name));
+        source = sources[0]!;
+        const mixedSource = sources.find((s) => s.kind !== source.kind);
+        if (mixedSource) {
+          ctx.setResult({
+            success: false,
+            packageName: '',
+            error: `Cannot mix install sources: ${source.kind} and ${mixedSource.kind}`,
+            restartRequired: false,
+          });
+          return;
+        }
+      }
+
+      if (source.kind === 'git') {
+        ctx.setResult({
+          success: false,
+          packageName: normalizedNames[0]!,
+          error: 'Git URL installs are not yet supported',
+          restartRequired: false,
+        });
+        return;
+      }
 
       if (source.kind === 'local') {
-        const result = await this.localInstaller.install(packageName);
+        if (normalizedNames.length > 1) {
+          ctx.setResult({
+            success: false,
+            packageName: '',
+            error: 'Local installs only support a single path',
+            restartRequired: false,
+          });
+          return;
+        }
+        const result = await this.localInstaller.install(normalizedNames[0]!);
         if (result.success) {
           await this.emitInstalled(result.packageName, result.version ?? 'unknown');
         }
@@ -319,42 +440,14 @@ export class PackageManagerService extends BaseService {
         return;
       }
 
-      if (source.kind === 'git') {
-        ctx.setResult({
-          success: false,
-          packageName,
-          error: 'Git URL installs are not yet supported',
-          restartRequired: false,
-        });
-        return;
-      }
-
       try {
-        try {
-          await this.yarnManager.ensureFrameworkDependency({
-            versionRange: this.frameworkPeerRange,
-            ...(this.frameworkPackagePath ? { localPackagePath: this.frameworkPackagePath } : {}),
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`Failed to ensure @makaio/framework dependency ${this.frameworkPeerRange}: ${message}`, {
-            cause: error,
-          });
-        }
-        const version = await this.yarnManager.installPackage(packageName);
-        await this.emitInstalled(packageName, version);
-        ctx.setResult({
-          success: true,
-          packageName,
-          version,
-          restartRequired: true,
-        });
+        ctx.setResult(await this.installNpmPackages(normalizedNames, ctx.payload.force));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[PackageManagerService] Install failed:', message);
         ctx.setResult({
           success: false,
-          packageName,
+          packageName: normalizedNames[0] ?? '',
           error: message,
           restartRequired: false,
         });
@@ -435,24 +528,21 @@ export class PackageManagerService extends BaseService {
       }
     });
 
-    const registryService = this.registryService;
-    if (registryService) {
-      this.registerHandler(PackageSubjects.getRegistry, async (ctx) => {
-        try {
-          const registry = await registryService.getRegistry();
-          ctx.setResult(registry);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[PackageManagerService] Registry fetch failed:', message);
-          ctx.setResult({
-            $schema: 'makaio/package-registry/v1',
-            updatedAt: new Date().toISOString(),
-            adapters: [],
-            extensions: [],
-          });
-        }
-      });
-    }
+    this.registerHandler(PackageSubjects.getRegistry, async (ctx) => {
+      try {
+        const registry = await this.registryService.getRegistry();
+        ctx.setResult(registry);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error('[PackageManagerService] Registry fetch failed:', message);
+        ctx.setResult({
+          $schema: 'makaio/package-registry/v1',
+          updatedAt: new Date().toISOString(),
+          adapters: [],
+          extensions: [],
+        });
+      }
+    });
 
     this.registerHandler(PackageSubjects.checkUpdates, async (ctx) => {
       try {

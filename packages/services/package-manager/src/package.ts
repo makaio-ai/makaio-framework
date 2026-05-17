@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts';
-import { PackageManagerService, type PackageRegistryClient } from './package-manager-service.js';
+import { PackageManagerService, type DependencyResolverClient } from './package-manager-service.js';
+import type { PackageRegistryClient } from './registry-client.js';
 import { PackageManagementNamespace } from './namespace.js';
 
 /**
@@ -9,9 +10,16 @@ import { PackageManagementNamespace } from './namespace.js';
 export interface PackageManagerPackageOptions {
   /**
    * Optional registry provider. Framework-only runtime leaves this unset;
-   * host runtimes can contribute their own registry handler separately.
+   * the package manager service then uses the default framework registry client.
    */
   readonly registryService?: PackageRegistryClient;
+  /**
+   * Optional dependency resolver override.
+   *
+   * When not provided, the service constructs a default resolver from the
+   * Yarn manager and a registry-backed name resolver.
+   */
+  readonly dependencyResolver?: DependencyResolverClient;
   /**
    * Framework peer dependency range installed alongside npm-sourced extensions.
    */
@@ -42,6 +50,7 @@ export function createPackageManagerPackage(
     create: (ctx) =>
       new PackageManagerService(ctx.bus, ctx.makaioHome, {
         registryService: options.registryService,
+        dependencyResolver: options.dependencyResolver,
         frameworkPeerRange: options.frameworkPeerRange,
         frameworkPackagePath: options.frameworkPackagePath,
       }),

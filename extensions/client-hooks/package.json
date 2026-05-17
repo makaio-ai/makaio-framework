@@ -1,7 +1,6 @@
 {
   "name": "@makaio/extension-client-hooks",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -11,6 +10,9 @@
   "scripts": {
     "build": "tsdown",
     "test": "vitest run --config vitest.config.ts"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
@@ -26,10 +28,23 @@
     "typescript": "^6.0.3",
     "vitest": "4.1.5"
   },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md",
+    "package.json"
+  ],
   "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
     "exports": {
-      ".": "./dist/index.mjs",
-      "./cli": "./dist/cli/index.mjs",
+      ".": {
+        "default": "./dist/index.mjs"
+      },
+      "./cli": {
+        "default": "./dist/cli/index.mjs"
+      },
       "./package.json": "./package.json"
     }
   }

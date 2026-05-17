@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { checkPacklist } from './npm-packlist-policy.js';
+import {
+  checkDescriptorEntrypointFiles,
+  checkManifestExportTargets,
+  checkPacklist,
+  checkRuntimeWorkspaceDependencies,
+} from './npm-packlist-policy.js';
 
 describe('npm packlist policy', () => {
   it('accepts dist files plus package metadata', () => {
@@ -56,5 +61,71 @@ describe('npm packlist policy', () => {
     const result = checkPacklist('@makaio/test', ['package.json', 'dist/index.js']);
     expect(result.missingRequired).toContain('README.md');
     expect(result.missingRequired).toContain('LICENSE');
+  });
+
+  it('checks the packed manifest exports instead of publishConfig exports', () => {
+    const issues = checkManifestExportTargets(
+      {
+        name: '@makaio/extension-test',
+        exports: {
+          '.': './src/index.ts',
+          './package.json': './package.json',
+        },
+        publishConfig: {
+          exports: {
+            '.': './dist/index.mjs',
+            './package.json': './package.json',
+          },
+        },
+      },
+      ['package.json', 'README.md', 'LICENSE', 'dist/index.mjs'],
+    );
+
+    expect(issues).toEqual(['@makaio/extension-test: manifest entrypoint missing from packlist: src/index.ts']);
+  });
+
+  it('checks packed manifest main and types targets', () => {
+    const issues = checkManifestExportTargets(
+      {
+        name: '@makaio/extension-test',
+        main: 'dist/index.mjs',
+        types: 'dist/index.d.mts',
+      },
+      ['package.json', 'README.md', 'LICENSE', 'dist/index.mjs'],
+    );
+
+    expect(issues).toEqual(['@makaio/extension-test: manifest entrypoint missing from packlist: dist/index.d.mts']);
+  });
+
+  it('rejects workspace protocol runtime dependencies in packed manifests', () => {
+    const issues = checkRuntimeWorkspaceDependencies({
+      name: '@makaio/extension-test',
+      dependencies: {
+        '@makaio/kernel': 'workspace:*',
+      },
+      devDependencies: {
+        '@makaio/build-tooling': 'workspace:*',
+      },
+    });
+
+    expect(issues).toEqual([
+      '@makaio/extension-test: runtime dependency uses workspace protocol: dependencies.@makaio/kernel',
+    ]);
+  });
+
+  it('requires descriptor entrypoint stems to exist as dist files in the packlist', () => {
+    const issues = checkDescriptorEntrypointFiles(
+      '@makaio/extension-client-hooks',
+      {
+        entrypoints: {
+          cli: 'cli/index',
+        },
+      },
+      ['package.json', 'README.md', 'LICENSE', 'descriptor.json', 'dist/cli.mjs'],
+    );
+
+    expect(issues).toEqual([
+      '@makaio/extension-client-hooks: descriptor entrypoint missing from packlist: dist/cli/index.mjs',
+    ]);
   });
 });

@@ -1,3 +1,4 @@
+import { build } from 'tsdown';
 import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
 
-export default defineAdapterConfig();
+await build(defineAdapterConfig());

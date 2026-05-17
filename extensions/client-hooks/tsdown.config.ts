@@ -3,6 +3,6 @@ import { defineExtensionConfig } from '@makaio/build-tooling/tsdown-extension-pr
 export default defineExtensionConfig({
   entry: {
     index: './src/index.ts',
-    cli: './src/cli/index.ts',
+    'cli/index': './src/cli/index.ts',
   },
 });

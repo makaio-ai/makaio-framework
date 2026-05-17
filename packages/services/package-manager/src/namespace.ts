@@ -13,6 +13,8 @@ import {
   RegistryPackageSchema,
   PackageRegistrySchema,
   PackageUpdateInfoSchema,
+  ResolvedPackageSchema,
+  SkippedPackageSchema,
   PackageManagementSchemas,
 } from './schemas.js';
 
@@ -24,6 +26,8 @@ export type {
   RegistryPackage,
   PackageRegistry,
   PackageUpdateInfo,
+  ResolvedPackage,
+  SkippedPackage,
 } from './schemas.js';
 export {
   PackageInstallResultSchema,
@@ -33,6 +37,8 @@ export {
   RegistryPackageSchema,
   PackageRegistrySchema,
   PackageUpdateInfoSchema,
+  ResolvedPackageSchema,
+  SkippedPackageSchema,
 };
 
 /**

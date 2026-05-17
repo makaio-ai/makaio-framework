@@ -31,7 +31,7 @@
   },
   "sideEffects": false,
   "scripts": {
-    "build": "tsdown",
+    "build": "bun build.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -56,6 +56,7 @@
   },
   "publishConfig": {
     "access": "public",
+    "directory": "node_modules/.makaio-publish",
     "exports": {
       ".": {
         "types": "./dist/index.d.mts",

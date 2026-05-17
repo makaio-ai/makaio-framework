@@ -33,16 +33,12 @@ export {
   type ClaudeCodeAdapterConfig,
 } from './adapter.js';
 
-// Export the agent class
-export { ClaudeCodeAgent } from './agent.js';
-
 // Export the connector class
 export { ClaudeSdkConnector } from './connector.js';
 
 // Export namespace and subjects
 export { ClaudeCodeConnectorSubjects, ClaudeCodeConnectorNamespace } from './namespace/index.js';
 import type { ClaudeCodeConnectorBus } from './namespace/index.js';
-export type { ClaudeCodeConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeAgent } from './agent.js';
 
 // Export types
@@ -53,21 +49,8 @@ export type { ClaudeAccountObservationPayload, ClaudeObservedAccountInfo } from 
 // Export schemas
 export { ClaudeCodeProviderConfigSchema, type ClaudeCodeProviderConfig } from './schemas.js';
 
-// Tool handling utilities
-export {
-  toGlobalToolApproval,
-  fromGlobalToolApproval,
-  registerToolApprovalHandler,
-  requestToolApproval,
-  type ToolApprovalContext,
-  type ClaudePermissionResult,
-} from '@makaio/ai-adapters-claude-shared';
-
 // Type-safe content block handlers
 export { CONTENT_BLOCK_HANDLERS } from '@makaio/ai-adapters-claude-shared';
-
-export { UserMessageQueue } from '@makaio/ai-adapters-core';
-export { ClaudeConnectorTurn, type ClaudeTurnState } from './turn.js';
 
 /**
  * Create a test configuration for conformance testing.

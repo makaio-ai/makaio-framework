@@ -47,6 +47,7 @@ export {
   type ParsedMakaioConfig,
 } from './makaio-config.js';
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
+export { readFrameworkVersion } from './read-framework-version.js';
 export { FileRegistryCache } from './model-registry/file-registry-cache.js';
 export { FilesystemDescriptorDiscovery, ExplicitDescriptorDiscovery } from './extension-discovery.js';
 export { RuntimeSubjects } from './bus/runtime/namespace.js';

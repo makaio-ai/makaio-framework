@@ -108,15 +108,6 @@ function ensurePackageRelativePrefix(target: string): string {
 }
 
 /**
- * Extract a source condition from a source export entry.
- * @param value - Source manifest export entry.
- * @returns Source target, when one is declared.
- */
-function getSourceExportTarget(value: string | { source?: string } | undefined): string | undefined {
-  return typeof value === 'string' ? value : value?.source;
-}
-
-/**
  * Build a root-only export map from resolved publishable entrypoints.
  * @param sourceExports - Source manifest export map.
  * @param rootEntrypoints - Resolved publishable root entrypoints.
@@ -126,11 +117,8 @@ function createRootPortableExports(
   sourceExports: Readonly<Record<string, string | { source?: string }>>,
   rootEntrypoints: PublishRootEntrypoints,
 ): Record<string, unknown> {
-  const source = getSourceExportTarget(sourceExports['.']);
-
   return {
     '.': {
-      ...(source ? { source } : {}),
       types: ensurePackageRelativePrefix(rootEntrypoints.types ?? 'dist/index.d.ts'),
       default: ensurePackageRelativePrefix(rootEntrypoints.main ?? 'dist/index.js'),
     },
@@ -158,14 +146,65 @@ function getPublishRootExportTarget(packageJson: PackageJsonLike): PublishRootEn
     (typeof root.default === 'string' ? root.default : undefined) ??
     (typeof root.import === 'string' ? root.import : undefined) ??
     (typeof root.require === 'string' ? root.require : undefined);
-  const types =
-    (typeof root.types === 'string' ? root.types : undefined) ?? (main ? toTypesExportTarget(main) : undefined);
+  const types = typeof root.types === 'string' ? root.types : undefined;
 
   return { main, types };
 }
 
 /**
- * Build the portable export map while preserving repo-only source conditions.
+ * Check whether a package manifest declares a root export.
+ * @param packageJson - Source workspace package manifest.
+ * @returns Whether the source manifest has a root-level runtime entrypoint.
+ */
+function hasRootExport(packageJson: PackageJsonLike): boolean {
+  const exportsField = packageJson.exports;
+  if (typeof exportsField === 'string') return true;
+  if (!exportsField || typeof exportsField !== 'object') return false;
+  return Object.hasOwn(exportsField, '.');
+}
+
+/**
+ * Resolve root-level `main` and `types` fields for a portable manifest.
+ * @param packageJson - Source workspace package manifest.
+ * @returns Root entrypoints that should be present in the publish manifest.
+ */
+function resolvePortableRootEntrypoints(packageJson: PackageJsonLike): PublishRootEntrypoints {
+  const publishRootExport = getPublishRootExportTarget(packageJson);
+  const sourceHasRootExport = hasRootExport(packageJson);
+  const main =
+    packageJson.publishConfig?.main ??
+    (publishRootExport.main ? stripPackageRelativePrefix(publishRootExport.main) : undefined) ??
+    (sourceHasRootExport ? 'dist/index.js' : undefined);
+  const types =
+    packageJson.publishConfig?.types ??
+    (publishRootExport.types ? stripPackageRelativePrefix(publishRootExport.types) : undefined) ??
+    (!packageJson.publishConfig?.exports && sourceHasRootExport ? 'dist/index.d.ts' : undefined);
+
+  return { main, types };
+}
+
+/**
+ * Move bundled framework workspace dependencies out of runtime dependencies.
+ * @param dependencies - Mutable runtime dependency map for the portable manifest.
+ * @param devDependencies - Mutable development dependency map for the portable manifest.
+ * @param frameworkOwnedPackages - Explicit package set owned by the framework distribution.
+ */
+function moveBundledWorkspaceDependencies(
+  dependencies: Record<string, string>,
+  devDependencies: Record<string, string>,
+  frameworkOwnedPackages: ReadonlySet<string>,
+): void {
+  for (const packageName of new Set([...frameworkOwnedPackages, ...Object.keys(dependencies)])) {
+    const version = dependencies[packageName];
+    if (isBundledWorkspaceDependency(packageName, version, frameworkOwnedPackages)) {
+      delete dependencies[packageName];
+      devDependencies[packageName] = version;
+    }
+  }
+}
+
+/**
+ * Build the portable export map from publish-time metadata.
  * @param packageJson - Source workspace package manifest.
  * @param rootEntrypoints - Resolved publishable root entrypoints.
  * @returns Export map suitable for the publishable manifest.
@@ -179,10 +218,10 @@ function createPortableExports(packageJson: PackageJsonLike, rootEntrypoints: Pu
 
   if (!publishExports || typeof publishExports !== 'object') {
     if (!packageJson.exports) return undefined;
-    return {
-      ...sourceExports,
-      ...createRootPortableExports(sourceExports, rootEntrypoints),
-    };
+    if (!hasRootExport(packageJson)) {
+      return sourceExports['./package.json'] ? { './package.json': sourceExports['./package.json'] } : undefined;
+    }
+    return createRootPortableExports(sourceExports, rootEntrypoints);
   }
 
   const portableExports: Record<string, unknown> = {};
@@ -193,19 +232,12 @@ function createPortableExports(packageJson: PackageJsonLike, rootEntrypoints: Pu
       continue;
     }
 
-    const source = getSourceExportTarget(sourceExports[key]);
-
     if (typeof value !== 'string') {
-      if (source && value && typeof value === 'object' && !('source' in value)) {
-        portableExports[key] = { source, ...(value as Record<string, unknown>) };
-      } else {
-        portableExports[key] = value;
-      }
+      portableExports[key] = value;
       continue;
     }
 
     portableExports[key] = {
-      ...(source ? { source } : {}),
       types: toTypesExportTarget(value),
       default: value,
     };
@@ -234,31 +266,16 @@ export function createPortablePackageJson(
   const dependencies = { ...(packageJson.dependencies ?? {}) };
   const devDependencies = { ...(packageJson.devDependencies ?? {}) };
   const peerDependencies = { ...(packageJson.peerDependencies ?? {}) };
-  const publishRootExport = getPublishRootExportTarget(packageJson);
-  const main =
-    packageJson.publishConfig?.main ??
-    (publishRootExport.main ? stripPackageRelativePrefix(publishRootExport.main) : undefined) ??
-    'dist/index.js';
-  const types =
-    packageJson.publishConfig?.types ??
-    (publishRootExport.types ? stripPackageRelativePrefix(publishRootExport.types) : undefined) ??
-    'dist/index.d.ts';
+  const { main, types } = resolvePortableRootEntrypoints(packageJson);
 
-  for (const packageName of new Set([...frameworkOwnedPackages, ...Object.keys(dependencies)])) {
-    const version = dependencies[packageName];
-    if (isBundledWorkspaceDependency(packageName, version, frameworkOwnedPackages)) {
-      delete dependencies[packageName];
-      devDependencies[packageName] = version;
-    }
-  }
-
+  moveBundledWorkspaceDependencies(dependencies, devDependencies, frameworkOwnedPackages);
   peerDependencies['@makaio/framework'] = options.frameworkPeerRange ?? `^${options.frameworkVersion}`;
 
   return {
     ...packageJson,
     private: false,
-    main,
-    types,
+    ...(main ? { main } : {}),
+    ...(types ? { types } : {}),
     exports: createPortableExports(packageJson, { main, types }),
     dependencies: Object.keys(dependencies).length > 0 ? dependencies : undefined,
     devDependencies: Object.keys(devDependencies).length > 0 ? devDependencies : undefined,
