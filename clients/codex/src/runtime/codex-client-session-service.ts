@@ -6,9 +6,13 @@
  * {@link normalizeCodexHook}.
  *
  * Also handles config management requests on `client:codex.config.hooks.*`
- * subjects, delegating to {@link CodexClientSettings} for filesystem I/O, and
- * wiring management requests on `client:codex.wiring.*` subjects, delegating
- * to the pure wiring helpers.
+ * subjects. Before constructing settings I/O, the service resolves the active
+ * config directory via `client.resolveBinary` and uses that as the global
+ * Codex config root, falling back to native `~/.codex` paths when no resolver
+ * or global binary is available. Wiring requests use the same settings path
+ * resolution. The service also handles the blocking `client:codex.config.prime`
+ * lifecycle hook and the `client:codex.sessionConfig.setup` delegation subject
+ * for per-session config directory initialization.
  *
  * Unknown or not-yet-modeled event names are silently dropped — they stay
  * raw-only inside the `client:codex.*` namespace and are never forwarded to
@@ -36,13 +40,15 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
+import { MakaioBus, RequestError } from '@makaio/bus-core';
+import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
 import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';
+import { handleCodexConfigPrime } from './config-prime-handler.js';
 import { normalizeCodexHook } from './hook-normalizer.js';
 import { CodexClientSubjects } from './namespace.js';
+import { handleCodexSessionConfigSetup } from './session-config-handler.js';
 import { applyCodexWiring, buildCodexWiringList, removeCodexWiring } from './wiring.js';
 
 /** Stable client ID for Codex — used to filter `client.runtime.started` events. */
@@ -68,8 +74,8 @@ export const MANAGED_SESSION_CAP = 10_000;
  * 1. `init()` — subscribes to `client:codex.hook.received`, subscribes to
  *    `client.runtime.started` for the adapter-managed session gate, and
  *    registers request handlers for `config.hooks.list`, `config.hooks.add`,
- *    `config.hooks.remove`, `wiring.list`, `wiring.apply`, and
- *    `wiring.remove`.
+ *    `config.hooks.remove`, `config.prime`, `wiring.list`, `wiring.apply`,
+ *    `wiring.remove`, and `sessionConfig.setup`.
  * 2. On each incoming raw event, calls {@link normalizeCodexHook}.
  * 3. Emits the normalized subject when the event is recognized; silently
  *    ignores unknown events.  Normalized `client.session.*` events are
@@ -78,8 +84,10 @@ export const MANAGED_SESSION_CAP = 10_000;
  * 4. `destroy()` — unsubscribes all handlers automatically via `BaseService`.
  */
 export class CodexClientSessionService extends BaseService {
-  /** Settings I/O delegate for Codex `hooks.json` config files. */
-  private readonly settings: CodexClientSettings;
+  /** Optional injected settings I/O delegate for tests. */
+  private readonly settingsOverride: CodexClientSettings | undefined;
+  /** Cached active config-dir resolution; reset when the active Codex version changes. */
+  private cachedConfigDir: Promise<string | undefined> | undefined;
 
   /**
    * Set of `adapterSessionId` values known to be owned by an adapter-managed
@@ -98,18 +106,19 @@ export class CodexClientSessionService extends BaseService {
   /**
    * Creates a new Codex client session service.
    * @param bus - Bus instance used for subscribing and emitting events
-   * @param settings - {@link CodexClientSettings} instance. Defaults to a
-   *   fresh instance that resolves real filesystem paths; pass a custom one
-   *   in tests to redirect I/O to a temp directory.
+   * @param settings - Optional {@link CodexClientSettings} instance for tests
+   *   that need exact filesystem paths. Production callers should omit it so
+   *   the service can resolve the active managed config dir via the bus.
    */
-  public constructor(bus: IMakaioBus = MakaioBus, settings: CodexClientSettings = new CodexClientSettings()) {
+  public constructor(bus: IMakaioBus = MakaioBus, settings?: CodexClientSettings) {
     super(bus);
-    this.settings = settings;
+    this.settingsOverride = settings;
   }
 
   /**
    * Register the raw hook ingress handler, config management request handlers,
-   * and wiring management request handlers on the bus.
+   * wiring management request handlers, the config-prime lifecycle handler,
+   * and the session config setup handler on the bus.
    *
    * Also subscribes to `client.runtime.started` to track adapter-managed
    * sessions for the {@link handleHookReceived} suppression gate.
@@ -118,26 +127,33 @@ export class CodexClientSessionService extends BaseService {
     this.registerHandler(ClientSubjects.runtime.started, ({ payload }) => {
       this.handleRuntimeStarted(payload);
     });
+    this.registerHandler(ClientSubjects.version.changed, ({ payload }) => {
+      if (payload.clientId === CLIENT_ID) {
+        this.cachedConfigDir = undefined;
+      }
+    });
 
     this.registerHandler(CodexClientSubjects.hook.received, async ({ payload }) => {
       await this.handleHookReceived(payload);
     });
 
     this.registerHandler(CodexClientSubjects.config.hooks.list, async (ctx) => {
-      ctx.setResult(await this.settings.listHooks(ctx.payload));
+      ctx.setResult(await (await this.createSettings()).listHooks(ctx.payload));
     });
 
     this.registerHandler(CodexClientSubjects.config.hooks.add, async (ctx) => {
-      ctx.setResult(await this.settings.addHook(ctx.payload));
+      ctx.setResult(await (await this.createSettings()).addHook(ctx.payload));
     });
 
     this.registerHandler(CodexClientSubjects.config.hooks.remove, async (ctx) => {
-      ctx.setResult(await this.settings.removeHook(ctx.payload));
+      ctx.setResult(await (await this.createSettings()).removeHook(ctx.payload));
     });
 
     this.registerHandler(CodexClientSubjects.wiring.list, async (ctx) => {
       assertAbsoluteProjectDir(ctx.payload.projectDir);
-      ctx.setResult(await buildCodexWiringList(this.settings, ctx.payload.makaioCommand, ctx.payload.projectDir));
+      ctx.setResult(
+        await buildCodexWiringList(await this.createSettings(), ctx.payload.makaioCommand, ctx.payload.projectDir),
+      );
     });
 
     this.registerHandler(CodexClientSubjects.wiring.apply, async (ctx) => {
@@ -146,7 +162,12 @@ export class CodexClientSessionService extends BaseService {
         throw new Error("projectDir is required when scope is 'project'");
       }
       ctx.setResult(
-        await applyCodexWiring(this.settings, ctx.payload.scope, ctx.payload.makaioCommand, ctx.payload.projectDir),
+        await applyCodexWiring(
+          await this.createSettings(),
+          ctx.payload.scope,
+          ctx.payload.makaioCommand,
+          ctx.payload.projectDir,
+        ),
       );
     });
 
@@ -155,7 +176,15 @@ export class CodexClientSessionService extends BaseService {
       if (ctx.payload.scope === 'project' && !ctx.payload.projectDir) {
         throw new Error("projectDir is required when scope is 'project'");
       }
-      ctx.setResult(await removeCodexWiring(this.settings, ctx.payload.scope, ctx.payload.projectDir));
+      ctx.setResult(await removeCodexWiring(await this.createSettings(), ctx.payload.scope, ctx.payload.projectDir));
+    });
+
+    this.registerHandler(CodexClientSubjects.config.prime, async (ctx) => {
+      ctx.setResult(await handleCodexConfigPrime(ctx.payload));
+    });
+
+    this.registerHandler(CodexClientSubjects.sessionConfig.setup, async (ctx) => {
+      ctx.setResult(await handleCodexSessionConfigSetup(ctx.payload));
     });
   }
 
@@ -164,6 +193,69 @@ export class CodexClientSessionService extends BaseService {
    */
   protected override onDestroy(): void {
     this.managedAdapterSessionIds.clear();
+    this.cachedConfigDir = undefined;
+  }
+
+  /**
+   * Create a settings delegate for the active Codex config root.
+   * @returns Settings instance bound to the managed config dir when available.
+   */
+  private async createSettings(): Promise<CodexClientSettings> {
+    if (this.settingsOverride !== undefined) {
+      return this.settingsOverride;
+    }
+    const configDir = await this.resolveConfigDir();
+    return new CodexClientSettings(configDir !== undefined ? { configDir } : undefined);
+  }
+
+  /**
+   * Return the cached config directory promise, resolving it on first access.
+   *
+   * Missing binary resolution is a graceful fallback so config reads/writes can
+   * still target native Codex config paths in framework-only or global-only
+   * setups.
+   * @returns Absolute managed config dir, or `undefined` to use native paths.
+   */
+  private resolveConfigDir(): Promise<string | undefined> {
+    if (this.cachedConfigDir === undefined) {
+      const pendingConfigDir = this.doResolveConfigDir().then(
+        (configDir) => {
+          if (configDir === undefined && this.cachedConfigDir === pendingConfigDir) {
+            this.cachedConfigDir = undefined;
+          }
+          return configDir;
+        },
+        (error: unknown) => {
+          if (this.cachedConfigDir === pendingConfigDir) {
+            this.cachedConfigDir = undefined;
+          }
+          throw error;
+        },
+      );
+      this.cachedConfigDir = pendingConfigDir;
+    }
+    return this.cachedConfigDir;
+  }
+
+  /**
+   * Resolve the active Codex config dir via `client.resolveBinary`.
+   * @returns Config directory returned by the binary resolver, or `undefined`
+   *   when no resolver/global binary is available.
+   */
+  private async doResolveConfigDir(): Promise<string | undefined> {
+    let result;
+    try {
+      result = await this.bus.requestOptional(ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
+    } catch (error) {
+      if (isResolveBinaryMissingGlobalBinary(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (!result.handled) {
+      return undefined;
+    }
+    return result.data.configDir ?? undefined;
   }
 
   /**
@@ -265,4 +357,19 @@ export class CodexClientSessionService extends BaseService {
 function throwUnhandledNormalizedEvent(event: { readonly subject: { readonly subject: string } }): never {
   const subject = event.subject.subject;
   throw new Error(`Unhandled normalized Codex hook subject: ${subject}`);
+}
+
+/**
+ * Return true when `client.resolveBinary` only failed because no Codex
+ * executable was found. Config and wiring requests can still use Codex's
+ * default native settings path in that case; other resolution failures should
+ * propagate.
+ * @param error - Error thrown by the bus request.
+ * @returns True when the error is the global-binary fallback miss.
+ */
+function isResolveBinaryMissingGlobalBinary(error: unknown): boolean {
+  if (!(error instanceof RequestError)) {
+    return false;
+  }
+  return error.subject?.endsWith('resolveBinary') === true && error.cause instanceof BinaryNotFoundError;
 }

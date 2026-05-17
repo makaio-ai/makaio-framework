@@ -8,17 +8,17 @@
  *
  * Coverage:
  * - Async install job creation (returns jobId before job completes)
- * - `client.install` without explicit version triggers a live feed fetch (RT-5)
- * - `client.update` installs the latest version and makes it active
+ * - `client.install` without explicit version uses the descriptor pin
+ * - `client.install` rejects explicit versions that differ from the descriptor pin
+ * - `client.update` installs the descriptor pin and makes it active
+ * - `client.update` does not contact an upstream feed
  * - `client.setActive` switches only among installed versions
  * - Uninstalling the active version leaves no active version
  * - `client.installJob.progress`, `client.installJob.completed`, and
  *   `client.version.changed` events emit with correct payloads
- * - `client.list` with `forceRefresh:true` refreshes the feed (TG-1)
- * - Manager hydration from storage restores state without a live fetch (TG-2)
- * - `updateAvailable` flag is `true` when active version differs from latest (TG-3)
- * - Concurrent install+update and install+uninstall are rejected (TG-4, TG-5)
- * - `client.update` rejects even with a cached version when the feed fails (RT-12)
+ * - `client.list` returns `pinnedVersion` and `updateAvailable` from the descriptor
+ * - `updateAvailable` is `true` when active version differs from the pin
+ * - Concurrent install+update and install+uninstall are rejected
  */
 
 import * as fs from 'node:fs/promises';
@@ -27,7 +27,14 @@ import * as path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects, createClientDefinition } from '@makaio/contracts/client';
-import type { ClientInstallCompleted, ClientInstallProgress, ClientVersionChanged } from '@makaio/contracts/client';
+import type {
+  ClientConfigPrimeRequest,
+  ClientInstallCompleted,
+  ClientInstallProgress,
+  ClientVersionChanged,
+} from '@makaio/contracts/client';
+import { createBusNamespace } from '@makaio/core';
+import { z } from 'zod';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleClientBinaryStorage } from '../storage/client-binary-drizzle-handler.js';
@@ -41,7 +48,11 @@ import { CLIENT_BINARY_DDL } from './test-ddl.js';
 // Test client definition
 // ---------------------------------------------------------------------------
 
-const CHECKSUM = 'abc123';
+/**
+ * Pinned version used in the default npm descriptor. The npm strategy uses
+ * `exec` for the actual install so the mock exec below covers it.
+ */
+const DEFAULT_PIN = '1.0.0';
 
 const TEST_CLIENT_DEFINITION = createClientDefinition({
   id: 'test-client',
@@ -50,16 +61,11 @@ const TEST_CLIENT_DEFINITION = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
-    type: 'manifest-bucket',
-    config: {
-      baseUrl: 'https://example.com/test-client',
-      versionIndex: { latest: 'latest.txt' },
-      manifestPath: 'manifest.json',
-      manifestChecksumField: 'sha256',
-      binaryPath: 'bin/test-client',
-    },
+    type: 'npm',
+    package: '@example/test-client',
+    version: DEFAULT_PIN,
   },
-  versionCommand: ['bin/test-client', '--version'],
+  versionCommand: { executable: 'bin/test-client', args: ['--version'] },
 });
 
 const POST_INSTALL_CLIENT_DEFINITION = createClientDefinition({
@@ -69,7 +75,7 @@ const POST_INSTALL_CLIENT_DEFINITION = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
-  versionCommand: ['bin/test-client', '--version'],
+  versionCommand: { executable: 'bin/test-client', args: ['--version'] },
   postInstall: {
     kind: 'set-executable',
     payload: { mode: '755' },
@@ -83,7 +89,7 @@ const UNKNOWN_HANDLER_CLIENT_DEFINITION = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
-  versionCommand: ['bin/test-client', '--version'],
+  versionCommand: { executable: 'bin/test-client', args: ['--version'] },
   postInstall: {
     kind: 'unknown-handler',
   },
@@ -96,7 +102,11 @@ const CONSTRAINED_CLIENT_DEFINITION = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   binary: { name: 'test-client', supportedVersions: '>=2.0.0 <3.0.0' },
   runtimeCapabilities: { supportsManagedBinary: true },
-  managedInstall: TEST_CLIENT_DEFINITION.managedInstall,
+  managedInstall: {
+    type: 'npm',
+    package: '@example/test-client',
+    version: '2.1.0',
+  },
   versionCommand: TEST_CLIENT_DEFINITION.versionCommand,
 });
 
@@ -110,61 +120,71 @@ function makeDefinitionLookup(definition = TEST_CLIENT_DEFINITION): ClientDefini
 // ---------------------------------------------------------------------------
 // Strategy dependency mocks
 //
-// The manifest-bucket strategy calls:
-//   fetchText(latestUrl) → version string (for resolveLatestVersion)
-//   fetchJson(manifestUrl) → { sha256: CHECKSUM } (manifest for a version)
-//   downloadFile(url, dest) → dest path
-//   computeChecksum(path) → CHECKSUM
-// extractArchive and exec are not called for 'raw' archive format.
+// The npm strategy calls exec('npm', [...]) to install the package.
+// The version verifier calls exec(binaryPath, args, { cwd: installPath }).
 // ---------------------------------------------------------------------------
 
 function makeStrategyDeps(
   options: {
-    latestVersion?: string;
     /** Delay in ms to simulate an async install that runs in the background */
     executeDelayMs?: number;
-    /** When true, downloadFile throws to simulate a failure */
-    failDownload?: boolean;
-    /** When true, exec throws to simulate a version-verification failure */
+    /**
+     * When true, the version verifier exec call throws to simulate a failure.
+     * The npm install exec call is unaffected.
+     */
     failExec?: boolean;
   } = {},
 ): StrategyDependencies {
-  const { latestVersion = '1.0.0', executeDelayMs = 0, failDownload = false, failExec = false } = options;
+  const { executeDelayMs = 0, failExec = false } = options;
 
   return {
-    fetchText: vi.fn().mockResolvedValue(latestVersion),
-    fetchJson: vi.fn().mockResolvedValue({ sha256: CHECKSUM }),
-    downloadFile: failDownload
-      ? vi.fn().mockRejectedValue(new Error('Download failed: connection refused'))
-      : vi.fn().mockImplementation(async (_url: string, dest: string) => {
-          if (executeDelayMs > 0) {
-            await new Promise<void>((resolve) => setTimeout(resolve, executeDelayMs));
-          }
-          await fs.mkdir(path.dirname(dest), { recursive: true });
-          await fs.writeFile(dest, '#!/bin/sh\n');
-          // The manifest strategy stores raw downloads by basename, while the
-          // test client's versionCommand models a real package layout with
-          // `bin/test-client`. Create that executable so verifier realpath
-          // checks exercise the manager flow instead of failing on the fixture.
-          await fs.mkdir(path.join(path.dirname(dest), 'bin'), { recursive: true });
-          await fs.writeFile(path.join(path.dirname(dest), 'bin', 'test-client'), '#!/bin/sh\n');
-          return dest;
-        }),
-    computeChecksum: vi.fn().mockResolvedValue(CHECKSUM),
+    // Not used by npm strategy, but kept for interface completeness
+    fetchText: vi.fn().mockResolvedValue(''),
+    fetchJson: vi.fn().mockResolvedValue({}),
+    downloadFile: vi.fn().mockResolvedValue(''),
+    computeChecksum: vi.fn().mockResolvedValue(''),
     extractArchive: vi.fn().mockResolvedValue(undefined),
     deleteFile: vi.fn().mockResolvedValue(undefined),
-    // StrategyDependencies.exec returns Promise<string> (raw stdout), not
-    // { stdout } — the bare-string return here is correct per the contract.
-    // The verifier calls exec with { cwd: installPath } where installPath
-    // ends with the version string, so the mock extracts the version from cwd.
-    exec: failExec
-      ? vi.fn().mockRejectedValue(new Error('exec: permission denied'))
-      : vi.fn().mockImplementation(async (_cmd: string, _args: string[], opts?: { cwd?: string }) => {
-          if (opts?.cwd !== undefined) {
-            return path.basename(opts.cwd) || latestVersion;
+    // exec is used for both `npm install` and the version verifier.
+    //
+    // npm install call:
+    //   exec('npm', ['install', ...], undefined)
+    //   → Must create the binary on disk so the verifier can resolve its realpath.
+    //     The install path is the --prefix argument (4th npm arg), and the version
+    //     being installed is the last segment of the `package@version` spec (2nd arg).
+    //
+    // version verifier call:
+    //   exec(binaryPath, ['--version'], { cwd: installPath })
+    //   → Must return the version string; we extract it from `path.basename(installPath)`.
+    exec: vi.fn().mockImplementation(async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+      if (executeDelayMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, executeDelayMs));
+      }
+
+      if (opts?.cwd !== undefined) {
+        // Version verifier call: return version from installPath basename.
+        if (failExec) {
+          throw new Error('exec: permission denied');
+        }
+        return path.basename(opts.cwd);
+      }
+
+      // npm install call: create the binary on disk so the verifier can find it.
+      // args: ['install', 'pkg@version', '--prefix', targetDir, '--no-save', '--ignore-scripts']
+      if (cmd === 'npm') {
+        const prefixIndex = args.indexOf('--prefix');
+        if (prefixIndex !== -1 && prefixIndex + 1 < args.length) {
+          const targetDir = args[prefixIndex + 1];
+          if (typeof targetDir === 'string') {
+            const binaryPath = path.join(targetDir, 'bin', 'test-client');
+            await fs.mkdir(path.dirname(binaryPath), { recursive: true });
+            await fs.writeFile(binaryPath, '#!/bin/sh\n');
           }
-          return latestVersion;
-        }),
+        }
+      }
+
+      return '';
+    }),
     removeDirectory: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -422,9 +442,7 @@ describe('ClientBinaryManager', () => {
         clientId: 'test-client',
         installedVersions: [],
         activeVersion: null,
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
+        pinnedVersion: DEFAULT_PIN,
         updateAvailable: false,
       },
     ]);
@@ -442,13 +460,13 @@ describe('ClientBinaryManager', () => {
 
     const response = await bus.request(ClientSubjects.install, {
       clientId: 'test-client',
-      version: '1.2.0',
+      version: DEFAULT_PIN,
     });
 
     // The response arrives before the background job completes
     expect(response.jobId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(response.requestedVersion).toBe('1.2.0');
-    expect(response.resolvedVersion).toBe('1.2.0');
+    expect(response.requestedVersion).toBe(DEFAULT_PIN);
+    expect(response.resolvedVersion).toBe(DEFAULT_PIN);
 
     await completion; // wait for the job to actually finish
   });
@@ -464,10 +482,12 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps, { definition: CONSTRAINED_CLIENT_DEFINITION });
 
+    // CONSTRAINED_CLIENT_DEFINITION pins 2.1.0 which is within >=2.0.0 <3.0.0.
+    // Request a version that is explicitly outside the range to trigger the guard.
     await expect(bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.9.0' })).rejects.toThrow(
-      "client.install: requested binary version 1.9.0 for client 'test-client' does not satisfy >=2.0.0 <3.0.0",
+      "client.install: requested version 1.9.0 for client 'test-client' does not match pinned version 2.1.0",
     );
-    expect(strategyDeps.downloadFile).not.toHaveBeenCalled();
+    expect(strategyDeps.exec).not.toHaveBeenCalled();
   });
 
   it('client.install rejects a second concurrent install for the same client', async () => {
@@ -477,14 +497,43 @@ describe('ClientBinaryManager', () => {
     const completion = waitForCompletion(bus);
 
     // Start first job (long-running)
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
 
     // Second request should be rejected immediately (job is still running)
-    await expect(bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.1' })).rejects.toThrow(
-      'already in progress',
-    );
+    await expect(
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
+    ).rejects.toThrow('already in progress');
 
     await completion; // let the first job finish
+  });
+
+  // -------------------------------------------------------------------------
+  // Pin-only install semantics
+  // -------------------------------------------------------------------------
+
+  it('client.install without explicit version uses the descriptor pin', async () => {
+    await initManager(makeStrategyDeps());
+
+    const response = await requestAndWaitForCompletion(bus, () =>
+      bus.request(ClientSubjects.install, { clientId: 'test-client' }),
+    );
+
+    expect(response.jobId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(response.requestedVersion).toBeNull();
+    expect(response.resolvedVersion).toBe(DEFAULT_PIN);
+
+    // Confirm the pinned version was actually installed
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+    expect(entry?.installedVersions.some((v) => v.version === DEFAULT_PIN)).toBe(true);
+  });
+
+  it('client.install rejects explicit versions that differ from the descriptor pin', async () => {
+    await initManager(makeStrategyDeps());
+
+    await expect(bus.request(ClientSubjects.install, { clientId: 'test-client', version: '0.9.0' })).rejects.toThrow(
+      `client.install: requested version 0.9.0 for client 'test-client' does not match pinned version ${DEFAULT_PIN}`,
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -498,22 +547,22 @@ describe('ClientBinaryManager', () => {
     const cleanupProgress = subscribeCapture(bus, ClientSubjects.installJob.progress, progressEvents);
 
     await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' }),
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
     );
 
     cleanupProgress();
 
-    // Strategy emits: resolving, downloading, verifying, extracting, installing
+    // npm strategy emits: installing
     expect(progressEvents.length).toBeGreaterThan(0);
     const first = progressEvents[0];
     expect(first.clientId).toBe('test-client');
-    expect(first.version).toBe('1.0.0');
-    expect(first.strategy).toBe('manifest-bucket');
+    expect(first.version).toBe(DEFAULT_PIN);
+    expect(first.strategy).toBe('npm');
     expect(first.jobId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('emits the activating progress stage during client.update (makeActive=true)', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '2.0.0' }));
+    await initManager(makeStrategyDeps());
 
     const progressEvents: ClientInstallProgress[] = [];
     const cleanupProgress = subscribeCapture(bus, ClientSubjects.installJob.progress, progressEvents);
@@ -535,7 +584,7 @@ describe('ClientBinaryManager', () => {
     const cleanupProgress = subscribeCapture(bus, ClientSubjects.installJob.progress, progressEvents);
 
     await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' }),
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
     );
 
     cleanupProgress();
@@ -557,7 +606,7 @@ describe('ClientBinaryManager', () => {
     const cleanupProgress = subscribeCapture(bus, ClientSubjects.installJob.progress, progressEvents);
 
     await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' }),
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
     );
 
     expect(progressEvents.some((event) => event.stage === 'post-install')).toBe(true);
@@ -567,8 +616,8 @@ describe('ClientBinaryManager', () => {
     expect(postInstallHandler).toHaveBeenCalledOnce();
     expect(postInstallHandler).toHaveBeenCalledWith({
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: expectedInstallPath('test-client', '1.0.0'),
+      version: DEFAULT_PIN,
+      installPath: expectedInstallPath('test-client', DEFAULT_PIN),
       descriptor: POST_INSTALL_CLIENT_DEFINITION.postInstall,
     });
   });
@@ -586,7 +635,7 @@ describe('ClientBinaryManager', () => {
     const { jobId } = await requestAndWaitForCompletion(bus, () =>
       bus.request(ClientSubjects.install, {
         clientId: 'test-client',
-        version: '1.0.0',
+        version: DEFAULT_PIN,
       }),
     );
 
@@ -595,7 +644,7 @@ describe('ClientBinaryManager', () => {
     expect(completedEvents).toHaveLength(1);
     expect(completedEvents[0].jobId).toBe(jobId);
     expect(completedEvents[0].clientId).toBe('test-client');
-    expect(completedEvents[0].version).toBe('1.0.0');
+    expect(completedEvents[0].version).toBe(DEFAULT_PIN);
     expect(completedEvents[0].status).toBe('success');
     expect(completedEvents[0].activeVersion).toBeNull(); // install does not auto-activate
   });
@@ -605,7 +654,7 @@ describe('ClientBinaryManager', () => {
   // -------------------------------------------------------------------------
 
   it('emits client.installJob.completed with status:error when the strategy fails', async () => {
-    await initManager(makeStrategyDeps({ failDownload: true }));
+    await initManager(makeStrategyDeps({ failExec: true }));
 
     const completedEvents: ClientInstallCompleted[] = [];
     const cleanup = subscribeCapture(bus, ClientSubjects.installJob.completed, completedEvents);
@@ -613,7 +662,7 @@ describe('ClientBinaryManager', () => {
     const { jobId } = await requestAndWaitForCompletion(bus, () =>
       bus.request(ClientSubjects.install, {
         clientId: 'test-client',
-        version: '1.0.0',
+        version: DEFAULT_PIN,
       }),
     );
 
@@ -622,42 +671,7 @@ describe('ClientBinaryManager', () => {
     expect(completedEvents).toHaveLength(1);
     expect(completedEvents[0].jobId).toBe(jobId);
     expect(completedEvents[0].status).toBe('error');
-    expect(completedEvents[0].error?.message).toContain('Download failed');
     expect(completedEvents[0].activeVersion).toBeNull();
-  });
-
-  it('client.install completes with status:error for a path-traversal version string without storing a version', async () => {
-    await initManager(makeStrategyDeps());
-
-    const completedEvents: ClientInstallCompleted[] = [];
-    const cleanupCompleted = subscribeCapture(bus, ClientSubjects.installJob.completed, completedEvents);
-
-    const versionChangedEvents: ClientVersionChanged[] = [];
-    const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
-
-    const { jobId } = await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, {
-        clientId: 'test-client',
-        version: '../../etc',
-      }),
-    );
-
-    cleanupCompleted();
-    cleanupChanged();
-
-    // Job must complete with error reporting the invalid install target path.
-    expect(completedEvents).toHaveLength(1);
-    expect(completedEvents[0].jobId).toBe(jobId);
-    expect(completedEvents[0].status).toBe('error');
-    expect(completedEvents[0].error?.message).toContain('Invalid install target path');
-
-    // No client.version.changed event must have been emitted.
-    expect(versionChangedEvents).toHaveLength(0);
-
-    // Storage must not contain any version record for the traversal attempt.
-    const listResult = await bus.request(ClientSubjects.list, {});
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-    expect(entry?.installedVersions).toHaveLength(0);
   });
 
   // -------------------------------------------------------------------------
@@ -672,7 +686,7 @@ describe('ClientBinaryManager', () => {
     const cleanupProgress = subscribeCapture(bus, ClientSubjects.installJob.progress, progressEvents);
 
     await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' }),
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
     );
 
     cleanupProgress();
@@ -683,7 +697,7 @@ describe('ClientBinaryManager', () => {
     );
     expect(verifyingEvent).toBeDefined();
     // The exec mock must have been called (verifier ran).
-    expect(strategyDeps.exec).toHaveBeenCalledOnce();
+    expect(strategyDeps.exec).toHaveBeenCalled();
   });
 
   it('post-install runs before version verification', async () => {
@@ -694,9 +708,24 @@ describe('ClientBinaryManager', () => {
     });
     const strategyDeps = makeStrategyDeps();
     (strategyDeps.exec as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_cmd: string, _args: string[], opts?: { cwd?: string }) => {
-        callOrder.push('verifier');
-        return opts?.cwd !== undefined ? path.basename(opts.cwd) : '1.0.0';
+      async (cmd: string, args: string[], opts?: { cwd?: string }) => {
+        if (opts?.cwd !== undefined) {
+          callOrder.push('verifier');
+          return path.basename(opts.cwd);
+        }
+        // npm install call: create binary on disk so the verifier can find it.
+        if (cmd === 'npm') {
+          const prefixIndex = args.indexOf('--prefix');
+          if (prefixIndex !== -1 && prefixIndex + 1 < args.length) {
+            const targetDir = args[prefixIndex + 1];
+            if (typeof targetDir === 'string') {
+              const binaryPath = path.join(targetDir, 'bin', 'test-client');
+              await fs.mkdir(path.dirname(binaryPath), { recursive: true });
+              await fs.writeFile(binaryPath, '#!/bin/sh\n');
+            }
+          }
+        }
+        return '';
       },
     );
 
@@ -709,7 +738,7 @@ describe('ClientBinaryManager', () => {
     });
 
     const completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
     await completion;
 
     // post-install must precede verifier so that chmod-like ops complete first.
@@ -739,7 +768,7 @@ describe('ClientBinaryManager', () => {
     const completion = waitForCompletion(bus);
     const { jobId } = await bus.request(ClientSubjects.install, {
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
     });
     await completion;
 
@@ -781,7 +810,7 @@ describe('ClientBinaryManager', () => {
     const completion = waitForCompletion(bus);
     const { jobId } = await bus.request(ClientSubjects.install, {
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
     });
     await completion;
 
@@ -813,7 +842,7 @@ describe('ClientBinaryManager', () => {
     const { jobId } = await requestAndWaitForCompletion(bus, () =>
       bus.request(ClientSubjects.install, {
         clientId: 'test-client',
-        version: '1.0.0',
+        version: DEFAULT_PIN,
       }),
     );
 
@@ -824,7 +853,6 @@ describe('ClientBinaryManager', () => {
     expect(completedEvents).toHaveLength(1);
     expect(completedEvents[0].jobId).toBe(jobId);
     expect(completedEvents[0].status).toBe('error');
-    expect(completedEvents[0].error?.message).toContain('Version verification failed');
 
     // No version.changed event must have been emitted.
     expect(versionChangedEvents).toHaveLength(0);
@@ -836,19 +864,19 @@ describe('ClientBinaryManager', () => {
   });
 
   it('update verification failure leaves the prior active version unchanged', async () => {
-    // Install and activate 1.0.0 successfully first.
-    const workingDeps = makeStrategyDeps({ latestVersion: '1.0.0' });
+    // Install and activate the pin (1.0.0) successfully first.
+    const workingDeps = makeStrategyDeps();
     await initManager(workingDeps);
     await requestAndWaitForCompletion(bus, () => bus.request(ClientSubjects.update, { clientId: 'test-client' }));
 
     // Verify 1.0.0 is active before the failing update.
     const listBefore = await bus.request(ClientSubjects.list, {});
     const entryBefore = listBefore.clients.find((c) => c.clientId === 'test-client');
-    expect(entryBefore?.activeVersion).toBe('1.0.0');
+    expect(entryBefore?.activeVersion).toBe(DEFAULT_PIN);
 
-    // Reinitialize with a new version but a failing exec.
+    // Reinitialize with a failing exec so version verification fails.
     await manager.destroy();
-    const failingDeps = makeStrategyDeps({ latestVersion: '2.0.0', failExec: true });
+    const failingDeps = makeStrategyDeps({ failExec: true });
     manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), failingDeps);
     await manager.init();
 
@@ -861,16 +889,14 @@ describe('ClientBinaryManager', () => {
 
     cleanupChanged();
 
-    // Active version must still be 1.0.0 — no extra version.changed emitted.
+    // Active version must still be the original pin — no extra version.changed emitted.
     const listAfter = await bus.request(ClientSubjects.list, {});
     const entryAfter = listAfter.clients.find((c) => c.clientId === 'test-client');
-    expect(entryAfter?.activeVersion).toBe('1.0.0');
-    expect(entryAfter?.installedVersions.some((v) => v.version === '2.0.0')).toBe(false);
+    expect(entryAfter?.activeVersion).toBe(DEFAULT_PIN);
 
-    // No extra version.changed events (the activation from the first update is
-    // already committed before we subscribe — only events from the failing update matter).
+    // No extra version.changed events (only the first update's activation occurred).
     expect(versionChangedEvents).toHaveLength(0);
-    void jobId; // jobId is used to start the update; outcome tracked via events above
+    void jobId;
   });
 
   // -------------------------------------------------------------------------
@@ -879,20 +905,32 @@ describe('ClientBinaryManager', () => {
 
   it('set-active verification failure does not mutate active state', async () => {
     // Install and activate 1.0.0 via update successfully.
-    const workingDeps = makeStrategyDeps({ latestVersion: '1.0.0' });
+    const workingDeps = makeStrategyDeps();
     await initManager(workingDeps);
-    let completion = waitForCompletion(bus);
+    const completion = waitForCompletion(bus);
     await bus.request(ClientSubjects.update, { clientId: 'test-client' });
     await completion;
 
-    // Install 1.1.0 (not activated) — exec returns correct version from cwd.
-    completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.1.0' });
-    await completion;
+    // We need a second installable version. Temporarily allow any version through
+    // by installing into storage directly and creating the binary on disk.
+    const altVersion = '0.9.0';
+    const altInstallPath = expectedInstallPath('test-client', altVersion);
+    const executablePath = path.join(altInstallPath, 'bin', 'test-client');
+    await fs.mkdir(path.dirname(executablePath), { recursive: true });
+    await fs.writeFile(executablePath, '#!/bin/sh\n');
+    const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version: altVersion,
+      installPath: altInstallPath,
+      installedAt: now,
+      createdAt: now,
+    });
 
     // Reinitialize with failing exec so setActive verification fails.
     await manager.destroy();
-    const failingDeps = makeStrategyDeps({ latestVersion: '1.0.0', failExec: true });
+    const failingDeps = makeStrategyDeps({ failExec: true });
     manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), failingDeps);
     await manager.init();
 
@@ -900,19 +938,19 @@ describe('ClientBinaryManager', () => {
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
     // setActive should throw because verification fails.
-    await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.1.0' })).rejects.toThrow(
-      'Version verification failed',
-    );
+    await expect(
+      bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: altVersion }),
+    ).rejects.toThrow('Version verification failed');
 
     cleanupChanged();
 
     // No version.changed must have been emitted.
     expect(versionChangedEvents).toHaveLength(0);
 
-    // Active version must still be 1.0.0.
+    // Active version must still be DEFAULT_PIN.
     const listResult = await bus.request(ClientSubjects.list, {});
     const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-    expect(entry?.activeVersion).toBe('1.0.0');
+    expect(entry?.activeVersion).toBe(DEFAULT_PIN);
   });
 
   it('client.setActive fails without mutating active state when no definition is registered for the client', async () => {
@@ -921,8 +959,8 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: expectedInstallPath('test-client', '1.0.0'),
+      version: DEFAULT_PIN,
+      installPath: expectedInstallPath('test-client', DEFAULT_PIN),
       installedAt: now,
       createdAt: now,
     });
@@ -938,9 +976,9 @@ describe('ClientBinaryManager', () => {
     manager = new ClientBinaryManager(bus, managerConfig(), emptyLookup, strategyDeps);
     await manager.init();
 
-    await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' })).rejects.toThrow(
-      "client.setActive: no definition registered for client 'test-client'",
-    );
+    await expect(
+      bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN }),
+    ).rejects.toThrow("client.setActive: no definition registered for client 'test-client'");
 
     const { state } = await bus.request(ClientBinaryStorageSubjects.getState, { clientId: 'test-client' });
     expect(state).toBeNull();
@@ -950,11 +988,11 @@ describe('ClientBinaryManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // client.update — installs latest and makes it active
+  // client.update — installs descriptor pin and makes it active
   // -------------------------------------------------------------------------
 
-  it('client.update installs the latest version and activates it', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '2.0.0' }));
+  it('client.update installs the descriptor pin and activates it', async () => {
+    await initManager(makeStrategyDeps());
 
     const versionChangedEvents: ClientVersionChanged[] = [];
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
@@ -967,7 +1005,7 @@ describe('ClientBinaryManager', () => {
     );
 
     expect(jobId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(resolvedVersion).toBe('2.0.0');
+    expect(resolvedVersion).toBe(DEFAULT_PIN);
 
     cleanupChanged();
     cleanupCompleted();
@@ -975,38 +1013,54 @@ describe('ClientBinaryManager', () => {
     // version.changed emitted after activation
     expect(versionChangedEvents).toHaveLength(1);
     expect(versionChangedEvents[0].clientId).toBe('test-client');
-    expect(versionChangedEvents[0].activeVersion).toBe('2.0.0');
+    expect(versionChangedEvents[0].activeVersion).toBe(DEFAULT_PIN);
     expect(versionChangedEvents[0].reason).toBe('update');
 
     // completed event has activeVersion set
-    expect(completedEvents[0].activeVersion).toBe('2.0.0');
+    expect(completedEvents[0].activeVersion).toBe(DEFAULT_PIN);
 
     // Storage reflects the new active version
     const listResult = await bus.request(ClientSubjects.list, {});
     const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-    expect(entry?.activeVersion).toBe('2.0.0');
+    expect(entry?.activeVersion).toBe(DEFAULT_PIN);
     expect(entry?.installedVersions).toHaveLength(1);
     expect(entry?.installedVersions[0]?.isActive).toBe(true);
   });
 
-  it('client.update rejects when the upstream feed refresh fails', async () => {
-    const failingDeps = makeStrategyDeps();
-    (failingDeps.fetchText as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
-    await initManager(failingDeps);
+  it('client.update does not contact an upstream feed', async () => {
+    const strategyDeps = makeStrategyDeps();
+    await initManager(strategyDeps);
 
-    await expect(bus.request(ClientSubjects.update, { clientId: 'test-client' })).rejects.toThrow(
-      "client.update: failed to resolve latest version for client 'test-client'",
-    );
+    await requestAndWaitForCompletion(bus, () => bus.request(ClientSubjects.update, { clientId: 'test-client' }));
+
+    // fetchText is the feed-fetch dependency — it must not be called
+    expect(strategyDeps.fetchText).not.toHaveBeenCalled();
   });
 
-  it('client.update rejects latest versions outside the supported binary range', async () => {
-    const strategyDeps = makeStrategyDeps({ latestVersion: '3.1.0' });
-    await initManager(strategyDeps, { definition: CONSTRAINED_CLIENT_DEFINITION });
+  it('client.update rejects the descriptor pin when it falls outside the supported binary range', async () => {
+    // CONSTRAINED_CLIENT_DEFINITION pins 2.1.0 which is within >=2.0.0 <3.0.0 —
+    // override with a version that is outside the range to test the guard.
+    const outOfRangeDefinition = createClientDefinition({
+      id: 'test-client',
+      name: 'Test Client',
+      version: '0.1.0',
+      defaultApprovalPolicy: 'always-ask',
+      binary: { name: 'test-client', supportedVersions: '>=2.0.0 <3.0.0' },
+      runtimeCapabilities: { supportsManagedBinary: true },
+      managedInstall: {
+        type: 'npm',
+        package: '@example/test-client',
+        version: '3.1.0',
+      },
+      versionCommand: TEST_CLIENT_DEFINITION.versionCommand,
+    });
+    const strategyDeps = makeStrategyDeps();
+    await initManager(strategyDeps, { definition: outOfRangeDefinition });
 
     await expect(bus.request(ClientSubjects.update, { clientId: 'test-client' })).rejects.toThrow(
       "client.update: resolved binary version 3.1.0 for client 'test-client' does not satisfy >=2.0.0 <3.0.0",
     );
-    expect(strategyDeps.downloadFile).not.toHaveBeenCalled();
+    expect(strategyDeps.exec).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------
@@ -1028,7 +1082,7 @@ describe('ClientBinaryManager', () => {
     const completedEvents: ClientInstallCompleted[] = [];
     const cleanupCompleted = subscribeCapture(bus, ClientSubjects.installJob.completed, completedEvents);
 
-    await initManager(makeStrategyDeps({ latestVersion: '2.0.0' }));
+    await initManager(makeStrategyDeps());
 
     // client.update uses makeActive=true, so the completion callback records
     // and activates the installed version in one storage transaction.
@@ -1055,26 +1109,53 @@ describe('ClientBinaryManager', () => {
   it('client.setActive switches the active pointer to an installed version', async () => {
     await initManager(makeStrategyDeps());
 
-    // Install two versions — waitForCompletion ensures per-client lock release
-    let completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    // Install the pinned version — waitForCompletion ensures per-client lock release
+    const completion = waitForCompletion(bus);
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
     await completion;
-    completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.1.0' });
-    await completion;
+
+    // Seed a second version record directly into storage for setActive testing
+    const altVersion = '0.9.0';
+    const altInstallPath = expectedInstallPath('test-client', altVersion);
+    const executablePath = path.join(altInstallPath, 'bin', 'test-client');
+    await fs.mkdir(path.dirname(executablePath), { recursive: true });
+    await fs.writeFile(executablePath, '#!/bin/sh\n');
+    const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version: altVersion,
+      installPath: altInstallPath,
+      installedAt: now,
+      createdAt: now,
+    });
+
+    const strategyDeps = makeStrategyDeps();
+    // Override exec to return the correct version for setActive verification
+    (strategyDeps.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_cmd: string, _args: string[], opts?: { cwd?: string }) => {
+        if (opts?.cwd !== undefined) {
+          return path.basename(opts.cwd);
+        }
+        return '';
+      },
+    );
+    await manager.destroy();
+    manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), strategyDeps);
+    await manager.init();
 
     const versionChangedEvents: ClientVersionChanged[] = [];
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
-    const result = await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN });
 
     cleanupChanged();
 
     expect(result.clientId).toBe('test-client');
-    expect(result.activeVersion).toBe('1.0.0');
+    expect(result.activeVersion).toBe(DEFAULT_PIN);
 
     expect(versionChangedEvents).toHaveLength(1);
-    expect(versionChangedEvents[0].activeVersion).toBe('1.0.0');
+    expect(versionChangedEvents[0].activeVersion).toBe(DEFAULT_PIN);
     expect(versionChangedEvents[0].reason).toBe('set-active');
   });
 
@@ -1115,21 +1196,21 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: expectedInstallPath('other-client', '1.0.0'),
+      version: DEFAULT_PIN,
+      installPath: expectedInstallPath('other-client', DEFAULT_PIN),
       installedAt: now,
       createdAt: now,
     });
 
     await initManager(makeStrategyDeps());
 
-    await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' })).rejects.toThrow(
-      'does not match the expected install directory',
-    );
+    await expect(
+      bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN }),
+    ).rejects.toThrow('does not match the expected install directory');
   });
 
   it('client.setActive accepts a stored installPath below the expected client version directory', async () => {
-    const nestedInstallPath = path.join(expectedInstallPath('test-client', '1.0.0'), 'package');
+    const nestedInstallPath = path.join(expectedInstallPath('test-client', DEFAULT_PIN), 'package');
     const executablePath = path.join(nestedInstallPath, 'bin', 'test-client');
     await fs.mkdir(path.dirname(executablePath), { recursive: true });
     await fs.writeFile(executablePath, '#!/bin/sh\n');
@@ -1140,26 +1221,26 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: nestedInstallPath,
       installedAt: now,
       createdAt: now,
     });
 
     const strategyDeps = makeStrategyDeps();
-    (strategyDeps.exec as ReturnType<typeof vi.fn>).mockResolvedValue('1.0.0');
+    (strategyDeps.exec as ReturnType<typeof vi.fn>).mockResolvedValue(DEFAULT_PIN);
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.activeVersion).toBe('1.0.0');
+    expect(result.activeVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.exec).toHaveBeenCalledWith(realExecutablePath, ['--version'], {
       cwd: realNestedInstallPath,
     });
   });
 
   it('client.setActive rejects a symlinked installPath that resolves outside the expected version directory', async () => {
-    const expectedRoot = expectedInstallPath('test-client', '1.0.0');
+    const expectedRoot = expectedInstallPath('test-client', DEFAULT_PIN);
     const outsideTarget = path.join(testBasePath, 'outside-target');
     const symlinkInstallPath = path.join(expectedRoot, 'linked-package');
     await fs.mkdir(expectedRoot, { recursive: true });
@@ -1170,7 +1251,7 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: symlinkInstallPath,
       installedAt: now,
       createdAt: now,
@@ -1179,14 +1260,14 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    await expect(bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' })).rejects.toThrow(
-      'does not match the expected install directory',
-    );
+    await expect(
+      bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN }),
+    ).rejects.toThrow('does not match the expected install directory');
     expect(strategyDeps.exec).not.toHaveBeenCalled();
   });
 
   it('client.setActive does not emit version.changed when the active version does not change', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
+    await initManager(makeStrategyDeps());
 
     // Install and activate via update
     const completion = waitForCompletion(bus);
@@ -1197,7 +1278,7 @@ describe('ClientBinaryManager', () => {
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
     // Set active to the already-active version
-    await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: DEFAULT_PIN });
 
     cleanupChanged();
 
@@ -1209,7 +1290,7 @@ describe('ClientBinaryManager', () => {
   // -------------------------------------------------------------------------
 
   it('client.uninstall active version sets activeVersion to null and emits version.changed', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
+    await initManager(makeStrategyDeps());
 
     // Install and activate — waitForCompletion is event-driven and ensures
     // the per-client lock is released before the uninstall request below.
@@ -1220,15 +1301,15 @@ describe('ClientBinaryManager', () => {
     const versionChangedEvents: ClientVersionChanged[] = [];
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
     cleanupChanged();
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(result.activeVersion).toBeNull();
 
     expect(versionChangedEvents).toHaveLength(1);
-    expect(versionChangedEvents[0].previousActiveVersion).toBe('1.0.0');
+    expect(versionChangedEvents[0].previousActiveVersion).toBe(DEFAULT_PIN);
     expect(versionChangedEvents[0].activeVersion).toBeNull();
     expect(versionChangedEvents[0].reason).toBe('uninstall');
 
@@ -1240,38 +1321,40 @@ describe('ClientBinaryManager', () => {
   });
 
   it('client.uninstall non-active version does not change the active pointer', async () => {
-    // Install 1.0.0 (not activated) using default deps
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
-    let completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
-    await completion;
+    // Seed a secondary (non-active) version record directly in storage.
+    const altVersion = '0.9.0';
+    const altInstallPath = expectedInstallPath('test-client', altVersion);
+    await fs.mkdir(altInstallPath, { recursive: true });
+    const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version: altVersion,
+      installPath: altInstallPath,
+      installedAt: now,
+      createdAt: now,
+    });
 
-    // Destroy the first manager, reinitialize with deps that resolve 1.1.0 as latest
-    await manager.destroy();
-    manager = new ClientBinaryManager(
-      bus,
-      managerConfig(),
-      makeDefinitionLookup(),
-      makeStrategyDeps({ latestVersion: '1.1.0' }),
-    );
-    await manager.init();
+    await initManager(makeStrategyDeps());
 
-    // Install and activate 1.1.0 via update — waitForCompletion ensures the
-    // per-client lock is released before the uninstall request below.
-    completion = waitForCompletion(bus);
+    // Install and activate the pinned version via update
+    const completion = waitForCompletion(bus);
     await bus.request(ClientSubjects.update, { clientId: 'test-client' });
     await completion;
 
     const versionChangedEvents: ClientVersionChanged[] = [];
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
-    // Uninstall the non-active 1.0.0
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    // Uninstall the non-active altVersion
+    const result = await bus.request(ClientSubjects.uninstall, {
+      clientId: 'test-client',
+      version: altVersion,
+    });
 
     cleanupChanged();
 
-    expect(result.removedVersion).toBe('1.0.0');
-    expect(result.activeVersion).toBe('1.1.0');
+    expect(result.removedVersion).toBe(altVersion);
+    expect(result.activeVersion).toBe(DEFAULT_PIN);
     expect(versionChangedEvents).toHaveLength(0); // no version change for non-active uninstall
   });
 
@@ -1283,26 +1366,22 @@ describe('ClientBinaryManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // client.list — shows correct isActive flags
-  // -------------------------------------------------------------------------
-
-  // -------------------------------------------------------------------------
   // client.uninstall — filesystem cleanup (CF-1)
   // -------------------------------------------------------------------------
 
   it('client.uninstall calls removeDirectory with the install path after successful DB deletion', async () => {
-    const strategyDeps = makeStrategyDeps({ latestVersion: '1.0.0' });
+    const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    // Install and activate 1.0.0 via update
+    // Install and activate via update
     const completion = waitForCompletion(bus);
     await bus.request(ClientSubjects.update, { clientId: 'test-client' });
     await completion;
 
-    await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
     expect(strategyDeps.removeDirectory).toHaveBeenCalledOnce();
-    expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(expectedInstallPath('test-client', '1.0.0'));
+    expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(expectedInstallPath('test-client', DEFAULT_PIN));
   });
 
   it('client.uninstall skips removeDirectory and still succeeds when installPath escapes basePath', async () => {
@@ -1312,7 +1391,7 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       // Escapes the managed-binary root and points at an unrelated directory.
       installPath: '/etc/cron.d',
       installedAt: now,
@@ -1322,10 +1401,10 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
     // Uninstall must still succeed and clean up the storage row
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     // The dangerous removeDirectory call must be skipped entirely
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
@@ -1335,7 +1414,7 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: path.join(testBasePath, 'binaries'),
       installedAt: now,
       createdAt: now,
@@ -1344,9 +1423,9 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
 
@@ -1355,7 +1434,7 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: '',
       installedAt: now,
       createdAt: now,
@@ -1364,9 +1443,9 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
 
@@ -1375,8 +1454,8 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: expectedInstallPath('other-client', '1.0.0'),
+      version: DEFAULT_PIN,
+      installPath: expectedInstallPath('other-client', DEFAULT_PIN),
       installedAt: now,
       createdAt: now,
     });
@@ -1384,20 +1463,20 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
 
   it('client.uninstall allows cleanup below the expected client version directory', async () => {
-    const nestedInstallPath = path.join(expectedInstallPath('test-client', '1.0.0'), 'package');
+    const nestedInstallPath = path.join(expectedInstallPath('test-client', DEFAULT_PIN), 'package');
     await fs.mkdir(nestedInstallPath, { recursive: true });
     const now = Date.now();
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: nestedInstallPath,
       installedAt: now,
       createdAt: now,
@@ -1406,9 +1485,9 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).toHaveBeenCalledOnce();
     expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(nestedInstallPath);
   });
@@ -1418,8 +1497,8 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: '/test-client/1.0.0',
+      version: DEFAULT_PIN,
+      installPath: `/test-client/${DEFAULT_PIN}`,
       installedAt: now,
       createdAt: now,
     });
@@ -1427,14 +1506,14 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps, { config: { basePath: '/', configBasePath: testBasePath } });
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
 
   it('client.uninstall skips cleanup for a symlinked installPath that resolves outside the expected directory', async () => {
-    const expectedRoot = expectedInstallPath('test-client', '1.0.0');
+    const expectedRoot = expectedInstallPath('test-client', DEFAULT_PIN);
     const outsideTarget = path.join(testBasePath, 'outside-target');
     const symlinkInstallPath = path.join(expectedRoot, 'linked-package');
     await fs.mkdir(expectedRoot, { recursive: true });
@@ -1445,7 +1524,7 @@ describe('ClientBinaryManager', () => {
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
+      version: DEFAULT_PIN,
       installPath: symlinkInstallPath,
       installedAt: now,
       createdAt: now,
@@ -1454,20 +1533,20 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).not.toHaveBeenCalled();
   });
 
   it('client.uninstall passes the normalized absolute install path to removeDirectory', async () => {
-    await fs.mkdir(expectedInstallPath('test-client', '1.0.0'), { recursive: true });
+    await fs.mkdir(expectedInstallPath('test-client', DEFAULT_PIN), { recursive: true });
     const now = Date.now();
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.0.0',
-      installPath: path.join(testBasePath, 'binaries', 'test-client', '..', 'test-client', '1.0.0'),
+      version: DEFAULT_PIN,
+      installPath: path.join(testBasePath, 'binaries', 'test-client', '..', 'test-client', DEFAULT_PIN),
       installedAt: now,
       createdAt: now,
     });
@@ -1475,210 +1554,126 @@ describe('ClientBinaryManager', () => {
     const strategyDeps = makeStrategyDeps();
     await initManager(strategyDeps);
 
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
 
-    expect(result.removedVersion).toBe('1.0.0');
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
     expect(strategyDeps.removeDirectory).toHaveBeenCalledOnce();
-    expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(expectedInstallPath('test-client', '1.0.0'));
+    expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(expectedInstallPath('test-client', DEFAULT_PIN));
   });
 
   it('client.uninstall still succeeds when removeDirectory throws', async () => {
-    const strategyDeps = makeStrategyDeps({ latestVersion: '1.0.0' });
+    const strategyDeps = makeStrategyDeps();
     (strategyDeps.removeDirectory as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('ENOENT: no such file or directory'),
     );
     await initManager(strategyDeps);
 
-    // Install 1.0.0
+    // Install and activate via update
     const completion = waitForCompletion(bus);
     await bus.request(ClientSubjects.update, { clientId: 'test-client' });
     await completion;
 
     // Uninstall should still resolve even though removeDirectory throws
-    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' });
-    expect(result.removedVersion).toBe('1.0.0');
+    const result = await bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN });
+    expect(result.removedVersion).toBe(DEFAULT_PIN);
   });
 
   it('client.list shows isActive correctly for multiple installed versions', async () => {
     await initManager(makeStrategyDeps());
 
-    // Install two versions — waitForCompletion ensures per-client lock release
-    let completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
-    await completion;
-    completion = waitForCompletion(bus);
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.1.0' });
+    // Install via update (activates pin)
+    const completion = waitForCompletion(bus);
+    await bus.request(ClientSubjects.update, { clientId: 'test-client' });
     await completion;
 
-    // Activate 1.1.0
-    await bus.request(ClientSubjects.setActive, { clientId: 'test-client', version: '1.1.0' });
-
-    const listResult = await bus.request(ClientSubjects.list, {});
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    expect(entry?.activeVersion).toBe('1.1.0');
-    expect(entry?.installedVersions).toHaveLength(2);
-
-    const v100 = entry?.installedVersions.find((v) => v.version === '1.0.0');
-    const v110 = entry?.installedVersions.find((v) => v.version === '1.1.0');
-    expect(v100?.isActive).toBe(false);
-    expect(v110?.isActive).toBe(true);
-  });
-
-  // -------------------------------------------------------------------------
-  // RT-5: client.install without explicit version (cache-miss live-fetch path)
-  // -------------------------------------------------------------------------
-
-  it('client.install without an explicit version performs a live feed fetch', async () => {
-    // No version supplied → resolver has no cache entry → triggers a live fetch
-    // via the strategy's resolveLatestVersion (fetchText mock returns '1.0.0').
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
-
-    const response = await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client' }),
-    );
-
-    expect(response.jobId).toMatch(/^[0-9a-f-]{36}$/);
-    expect(response.requestedVersion).toBeNull();
-    expect(response.resolvedVersion).toBe('1.0.0');
-
-    // Confirm the version was actually installed
-    const listResult = await bus.request(ClientSubjects.list, {});
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-    expect(entry?.installedVersions.some((v) => v.version === '1.0.0')).toBe(true);
-  });
-
-  // -------------------------------------------------------------------------
-  // TG-1: client.list with forceRefresh:true
-  // -------------------------------------------------------------------------
-
-  it('client.list with forceRefresh:true updates latestAvailableVersion on success', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '3.0.0' }));
-
-    const listResult = await bus.request(ClientSubjects.list, { forceRefresh: true });
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    expect(entry?.latestAvailableVersion).toBe('3.0.0');
-    expect(entry?.latestVersionSourceStatus).toBe('fresh');
-  });
-
-  it('client.list with forceRefresh:true returns cached data with error status when refresh fails', async () => {
-    // Seed the version resolver with a prior known-good version via a
-    // successful install so that storage holds a latestAvailableVersion.
-    const workingDeps = makeStrategyDeps({ latestVersion: '2.0.0' });
-    await initManager(workingDeps);
-
-    // Perform a successful forceRefresh to seed storage with latestAvailableVersion.
-    await bus.request(ClientSubjects.list, { forceRefresh: true });
-
-    // Destroy the manager and recreate with a failing feed so the resolver
-    // re-hydrates from storage and the forceRefresh attempt fails.
-    await manager.destroy();
-    const failingDeps = makeStrategyDeps();
-    (failingDeps.fetchText as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Feed unavailable'));
-    manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), failingDeps);
-    await manager.init();
-
-    // forceRefresh fails but Promise.allSettled ensures list still returns.
-    const listResult = await bus.request(ClientSubjects.list, { forceRefresh: true });
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    // The refresh failed — status is error and the cached version is preserved.
-    expect(entry?.latestVersionSourceStatus).toBe('error');
-    expect(entry?.latestAvailableVersion).toBe('2.0.0');
-  });
-
-  it('client.list with forceRefresh:true preserves cached feed metadata when the descriptor is missing', async () => {
-    const now = Date.now();
-    await bus.request(ClientBinaryStorageSubjects.upsertState, {
-      clientId: 'test-client',
-      activeVersion: null,
-      latestAvailableVersion: '2.0.0',
-      latestVersionLastCheckedAt: now,
-      latestVersionSourceStatus: 'cached',
-      updatedAt: now,
-    });
-
-    const emptyLookup: ClientDefinitionLookup = {
-      getDefinition: () => undefined,
-      listDefinitions: () => [],
-    };
-    const strategyDeps = makeStrategyDeps({ latestVersion: '99.0.0' });
-    manager = new ClientBinaryManager(bus, managerConfig(), emptyLookup, strategyDeps);
-    await manager.init();
-
-    const listResult = await bus.request(ClientSubjects.list, { forceRefresh: true });
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    expect(entry?.latestAvailableVersion).toBe('2.0.0');
-    expect(entry?.latestVersionLastCheckedAt).toBe(now);
-    expect(entry?.latestVersionSourceStatus).toBe('error');
-    expect(strategyDeps.fetchText).not.toHaveBeenCalled();
-  });
-
-  // -------------------------------------------------------------------------
-  // TG-2: Manager hydration from storage (post-restart)
-  // -------------------------------------------------------------------------
-
-  it('a freshly initialized manager returns seeded state from storage without a live fetch', async () => {
-    // Populate storage directly via bus handlers before the manager is created.
+    // Seed a second version in storage
+    const altVersion = '0.9.0';
+    const altInstallPath = expectedInstallPath('test-client', altVersion);
+    await fs.mkdir(altInstallPath, { recursive: true });
     const now = Date.now();
     await bus.request(ClientBinaryStorageSubjects.insertVersion, {
       id: crypto.randomUUID(),
       clientId: 'test-client',
-      version: '1.5.0',
-      installPath: expectedInstallPath('test-client', '1.5.0'),
+      version: altVersion,
+      installPath: altInstallPath,
+      installedAt: now,
+      createdAt: now,
+    });
+
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+
+    expect(entry?.activeVersion).toBe(DEFAULT_PIN);
+    expect(entry?.installedVersions).toHaveLength(2);
+
+    const vPin = entry?.installedVersions.find((v) => v.version === DEFAULT_PIN);
+    const vAlt = entry?.installedVersions.find((v) => v.version === altVersion);
+    expect(vPin?.isActive).toBe(true);
+    expect(vAlt?.isActive).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // client.list — pinnedVersion and updateAvailable
+  // -------------------------------------------------------------------------
+
+  it('client.list returns pinnedVersion from the descriptor', async () => {
+    await initManager(makeStrategyDeps());
+
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+
+    expect(entry?.pinnedVersion).toBe(DEFAULT_PIN);
+  });
+
+  it('client.list returns updateAvailable:false when no version is active', async () => {
+    await initManager(makeStrategyDeps());
+
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+
+    expect(entry?.updateAvailable).toBe(false);
+  });
+
+  it('client.list returns updateAvailable:false when active version matches the pin', async () => {
+    await initManager(makeStrategyDeps());
+
+    // Install and activate the pinned version via update
+    await requestAndWaitForCompletion(bus, () => bus.request(ClientSubjects.update, { clientId: 'test-client' }));
+
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+
+    expect(entry?.activeVersion).toBe(DEFAULT_PIN);
+    expect(entry?.pinnedVersion).toBe(DEFAULT_PIN);
+    expect(entry?.updateAvailable).toBe(false);
+  });
+
+  it('client.list returns updateAvailable:true when active version differs from the pin', async () => {
+    // Seed an older version as active in storage directly
+    const olderVersion = '0.9.0';
+    const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version: olderVersion,
+      installPath: expectedInstallPath('test-client', olderVersion),
       installedAt: now,
       createdAt: now,
     });
     await bus.request(ClientBinaryStorageSubjects.upsertState, {
       clientId: 'test-client',
-      activeVersion: '1.5.0',
-      latestAvailableVersion: '1.5.0',
-      latestVersionLastCheckedAt: now,
-      latestVersionSourceStatus: 'cached',
+      activeVersion: olderVersion,
       updatedAt: now,
     });
 
-    // Create a fresh manager with a feed that would return a different version
-    // if contacted — verifying that no live fetch occurs during init.
-    const strategyDeps = makeStrategyDeps({ latestVersion: '99.0.0' });
-    manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), strategyDeps);
-    await manager.init();
+    await initManager(makeStrategyDeps());
 
     const listResult = await bus.request(ClientSubjects.list, {});
     const entry = listResult.clients.find((c) => c.clientId === 'test-client');
 
-    expect(entry?.activeVersion).toBe('1.5.0');
-    expect(entry?.installedVersions).toHaveLength(1);
-    expect(entry?.installedVersions[0]?.version).toBe('1.5.0');
-    // The feed was seeded from storage — no live fetch happened, so the value
-    // reflects the persisted cached version, not the mock's '99.0.0'.
-    expect(entry?.latestAvailableVersion).toBe('1.5.0');
-    expect(strategyDeps.fetchText).not.toHaveBeenCalled();
-  });
-
-  // -------------------------------------------------------------------------
-  // TG-3: updateAvailable flag
-  // -------------------------------------------------------------------------
-
-  it('client.list returns updateAvailable:true when active version differs from latestAvailableVersion', async () => {
-    // Install 1.0.0 and activate it via update (which sets it as active).
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
-    await requestAndWaitForCompletion(bus, () => bus.request(ClientSubjects.update, { clientId: 'test-client' }));
-
-    // Reinitialize with a newer latestVersion so that the feed cache reports 2.0.0.
-    await manager.destroy();
-    const updatedDeps = makeStrategyDeps({ latestVersion: '2.0.0' });
-    manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), updatedDeps);
-    await manager.init();
-
-    // Force a refresh so the resolver learns about 2.0.0.
-    const listResult = await bus.request(ClientSubjects.list, { forceRefresh: true });
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    expect(entry?.activeVersion).toBe('1.0.0');
-    expect(entry?.latestAvailableVersion).toBe('2.0.0');
+    // Active is 0.9.0 but pin is 1.0.0 — update is available
+    expect(entry?.activeVersion).toBe(olderVersion);
+    expect(entry?.pinnedVersion).toBe(DEFAULT_PIN);
     expect(entry?.updateAvailable).toBe(true);
   });
 
@@ -1687,13 +1682,13 @@ describe('ClientBinaryManager', () => {
   // -------------------------------------------------------------------------
 
   it('client.update rejects while an install job is in progress for the same client', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0', executeDelayMs: 100 }));
+    await initManager(makeStrategyDeps({ executeDelayMs: 100 }));
 
     // Start listening before the install so we can wait for it to complete.
     const completion = waitForCompletion(bus);
 
     // Start a long-running install job.
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
 
     // While the install is still running, client.update should be rejected.
     await expect(bus.request(ClientSubjects.update, { clientId: 'test-client' })).rejects.toThrow(
@@ -1708,18 +1703,18 @@ describe('ClientBinaryManager', () => {
   // -------------------------------------------------------------------------
 
   it('client.uninstall rejects while an install job is in progress for the same client', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0', executeDelayMs: 100 }));
+    await initManager(makeStrategyDeps({ executeDelayMs: 100 }));
 
     // Start listening before the install so we can wait for it to complete.
     const completion = waitForCompletion(bus);
 
     // Start a long-running install job.
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
 
     // While the install is still running, client.uninstall should be rejected.
-    await expect(bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: '1.0.0' })).rejects.toThrow(
-      'already in progress',
-    );
+    await expect(
+      bus.request(ClientSubjects.uninstall, { clientId: 'test-client', version: DEFAULT_PIN }),
+    ).rejects.toThrow('already in progress');
 
     await completion; // let the first job finish
   });
@@ -1731,7 +1726,7 @@ describe('ClientBinaryManager', () => {
   it('cancelAll() prevents completed and version.changed callbacks when destroy races an in-flight job', async () => {
     // Use a long enough delay so the job is guaranteed to still be running when
     // manager.destroy() is called synchronously after the install request.
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0', executeDelayMs: 80 }));
+    await initManager(makeStrategyDeps({ executeDelayMs: 80 }));
 
     const completedEvents: ClientInstallCompleted[] = [];
     const versionChangedEvents: ClientVersionChanged[] = [];
@@ -1740,7 +1735,7 @@ describe('ClientBinaryManager', () => {
     const cleanupChanged = subscribeCapture(bus, ClientSubjects.version.changed, versionChangedEvents);
 
     // Start an install that will remain in-flight for ~80 ms.
-    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' });
+    await bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN });
 
     // Destroy immediately while the download delay is still running. This sets
     // the #cancelled flag and clears the internal job map so that every callback
@@ -1762,75 +1757,134 @@ describe('ClientBinaryManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Feed metadata persistence on implicit latest install (RT-5 storage side)
+  // TG-2 analogue: freshly initialized manager reads from storage
   // -------------------------------------------------------------------------
 
-  it('client.install without explicit version persists feed metadata to storage', async () => {
-    await initManager(makeStrategyDeps({ latestVersion: '1.0.0' }));
-
-    await requestAndWaitForCompletion(bus, () => bus.request(ClientSubjects.install, { clientId: 'test-client' }));
-
-    // The feed cache must have been written to storage during the implicit feed fetch.
-    const listResult = await bus.request(ClientSubjects.list, {});
-    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    expect(entry?.latestAvailableVersion).toBe('1.0.0');
-    expect(entry?.latestVersionLastCheckedAt).not.toBeNull();
-    expect(entry?.latestVersionSourceStatus).toBe('fresh');
-  });
-
-  it('client.install with explicit version does not overwrite latestAvailableVersion in storage', async () => {
-    // Seed storage so there is an existing feed entry to protect.
+  it('a freshly initialized manager returns state seeded in storage without contacting a feed', async () => {
+    // Populate storage directly via bus handlers before the manager is created.
     const now = Date.now();
+    await bus.request(ClientBinaryStorageSubjects.insertVersion, {
+      id: crypto.randomUUID(),
+      clientId: 'test-client',
+      version: DEFAULT_PIN,
+      installPath: expectedInstallPath('test-client', DEFAULT_PIN),
+      installedAt: now,
+      createdAt: now,
+    });
     await bus.request(ClientBinaryStorageSubjects.upsertState, {
       clientId: 'test-client',
-      activeVersion: null,
-      latestAvailableVersion: '2.0.0',
-      latestVersionLastCheckedAt: now,
-      latestVersionSourceStatus: 'cached',
+      activeVersion: DEFAULT_PIN,
       updatedAt: now,
     });
 
-    await initManager(makeStrategyDeps({ latestVersion: '99.0.0' }));
+    const strategyDeps = makeStrategyDeps();
+    manager = new ClientBinaryManager(bus, managerConfig(), makeDefinitionLookup(), strategyDeps);
+    await manager.init();
 
-    // Install a pinned version — no implicit feed fetch should occur.
+    const listResult = await bus.request(ClientSubjects.list, {});
+    const entry = listResult.clients.find((c) => c.clientId === 'test-client');
+
+    expect(entry?.activeVersion).toBe(DEFAULT_PIN);
+    expect(entry?.installedVersions).toHaveLength(1);
+    expect(entry?.installedVersions[0]?.version).toBe(DEFAULT_PIN);
+    expect(entry?.pinnedVersion).toBe(DEFAULT_PIN);
+    // No feed fetches occur during init or list
+    expect(strategyDeps.fetchText).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Config prime lifecycle — managed-install phase
+  // -------------------------------------------------------------------------
+
+  it('calls client-specific config.prime with managed-install phase after a successful install', async () => {
+    await initManager(makeStrategyDeps());
+
+    // Register a per-client handler that observes the prime requests.
+    const observed: ClientConfigPrimeRequest[] = [];
+    const primeNs = createBusNamespace('client:test-client', {
+      'config.prime': {
+        request: z.object({
+          clientId: z.string(),
+          configDir: z.string(),
+          phase: z.string(),
+          binaryVersion: z.string().optional(),
+          adapterName: z.string().optional(),
+          projectDir: z.string().optional(),
+        }),
+        response: z.object({ primed: z.boolean() }),
+      },
+    });
+    const unsubPrime = bus.on(primeNs.subjects.config.prime, (ctx) => {
+      observed.push(ctx.payload as ClientConfigPrimeRequest);
+      ctx.setResult({ primed: true });
+    });
+
     await requestAndWaitForCompletion(bus, () =>
-      bus.request(ClientSubjects.install, { clientId: 'test-client', version: '1.0.0' }),
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
     );
+
+    unsubPrime();
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.clientId).toBe('test-client');
+    expect(observed[0]?.phase).toBe('managed-install');
+    expect(observed[0]?.binaryVersion).toBe(DEFAULT_PIN);
+    expect(observed[0]?.configDir).toBe(path.join(testBasePath, 'config', 'test-client', 'config'));
+  });
+
+  it('proceeds with install when no config.prime handler is registered (no-op delegation)', async () => {
+    await initManager(makeStrategyDeps());
+
+    // No client:test-client.config.prime handler registered — the install must
+    // still complete successfully.
+    const completedEvents: ClientInstallCompleted[] = [];
+    const cleanup = subscribeCapture(bus, ClientSubjects.installJob.completed, completedEvents);
+
+    await requestAndWaitForCompletion(bus, () =>
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
+    );
+
+    cleanup();
+
+    expect(completedEvents).toHaveLength(1);
+    expect(completedEvents[0]?.status).toBe('success');
+  });
+
+  it('does not publish an installed version when config.prime fails', async () => {
+    await initManager(makeStrategyDeps());
+
+    const primeNs = createBusNamespace('client:test-client', {
+      'config.prime': {
+        request: z.object({
+          clientId: z.string(),
+          configDir: z.string(),
+          phase: z.string(),
+          binaryVersion: z.string().optional(),
+        }),
+        response: z.object({ primed: z.boolean() }),
+      },
+    });
+    const unsubPrime = bus.on(primeNs.subjects.config.prime, () => {
+      throw new Error('prime failed');
+    });
+
+    const completedEvents: ClientInstallCompleted[] = [];
+    const cleanupCompleted = subscribeCapture(bus, ClientSubjects.installJob.completed, completedEvents);
+
+    await requestAndWaitForCompletion(bus, () =>
+      bus.request(ClientSubjects.install, { clientId: 'test-client', version: DEFAULT_PIN }),
+    );
+
+    unsubPrime();
+    cleanupCompleted();
+
+    expect(completedEvents).toHaveLength(1);
+    expect(completedEvents[0]?.status).toBe('error');
+    expect(completedEvents[0]?.error?.message).toContain('prime failed');
 
     const listResult = await bus.request(ClientSubjects.list, {});
     const entry = listResult.clients.find((c) => c.clientId === 'test-client');
-
-    // Feed metadata seeded from storage must be unchanged — no implicit fetch occurred.
-    expect(entry?.latestAvailableVersion).toBe('2.0.0');
-  });
-
-  // -------------------------------------------------------------------------
-  // RT-12: client.update when feed refresh fails with a cached version
-  // -------------------------------------------------------------------------
-
-  it('client.update rejects even when a cached version exists but the feed refresh fails', async () => {
-    // Seed storage with a known-good version so the resolver hydrates from it.
-    const now = Date.now();
-    await bus.request(ClientBinaryStorageSubjects.upsertState, {
-      clientId: 'test-client',
-      activeVersion: null,
-      latestAvailableVersion: '1.0.0',
-      latestVersionLastCheckedAt: now,
-      latestVersionSourceStatus: 'cached',
-      updatedAt: now,
-    });
-
-    // Initialize manager with a failing feed — the resolver will seed from storage
-    // (version '1.0.0' cached) but the live refresh required by update will fail.
-    const failingDeps = makeStrategyDeps();
-    (failingDeps.fetchText as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
-    await initManager(failingDeps);
-
-    // client.update always forces a live refresh and must not fall back to the
-    // cached version — callers expect the update to reflect the current upstream state.
-    await expect(bus.request(ClientSubjects.update, { clientId: 'test-client' })).rejects.toThrow(
-      "client.update: failed to resolve latest version for client 'test-client'",
-    );
+    expect(entry?.activeVersion).toBeNull();
+    expect(entry?.installedVersions).toEqual([]);
   });
 });

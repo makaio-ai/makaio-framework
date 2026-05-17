@@ -15,9 +15,10 @@
  * resolution command (`client.resolveBinary`), the profile management
  * subjects (`client.profile.create`, `client.profile.list`,
  * `client.profile.get`, `client.profile.update`, `client.profile.delete`,
- * `client.profile.setDefault`), and the session config lifecycle subjects
+ * `client.profile.setDefault`), the session config lifecycle subjects
  * (`client.sessionConfig.create`, `client.sessionConfig.destroy`,
- * `client.sessionConfig.cleanup`).
+ * `client.sessionConfig.cleanup`), and the generic blocking config-prime
+ * lifecycle hook (`client.config.prime`).
  * @packageDocumentation
  */
 

@@ -53,6 +53,7 @@ describe('createNodeClientBinaryStrategyDependencies', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fsPromises.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -235,6 +236,23 @@ describe('createNodeClientBinaryStrategyDependencies', () => {
       await expect(timeoutDeps.exec('node', ['-e', 'setTimeout(() => undefined, 1000)'])).rejects.toThrow(
         'Command failed',
       );
+    });
+
+    it('passes merged environment variables to execFile', async () => {
+      vi.stubEnv('MAKAIO_TEST_PARENT_ENV', 'parent');
+
+      await expect(
+        deps.exec(
+          process.execPath,
+          [
+            '-e',
+            'console.log(JSON.stringify({ injected: process.env.MAKAIO_TEST_EXEC_ENV, inherited: process.env.MAKAIO_TEST_PARENT_ENV }))',
+          ],
+          {
+            env: { MAKAIO_TEST_EXEC_ENV: 'ok' },
+          },
+        ),
+      ).resolves.toBe(JSON.stringify({ injected: 'ok', inherited: 'parent' }));
     });
   });
 

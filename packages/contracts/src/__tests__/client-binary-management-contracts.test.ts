@@ -10,9 +10,11 @@
  * - `client.installJob.progress` (event)
  * - `client.installJob.completed`(event)
  * - `client.version.changed`     (event)
+ * - `client.config.prime`        (request/response)
  */
 import { describe, expect, it } from 'vitest';
 import {
+  ClientConfigPrimeSchema,
   ClientInstallCompletedSchema,
   ClientInstallProgressSchema,
   ClientInstallSchema,
@@ -59,7 +61,30 @@ describe('client.list response', () => {
     expect(result.clients).toHaveLength(0);
   });
 
-  it('accepts a full client entry with null nullable fields', () => {
+  it('accepts managed client list entries with pinnedVersion', () => {
+    const result = ClientListSchema.response.parse({
+      clients: [
+        {
+          clientId: 'codex',
+          installedVersions: [
+            {
+              version: '0.130.0',
+              installPath: '/home/user/.makaio/clients/codex/0.130.0',
+              installedAt: 1_700_000_000_000,
+              isActive: true,
+            },
+          ],
+          activeVersion: '0.130.0',
+          pinnedVersion: '0.130.0',
+          updateAvailable: false,
+        },
+      ],
+    });
+
+    expect(result.clients[0]?.pinnedVersion).toBe('0.130.0');
+  });
+
+  it('accepts a full client entry with installed versions and pinnedVersion', () => {
     const result = ClientListSchema.response.parse({
       clients: [
         {
@@ -73,9 +98,7 @@ describe('client.list response', () => {
             },
           ],
           activeVersion: '1.2.3',
-          latestAvailableVersion: '1.3.0',
-          latestVersionLastCheckedAt: 1_700_000_000_000,
-          latestVersionSourceStatus: 'fresh',
+          pinnedVersion: '1.3.0',
           updateAvailable: true,
         },
       ],
@@ -85,21 +108,20 @@ describe('client.list response', () => {
 
     expect(entry?.clientId).toBe('claude-code');
     expect(entry?.activeVersion).toBe('1.2.3');
+    expect(entry?.pinnedVersion).toBe('1.3.0');
     expect(entry?.updateAvailable).toBe(true);
     expect(entry?.installedVersions[0]?.isActive).toBe(true);
   });
 
-  it('accepts null for all nullable fields', () => {
+  it('accepts null activeVersion when no version is installed', () => {
     const result = ClientListSchema.response.parse({
       clients: [
         {
           clientId: 'claude-code',
           installedVersions: [],
           activeVersion: null,
-          latestAvailableVersion: null,
-          latestVersionLastCheckedAt: null,
-          latestVersionSourceStatus: 'error',
-          updateAvailable: false,
+          pinnedVersion: '1.0.0',
+          updateAvailable: true,
         },
       ],
     });
@@ -107,11 +129,30 @@ describe('client.list response', () => {
     const [entry] = result.clients;
 
     expect(entry?.activeVersion).toBeNull();
-    expect(entry?.latestAvailableVersion).toBeNull();
-    expect(entry?.latestVersionLastCheckedAt).toBeNull();
+    expect(entry?.pinnedVersion).toBe('1.0.0');
+    expect(entry?.updateAvailable).toBe(true);
   });
 
-  it('rejects an invalid latestVersionSourceStatus value', () => {
+  it('rejects removed upstream latest metadata in managed client list entries', () => {
+    const result = ClientListSchema.response.safeParse({
+      clients: [
+        {
+          clientId: 'codex',
+          installedVersions: [],
+          activeVersion: null,
+          pinnedVersion: '0.130.0',
+          updateAvailable: false,
+          latestAvailableVersion: '0.130.0',
+          latestVersionLastCheckedAt: Date.now(),
+          latestVersionSourceStatus: 'fresh',
+        },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a client entry missing pinnedVersion', () => {
     expect(
       ClientListSchema.response.safeParse({
         clients: [
@@ -119,9 +160,22 @@ describe('client.list response', () => {
             clientId: 'claude-code',
             installedVersions: [],
             activeVersion: null,
-            latestAvailableVersion: null,
-            latestVersionLastCheckedAt: null,
-            latestVersionSourceStatus: 'unknown',
+            updateAvailable: false,
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a non-semver pinnedVersion', () => {
+    expect(
+      ClientListSchema.response.safeParse({
+        clients: [
+          {
+            clientId: 'claude-code',
+            installedVersions: [],
+            activeVersion: null,
+            pinnedVersion: '^1.0.0',
             updateAvailable: false,
           },
         ],
@@ -137,9 +191,7 @@ describe('client.list response', () => {
             clientId: '   ',
             installedVersions: [],
             activeVersion: null,
-            latestAvailableVersion: null,
-            latestVersionLastCheckedAt: null,
-            latestVersionSourceStatus: 'fresh',
+            pinnedVersion: '1.0.0',
             updateAvailable: false,
           },
         ],
@@ -166,9 +218,7 @@ describe('client.list response', () => {
               },
             ],
             activeVersion: '1.2.3',
-            latestAvailableVersion: null,
-            latestVersionLastCheckedAt: null,
-            latestVersionSourceStatus: 'fresh',
+            pinnedVersion: '1.2.3',
             updateAvailable: false,
           },
         ],
@@ -387,7 +437,7 @@ describe('client.installJob.progress', () => {
       jobId: 'job-003',
       clientId: 'claude-code',
       version: '1.2.3',
-      strategy: 'manifest-bucket',
+      strategy: 'signed-binary-bucket',
       stage: 'downloading',
       progress: 42.5,
     });
@@ -414,7 +464,7 @@ describe('client.installJob.progress', () => {
       jobId: 'job-004',
       clientId: 'claude-code',
       version: '1.2.3',
-      strategy: 'github-release',
+      strategy: 'signed-binary-bucket',
       stage: 'installing',
       progress: 100,
       installPath: '/opt/makaio/clients/claude-code/1.2.3',
@@ -567,7 +617,7 @@ describe('client.installJob.completed', () => {
       jobId: 'job-005',
       clientId: 'claude-code',
       version: '1.2.3',
-      strategy: 'manifest-bucket',
+      strategy: 'signed-binary-bucket',
       status: 'success',
       installPath: '/opt/makaio/clients/claude-code/1.2.3',
       activeVersion: '1.2.3',
@@ -582,7 +632,7 @@ describe('client.installJob.completed', () => {
       jobId: 'job-006',
       clientId: 'claude-code',
       version: '1.2.3',
-      strategy: 'github-release',
+      strategy: 'signed-binary-bucket',
       status: 'error',
       activeVersion: null,
       error: { message: 'Download failed', code: 'ECONNRESET' },
@@ -755,5 +805,102 @@ describe('client.version.changed', () => {
         reason: 'install',
       }).success,
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// client.config.prime (request/response)
+// ---------------------------------------------------------------------------
+
+describe('client.config.prime', () => {
+  it('accepts client.config.prime requests for managed-install phase', () => {
+    const result = ClientConfigPrimeSchema.request.parse({
+      clientId: 'claude-code',
+      configDir: '/tmp/makaio/clients/claude-code/config',
+      phase: 'managed-install',
+      binaryVersion: '2.1.143',
+    });
+
+    expect(result.phase).toBe('managed-install');
+    expect(result.binaryVersion).toBe('2.1.143');
+  });
+
+  it('accepts client.config.prime requests with adapterName for session-create phase', () => {
+    const result = ClientConfigPrimeSchema.request.parse({
+      clientId: 'codex',
+      configDir: '/tmp/makaio/clients/codex/sessions/session-1',
+      phase: 'session-create',
+      binaryVersion: '0.130.0',
+      adapterName: 'codex-app-server',
+      projectDir: '/tmp/project',
+    });
+
+    expect(result.adapterName).toBe('codex-app-server');
+    expect(result.projectDir).toBe('/tmp/project');
+  });
+
+  it('accepts a profile-create request without binaryVersion or adapterName', () => {
+    const result = ClientConfigPrimeSchema.request.parse({
+      clientId: 'claude-code',
+      configDir: '/tmp/makaio/clients/claude-code/profiles/work',
+      phase: 'profile-create',
+    });
+
+    expect(result.phase).toBe('profile-create');
+    expect(result.binaryVersion).toBeUndefined();
+    expect(result.adapterName).toBeUndefined();
+  });
+
+  it('rejects a request with a relative configDir', () => {
+    expect(
+      ClientConfigPrimeSchema.request.safeParse({
+        clientId: 'claude-code',
+        configDir: 'relative/path/to/config',
+        phase: 'managed-install',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a request with an empty clientId', () => {
+    expect(
+      ClientConfigPrimeSchema.request.safeParse({
+        clientId: '',
+        configDir: '/tmp/makaio/config',
+        phase: 'managed-install',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an invalid phase value', () => {
+    expect(
+      ClientConfigPrimeSchema.request.safeParse({
+        clientId: 'claude-code',
+        configDir: '/tmp/makaio/config',
+        phase: 'pre-install',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a non-semver binaryVersion', () => {
+    expect(
+      ClientConfigPrimeSchema.request.safeParse({
+        clientId: 'claude-code',
+        configDir: '/tmp/makaio/config',
+        phase: 'managed-install',
+        binaryVersion: '^2.0.0',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts a response with primed:true', () => {
+    const result = ClientConfigPrimeSchema.response.parse({ primed: true });
+
+    expect(result.primed).toBe(true);
+  });
+
+  it('accepts a response with primed:false (no handler registered)', () => {
+    const result = ClientConfigPrimeSchema.response.parse({ primed: false });
+
+    expect(result.primed).toBe(false);
   });
 });

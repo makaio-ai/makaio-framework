@@ -34,6 +34,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
 const MANAGED_INSTALL_DESCRIPTOR = {
   type: 'npm',
   package: '@anthropic-ai/claude-code',
+  version: '1.2.3',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ describe('ClientDefinitionSchema — individual runtime capability flags', () =>
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: MANAGED_INSTALL_DESCRIPTOR,
-        versionCommand: ['bin/claude', '--version'],
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
       }),
     );
 
@@ -121,7 +122,7 @@ describe('ClientDefinitionSchema — individual runtime capability flags', () =>
           supportsManagedBinary: true,
         },
         managedInstall: MANAGED_INSTALL_DESCRIPTOR,
-        versionCommand: ['bin/claude', '--version'],
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
       }),
     );
 
@@ -180,7 +181,7 @@ describe('createClientDefinition — runtime capability flags', () => {
         supportsManagedBinary: true,
       },
       managedInstall: MANAGED_INSTALL_DESCRIPTOR,
-      versionCommand: ['bin/claude', '--version'],
+      versionCommand: { executable: 'bin/claude', args: ['--version'] },
     });
 
     expect(definition.runtimeCapabilities.supportsHooks).toBe(true);

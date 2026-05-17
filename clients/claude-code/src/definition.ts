@@ -23,7 +23,36 @@ export const clientDefinition = createClientDefinition({
   description: 'Anthropic Claude Code CLI — an agentic coding assistant',
   binary: {
     name: 'claude',
-    supportedVersions: '>=1.0.0',
+    supportedVersions: '2.1.143',
+  },
+  managedInstall: {
+    type: 'signed-binary-bucket',
+    version: '2.1.143',
+    config: {
+      baseUrl: 'https://downloads.claude.ai/claude-code-releases',
+      manifestPathTemplate: '{version}/manifest.json',
+      manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+      publicKeyUrl: 'https://downloads.claude.ai/keys/claude-code.asc',
+      publicKeyFingerprint: '31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE',
+      binaryPathTemplate: '{version}/{platform}/{binary}',
+      platforms: {
+        'darwin-arm64': 'darwin-arm64',
+        'darwin-x64': 'darwin-x64',
+        'linux-arm64': 'linux-arm64',
+        'linux-x64': 'linux-x64',
+        'linux-arm64-musl': 'linux-arm64-musl',
+        'linux-x64-musl': 'linux-x64-musl',
+        'win32-arm64': 'win32-arm64',
+        'win32-x64': 'win32-x64',
+      },
+    },
+  },
+  versionCommand: {
+    executable: {
+      default: 'claude',
+      win32: 'claude.exe',
+    },
+    args: ['--version'],
   },
   configIsolation: {
     envVar: 'CLAUDE_CONFIG_DIR',
@@ -79,7 +108,7 @@ export const clientDefinition = createClientDefinition({
     supportsHooks: true,
     supportsStatusline: true,
     supportsSupervisorLaunch: false,
-    supportsManagedBinary: false,
+    supportsManagedBinary: true,
     hookEvents: [
       { name: 'SessionStart', frameworkSubject: 'client.session.started' },
       {

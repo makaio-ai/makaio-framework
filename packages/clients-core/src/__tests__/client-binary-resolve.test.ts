@@ -49,8 +49,9 @@ const BASE_DEFINITION_INPUT = {
   managedInstall: {
     type: 'npm' as const,
     package: '@anthropic-ai/claude-code',
+    version: '1.0.17',
   },
-  versionCommand: ['bin/claude', '--version'],
+  versionCommand: { executable: 'bin/claude', args: ['--version'] },
   configIsolation: {
     envVar: 'CLAUDE_CONFIG_DIR',
     defaultPath: '~/.claude',
@@ -600,7 +601,10 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
       ...DEFINITION_WITH_ISOLATION,
       id: 'traversal-test',
       binary: { name: 'traversal-test', supportedVersions: '>=0.0.0' },
-      versionCommand: ['../../etc/evil', '--version'],
+      // Intentionally bypassing schema validation to test the runtime guard.
+      // The schema rejects `..` segments; this tampered definition simulates
+      // a corrupted or malicious definition that reaches the runtime check.
+      versionCommand: { executable: '../../etc/evil', args: ['--version'] },
     };
     await initManager([tamperedDefinition]);
 

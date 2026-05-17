@@ -8,7 +8,6 @@
  */
 
 import { createBusNamespace } from '@makaio/core';
-import { LatestVersionSourceStatusSchema } from '@makaio/contracts/client';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -41,15 +40,6 @@ export const ClientBinaryStateRecordSchema = z.object({
   clientId: z.string(),
   /** Currently active version, or `null` when no version is active. */
   activeVersion: z.string().nullable(),
-  /** Latest version from the upstream feed, or `null` when not yet fetched. */
-  latestAvailableVersion: z.string().nullable(),
-  /**
-   * Epoch timestamp when the feed was last successfully checked, or `null`
-   * when the feed has never been checked.
-   */
-  latestVersionLastCheckedAt: z.number().int().nonnegative().nullable(),
-  /** Freshness/status of the latest-version source at the last refresh attempt. */
-  latestVersionSourceStatus: LatestVersionSourceStatusSchema,
   /** Epoch timestamp in milliseconds of the last mutation. */
   updatedAt: z.number().int().nonnegative(),
 });
@@ -122,15 +112,13 @@ export const ClientBinaryStorageNamespace = createBusNamespace('client-binary:st
     request: z.object({}),
     response: z.object({ versions: z.array(ClientBinaryVersionRecordSchema) }),
   },
-  /** Upsert the per-client binary state row (active version + feed cache). */
+  /** Upsert the per-client binary state row. */
   upsertState: {
     request: ClientBinaryStateRecordSchema,
     response: z.object({ success: z.boolean() }),
   },
   /**
-   * Set the active version without touching feed-cache fields.
-   *
-   * Creates a minimal state row when one does not exist yet.
+   * Set the active version, creating a state row when one does not exist yet.
    */
   setActiveVersion: {
     request: z.object({
@@ -160,25 +148,6 @@ export const ClientBinaryStorageNamespace = createBusNamespace('client-binary:st
       states: z.array(ClientBinaryStateRecordSchema),
       versions: z.array(ClientBinaryVersionRecordSchema),
     }),
-  },
-  /**
-   * Persist an updated feed-cache entry for a client.
-   *
-   * This is a subset of `upsertState` — the handler merges the feed fields
-   * into the existing row (or creates a minimal row) without touching
-   * `activeVersion`.
-   */
-  updateFeedCache: {
-    request: z.object({
-      clientId: z.string(),
-      latestAvailableVersion: z.string().nullable(),
-      /** `null` when the feed check failed — preserves the last successful timestamp in storage. */
-      latestVersionLastCheckedAt: z.number().int().nonnegative().nullable(),
-      /** Latest-version source status to persist with the feed cache entry. */
-      latestVersionSourceStatus: LatestVersionSourceStatusSchema,
-      updatedAt: z.number().int().nonnegative(),
-    }),
-    response: z.object({ success: z.boolean() }),
   },
   /**
    * Atomically remove an installed-version row and clear the active-version

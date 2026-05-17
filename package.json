@@ -56,6 +56,7 @@
     "dev:electron": "yarn workspace @makaio/electron dev",
     "test": "vitest run",
     "generate:sdk": "tsx scripts/generate-sdk-bindings.ts",
+    "smoke:managed-binaries": "tsx scripts/smoke-managed-binaries.ts",
     "test:conformance": "tsx scripts/test-adapters.ts",
     "test:e2e": "yarn test:e2e:browser && yarn test:e2e:desktop && yarn test:e2e:cli && yarn test:e2e:electron && yarn test:e2e:electron-pw",
     "test:e2e:browser": "vitest run --config ui/vitest.browser.config.ts",

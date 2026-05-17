@@ -38,6 +38,7 @@ import { BaseService } from '@makaio/service-base';
 import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
 import { ClientProfileStorageSubjects } from './storage/profile-storage-namespace.js';
 import { canonicalizeClientId } from './client-session-observed-semantics.js';
+import { primeClientConfig } from './client-config-prime.js';
 
 // ---------------------------------------------------------------------------
 // Per-client sessionConfig.setup subject definition
@@ -207,26 +208,43 @@ export class ClientSessionConfigService extends BaseService {
       const sessionDir = this.resolveClientSessionDir(canonicalId, sessionId, 'sessionConfig.create');
       await fs.mkdir(sessionDir, { recursive: true });
 
-      const baseConfigDir = await this.resolveBaseConfigDir(
-        canonicalId,
-        sessionDir,
-        profileName,
-        explicitBaseConfigDir,
-      );
+      try {
+        const baseConfigDir = await this.resolveBaseConfigDir(
+          canonicalId,
+          sessionDir,
+          profileName,
+          explicitBaseConfigDir,
+        );
 
-      // Delegate setup to the client-owned handler.  NoHandlerError is expected
-      // and silently ignored — the session directory remains empty.
-      const setupSubject = createClientSessionConfigSetupSubjectDef(canonicalId);
-      const setupResult = await this.bus.requestOptional(setupSubject, {
-        sessionDir,
-        baseConfigDir,
-        projectDir,
-        platform: resolveSessionConfigPlatform(),
-        configInheritance,
-      });
+        // Delegate setup to the client-owned handler.  NoHandlerError is expected
+        // and silently ignored — the session directory remains empty.
+        const setupSubject = createClientSessionConfigSetupSubjectDef(canonicalId);
+        const setupResult = await this.bus.requestOptional(setupSubject, {
+          sessionDir,
+          baseConfigDir,
+          projectDir,
+          platform: resolveSessionConfigPlatform(),
+          configInheritance,
+        });
 
-      const env = setupResult.handled ? (setupResult.data.env ?? {}) : {};
-      ctx.setResult({ sessionDir, env });
+        const env = setupResult.handled ? (setupResult.data.env ?? {}) : {};
+
+        // Prime the session config directory after setup delegation.  The call is
+        // blocking so that config writes complete before the session directory
+        // path is returned to the caller.  The call is a no-op when the client
+        // has not registered a handler.
+        await primeClientConfig(this.bus, {
+          clientId: canonicalId,
+          configDir: sessionDir,
+          phase: 'session-create',
+          projectDir,
+        });
+
+        ctx.setResult({ sessionDir, env });
+      } catch (error) {
+        await fs.rm(sessionDir, { recursive: true, force: true });
+        throw error;
+      }
     });
 
     this.registerHandler(ClientSubjects.sessionConfig.destroy, async (ctx) => {

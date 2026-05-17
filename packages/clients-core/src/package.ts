@@ -9,6 +9,7 @@ import {
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ClientRuntimeService } from './client-runtime-service.js';
 import { ClientBinaryManager } from './client-binary-manager.js';
+import { ClientConfigPrimeService } from './client-config-prime-service.js';
 import { ClientProfileService } from './client-profile-service.js';
 import { ClientSessionConfigService } from './client-session-config-service.js';
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
@@ -28,29 +29,32 @@ import type { PostInstallHandler } from './client-binary-manager-types.js';
 /**
  * Composite service that initialises and destroys the
  * {@link ClientRuntimeService}, the {@link ClientBinaryManager}, the
- * {@link ClientProfileService}, and the {@link ClientSessionConfigService}
+ * {@link ClientConfigPrimeService}, the {@link ClientProfileService}, and the
+ * {@link ClientSessionConfigService}
  * under a single {@link ExtensionServiceLifecycle} handle.
  *
  * The host coordinator calls `init()` once and `destroy()` once; this class
- * ensures all four services participate in the same lifecycle without any
+ * ensures all five services participate in the same lifecycle without any
  * requiring knowledge of the others.
  */
 export class ClientsCoreService implements ExtensionServiceLifecycle {
   /**
    * @param runtimeService - Handles `client.*` runtime observation subjects
    * @param binaryManager - Handles `client.*` binary-management subjects
+   * @param configPrimeService - Handles generic `client.config.prime` delegation
    * @param profileService - Handles `client.profile.*` CRUD subjects
    * @param sessionConfigService - Handles `client.sessionConfig.*` isolation subjects
    */
   public constructor(
     private readonly runtimeService: ClientRuntimeService,
     private readonly binaryManager: ClientBinaryManager,
+    private readonly configPrimeService: ClientConfigPrimeService,
     private readonly profileService: ClientProfileService,
     private readonly sessionConfigService: ClientSessionConfigService,
   ) {}
 
   /**
-   * Initialize all four sub-services in parallel.
+   * Initialize all five sub-services in parallel.
    *
    * Uses {@link Promise.allSettled} so every service always attempts
    * initialisation — matching the resilience pattern used by {@link destroy}.
@@ -61,6 +65,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
     const results = await Promise.allSettled([
       this.runtimeService.init(),
       this.binaryManager.init(),
+      this.configPrimeService.init(),
       this.profileService.init(),
       this.sessionConfigService.init(),
     ]);
@@ -74,7 +79,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
   }
 
   /**
-   * Destroy all four sub-services in parallel.
+   * Destroy all five sub-services in parallel.
    *
    * Uses {@link Promise.allSettled} to guarantee every cleanup runs even when
    * one rejects. Any rejections are logged for observability — matching the
@@ -84,6 +89,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
     const results = await Promise.allSettled([
       this.runtimeService.destroy(),
       this.binaryManager.destroy(),
+      this.configPrimeService.destroy(),
       this.profileService.destroy(),
       this.sessionConfigService.destroy(),
     ]);
@@ -261,6 +267,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
       return new ClientsCoreService(
         new ClientRuntimeService(ctx.bus),
         binaryManager,
+        new ClientConfigPrimeService(ctx.bus),
         profileService,
         sessionConfigService,
       );

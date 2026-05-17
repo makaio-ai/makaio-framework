@@ -69,6 +69,7 @@ import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
 import { z } from 'zod';
 import { ClaudeCodeClientSettings } from './client-settings.js';
+import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import { normalizeClaudeCodeHook } from './hook-normalizer.js';
 import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
@@ -226,6 +227,7 @@ export class ClaudeCodeClientService extends BaseService {
     });
 
     this.registerConfigHandlers();
+    this.registerConfigPrimeHandler();
     this.registerSessionConfigHandler();
     this.registerMcpServersHandlers();
     this.registerWiringHandlers();
@@ -268,6 +270,23 @@ export class ClaudeCodeClientService extends BaseService {
 
     this.registerHandler(ClaudeCodeClientSubjects.config.plugins.list, async (ctx) => {
       ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).listPlugins());
+    });
+  }
+
+  /**
+   * Register the `config.prime` handler.
+   *
+   * Delegates to {@link handleClaudeCodeConfigPrime} which ensures the target
+   * config directory's `settings.json` has `DISABLE_AUTOUPDATER=1` set,
+   * preventing Claude Code from self-updating while running under Makaio's
+   * binary lifecycle management.
+   *
+   * Extracted from {@link onInit} to keep the init method within the
+   * max-lines-per-function lint threshold.
+   */
+  private registerConfigPrimeHandler(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.config.prime, async (ctx) => {
+      ctx.setResult(await handleClaudeCodeConfigPrime(ctx.payload));
     });
   }
 

@@ -1,8 +1,8 @@
 /**
  * Drizzle-backed persistence handler for client binary installation state.
  *
- * Registers bus handlers for version records and per-client state (active
- * version + feed cache) on the `client-binary:storage.*` subjects. All DB
+ * Registers bus handlers for version records and per-client active-version
+ * state on the `client-binary:storage.*` subjects. All DB
  * access is encapsulated here — no caller outside this module should query
  * the `client_binary_versions` or `client_binary_state` tables directly.
  * @packageDocumentation
@@ -57,9 +57,6 @@ function mapStateRow(row: StateRow): ClientBinaryStateRecord {
   return {
     clientId: row.clientId,
     activeVersion: row.activeVersion ?? null,
-    latestAvailableVersion: row.latestAvailableVersion ?? null,
-    latestVersionLastCheckedAt: row.latestVersionLastCheckedAt ?? null,
-    latestVersionSourceStatus: row.latestVersionSourceStatus,
     updatedAt: row.updatedAt,
   };
 }
@@ -115,17 +112,12 @@ function toActiveVersionStateInsert(
   return {
     clientId,
     activeVersion,
-    latestAvailableVersion: null,
-    latestVersionLastCheckedAt: null,
-    // There is no separate "not checked yet" source status in the public
-    // contract; the null feed fields above carry that distinction.
-    latestVersionSourceStatus: 'error',
     updatedAt,
   };
 }
 
 /**
- * Upsert active-version state without mutating feed-cache columns.
+ * Upsert active-version state.
  * @param db - Drizzle database or transaction executor
  * @param clientId - Stable client identifier
  * @param activeVersion - Version to mark active, or `null` to clear
@@ -142,8 +134,6 @@ async function upsertActiveVersionState(
     .values(toActiveVersionStateInsert(clientId, activeVersion, updatedAt))
     .onConflictDoUpdate({
       target: clientBinaryState.clientId,
-      // Only the active pointer changes on conflict so feed-cache metadata
-      // survives install-time activation and explicit active-version changes.
       set: { activeVersion, updatedAt },
     });
 }
@@ -255,9 +245,6 @@ async function handleUpsertState(db: MakaioDatabase, record: ClientBinaryStateRe
   const values = {
     clientId: record.clientId,
     activeVersion: record.activeVersion ?? null,
-    latestAvailableVersion: record.latestAvailableVersion ?? null,
-    latestVersionLastCheckedAt: record.latestVersionLastCheckedAt ?? null,
-    latestVersionSourceStatus: record.latestVersionSourceStatus,
     updatedAt: record.updatedAt,
   };
   await db
@@ -267,62 +254,9 @@ async function handleUpsertState(db: MakaioDatabase, record: ClientBinaryStateRe
 }
 
 /**
- * Merge feed-cache fields into the per-client state row without touching
- * the `activeVersion` column.
+ * Set the active-version pointer.
  *
- * Creates a minimal state row with `activeVersion: null` if no row exists yet,
- * ensuring feed cache metadata can be stored independently from version
- * management.
- *
- * When `latestVersionLastCheckedAt` is `null` (i.e. the feed check failed),
- * the timestamp column is excluded from the conflict update so the last
- * successful check time is preserved in the database.
- * @param db - Drizzle database instance
- * @param clientId - Stable client identifier
- * @param latestAvailableVersion - Latest version from the upstream feed, or `null`
- * @param latestVersionLastCheckedAt - Epoch ms when the feed was last checked,
- *   or `null` when the check failed (preserves the previous value in storage)
- * @param latestVersionSourceStatus - Source status to persist for this refresh attempt
- * @param updatedAt - Epoch ms of this mutation
- */
-async function handleUpdateFeedCache(
-  db: MakaioDatabase,
-  clientId: string,
-  latestAvailableVersion: string | null,
-  latestVersionLastCheckedAt: number | null,
-  latestVersionSourceStatus: ClientBinaryStateRecord['latestVersionSourceStatus'],
-  updatedAt: number,
-): Promise<void> {
-  // When the check failed the timestamp stays null in the insert (new row) but
-  // is intentionally excluded from the conflict update clause so the previous
-  // successful timestamp is not overwritten.
-  const conflictSet =
-    latestVersionLastCheckedAt !== null
-      ? { latestAvailableVersion, latestVersionLastCheckedAt, latestVersionSourceStatus, updatedAt }
-      : { latestAvailableVersion, latestVersionSourceStatus, updatedAt };
-
-  await db
-    .insert(clientBinaryState)
-    .values({
-      clientId,
-      activeVersion: null,
-      latestAvailableVersion,
-      latestVersionLastCheckedAt,
-      latestVersionSourceStatus,
-      updatedAt,
-    })
-    .onConflictDoUpdate({
-      target: clientBinaryState.clientId,
-      set: conflictSet,
-    });
-}
-
-/**
- * Set the active-version pointer without changing feed-cache fields.
- *
- * Creates a minimal row when none exists yet so activation can be persisted
- * independently from feed refreshes. Existing feed metadata is preserved by
- * issuing an update that touches only `activeVersion` and `updatedAt`.
+ * Creates a minimal row when none exists yet so activation can be persisted.
  * @param db - Drizzle database instance
  * @param clientId - Stable client identifier
  * @param activeVersion - Version to mark active, or `null` to clear
@@ -435,7 +369,6 @@ async function handleRemoveVersionAndClearActive(
  * - `client-binary:storage.getState`      — return the per-client state row.
  * - `client-binary:storage.loadAllState`  — return all state rows.
  * - `client-binary:storage.loadSnapshot` — return all state and version rows from one read transaction.
- * - `client-binary:storage.updateFeedCache` — merge feed-cache fields into state.
  * - `client-binary:storage.removeVersionAndClearActive` — atomic uninstall in one transaction.
  * @param bus - Bus instance to register handlers on
  * @param db - Drizzle database instance
@@ -505,20 +438,6 @@ export function registerDrizzleClientBinaryStorage(
     bus.on(ClientBinaryStorageSubjects.loadSnapshot, async (ctx) => {
       const { states, versions } = await handleLoadSnapshot(db);
       ctx.setResult({ states, versions });
-    }),
-
-    bus.on(ClientBinaryStorageSubjects.updateFeedCache, async (ctx) => {
-      const { clientId, latestAvailableVersion, latestVersionLastCheckedAt, latestVersionSourceStatus, updatedAt } =
-        ctx.payload;
-      await handleUpdateFeedCache(
-        db,
-        clientId,
-        latestAvailableVersion,
-        latestVersionLastCheckedAt,
-        latestVersionSourceStatus,
-        updatedAt,
-      );
-      ctx.setResult({ success: true });
     }),
 
     bus.on(ClientBinaryStorageSubjects.removeVersionAndClearActive, async (ctx) => {

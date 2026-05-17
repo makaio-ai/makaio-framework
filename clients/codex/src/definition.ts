@@ -24,7 +24,19 @@ export const clientDefinition = createClientDefinition({
   description: 'OpenAI Codex CLI — an agentic coding assistant',
   binary: {
     name: 'codex',
-    supportedVersions: '*',
+    supportedVersions: '0.130.0',
+  },
+  managedInstall: {
+    type: 'npm',
+    package: '@openai/codex',
+    version: '0.130.0',
+  },
+  versionCommand: {
+    executable: {
+      default: 'node_modules/.bin/codex',
+      win32: 'node_modules/.bin/codex.cmd',
+    },
+    args: ['--version'],
   },
   configIsolation: { envVar: 'CODEX_HOME', defaultPath: '~/.codex' },
   nativeTools: [
@@ -49,7 +61,7 @@ export const clientDefinition = createClientDefinition({
     supportsHooks: true,
     supportsStatusline: false,
     supportsSupervisorLaunch: true,
-    supportsManagedBinary: false,
+    supportsManagedBinary: true,
     hookEvents: [
       { name: 'SessionStart', frameworkSubject: 'client.session.started' },
       {

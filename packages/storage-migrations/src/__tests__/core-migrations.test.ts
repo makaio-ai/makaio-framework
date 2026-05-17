@@ -2,8 +2,8 @@
  * Regression tests for the core migration set.
  *
  * Applies all migrations read from the local `drizzle/` folder to an
- * in-memory SQLite database and asserts that the managed-binary tables,
- * indexes, and column defaults are present and correctly formed.
+ * in-memory SQLite database and asserts that the managed-binary tables and
+ * indexes are present and correctly formed.
  *
  * These are black-box regression guards: they verify the observable schema
  * produced by the SQL files, not the Drizzle TypeScript schema objects.
@@ -87,9 +87,11 @@ describe('core migrations — managed binary tables', () => {
     expect(Object.keys(tables['client_binary_versions']!.indexes)).toEqual(
       expect.arrayContaining(['idx_client_binary_versions_client_id', 'uq_client_binary_versions_client_version']),
     );
-    expect(tables['client_binary_state']!.columns['latest_version_source_status']).toMatchObject({
-      default: "'error'",
-    });
+    expect(Object.keys(tables['client_binary_state']!.columns).sort()).toEqual([
+      'active_version',
+      'client_id',
+      'updated_at',
+    ]);
   });
 
   it('applies all migrations to :memory: without error', async () => {
@@ -156,23 +158,21 @@ describe('core migrations — managed binary tables', () => {
     });
   });
 
-  it('client_binary_state.latest_version_source_status defaults to error', async () => {
+  it('client_binary_state stores active-version state', async () => {
     await withMigratedMemoryDatabase(async (db) => {
-      // Insert a row without supplying latest_version_source_status and verify
-      // the column's DEFAULT 'error' constraint fires as expected.
       await db.run(sql`
-        INSERT INTO client_binary_state (client_id, updated_at)
-        VALUES ('test-client', 1000)
+        INSERT INTO client_binary_state (client_id, active_version, updated_at)
+        VALUES ('test-client', '1.0.0', 1000)
       `);
 
-      const rows = await db.all<{ latest_version_source_status: string }>(sql`
-        SELECT latest_version_source_status
+      const rows = await db.all<{ active_version: string }>(sql`
+        SELECT active_version
         FROM client_binary_state
         WHERE client_id = 'test-client'
       `);
 
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.latest_version_source_status).toBe('error');
+      expect(rows[0]?.active_version).toBe('1.0.0');
     });
   });
 });

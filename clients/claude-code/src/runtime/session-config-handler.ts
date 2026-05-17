@@ -26,6 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { SessionConfigSetupRequest, SessionConfigSetupResponse } from '@makaio/contracts/client';
 import { scrubManagedClaudeCodeWiring } from './client-settings-modifiers.js';
+import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
 import {
   clearClaudeCodeNativeCredentialsForSession,
   inheritClaudeCodeNativeCredentialsForSession,
@@ -239,6 +240,13 @@ export async function handleClaudeCodeSessionConfigSetup(
       await inheritAuthState(sourceConfigDir, sessionDir, projectDir);
     }
   }
+
+  await handleClaudeCodeConfigPrime({
+    clientId: 'claude-code',
+    configDir: sessionDir,
+    phase: 'session-create',
+    ...(projectDir !== undefined ? { projectDir } : {}),
+  });
 
   return { env: { CLAUDE_CONFIG_DIR: sessionDir } };
 }

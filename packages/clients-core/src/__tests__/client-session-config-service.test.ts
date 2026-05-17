@@ -11,6 +11,7 @@ import * as fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSessionConfigSchemas, ClientSubjects, SessionConfigSetupRequestSchema } from '@makaio/contracts/client';
+import type { ClientConfigPrimeRequest } from '@makaio/contracts/client';
 import { SessionSubjects } from '@makaio/contracts/session';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
@@ -345,6 +346,131 @@ describe('ClientSessionConfigService', () => {
           sessionId: '../escape',
         }),
       ).rejects.toThrow();
+    });
+
+    // -----------------------------------------------------------------------
+    // Config prime lifecycle — session-create phase
+    // -----------------------------------------------------------------------
+
+    it('calls client-specific config.prime with session-create phase after setup delegation', async () => {
+      const observed: ClientConfigPrimeRequest[] = [];
+      const primeNs = createBusNamespace('client:claude-code', {
+        'config.prime': {
+          request: z.object({
+            clientId: z.string(),
+            configDir: z.string(),
+            phase: z.string(),
+            binaryVersion: z.string().optional(),
+            adapterName: z.string().optional(),
+            projectDir: z.string().optional(),
+          }),
+          response: z.object({ primed: z.boolean() }),
+        },
+      });
+      const unsubPrime = bus.on(primeNs.subjects.config.prime, (ctx) => {
+        observed.push(ctx.payload as ClientConfigPrimeRequest);
+        ctx.setResult({ primed: true });
+      });
+
+      const projectDir = path.join(baseDir, 'my-project');
+      const result = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-prime-test',
+        projectDir,
+      });
+
+      unsubPrime();
+
+      expect(observed).toHaveLength(1);
+      expect(observed[0]?.clientId).toBe('claude-code');
+      expect(observed[0]?.phase).toBe('session-create');
+      expect(observed[0]?.configDir).toBe(result.sessionDir);
+      expect(observed[0]?.projectDir).toBe(projectDir);
+      expect(observed[0]?.binaryVersion).toBeUndefined();
+    });
+
+    it('proceeds without a config.prime handler registered for session-create', async () => {
+      // No client:claude-code.config.prime handler — creation must succeed.
+      const result = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-no-prime-handler',
+      });
+
+      const stat = await fs.stat(result.sessionDir);
+      expect(stat.isDirectory()).toBe(true);
+    });
+
+    it('calls config.prime after setup delegation (setup env is returned correctly)', async () => {
+      // Register both a setup handler and a prime handler to confirm ordering:
+      // setup runs first (returns env), then prime is called.
+      const callOrder: string[] = [];
+      const setupNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
+          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+        },
+      });
+      bus.on(setupNs.subjects.sessionConfig.setup, (ctx) => {
+        callOrder.push('setup');
+        ctx.setResult({ env: { SETUP_VAR: 'setup-value' } });
+      });
+
+      const primeNs = createBusNamespace('client:claude-code', {
+        'config.prime': {
+          request: z.object({ clientId: z.string(), configDir: z.string(), phase: z.string() }),
+          response: z.object({ primed: z.boolean() }),
+        },
+      });
+      bus.on(primeNs.subjects.config.prime, (ctx) => {
+        callOrder.push('prime');
+        ctx.setResult({ primed: true });
+      });
+
+      const result = await bus.request(ClientSubjects.sessionConfig.create, {
+        clientId: 'claude-code',
+        sessionId: 'session-order-test',
+      });
+
+      // Setup must run before prime.
+      expect(callOrder).toEqual(['setup', 'prime']);
+      // Env from setup is returned correctly even when prime is called after.
+      expect(result.env).toEqual({ SETUP_VAR: 'setup-value' });
+    });
+
+    it('rejects session config creation when config.prime fails after setup', async () => {
+      const callOrder: string[] = [];
+      const expectedDir = path.join(baseDir, 'claude-code', 'sessions', 'session-prime-fails');
+      const setupNs = createBusNamespace('client:claude-code', {
+        'sessionConfig.setup': {
+          request: z.object({ sessionDir: z.string(), baseConfigDir: z.string(), platform: z.string() }),
+          response: z.object({ env: z.record(z.string(), z.string()).optional() }),
+        },
+      });
+      bus.on(setupNs.subjects.sessionConfig.setup, (ctx) => {
+        callOrder.push('setup');
+        ctx.setResult({ env: { SETUP_VAR: 'setup-value' } });
+      });
+
+      const primeNs = createBusNamespace('client:claude-code', {
+        'config.prime': {
+          request: z.object({ clientId: z.string(), configDir: z.string(), phase: z.string() }),
+          response: z.object({ primed: z.boolean() }),
+        },
+      });
+      bus.on(primeNs.subjects.config.prime, () => {
+        callOrder.push('prime');
+        throw new Error('prime failed');
+      });
+
+      await expect(
+        bus.request(ClientSubjects.sessionConfig.create, {
+          clientId: 'claude-code',
+          sessionId: 'session-prime-fails',
+        }),
+      ).rejects.toThrow('prime failed');
+
+      expect(callOrder).toEqual(['setup', 'prime']);
+      await expect(fs.access(expectedDir)).rejects.toThrow();
     });
   });
 

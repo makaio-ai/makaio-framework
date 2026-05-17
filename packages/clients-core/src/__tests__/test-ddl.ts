@@ -31,9 +31,6 @@ export const CLIENT_BINARY_DDL = [
     CREATE TABLE IF NOT EXISTS client_binary_state (
       client_id TEXT PRIMARY KEY NOT NULL,
       active_version TEXT,
-      latest_available_version TEXT,
-      latest_version_last_checked_at INTEGER,
-      latest_version_source_status TEXT NOT NULL DEFAULT 'error',
       updated_at INTEGER NOT NULL
     )
   `,

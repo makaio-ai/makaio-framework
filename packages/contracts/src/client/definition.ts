@@ -149,132 +149,184 @@ export const ConfigIsolationSchema = z.object({
 
 export type ConfigIsolation = z.infer<typeof ConfigIsolationSchema>;
 
+/**
+ * Return true when an npm package spec is only a package name, without an
+ * inline version suffix.
+ * @param value - Candidate npm package name.
+ * @returns True when the value does not include a version suffix.
+ */
+function isBareNpmPackageName(value: string): boolean {
+  if (!value.startsWith('@')) {
+    return !value.includes('@');
+  }
+  const slashIndex = value.indexOf('/');
+  return slashIndex > 1 && !value.slice(slashIndex + 1).includes('@');
+}
+
 // ---------------------------------------------------------------------------
 // Managed install descriptors
 // ---------------------------------------------------------------------------
-
-/**
- * Install descriptor for the `manifest-bucket` strategy.
- *
- * The manager fetches a version-index file from a static HTTP bucket, selects
- * a per-platform manifest, downloads the binary archive, verifies its
- * checksum, and extracts it.
- */
-export const ManifestBucketInstallDescriptorSchema = z.object({
-  type: z.literal('manifest-bucket'),
-  config: z.object({
-    /**
-     * Base URL of the storage bucket (e.g.
-     * `'https://storage.example.com/client'`).
-     */
-    baseUrl: z.string().url(),
-    /**
-     * Sub-paths within the bucket used to look up version metadata.
-     * `latest` is the path to the latest-version index file.
-     */
-    versionIndex: z.object({
-      /** Path to the file that returns the current latest version string. */
-      latest: z.string().min(1),
-    }),
-    /**
-     * Path to the per-version manifest JSON file, relative to the versioned
-     * bucket directory (`{baseUrl}/{version}/{manifestPath}`).
-     *
-     * This is a plain path segment, not a template — the strategy prepends the
-     * resolved version automatically (e.g. `'manifest.json'` resolves to
-     * `{baseUrl}/1.2.3/manifest.json`).
-     */
-    manifestPath: z.string().min(1),
-    /**
-     * JSON field name within the manifest that carries the expected checksum
-     * of the binary archive (e.g. `'sha256'`).
-     */
-    manifestChecksumField: z.string().min(1),
-    /**
-     * Relative path within the version directory of the bucket that points to
-     * the binary archive to download (e.g. `'dist/myapp-linux-x64.tar.gz'`).
-     *
-     * The strategy constructs the download URL as
-     * `{baseUrl}/{version}/{binaryPath}` and uses the last path segment as
-     * the local filename for the downloaded archive. This is not a path inside
-     * the extracted archive — extraction always targets the `targetDir`
-     * provided by the install pipeline.
-     */
-    binaryPath: z.string().min(1),
-    /**
-     * Archive format of the downloaded asset.
-     * Defaults to `'raw'` when the download is an uncompressed binary.
-     */
-    archiveFormat: z.enum(['raw', 'tar.gz', 'zip']).optional(),
-  }),
-});
-
-export type ManifestBucketInstallDescriptor = z.infer<typeof ManifestBucketInstallDescriptorSchema>;
 
 /**
  * Install descriptor for the `npm` strategy.
  *
  * The manager runs a sandboxed `npm install --prefix <targetDir>` for the
  * pinned package version so managed installs do not mutate global npm state.
+ * An exact version pin is required; floating ranges are not accepted so the
+ * framework can reproduce the same binary across machines and time.
  */
 export const NpmInstallDescriptorSchema = z.object({
   type: z.literal('npm'),
   /**
    * npm package name to install (e.g. `'@anthropic-ai/claude-code'`).
-   * May include an `@version` suffix to pin a specific version.
+   * Must not include an inline `@version` suffix — use the `version` field.
    */
-  package: z.string().min(1),
+  package: z.string().min(1).refine(isBareNpmPackageName, {
+    message: 'package must not include an inline `@version` suffix; use the version field instead',
+  }),
+  /**
+   * Exact semver version of the package to install (e.g. `'1.2.3'`).
+   * Required so managed installs are fully deterministic.
+   */
+  version: VersionLiteralSchema,
 });
 
 export type NpmInstallDescriptor = z.infer<typeof NpmInstallDescriptorSchema>;
 
 /**
- * Install descriptor for the `github-release` strategy.
+ * Install descriptor for the `signed-binary-bucket` strategy.
  *
- * The manager queries the GitHub Releases API for the specified repository,
- * selects a platform-appropriate asset using `assetPattern`, downloads and
- * extracts it.
+ * The manager fetches a GPG-signed manifest from a versioned bucket path,
+ * verifies the manifest signature against the declared public key, selects the
+ * per-platform binary, downloads it, and verifies its checksum before
+ * activating the install.
+ *
+ * All bucket paths are Go-style templates: `{version}` is replaced with the
+ * resolved version string and `{platform}` / `{binary}` are replaced with the
+ * per-platform values from the `platforms` map.
  */
-export const GithubReleaseInstallDescriptorSchema = z.object({
-  type: z.literal('github-release'),
+export const SignedBinaryBucketInstallDescriptorSchema = z.object({
+  type: z.literal('signed-binary-bucket'),
   /**
-   * GitHub repository in `owner/repo` format
-   * (e.g. `'anthropics/claude-code'`).
+   * Exact semver version of the binary to install (e.g. `'2.1.143'`).
+   * Required so managed installs are fully deterministic.
    */
-  repo: z.string().regex(/^[^/]+\/[^/]+$/, { message: "repo must be in 'owner/repo' format" }),
-  /**
-   * Mapping from a platform key to a glob or substring pattern used to
-   * select the correct release asset.
-   *
-   * Keys should follow the `<os>-<arch>` convention used by Node.js
-   * `process.platform` and `process.arch`
-   * (e.g. `{ 'darwin-arm64': 'claude-darwin-arm64.tar.gz' }`).
-   * Both keys and values must be non-empty strings.
-   */
-  assetPattern: z.record(z.string().min(1), z.string().min(1)),
-  /** Archive format of the matched release asset. */
-  archiveFormat: z.enum(['tar.gz', 'zip']),
+  version: VersionLiteralSchema,
+  /** Bucket configuration required to locate and verify the binary. */
+  config: z.object({
+    /**
+     * Base URL of the storage bucket
+     * (e.g. `'https://downloads.claude.ai/claude-code-releases'`).
+     */
+    baseUrl: z.string().url(),
+    /**
+     * Bucket-relative path template for the per-version manifest JSON file.
+     * (e.g. `'{version}/manifest.json'`).
+     */
+    manifestPathTemplate: z.string().min(1),
+    /**
+     * Bucket-relative path template for the detached GPG signature of the
+     * manifest (e.g. `'{version}/manifest.json.sig'`).
+     */
+    manifestSignaturePathTemplate: z.string().min(1),
+    /**
+     * URL of the ASCII-armored public key used to verify the manifest
+     * signature (e.g. `'https://downloads.claude.ai/keys/claude-code.asc'`).
+     */
+    publicKeyUrl: z.string().url(),
+    /**
+     * Full OpenPGP fingerprint of the expected signing key
+     * (e.g. `'31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE'`).
+     *
+     * The install pipeline verifies that the downloaded key matches this
+     * fingerprint before trusting the signature.
+     */
+    publicKeyFingerprint: z.string().min(1),
+    /**
+     * Bucket-relative path template for the binary to download.
+     * (e.g. `'{version}/{platform}/{binary}'`).
+     */
+    binaryPathTemplate: z.string().min(1),
+    /**
+     * Mapping from platform key to the platform directory segment used in
+     * bucket paths.
+     *
+     * Keys follow the `<os>-<arch>` convention used by Node.js
+     * `process.platform` and `process.arch`, with an optional suffix for
+     * libc variant (e.g. `'darwin-arm64'`, `'linux-x64-musl'`).
+     * Values are the platform path segment as stored in the bucket.
+     */
+    platforms: z.record(z.string().min(1), z.string().min(1)),
+  }),
 });
 
-export type GithubReleaseInstallDescriptor = z.infer<typeof GithubReleaseInstallDescriptorSchema>;
+export type SignedBinaryBucketInstallDescriptor = z.infer<typeof SignedBinaryBucketInstallDescriptorSchema>;
 
 /**
  * Discriminated union of all supported managed install descriptors.
  *
- * Exactly three v1 strategies are supported:
- * - `manifest-bucket` — static HTTP bucket with a version index and manifest.
- * - `npm`             — npm registry installation.
- * - `github-release`  — GitHub Releases asset download.
+ * Two strategies are supported:
+ * - `npm`                  — npm registry installation with an exact version pin.
+ * - `signed-binary-bucket` — signed static bucket download with an exact version pin.
  *
  * The descriptor is purely declarative; no runtime logic lives here.
  */
 export const ManagedInstallDescriptorSchema = z.discriminatedUnion('type', [
-  ManifestBucketInstallDescriptorSchema,
   NpmInstallDescriptorSchema,
-  GithubReleaseInstallDescriptorSchema,
+  SignedBinaryBucketInstallDescriptorSchema,
 ]);
 
 export type ManagedInstallDescriptor = z.infer<typeof ManagedInstallDescriptorSchema>;
+
+// ---------------------------------------------------------------------------
+// Version command schema
+// ---------------------------------------------------------------------------
+
+/**
+ * Platform-aware command descriptor for querying the installed binary version.
+ *
+ * The `executable` field may be a single relative path string (used on all
+ * platforms) or a platform-keyed object that overrides the `default` executable
+ * on specific operating systems.
+ *
+ * All executable values are resolved relative to the managed install directory
+ * — absolute paths and parent-directory traversals (`..`) are rejected by the
+ * `ClientDefinitionSchema` refinement.
+ */
+export const VersionCommandSchema = z
+  .object({
+    /**
+     * Executable path, relative to the managed install directory.
+     *
+     * Provide a plain string to use the same executable on all platforms, or a
+     * platform-keyed object to supply per-OS overrides (useful when the binary
+     * has a platform-specific name or extension, e.g. `'bin/claude.exe'` on
+     * Windows).
+     */
+    executable: z.union([
+      z.string().min(1),
+      z
+        .object({
+          /** Fallback executable when no platform-specific key matches. */
+          default: z.string().min(1),
+          /** macOS override (maps to `process.platform === 'darwin'`). */
+          darwin: z.string().min(1).optional(),
+          /** Linux override (maps to `process.platform === 'linux'`). */
+          linux: z.string().min(1).optional(),
+          /** Windows override (maps to `process.platform === 'win32'`). */
+          win32: z.string().min(1).optional(),
+        })
+        .strict(),
+    ]),
+    /**
+     * Arguments passed to the executable when querying the version.
+     * Defaults to an empty array when omitted.
+     */
+    args: z.array(z.string()).default([]),
+  })
+  .strict();
+
+export type VersionCommand = z.infer<typeof VersionCommandSchema>;
 
 /**
  * Optional post-install action descriptor.
@@ -431,24 +483,32 @@ export const ClientDefinitionSchema = z
      * Declarative install descriptor used by the binary manager when
      * `runtimeCapabilities.supportsManagedBinary` is `true`.
      *
-     * Exactly one of the three v1 strategy variants must be provided.
+     * Exactly one supported managed install strategy must be provided.
      * Omit this field for clients that are not managed by Makaio.
      */
     managedInstall: ManagedInstallDescriptorSchema.optional(),
     /**
-     * Command and arguments used to query the installed binary version.
+     * Command descriptor used to query the installed binary version.
      *
-     * Each element is a separate argument so no shell quoting is required.
-     * The first element is resolved **relative to the managed install
+     * The `executable` field is resolved **relative to the managed install
      * directory** (i.e. the versioned directory written by the install
      * strategy after `postInstall` runs), not looked up on `PATH`.
-     * Subsequent elements are passed as-is
-     * (e.g. `['bin/claude', '--version']` resolves to
-     * `<installDir>/bin/claude --version`).
+     * Absolute paths and parent-directory traversals (`..`) are rejected.
      *
      * Required whenever `managedInstall` is provided.
+     * @example
+     * ```ts
+     * versionCommand: { executable: 'bin/claude', args: ['--version'] }
+     * ```
+     * @example Platform-specific executables
+     * ```ts
+     * versionCommand: {
+     *   executable: { default: 'bin/claude', win32: 'bin/claude.exe' },
+     *   args: ['--version'],
+     * }
+     * ```
      */
-    versionCommand: z.array(z.string().min(1)).min(1).optional(),
+    versionCommand: VersionCommandSchema.optional(),
     /**
      * Optional post-install action to run after the binary is written to disk
      * but before it is activated.
@@ -494,32 +554,51 @@ export const ClientDefinitionSchema = z
       return;
     }
 
-    const executable = definition.versionCommand[0];
+    // Collect all executable candidates — both the cross-platform default and
+    // any per-OS overrides — so every path is validated uniformly.
+    const { executable } = definition.versionCommand;
+    const candidates: Array<{ path: string; issuePath: Array<string | number> }> =
+      typeof executable === 'string'
+        ? [{ path: executable, issuePath: ['versionCommand', 'executable'] }]
+        : [
+            { path: executable.default, issuePath: ['versionCommand', 'executable', 'default'] },
+            ...(executable.darwin !== undefined
+              ? [{ path: executable.darwin, issuePath: ['versionCommand', 'executable', 'darwin'] }]
+              : []),
+            ...(executable.linux !== undefined
+              ? [{ path: executable.linux, issuePath: ['versionCommand', 'executable', 'linux'] }]
+              : []),
+            ...(executable.win32 !== undefined
+              ? [{ path: executable.win32, issuePath: ['versionCommand', 'executable', 'win32'] }]
+              : []),
+          ];
 
-    const isAbsolutePosix = executable.startsWith('/');
-    const isAbsoluteWindowsDrive = /^[A-Za-z]:[/\\]/.test(executable);
-    const isAbsoluteWindowsRooted = executable.startsWith('\\');
+    for (const { path: execPath, issuePath } of candidates) {
+      const isAbsolutePosix = execPath.startsWith('/');
+      const isWindowsDrivePrefixed = /^[A-Za-z]:/.test(execPath);
+      const isAbsoluteWindowsRooted = execPath.startsWith('\\');
 
-    // Validate Windows forms explicitly even on POSIX hosts; client
-    // definitions are portable contracts, not host-local path strings.
-    if (isAbsolutePosix || isAbsoluteWindowsDrive || isAbsoluteWindowsRooted) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['versionCommand', 0],
-        message: 'versionCommand[0] must be a relative path within the install directory',
-      });
-      return;
-    }
+      // Validate Windows forms explicitly even on POSIX hosts; client
+      // definitions are portable contracts, not host-local path strings.
+      if (isAbsolutePosix || isWindowsDrivePrefixed || isAbsoluteWindowsRooted) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: issuePath,
+          message: `${issuePath.join('.')} must be a relative path within the install directory`,
+        });
+        continue;
+      }
 
-    const segments = executable.split(/[/\\]/);
-    const hasTraversal = segments.some((segment) => segment === '..');
+      const segments = execPath.split(/[/\\]/);
+      const hasTraversal = segments.some((segment) => segment === '..');
 
-    if (hasTraversal) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['versionCommand', 0],
-        message: 'versionCommand[0] must be a relative path within the install directory',
-      });
+      if (hasTraversal) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: issuePath,
+          message: `${issuePath.join('.')} must be a relative path within the install directory`,
+        });
+      }
     }
   });
 

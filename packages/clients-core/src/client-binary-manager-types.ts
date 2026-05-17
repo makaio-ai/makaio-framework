@@ -26,18 +26,28 @@ import { isPathWithinBase as isPathWithinResolvedBase } from './client-binary-pa
  *
  * The manager derives per-client, per-version install directories from
  * `basePath` using the pattern `{basePath}/{clientId}/{version}/`.
- *
- * TODO: ClientBinaryJobRunner only consumes basePath — introduce a narrowed
- * runner-specific config (e.g. `Pick<ClientBinaryManagerConfig, 'basePath'>`) to
- * decouple the runner from manager-only config such as configBasePath.
  */
-export interface ClientBinaryManagerConfig {
+export interface ClientBinaryJobRunnerConfig {
   /**
    * Absolute base directory under which all managed binary versions are
    * installed (e.g. `~/.makaio/binaries/`).
    */
   basePath: string;
 
+  /**
+   * Framework-owned handlers for declarative post-install descriptors.
+   *
+   * Client packages declare `postInstall.kind`; the host supplies the handler
+   * implementation here. Missing handlers fail the install job rather than
+   * silently skipping a declared lifecycle step.
+   */
+  postInstallHandlers?: ReadonlyMap<string, PostInstallHandler>;
+}
+
+/**
+ * Configuration for the managed binary manager.
+ */
+export interface ClientBinaryManagerConfig extends ClientBinaryJobRunnerConfig {
   /**
    * Base directory for per-client config isolation directories.
    *
@@ -48,15 +58,6 @@ export interface ClientBinaryManagerConfig {
    * the definition declares `configIsolation`.
    */
   configBasePath: string;
-
-  /**
-   * Framework-owned handlers for declarative post-install descriptors.
-   *
-   * Client packages declare `postInstall.kind`; the host supplies the handler
-   * implementation here. Missing handlers fail the install job rather than
-   * silently skipping a declared lifecycle step.
-   */
-  postInstallHandlers?: ReadonlyMap<string, PostInstallHandler>;
 }
 
 /**

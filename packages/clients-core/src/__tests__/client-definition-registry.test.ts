@@ -22,16 +22,11 @@ const DEFINITION_A = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
-    type: 'manifest-bucket',
-    config: {
-      baseUrl: 'https://example.com/client-a',
-      versionIndex: { latest: 'latest.txt' },
-      manifestPath: 'manifest.json',
-      manifestChecksumField: 'sha256',
-      binaryPath: 'bin/client-a',
-    },
+    type: 'npm',
+    package: '@example/client-a',
+    version: '1.0.0',
   },
-  versionCommand: ['bin/client-a', '--version'],
+  versionCommand: { executable: 'bin/client-a', args: ['--version'] },
 });
 
 const DEFINITION_B = createClientDefinition({

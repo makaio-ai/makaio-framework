@@ -70,19 +70,16 @@ function makeStrategyDeps(
 }
 
 /**
- * Build a minimal manifest-bucket install descriptor for use in tests.
- * @returns A typed manifest-bucket managed install descriptor
+ * Build a minimal npm install descriptor for use in tests.
+ *
+ * Uses the same pinned version as `makeJob` so the strategy pin check passes.
+ * @returns A typed npm managed install descriptor
  */
-function makeManifestBucketDescriptor() {
+function makeNpmDescriptor() {
   return {
-    type: 'manifest-bucket' as const,
-    config: {
-      baseUrl: 'https://example.com/test-client',
-      versionIndex: { latest: 'latest.txt' },
-      manifestPath: 'manifest.json',
-      manifestChecksumField: 'sha256',
-      binaryPath: 'bin/test-client',
-    },
+    type: 'npm' as const,
+    package: '@example/test-client',
+    version: '1.0.0',
   };
 }
 
@@ -127,7 +124,6 @@ function createPostInstallFailureHarness(
   const strategyDeps = makeStrategyDeps();
   const runner = new ClientBinaryJobRunner(strategyDeps, {
     basePath: BASE_PATH,
-    configBasePath: BASE_PATH,
     ...(postInstallHandlers !== undefined && { postInstallHandlers }),
   });
 
@@ -149,7 +145,7 @@ function makeJob(
     jobId: 'test-job-id',
     clientId: 'test-client',
     version: overrides.version ?? '1.0.0',
-    strategy: 'manifest-bucket',
+    strategy: 'npm',
     status: 'pending',
     makeActive: overrides.makeActive ?? false,
     reason: 'install',
@@ -204,7 +200,7 @@ describe('ClientBinaryJobRunner', () => {
   let runner: ClientBinaryJobRunner;
 
   beforeEach(() => {
-    runner = new ClientBinaryJobRunner(makeStrategyDeps(), { basePath: BASE_PATH, configBasePath: BASE_PATH });
+    runner = new ClientBinaryJobRunner(makeStrategyDeps(), { basePath: BASE_PATH });
   });
 
   afterEach(() => {
@@ -213,14 +209,14 @@ describe('ClientBinaryJobRunner', () => {
 
   it('removes the installed artifact when persistence rejects the completed install', async () => {
     const strategyDeps = makeStrategyDeps();
-    const cleanupRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH, configBasePath: BASE_PATH });
+    const cleanupRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH });
     const completedPayloads: ClientInstallCompleted[] = [];
 
     const onProgress: JobProgressCallback = vi.fn();
     const onComplete: JobCompletionCallback = vi.fn().mockRejectedValue(new Error('storage write failed'));
     const { onCompleted, completed } = createCompletionSpy(completedPayloads);
 
-    cleanupRunner.startJob(makeJob(), makeManifestBucketDescriptor(), onProgress, onComplete, onCompleted);
+    cleanupRunner.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
     await completed;
 
@@ -252,7 +248,6 @@ describe('ClientBinaryJobRunner', () => {
     } satisfies StrategyDependencies;
     const cleanupRunner = new ClientBinaryJobRunner(strategyDeps, {
       basePath: tmpBasePath,
-      configBasePath: tmpBasePath,
     });
     const artifactPath = path.join(tmpBasePath, 'test-client', '1.0.0');
 
@@ -261,7 +256,7 @@ describe('ClientBinaryJobRunner', () => {
       const onComplete: JobCompletionCallback = vi.fn().mockRejectedValue(new Error('storage write failed'));
       const { onCompleted, completed } = createCompletionSpy();
 
-      cleanupRunner.startJob(makeJob(), makeManifestBucketDescriptor(), onProgress, onComplete, onCompleted);
+      cleanupRunner.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
       await completed;
 
@@ -272,24 +267,60 @@ describe('ClientBinaryJobRunner', () => {
     }
   });
 
+  it('removes the target directory when strategy execution fails after staging files', async () => {
+    const tmpBasePath = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-runner-strategy-fail-'));
+    const artifactPath = path.join(tmpBasePath, 'test-client', '1.0.0');
+    const strategyDeps = {
+      ...makeStrategyDeps(),
+      exec: vi.fn().mockImplementation(async () => {
+        await fs.mkdir(artifactPath, { recursive: true });
+        await fs.writeFile(path.join(artifactPath, 'partial.txt'), 'partial');
+        throw new Error('npm install failed');
+      }),
+      removeDirectory: vi.fn().mockImplementation(async (dirPath: string) => {
+        await fs.rm(dirPath, { recursive: true, force: true });
+      }),
+    } satisfies StrategyDependencies;
+    const cleanupRunner = new ClientBinaryJobRunner(strategyDeps, {
+      basePath: tmpBasePath,
+    });
+    const completedPayloads: ClientInstallCompleted[] = [];
+
+    try {
+      const onProgress: JobProgressCallback = vi.fn();
+      const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
+      const { onCompleted, completed } = createCompletionSpy(completedPayloads);
+
+      cleanupRunner.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
+
+      await completed;
+
+      await expect(fs.stat(artifactPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(strategyDeps.removeDirectory).toHaveBeenCalledWith(artifactPath);
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(completedPayloads[0]).toMatchObject({
+        status: 'error',
+        error: { message: 'npm install failed' },
+      });
+    } finally {
+      cleanupRunner.cancelAll();
+      await fs.rm(tmpBasePath, { recursive: true, force: true });
+    }
+  });
+
   it('removes the staged artifact when version verification fails before persistence', async () => {
     const strategyDeps = makeStrategyDeps();
-    const verifyingRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH, configBasePath: BASE_PATH });
+    const verifyingRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH });
     const completedPayloads: ClientInstallCompleted[] = [];
 
     const onProgress: JobProgressCallback = vi.fn();
     const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
     const { onCompleted, completed } = createCompletionSpy(completedPayloads);
 
-    verifyingRunner.startJob(
-      makeJob(),
-      makeManifestBucketDescriptor(),
-      onProgress,
-      onComplete,
-      onCompleted,
-      undefined,
-      ['/usr/bin/test-client', '--version'],
-    );
+    verifyingRunner.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted, undefined, [
+      '/usr/bin/test-client',
+      '--version',
+    ]);
 
     await completed;
 
@@ -322,7 +353,7 @@ describe('ClientBinaryJobRunner', () => {
 
     const { onCompleted, completed } = createCompletionSpy(completedPayloads);
 
-    runner.startJob(makeJob(), makeManifestBucketDescriptor(), throwingOnProgress, onComplete, onCompleted);
+    runner.startJob(makeJob(), makeNpmDescriptor(), throwingOnProgress, onComplete, onCompleted);
 
     await completed;
 
@@ -345,7 +376,7 @@ describe('ClientBinaryJobRunner', () => {
     const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
     const { onCompleted, completed } = createCompletionSpy();
 
-    runner.startJob(makeJob({ makeActive: true }), makeManifestBucketDescriptor(), onProgress, onComplete, onCompleted);
+    runner.startJob(makeJob({ makeActive: true }), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
     await completed;
 
@@ -368,13 +399,7 @@ describe('ClientBinaryJobRunner', () => {
     const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
     const { onCompleted, completed } = createCompletionSpy();
 
-    runner.startJob(
-      makeJob({ makeActive: false }),
-      makeManifestBucketDescriptor(),
-      onProgress,
-      onComplete,
-      onCompleted,
-    );
+    runner.startJob(makeJob({ makeActive: false }), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
     await completed;
 
@@ -390,20 +415,13 @@ describe('ClientBinaryJobRunner', () => {
     // Use a delay so the job is still executing when cancelAll fires.
     const slowRunner = new ClientBinaryJobRunner(makeStrategyDeps({ executeDelayMs: 50 }), {
       basePath: BASE_PATH,
-      configBasePath: BASE_PATH,
     });
 
     const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
     const onCompleted: JobCompletedCallback = vi.fn().mockResolvedValue(undefined);
     const onProgress: JobProgressCallback = vi.fn();
 
-    slowRunner.startJob(
-      makeJob({ makeActive: false }),
-      makeManifestBucketDescriptor(),
-      onProgress,
-      onComplete,
-      onCompleted,
-    );
+    slowRunner.startJob(makeJob({ makeActive: false }), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
     // Cancel before the delayed download resolves.
     slowRunner.cancelAll();
@@ -417,9 +435,9 @@ describe('ClientBinaryJobRunner', () => {
     expect(onCompleted).not.toHaveBeenCalled();
   });
 
-  it('cancelAll from verifying progress suppresses exec, onComplete, and onCompleted', async () => {
+  it('cancelAll from verifying progress suppresses the version-command exec, onComplete, and onCompleted', async () => {
     const strategyDeps = makeStrategyDeps();
-    const verifyingRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH, configBasePath: BASE_PATH });
+    const verifyingRunner = new ClientBinaryJobRunner(strategyDeps, { basePath: BASE_PATH });
 
     const onProgress: JobProgressCallback = (payload) => {
       if (payload.stage === 'verifying' && payload.metadata?.['kind'] === 'version-command') {
@@ -429,19 +447,19 @@ describe('ClientBinaryJobRunner', () => {
     const onComplete: JobCompletionCallback = vi.fn().mockResolvedValue(undefined);
     const onCompleted: JobCompletedCallback = vi.fn().mockResolvedValue(undefined);
 
-    verifyingRunner.startJob(
-      makeJob(),
-      makeManifestBucketDescriptor(),
-      onProgress,
-      onComplete,
-      onCompleted,
-      undefined,
-      ['bin/test-client', '--version'],
-    );
+    verifyingRunner.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted, undefined, [
+      'bin/test-client',
+      '--version',
+    ]);
 
     await flushAsync();
 
-    expect(strategyDeps.exec).not.toHaveBeenCalled();
+    // The npm strategy calls exec once (for `npm install`). The version-command
+    // exec (`bin/test-client --version`) must NOT fire because cancelAll was
+    // called synchronously inside the verifying progress callback.
+    const execCalls = (strategyDeps.exec as ReturnType<typeof vi.fn>).mock.calls as unknown[][];
+    const versionCommandCall = execCalls.find((call) => call[0] !== 'npm');
+    expect(versionCommandCall).toBeUndefined();
     expect(onComplete).not.toHaveBeenCalled();
     expect(onCompleted).not.toHaveBeenCalled();
   });
@@ -464,14 +482,7 @@ describe('ClientBinaryJobRunner', () => {
 
     try {
       const postInstall = { kind: 'unregistered-kind' };
-      runnerWithoutHandlers.startJob(
-        makeJob(),
-        makeManifestBucketDescriptor(),
-        onProgress,
-        onComplete,
-        onCompleted,
-        postInstall,
-      );
+      runnerWithoutHandlers.startJob(makeJob(), makeNpmDescriptor(), onProgress, onComplete, onCompleted, postInstall);
 
       await completed;
 
@@ -504,7 +515,7 @@ describe('ClientBinaryJobRunner', () => {
       const postInstall = { kind: 'set-permissions' };
       runnerWithThrowingHandler.startJob(
         makeJob(),
-        makeManifestBucketDescriptor(),
+        makeNpmDescriptor(),
         onProgress,
         onComplete,
         onCompleted,
@@ -543,7 +554,7 @@ describe('ClientBinaryJobRunner', () => {
     });
     const { onCompleted, completed } = createCompletionSpy();
 
-    runner.startJob(makeJob({ makeActive: true }), makeManifestBucketDescriptor(), onProgress, onComplete, onCompleted);
+    runner.startJob(makeJob({ makeActive: true }), makeNpmDescriptor(), onProgress, onComplete, onCompleted);
 
     await completed;
 

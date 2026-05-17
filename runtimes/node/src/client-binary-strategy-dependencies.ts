@@ -156,6 +156,40 @@ async function extractArchive(
   }
 }
 
+/**
+ * Execute a command without a shell, returning trimmed stdout.
+ *
+ * Uses `node:child_process.execFile` so no shell expansion occurs on the
+ * arguments. Stderr is included in the thrown error message on non-zero exit.
+ * @param command - The executable to run.
+ * @param args - Positional arguments passed to the executable.
+ * @param options - Optional execution options. `cwd` sets the working
+ *   directory; `env` is merged on top of `process.env` when present
+ *   (when absent `process.env` is inherited unchanged).
+ * @param timeoutMs - Timeout in milliseconds for the subprocess.
+ * @returns Trimmed stdout string.
+ */
+async function execCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: Record<string, string> } | undefined,
+  timeoutMs: number,
+): Promise<string> {
+  const { stdout } = await execFileAsync(command, args, {
+    cwd: options?.cwd,
+    env: options?.env === undefined ? process.env : { ...process.env, ...options.env },
+    shell: false,
+    timeout: timeoutMs,
+  }).catch((err: NodeJS.ErrnoException & { stderr?: string; stdout?: string }) => {
+    if (err.code === 'ENOENT') {
+      throw new Error(`Command failed: host executable "${command}" was not found on PATH`);
+    }
+    const stderrText = err.stderr ?? '';
+    throw new Error(`Command failed: ${command} ${args.join(' ')}\nstderr: ${stderrText}\n${String(err.message)}`);
+  });
+  return (stdout ?? '').trim();
+}
+
 // ---------------------------------------------------------------------------
 // Public factory
 // ---------------------------------------------------------------------------
@@ -272,28 +306,16 @@ export function createNodeClientBinaryStrategyDependencies(
     /**
      * Execute a command without a shell and return trimmed stdout.
      *
-     * Uses `node:child_process.execFile` so no shell expansion occurs on the
-     * arguments. Stderr is included in the thrown error message on non-zero
-     * exit.
+     * Delegates to the module-level {@link execCommand} helper which uses
+     * `node:child_process.execFile` (no shell, stderr in errors, optional
+     * working directory and environment merge).
      * @param command - The executable to run.
      * @param args - Positional arguments passed to the executable.
-     * @param options - Optional execution options (e.g. `cwd`).
+     * @param options - Optional execution options.
      * @returns Trimmed stdout string.
      */
-    async exec(command: string, args: string[], options?: { cwd?: string }): Promise<string> {
-      const { stdout } = await execFileAsync(command, args, {
-        cwd: options?.cwd,
-        shell: false,
-        timeout: execTimeoutMs,
-      }).catch((err: NodeJS.ErrnoException & { stderr?: string; stdout?: string }) => {
-        if (err.code === 'ENOENT') {
-          throw new Error(`Command failed: host executable "${command}" was not found on PATH`);
-        }
-        const stderrText = err.stderr ?? '';
-        throw new Error(`Command failed: ${command} ${args.join(' ')}\nstderr: ${stderrText}\n${String(err.message)}`);
-      });
-
-      return (stdout ?? '').trim();
+    exec(command: string, args: string[], options?: { cwd?: string; env?: Record<string, string> }): Promise<string> {
+      return execCommand(command, args, options, execTimeoutMs);
     },
 
     /**

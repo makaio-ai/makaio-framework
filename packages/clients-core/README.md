@@ -47,8 +47,7 @@ MakaioBus.on(ClientSubjects.hookReceived, ({ payload }) => {
 | `createClientsCorePackage()` | Factory for the `MakaioExtension` manifest |
 | `ClientBinaryManager` | Orchestrates binary download, versioning, and disk layout |
 | `ClientBinaryJobRunner` | Executes install/uninstall jobs with progress callbacks |
-| `ClientBinaryFeedCache` | Cache layer for version feed responses |
-| `ClientBinaryVersionResolver` | Fetches latest available version from a feed |
+| `ClientBinaryVersionResolver` | Resolves install requests against descriptor-pinned versions |
 | `ClientDefinitionRegistry` | In-memory registry of known client definitions |
 | `ClientRuntimeRegistry` | Persistent registry of running client instances |
 | `ClientRuntimeService` | Service that owns the `ClientRuntimeRegistry` bus handlers |

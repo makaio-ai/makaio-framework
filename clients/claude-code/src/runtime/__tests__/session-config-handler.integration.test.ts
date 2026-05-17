@@ -49,7 +49,8 @@ describe('handleClaudeCodeSessionConfigSetup filesystem integration', () => {
       });
 
       expect(result).toEqual({ env: { CLAUDE_CONFIG_DIR: sessionDir } });
-      await expect(fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8')).resolves.toBe('{}');
+      const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
+      expect(sessionSettings).toEqual({ env: { DISABLE_AUTOUPDATER: '1' } });
       await expect(fs.access(path.join(sessionDir, 'settings.local.json'))).rejects.toThrow();
       expect(await fs.readlink(path.join(sessionDir, '.credentials.json'))).toBe(
         path.join(sourceDir, '.credentials.json'),

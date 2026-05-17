@@ -14,7 +14,11 @@
         "id": "claude-code",
         "name": "Claude Code",
         "description": "Anthropic Claude Code CLI \u2014 an agentic coding assistant",
-        "binary": { "name": "claude" }
+        "binary": {
+          "name": "claude",
+          "managed": true,
+          "version": "2.1.143"
+        }
       }
     ]
   }

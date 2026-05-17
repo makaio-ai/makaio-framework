@@ -262,12 +262,95 @@ describe('ClientManifestSchema', () => {
   });
 });
 
+describe('ClientManifest — binary managed/version fields', () => {
+  it('accepts a managed client descriptor with an exact binary version', () => {
+    const result = ClientManifestSchema.parse({
+      id: 'claude-code',
+      name: 'Claude Code',
+      binary: {
+        name: 'claude',
+        managed: true,
+        version: '2.1.143',
+      },
+    });
+
+    expect(result.binary).toEqual({
+      name: 'claude',
+      managed: true,
+      version: '2.1.143',
+    });
+  });
+
+  it('rejects a managed client descriptor without an exact binary version', () => {
+    const result = ClientManifestSchema.safeParse({
+      id: 'claude-code',
+      name: 'Claude Code',
+      binary: {
+        name: 'claude',
+        managed: true,
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts an unmanaged client descriptor without a binary version', () => {
+    const result = ClientManifestSchema.parse({
+      id: 'gemini',
+      name: 'Gemini CLI',
+      binary: { name: 'gemini' },
+    });
+
+    expect(result.binary).toEqual({ name: 'gemini' });
+  });
+
+  it('rejects an unmanaged client descriptor with a binary version', () => {
+    const result = ClientManifestSchema.safeParse({
+      id: 'gemini',
+      name: 'Gemini CLI',
+      binary: { name: 'gemini', version: '1.2.3' },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a managed client with managed: false and no version', () => {
+    const result = ClientManifestSchema.parse({
+      id: 'my-client',
+      name: 'My Client',
+      binary: { name: 'my-cli', managed: false },
+    });
+
+    expect(result.binary?.managed).toBe(false);
+    expect(result.binary?.version).toBeUndefined();
+  });
+
+  it('rejects a non-semver binary version', () => {
+    const result = ClientManifestSchema.safeParse({
+      id: 'claude-code',
+      name: 'Claude Code',
+      binary: { name: 'claude', managed: true, version: '^1.0.0' },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('legacy field rejection', () => {
   it('rejects legacy binaryName from ClientManifest', () => {
     const result = ClientManifestSchema.safeParse({
       id: 'test',
       name: 'Test',
       binaryName: 'test-bin',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown fields on binary object', () => {
+    const result = ClientManifestSchema.safeParse({
+      id: 'test',
+      name: 'Test',
+      binary: { name: 'test-bin', unknownField: true },
     });
     expect(result.success).toBe(false);
   });

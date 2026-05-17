@@ -3,7 +3,7 @@
  *
  * Provides a pure utility for computing the filesystem paths where Codex
  * stores its `hooks.json` configuration files — one global path under the
- * user's home directory and an optional project-scoped path.
+ * resolved Codex config directory and an optional project-scoped path.
  *
  * No filesystem I/O is performed; callers are responsible for reading,
  * writing, or watching the returned paths.
@@ -23,7 +23,7 @@ const HOME_DIR = os.homedir();
  * only when a `projectDir` was supplied to {@link resolveCodexSettingsPaths}.
  */
 export interface CodexSettingsPaths {
-  /** Absolute path to `~/.codex/hooks.json` — always present. */
+  /** Absolute path to the global `hooks.json` file — always present. */
   readonly globalHooks: string;
   /**
    * Absolute path to `{projectDir}/.codex/hooks.json`.
@@ -42,6 +42,8 @@ export interface CodexSettingsPaths {
  * @param projectDir - Absolute path to the project root directory. When
  *   provided, {@link CodexSettingsPaths.projectHooks} is set to
  *   `{projectDir}/.codex/hooks.json`. When omitted, `projectHooks` is `null`.
+ * @param configDir - Optional Codex config root. When omitted, the global
+ *   hooks path falls back to `~/.codex/hooks.json`.
  * @returns Resolved paths for the global and optional project-scoped Codex
  *   hooks configuration files.
  */
@@ -52,9 +54,10 @@ export interface CodexSettingsPaths {
 // by CodexClientSettings, which receives projectDir from bus request payloads
 // originating in framework services. Validation belongs at the system boundary,
 // not at every internal call site.
-export function resolveCodexSettingsPaths(projectDir?: string): CodexSettingsPaths {
+export function resolveCodexSettingsPaths(projectDir?: string, configDir?: string): CodexSettingsPaths {
+  const globalRoot = configDir ?? path.join(HOME_DIR, '.codex');
   return {
-    globalHooks: path.join(HOME_DIR, '.codex', 'hooks.json'),
+    globalHooks: path.join(globalRoot, 'hooks.json'),
     projectHooks: projectDir !== undefined ? path.join(projectDir, '.codex', 'hooks.json') : null,
   };
 }

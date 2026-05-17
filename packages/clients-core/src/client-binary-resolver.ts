@@ -4,7 +4,7 @@
  * {@link ClientBinaryResolver} handles the `client.resolveBinary` responsibility:
  * resolving the execution context for an active binary via the managed path or
  * the global PATH fallback, without touching `pendingClients`, the job runner,
- * or the feed cache.
+ * or storage writes.
  * @packageDocumentation
  */
 
@@ -13,12 +13,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
-import type { ClientDefinition, ClientExecutionContext } from '@makaio/contracts/client';
+import type { ClientDefinition, ClientExecutionContext, VersionCommand } from '@makaio/contracts/client';
 import { ClientBinaryStorageSubjects } from './storage/client-binary-storage-namespace.js';
 import { BinaryNotFoundError } from './client-binary-errors.js';
 import { isPathWithinBase } from './client-binary-manager-types.js';
 import type { ClientDefinitionLookup } from './client-binary-manager-types.js';
-import type { StrategyDependencies } from './binary-strategies/index.js';
 import { assertSupportedBinaryVersion } from './client-binary-version-support.js';
 
 // ---------------------------------------------------------------------------
@@ -49,8 +48,6 @@ export interface ClientBinaryResolverDeps {
   resolvedConfigBasePath: string;
   /** Client definition lookup for retrieving registered definitions. */
   definitionLookup: ClientDefinitionLookup;
-  /** Strategy exec dependency, forwarded for future resolution-time verification. */
-  exec: StrategyDependencies['exec'];
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +65,7 @@ export interface ClientBinaryResolverDeps {
  * - Validate stored install paths against the expected managed-binary directory.
  *
  * This class has no dependency on `pendingClients`, the job runner, or the
- * feed cache — it is a pure resolution concern and is an internal implementation
+ * storage writes — it is a pure resolution concern and is an internal implementation
  * detail of the binary manager.
  */
 export class ClientBinaryResolver {
@@ -76,9 +73,6 @@ export class ClientBinaryResolver {
   private readonly resolvedBasePath: string;
   private readonly resolvedConfigBasePath: string;
   private readonly definitionLookup: ClientDefinitionLookup;
-  // Reserved for future resolution-time verification (e.g. binary liveness checks).
-
-  private readonly exec: StrategyDependencies['exec'];
 
   /**
    * @param deps - Resolution dependencies
@@ -88,7 +82,6 @@ export class ClientBinaryResolver {
     this.resolvedBasePath = deps.resolvedBasePath;
     this.resolvedConfigBasePath = deps.resolvedConfigBasePath;
     this.definitionLookup = deps.definitionLookup;
-    this.exec = deps.exec;
   }
 
   // -------------------------------------------------------------------------
@@ -362,19 +355,30 @@ export class ClientBinaryResolver {
 // ---------------------------------------------------------------------------
 
 /**
- * Narrow a raw `versionCommand` array to the `[string, ...string[]]` tuple
- * type required for binary-path derivation.
+ * Resolve a {@link VersionCommand} descriptor to a flat `[executable, ...args]`
+ * tuple suitable for passing to the version verifier and binary resolver.
  *
- * Returns `undefined` when `versionCommand` is absent or empty so callers
- * can use a simple `!= undefined` guard to decide whether to proceed.
- * @param versionCommand - Raw array from the client definition, or `undefined`
- * @returns Typed non-empty tuple, or `undefined`
+ * The executable is resolved for the current platform: the per-OS key is
+ * preferred when present, falling back to the `default` key (for keyed objects)
+ * or the plain string value. Returns `undefined` when `versionCommand` is
+ * absent so callers can use a `!= undefined` guard to decide whether to proceed.
+ * @param versionCommand - Structured version command from the client definition,
+ *   or `undefined` when the definition omits it
+ * @returns Typed non-empty tuple of `[executable, ...args]`, or `undefined`
  */
 export function toVersionCommandTuple(
-  versionCommand: readonly string[] | undefined,
+  versionCommand: VersionCommand | undefined,
 ): readonly [string, ...string[]] | undefined {
-  if (versionCommand === undefined || versionCommand.length === 0) {
+  if (versionCommand === undefined) {
     return undefined;
   }
-  return versionCommand as readonly [string, ...string[]];
+  const { executable, args } = versionCommand;
+  const execStr =
+    typeof executable === 'string'
+      ? executable
+      : (executable[process.platform as 'darwin' | 'linux' | 'win32'] ?? executable.default);
+  if (typeof execStr !== 'string' || execStr.trim() === '') {
+    throw new Error('client.resolveBinary: versionCommand executable is missing for this platform');
+  }
+  return [execStr, ...args];
 }
