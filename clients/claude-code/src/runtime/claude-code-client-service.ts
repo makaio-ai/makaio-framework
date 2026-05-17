@@ -258,6 +258,8 @@ export class ClaudeCodeClientService extends BaseService {
       ctx.setResult(await settings.listPlugins());
     });
 
+    this.registerMcpServersHandlers();
+
     this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
       assertAbsoluteProjectDir(ctx.payload.projectDir);
       const configDir = await this.resolveConfigDir();
@@ -359,6 +361,32 @@ export class ClaudeCodeClientService extends BaseService {
       return undefined;
     }
     return result.data.configDir ?? undefined;
+  }
+
+  /**
+   * Register bus handlers for the `config.mcpServers.*` subjects.
+   *
+   * Extracted from {@link onInit} to keep the init method within the
+   * max-lines-per-function lint threshold.
+   */
+  private registerMcpServersHandlers(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.list, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.listMcpServers());
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.add, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.addMcpServer(ctx.payload));
+    });
+
+    this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.remove, async (ctx) => {
+      const configDir = await this.resolveConfigDir();
+      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
+      ctx.setResult(await settings.removeMcpServer(ctx.payload));
+    });
   }
 
   /**

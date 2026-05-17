@@ -3529,6 +3529,7 @@ __metadata:
   resolution: "@makaio/adapter-claude-agent-sdk@workspace:adapters/implementations/claude-agent-sdk"
   dependencies:
     "@anthropic-ai/claude-agent-sdk": "npm:0.2.131"
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*"
     "@makaio/ai-adapters-claude-shared": "workspace:*"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
@@ -3552,6 +3553,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-claude-code-cli@workspace:adapters/implementations/claude-code-cli"
   dependencies:
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*"
     "@makaio/ai-adapters-claude-shared": "workspace:*"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
@@ -3559,6 +3561,27 @@ __metadata:
     "@makaio/client-claude-code": "workspace:*"
     "@makaio/clients-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/utils": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    zod: "npm:^4.1.13"
+  peerDependencies:
+    "@makaio/framework": ^0.1.0
+  languageName: unknown
+  linkType: soft
+
+"@makaio/adapter-claude-code-tmux@workspace:adapters/implementations/claude-code-tmux":
+  version: 0.0.0-use.local
+  resolution: "@makaio/adapter-claude-code-tmux@workspace:adapters/implementations/claude-code-tmux"
+  dependencies:
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*"
+    "@makaio/ai-adapters-core": "workspace:*"
+    "@makaio/ai-adapters-stream-session": "workspace:*"
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/client-claude-code": "workspace:*"
+    "@makaio/clients-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/native-session-supervisor": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
@@ -3784,6 +3807,17 @@ __metadata:
   dependencies:
     "@agentclientprotocol/sdk": "npm:^0.21.0"
     "@makaio/build-tooling": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/ai-adapters-claude-process-shared@workspace:*, @makaio/ai-adapters-claude-process-shared@workspace:adapters/shared/claude-process-shared":
+  version: 0.0.0-use.local
+  resolution: "@makaio/ai-adapters-claude-process-shared@workspace:adapters/shared/claude-process-shared"
+  dependencies:
+    "@makaio/ai-adapters-core": "workspace:*"
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/client-claude-code": "workspace:*"
+    "@makaio/contracts": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -4558,7 +4592,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/native-session-supervisor@workspace:packages/native-session-supervisor":
+"@makaio/native-session-supervisor@workspace:*, @makaio/native-session-supervisor@workspace:packages/native-session-supervisor":
   version: 0.0.0-use.local
   resolution: "@makaio/native-session-supervisor@workspace:packages/native-session-supervisor"
   dependencies:

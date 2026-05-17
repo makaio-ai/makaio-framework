@@ -87,6 +87,35 @@ export const ClaudeCodeHookMatcherGroupSchema = z.object({
 export type ClaudeCodeHookMatcherGroup = z.infer<typeof ClaudeCodeHookMatcherGroupSchema>;
 
 // ---------------------------------------------------------------------------
+// MCP server entry schema
+// ---------------------------------------------------------------------------
+
+/**
+ * A single MCP server definition as stored in Claude Code's `.mcp.json` file.
+ *
+ * Claude Code supports multiple MCP transport types. The `type` field
+ * discriminates between them; unknown types are passed through so that newer
+ * Claude Code versions do not require client-package updates before consumers
+ * can observe the payload.
+ */
+export const ClaudeCodeMcpServerEntrySchema = z
+  .object({
+    /** Transport type — `'http'`, `'sse'`, `'stdio'`, etc. */
+    type: z.string().min(1),
+    /** Server URL (for `http` / `sse` transports). */
+    url: z.string().optional(),
+    /** Command (for `stdio` transport). */
+    command: z.string().optional(),
+    /** Arguments (for `stdio` transport). */
+    args: z.array(z.string()).optional(),
+    /** Environment variables (for `stdio` transport). */
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .passthrough();
+
+export type ClaudeCodeMcpServerEntry = z.infer<typeof ClaudeCodeMcpServerEntrySchema>;
+
+// ---------------------------------------------------------------------------
 // Per-scope entry schemas
 // ---------------------------------------------------------------------------
 
@@ -362,6 +391,64 @@ export const ClaudeCodeConfigSchemas = {
     response: z.object({
       /** Plugins registered across all visible scopes. */
       plugins: z.array(ClaudeCodePluginEntrySchema),
+    }),
+  },
+
+  /**
+   * List MCP servers defined in the project's `.mcp.json`.
+   *
+   * Returns all server entries keyed by name.  `projectDir` is required
+   * because `.mcp.json` is always project-scoped.
+   */
+  'config.mcpServers.list': {
+    request: z.object({
+      /** Absolute path of the project directory containing `.mcp.json`. */
+      projectDir: AbsolutePathSchema,
+    }),
+    response: z.object({
+      /** MCP server entries keyed by server name. */
+      servers: z.record(z.string(), ClaudeCodeMcpServerEntrySchema),
+    }),
+  },
+
+  /**
+   * Add an MCP server to the project's `.mcp.json`.
+   *
+   * Idempotent: when a server with the same `name` already exists and its
+   * definition is structurally equal, no write is performed and
+   * `added: false` is returned.  When a server with the same name exists
+   * but differs, it is overwritten and `added: true, replaced: true`.
+   */
+  'config.mcpServers.add': {
+    request: z.object({
+      /** Absolute path of the project directory containing `.mcp.json`. */
+      projectDir: AbsolutePathSchema,
+      /** Logical server name (key in the `mcpServers` map). */
+      name: z.string().min(1),
+      /** MCP server definition to persist. */
+      server: ClaudeCodeMcpServerEntrySchema,
+    }),
+    response: z.object({
+      /** `true` when the file was written (new entry or replacement). */
+      added: z.boolean(),
+      /** `true` when an existing entry with the same name was replaced. */
+      replaced: z.boolean(),
+    }),
+  },
+
+  /**
+   * Remove an MCP server from the project's `.mcp.json`.
+   */
+  'config.mcpServers.remove': {
+    request: z.object({
+      /** Absolute path of the project directory containing `.mcp.json`. */
+      projectDir: AbsolutePathSchema,
+      /** Logical server name to remove. */
+      name: z.string().min(1),
+    }),
+    response: z.object({
+      /** `true` when a server was actually removed; `false` when not found. */
+      removed: z.boolean(),
     }),
   },
 } satisfies SchemaRecord;

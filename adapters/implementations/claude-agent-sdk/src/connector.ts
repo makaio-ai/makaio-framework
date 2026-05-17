@@ -16,8 +16,8 @@ import {
   parseReasoningLevel,
   readClaudeProviderBaseUrl,
   resolveClaudeProcessEnv,
-  type SDKMessage,
-} from '@makaio/ai-adapters-claude-shared';
+} from '@makaio/ai-adapters-claude-process-shared';
+import { type SDKMessage } from '@makaio/ai-adapters-claude-shared';
 import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
 import { McpSubjects, type McpSessionContext, type SystemPrompt } from '@makaio/contracts';
 import { type ClaudeCodeConnectorBus, ClaudeCodeConnectorSubjects } from './namespace/index.js';

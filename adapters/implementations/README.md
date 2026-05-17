@@ -18,12 +18,14 @@ implementations/
 ├── anthropic-sdk/          # Anthropic Claude API adapter
 ├── claude-agent-sdk/       # Anthropic Claude Agent SDK adapter
 ├── claude-code-cli/        # Claude Code CLI subprocess adapter
+├── claude-code-tmux/       # Claude Code interactive tmux adapter
 ├── codex-app-server/       # OpenAI Codex app-server JSON-RPC/JSONL adapter
 ├── gemini-sdk/             # Google Gemini adapter
 ├── github-copilot-sdk/     # GitHub Copilot SDK adapter
 ├── openai-node/            # OpenAI API adapter
-├── qwen-acp/              # Alibaba Qwen (ACP) adapter
-└── __tests__/             # Shared conformance test suite
+├── pi-sdk/                 # Pi coding agent SDK adapter
+├── qwen-acp/               # Alibaba Qwen (ACP) adapter
+└── __tests__/              # Shared conformance test suite
 ```
 
 ## Architecture

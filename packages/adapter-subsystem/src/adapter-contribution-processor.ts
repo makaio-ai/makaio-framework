@@ -318,11 +318,15 @@ export class AdapterContributionProcessor {
 
     try {
       await this.ensureAdapterConfig(loadedAdapter);
+      const enabled = this.configStore.isAdapterEnabled(loadedAdapter.name);
+      if (enabled) {
+        await this.validateEnabledAdapterClientRefs(loadedAdapter, bus, clientCatalog);
+      }
 
       this.registry.registerAdapter(loadedAdapter, packageName);
       registered = true;
 
-      if (this.configStore.isAdapterEnabled(loadedAdapter.name)) {
+      if (enabled) {
         await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
         console.info(
           `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
@@ -343,6 +347,28 @@ export class AdapterContributionProcessor {
     }
 
     return loadedAdapter;
+  }
+
+  /**
+   * Validate runtime binary compatibility for an enabled adapter.
+   *
+   * Static client definition compatibility is checked while building the loaded
+   * adapter. Concrete binary resolution is deferred until the adapter is enabled
+   * so a disabled package can register without requiring the user's CLI binary
+   * to be installed at boot.
+   * @param loadedAdapter - Adapter whose enabled runtime dependencies are being checked.
+   * @param bus - Bus used to resolve binary context and, when needed, the active client catalog.
+   * @param clientCatalog - Optional client catalog snapshot already loaded by the activation batch.
+   */
+  private async validateEnabledAdapterClientRefs(
+    loadedAdapter: LoadedAdapter,
+    bus: IMakaioBus,
+    clientCatalog?: readonly AdapterClientCatalogEntry[],
+  ): Promise<void> {
+    if (loadedAdapter.clients === undefined || loadedAdapter.clients.length === 0) return;
+    const resolvedClientCatalog =
+      clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
+    await validateAdapterClientRefs(loadedAdapter.name, loadedAdapter.clients, resolvedClientCatalog, bus);
   }
 
   /**
@@ -437,7 +463,9 @@ export class AdapterContributionProcessor {
     const adapterName = def.name;
     const resolvedClientCatalog =
       clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
-    await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus);
+    await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus, {
+      checkBinaryVersions: false,
+    });
     const resolvedProviders = await this.resolveProviderDefinitions(
       bus,
       def.providers,

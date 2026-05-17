@@ -14,6 +14,7 @@
  * - {@link PtyRuntime} — PTY session lifecycle manager (spawn, I/O, buffering, cleanup)
  * - {@link createNodePtyBackend} — lazily loads the `node-pty` backend for Node.js hosts
  * - {@link NodeBridgeBackend} — bridge-process backend for Bun hosts
+ * - {@link TmuxBackend} — tmux CLI backend for hosts where native PTY addons are unavailable
  *
  * ## Usage
  * ```typescript
@@ -39,6 +40,8 @@ export { OutputBuffer } from './pty/output-buffer.js';
 export type { BufferReadResult } from './pty/output-buffer.js';
 export type { NodePtyBackend } from './pty/node-pty-backend.js';
 export { NodeBridgeBackend } from './pty/node-bridge-backend.js';
+export { TmuxBackend, isTmuxAvailable } from './pty/tmux-backend.js';
+export type { TmuxBackendOptions } from './pty/tmux-backend.js';
 export type { IPtyBackend, IPtyProcess, IPtySpawnOptions, PtyExitEvent, PtyOutputEvent } from './pty/types.js';
 
 /**

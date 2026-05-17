@@ -3,16 +3,13 @@ import { McpSubjects, type McpTransportConfig } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   BaseConnectorSession,
-  formatMessageHistoryAsTranscript,
-  formatContextBlockAsText,
-  serializeTurnContext,
-  formatContextBlocksAsText,
   type AIReasoningLevel,
   type MessageHandle,
   type MessageResult,
   type UserMessageQueue,
   processQueueMessages,
 } from '@makaio/ai-adapters-core';
+import { buildTextPrompt, extractMessageText } from '@makaio/ai-adapters-claude-process-shared';
 import { DeferredPromise } from '@makaio/utils';
 import type { CliStdioTransport } from './utils/createStdioTransport.js';
 import { createStdioTransport } from './utils/createStdioTransport.js';
@@ -86,26 +83,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   /** Callbacks for turn lifecycle notifications */
   private readonly onTurnStart?: OnTurnStartCallback;
   private readonly onTurnComplete?: OnTurnCompleteCallback;
-
-  /**
-   * Build the full prompt for a turn, layering all context from innermost to outermost.
-   *
-   * Final prompt order is:
-   * `merged_context → turn context → message_history → user text`.
-   * @param handle - Message handle for this turn
-   * @param mergedContent - Optional merged content from immediate-mode supersede
-   * @returns Prompt text to pass to CLI
-   */
-  private buildTurnPrompt(handle: MessageHandle, mergedContent?: string[]): string {
-    let prompt = this.buildMessagePrompt(handle);
-
-    // merged_context is the outermost wrapper for superseded immediate-mode payloads.
-    if (mergedContent && mergedContent.length > 0) {
-      prompt = `${formatContextBlockAsText('merged_context', mergedContent.join('\n'))}\n\n${prompt}`;
-    }
-
-    return prompt;
-  }
 
   /**
    * Resolve resume/session IDs for the next CLI turn.
@@ -296,7 +273,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   public async processQueue(queue: UserMessageQueue): Promise<boolean> {
     return processQueueMessages(queue, {
       getCurrentTurn: () => this.currentTurn,
-      extractContent: (handle) => this.extractMessageText(handle),
+      extractContent: (handle) => extractMessageText(handle.message),
       startNewTurn: (handle, mergedContent) => this.startTurn(handle, mergedContent),
     });
   }
@@ -313,7 +290,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // Notify connector that turn is starting
     this.onTurnStart?.(handle);
 
-    const prompt = this.buildTurnPrompt(handle, mergedContent);
+    const prompt = buildTextPrompt(handle, mergedContent);
     const { resumeId, sessionIdForMcp } = this.resolveTurnSessionIdentity(mergedContent);
     const executionContext = await this.resolveAndPersistTurnExecutionContext();
     const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp, executionContext.env);
@@ -377,23 +354,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
   }
 
   /**
-   * Extract raw user text from a message handle.
-   *
-   * Non-text blocks (images, documents) are not supported by the CLI's `-p`
-   * flag and are silently skipped.
-   * @param handle - Message handle containing normalized user message blocks
-   * @returns Raw user text without turn-context or history injection
-   */
-  private extractMessageText(handle: MessageHandle): string {
-    const blocks = handle.message.blocks;
-    const textParts: string[] = blocks
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { type: 'text'; content: string }).content);
-
-    return textParts.join('\n') || handle.message.message || '';
-  }
-
-  /**
    * Resolve and persist the execution context for the next CLI turn.
    * @returns Environment and binary path for the next subprocess
    */
@@ -404,32 +364,6 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     this.config.env = context.env;
     this.config.binaryPath = context.binaryPath;
     return context;
-  }
-
-  /**
-   * Build the prompt body beneath merged context.
-   *
-   * Order: turn context → message_history → user text.
-   * `merged_context` (if present) is prepended by {@link buildTurnPrompt}.
-   * @param handle - Message handle containing message text and optional turn context
-   * @returns Prompt text with turn context and message history wrapped above user text
-   */
-  private buildMessagePrompt(handle: MessageHandle): string {
-    const userText = this.extractMessageText(handle);
-    const segments: string[] = [];
-
-    const contextText = formatContextBlocksAsText(serializeTurnContext(handle.turnContext));
-    if (contextText) {
-      segments.push(contextText);
-    }
-
-    if (handle.messageHistory && handle.messageHistory.length > 0) {
-      const historyTranscript = formatMessageHistoryAsTranscript(handle.messageHistory);
-      segments.push(formatContextBlockAsText('message_history', historyTranscript));
-    }
-
-    segments.push(userText);
-    return segments.join('\n\n');
   }
 
   /**

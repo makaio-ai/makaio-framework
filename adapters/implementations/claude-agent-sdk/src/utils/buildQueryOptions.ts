@@ -1,4 +1,4 @@
-import { parseReasoningLevel, buildSystemPrompt } from '@makaio/ai-adapters-claude-shared';
+import { parseReasoningLevel, buildSystemPrompt } from '@makaio/ai-adapters-claude-process-shared';
 import type {
   McpHttpServerConfig,
   McpSSEServerConfig,

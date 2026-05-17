@@ -1,0 +1,24 @@
+{
+  "name": "@makaio/ai-adapters-claude-process-shared",
+  "description": "Pure process utilities shared between Claude CLI and tmux adapter implementations.",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*"
+  },
+  "dependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/client-claude-code": "workspace:*",
+    "@makaio/contracts": "workspace:*"
+  }
+}
