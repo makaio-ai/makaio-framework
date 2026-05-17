@@ -287,6 +287,17 @@ export function renderSummary(
 }
 
 /**
+ * Builds the Yarn publish command arguments for a dev package.
+ * npm provenance currently requires an OIDC source ref that deployment-triggered
+ * workflows do not provide, so the deployment-gated dev lane publishes without it.
+ * @param packageName - Workspace package to publish.
+ * @returns Arguments passed to `yarn`.
+ */
+export function buildPublishArgs(packageName: string): string[] {
+  return ['workspace', packageName, 'npm', 'publish', '--tag', 'dev', '--access', 'public'];
+}
+
+/**
  * Reads a required CLI flag.
  * @param flags - Parsed flags.
  * @param name - Flag name.
@@ -366,7 +377,7 @@ function main(argv: readonly string[]): void {
         console.log(`${pkg.name}@${pkg.version} already exists on npm; skipping publish.`);
         continue;
       }
-      run('yarn', ['workspace', pkg.name, 'npm', 'publish', '--tag', 'dev', '--access', 'public', '--provenance']);
+      run('yarn', buildPublishArgs(pkg.name));
     }
     return;
   }

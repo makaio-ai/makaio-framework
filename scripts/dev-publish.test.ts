@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAnnotatedTag,
   buildDevVersion,
+  buildPublishArgs,
   parsePackageNames,
   renderSummary,
   resolveDevPublishPlan,
@@ -80,6 +81,21 @@ describe('buildAnnotatedTag', () => {
         'workflow: https://github.com/makaio-ai/makaio-framework/actions/runs/1',
       ].join('\n'),
     });
+  });
+});
+
+describe('buildPublishArgs', () => {
+  it('publishes dev packages without provenance for deployment-triggered releases', () => {
+    expect(buildPublishArgs('@makaio/contracts')).toEqual([
+      'workspace',
+      '@makaio/contracts',
+      'npm',
+      'publish',
+      '--tag',
+      'dev',
+      '--access',
+      'public',
+    ]);
   });
 });
 
