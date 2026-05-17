@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { safeParseExtensionDescriptor } from '@makaio/contracts';
 import type { PackageRegistry } from '../namespace.js';
+import { PackageRegistrySchema } from '../namespace.js';
 import { DescriptorNameResolver } from '../descriptor-name-resolver.js';
 
 const registry: PackageRegistry = {
@@ -23,6 +24,12 @@ const registry: PackageRegistry = {
     },
   ],
   extensions: [
+    {
+      name: '@makaio/provider-anthropic',
+      descriptorName: 'provider-anthropic',
+      displayName: 'Anthropic Provider',
+      description: 'Anthropic provider definitions',
+    },
     {
       name: '@makaio/client-claude-code',
       descriptorName: 'claude-code',
@@ -95,6 +102,22 @@ async function findWorkspaceFile(startDir: string, relativePath: string): Promis
   }
 
   throw new Error(`Could not find ${relativePath} from ${workspaceRoot}.`);
+}
+
+async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
+  const packageRoot = await findPackageRoot(import.meta.dirname);
+  const workspaceRoot = path.resolve(packageRoot, '../../..');
+  const monorepoRegistryPath = path.join(workspaceRoot, '../registry/packages.json');
+
+  try {
+    const registryRaw = JSON.parse(await fs.readFile(monorepoRegistryPath, 'utf-8')) as unknown;
+    return PackageRegistrySchema.parse(registryRaw);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return registry;
+    }
+    throw error;
+  }
 }
 
 describe('DescriptorNameResolver', () => {
@@ -173,6 +196,7 @@ describe('DescriptorNameResolver', () => {
   });
 
   it('maps every Claude Code tmux descriptor dependency through registry metadata', async () => {
+    const actualRegistry = await readRegistryForCurrentCheckout();
     const descriptorPath = await findWorkspaceFile(
       import.meta.dirname,
       'adapters/implementations/claude-code-tmux/descriptor.json',
@@ -182,7 +206,7 @@ describe('DescriptorNameResolver', () => {
     expect(descriptorResult.success).toBe(true);
     if (!descriptorResult.success) return;
 
-    const resolver = new DescriptorNameResolver({ getRegistry: async () => registry });
+    const resolver = new DescriptorNameResolver({ getRegistry: async () => actualRegistry });
     const resolved = await Promise.all(
       (descriptorResult.data.dependencies ?? []).map(async (dependency) => [
         dependency.name,
