@@ -1,4 +1,4 @@
-"""Subject constants generated from framework/sdks/manifest/makaio-bus-protocol.json."""
+"""Subject constants generated from sdks/manifest/makaio-bus-protocol.json."""
 
 AGENT_COMPLETE = "agent.complete"
 AGENT_CONTEXT_WINDOW_UPDATED = "agent.contextWindow.updated"
