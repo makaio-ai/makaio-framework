@@ -1,6 +1,6 @@
 {
   "name": "@makaio/electron",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "private": true,
   "description": "Makaio desktop application",
   "author": "Makaio AI",

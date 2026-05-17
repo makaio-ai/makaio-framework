@@ -1,7 +1,7 @@
 {
   "name": "@makaio/extension-subagent",
   "description": "Subagent communication tool extension and state manager.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "types": "./src/index.ts",
   "private": true,

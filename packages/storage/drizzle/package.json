@@ -1,7 +1,7 @@
 {
   "name": "@makaio/storage-drizzle",
   "description": "Drizzle ORM extension for storage namespaces with a runtime SQLite client.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "types": "src/index.ts",
   "type": "module",
   "private": true,

@@ -1,6 +1,6 @@
 {
   "name": "@makaio/provider-kimi",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "main": "./src/index.ts",
   "exports": {

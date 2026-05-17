@@ -1,7 +1,7 @@
 {
   "name": "@makaio/services-log-import",
   "description": "Central registry for log importers from adapters and extensions.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "makaio": {

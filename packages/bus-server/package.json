@@ -1,7 +1,7 @@
 {
   "name": "@makaio/bus-server",
   "description": "WebSocket server for MakaioBus message routing.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "types": "src/index.ts",
   "private": true,
