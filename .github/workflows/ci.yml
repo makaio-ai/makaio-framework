@@ -32,6 +32,8 @@ jobs:
             command: yarn validate:stylelint
           - name: TypeScript Validation
             command: yarn validate:typescript
+          - name: SDK Codegen Drift
+            command: yarn validate:sdk-codegen
           - name: Unit Tests
             command: yarn test
             setup_bun: true

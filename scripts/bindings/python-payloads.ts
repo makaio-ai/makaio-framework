@@ -598,6 +598,14 @@ export function groupByNamespace(subjects: MakaioProtocolSubject[]): Map<string,
   return groups;
 }
 
+/**
+ * Generate the Python payload package init file content.
+ * @returns Generated Python package init source.
+ */
+export function generatePythonPayloadsInit(): string {
+  return '"""Payload dataclass modules — generated from makaio-bus-protocol.json."""\n';
+}
+
 // ---------------------------------------------------------------------------
 // File writer
 // ---------------------------------------------------------------------------
@@ -616,9 +624,9 @@ export async function writePythonPayloads(manifest: MakaioProtocolManifest): Pro
   const groups = groupByNamespace(manifest.subjects);
   const written: string[] = [];
 
-  // Write an empty __init__.py to make the directory a Python package
+  // Write __init__.py to make the generated payload modules a Python package.
   const initPath = resolve(PYTHON_PAYLOADS_DIR, '__init__.py');
-  await writeFile(initPath, '"""Payload dataclass modules — generated from makaio-bus-protocol.json."""\n', 'utf8');
+  await writeFile(initPath, generatePythonPayloadsInit(), 'utf8');
   written.push(initPath);
 
   for (const [namespace, subjects] of groups) {

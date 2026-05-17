@@ -53,10 +53,7 @@ export function generatePythonSubjects(manifest: MakaioProtocolManifest): string
     subjectsByConstant.set(constName, subject.fullSubject);
   }
 
-  const lines: string[] = [
-    '"""Subject constants generated from framework/sdks/manifest/makaio-bus-protocol.json."""',
-    '',
-  ];
+  const lines: string[] = ['"""Subject constants generated from sdks/manifest/makaio-bus-protocol.json."""', ''];
 
   for (const subject of sorted) {
     const constName = toPythonConstantName(subject.fullSubject);
@@ -206,6 +203,20 @@ export function generatePythonNamespaceModule(namespace: string, subjects: Makai
 }
 
 /**
+ * Generate the Python namespace package init file content.
+ * @param namespaces - Protocol namespace names to re-export.
+ * @returns Generated Python package init source.
+ */
+export function generatePythonNamespaceInit(namespaces: readonly string[]): string {
+  return [
+    '"""Generated namespace modules — re-export for convenient access."""',
+    '',
+    `from makaio.generated import ${namespaces.join(', ')}`,
+    '',
+  ].join('\n');
+}
+
+/**
  * Write generated Python namespace module files and the generated `__init__.py`
  * for every namespace in the manifest.
  *
@@ -230,14 +241,8 @@ export async function writePythonNamespaceModules(manifest: MakaioProtocolManife
   }
 
   // Write __init__.py that re-exports all namespace modules
-  const initLines: string[] = [
-    '"""Generated namespace modules — re-export for convenient access."""',
-    '',
-    `from makaio.generated import ${namespaces.join(', ')}`,
-    '',
-  ];
   const initPath = resolve(PYTHON_GENERATED_DIR, '__init__.py');
-  await writeFile(initPath, initLines.join('\n'), 'utf8');
+  await writeFile(initPath, generatePythonNamespaceInit(namespaces), 'utf8');
   written.push(initPath);
 
   return written;

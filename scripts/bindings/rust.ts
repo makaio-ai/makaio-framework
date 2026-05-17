@@ -299,7 +299,7 @@ export function generateRustSubjectsSection(manifest: MakaioProtocolManifest): s
 
   const lines: string[] = [
     GENERATED_SECTION_START_MARKER,
-    '//! Subject bindings generated from `framework/sdks/manifest/makaio-bus-protocol.json`.',
+    '//! Subject bindings generated from `sdks/manifest/makaio-bus-protocol.json`.',
     '#![allow(non_snake_case)]',
     '',
     'use crate::bus::{EventSubject, RequestSubject};',
@@ -387,13 +387,24 @@ export async function writeRustSubjects(manifest: MakaioProtocolManifest): Promi
       cause: error,
     });
   }
+  const fullContent = generateRustSubjectsFile(manifest, existingContent);
+
+  await writeFile(RUST_SUBJECTS_PATH, fullContent, 'utf8');
+  return RUST_SUBJECTS_PATH;
+}
+
+/**
+ * Generate the full Rust `subjects.rs` file while preserving the hand-authored
+ * suffix from the current committed file content.
+ * @param manifest - Protocol manifest to generate bindings from.
+ * @param existingContent - Current Rust subjects file content.
+ * @returns Full generated Rust file content.
+ */
+export function generateRustSubjectsFile(manifest: MakaioProtocolManifest, existingContent: string): string {
   const handAuthored = extractHandAuthoredSection(existingContent);
   const lineEnding = detectLineEnding(existingContent);
 
   const generatedSection = normalizeLineEndings(generateRustSubjectsSection(manifest), lineEnding);
   const normalizedHandAuthored = normalizeLineEndings(handAuthored, lineEnding);
-  const fullContent = generatedSection + normalizedHandAuthored;
-
-  await writeFile(RUST_SUBJECTS_PATH, fullContent, 'utf8');
-  return RUST_SUBJECTS_PATH;
+  return generatedSection + normalizedHandAuthored;
 }

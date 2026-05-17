@@ -1,5 +1,5 @@
 // <generated-subjects>
-//! Subject bindings generated from `framework/sdks/manifest/makaio-bus-protocol.json`.
+//! Subject bindings generated from `sdks/manifest/makaio-bus-protocol.json`.
 #![allow(non_snake_case)]
 
 use crate::bus::{EventSubject, RequestSubject};
