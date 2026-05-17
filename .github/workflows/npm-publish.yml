@@ -93,82 +93,111 @@ jobs:
           path: '**/node_modules'
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
-      - name: Build framework
-        run: yarn build:framework
+      - name: Build all packages
+        run: |
+          yarn build:framework
+          yarn build:adapters
+          yarn build:providers
+          yarn build:clients
+          yarn build:extensions
 
-      - name: Resolve publishable packages
+      - name: Discover publishable packages
         id: packages
         run: |
-          PACKAGES=$(node -e "
-            const { readdirSync, readFileSync } = require('fs');
-            const { join } = require('path');
-            const dirs = [
-              'packages/framework',
-              'packages/contracts',
-              'sdks/typescript',
-              'sdks/agent-sdk',
-              'extensions/account-manager',
-              ...readdirSync('adapters/implementations', { withFileTypes: true })
-                .filter(d => d.isDirectory())
-                .map(d => join('adapters/implementations', d.name))
-            ];
-            const publishable = dirs
-              .map(dir => {
-                try {
-                  const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-                  return pkg.private ? null : { name: pkg.name, dir };
-                } catch { return null; }
-              })
-              .filter(Boolean);
+          node -e "
+            const { execSync } = require('child_process');
+            const { readFileSync } = require('fs');
+            const { join, dirname } = require('path');
+
+            const output = execSync('yarn workspaces list --json', { encoding: 'utf8' });
+            const workspaces = output.trim().split('\n').map(line => JSON.parse(line));
+
+            const publishable = [];
+            for (const ws of workspaces) {
+              if (ws.location === '.') continue;
+              const pkgPath = join(ws.location, 'package.json');
+              let pkg;
+              try {
+                pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+              } catch (err) {
+                console.error('Failed to read ' + pkgPath + ': ' + err.message);
+                process.exit(1);
+              }
+              if (pkg.private) continue;
+              if (!pkg.name || !pkg.name.startsWith('@makaio/')) continue;
+              publishable.push({ name: pkg.name, version: pkg.version, dir: ws.location });
+            }
+
             console.log(JSON.stringify(publishable));
-          ")
-          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
+          " > /tmp/packages.json
+
+          echo "packages=$(cat /tmp/packages.json)" >> "$GITHUB_OUTPUT"
+
           echo "Publishable packages:"
-          echo "$PACKAGES" | node -e "JSON.parse(require('fs').readFileSync(0,'utf8')).forEach(p => console.log('  ' + p.name + ' (' + p.dir + ')'))"
+          node -e "
+            JSON.parse(require('fs').readFileSync('/tmp/packages.json', 'utf8'))
+              .forEach(p => console.log('  ' + p.name + '@' + p.version + ' (' + p.dir + ')'));
+          "
 
       - name: Publish packages
         if: inputs.dry-run == false
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ inputs.tag }}"
-          PACKAGES='${{ steps.packages.outputs.packages }}'
+          node -e "
+            const pkgs = JSON.parse(process.env.PACKAGES);
+            const { spawnSync } = require('child_process');
 
-          echo "$PACKAGES" | node -e "
-            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-            const { execSync } = require('child_process');
-
-            // Topological order: contracts first, then framework, then the rest
             const order = ['@makaio/contracts', '@makaio/framework'];
             const sorted = [
               ...pkgs.filter(p => order.includes(p.name)).sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)),
               ...pkgs.filter(p => !order.includes(p.name))
             ];
 
+            let failed = 0;
             for (const pkg of sorted) {
-              console.log('Publishing ' + pkg.name + '...');
-              try {
-                execSync(
-                  'npm publish --tag ${TAG} --access public --provenance',
-                  { cwd: pkg.dir, stdio: 'inherit' }
-                );
+              const check = spawnSync('npm', ['view', pkg.name + '@' + pkg.version, 'version'], {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'pipe'],
+              });
+              if (check.status === 0 && check.stdout.trim() === pkg.version) {
+                console.log('⊘ ' + pkg.name + '@' + pkg.version + ' already published, skipping');
+                continue;
+              }
+
+              console.log('Publishing ' + pkg.name + '@' + pkg.version + '…');
+              const result = spawnSync(
+                'npm',
+                ['publish', '--tag', process.env.NPM_TAG, '--access', 'public', '--provenance'],
+                { cwd: pkg.dir, stdio: 'inherit', env: process.env }
+              );
+
+              if (result.status !== 0) {
+                console.error('✗ ' + pkg.name + ' failed with exit code ' + result.status);
+                failed++;
+              } else {
                 console.log('✓ ' + pkg.name);
-              } catch (e) {
-                console.error('✗ ' + pkg.name + ': ' + e.message);
-                process.exit(1);
               }
             }
+
+            if (failed > 0) {
+              console.error(failed + ' package(s) failed to publish');
+              process.exit(1);
+            }
           "
+        env:
+          PACKAGES: ${{ steps.packages.outputs.packages }}
 
       - name: Dry run — pack only
         if: inputs.dry-run == true
+        env:
+          PACKAGES: ${{ steps.packages.outputs.packages }}
         run: |
-          PACKAGES='${{ steps.packages.outputs.packages }}'
-          echo "$PACKAGES" | node -e "
-            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-            const { execSync } = require('child_process');
+          node -e "
+            const pkgs = JSON.parse(process.env.PACKAGES);
+            const { spawnSync } = require('child_process');
             for (const pkg of pkgs) {
-              console.log('Packing ' + pkg.name + '...');
-              execSync('npm pack --dry-run', { cwd: pkg.dir, stdio: 'inherit' });
+              console.log('Packing ' + pkg.name + '…');
+              spawnSync('npm', ['pack', '--dry-run'], { cwd: pkg.dir, stdio: 'inherit' });
             }
           "
