@@ -59,6 +59,23 @@ describe('resolveWorkspaceRoot', () => {
     expect(resolveWorkspaceRoot(packageDir)).toBe(root);
   });
 
+  it('does not overshoot an embedded package-root checkout', () => {
+    const parent = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
+    tempDirs.push(parent);
+
+    const embeddedRoot = path.join(parent, 'checkout');
+    writeFileSync(path.join(parent, 'package.json'), '{}\n', 'utf-8');
+    mkdirSync(path.join(parent, 'framework'), { recursive: true });
+    writeFileSync(path.join(parent, 'framework', 'package.json'), '{}\n', 'utf-8');
+    mkdirSync(embeddedRoot, { recursive: true });
+    writeFileSync(path.join(embeddedRoot, 'package.json'), '{}\n', 'utf-8');
+
+    const packageDir = path.join(embeddedRoot, 'apps', 'electron');
+    mkdirSync(packageDir, { recursive: true });
+
+    expect(resolveWorkspaceRoot(packageDir)).toBe(embeddedRoot);
+  });
+
   it('does not overshoot to a parent directory that also has package.json', () => {
     // Simulate: /parent/root where parent/ has package.json but root/ is the
     // actual workspace root with framework/package.json.

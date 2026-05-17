@@ -8,12 +8,13 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { spawnAndDiscoverPort, type SpawnedProcess } from '../../../../e2e/shared/spawn-helpers.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Root used as the spawn cwd for this framework E2E harness. */
-const REPO_ROOT = path.resolve(__dirname, '../../../../..');
+const REPO_ROOT = resolveWorkspaceRoot(path.resolve(__dirname, '../..'));
 
 /** Absolute path to the CLI serve standalone entry. */
 const CLI_ENTRY = path.resolve(__dirname, './cli-serve-entry.ts');

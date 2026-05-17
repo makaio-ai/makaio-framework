@@ -16,10 +16,12 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import type { VariantConfig } from '../src/variant-config.js';
 import { resolveVariantConfig, resolveVariantRendererConfig } from '../src/variant-config.js';
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
+const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
 const DIST_DIR = path.join(PACKAGE_ROOT, 'dist');
 
 // ---------------------------------------------------------------------------
@@ -171,7 +173,7 @@ describe.skipIf(!process.env['CI_FULL'])(
      */
     function runPackageScript(script: string): void {
       execFileSync('yarn', ['workspace', '@makaio/electrobun', script], {
-        cwd: path.resolve(PACKAGE_ROOT, '../../..'),
+        cwd: WORKSPACE_ROOT,
         stdio: 'inherit',
         timeout: 540_000,
       });
