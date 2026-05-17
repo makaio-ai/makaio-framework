@@ -1,6 +1,6 @@
 {
   "name": "@makaio/cli",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "type": "module",
   "private": true,
   "main": "src/index.ts",

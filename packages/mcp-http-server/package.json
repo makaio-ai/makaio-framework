@@ -1,6 +1,6 @@
 {
   "name": "@makaio/mcp-http-server",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "types": "src/index.ts",
   "type": "module",
   "private": true,

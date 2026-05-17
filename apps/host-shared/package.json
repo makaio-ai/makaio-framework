@@ -1,6 +1,6 @@
 {
   "name": "@makaio/host-shared",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "private": true,
   "description": "Shared host logic for desktop hosts and host-aware tooling",
   "type": "module",

@@ -1,7 +1,7 @@
 {
   "name": "@makaio/utils",
   "description": "Utility primitives for the Makaio framework. Zero internal dependencies.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "types": "dist/index.d.ts",
   "type": "module",
   "private": true,

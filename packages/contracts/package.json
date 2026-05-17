@@ -1,7 +1,7 @@
 {
   "name": "@makaio/contracts",
   "description": "Shared type contracts, Zod schemas, and bus subject namespaces.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "types": "dist/index.d.ts",
   "type": "module",
   "files": [

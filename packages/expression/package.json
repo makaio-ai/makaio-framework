@@ -1,7 +1,7 @@
 {
   "name": "@makaio/expression",
   "description": "Jexl-based expression evaluation and template interpolation for workflows.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@makaio/bus-server-vite",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "private": true,
   "type": "module",
   "exports": {

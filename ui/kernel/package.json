@@ -1,7 +1,7 @@
 {
   "name": "@makaio/ui-kernel",
   "description": "TypeScript contracts, registries, and schemas for framework UI packages.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "type": "module",
   "private": true,
   "license": "CC-BY-NC-4.0",

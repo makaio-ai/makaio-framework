@@ -1,7 +1,7 @@
 {
   "name": "@makaio/bus-core",
   "description": "Type-safe, distributed event bus for the Makaio framework.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "types": "src/index.ts",
   "type": "module",
   "private": true,

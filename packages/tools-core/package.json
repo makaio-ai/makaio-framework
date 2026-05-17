@@ -1,7 +1,7 @@
 {
   "name": "@makaio/tools-core",
   "description": "Tool execution primitives: contracts, typed results, and toolset abstractions.",
-  "version": "1.0.0-dev-1779048017991",
+  "version": "1.0.0-dev-1779051654000",
   "types": "src/index.ts",
   "type": "module",
   "private": true,
