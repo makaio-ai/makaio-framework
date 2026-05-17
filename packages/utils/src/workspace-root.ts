@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 /**
- * Resolve the workspace root from a package directory 2–4 levels below the root.
+ * Resolve the workspace root from a package directory 2-4 levels below the root.
  *
  * Supports two source layouts:
  * - **Prefixed source layout**: workspace root contains `framework/package.json`;
@@ -11,14 +11,10 @@ import path from 'node:path';
  * - **Package-root layout**: workspace root contains `package.json` directly;
  *   the workspace root is the nearest ancestor that contains `package.json`.
  *
- * Resolution uses two passes over bounded candidate depths (2–4 levels up):
- * 1. **Prefixed-layout pass** — prefer the shallowest candidate containing
- *    `framework/package.json` (avoids overshooting into an enclosing workspace).
- * 2. **Package-root fallback** — if no prefixed-layout marker is found, accept the
- *    shallowest candidate containing `package.json`.
- *
- * The two-pass approach prevents a bare `package.json` above the repo root
- * from being mistakenly selected when the prefixed-layout marker is present deeper.
+ * Resolution walks bounded candidate depths from shallowest to deepest. A
+ * package root named `framework` is treated as nested source layout only when
+ * its parent contains that directory as a workspace marker; other package roots
+ * win immediately so checkouts embedded in another workspace do not overshoot.
  * @param packageDir - Absolute path to a package directory inside the repo
  *   (e.g. the value of `path.dirname(fileURLToPath(import.meta.url))`).
  * @returns Absolute path to the workspace root.
@@ -28,7 +24,7 @@ export function resolveWorkspaceRoot(packageDir: string): string {
   if (!path.isAbsolute(packageDir)) {
     throw new Error(`[workspace-root] packageDir must be absolute. Received: "${packageDir}"`);
   }
-  // Depth is intentionally bounded to 2–4 levels. All known call sites live
+  // Depth is intentionally bounded to 2-4 levels. All known call sites live
   // within that range (for example, framework package src directories are
   // usually 4 levels below the root). A dynamic upward walk would risk matching unrelated package.json
   // files higher in the filesystem — the bounded list is a safety constraint.
@@ -38,16 +34,12 @@ export function resolveWorkspaceRoot(packageDir: string): string {
     path.resolve(packageDir, '../../../..'),
   ];
 
-  // Pass 1: prefer the prefixed-layout marker (framework/package.json).
-  for (const candidate of candidates) {
-    if (existsSync(path.join(candidate, 'framework', 'package.json'))) {
-      return candidate;
-    }
-  }
-
-  // Pass 2: package-root fallback — bare package.json at the shallowest match.
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, 'package.json'))) {
+      const parentDir = path.dirname(candidate);
+      if (path.basename(candidate) === 'framework' && existsSync(path.join(parentDir, 'framework', 'package.json'))) {
+        return parentDir;
+      }
       return candidate;
     }
   }
