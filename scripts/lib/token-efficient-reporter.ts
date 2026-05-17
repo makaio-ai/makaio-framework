@@ -60,6 +60,15 @@ export default class TokenEfficientReporter implements Reporter {
   private lastColor: string | null = null;
   private counts = { passed: 0, failed: 0, skipped: 0 };
   private failedTests: FailedTest[] = [];
+  private cleanRunOwnsExitCode = false;
+
+  public onInit(): void {
+    process.once('exit', () => {
+      if (this.cleanRunOwnsExitCode) {
+        process.exitCode = 0;
+      }
+    });
+  }
 
   public onTestRunStart(): void {
     if (aiAgent) {
@@ -114,7 +123,7 @@ export default class TokenEfficientReporter implements Reporter {
   public onTestRunEnd(
     testModules: ReadonlyArray<TestModule>,
     unhandledErrors: ReadonlyArray<SerializedError>,
-    _reason: TestRunEndReason,
+    reason: TestRunEndReason,
   ): void {
     // Reset colors and print summary
     process.stdout.write(colors.reset + '\n\n');
@@ -132,9 +141,11 @@ export default class TokenEfficientReporter implements Reporter {
     }
 
     // Print module-level errors (e.g., import failures)
+    let moduleErrorCount = 0;
     for (const testModule of testModules) {
       const moduleErrors = testModule.errors();
       if (moduleErrors?.length) {
+        moduleErrorCount += moduleErrors.length;
         process.stderr.write(`${colors.red}MODULE ERROR:${colors.reset} ${testModule.relativeModuleId}\n`);
         for (const error of moduleErrors) {
           this.printError(error as TestError, { fullMessage: true });
@@ -153,14 +164,27 @@ export default class TokenEfficientReporter implements Reporter {
     }
 
     const { passed, failed, skipped } = this.counts;
-    const total = passed + failed + skipped;
+    const total = passed + failed + skipped + moduleErrorCount;
 
     const parts: string[] = [];
     if (passed) parts.push(`${colors.green}${passed} passed${colors.reset}`);
     if (failed) parts.push(`${colors.red}${failed} failed${colors.reset}`);
     if (skipped) parts.push(`${colors.yellow}${skipped} skipped${colors.reset}`);
+    if (moduleErrorCount) {
+      const label = moduleErrorCount === 1 ? 'module error' : 'module errors';
+      parts.push(`${colors.red}${moduleErrorCount} ${label}${colors.reset}`);
+    }
 
     process.stdout.write(`${parts.join(' | ')} (${total} total)\n`);
+
+    // CLI-oriented tests intentionally assert non-zero process.exitCode values.
+    // A clean Vitest result must own the final process status instead of
+    // inheriting a stale command-under-test exit code from the worker lifecycle.
+    this.cleanRunOwnsExitCode =
+      reason === 'passed' && failed === 0 && moduleErrorCount === 0 && unhandledErrors.length === 0;
+    if (this.cleanRunOwnsExitCode) {
+      process.exitCode = 0;
+    }
   }
 
   /**

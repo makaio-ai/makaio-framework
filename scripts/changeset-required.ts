@@ -5,7 +5,7 @@
  *
  * Compares git diff between `--base` and `--head` SHAs, maps changed files
  * to publishable packages via convention-based directory matching, and
- * checks whether any `.changeset/*.md` file was added or modified.
+ * checks whether any package release `.changeset/*.md` file was added or modified.
  *
  * Exits 0 (pass) when:
  * - No publishable packages are affected by the diff.
@@ -58,7 +58,7 @@ function parseArgs(argv: string[]): RefRange {
  * @returns Array of changed file paths (repo-root-relative).
  */
 function getChangedFiles(base: string, head: string): string[] {
-  const output = execFileSync('git', ['diff', '--name-only', `${base}...${head}`], { encoding: 'utf-8' });
+  const output = execFileSync('git', buildChangedFilesDiffArgs(base, head), { encoding: 'utf-8' });
   return output
     .trim()
     .split('\n')
@@ -66,12 +66,33 @@ function getChangedFiles(base: string, head: string): string[] {
 }
 
 /**
- * Tests whether a diff includes a root-level changeset file.
- * @param changedFiles - Changed file paths relative to the repository root.
- * @returns `true` when a `.changeset/*.md` file is present.
+ * Builds the git diff command arguments used to list changed files.
+ * @param base - Base ref.
+ * @param head - Head ref.
+ * @returns Arguments for `git`.
  */
-export function hasChangesetFile(changedFiles: readonly string[]): boolean {
-  return changedFiles.some((f) => /^\.changeset\/[^/]+\.md$/u.test(f));
+export function buildChangedFilesDiffArgs(base: string, head: string): string[] {
+  return [
+    'diff',
+    '--name-only',
+    // Lowercase `d` excludes deleted paths while preserving every non-deleted
+    // status, so deleting an old changeset cannot satisfy the release gate.
+    '--diff-filter=d',
+    `${base}...${head}`,
+  ];
+}
+
+/**
+ * Tests whether a diff includes a package release changeset file.
+ * @param changedFiles - Changed file paths relative to the repository root.
+ * @param frameworkPrefix - Framework root prefix when diff paths include one, or null for repository-root paths.
+ * @returns `true` when a package release `.changeset/*.md` file is present.
+ */
+export function hasChangesetFile(changedFiles: readonly string[], frameworkPrefix: string | null = null): boolean {
+  const changesetPrefix = frameworkPrefix ? `${frameworkPrefix}/.changeset/` : '.changeset/';
+  return changedFiles.some(
+    (file) => file.startsWith(changesetPrefix) && /^([^/]+)\.md$/u.test(file.slice(changesetPrefix.length)),
+  );
 }
 
 /**
@@ -100,7 +121,7 @@ function main(argv: string[]): void {
     process.exit(0);
   }
 
-  if (hasChangesetFile(changedFiles)) {
+  if (hasChangesetFile(changedFiles, prefix)) {
     console.info(`Changeset found for affected packages: ${affectedPackages.join(', ')}`);
     process.exit(0);
   }
