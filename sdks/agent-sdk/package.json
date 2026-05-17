@@ -1,11 +1,13 @@
 {
   "name": "@makaio/agent-sdk",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "description": "Claude Agent SDK-compatible interface to all Makaio adapters",
   "license": "MIT",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "exports": {
     ".": "./src/shared/index.ts",

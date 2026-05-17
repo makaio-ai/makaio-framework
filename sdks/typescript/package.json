@@ -1,6 +1,6 @@
 {
   "name": "@makaio/sdk",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "description": "TypeScript SDK for the Makaio bus protocol",
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,9 @@
   "main": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "tsdown",

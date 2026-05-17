@@ -1,6 +1,6 @@
 {
   "name": "@makaio/extension-opencode",
-  "version": "0.1.0",
+  "version": "1.0.0-dev-1779048017991",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
