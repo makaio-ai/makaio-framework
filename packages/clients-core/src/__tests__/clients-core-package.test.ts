@@ -14,9 +14,11 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { ClientSubjects, createClientDefinition } from '@makaio/contracts/client';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
 import type { KernelExtensionContext } from '@makaio/kernel/extension';
+import { z } from 'zod';
 import { createClientsCorePackage, registerStorageHandlersWithRollback } from '../package.js';
 import type { ClientsCorePackageOptions, ClientsCoreService } from '../package.js';
 import { CLIENTS_CORE_DDL } from './test-ddl.js';
@@ -32,16 +34,11 @@ const MANAGED_DEFINITION = createClientDefinition({
   defaultApprovalPolicy: 'always-ask',
   runtimeCapabilities: { supportsManagedBinary: true },
   managedInstall: {
-    type: 'manifest-bucket',
-    config: {
-      baseUrl: 'https://example.com/claude-code',
-      versionIndex: { latest: 'latest.txt' },
-      manifestPath: 'manifest.json',
-      manifestChecksumField: 'sha256',
-      binaryPath: 'bin/claude-code',
-    },
+    type: 'npm',
+    package: '@anthropic-ai/claude-code',
+    version: '1.0.17',
   },
-  versionCommand: ['bin/claude-code', '--version'],
+  versionCommand: { executable: 'bin/claude-code', args: ['--version'] },
 });
 
 const UNMANAGED_DEFINITION = createClientDefinition({
@@ -181,16 +178,11 @@ describe('createClientsCorePackage (integration)', () => {
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
-        type: 'manifest-bucket',
-        config: {
-          baseUrl: 'https://example.com/gemini-code',
-          versionIndex: { latest: 'latest.txt' },
-          manifestPath: 'manifest.json',
-          manifestChecksumField: 'sha256',
-          binaryPath: 'bin/gemini-code',
-        },
+        type: 'npm',
+        package: '@google/gemini-code',
+        version: '2.0.0',
       },
-      versionCommand: ['bin/gemini-code', '--version'],
+      versionCommand: { executable: 'bin/gemini-code', args: ['--version'] },
     });
 
     await bootService([MANAGED_DEFINITION, secondManaged]);
@@ -214,8 +206,9 @@ describe('createClientsCorePackage (integration)', () => {
         managedInstall: {
           type: 'npm',
           package: '@example/late-added',
+          version: '0.1.0',
         },
-        versionCommand: ['bin/late-added', '--version'],
+        versionCommand: { executable: 'bin/late-added', args: ['--version'] },
       }),
     );
 
@@ -250,14 +243,69 @@ describe('createClientsCorePackage (integration)', () => {
     expect(ids).not.toContain('codex');
   });
 
-  it('client.list returns correct latestVersionSourceStatus before any feed refresh', async () => {
+  it('client.list returns the descriptor pin and updateAvailable:false before any install', async () => {
     await bootService([MANAGED_DEFINITION]);
 
     const result = await bus.request(ClientSubjects.list, {});
     const entry = result.clients.find((c) => c.clientId === 'claude-code');
-    expect(entry?.latestAvailableVersion).toBeNull();
-    expect(entry?.latestVersionSourceStatus).toBe('error');
+    expect(entry?.pinnedVersion).toBe('1.0.17');
     expect(entry?.updateAvailable).toBe(false);
+  });
+
+  it('client.config.prime delegates to the client-owned config prime subject', async () => {
+    const observed: unknown[] = [];
+    const primeNs = createBusNamespace('client:claude-code', {
+      'config.prime': {
+        request: z.object({
+          clientId: z.string(),
+          configDir: z.string(),
+          phase: z.string(),
+          binaryVersion: z.string().optional(),
+          adapterName: z.string().optional(),
+          projectDir: z.string().optional(),
+        }),
+        response: z.object({ primed: z.boolean() }),
+      },
+    });
+    const unsubPrime = bus.on(primeNs.subjects.config.prime, (ctx) => {
+      observed.push(ctx.payload);
+      ctx.setResult({ primed: true });
+    });
+
+    await bootService([MANAGED_DEFINITION]);
+
+    try {
+      const result = await bus.request(ClientSubjects.config.prime, {
+        clientId: 'claude-code',
+        configDir: '/tmp/claude-config',
+        phase: 'managed-install',
+        binaryVersion: '1.0.17',
+      });
+
+      expect(result).toEqual({ primed: true });
+      expect(observed).toEqual([
+        {
+          clientId: 'claude-code',
+          configDir: '/tmp/claude-config',
+          phase: 'managed-install',
+          binaryVersion: '1.0.17',
+        },
+      ]);
+    } finally {
+      unsubPrime();
+    }
+  });
+
+  it('client.config.prime reports primed:false when no client-owned handler exists', async () => {
+    await bootService([MANAGED_DEFINITION]);
+
+    const result = await bus.request(ClientSubjects.config.prime, {
+      clientId: 'claude-code',
+      configDir: '/tmp/claude-config',
+      phase: 'profile-create',
+    });
+
+    expect(result).toEqual({ primed: false });
   });
 
   // -------------------------------------------------------------------------

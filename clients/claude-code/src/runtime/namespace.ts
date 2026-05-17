@@ -1,4 +1,5 @@
 import { createClientNamespace } from '@makaio/clients-core';
+import { ClaudeCodeConfigPrimeSchemas } from '../schemas/config-prime.js';
 import { ClaudeCodeConfigSchemas } from '../schemas/config.js';
 import { ClaudeCodeSessionConfigSchemas } from '../schemas/session-config.js';
 import { ClaudeCodeStatuslineRawPayloadSchema } from '../schemas/statusline.js';
@@ -28,6 +29,8 @@ import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
  * - `sessionConfig.setup` — seed a session-scoped directory with the requested
  *   native config inheritance policy.
  * - `sessionConfig.destroy` — clear native session credential material.
+ * - `config.prime` — prime a config directory with Claude Code-specific
+ *   defaults (e.g. `DISABLE_AUTOUPDATER=1`).
  *
  * All subjects live in `client:claude-code.*` and are never promoted to
  * the global `client.*` namespace directly.  Downstream normalizers translate
@@ -38,6 +41,7 @@ const claudeCodeNamespace = createClientNamespace('claude-code', {
   ...ClaudeCodeConfigSchemas,
   ...ClaudeCodeWiringSchemas,
   ...ClaudeCodeSessionConfigSchemas,
+  ...ClaudeCodeConfigPrimeSchemas,
 });
 
 /**

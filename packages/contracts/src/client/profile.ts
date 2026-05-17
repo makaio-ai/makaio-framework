@@ -3,13 +3,16 @@
  *
  * Covers the `ClientProfile` entity, the `profile.*` command–response pairs
  * for CRUD and default-selection, the `sessionConfig.*` lifecycle subjects
- * for per-session configuration isolation, and the setup-delegation request
- * schema passed to client-owned setup handlers.
+ * for per-session configuration isolation, the setup-delegation request
+ * schema passed to client-owned setup handlers, and the `config.prime`
+ * generic lifecycle hook fired at managed-install, profile-create, and
+ * session-create phases.
  * @packageDocumentation
  */
 
 import { z } from 'zod';
 import { AbsolutePathSchema, EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
+import { VersionLiteralSchema } from '../version/index.js';
 
 /**
  * Filesystem-safe profile name.
@@ -315,6 +318,84 @@ export const SessionConfigSetupResponseSchema = z.object({
 });
 
 export type SessionConfigSetupResponse = z.infer<typeof SessionConfigSetupResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// client.config.prime — generic blocking config-prime lifecycle hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle phases at which the config-prime hook fires.
+ *
+ * - `'managed-install'` — after a managed binary is verified and before the
+ *   version record is persisted and the binary is activated.
+ * - `'profile-create'`  — after a named profile directory is created and
+ *   before the profile record is written to storage.
+ * - `'session-create'`  — after a session config directory is created and the
+ *   client-owned setup handler has run, before the session config response is
+ *   returned.
+ */
+export const ClientConfigPrimePhaseSchema = z.enum(['managed-install', 'profile-create', 'session-create']);
+
+export type ClientConfigPrimePhase = z.infer<typeof ClientConfigPrimePhaseSchema>;
+
+/**
+ * Request and response schemas for `client.config.prime`.
+ *
+ * The generic `client.config.prime` handler delegates to the per-client
+ * `client:<clientId>.config.prime` subject via `requestOptional`.  If no
+ * client-specific handler is registered the call is a no-op.
+ *
+ * This allows client packages to perform one-time or per-session config
+ * initialisation (e.g. writing settings templates, injecting MCP server
+ * entries) at well-defined lifecycle points without the framework needing to
+ * know the client's config file format.
+ */
+export const ClientConfigPrimeSchema = {
+  /**
+   * Initiate a config prime for the given client directory and phase.
+   */
+  request: z.object({
+    /** Stable client identifier (e.g. `'claude-code'`). */
+    clientId: NonEmptyStringSchema,
+    /** Absolute path to the config directory that should be primed. */
+    configDir: AbsolutePathSchema,
+    /** Lifecycle phase at which config priming is requested. */
+    phase: ClientConfigPrimePhaseSchema,
+    /**
+     * Resolved binary version that was just installed.
+     *
+     * Usually present for `'managed-install'` so the client handler can write
+     * version-specific defaults. Session callers may also provide it when the
+     * active binary version is already known.
+     */
+    binaryVersion: VersionLiteralSchema.optional(),
+    /**
+     * Name of the adapter that will own this session.
+     *
+     * Present for `'session-create'` phase so the handler can inject the
+     * correct adapter-specific configuration.  Absent for other phases.
+     */
+    adapterName: z.string().min(1).optional(),
+    /**
+     * Project directory the client process will start in.
+     *
+     * Present for `'session-create'` phase when the caller supplies a project
+     * directory.  Absent for other phases.
+     */
+    projectDir: AbsolutePathSchema.optional(),
+  }),
+  /** Outcome of the config-prime operation. */
+  response: z.object({
+    /**
+     * `true` when a client-specific handler handled the prime; `false` when no
+     * handler was registered and the call was a no-op.
+     */
+    primed: z.boolean(),
+  }),
+};
+
+export type ClientConfigPrimeRequest = z.infer<typeof ClientConfigPrimeSchema.request>;
+export type ClientConfigPrimeResponse = z.infer<typeof ClientConfigPrimeSchema.response>;
 
 // Inferred request/response types for key profile subjects
 export type ProfileCreateRequest = z.infer<(typeof ClientProfileSchemas)['profile.create']['request']>;

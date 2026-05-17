@@ -14,7 +14,7 @@
         "id": "codex",
         "name": "Codex",
         "description": "OpenAI Codex CLI \u2014 an agentic coding assistant",
-        "binary": { "name": "codex" }
+        "binary": { "name": "codex", "managed": true, "version": "0.130.0" }
       }
     ]
   }

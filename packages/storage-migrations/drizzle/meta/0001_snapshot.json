@@ -21,28 +21,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "latest_available_version": {
-          "name": "latest_available_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "latest_version_last_checked_at": {
-          "name": "latest_version_last_checked_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "latest_version_source_status": {
-          "name": "latest_version_source_status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'error'"
-        },
         "updated_at": {
           "name": "updated_at",
           "type": "integer",

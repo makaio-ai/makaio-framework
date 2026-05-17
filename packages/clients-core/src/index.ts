@@ -8,7 +8,6 @@ export type { AtomicContentParser, AtomicModifier, AtomicModifyOutcome } from '.
 export { BinaryNotFoundError } from './client-binary-errors.js';
 export { ClientAccountRegistry } from './client-account-registry.js';
 export type { ClientAccountUpsertResult } from './client-account-registry.js';
-export { ClientBinaryFeedCache } from './client-binary-feed-cache.js';
 export { ClientBinaryManager } from './client-binary-manager.js';
 export { isPathWithinBase, resolveAndValidateBasePath } from './client-binary-manager-types.js';
 export type {
@@ -26,11 +25,12 @@ export { ClientBinaryJobRunner } from './client-binary-job-runner.js';
 export type { StrategyDependencies } from './binary-strategies/index.js';
 export { ClientDefinitionRegistry } from './client-definition-registry.js';
 export { ClientBinaryVersionResolver } from './client-binary-version-resolver.js';
-export type { FeedFetcher, LatestVersionMeta, ResolvedInstallVersion } from './client-binary-version-resolver.js';
+export type { ResolvedInstallVersion } from './client-binary-version-resolver.js';
 export { ClientRuntimeRegistry } from './client-runtime-registry.js';
 export { CLIENT_RUNTIME_STATUSES } from './client-runtime-registry-types.js';
 export type { ClientRuntimeRecord, ClientRuntimeStatus, RuntimeUpsertResult } from './client-runtime-registry-types.js';
 export { ClientRuntimeService } from './client-runtime-service.js';
+export { ClientConfigPrimeService } from './client-config-prime-service.js';
 export { ClientProfileService } from './client-profile-service.js';
 export { ClientSessionConfigService } from './client-session-config-service.js';
 export {

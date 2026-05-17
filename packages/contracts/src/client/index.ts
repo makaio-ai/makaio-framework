@@ -15,12 +15,12 @@ export {
   ClientToolCapabilityAnnotationSchema,
   ClientToolDefinitionSchema,
   ConfigIsolationSchema,
-  GithubReleaseInstallDescriptorSchema,
   LogSourceDefinitionSchema,
   ManagedInstallDescriptorSchema,
-  ManifestBucketInstallDescriptorSchema,
   NpmInstallDescriptorSchema,
   PostInstallDescriptorSchema,
+  SignedBinaryBucketInstallDescriptorSchema,
+  VersionCommandSchema,
 } from './definition.js';
 export type {
   ClientBinaryCompatibility,
@@ -31,12 +31,12 @@ export type {
   ClientToolCapabilityAnnotation,
   ClientToolDefinition,
   ConfigIsolation,
-  GithubReleaseInstallDescriptor,
   LogSourceDefinition,
   ManagedInstallDescriptor,
-  ManifestBucketInstallDescriptor,
   NpmInstallDescriptor,
   PostInstallDescriptor,
+  SignedBinaryBucketInstallDescriptor,
+  VersionCommand,
 } from './definition.js';
 export { ClientExecutionContextSchema, ClientResolveBinarySchema, ClientSchemas } from './schemas.js';
 export type { ClientExecutionContext, ClientResolveBinaryRequest, ClientResolveBinaryResponse } from './schemas.js';
@@ -85,7 +85,6 @@ export {
   InstalledVersionEntrySchema,
   InstallErrorSchema,
   InstallStageSchema,
-  LatestVersionSourceStatusSchema,
   ManagedInstallStrategySchema,
 } from './binary-management.js';
 export type {
@@ -106,7 +105,6 @@ export type {
   InstalledVersionEntry,
   InstallError,
   InstallStage,
-  LatestVersionSourceStatus,
   ManagedInstallStrategy,
 } from './binary-management.js';
 export {
@@ -147,6 +145,8 @@ export type {
 export { ClientNamespace, ClientSubjects } from './namespace.js';
 export { createClientDefinition } from './create-definition.js';
 export {
+  ClientConfigPrimePhaseSchema,
+  ClientConfigPrimeSchema,
   ClientProfileSchema,
   ClientProfileNameSchema,
   ClientProfileSchemas,
@@ -160,6 +160,9 @@ export {
   SessionConfigTeardownResponseSchema,
 } from './profile.js';
 export type {
+  ClientConfigPrimePhase,
+  ClientConfigPrimeRequest,
+  ClientConfigPrimeResponse,
   ClientProfile,
   SessionConfigInheritance,
   ProfileCreateRequest,

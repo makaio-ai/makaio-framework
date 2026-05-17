@@ -76,7 +76,9 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
       configInheritance: 'full',
     });
 
-    await expect(fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8')).resolves.toBe('{"theme":"dark"}');
+    const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
+    expect(sessionSettings).toMatchObject({ theme: 'dark', env: { DISABLE_AUTOUPDATER: '1' } });
+    // Native source is never modified by the session setup.
     await expect(fs.readFile(path.join(nativeConfigDir, 'settings.json'), 'utf-8')).resolves.toBe('{"theme":"dark"}');
     expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: sessionDir });
   });
@@ -147,7 +149,8 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
       configInheritance: 'auth-only',
     });
 
-    await expect(fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8')).resolves.toBe('{}');
+    const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
+    expect(sessionSettings).toEqual({ env: { DISABLE_AUTOUPDATER: '1' } });
     await expect(fs.access(path.join(sessionDir, 'settings.local.json'))).rejects.toThrow();
     expect(nativeCredentialMockState.inheritCalls).toEqual([
       { sourceConfigDir: sourceDir, sessionDir, platform: 'linux' },
@@ -282,7 +285,8 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
       configInheritance: 'empty',
     });
 
-    await expect(fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8')).resolves.toBe('{}');
+    const sessionSettings = JSON.parse(await fs.readFile(path.join(sessionDir, 'settings.json'), 'utf-8'));
+    expect(sessionSettings).toEqual({ env: { DISABLE_AUTOUPDATER: '1' } });
     expect(nativeCredentialMockState.clearCalls).toEqual([{ sessionDir, platform: 'linux' }]);
   });
 

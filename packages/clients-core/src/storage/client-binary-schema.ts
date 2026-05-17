@@ -3,8 +3,7 @@
  *
  * Two tables:
  * - `client_binary_versions` — one row per installed version per client.
- * - `client_binary_state`   — one row per client for active-version pointer
- *   and feed-cache metadata.
+ * - `client_binary_state`   — one row per client for the active-version pointer.
  * @packageDocumentation
  */
 
@@ -54,7 +53,7 @@ export type SelectClientBinaryVersion = typeof clientBinaryVersions.$inferSelect
 // ---------------------------------------------------------------------------
 
 /**
- * Persistent store for per-client active-version pointer and feed-cache state.
+ * Persistent store for the per-client active-version pointer.
  *
  * One row exists per managed client. The row is upserted on any state change.
  * `activeVersion` is `NULL` when no version is currently active (e.g. after
@@ -69,22 +68,6 @@ export const clientBinaryState = sqliteTable('client_binary_state', {
    * A `NULL` here is semantically meaningful — it is not the same as "unknown".
    */
   activeVersion: text('active_version'),
-
-  /** Latest version string from the upstream feed, or `NULL` when not yet fetched. */
-  latestAvailableVersion: text('latest_available_version'),
-
-  /**
-   * Unix epoch timestamp in milliseconds when the feed was last successfully
-   * checked, or `NULL` when the feed has never been checked.
-   */
-  latestVersionLastCheckedAt: integer('latest_version_last_checked_at'),
-
-  /** Freshness/status of the latest-version source at the last refresh attempt. */
-  latestVersionSourceStatus: text('latest_version_source_status', {
-    enum: ['fresh', 'cached', 'error'],
-  })
-    .notNull()
-    .default('error'),
 
   /** Unix epoch timestamp in milliseconds of the last mutation. */
   updatedAt: integer('updated_at').notNull(),

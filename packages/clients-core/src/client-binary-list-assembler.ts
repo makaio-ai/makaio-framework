@@ -9,8 +9,6 @@
  */
 
 import type { ClientBinaryListEntry, InstalledVersionEntry, ManagedInstallDescriptor } from '@makaio/contracts/client';
-import type { ClientBinaryFeedCache } from './client-binary-feed-cache.js';
-import type { ClientBinaryVersionResolver } from './client-binary-version-resolver.js';
 import type { ClientDefinitionLookup } from './client-binary-manager-types.js';
 import { ClientBinaryStorageSubjects } from './storage/client-binary-storage-namespace.js';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -22,23 +20,18 @@ import type { IMakaioBus } from '@makaio/bus-core';
 /**
  * Assemble the installation inventory for all managed clients.
  *
- * Optionally refreshes the feed cache from upstream before assembling the
- * response. The result contains one {@link ClientBinaryListEntry} per client
- * known to the definition lookup, enriched with installed versions, the
- * active version pointer, and the latest-available-version metadata.
- * @param bus - Bus instance for storage requests and feed refresh
- * @param versionResolver - Version resolver holding the in-memory feed cache
- * @param feedCache - Feed cache for persisting refreshed metadata
+ * Returns one {@link ClientBinaryListEntry} per managed client known to the
+ * definition lookup, enriched with installed versions, the active version
+ * pointer, the descriptor pin, and the `updateAvailable` flag. A client is
+ * considered to have an update available when its active version does not
+ * match the pinned version in the managed install descriptor.
+ * @param bus - Bus instance for storage snapshot requests
  * @param definitionLookup - Client definition registry
- * @param forceRefresh - When `true`, force a live upstream feed refresh
  * @returns Assembled list of client binary entries
  */
 export async function assembleBinaryList(
   bus: IMakaioBus,
-  versionResolver: ClientBinaryVersionResolver,
-  feedCache: ClientBinaryFeedCache,
   definitionLookup: ClientDefinitionLookup,
-  forceRefresh: boolean,
 ): Promise<ClientBinaryListEntry[]> {
   const { versions: allVersions, states } = await bus.request(ClientBinaryStorageSubjects.loadSnapshot, {});
 
@@ -49,9 +42,7 @@ export async function assembleBinaryList(
     activeVersionByClient.set(s.clientId, s.activeVersion);
   }
 
-  // Build a clientId → descriptor map from the definition registry. Used by
-  // the refresh loop and the entry-assembly loop below, avoiding repeated
-  // lookups against the registry.
+  // Build a clientId → descriptor map from the definition registry.
   const descriptorByClient = new Map<string, ManagedInstallDescriptor>();
   for (const definition of definitionLookup.listDefinitions()) {
     if (definition.managedInstall !== undefined) {
@@ -59,32 +50,18 @@ export async function assembleBinaryList(
     }
   }
 
-  // Collect all known managed client IDs from the definition registry plus
-  // any persisted state. Persisted state can outlive a temporarily missing
-  // package, so storage-owned IDs remain visible with degraded feed metadata.
-  const clientIds = new Set<string>([
-    ...descriptorByClient.keys(),
-    ...versionsByClient.keys(),
-    ...activeVersionByClient.keys(),
-  ]);
-
-  // Refresh all feeds in parallel when requested. Each client targets a
-  // different upstream (npm, GitHub, bucket) so there is no ordering
-  // dependency. allSettled ensures one failure does not abort the rest.
-  if (forceRefresh) {
-    await Promise.allSettled(
-      [...clientIds].map(async (clientId) => {
-        const descriptor = descriptorByClient.get(clientId);
-        if (descriptor === undefined) return;
-        const refreshed = await versionResolver.refresh(clientId, descriptor);
-        const refreshedMeta = versionResolver.getLatestVersionMeta(clientId);
-        await feedCache.update(clientId, refreshedMeta.latestAvailableVersion, refreshed ? 'fresh' : 'error');
-      }),
-    );
-  }
+  // Include every managed client ID known to the definition registry. Storage
+  // may also hold persisted state for clients whose descriptor is temporarily
+  // absent; those are omitted from the list because there is no pin to report.
+  const clientIds = new Set<string>(descriptorByClient.keys());
 
   return [...clientIds].map((clientId) => {
     const descriptor = descriptorByClient.get(clientId);
+    // All clientIds in the set come from the descriptor map, so this is always
+    // defined. The type-narrowing assert documents this invariant clearly.
+    if (descriptor === undefined) {
+      throw new Error(`assembleBinaryList: missing descriptor for client '${clientId}'`);
+    }
     const activeVersion = activeVersionByClient.get(clientId) ?? null;
     const versionRecords = versionsByClient.get(clientId) ?? [];
     const installedVersions: InstalledVersionEntry[] = versionRecords.map((v) => ({
@@ -93,27 +70,15 @@ export async function assembleBinaryList(
       installedAt: v.installedAt,
       isActive: v.version === activeVersion,
     }));
-    const cachedMeta = versionResolver.getLatestVersionMeta(clientId);
-    // When forceRefresh was requested but no descriptor is registered, the
-    // refresh could not happen. Downgrade the source status to 'error' so the
-    // caller can distinguish "refresh attempted and failed" from "stale cache"
-    // without losing the last-known upstream version.
-    const meta =
-      forceRefresh && descriptor === undefined
-        ? { ...cachedMeta, latestVersionSourceStatus: 'error' as const }
-        : cachedMeta;
-    // Version comparison uses string inequality — sufficient for V1 where versions
-    // are opaque identifiers. Semver-aware comparison is deferred until version
-    // format conventions are established across strategies.
-    const updateAvailable =
-      activeVersion !== null && meta.latestAvailableVersion !== null && meta.latestAvailableVersion !== activeVersion;
+    const pinnedVersion = descriptor.version;
+    // Version comparison uses string inequality — sufficient for V1 where
+    // versions are opaque identifiers pinned to an exact release.
+    const updateAvailable = activeVersion !== null && activeVersion !== pinnedVersion;
     return {
       clientId,
       installedVersions,
       activeVersion,
-      latestAvailableVersion: meta.latestAvailableVersion,
-      latestVersionLastCheckedAt: meta.latestVersionLastCheckedAt,
-      latestVersionSourceStatus: meta.latestVersionSourceStatus,
+      pinnedVersion,
       updateAvailable,
     };
   });

@@ -33,6 +33,7 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
 const NPM_MANAGED_INSTALL = {
   type: 'npm',
   package: '@example/test-client',
+  version: '1.0.0',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -171,7 +172,7 @@ describe('ClientDefinitionSchema — configIsolation', () => {
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: NPM_MANAGED_INSTALL,
-        versionCommand: ['bin/example-client', '--version'],
+        versionCommand: { executable: 'bin/example-client', args: ['--version'] },
         configIsolation: { envVar: 'EXAMPLE_CONFIG_DIR', defaultPath: '~/.example-client' },
       }),
     );
@@ -185,7 +186,7 @@ describe('ClientDefinitionSchema — configIsolation', () => {
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: NPM_MANAGED_INSTALL,
-        versionCommand: ['bin/example-client', '--version'],
+        versionCommand: { executable: 'bin/example-client', args: ['--version'] },
       }),
     );
 

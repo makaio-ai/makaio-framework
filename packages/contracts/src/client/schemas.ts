@@ -41,7 +41,7 @@ import {
   ClientSessionUserPromptSubmittedSchema,
   ClientWiringEntrySchema,
 } from './session-observed.js';
-import { ClientProfileSchemas, ClientSessionConfigSchemas } from './profile.js';
+import { ClientConfigPrimeSchema, ClientProfileSchemas, ClientSessionConfigSchemas } from './profile.js';
 
 export { ClientExecutionContextSchema, ClientResolveBinarySchema } from './binary-resolution.js';
 export type {
@@ -160,4 +160,6 @@ export const ClientSchemas = {
   ...ClientProfileSchemas,
   // Session config isolation
   ...ClientSessionConfigSchemas,
+  // Generic blocking config-prime lifecycle hook
+  'config.prime': ClientConfigPrimeSchema,
 } satisfies SchemaRecord;

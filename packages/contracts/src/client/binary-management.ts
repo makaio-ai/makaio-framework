@@ -1,7 +1,7 @@
 /**
  * Binary management schemas for the client domain.
  *
- * Covers install strategies, version-cache status, installed version entries,
+ * Covers install strategies, installed version entries, pinned version metadata,
  * the `client.list` / `client.install` / `client.uninstall` / `client.update` /
  * `client.setActive` command–response pairs, and the install-job progress and
  * completion event payloads.
@@ -10,24 +10,17 @@
 
 import { z } from 'zod';
 import { AbsolutePathSchema, EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
+import { VersionLiteralSchema } from '../version/index.js';
 
 /**
  * Install strategies that Makaio supports for managed client binaries.
+ *
+ * - `npm`                  — npm registry installation with an exact version pin.
+ * - `signed-binary-bucket` — signed static bucket download with an exact version pin.
  */
-export const ManagedInstallStrategySchema = z.enum(['manifest-bucket', 'npm', 'github-release']);
+export const ManagedInstallStrategySchema = z.enum(['npm', 'signed-binary-bucket']);
 
 export type ManagedInstallStrategy = z.infer<typeof ManagedInstallStrategySchema>;
-
-/**
- * Freshness classification for the latest-version cache entry.
- *
- * - `'fresh'`  — the version index was fetched within the cache TTL.
- * - `'cached'` — the cached value is stale but still available.
- * - `'error'`  — the last refresh attempt failed; cached value may be absent.
- */
-export const LatestVersionSourceStatusSchema = z.enum(['fresh', 'cached', 'error']);
-
-export type LatestVersionSourceStatus = z.infer<typeof LatestVersionSourceStatusSchema>;
 
 /**
  * A single installed version entry for a managed client binary.
@@ -48,36 +41,46 @@ export type InstalledVersionEntry = z.infer<typeof InstalledVersionEntrySchema>;
 /**
  * Summary row for a single client in a `client.list` response.
  */
-export const ClientBinaryListEntrySchema = z.object({
-  /** Stable client identifier (e.g. `'claude-code'`). */
-  clientId: NonEmptyStringSchema,
-  /** All locally installed versions for this client. */
-  installedVersions: z.array(InstalledVersionEntrySchema),
-  /** The currently active version string, or `null` when none is active. */
-  activeVersion: NonEmptyStringSchema.nullable(),
-  /** Latest version available from the upstream source, or `null` if unknown. */
-  latestAvailableVersion: NonEmptyStringSchema.nullable(),
-  /** Epoch timestamp when the latest-version index was last checked, or `null`. */
-  latestVersionLastCheckedAt: EpochMillisecondsSchema.nullable(),
-  /** Freshness classification of the latest-version cache entry. */
-  latestVersionSourceStatus: LatestVersionSourceStatusSchema,
-  /** Whether a newer version than the active one is available upstream. */
-  updateAvailable: z.boolean(),
-});
+export const ClientBinaryListEntrySchema = z
+  .object({
+    /** Stable client identifier (e.g. `'claude-code'`). */
+    clientId: NonEmptyStringSchema,
+    /** All locally installed versions for this client. */
+    installedVersions: z.array(InstalledVersionEntrySchema),
+    /** The currently active version string, or `null` when none is active. */
+    activeVersion: NonEmptyStringSchema.nullable(),
+    /**
+     * Exact version pinned by the client package's managed install descriptor.
+     *
+     * This is the version the framework will install or promote to when the
+     * client is updated. `updateAvailable` is `true` when the active version
+     * does not match this pin.
+     */
+    pinnedVersion: VersionLiteralSchema,
+    /**
+     * Whether the active managed version differs from the current package pin.
+     *
+     * `true`  — the active version is not the pinned version; an install or
+     *            update is required to reach the pin.
+     * `false` — the active version matches the pin; no update is needed.
+     */
+    updateAvailable: z.boolean(),
+  })
+  .strict();
 
 export type ClientBinaryListEntry = z.infer<typeof ClientBinaryListEntrySchema>;
 
 /**
  * Request and response schemas for `client.list`.
  *
- * Returns the local installation inventory for all managed clients, enriched
- * with the latest-available-version from the upstream index.
+ * Returns the local installation inventory for all managed clients, including
+ * their pinned version and whether the active version matches the current pin.
  */
 export const ClientListSchema = {
   request: z.object({
     /**
-     * When `true`, bypass the version-index cache and re-fetch from upstream
-     * before computing `latestAvailableVersion` and `updateAvailable`.
+     * When `true`, re-evaluate the pinned version state for all clients
+     * before returning the list (e.g. after a package update).
      */
     forceRefresh: z.boolean().optional(),
   }),
@@ -102,10 +105,10 @@ export const ClientInstallSchema = {
     /** Stable client identifier to install (e.g. `'claude-code'`). */
     clientId: NonEmptyStringSchema,
     /**
-     * Version to install. When omitted the manager resolves the latest
-     * available version from the upstream index.
+     * Version to install. When omitted the manager installs the exact version
+     * pinned by the client package. When present, it must match that pin.
      */
-    version: NonEmptyStringSchema.optional(),
+    version: VersionLiteralSchema.optional(),
   }),
   response: z.object({
     /** Opaque job identifier for tracking progress events. */
@@ -114,12 +117,12 @@ export const ClientInstallSchema = {
      * Version string as requested by the caller, or `null` when the caller
      * did not specify a version.
      */
-    requestedVersion: NonEmptyStringSchema.nullable(),
+    requestedVersion: VersionLiteralSchema.nullable(),
     /**
      * Version that the manager resolved and will install, or `null` when
      * resolution has not yet completed at the time of acknowledgement.
      */
-    resolvedVersion: NonEmptyStringSchema.nullable(),
+    resolvedVersion: VersionLiteralSchema.nullable(),
   }),
 };
 
@@ -160,8 +163,8 @@ export type ClientUninstallResponse = z.infer<typeof ClientUninstallSchema.respo
 /**
  * Request and response schemas for `client.update`.
  *
- * Enqueues an update job that installs the latest available version and
- * activates it. Callers can track progress via `client.installJob.progress` and
+ * Enqueues an update job that installs the client package pin and activates it.
+ * Callers can track progress via `client.installJob.progress` and
  * `client.installJob.completed` events using the returned `jobId`.
  */
 export const ClientUpdateSchema = {
@@ -173,10 +176,10 @@ export const ClientUpdateSchema = {
     /** Opaque job identifier for tracking progress events. */
     jobId: NonEmptyStringSchema,
     /**
-     * The latest version the manager resolved from the upstream index, or
-     * `null` when resolution has not yet completed at acknowledgement time.
+     * The exact version pinned by the client package, or `null` when resolution
+     * has not yet completed at acknowledgement time.
      */
-    resolvedVersion: NonEmptyStringSchema.nullable(),
+    resolvedVersion: VersionLiteralSchema.nullable(),
   }),
 };
 

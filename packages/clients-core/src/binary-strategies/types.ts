@@ -1,10 +1,13 @@
 /**
  * Shared types for the client binary install strategy subsystem.
  *
- * All three built-in strategies (`manifest-bucket`, `npm`, `github-release`)
- * implement {@link InstallStrategy} and receive their I/O dependencies through
- * {@link StrategyDependencies}. This keeps every strategy fully testable without
- * real network calls or file-system side effects.
+ * Both built-in strategies (`npm` and `signed-binary-bucket`) implement
+ * {@link InstallStrategy}. Runtime install receives an exact client package pin;
+ * strategies must not resolve upstream latest versions.
+ *
+ * Every strategy receives its I/O dependencies through {@link StrategyDependencies},
+ * keeping implementations fully testable without real network calls or file-system
+ * side effects.
  * @packageDocumentation
  */
 
@@ -34,11 +37,10 @@ export interface InstallArtifact {
   installPath: string;
 
   /**
-   * The concrete version that was installed.
+   * The exact version that was installed, as passed to {@link InstallStrategy.execute}.
    *
-   * For `manifest-bucket` and `github-release` this is the tag/version
-   * string resolved from the upstream index. For `npm` it is the registry
-   * version.
+   * For `npm` this mirrors the registry semver tag. For `signed-binary-bucket`
+   * this is the version string from the descriptor.
    */
   version: string;
 
@@ -85,10 +87,12 @@ export interface StrategyDependencies {
    * Execute a shell command and return its stdout.
    * @param command - The executable to run (no shell expansion).
    * @param args - Positional arguments passed to the executable.
-   * @param options - Optional execution options.
+   * @param options - Optional execution options. `cwd` sets the working
+   *   directory; `env` is merged on top of the parent environment when present
+   *   (when absent the parent environment is inherited unchanged).
    * @returns Trimmed stdout string.
    */
-  exec(command: string, args: string[], options?: { cwd?: string }): Promise<string>;
+  exec(command: string, args: string[], options?: { cwd?: string; env?: Record<string, string> }): Promise<string>;
 
   /**
    * Extract an archive file into `destDir`.
@@ -167,17 +171,10 @@ export function makeDownloadProgressAdapter(
  *
  * A strategy is a pure computation unit — it has no bus, no BaseService, and
  * no side effects beyond what is provided through {@link StrategyDependencies}.
+ * Strategies operate only on pinned versions; upstream version resolution is not
+ * part of this contract.
  */
 export interface InstallStrategy {
-  /**
-   * Resolve the latest available version for this descriptor.
-   *
-   * Strategies should make a single network call (version index or API
-   * endpoint) and return the version string without any local state.
-   * @returns The latest version string (semver or opaque tag).
-   */
-  resolveLatestVersion(): Promise<string>;
-
   /**
    * Execute the install pipeline for `version` into `targetDir`.
    *

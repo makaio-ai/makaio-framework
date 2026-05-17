@@ -4,9 +4,9 @@
  * The {@link ClientBinaryManager} is a {@link BaseService} that registers
  * handlers for the six binary-management bus subjects:
  *
- * - `client.list`          — assemble the installation inventory with feed metadata
+ * - `client.list`          — assemble the installation inventory
  * - `client.install`       — enqueue a background install job
- * - `client.update`        — refresh feed + install latest + set active
+ * - `client.update`        — install the descriptor pin and set it active
  * - `client.setActive`     — switch the active pointer among installed versions
  * - `client.uninstall`     — remove a specific installed version
  * - `client.resolveBinary` — resolve the execution context for an active binary
@@ -26,8 +26,8 @@ import type {
   ClientInstallProgress,
   ManagedInstallDescriptor,
 } from '@makaio/contracts/client';
+import { primeClientConfig } from './client-config-prime.js';
 import { BaseService } from '@makaio/service-base';
-import { ClientBinaryFeedCache } from './client-binary-feed-cache.js';
 import { createNoopStrategyDeps } from './client-binary-noop-strategy-deps.js';
 import { ClientBinaryVersionResolver } from './client-binary-version-resolver.js';
 import { ClientBinaryJobRunner } from './client-binary-job-runner.js';
@@ -43,7 +43,6 @@ import type {
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
 import { verifyInstalledVersion } from './client-binary-version-verifier.js';
 import { ClientBinaryResolver, toVersionCommandTuple } from './client-binary-resolver.js';
-import { StrategyFeedFetcher } from './client-binary-strategy-feed-fetcher.js';
 import { assembleBinaryList } from './client-binary-list-assembler.js';
 import { assertSupportedBinaryVersion } from './client-binary-version-support.js';
 
@@ -63,7 +62,6 @@ interface ManagedDefinitionResult {
  * In-memory manager for the global `client.*` binary-management contracts.
  *
  * **Responsibilities:**
- * - Hydrate the feed cache and version resolver from storage on boot.
  * - Handle `client.list`, `client.install`, `client.update`,
  *   `client.setActive`, and `client.uninstall` bus subjects.
  * - Delegate async install/update execution to {@link ClientBinaryJobRunner}.
@@ -75,13 +73,17 @@ interface ManagedDefinitionResult {
  * **One job per client invariant:** only one install or update job is allowed
  * to run for a given client at a time. Concurrent requests are rejected with
  * an error until the in-flight job completes.
+ *
+ * **Pin-only installs:** version resolution is always derived from the
+ * descriptor pin. No upstream feed fetches are performed at runtime; the
+ * version is determined statically from the client package.
  */
 export class ClientBinaryManager extends BaseService {
-  private readonly feedCache: ClientBinaryFeedCache;
   private readonly versionResolver: ClientBinaryVersionResolver;
   private readonly jobRunner: ClientBinaryJobRunner;
   private readonly strategyDeps: StrategyDependencies;
   private readonly resolvedBasePath: string;
+  private readonly resolvedConfigBasePath: string;
   private readonly resolver: ClientBinaryResolver;
 
   /**
@@ -114,21 +116,18 @@ export class ClientBinaryManager extends BaseService {
   ) {
     super(bus);
     this.resolvedBasePath = resolveAndValidateBasePath(config.basePath, 'ClientBinaryManager');
-    const resolvedConfigBasePath = resolveAndValidateBasePath(
+    this.resolvedConfigBasePath = resolveAndValidateBasePath(
       config.configBasePath,
       'ClientBinaryManager configBasePath',
     );
     this.strategyDeps = strategyDeps;
-    this.feedCache = new ClientBinaryFeedCache(bus);
-    const feedFetcher = new StrategyFeedFetcher(strategyDeps);
-    this.versionResolver = new ClientBinaryVersionResolver(feedFetcher);
+    this.versionResolver = new ClientBinaryVersionResolver();
     this.jobRunner = new ClientBinaryJobRunner(strategyDeps, config);
     this.resolver = new ClientBinaryResolver({
       bus,
       resolvedBasePath: this.resolvedBasePath,
-      resolvedConfigBasePath,
+      resolvedConfigBasePath: this.resolvedConfigBasePath,
       definitionLookup,
-      exec: strategyDeps.exec,
     });
   }
 
@@ -137,13 +136,11 @@ export class ClientBinaryManager extends BaseService {
   // -------------------------------------------------------------------------
 
   /**
-   * Hydrate state from storage and register bus handlers.
+   * Register bus handlers.
    */
   protected override async onInit(): Promise<void> {
-    await this.hydrateFromStorage();
-
     this.registerHandler(ClientSubjects.list, async (ctx) => {
-      const clients = await this.handleList(ctx.payload.forceRefresh ?? false);
+      const clients = await this.handleList();
       ctx.setResult({ clients });
     });
 
@@ -178,7 +175,6 @@ export class ClientBinaryManager extends BaseService {
    */
   protected override onDestroy(): void {
     this.jobRunner.cancelAll();
-    this.versionResolver.clear();
     this.pendingClients.clear();
   }
 
@@ -190,21 +186,22 @@ export class ClientBinaryManager extends BaseService {
    * Assemble the installation inventory for all managed clients.
    *
    * Delegates to {@link assembleBinaryList} for the read-model assembly logic.
-   * @param forceRefresh - When `true`, force a live upstream feed refresh
    * @returns Assembled list of client binary entries
    */
-  private async handleList(forceRefresh: boolean): Promise<ClientBinaryListEntry[]> {
-    return assembleBinaryList(this.bus, this.versionResolver, this.feedCache, this.definitionLookup, forceRefresh);
+  private async handleList(): Promise<ClientBinaryListEntry[]> {
+    return assembleBinaryList(this.bus, this.definitionLookup);
   }
 
   /**
    * Enqueue a background install job for a managed client binary.
    *
-   * Resolves the target version (explicit or latest-from-feed) and returns
-   * a `jobId` immediately. The job runs asynchronously; callers track progress
-   * via `client.installJob.progress` and `client.installJob.completed` events.
+   * Resolves the target version from the descriptor pin (or validates the
+   * explicit version against it) and returns a `jobId` immediately. The job
+   * runs asynchronously; callers track progress via
+   * `client.installJob.progress` and `client.installJob.completed` events.
    * @param clientId - Stable client identifier to install
-   * @param requestedVersion - Explicit version to install, or `undefined` for latest
+   * @param requestedVersion - Explicit version to install (must match the
+   *   descriptor pin), or `undefined` to use the pin directly
    * @returns Job acknowledgement with resolved version
    */
   private async handleInstall(
@@ -214,7 +211,7 @@ export class ClientBinaryManager extends BaseService {
     const { definition, descriptor } = this.requireManagedDefinition(clientId, 'client.install');
 
     return this.withClientLock(clientId, async () => {
-      const { version: resolvedVersion, explicit } = await this.versionResolver.resolveInstallVersion(
+      const { version: resolvedVersion } = this.versionResolver.resolveInstallVersion(
         clientId,
         descriptor,
         requestedVersion,
@@ -229,20 +226,6 @@ export class ClientBinaryManager extends BaseService {
         );
       }
 
-      // When the caller did not supply an explicit version, the resolver may
-      // have performed a live upstream feed fetch to determine the latest
-      // version. Persist the resulting feed metadata so that subsequent list
-      // calls and process restarts reflect the freshly fetched version, not a
-      // stale-or-absent cache entry.
-      if (!explicit) {
-        const refreshedMeta = this.versionResolver.getLatestVersionMeta(clientId);
-        await this.feedCache.update(
-          clientId,
-          refreshedMeta.latestAvailableVersion,
-          refreshedMeta.latestVersionSourceStatus,
-        );
-      }
-
       const jobId = this.startInstallJob(clientId, resolvedVersion, descriptor, definition, false, 'install');
 
       return {
@@ -254,8 +237,10 @@ export class ClientBinaryManager extends BaseService {
   }
 
   /**
-   * Refresh the feed, resolve the latest version, and enqueue an update job
-   * that installs and activates the result.
+   * Install the descriptor pin and activate it.
+   *
+   * Resolves the version from the descriptor pin and enqueues a job with
+   * `makeActive: true`. No upstream feed fetch is performed.
    * @param clientId - Stable client identifier to update
    * @returns Job acknowledgement with resolved version
    */
@@ -263,19 +248,7 @@ export class ClientBinaryManager extends BaseService {
     const { definition, descriptor } = this.requireManagedDefinition(clientId, 'client.update');
 
     return this.withClientLock(clientId, async () => {
-      // Force a live feed refresh so the update always installs the true latest.
-      // If the refresh fails (network error, parse failure, etc.) we must not fall
-      // back to a potentially stale cached version — the caller expects the update
-      // to reflect the current upstream state.
-      const refreshed = await this.versionResolver.refresh(clientId, descriptor);
-      const meta = this.versionResolver.getLatestVersionMeta(clientId);
-      await this.feedCache.update(clientId, meta.latestAvailableVersion, refreshed ? 'fresh' : 'error');
-
-      if (!refreshed || meta.latestAvailableVersion === null) {
-        throw new Error(`client.update: failed to resolve latest version for client '${clientId}'`);
-      }
-
-      const resolvedVersion = meta.latestAvailableVersion;
+      const { version: resolvedVersion } = this.versionResolver.resolveInstallVersion(clientId, descriptor);
       if (definition.binary !== undefined) {
         assertSupportedBinaryVersion(
           'client.update',
@@ -455,8 +428,7 @@ export class ClientBinaryManager extends BaseService {
    * `client.version.changed`.
    *
    * Centralizes the storage-side active-version mutation used by
-   * `handleSetActive` and the job completion callback. Feed-cache fields are
-   * preserved by `client-binary:storage.setActiveVersion`.
+   * `handleSetActive` and the job completion callback.
    * @param clientId - Stable client identifier
    * @param newActiveVersion - Version to set active, or `null` to clear
    * @param reason - Operation that triggered the change
@@ -490,33 +462,6 @@ export class ClientBinaryManager extends BaseService {
     }
 
     return previousActiveVersion;
-  }
-
-  // -------------------------------------------------------------------------
-  // Boot hydration
-  // -------------------------------------------------------------------------
-
-  /**
-   * Hydrate feed cache and version resolver from persisted storage.
-   *
-   * Called once during `onInit()`. Populates the in-memory caches so that
-   * `client.list` and `client.install` requests do not need a live feed fetch
-   * on the first call after a process restart. Both caches are seeded from
-   * a single `loadAllState` bus round-trip.
-   */
-  private async hydrateFromStorage(): Promise<void> {
-    const states = await this.feedCache.hydrate();
-
-    for (const state of states) {
-      if (state.latestAvailableVersion !== null && state.latestVersionLastCheckedAt !== null) {
-        this.versionResolver.seedFromStorage(
-          state.clientId,
-          state.latestAvailableVersion,
-          state.latestVersionLastCheckedAt,
-          state.latestVersionSourceStatus,
-        );
-      }
-    }
   }
 
   // -------------------------------------------------------------------------
@@ -633,8 +578,14 @@ export class ClientBinaryManager extends BaseService {
   /**
    * Create the completion callback passed to the job runner.
    *
-   * Persists the installed version to storage and optionally sets it as active,
-   * then emits `client.version.changed` with the originating operation reason.
+   * Primes the managed config directory for the installed client, then persists
+   * the installed version to storage and optionally sets it as active, then
+   * emits `client.version.changed` with the originating operation reason.
+   *
+   * **Order of operations:**
+   * 1. Prime the managed config directory (blocking, no-op if no handler).
+   * 2. Record the installed version and optional activation atomically.
+   * 3. Emit `client.version.changed` on activation (best-effort).
    *
    * **Consistency guarantee:** version persistence and optional activation
    * are committed through one storage transaction, so a failed activation
@@ -644,6 +595,17 @@ export class ClientBinaryManager extends BaseService {
   private makeCompletionCallback(): JobCompletionCallback {
     return async ({ clientId, version, installPath, makeActive, reason }) => {
       const now = Date.now();
+
+      // Prime the managed config directory before recording the version in
+      // storage so client-specific defaults are applied before the binary is
+      // visible as installed.  The call is a no-op when the client has not
+      // registered a handler.
+      await primeClientConfig(this.bus, {
+        clientId,
+        configDir: this.resolveManagedConfigDir(clientId),
+        phase: 'managed-install',
+        binaryVersion: version,
+      });
 
       const result = await this.bus.request(ClientBinaryStorageSubjects.recordInstalledVersion, {
         versionRecord: {
@@ -673,5 +635,22 @@ export class ClientBinaryManager extends BaseService {
         }
       }
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Config directory helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the managed config directory for a client.
+   *
+   * The managed config directory follows the convention established by
+   * {@link ClientBinaryManagerConfig.configBasePath}:
+   * `{configBasePath}/{clientId}/config/`.
+   * @param clientId - Stable client identifier.
+   * @returns Absolute path to the client's managed config directory.
+   */
+  private resolveManagedConfigDir(clientId: string): string {
+    return path.join(this.resolvedConfigBasePath, clientId, 'config');
   }
 }

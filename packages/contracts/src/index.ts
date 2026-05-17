@@ -630,7 +630,6 @@ export {
   ClientToolDefinitionSchema,
   ClientWiringEntrySchema,
   createClientDefinition,
-  LatestVersionSourceStatusSchema,
   LogSourceDefinitionSchema,
   ManagedInstallDescriptorSchema,
 } from './client/index.js';
@@ -663,16 +662,14 @@ export type {
   ClientUsageWindow,
   ClientVersionChanged,
   ClientWiringEntry,
-  GithubReleaseInstallDescriptor,
   InstalledVersionEntry,
   InstallStage,
-  LatestVersionSourceStatus,
   LogSourceDefinition,
   ManagedInstallDescriptor,
   ManagedInstallStrategy,
-  ManifestBucketInstallDescriptor,
   NpmInstallDescriptor,
   PostInstallDescriptor,
+  SignedBinaryBucketInstallDescriptor,
 } from './client/index.js';
 export { NativeSessionSupervisorSubjects, SupervisorSessionStatusSchema } from './native-session-supervisor/index.js';
 export type {

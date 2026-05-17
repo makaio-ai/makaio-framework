@@ -346,6 +346,45 @@ describe('ClaudeCodeClientService — config subjects', () => {
   });
 
   // -------------------------------------------------------------------------
+  // managed config lifecycle subjects
+  // -------------------------------------------------------------------------
+
+  describe('managed config lifecycle subjects', () => {
+    it('round-trips config.prime through the service handler', async () => {
+      const configDir = path.join(tmpDir, 'prime-config');
+
+      const result = await bus.request(ClaudeCodeClientSubjects.config.prime, {
+        clientId: 'claude-code',
+        configDir,
+        phase: 'managed-install',
+      });
+
+      expect(result).toEqual({ primed: true });
+      const settings = await readSettings(path.join(configDir, 'settings.json'));
+      expect(settings['env']).toEqual({ DISABLE_AUTOUPDATER: '1' });
+    });
+
+    it('round-trips sessionConfig.setup through the service handler', async () => {
+      const baseConfigDir = path.join(tmpDir, 'base-config');
+      const sessionDir = path.join(tmpDir, 'session-config');
+      await fs.mkdir(baseConfigDir, { recursive: true });
+      await fs.mkdir(sessionDir, { recursive: true });
+      await fs.writeFile(path.join(baseConfigDir, 'settings.json'), '{"theme":"dark"}', 'utf-8');
+
+      const result = await bus.request(ClaudeCodeClientSubjects.sessionConfig.setup, {
+        sessionDir,
+        baseConfigDir,
+        platform: 'linux',
+        configInheritance: 'full',
+      });
+
+      expect(result.env).toEqual({ CLAUDE_CONFIG_DIR: sessionDir });
+      const settings = await readSettings(path.join(sessionDir, 'settings.json'));
+      expect(settings).toMatchObject({ theme: 'dark', env: { DISABLE_AUTOUPDATER: '1' } });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // wiring subjects
   // -------------------------------------------------------------------------
 

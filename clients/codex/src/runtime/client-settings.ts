@@ -54,6 +54,16 @@ export interface CodexClientSettingsPathsOverride {
 }
 
 /**
+ * Path resolution options for {@link CodexClientSettings}.
+ */
+export interface CodexClientSettingsOptions {
+  /** Optional managed Codex config root used for global-scope hooks. */
+  readonly configDir?: string;
+  /** Optional exact path override used by tests. */
+  readonly pathsOverride?: CodexClientSettingsPathsOverride;
+}
+
+/**
  * Handles reading and writing Codex `hooks.json` configuration files.
  *
  * This is a plain composed component — not a `BaseService` — intended to be
@@ -73,15 +83,22 @@ export class CodexClientSettings {
    * resolved dynamically via {@link resolveCodexSettingsPaths}.
    */
   private readonly pathsOverride: CodexClientSettingsPathsOverride | undefined;
+  /** Optional managed Codex config root for global-scope hooks. */
+  private readonly configDir: string | undefined;
 
   /**
    * Creates a new `CodexClientSettings` instance.
-   * @param pathsOverride - Optional path override for testing. When provided,
-   *   these paths are used instead of calling {@link resolveCodexSettingsPaths}.
-   *   In production, omit this argument.
+   * @param options - Optional path override or config-root options. Passing
+   *   `{ globalHooks, projectHooks }` remains supported for existing tests.
    */
-  public constructor(pathsOverride?: CodexClientSettingsPathsOverride) {
-    this.pathsOverride = pathsOverride;
+  public constructor(options?: CodexClientSettingsPathsOverride | CodexClientSettingsOptions) {
+    if (options !== undefined && 'globalHooks' in options) {
+      this.pathsOverride = options;
+      this.configDir = undefined;
+      return;
+    }
+    this.pathsOverride = options?.pathsOverride;
+    this.configDir = options?.configDir;
   }
 
   // ---------------------------------------------------------------------------
@@ -297,7 +314,7 @@ export class CodexClientSettings {
     if (this.pathsOverride !== undefined) {
       return this.pathsOverride;
     }
-    return resolveCodexSettingsPaths(projectDir);
+    return resolveCodexSettingsPaths(projectDir, this.configDir);
   }
 
   /**

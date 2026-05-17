@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { ClientSubjects } from '@makaio/clients-core';
 import { CodexClientSettings } from '../client-settings.js';
 import { CodexClientSessionService } from '../codex-client-session-service.js';
 import { CodexClientSubjects } from '../namespace.js';
@@ -233,6 +234,105 @@ describe('CodexClientSessionService — config handler round-trips', () => {
       const hooks = await readHooksJson(path.join(tmpDir, '.codex', 'hooks.json'));
       expect(hooks).toHaveLength(1);
       expect(hooks[0]).toMatchObject({ command: 'echo production-path' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // managed config lifecycle subjects
+  // ---------------------------------------------------------------------------
+
+  describe('managed config lifecycle subjects', () => {
+    it('round-trips config.prime through the service handler', async () => {
+      const configDir = path.join(tmpDir, 'prime-config');
+
+      const result = await bus.request(CodexClientSubjects.config.prime, {
+        clientId: 'codex',
+        configDir,
+        phase: 'managed-install',
+      });
+
+      expect(result).toEqual({ primed: true });
+      await expect(fs.readFile(path.join(configDir, 'config.toml'), 'utf-8')).resolves.toContain(
+        'check_for_update_on_startup = false',
+      );
+    });
+
+    it('round-trips sessionConfig.setup through the service handler', async () => {
+      const baseConfigDir = path.join(tmpDir, 'base-config');
+      const sessionDir = path.join(tmpDir, 'session-config');
+      await fs.mkdir(baseConfigDir, { recursive: true });
+      await fs.writeFile(path.join(baseConfigDir, 'config.toml'), 'model = "gpt-5"\n', 'utf-8');
+
+      const result = await bus.request(CodexClientSubjects.sessionConfig.setup, {
+        sessionDir,
+        baseConfigDir,
+        platform: 'linux',
+        configInheritance: 'full',
+      });
+
+      expect(result.env).toEqual({ CODEX_HOME: sessionDir });
+      const configToml = await fs.readFile(path.join(sessionDir, 'config.toml'), 'utf-8');
+      expect(configToml).toContain('model = "gpt-5"');
+      expect(configToml).toContain('check_for_update_on_startup = false');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // managed config resolution
+  // ---------------------------------------------------------------------------
+
+  describe('managed config resolution', () => {
+    it('uses client.resolveBinary configDir for global hook config when no settings override is injected', async () => {
+      await service!.destroy();
+      const managedConfigDir = path.join(tmpDir, 'managed-codex-config');
+      bus.on(ClientSubjects.resolveBinary, (ctx) => {
+        expect(ctx.payload.clientId).toBe('codex');
+        ctx.setResult({
+          binaryPath: null,
+          env: { CODEX_HOME: managedConfigDir },
+          configDir: managedConfigDir,
+          source: 'managed',
+          version: '0.130.0',
+        });
+      });
+      const svc = new CodexClientSessionService(bus);
+      await svc.init();
+      service = svc;
+
+      const result = await bus.request(CodexClientSubjects.config.hooks.list, {});
+
+      expect(result.perScope[0]?.path).toBe(path.join(managedConfigDir, 'hooks.json'));
+    });
+
+    it('uses client.resolveBinary configDir when listing installed wiring', async () => {
+      await service!.destroy();
+      const managedConfigDir = path.join(tmpDir, 'managed-codex-config');
+      await writeHooksJson(path.join(managedConfigDir, 'hooks.json'), [
+        {
+          event: 'SessionStart',
+          command: 'makaio hook received codex SessionStart',
+        },
+      ]);
+      bus.on(ClientSubjects.resolveBinary, (ctx) => {
+        expect(ctx.payload.clientId).toBe('codex');
+        ctx.setResult({
+          binaryPath: null,
+          env: { CODEX_HOME: managedConfigDir },
+          configDir: managedConfigDir,
+          source: 'managed',
+          version: '0.130.0',
+        });
+      });
+      const svc = new CodexClientSessionService(bus);
+      await svc.init();
+      service = svc;
+
+      const result = await bus.request(CodexClientSubjects.wiring.list, {
+        makaioCommand: 'makaio',
+      });
+
+      const sessionStart = result.entries.find((entry) => entry.name === 'SessionStart');
+      expect(sessionStart?.installed).toBe(true);
     });
   });
 

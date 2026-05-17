@@ -76,14 +76,12 @@ describe('runMigrations', () => {
         'uq_client_binary_versions_client_version',
       ]);
 
-      // Verify the latest_version_source_status column exists and has DEFAULT 'error'.
+      // Verify the active-version state schema remains minimal.
       const stateTableInfo = await db.all<{ name: string; dflt_value: string | null }>(sql`
         PRAGMA table_info(client_binary_state)
       `);
 
-      const sourceStatusCol = stateTableInfo.find((col) => col.name === 'latest_version_source_status');
-      expect(sourceStatusCol).toBeDefined();
-      expect(sourceStatusCol?.dflt_value).toBe("'error'");
+      expect(stateTableInfo.map((col) => col.name)).toEqual(['client_id', 'active_version', 'updated_at']);
     } finally {
       close();
     }

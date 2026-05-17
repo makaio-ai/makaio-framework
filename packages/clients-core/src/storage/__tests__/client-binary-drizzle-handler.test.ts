@@ -215,9 +215,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'cached',
         updatedAt: now,
       });
 
@@ -275,9 +272,6 @@ describe('client binary Drizzle handler', () => {
       const { success } = await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -294,18 +288,12 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now - 1000,
       });
 
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.1.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -319,9 +307,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now - 500,
       });
 
@@ -329,9 +314,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: null,
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -363,23 +345,16 @@ describe('client binary Drizzle handler', () => {
       expect(state).toMatchObject({
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
     });
 
-    it('preserves feed-cache fields when switching the active version', async () => {
+    it('switches the active version on an existing state row', async () => {
       const now = Date.now();
-      const checkedAt = now - 30_000;
 
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'fresh',
         updatedAt: now - 1000,
       });
 
@@ -397,9 +372,6 @@ describe('client binary Drizzle handler', () => {
       const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
       expect(state).toMatchObject({
         activeVersion: '1.5.0',
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'fresh',
         updatedAt: now,
       });
     });
@@ -460,16 +432,12 @@ describe('client binary Drizzle handler', () => {
       expect(state?.activeVersion).toBe('1.0.0');
     });
 
-    it('preserves feed-cache fields while activating the installed version', async () => {
+    it('activates the installed version on an existing state row', async () => {
       const now = Date.now();
-      const checkedAt = now - 30_000;
 
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: null,
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'fresh',
         updatedAt: now - 1000,
       });
 
@@ -489,9 +457,6 @@ describe('client binary Drizzle handler', () => {
       const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
       expect(state).toMatchObject({
         activeVersion: '1.0.0',
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'fresh',
       });
     });
 
@@ -501,9 +466,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '0.9.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now - 1000,
       });
 
@@ -548,9 +510,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.2.3',
-        latestAvailableVersion: '1.3.0',
-        latestVersionLastCheckedAt: now - 60_000,
-        latestVersionSourceStatus: 'cached',
         updatedAt: now,
       });
 
@@ -560,9 +519,6 @@ describe('client binary Drizzle handler', () => {
 
       expect(state).not.toBeNull();
       expect(state?.activeVersion).toBe('1.2.3');
-      expect(state?.latestAvailableVersion).toBe('1.3.0');
-      expect(state?.latestVersionLastCheckedAt).toBe(now - 60_000);
-      expect(state?.latestVersionSourceStatus).toBe('cached');
     });
   });
 
@@ -582,17 +538,11 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'codex',
         activeVersion: null,
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -622,9 +572,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'cached',
         updatedAt: now,
       });
 
@@ -634,127 +581,6 @@ describe('client binary Drizzle handler', () => {
       expect(states[0]?.clientId).toBe('claude-code');
       expect(versions).toHaveLength(1);
       expect(versions[0]?.version).toBe('1.0.0');
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // updateFeedCache
-  // -------------------------------------------------------------------------
-
-  describe('updateFeedCache', () => {
-    it('creates a state row when none exists and persists feed metadata', async () => {
-      const now = Date.now();
-
-      const { success } = await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: now,
-        latestVersionSourceStatus: 'fresh',
-        updatedAt: now,
-      });
-
-      expect(success).toBe(true);
-
-      const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
-      expect(state?.latestAvailableVersion).toBe('2.0.0');
-      expect(state?.latestVersionLastCheckedAt).toBe(now);
-      expect(state?.latestVersionSourceStatus).toBe('fresh');
-    });
-
-    it('merges feed metadata without overwriting the existing activeVersion', async () => {
-      const now = Date.now();
-
-      // Establish initial state with active version
-      await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
-        clientId: 'claude-code',
-        activeVersion: '1.5.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
-        updatedAt: now - 5000,
-      });
-
-      // Update only the feed-cache fields
-      await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: '2.0.0',
-        latestVersionLastCheckedAt: now,
-        latestVersionSourceStatus: 'fresh',
-        updatedAt: now,
-      });
-
-      const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
-      // Active version must be preserved
-      expect(state?.activeVersion).toBe('1.5.0');
-      // Feed-cache fields must be updated
-      expect(state?.latestAvailableVersion).toBe('2.0.0');
-      expect(state?.latestVersionLastCheckedAt).toBe(now);
-      expect(state?.latestVersionSourceStatus).toBe('fresh');
-    });
-
-    it('stores a null latestAvailableVersion when the feed check fails', async () => {
-      const now = Date.now();
-
-      await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: now,
-        latestVersionSourceStatus: 'error',
-        updatedAt: now,
-      });
-
-      const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
-      expect(state?.latestAvailableVersion).toBeNull();
-      expect(state?.latestVersionLastCheckedAt).toBe(now);
-      expect(state?.latestVersionSourceStatus).toBe('error');
-    });
-
-    it('round-trips the cached latest metadata cleanly', async () => {
-      const now = Date.now();
-      const checkedAt = now - 30_000;
-
-      await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: '3.0.0-alpha.1',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'cached',
-        updatedAt: now,
-      });
-
-      const { states } = await MakaioBus.request(ClientBinaryStorageSubjects.loadAllState, {});
-      const entry = states.find((s) => s.clientId === 'claude-code');
-
-      expect(entry).toBeDefined();
-      expect(entry?.latestAvailableVersion).toBe('3.0.0-alpha.1');
-      expect(entry?.latestVersionLastCheckedAt).toBe(checkedAt);
-      expect(entry?.latestVersionSourceStatus).toBe('cached');
-    });
-
-    it('persists error status while preserving the last successful check timestamp', async () => {
-      const now = Date.now();
-      const checkedAt = now - 30_000;
-
-      await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: '3.0.0',
-        latestVersionLastCheckedAt: checkedAt,
-        latestVersionSourceStatus: 'fresh',
-        updatedAt: now - 1000,
-      });
-
-      await MakaioBus.request(ClientBinaryStorageSubjects.updateFeedCache, {
-        clientId: 'claude-code',
-        latestAvailableVersion: '3.0.0',
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
-        updatedAt: now,
-      });
-
-      const state = await selectStateByClientId(ctx.dbContext.db, 'claude-code');
-
-      expect(state?.latestAvailableVersion).toBe('3.0.0');
-      expect(state?.latestVersionLastCheckedAt).toBe(checkedAt);
-      expect(state?.latestVersionSourceStatus).toBe('error');
     });
   });
 
@@ -814,9 +640,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -858,9 +681,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '1.1.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 
@@ -895,9 +715,6 @@ describe('client binary Drizzle handler', () => {
       await MakaioBus.request(ClientBinaryStorageSubjects.upsertState, {
         clientId: 'claude-code',
         activeVersion: '2.0.0',
-        latestAvailableVersion: null,
-        latestVersionLastCheckedAt: null,
-        latestVersionSourceStatus: 'error',
         updatedAt: now,
       });
 

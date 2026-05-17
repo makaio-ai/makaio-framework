@@ -2,9 +2,10 @@
  * Tests for managed install descriptor types on `ClientDefinitionSchema`.
  *
  * Covers:
- * - `managedInstall` discriminated union for all three v1 strategies:
- *     `manifest-bucket`, `npm`, `github-release`
- * - `versionCommand` field validation
+ * - `managedInstall` discriminated union for the two supported strategies:
+ *     `npm`, `signed-binary-bucket`
+ * - Rejection of removed `manifest-bucket` and `github-release` strategies
+ * - `versionCommand` field validation (platform-aware `VersionCommandSchema`)
  * - `postInstall` descriptor field validation
  * - Rejection of unsupported / malformed descriptor shapes
  * - Integration via `createClientDefinition` to confirm the new fields
@@ -13,11 +14,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   ClientDefinitionSchema,
-  GithubReleaseInstallDescriptorSchema,
-  ManifestBucketInstallDescriptorSchema,
   ManagedInstallDescriptorSchema,
   NpmInstallDescriptorSchema,
   PostInstallDescriptorSchema,
+  SignedBinaryBucketInstallDescriptorSchema,
+  VersionCommandSchema,
   createClientDefinition,
   type ClientDefinitionInput,
 } from '@makaio/contracts/client';
@@ -37,175 +38,119 @@ function makeMinimalInput(overrides?: Partial<ClientDefinitionInput>): ClientDef
 }
 
 // ---------------------------------------------------------------------------
-// manifest-bucket descriptor
+// NpmInstallDescriptorSchema
 // ---------------------------------------------------------------------------
 
-describe('ManifestBucketInstallDescriptorSchema', () => {
+describe('NpmInstallDescriptorSchema', () => {
+  it('accepts npm managed install with an exact version pin', () => {
+    const result = NpmInstallDescriptorSchema.parse({
+      type: 'npm',
+      package: '@openai/codex',
+      version: '0.130.0',
+    });
+
+    expect(result).toEqual({
+      type: 'npm',
+      package: '@openai/codex',
+      version: '0.130.0',
+    });
+  });
+
+  it('rejects npm managed install without an exact version pin', () => {
+    expect(NpmInstallDescriptorSchema.safeParse({ type: 'npm', package: '@openai/codex' }).success).toBe(false);
+  });
+
+  it('rejects an empty package name', () => {
+    expect(NpmInstallDescriptorSchema.safeParse({ type: 'npm', package: '', version: '1.0.0' }).success).toBe(false);
+  });
+
+  it('rejects a non-semver version string', () => {
+    expect(
+      NpmInstallDescriptorSchema.safeParse({ type: 'npm', package: '@openai/codex', version: '^1.0.0' }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['unscoped package', 'codex@0.130.0'],
+    ['scoped package', '@openai/codex@0.130.0'],
+  ])('rejects inline version suffixes on %s names', (_label, packageName) => {
+    expect(
+      NpmInstallDescriptorSchema.safeParse({ type: 'npm', package: packageName, version: '0.130.0' }).success,
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SignedBinaryBucketInstallDescriptorSchema
+// ---------------------------------------------------------------------------
+
+describe('SignedBinaryBucketInstallDescriptorSchema', () => {
   const validDescriptor = {
-    type: 'manifest-bucket',
+    type: 'signed-binary-bucket',
+    version: '2.1.143',
     config: {
-      baseUrl: 'https://storage.example.com/claude-code',
-      versionIndex: { latest: 'version.txt' },
-      manifestPath: 'manifest.json',
-      manifestChecksumField: 'sha256',
-      binaryPath: 'bin/claude',
+      baseUrl: 'https://downloads.claude.ai/claude-code-releases',
+      manifestPathTemplate: '{version}/manifest.json',
+      manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+      publicKeyUrl: 'https://downloads.claude.ai/keys/claude-code.asc',
+      publicKeyFingerprint: '31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE',
+      binaryPathTemplate: '{version}/{platform}/{binary}',
+      platforms: {
+        'darwin-arm64': 'darwin-arm64',
+        'darwin-x64': 'darwin-x64',
+        'linux-arm64': 'linux-arm64',
+        'linux-x64': 'linux-x64',
+        'linux-arm64-musl': 'linux-arm64-musl',
+        'linux-x64-musl': 'linux-x64-musl',
+        'win32-arm64': 'win32-arm64',
+        'win32-x64': 'win32-x64',
+      },
     },
   } as const;
 
-  it('parses a minimal manifest-bucket descriptor without archiveFormat', () => {
-    const result = ManifestBucketInstallDescriptorSchema.parse(validDescriptor);
+  it('accepts signed binary bucket managed install with exact version pin and signature metadata', () => {
+    const result = SignedBinaryBucketInstallDescriptorSchema.parse(validDescriptor);
 
-    expect(result.type).toBe('manifest-bucket');
-    expect(result.config.baseUrl).toBe('https://storage.example.com/claude-code');
-    expect(result.config.archiveFormat).toBeUndefined();
+    expect(result.type).toBe('signed-binary-bucket');
+    expect(result.version).toBe('2.1.143');
+    expect(result.config.publicKeyFingerprint).toBe('31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE');
   });
 
-  it('accepts all three archiveFormat variants', () => {
-    for (const archiveFormat of ['raw', 'tar.gz', 'zip'] as const) {
-      const result = ManifestBucketInstallDescriptorSchema.parse({
-        ...validDescriptor,
-        config: { ...validDescriptor.config, archiveFormat },
-      });
+  it('rejects signed binary bucket without an exact version pin', () => {
+    const { version: _, ...withoutVersion } = validDescriptor;
 
-      expect(result.config.archiveFormat).toBe(archiveFormat);
-    }
+    expect(SignedBinaryBucketInstallDescriptorSchema.safeParse(withoutVersion).success).toBe(false);
   });
 
-  it('rejects an invalid archiveFormat', () => {
+  it('rejects a non-semver version string', () => {
+    expect(SignedBinaryBucketInstallDescriptorSchema.safeParse({ ...validDescriptor, version: 'latest' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects a descriptor missing the config block', () => {
     expect(
-      ManifestBucketInstallDescriptorSchema.safeParse({
-        ...validDescriptor,
-        config: { ...validDescriptor.config, archiveFormat: 'gz' },
+      SignedBinaryBucketInstallDescriptorSchema.safeParse({
+        type: 'signed-binary-bucket',
+        version: '1.0.0',
       }).success,
     ).toBe(false);
   });
 
-  it('rejects a descriptor with an empty baseUrl', () => {
+  it('rejects a non-URL baseUrl', () => {
     expect(
-      ManifestBucketInstallDescriptorSchema.safeParse({
-        type: 'manifest-bucket',
-        config: { ...validDescriptor.config, baseUrl: '' },
-      }).success,
-    ).toBe(false);
-  });
-
-  it('rejects a baseUrl that is not a valid URL', () => {
-    expect(
-      ManifestBucketInstallDescriptorSchema.safeParse({
-        type: 'manifest-bucket',
+      SignedBinaryBucketInstallDescriptorSchema.safeParse({
+        ...validDescriptor,
         config: { ...validDescriptor.config, baseUrl: 'not-a-url' },
       }).success,
     ).toBe(false);
   });
 
-  it('rejects a descriptor missing the config block', () => {
-    expect(ManifestBucketInstallDescriptorSchema.safeParse({ type: 'manifest-bucket' }).success).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// npm descriptor
-// ---------------------------------------------------------------------------
-
-describe('NpmInstallDescriptorSchema', () => {
-  it('parses a valid npm descriptor', () => {
-    const result = NpmInstallDescriptorSchema.parse({
-      type: 'npm',
-      package: '@anthropic-ai/claude-code',
-    });
-
-    expect(result.type).toBe('npm');
-    expect(result.package).toBe('@anthropic-ai/claude-code');
-  });
-
-  it('accepts a versioned package reference', () => {
-    const result = NpmInstallDescriptorSchema.parse({
-      type: 'npm',
-      package: '@anthropic-ai/claude-code@1.2.3',
-    });
-
-    expect(result.package).toBe('@anthropic-ai/claude-code@1.2.3');
-  });
-
-  it('rejects an empty package name', () => {
-    expect(NpmInstallDescriptorSchema.safeParse({ type: 'npm', package: '' }).success).toBe(false);
-  });
-
-  it('rejects a descriptor missing the package field', () => {
-    expect(NpmInstallDescriptorSchema.safeParse({ type: 'npm' }).success).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// github-release descriptor
-// ---------------------------------------------------------------------------
-
-describe('GithubReleaseInstallDescriptorSchema', () => {
-  const validDescriptor = {
-    type: 'github-release',
-    repo: 'anthropics/claude-code',
-    assetPattern: {
-      'darwin-arm64': 'claude-darwin-arm64.tar.gz',
-      'darwin-x64': 'claude-darwin-x64.tar.gz',
-      'linux-x64': 'claude-linux-x64.tar.gz',
-    },
-    archiveFormat: 'tar.gz',
-  } as const;
-
-  it('parses a valid github-release descriptor', () => {
-    const result = GithubReleaseInstallDescriptorSchema.parse(validDescriptor);
-
-    expect(result.type).toBe('github-release');
-    expect(result.repo).toBe('anthropics/claude-code');
-    expect(result.assetPattern['darwin-arm64']).toBe('claude-darwin-arm64.tar.gz');
-  });
-
-  it('accepts zip as archiveFormat', () => {
-    const result = GithubReleaseInstallDescriptorSchema.parse({ ...validDescriptor, archiveFormat: 'zip' });
-
-    expect(result.archiveFormat).toBe('zip');
-  });
-
-  it('rejects an invalid archiveFormat (raw is not supported for github-release)', () => {
-    expect(GithubReleaseInstallDescriptorSchema.safeParse({ ...validDescriptor, archiveFormat: 'raw' }).success).toBe(
-      false,
-    );
-  });
-
-  it('rejects an empty repo string', () => {
-    expect(GithubReleaseInstallDescriptorSchema.safeParse({ ...validDescriptor, repo: '' }).success).toBe(false);
-  });
-
-  it("rejects a repo string without a slash (must be 'owner/repo' format)", () => {
-    expect(GithubReleaseInstallDescriptorSchema.safeParse({ ...validDescriptor, repo: 'noslash' }).success).toBe(false);
-  });
-
-  it("rejects a repo string with a leading slash (must be 'owner/repo' format)", () => {
-    expect(GithubReleaseInstallDescriptorSchema.safeParse({ ...validDescriptor, repo: '/missing-owner' }).success).toBe(
-      false,
-    );
-  });
-
-  it('rejects a descriptor missing assetPattern', () => {
-    const { assetPattern: _, ...withoutPattern } = validDescriptor;
-
-    expect(GithubReleaseInstallDescriptorSchema.safeParse(withoutPattern).success).toBe(false);
-  });
-
-  it('rejects an assetPattern with an empty key', () => {
+  it('rejects a non-URL publicKeyUrl', () => {
     expect(
-      GithubReleaseInstallDescriptorSchema.safeParse({
+      SignedBinaryBucketInstallDescriptorSchema.safeParse({
         ...validDescriptor,
-        assetPattern: { '': 'claude-darwin-arm64.tar.gz' },
-      }).success,
-    ).toBe(false);
-  });
-
-  it('rejects an assetPattern with an empty value', () => {
-    expect(
-      GithubReleaseInstallDescriptorSchema.safeParse({
-        ...validDescriptor,
-        assetPattern: { 'darwin-arm64': '' },
+        config: { ...validDescriptor.config, publicKeyUrl: 'not-a-url' },
       }).success,
     ).toBe(false);
   });
@@ -216,39 +161,37 @@ describe('GithubReleaseInstallDescriptorSchema', () => {
 // ---------------------------------------------------------------------------
 
 describe('ManagedInstallDescriptorSchema', () => {
-  it('routes manifest-bucket to the correct variant', () => {
-    const result = ManagedInstallDescriptorSchema.parse({
-      type: 'manifest-bucket',
-      config: {
-        baseUrl: 'https://example.com',
-        versionIndex: { latest: 'version.txt' },
-        manifestPath: 'manifest.json',
-        manifestChecksumField: 'sha256',
-        binaryPath: 'bin/claude',
-      },
-    });
-
-    expect(result.type).toBe('manifest-bucket');
-  });
-
   it('routes npm to the correct variant', () => {
     const result = ManagedInstallDescriptorSchema.parse({
       type: 'npm',
-      package: 'claude',
+      package: '@openai/codex',
+      version: '0.130.0',
     });
 
     expect(result.type).toBe('npm');
   });
 
-  it('routes github-release to the correct variant', () => {
+  it('routes signed-binary-bucket to the correct variant', () => {
     const result = ManagedInstallDescriptorSchema.parse({
-      type: 'github-release',
-      repo: 'owner/repo',
-      assetPattern: { 'linux-x64': 'binary-linux-x64.tar.gz' },
-      archiveFormat: 'tar.gz',
+      type: 'signed-binary-bucket',
+      version: '2.1.143',
+      config: {
+        baseUrl: 'https://downloads.claude.ai/releases',
+        manifestPathTemplate: '{version}/manifest.json',
+        manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+        publicKeyUrl: 'https://downloads.claude.ai/keys/key.asc',
+        publicKeyFingerprint: 'AABB CCDD',
+        binaryPathTemplate: '{version}/{platform}/{binary}',
+        platforms: { 'linux-x64': 'linux-x64' },
+      },
     });
 
-    expect(result.type).toBe('github-release');
+    expect(result.type).toBe('signed-binary-bucket');
+  });
+
+  it('rejects removed manifest-bucket and github-release strategies', () => {
+    expect(ManagedInstallDescriptorSchema.safeParse({ type: 'manifest-bucket' }).success).toBe(false);
+    expect(ManagedInstallDescriptorSchema.safeParse({ type: 'github-release' }).success).toBe(false);
   });
 
   it('rejects an unsupported strategy type', () => {
@@ -287,58 +230,103 @@ describe('PostInstallDescriptorSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
+// VersionCommandSchema
+// ---------------------------------------------------------------------------
+
+describe('VersionCommandSchema', () => {
+  it('accepts a string executable with default args', () => {
+    const result = VersionCommandSchema.parse({ executable: 'bin/claude', args: ['--version'] });
+
+    expect(result.executable).toBe('bin/claude');
+    expect(result.args).toEqual(['--version']);
+  });
+
+  it('defaults args to an empty array when omitted', () => {
+    const result = VersionCommandSchema.parse({ executable: 'bin/claude' });
+
+    expect(result.args).toEqual([]);
+  });
+
+  it('accepts a platform-keyed executable object', () => {
+    const result = VersionCommandSchema.parse({
+      executable: {
+        default: 'bin/claude',
+        win32: 'bin/claude.exe',
+      },
+      args: ['--version'],
+    });
+
+    expect(typeof result.executable).toBe('object');
+    if (typeof result.executable === 'object') {
+      expect(result.executable.default).toBe('bin/claude');
+      expect(result.executable.win32).toBe('bin/claude.exe');
+      expect(result.executable.darwin).toBeUndefined();
+    }
+  });
+
+  it('rejects an empty string executable', () => {
+    expect(VersionCommandSchema.safeParse({ executable: '' }).success).toBe(false);
+  });
+
+  it('rejects a platform object with an empty default', () => {
+    expect(VersionCommandSchema.safeParse({ executable: { default: '' } }).success).toBe(false);
+  });
+
+  it('rejects unknown top-level fields', () => {
+    expect(VersionCommandSchema.safeParse({ executable: 'bin/claude', windows: 'bin/claude.exe' }).success).toBe(false);
+  });
+
+  it('rejects unknown platform executable keys', () => {
+    expect(
+      VersionCommandSchema.safeParse({
+        executable: {
+          default: 'bin/claude',
+          windows: 'bin/claude.exe',
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // ClientDefinitionSchema — managedInstall field
 // ---------------------------------------------------------------------------
 
 describe('ClientDefinitionSchema — managedInstall', () => {
-  it('accepts a definition with a manifest-bucket install descriptor', () => {
-    const result = ClientDefinitionSchema.parse(
-      makeMinimalInput({
-        runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: {
-          type: 'manifest-bucket',
-          config: {
-            baseUrl: 'https://storage.example.com',
-            versionIndex: { latest: 'version.txt' },
-            manifestPath: 'manifest.json',
-            manifestChecksumField: 'sha256',
-            binaryPath: 'bin/claude',
-          },
-        },
-        versionCommand: ['bin/claude', '--version'],
-      }),
-    );
-
-    expect(result.managedInstall?.type).toBe('manifest-bucket');
-  });
-
   it('accepts a definition with an npm install descriptor', () => {
     const result = ClientDefinitionSchema.parse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['bin/claude', '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
       }),
     );
 
     expect(result.managedInstall?.type).toBe('npm');
   });
 
-  it('accepts a definition with a github-release install descriptor', () => {
+  it('accepts a definition with a signed-binary-bucket install descriptor', () => {
     const result = ClientDefinitionSchema.parse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
         managedInstall: {
-          type: 'github-release',
-          repo: 'anthropics/claude-code',
-          assetPattern: { 'darwin-arm64': 'claude-darwin-arm64.tar.gz' },
-          archiveFormat: 'zip',
+          type: 'signed-binary-bucket',
+          version: '2.1.143',
+          config: {
+            baseUrl: 'https://downloads.claude.ai/releases',
+            manifestPathTemplate: '{version}/manifest.json',
+            manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+            publicKeyUrl: 'https://downloads.claude.ai/keys/key.asc',
+            publicKeyFingerprint: 'AABB CCDD',
+            binaryPathTemplate: '{version}/{platform}/{binary}',
+            platforms: { 'linux-x64': 'linux-x64' },
+          },
         },
-        versionCommand: ['bin/claude', '--version'],
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
       }),
     );
 
-    expect(result.managedInstall?.type).toBe('github-release');
+    expect(result.managedInstall?.type).toBe('signed-binary-bucket');
   });
 
   it('accepts a definition without managedInstall (field is optional)', () => {
@@ -360,7 +348,7 @@ describe('ClientDefinitionSchema — managedInstall', () => {
   it('rejects managedInstall when supportsManagedBinary is absent (bidirectional invariant)', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
       }),
     );
 
@@ -371,7 +359,7 @@ describe('ClientDefinitionSchema — managedInstall', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: false },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
       }),
     );
 
@@ -390,14 +378,41 @@ describe('ClientDefinitionSchema — managedInstall', () => {
 });
 
 // ---------------------------------------------------------------------------
-// ClientDefinitionSchema — versionCommand field
+// ClientDefinitionSchema — versionCommand field (VersionCommandSchema)
 // ---------------------------------------------------------------------------
 
 describe('ClientDefinitionSchema — versionCommand', () => {
-  it('accepts a valid versionCommand array on an unmanaged definition', () => {
-    const result = ClientDefinitionSchema.parse(makeMinimalInput({ versionCommand: ['claude', '--version'] }));
+  it('accepts a string executable versionCommand on a managed definition', () => {
+    const result = ClientDefinitionSchema.parse(
+      makeMinimalInput({
+        runtimeCapabilities: { supportsManagedBinary: true },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
+      }),
+    );
 
-    expect(result.versionCommand).toEqual(['claude', '--version']);
+    expect(result.versionCommand?.executable).toBe('bin/claude');
+    expect(result.versionCommand?.args).toEqual(['--version']);
+  });
+
+  it('accepts a platform-keyed versionCommand on a managed definition', () => {
+    const result = ClientDefinitionSchema.parse(
+      makeMinimalInput({
+        runtimeCapabilities: { supportsManagedBinary: true },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: {
+          executable: { default: 'bin/claude', win32: 'bin/claude.exe' },
+          args: ['--version'],
+        },
+      }),
+    );
+
+    const exec = result.versionCommand?.executable;
+    expect(typeof exec).toBe('object');
+    if (exec && typeof exec === 'object') {
+      expect(exec.default).toBe('bin/claude');
+      expect(exec.win32).toBe('bin/claude.exe');
+    }
   });
 
   it('unmanaged definitions may omit versionCommand', () => {
@@ -406,23 +421,11 @@ describe('ClientDefinitionSchema — versionCommand', () => {
     expect(result.versionCommand).toBeUndefined();
   });
 
-  it('accepts versionCommand[0] as a relative path for managed definitions', () => {
-    const result = ClientDefinitionSchema.parse(
-      makeMinimalInput({
-        runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['bin/claude', '--version'],
-      }),
-    );
-
-    expect(result.versionCommand).toEqual(['bin/claude', '--version']);
-  });
-
   it('managed definitions with managedInstall must also provide versionCommand', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
       }),
     );
 
@@ -433,94 +436,109 @@ describe('ClientDefinitionSchema — versionCommand', () => {
     }
   });
 
-  it('rejects an empty versionCommand array', () => {
-    expect(ClientDefinitionSchema.safeParse(makeMinimalInput({ versionCommand: [] })).success).toBe(false);
-  });
-
-  it('rejects a versionCommand where an element is an empty string', () => {
-    expect(ClientDefinitionSchema.safeParse(makeMinimalInput({ versionCommand: [''] })).success).toBe(false);
-  });
-
-  it('rejects managed definitions with an absolute versionCommand[0]', () => {
+  it('rejects managed definitions with an absolute string executable', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['/usr/bin/claude', '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable: '/usr/bin/claude', args: ['--version'] },
       }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const paths = result.error.issues.map((issue) => issue.path.join('.'));
-      expect(paths).toContain('versionCommand.0');
+      expect(paths).toContain('versionCommand.executable');
     }
   });
 
-  it('rejects managed definitions with path traversal in versionCommand[0]', () => {
+  it('rejects managed definitions with path traversal in string executable', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['../bin/claude', '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable: '../bin/claude', args: ['--version'] },
       }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const paths = result.error.issues.map((issue) => issue.path.join('.'));
-      expect(paths).toContain('versionCommand.0');
+      expect(paths).toContain('versionCommand.executable');
     }
   });
 
-  it('rejects managed definitions with Windows rooted backslash versionCommand[0]', () => {
+  it('rejects managed definitions with an absolute default executable in platform object', () => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['\\Windows\\System32\\cmd.exe', '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: {
+          executable: { default: '/usr/bin/claude', win32: 'bin/claude.exe' },
+          args: ['--version'],
+        },
       }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const paths = result.error.issues.map((issue) => issue.path.join('.'));
-      expect(paths).toContain('versionCommand.0');
+      expect(paths).toContain('versionCommand.executable.default');
+    }
+  });
+
+  it('rejects managed definitions with path traversal in a platform-specific executable', () => {
+    const result = ClientDefinitionSchema.safeParse(
+      makeMinimalInput({
+        runtimeCapabilities: { supportsManagedBinary: true },
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: {
+          executable: { default: 'bin/claude', win32: '..\\bin\\claude.exe' },
+          args: ['--version'],
+        },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join('.'));
+      expect(paths).toContain('versionCommand.executable.win32');
     }
   });
 
   it.each([
     ['Windows drive path with backslashes', 'C:\\Windows\\System32\\cmd.exe'],
     ['Windows drive path with slashes', 'C:/Windows/System32/cmd.exe'],
-    ['Windows UNC path', '\\\\server\\share\\cmd.exe'],
+    ['Windows drive-relative path', 'C:Windows\\System32\\cmd.exe'],
+    ['Windows rooted backslash path', '\\Windows\\System32\\cmd.exe'],
     ['POSIX traversal after a path segment', 'bin/../claude'],
     ['Windows traversal after a path segment', 'bin\\..\\claude.exe'],
-  ])('rejects managed definitions with %s in versionCommand[0]', (_label, executable) => {
+  ])('rejects managed definitions with %s in string executable', (_label, executable) => {
     const result = ClientDefinitionSchema.safeParse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: [executable, '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable, args: ['--version'] },
       }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       const paths = result.error.issues.map((issue) => issue.path.join('.'));
-      expect(paths).toContain('versionCommand.0');
+      expect(paths).toContain('versionCommand.executable');
     }
   });
 
-  it('accepts managed definitions with nested relative versionCommand[0]', () => {
+  it('accepts managed definitions with nested relative string executable', () => {
     const result = ClientDefinitionSchema.parse(
       makeMinimalInput({
         runtimeCapabilities: { supportsManagedBinary: true },
-        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code' },
-        versionCommand: ['bin/claude', '--version'],
+        managedInstall: { type: 'npm', package: '@anthropic-ai/claude-code', version: '1.2.3' },
+        versionCommand: { executable: 'bin/claude', args: ['--version'] },
       }),
     );
 
-    expect(result.versionCommand).toEqual(['bin/claude', '--version']);
+    expect(result.versionCommand?.executable).toBe('bin/claude');
   });
 });
 
@@ -552,7 +570,7 @@ describe('ClientDefinitionSchema — postInstall', () => {
 // ---------------------------------------------------------------------------
 
 describe('createClientDefinition — managed install integration', () => {
-  it('returns a frozen definition with managedInstall, versionCommand, and postInstall', () => {
+  it('returns a frozen definition with npm managedInstall, versionCommand, and postInstall', () => {
     const definition = createClientDefinition({
       id: 'claude-code',
       name: 'Claude Code',
@@ -560,63 +578,48 @@ describe('createClientDefinition — managed install integration', () => {
       defaultApprovalPolicy: 'full-access',
       runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
-        type: 'manifest-bucket',
-        config: {
-          baseUrl: 'https://storage.example.com/claude-code',
-          versionIndex: { latest: 'version.txt' },
-          manifestPath: 'manifest.json',
-          manifestChecksumField: 'sha256',
-          binaryPath: 'bin/claude',
-          archiveFormat: 'tar.gz',
-        },
+        type: 'npm',
+        package: '@anthropic-ai/claude-code',
+        version: '1.2.3',
       },
-      versionCommand: ['claude', '--version'],
+      versionCommand: { executable: 'bin/claude', args: ['--version'] },
       postInstall: { kind: 'set-permissions' },
     });
 
     expect(definition.runtimeCapabilities.supportsManagedBinary).toBe(true);
-    expect(definition.managedInstall?.type).toBe('manifest-bucket');
-    expect(definition.versionCommand).toEqual(['claude', '--version']);
+    expect(definition.managedInstall?.type).toBe('npm');
+    expect(definition.versionCommand?.executable).toBe('bin/claude');
+    expect(definition.versionCommand?.args).toEqual(['--version']);
     expect(definition.postInstall?.kind).toBe('set-permissions');
     expect(Object.isFrozen(definition)).toBe(true);
     expect(Object.isFrozen(definition.managedInstall)).toBe(true);
     expect(Object.isFrozen(definition.versionCommand)).toBe(true);
   });
 
-  it('returns a frozen definition with an npm install descriptor', () => {
+  it('returns a frozen definition with signed-binary-bucket install descriptor', () => {
     const definition = createClientDefinition({
       id: 'codex',
       name: 'Codex',
       version: '0.1.0',
       defaultApprovalPolicy: 'always-ask',
       runtimeCapabilities: { supportsManagedBinary: true },
-      managedInstall: { type: 'npm', package: 'openai-codex' },
-      versionCommand: ['codex', '-v'],
-    });
-
-    expect(definition.managedInstall?.type).toBe('npm');
-    expect(Object.isFrozen(definition.managedInstall)).toBe(true);
-  });
-
-  it('returns a frozen definition with a github-release install descriptor', () => {
-    const definition = createClientDefinition({
-      id: 'my-client',
-      name: 'My Client',
-      version: '0.1.0',
-      defaultApprovalPolicy: 'always-ask',
-      runtimeCapabilities: { supportsManagedBinary: true },
       managedInstall: {
-        type: 'github-release',
-        repo: 'owner/my-client',
-        assetPattern: { 'linux-x64': 'my-client-linux-x64.tar.gz' },
-        archiveFormat: 'tar.gz',
+        type: 'signed-binary-bucket',
+        version: '2.1.143',
+        config: {
+          baseUrl: 'https://downloads.claude.ai/releases',
+          manifestPathTemplate: '{version}/manifest.json',
+          manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+          publicKeyUrl: 'https://downloads.claude.ai/keys/key.asc',
+          publicKeyFingerprint: 'AABB CCDD',
+          binaryPathTemplate: '{version}/{platform}/{binary}',
+          platforms: { 'linux-x64': 'linux-x64' },
+        },
       },
-      versionCommand: ['bin/my-client', '--version'],
+      versionCommand: { executable: 'bin/codex', args: ['-v'] },
     });
 
-    expect(definition.managedInstall?.type).toBe('github-release');
-    if (definition.managedInstall?.type === 'github-release') {
-      expect(definition.managedInstall.repo).toBe('owner/my-client');
-    }
+    expect(definition.managedInstall?.type).toBe('signed-binary-bucket');
+    expect(Object.isFrozen(definition.managedInstall)).toBe(true);
   });
 });

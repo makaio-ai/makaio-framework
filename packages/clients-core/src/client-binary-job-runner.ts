@@ -26,10 +26,10 @@ import type {
   PostInstallDescriptor,
 } from '@makaio/contracts/client';
 import { createStrategy } from './binary-strategies/index.js';
-import type { InstallArtifact, StrategyDependencies } from './binary-strategies/index.js';
+import type { InstallArtifact, InstallStrategy, StrategyDependencies } from './binary-strategies/index.js';
 import { isPathWithinBase, resolveAndValidateBasePath } from './client-binary-manager-types.js';
 import type {
-  ClientBinaryManagerConfig,
+  ClientBinaryJobRunnerConfig,
   PostInstallHandler,
   InstallJob,
   JobCompletedCallback,
@@ -72,11 +72,11 @@ export class ClientBinaryJobRunner {
 
   /**
    * @param strategyDeps - I/O dependency implementations forwarded to each strategy
-   * @param config - Manager configuration (provides `basePath`)
+   * @param config - Job-runner configuration
    */
   public constructor(
     private readonly strategyDeps: StrategyDependencies,
-    private readonly config: ClientBinaryManagerConfig,
+    private readonly config: ClientBinaryJobRunnerConfig,
   ) {
     this.resolvedBasePath = resolveAndValidateBasePath(config.basePath, 'ClientBinaryJobRunner');
   }
@@ -214,22 +214,7 @@ export class ClientBinaryJobRunner {
         throw new Error(`Unsupported managed install descriptor type: ${descriptor.type}`);
       }
 
-      const artifact = await strategy.execute(
-        job.version,
-        targetDir,
-        (stage: InstallStage, progress: number | null) => {
-          this.emitProgressIfActive(onProgress, {
-            jobId: job.jobId,
-            clientId: job.clientId,
-            version: job.version,
-            strategy: job.strategy,
-            stage,
-            progress,
-            installPath: stage === 'installing' ? targetDir : undefined,
-            activeAfterCompletion: job.makeActive,
-          });
-        },
-      );
+      const artifact = await this.executeStrategy(job, strategy, targetDir, onProgress);
 
       if (this.#cancelled) return;
 
@@ -369,6 +354,42 @@ export class ClientBinaryJobRunner {
       await this.strategyDeps.removeDirectory(installPath);
     } catch {
       // Preserve the post-install or verification error that made the install invalid.
+    }
+  }
+
+  /**
+   * Execute the install strategy and clean the target directory if the strategy
+   * fails after staging files.
+   * @param job - Running job descriptor.
+   * @param strategy - Concrete install strategy.
+   * @param targetDir - Versioned install directory.
+   * @param onProgress - Progress notification callback.
+   * @returns Normalized install artifact from the strategy.
+   */
+  private async executeStrategy(
+    job: InstallJob,
+    strategy: InstallStrategy,
+    targetDir: string,
+    onProgress: JobProgressCallback,
+  ): Promise<InstallArtifact> {
+    try {
+      return await strategy.execute(job.version, targetDir, (stage: InstallStage, progress: number | null) => {
+        this.emitProgressIfActive(onProgress, {
+          jobId: job.jobId,
+          clientId: job.clientId,
+          version: job.version,
+          strategy: job.strategy,
+          stage,
+          progress,
+          installPath: stage === 'installing' ? targetDir : undefined,
+          activeAfterCompletion: job.makeActive,
+        });
+      });
+    } catch (error) {
+      if (!this.#cancelled) {
+        await this.cleanupStagedArtifact(targetDir);
+      }
+      throw error;
     }
   }
 

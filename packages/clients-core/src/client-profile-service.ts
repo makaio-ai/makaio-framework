@@ -16,6 +16,7 @@ import { ClientSubjects } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { ClientProfileStorageSubjects, type ClientProfileRecord } from './storage/profile-storage-namespace.js';
 import { canonicalizeClientId } from './client-session-observed-semantics.js';
+import { primeClientConfig } from './client-config-prime.js';
 
 /**
  * Resolve a child path and verify that it remains inside the expected base.
@@ -86,20 +87,34 @@ export class ClientProfileService extends BaseService {
       const configDir = assertPathWithinBase(profilesBasePath, path.join(profilesBasePath, name), 'profile.create');
       await fs.mkdir(configDir, { recursive: true });
 
-      const now = Date.now();
-      const profile: ClientProfileRecord = {
-        id: randomUUID(),
-        clientId,
-        name,
-        description: description ?? null,
-        configDir,
-        isDefault: false,
-        createdAt: now,
-        updatedAt: now,
-      };
+      try {
+        // Prime the newly created profile config directory before persisting the
+        // profile record.  The call is a no-op when the client has not registered
+        // a handler.
+        await primeClientConfig(this.bus, {
+          clientId,
+          configDir,
+          phase: 'profile-create',
+        });
 
-      await this.bus.request(ClientProfileStorageSubjects.set, profile);
-      ctx.setResult({ profile });
+        const now = Date.now();
+        const profile: ClientProfileRecord = {
+          id: randomUUID(),
+          clientId,
+          name,
+          description: description ?? null,
+          configDir,
+          isDefault: false,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        await this.bus.request(ClientProfileStorageSubjects.set, profile);
+        ctx.setResult({ profile });
+      } catch (error) {
+        await fs.rm(configDir, { recursive: true, force: true });
+        throw error;
+      }
     });
   }
 

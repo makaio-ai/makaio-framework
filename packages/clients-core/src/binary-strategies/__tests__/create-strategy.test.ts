@@ -2,62 +2,41 @@
  * Tests for the {@link createStrategy} factory function.
  *
  * Verifies that the factory returns the correct {@link InstallStrategy}
- * subclass for each supported managed install descriptor discriminant
- * and returns `undefined` for an unknown descriptor type at runtime.
+ * subclass for each supported managed install descriptor discriminant, returns
+ * `undefined` for an unknown descriptor type at runtime, and rejects the
+ * previously-supported (now-removed) `manifest-bucket` and `github-release`
+ * descriptor types.
  *
  * Coverage (RT-13 / TG-8):
- * - Returns {@link ManifestBucketStrategy} for `manifest-bucket`
  * - Returns {@link NpmStrategy} for `npm`
- * - Returns {@link GithubReleaseStrategy} for `github-release`
+ * - Returns {@link SignedBinaryBucketStrategy} for `signed-binary-bucket`
  * - Returns `undefined` for an unknown descriptor type at runtime
+ * - Returns `undefined` for removed `manifest-bucket` and `github-release` types
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  GithubReleaseInstallDescriptor,
-  ManifestBucketInstallDescriptor,
-  NpmInstallDescriptor,
-} from '@makaio/contracts/client';
-import { createStrategy, GithubReleaseStrategy, ManifestBucketStrategy, NpmStrategy } from '../index.js';
+import type { NpmInstallDescriptor } from '@makaio/contracts/client';
+import { createStrategy, NpmStrategy, SignedBinaryBucketStrategy } from '../index.js';
 import type { StrategyDependencies } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/** Minimal manifest-bucket descriptor. */
-const MANIFEST_BUCKET_DESCRIPTOR: ManifestBucketInstallDescriptor = {
-  type: 'manifest-bucket',
-  config: {
-    baseUrl: 'https://storage.example.com/client',
-    versionIndex: { latest: 'latest.txt' },
-    manifestPath: 'manifest.json',
-    manifestChecksumField: 'sha256',
-    binaryPath: 'bin/client',
-  },
-};
-
-/** Minimal npm descriptor. */
+/** Minimal npm descriptor — includes the required exact version pin. */
 const NPM_DESCRIPTOR: NpmInstallDescriptor = {
   type: 'npm',
   package: '@example/my-cli',
-};
-
-/** Minimal github-release descriptor using the actual runtime platform key. */
-const PLATFORM_KEY = `${process.platform}-${process.arch}`;
-const GITHUB_RELEASE_DESCRIPTOR: GithubReleaseInstallDescriptor = {
-  type: 'github-release',
-  repo: 'example-org/my-tool',
-  assetPattern: { [PLATFORM_KEY]: `my-tool-${PLATFORM_KEY}.tar.gz` },
-  archiveFormat: 'tar.gz',
+  version: '1.2.3',
 };
 
 /**
  * Minimal {@link StrategyDependencies} stub — all methods throw if called.
  *
  * The factory tests only verify instance type; no I/O is executed.
+ * @returns A stub with all required dependency methods replaced by throwing fns.
  */
-function makeStubDeps(): StrategyDependencies {
+function makeDeps(): StrategyDependencies {
   const notCalled = (name: string) => (): never => {
     throw new Error(`StrategyDependencies.${name} must not be called in factory tests`);
   };
@@ -78,22 +57,28 @@ function makeStubDeps(): StrategyDependencies {
 // ---------------------------------------------------------------------------
 
 describe('createStrategy', () => {
-  it('returns a ManifestBucketStrategy for a manifest-bucket descriptor', () => {
-    const strategy = createStrategy(MANIFEST_BUCKET_DESCRIPTOR, makeStubDeps());
-
-    expect(strategy).toBeInstanceOf(ManifestBucketStrategy);
-  });
-
   it('returns an NpmStrategy for an npm descriptor', () => {
-    const strategy = createStrategy(NPM_DESCRIPTOR, makeStubDeps());
+    const strategy = createStrategy(NPM_DESCRIPTOR, makeDeps());
 
     expect(strategy).toBeInstanceOf(NpmStrategy);
   });
 
-  it('returns a GithubReleaseStrategy for a github-release descriptor', () => {
-    const strategy = createStrategy(GITHUB_RELEASE_DESCRIPTOR, makeStubDeps());
+  it('returns a SignedBinaryBucketStrategy for a signed-binary-bucket descriptor', () => {
+    const descriptor = {
+      type: 'signed-binary-bucket',
+      version: '2.1.143',
+      config: {
+        baseUrl: 'https://downloads.example.com/releases',
+        manifestPathTemplate: '{version}/manifest.json',
+        manifestSignaturePathTemplate: '{version}/manifest.json.sig',
+        publicKeyUrl: 'https://downloads.example.com/keys/signing.asc',
+        publicKeyFingerprint: 'ABCD EF01 2345 6789 ABCD EF01 2345 6789 ABCD EF01',
+        binaryPathTemplate: '{version}/{platform}/{binary}',
+        platforms: { 'darwin-arm64': 'darwin-arm64' },
+      },
+    };
 
-    expect(strategy).toBeInstanceOf(GithubReleaseStrategy);
+    expect(createStrategy(descriptor, makeDeps())).toBeInstanceOf(SignedBinaryBucketStrategy);
   });
 
   it('returns undefined for an unknown descriptor type at runtime', () => {
@@ -101,6 +86,13 @@ describe('createStrategy', () => {
     // validates before narrowing so unsupported descriptor types fail closed.
     const unknownDescriptor = { type: 'unknown-type' };
 
-    expect(createStrategy(unknownDescriptor, makeStubDeps())).toBeUndefined();
+    expect(createStrategy(unknownDescriptor, makeDeps())).toBeUndefined();
+  });
+
+  it('rejects removed manifest-bucket and github-release descriptors', () => {
+    // These types were removed from ManagedInstallDescriptorSchema in Task 1.
+    // The factory must return undefined, not throw.
+    expect(createStrategy({ type: 'manifest-bucket' }, makeDeps())).toBeUndefined();
+    expect(createStrategy({ type: 'github-release' }, makeDeps())).toBeUndefined();
   });
 });

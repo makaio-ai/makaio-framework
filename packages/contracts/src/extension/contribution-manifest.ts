@@ -26,7 +26,7 @@
 
 import { z } from 'zod';
 import { type ProtocolId, ProtocolIdSchema } from '../provider/definition.js';
-import { type VersionRange, VersionRangeSchema } from '../version/index.js';
+import { type VersionLiteral, type VersionRange, VersionRangeSchema, VersionLiteralSchema } from '../version/index.js';
 
 // ---------------------------------------------------------------------------
 // ProtocolConfig
@@ -35,9 +35,8 @@ import { type VersionRange, VersionRangeSchema } from '../version/index.js';
 /**
  * Protocol-specific configuration for an adapter contribution.
  *
- * Acts as a seam for future protocol-level settings (e.g., custom base URLs,
- * auth overrides, timeout policies). Currently intentionally empty — consuming
- * code should treat an absent value the same as `{}`.
+ * Currently supports endpoint overrides and acts as a seam for additional
+ * protocol-level settings such as auth overrides or timeout policies.
  */
 export interface ProtocolConfig {
   /** Optional custom endpoint URL overriding the protocol default. */
@@ -217,11 +216,27 @@ export interface ClientManifest {
    * Binary identity for this client.
    *
    * When present, carries the executable name used for PATH detection.
-   * When omitted, executable client definitions use {@link id} as the
-   * default binary lookup key.
-   * @example `{ name: 'claude' }`
+   * When `managed` is `true`, `version` is also required and records the
+   * exact binary version the framework should install and activate.
+   * @example Unmanaged binary
+   * ```ts
+   * { name: 'claude' }
+   * ```
+   * @example Managed binary with pinned version
+   * ```ts
+   * { name: 'claude', managed: true, version: '2.1.143' }
+   * ```
    */
-  readonly binary?: { readonly name: string };
+  readonly binary?: {
+    readonly name: string;
+    /** Whether the framework manages the installation of this binary. */
+    readonly managed?: boolean;
+    /**
+     * Exact semver version of the binary to install and activate.
+     * Required when `managed` is `true`.
+     */
+    readonly version?: VersionLiteral;
+  };
 }
 
 /** Zod schema for {@link ClientManifest}. */
@@ -231,8 +246,25 @@ export const ClientManifestSchema = z
     name: z.string().min(1),
     description: z.string().optional(),
     binary: z
-      .object({ name: z.string().min(1) })
+      .object({
+        name: z.string().min(1),
+        /** Whether the framework manages the installation of this binary. */
+        managed: z.boolean().optional(),
+        /**
+         * Exact semver version of the binary to install and activate.
+         * Required when `managed` is `true`.
+         */
+        version: VersionLiteralSchema.optional(),
+      })
       .strict()
+      .refine((binary) => binary.managed !== true || binary.version !== undefined, {
+        message: 'binary.version is required when binary.managed is true',
+        path: ['version'],
+      })
+      .refine((binary) => binary.version === undefined || binary.managed === true, {
+        message: 'binary.managed must be true when binary.version is provided',
+        path: ['managed'],
+      })
       .optional(),
   })
   .strict() satisfies z.ZodType<ClientManifest>;

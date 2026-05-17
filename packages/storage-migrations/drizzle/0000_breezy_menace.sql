@@ -1,9 +1,6 @@
 CREATE TABLE `client_binary_state` (
 	`client_id` text PRIMARY KEY NOT NULL,
 	`active_version` text,
-	`latest_available_version` text,
-	`latest_version_last_checked_at` integer,
-	`latest_version_source_status` text DEFAULT 'error' NOT NULL,
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint

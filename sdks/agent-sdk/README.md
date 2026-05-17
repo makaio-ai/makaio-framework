@@ -6,9 +6,8 @@ same message types — switch one import, gain access to every adapter in the
 framework.
 
 > [!IMPORTANT]
-> This package is experimental. No npm packages have been published yet — all
-> dependencies are resolved via `workspace:*` during local framework development. The API
-> surface may change without notice until the first stable release.
+> This package is experimental and unpublished. The API surface may change
+> without notice until the first stable release.
 
 ## Why
 

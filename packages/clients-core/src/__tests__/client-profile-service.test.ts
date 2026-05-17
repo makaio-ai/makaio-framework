@@ -12,6 +12,9 @@ import * as fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import type { ClientConfigPrimeRequest } from '@makaio/contracts/client';
+import { createBusNamespace } from '@makaio/core';
+import { z } from 'zod';
 import { ClientProfileService } from '../client-profile-service.js';
 import { ClientProfileStorageSubjects, type ClientProfileRecord } from '../storage/profile-storage-namespace.js';
 
@@ -205,6 +208,83 @@ describe('ClientProfileService', () => {
 
       expect(first.profile.clientId).toBe('claude-code');
       expect(second.profile.clientId).toBe('codex');
+    });
+
+    // -----------------------------------------------------------------------
+    // Config prime lifecycle — profile-create phase
+    // -----------------------------------------------------------------------
+
+    it('calls client-specific config.prime with profile-create phase after directory creation', async () => {
+      const observed: ClientConfigPrimeRequest[] = [];
+      const primeNs = createBusNamespace('client:claude-code', {
+        'config.prime': {
+          request: z.object({
+            clientId: z.string(),
+            configDir: z.string(),
+            phase: z.string(),
+            binaryVersion: z.string().optional(),
+            adapterName: z.string().optional(),
+            projectDir: z.string().optional(),
+          }),
+          response: z.object({ primed: z.boolean() }),
+        },
+      });
+      const unsubPrime = bus.on(primeNs.subjects.config.prime, (ctx) => {
+        observed.push(ctx.payload as ClientConfigPrimeRequest);
+        ctx.setResult({ primed: true });
+      });
+
+      const result = await bus.request(ClientSubjects.profile.create, {
+        clientId: 'claude-code',
+        name: 'work',
+      });
+
+      unsubPrime();
+
+      expect(observed).toHaveLength(1);
+      expect(observed[0]?.clientId).toBe('claude-code');
+      expect(observed[0]?.phase).toBe('profile-create');
+      expect(observed[0]?.configDir).toBe(result.profile.configDir);
+      expect(observed[0]?.binaryVersion).toBeUndefined();
+    });
+
+    it('proceeds with profile creation when no config.prime handler is registered', async () => {
+      // No client:claude-code.config.prime handler — creation must succeed.
+      const result = await bus.request(ClientSubjects.profile.create, {
+        clientId: 'claude-code',
+        name: 'personal',
+      });
+
+      expect(result.profile.name).toBe('personal');
+    });
+
+    it('does not persist the profile when config.prime fails', async () => {
+      const expectedDir = path.join(baseDir, 'claude-code', 'profiles', 'work');
+      const primeNs = createBusNamespace('client:claude-code', {
+        'config.prime': {
+          request: z.object({
+            clientId: z.string(),
+            configDir: z.string(),
+            phase: z.string(),
+          }),
+          response: z.object({ primed: z.boolean() }),
+        },
+      });
+      const unsubPrime = bus.on(primeNs.subjects.config.prime, () => {
+        throw new Error('prime failed');
+      });
+
+      await expect(
+        bus.request(ClientSubjects.profile.create, {
+          clientId: 'claude-code',
+          name: 'work',
+        }),
+      ).rejects.toThrow('prime failed');
+
+      unsubPrime();
+
+      expect(storageStore.size).toBe(0);
+      await expect(fs.access(expectedDir)).rejects.toThrow();
     });
   });
 
