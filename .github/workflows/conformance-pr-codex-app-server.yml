@@ -31,3 +31,4 @@ jobs:
     with:
       adapter: codex-app-server
       environment: conformance-codex-app-server
+    secrets: inherit

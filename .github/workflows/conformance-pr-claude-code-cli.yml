@@ -38,3 +38,4 @@ jobs:
     with:
       adapter: claude-code-cli
       environment: conformance-claude-code-cli
+    secrets: inherit

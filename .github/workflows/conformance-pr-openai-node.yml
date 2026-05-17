@@ -32,3 +32,4 @@ jobs:
     with:
       adapter: openai-node
       environment: conformance-openai-node
+    secrets: inherit
