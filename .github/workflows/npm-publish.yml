@@ -143,6 +143,7 @@ jobs:
         if: inputs.dry-run == false
         env:
           NPM_TAG: ${{ inputs.tag }}
+          PACKAGES: ${{ steps.packages.outputs.packages }}
         run: |
           node -e "
             const pkgs = JSON.parse(process.env.PACKAGES);
@@ -185,8 +186,6 @@ jobs:
               process.exit(1);
             }
           "
-        env:
-          PACKAGES: ${{ steps.packages.outputs.packages }}
 
       - name: Dry run — pack only
         if: inputs.dry-run == true
@@ -198,6 +197,14 @@ jobs:
             const { spawnSync } = require('child_process');
             for (const pkg of pkgs) {
               console.log('Packing ' + pkg.name + '…');
-              spawnSync('npm', ['pack', '--dry-run'], { cwd: pkg.dir, stdio: 'inherit' });
+              const result = spawnSync('npm', ['pack', '--dry-run'], { cwd: pkg.dir, stdio: 'inherit' });
+              if (result.error) {
+                console.error('Failed to pack ' + pkg.name + ': ' + result.error.message);
+                process.exit(1);
+              }
+              if (result.status !== 0) {
+                console.error('Failed to pack ' + pkg.name + ' with exit code ' + result.status);
+                process.exit(result.status || 1);
+              }
             }
           "

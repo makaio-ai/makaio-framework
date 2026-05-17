@@ -20,13 +20,46 @@ const registry: PackageRegistry = {
   ],
   extensions: [
     {
+      name: '@makaio/provider-anthropic',
+      descriptorName: 'provider-anthropic',
+      displayName: 'Anthropic Provider',
+      description: 'Anthropic provider definitions',
+    },
+    {
       name: '@makaio/client-claude-code',
       descriptorName: 'claude-code',
       displayName: 'Claude Code',
       description: 'Claude Code client definition',
     },
+    {
+      name: '@makaio/extension-client-hooks',
+      descriptorName: 'client-hooks',
+      displayName: 'Client Hooks',
+      description: 'Bridge native client hook events to the Makaio bus',
+    },
+    {
+      name: '@makaio/extension-claude-code-statusline',
+      descriptorName: 'claude-code-statusline',
+      displayName: 'Claude Code Statusline',
+      description: 'Claude Code statusline command helpers',
+    },
   ],
 };
+
+const frameworkRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../');
+
+async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
+  const monorepoRegistryPath = path.join(path.dirname(frameworkRoot), 'registry/packages.json');
+  try {
+    const registryRaw = JSON.parse(await fs.readFile(monorepoRegistryPath, 'utf-8')) as unknown;
+    return PackageRegistrySchema.parse(registryRaw);
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+      return registry;
+    }
+    throw error;
+  }
+}
 
 describe('DescriptorNameResolver', () => {
   it('resolves descriptor names from registry metadata', async () => {
@@ -104,16 +137,9 @@ describe('DescriptorNameResolver', () => {
   });
 
   it('maps every Claude Code tmux descriptor dependency through registry metadata', async () => {
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..');
-    const registryRaw = JSON.parse(
-      await fs.readFile(path.join(repoRoot, 'registry/packages.json'), 'utf-8'),
-    ) as unknown;
-    const actualRegistry = PackageRegistrySchema.parse(registryRaw);
+    const actualRegistry = await readRegistryForCurrentCheckout();
     const descriptorRaw = JSON.parse(
-      await fs.readFile(
-        path.join(repoRoot, 'framework/adapters/implementations/claude-code-tmux/descriptor.json'),
-        'utf-8',
-      ),
+      await fs.readFile(path.join(frameworkRoot, 'adapters/implementations/claude-code-tmux/descriptor.json'), 'utf-8'),
     ) as unknown;
     const descriptorResult = safeParseExtensionDescriptor(descriptorRaw);
     expect(descriptorResult.success).toBe(true);
