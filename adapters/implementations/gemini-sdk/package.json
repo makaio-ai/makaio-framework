@@ -42,7 +42,7 @@
   "peerDependencies": {
     "@google/gemini-cli-core": ">=0.29.5 <0.40.0",
     "@google/genai": ">=1.42.0 <2.0.0",
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "0.21.0",

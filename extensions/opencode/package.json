@@ -23,7 +23,7 @@
     "directory": "extensions/opencode"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",

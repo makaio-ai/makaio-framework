@@ -21,7 +21,7 @@
     "directory": "extensions/pin-message"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

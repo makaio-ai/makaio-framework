@@ -18,6 +18,11 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--no-cache']).flags.cache).toBe(false);
   });
 
+  it('lets the last cache flag win', () => {
+    expect(parseCliArgs(['--no-cache', '--cache']).flags.cache).toBe(true);
+    expect(parseCliArgs(['--cache', '--no-cache']).flags.cache).toBe(false);
+  });
+
   it('accepts both profile syntaxes for valid values', () => {
     expect(parseCliArgs(['--profile', 'full-workspace']).profile).toBe('full-workspace');
     expect(parseCliArgs(['--profile=standalone']).profile).toBe('standalone');

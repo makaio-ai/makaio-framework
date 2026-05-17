@@ -37,7 +37,7 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0",
+    "@makaio/framework": "^1.0.0",
     "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0",
     "@mariozechner/pi-ai": ">=0.72.0 <0.74.0",
     "@mariozechner/pi-coding-agent": ">=0.72.0 <0.74.0"

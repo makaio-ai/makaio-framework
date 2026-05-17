@@ -12,17 +12,16 @@ on:
         required: false
         default: true
         type: boolean
-  issue_comment:
-    types: [created]
+  deployment:
 
 permissions:
   contents: write
+  deployments: write
   id-token: write
   issues: write
-  pull-requests: read
 
 concurrency:
-  group: npm-dev-publish-${{ github.event.issue.number || github.ref }}
+  group: npm-dev-publish-${{ github.event.deployment.id || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -34,15 +33,14 @@ jobs:
     if: |
       github.event_name == 'workflow_dispatch' ||
       (
-        github.event.issue.pull_request &&
-        startsWith(github.event.comment.body, '/publish-dev')
+        github.event_name == 'deployment' &&
+        github.event.deployment.environment == 'canary'
       )
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: canary
-    env:
-      DEV_PUBLISH_MANIFEST: ${{ runner.temp }}/dev-publish-packages.json
-      DEV_PUBLISH_SUMMARY: ${{ runner.temp }}/dev-publish-summary.md
+    environment:
+      name: canary
+      deployment: false
 
     steps:
       - name: Resolve request
@@ -56,49 +54,56 @@ jobs:
               core.setOutput('ref', context.sha);
               core.setOutput('source-sha', context.sha);
               core.setOutput('pr-number', '');
+              core.setOutput('deployment-id', '');
               return;
             }
 
-            const comment = context.payload.comment;
-            const body = comment.body.trim();
-            const [command, ...packageNames] = body.split(/\s+/);
+            const deployment = context.payload.deployment;
+            const rawPayload = deployment.payload ?? {};
+            const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload || '{}') : rawPayload;
+            const sourceSha = payload.source_sha || deployment.sha || deployment.ref;
+            const packages = payload.packages;
 
-            if (command !== '/publish-dev') {
-              core.setFailed('This workflow only handles /publish-dev comments.');
+            if (!packages) {
+              core.setFailed('Deployment payload is missing packages.');
               return;
             }
-            if (!context.payload.issue.pull_request) {
-              core.setFailed('/publish-dev can only be used on pull requests.');
-              return;
-            }
-            if (!['OWNER', 'MEMBER'].includes(comment.author_association)) {
-              core.setFailed('/publish-dev can only be used by repository owners or members.');
-              return;
-            }
-            if (packageNames.length === 0) {
-              core.setFailed('Usage: /publish-dev @makaio/package-name [@makaio/another-package]');
+            if (!sourceSha) {
+              core.setFailed('Deployment payload is missing source SHA.');
               return;
             }
 
-            const { owner, repo } = context.repo;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: context.payload.issue.number,
+            core.setOutput('packages', String(packages));
+            core.setOutput('dry-run', String(payload.dry_run ?? 'false'));
+            core.setOutput('ref', String(sourceSha));
+            core.setOutput('source-sha', String(sourceSha));
+            core.setOutput('pr-number', payload.pr_number ? String(payload.pr_number) : '');
+            core.setOutput('deployment-id', String(deployment.id));
+
+      - name: Set dev publish env
+        run: |
+          {
+            echo "DEV_PUBLISH_MANIFEST=${{ runner.temp }}/dev-publish-packages.json"
+            echo "DEV_PUBLISH_SUMMARY=${{ runner.temp }}/dev-publish-summary.md"
+          } >> "$GITHUB_ENV"
+
+      - name: Mark deployment in progress
+        if: steps.request.outputs.deployment-id != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEPLOYMENT_ID: ${{ steps.request.outputs.deployment-id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: Number(process.env.DEPLOYMENT_ID),
+              state: 'in_progress',
+              environment: 'canary',
+              log_url: process.env.RUN_URL,
+              description: 'Dev package publish started.',
             });
-
-            const baseRepository = `${owner}/${repo}`;
-            const headRepository = pr.head.repo.full_name;
-            if (headRepository !== baseRepository) {
-              core.setFailed('/publish-dev rejects fork PRs before checkout because publishing runs PR code.');
-              return;
-            }
-
-            core.setOutput('packages', packageNames.join(' '));
-            core.setOutput('dry-run', 'false');
-            core.setOutput('ref', pr.head.sha);
-            core.setOutput('source-sha', pr.head.sha);
-            core.setOutput('pr-number', String(pr.number));
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -154,10 +159,12 @@ jobs:
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
       - name: Prepare dev package versions
+        env:
+          PACKAGES: ${{ steps.request.outputs.packages }}
         run: |
           timestamp="$(node -p 'Date.now().toString()')"
           yarn tsx scripts/dev-publish.ts prepare \
-            --packages "${{ steps.request.outputs.packages }}" \
+            --packages "$PACKAGES" \
             --timestamp "$timestamp" \
             --out "$DEV_PUBLISH_MANIFEST"
 
@@ -175,33 +182,62 @@ jobs:
 
       - name: Push annotated dev tags
         if: steps.request.outputs.dry-run != 'true'
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           yarn tsx scripts/dev-publish.ts tag \
             --manifest "$DEV_PUBLISH_MANIFEST" \
-            --source-sha "${{ steps.request.outputs.source-sha }}" \
-            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            --source-sha "$SOURCE_SHA" \
+            --workflow-url "$WORKFLOW_URL"
 
       - name: Write publish summary
+        env:
+          DRY_RUN: ${{ steps.request.outputs.dry-run }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           yarn tsx scripts/dev-publish.ts summary \
             --manifest "$DEV_PUBLISH_MANIFEST" \
-            --source-sha "${{ steps.request.outputs.source-sha }}" \
-            --workflow-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --dry-run "${{ steps.request.outputs.dry-run }}" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-url "$WORKFLOW_URL" \
+            --dry-run "$DRY_RUN" \
             --out "$DEV_PUBLISH_SUMMARY"
           cat "$DEV_PUBLISH_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on PR
         if: steps.request.outputs.pr-number != ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
         with:
           script: |
             const fs = require('fs');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number('${{ steps.request.outputs.pr-number }}'),
+              issue_number: Number(process.env.PR_NUMBER),
               body: fs.readFileSync(process.env.DEV_PUBLISH_SUMMARY, 'utf8'),
+            });
+
+      - name: Mark deployment complete
+        if: always() && steps.request.outputs.deployment-id != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEPLOYMENT_ID: ${{ steps.request.outputs.deployment-id }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const succeeded = process.env.JOB_STATUS === 'success';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: Number(process.env.DEPLOYMENT_ID),
+              state: succeeded ? 'success' : 'failure',
+              environment: 'canary',
+              log_url: process.env.RUN_URL,
+              description: succeeded ? 'Dev package publish completed.' : 'Dev package publish failed.',
             });
