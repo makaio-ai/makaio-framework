@@ -42,6 +42,7 @@ export type AgentCreationOptions = Omit<
       | 'mcpSessionContext'
       | 'harnessId'
       | 'clientId'
+      | 'clientProfileName'
       | 'providerContext'
       | 'ephemeral'
     >

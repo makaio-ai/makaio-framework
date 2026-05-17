@@ -164,19 +164,27 @@ export class TmuxConnectorSession {
    * Handle a PreToolUse hook event.
    * @param toolName - Name of the tool being invoked.
    * @param toolUseId - Claude Code-native tool use identifier.
+   * @param toolInput - Raw tool input from Claude Code.
    */
-  public async handlePreToolUse(toolName: string, toolUseId: string): Promise<void> {
+  public async handlePreToolUse(toolName: string, toolUseId: string, toolInput: unknown): Promise<void> {
     await this.activeTurn?.markStepStarted();
-    await this.config.emitToolUseStarted({ toolName, toolUseId });
+    await this.config.emitToolUseStarted({ toolName, toolUseId, toolInput });
   }
 
   /**
    * Handle a PostToolUse hook event.
    * @param toolName - Name of the tool that completed.
    * @param toolUseId - Claude Code-native tool use identifier.
+   * @param toolResult - Raw tool result or error from Claude Code.
+   * @param isError - Whether Claude Code reported the tool call as failed.
    */
-  public async handlePostToolUse(toolName: string, toolUseId: string): Promise<void> {
+  public async handlePostToolUse(
+    toolName: string,
+    toolUseId: string,
+    toolResult: unknown,
+    isError?: boolean,
+  ): Promise<void> {
     await this.activeTurn?.markStepFinished();
-    await this.config.emitToolUseFinished({ toolName, toolUseId });
+    await this.config.emitToolUseFinished({ toolName, toolUseId, toolResult, isError });
   }
 }

@@ -1,5 +1,6 @@
 import { createClientNamespace } from '@makaio/clients-core';
 import { ClaudeCodeConfigSchemas } from '../schemas/config.js';
+import { ClaudeCodeSessionConfigSchemas } from '../schemas/session-config.js';
 import { ClaudeCodeStatuslineRawPayloadSchema } from '../schemas/statusline.js';
 import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
 
@@ -24,6 +25,8 @@ import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
  * - `wiring.list` — list all wiring entries with installation status.
  * - `wiring.apply` — install wiring entries into the target scope.
  * - `wiring.remove` — uninstall wiring entries from the target scope.
+ * - `sessionConfig.setup` — seed a session-scoped directory with native
+ *   config files copied from the base config directory.
  *
  * All subjects live in `client:claude-code.*` and are never promoted to
  * the global `client.*` namespace directly.  Downstream normalizers translate
@@ -33,6 +36,7 @@ const claudeCodeNamespace = createClientNamespace('claude-code', {
   'statusline.received': ClaudeCodeStatuslineRawPayloadSchema,
   ...ClaudeCodeConfigSchemas,
   ...ClaudeCodeWiringSchemas,
+  ...ClaudeCodeSessionConfigSchemas,
 });
 
 /**

@@ -1,15 +1,18 @@
 # Makaio Client Commands
 
-CLI extension for managing Makaio hook wiring in AI client tools. Provides three subcommands — `wire`, `unwire`, and `wiring` — that install, remove, and inspect Makaio hooks in the native configuration of any supported client (Claude Code, Codex, etc.).
+CLI extension for managing Makaio hook wiring and named client profiles in AI
+client tools.
 
 ## What It Provides
 
 | Surface | Detail |
 |---------|--------|
-| CLI commands | `makaio client wire`, `makaio client unwire`, `makaio client wiring` |
-| Bus dispatch | `client:<id>.wiring.apply`, `client:<id>.wiring.remove`, `client.wiring.list` |
+| CLI commands | `makaio client wire`, `makaio client unwire`, `makaio client wiring`, `makaio client profile-*` |
+| Bus dispatch | `client:<id>.wiring.apply`, `client:<id>.wiring.remove`, `client.wiring.list`, `client.profile.*` |
 
-This extension is CLI-only: it has no background service and no storage. All hook installation and removal is delegated to the per-client service via the Makaio bus.
+This extension is CLI-only: it has no background service and no direct storage
+access. Hook installation and profile management are delegated to framework
+services via the Makaio bus.
 
 ## Usage
 
@@ -62,6 +65,28 @@ claude-code:
   [missing  ] hooks/pre-tool    makaio hook received claude-code pre_tool_use
 ```
 
+### Manage client profiles
+
+The current extension CLI contribution model supports one subcommand layer, so
+profile commands use flattened names:
+
+```bash
+makaio client profile-list claude-code
+makaio client profile-create claude-code work --description "Work account"
+makaio client profile-default claude-code work
+makaio client profile-show claude-code work
+makaio client profile-open claude-code work
+makaio client profile-delete claude-code work
+```
+
+Native launch commands accept the profile name and pass it to session config
+materialization:
+
+```bash
+makaio client launch claude-code --profile work
+makaio claude-code --profile work
+```
+
 ## Flags
 
 ### `wire`
@@ -86,6 +111,17 @@ claude-code:
 |----------|-------|-------------|
 | `--client` | `-c` | Filter to a single client identifier |
 | `--project-dir` | `-d` | Include project-scope entries for this directory |
+
+### `profile-*`
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `profile-list` | `<client>` | List all profiles for a client |
+| `profile-create` | `<client> <name>` | Create a named profile config directory |
+| `profile-delete` | `<client> <name>` | Delete a named profile and its config directory |
+| `profile-default` | `<client> <name>` | Set the default profile for a client |
+| `profile-show` | `<client> <name>` | Show profile details and config directory |
+| `profile-open` | `<client> <name>` | Open the profile config directory in the OS file manager |
 
 ## Exit Codes
 

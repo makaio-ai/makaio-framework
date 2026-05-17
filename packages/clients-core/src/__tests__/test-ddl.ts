@@ -66,5 +66,26 @@ export const CLIENT_RUNTIME_DDL = [
   sql`CREATE INDEX IF NOT EXISTS idx_client_runtimes_adapter_session_id_client_id ON client_runtimes (adapter_session_id, client_id)`,
 ];
 
+/**
+ * SQLite DDL statements that create the client profiles storage table.
+ */
+export const CLIENT_PROFILES_DDL = [
+  sql`
+    CREATE TABLE IF NOT EXISTS client_profiles (
+      id TEXT PRIMARY KEY NOT NULL,
+      client_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      config_dir TEXT NOT NULL,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE (client_id, name)
+    )
+  `,
+  sql`CREATE INDEX IF NOT EXISTS idx_client_profiles_client_id ON client_profiles (client_id)`,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_client_profiles_default ON client_profiles (client_id) WHERE is_default = 1`,
+];
+
 /** DDL statements for every table needed by the clients-core package. */
-export const CLIENTS_CORE_DDL = [...CLIENT_BINARY_DDL, ...CLIENT_RUNTIME_DDL];
+export const CLIENTS_CORE_DDL = [...CLIENT_BINARY_DDL, ...CLIENT_RUNTIME_DDL, ...CLIENT_PROFILES_DDL];

@@ -73,6 +73,9 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
   /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
   clientId?: string;
 
+  /** Client profile name for session-scoped config isolation. */
+  clientProfileName?: string;
+
   /**
    * Resolved MCP session context including upstream server configs.
    * When present, native-passthrough adapters use `servers` to configure SDK MCP connections.

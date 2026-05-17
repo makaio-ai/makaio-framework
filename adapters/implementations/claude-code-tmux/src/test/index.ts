@@ -32,6 +32,7 @@ import {
   CLAUDE_CODE_HOOK_POST_TOOL_USE,
   CLAUDE_CODE_HOOK_STOP,
 } from '@makaio/client-claude-code/runtime';
+import { ClientSubjects } from '@makaio/contracts/client';
 import { isRecord } from '@makaio/utils';
 import { ClaudeCodeTmuxConnectorNamespace, type ClaudeCodeTmuxConnectorBus } from '../namespace/index.js';
 import { ADAPTER_NAME } from '../constants.js';
@@ -94,8 +95,8 @@ function buildHookSettings(port: number): Record<string, unknown> {
 }
 
 /**
- * Register a `wiring.apply` handler that writes curl-based hooks directly
- * to `.claude/settings.json` in the project directory.
+ * Register a `wiring.apply` handler that writes curl-based hooks directly to
+ * the settings file Claude Code reads for the requested scope.
  *
  * Writes the file directly rather than using `ClaudeCodeClientSettings`
  * because that class is not exported from the client package's public API.
@@ -104,12 +105,13 @@ function buildHookSettings(port: number): Record<string, unknown> {
  */
 function registerTestWiringHandler(bridgePort: number): () => void {
   return MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
-    const { projectDir } = ctx.payload;
-    if (!projectDir) {
+    const { projectDir, configDir, scope } = ctx.payload;
+    const settingsDir =
+      scope === 'user' && configDir ? configDir : projectDir ? path.join(projectDir, '.claude') : undefined;
+    if (!settingsDir) {
       ctx.setResult({ applied: 0, skipped: 0 });
       return;
     }
-    const settingsDir = path.join(projectDir, '.claude');
     const settingsPath = path.join(settingsDir, 'settings.json');
 
     await fs.mkdir(settingsDir, { recursive: true });
@@ -189,11 +191,21 @@ export const createTestConfig = async (
 
   const { ClaudeCodeTmuxConnector } = await import('../connector.js');
 
+  /** Session IDs created via sessionConfig.create; destroyed during cleanup. */
+  const createdSessionIds: string[] = [];
+
   return {
     createConnector: async (connectorOptions) => {
-      const baseConfig = await ClaudeCodeTmuxConfig.getConfig(
-        resolveTestConfig(connectorOptions, bus, testPreset.provider, testPreset.providers),
-      );
+      const resolvedConfig = resolveTestConfig(connectorOptions, bus, testPreset.provider, testPreset.providers);
+
+      // Determine the session ID the connector will use for config isolation
+      // (mirrors the connector's own logic: sessionId ?? agentId). Track it
+      // so the session config directory is destroyed during cleanup even when
+      // the connector's own teardown is skipped.
+      const sessionId = connectorOptions?.sessionId ?? resolvedConfig.agentId;
+      createdSessionIds.push(sessionId);
+
+      const baseConfig = await ClaudeCodeTmuxConfig.getConfig(resolvedConfig);
       const connector = new ClaudeCodeTmuxConnector(baseConfig);
 
       // Register the agent context with the hook bridge so PreToolUse
@@ -217,8 +229,8 @@ export const createTestConfig = async (
     },
     options: {
       defaultTimeout: 90_000,
-      concurrency: 1,
-      testConcurrency: 1,
+      concurrency: 4,
+      testConcurrency: 4,
       primaryModel: testPreset.primaryModel,
       secondaryModel: testPreset.secondaryModel,
     },
@@ -226,7 +238,18 @@ export const createTestConfig = async (
     adapterName: ADAPTER_NAME,
     testProviderContext: testPreset.providerContext,
     cleanup: async () => {
-      await cleanupSharedHookBridge();
+      try {
+        await Promise.allSettled(
+          [...new Set(createdSessionIds)].map((id) =>
+            MakaioBus.requestOptional(ClientSubjects.sessionConfig.destroy, {
+              clientId: 'claude-code',
+              sessionId: id,
+            }),
+          ),
+        );
+      } finally {
+        await cleanupSharedHookBridge();
+      }
     },
   };
 };

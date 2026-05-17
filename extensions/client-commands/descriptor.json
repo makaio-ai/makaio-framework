@@ -73,6 +73,30 @@
             "short": "-d"
           }
         ]
+      },
+      {
+        "name": "profile-list",
+        "description": "List all profiles for a client"
+      },
+      {
+        "name": "profile-create",
+        "description": "Create a named profile config directory"
+      },
+      {
+        "name": "profile-delete",
+        "description": "Delete a named profile and its config directory"
+      },
+      {
+        "name": "profile-default",
+        "description": "Set the default profile for a client"
+      },
+      {
+        "name": "profile-show",
+        "description": "Show profile details and config directory"
+      },
+      {
+        "name": "profile-open",
+        "description": "Open a profile config directory in the OS file manager"
       }
     ]
   },

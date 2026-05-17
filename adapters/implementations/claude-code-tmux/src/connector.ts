@@ -13,9 +13,10 @@ import {
 import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { MakaioBus } from '@makaio/bus-core';
-import { TmuxBackend } from '@makaio/native-session-supervisor';
+import { isTmuxAvailable, TmuxBackend } from '@makaio/native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import { McpSubjects } from '@makaio/contracts';
+import { ClientSubjects } from '@makaio/contracts/client';
 import { TmuxSession } from './session.js';
 import { ClaudeCodeTmuxConnectorSubjects, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import { ADAPTER_NAME, DEFAULT_INTERRUPT_SETTLE_MS, TMUX_SERVER_NAME } from './constants.js';
@@ -25,6 +26,7 @@ import { resolveHookEnvPairs } from './utils/hook-env.js';
 import { addMcpServerToProject, removeMcpServerFromProject } from './utils/mcp-settings.js';
 import { buildSpawnArgs } from './utils/spawn-args.js';
 import { withTimeout } from './utils/timeout.js';
+import { prepareLaunchPrerequisites } from './utils/launch-prerequisites.js';
 
 /**
  * Connector for the Claude Code tmux adapter.
@@ -109,18 +111,21 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * Ensure Claude Code hooks are wired to call back into Makaio.
    *
    * Sends a `wiring.apply` bus request to the Claude Code client service, which
-   * writes hook entries into `.claude/settings.json` (project scope). This must
+   * writes hook entries into the session-scoped user settings file. This must
    * complete before Claude Code is spawned — it reads the config at startup.
    * @param projectDir - Absolute path to the project root.
+   * @param configDir - Session-scoped config directory where user-scope
+   *   settings are written.
    */
-  private async ensureHookWiring(projectDir: string): Promise<void> {
+  private async ensureHookWiring(projectDir: string, configDir: string): Promise<void> {
     const makaioCommand = process.argv[1] ?? 'makaio';
     try {
       await MakaioBus.request(ClaudeCodeClientSubjects.wiring.apply, {
-        scope: 'project',
+        scope: 'user',
         projectDir,
         makaioCommand,
         envPairs: resolveHookEnvPairs(),
+        configDir,
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -188,10 +193,14 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   private async cleanupMcpSession(projectDir: string): Promise<void> {
     const installedNames = [...this.installedMcpServerNames];
     this.installedMcpServerNames.clear();
-    try {
-      await Promise.all(installedNames.map((name) => removeMcpServerFromProject(projectDir, name)));
-    } finally {
-      await this.unregisterMcpSession();
+    const removals = await Promise.allSettled(
+      installedNames.map((name) => removeMcpServerFromProject(projectDir, name)),
+    );
+    await this.unregisterMcpSession();
+
+    const failedRemoval = removals.find((result) => result.status === 'rejected');
+    if (failedRemoval?.status === 'rejected') {
+      throw failedRemoval.reason;
     }
   }
 
@@ -243,7 +252,20 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     const projectDir = this.cwd;
 
     try {
-      await this.prepareLaunchPrerequisites(projectDir, env, token);
+      if (!isTmuxAvailable()) {
+        throw new Error('Claude Code tmux adapter requires tmux on PATH. Install tmux or use a non-tmux adapter.');
+      }
+
+      const mergedEnv = await prepareLaunchPrerequisites({
+        projectDir,
+        baseEnv: env,
+        sessionId: this.sessionId,
+        agentId: this.agentId,
+        clientProfileName: this.config.clientProfileName,
+        ensureHookWiring: (dir, configDir) => this.ensureHookWiring(dir, configDir),
+        registerMcpSession: (dir, mcpEnv) => this.registerMcpSession(dir, mcpEnv),
+        assertLifecycleCurrent: () => this.assertLifecycleCurrent(token),
+      });
 
       this.backend = new TmuxBackend({ serverName: TMUX_SERVER_NAME });
 
@@ -255,7 +277,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       });
       const ptyProcess = await this.backend.spawn(binaryPath, spawnArgs, {
         cwd: projectDir,
-        env,
+        env: mergedEnv,
       });
       if (!this.isLifecycleCurrent(token)) {
         ptyProcess.kill();
@@ -284,11 +306,11 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         onUserPromptSubmit: async () => {
           await this.connectorSession?.handleUserPromptSubmit();
         },
-        onPreToolUse: async (_sessionId, toolName, toolUseId) => {
-          await this.connectorSession?.handlePreToolUse(toolName, toolUseId);
+        onPreToolUse: async (_sessionId, toolName, toolUseId, toolInput) => {
+          await this.connectorSession?.handlePreToolUse(toolName, toolUseId, toolInput);
         },
-        onPostToolUse: async (_sessionId, toolName, toolUseId) => {
-          await this.connectorSession?.handlePostToolUse(toolName, toolUseId);
+        onPostToolUse: async (_sessionId, toolName, toolUseId, toolResult, isError) => {
+          await this.connectorSession?.handlePostToolUse(toolName, toolUseId, toolResult, isError);
         },
         onStop: async (_sessionId, lastAssistantMessage) => {
           await this.connectorSession?.handleTurnFinished(lastAssistantMessage);
@@ -305,26 +327,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       this.assertLifecycleCurrent(token);
 
       this.userMessageQueue = new UserMessageQueue();
-
-      this.connectorSession = new TmuxConnectorSession({
-        tmuxSession: this.tmuxSession,
-        bus: this.config.bus,
-        adapterId: this.adapterId,
-        adapterName: this.adapterName,
-        agentId: this.agentId,
-        onTurnStart: (handle) => {
-          this.pendingMessageHandle = handle;
-        },
-        onTurnComplete: (_handle, result) => {
-          this.lastResult = result;
-          this.pendingMessageHandle = undefined;
-        },
-        emitTurnCompleted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.turn.turn_completed, payload),
-        emitToolUseStarted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, payload),
-        emitToolUseFinished: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.finished, payload),
-        interruptSettleMs: DEFAULT_INTERRUPT_SETTLE_MS,
-      });
-
+      this.connectorSession = this.createConnectorSession(this.tmuxSession);
       this.wireSessionEvents();
     } catch (error) {
       await this.teardown({ finalizeActiveTurn: false, cleanupMcp: true });
@@ -333,29 +336,29 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   }
 
   /**
-   * Ensure launch prerequisites settle before native spawn starts.
-   *
-   * Hook wiring and MCP registration are independent, but cleanup must observe
-   * both results. `Promise.allSettled` prevents a fast hook-wiring failure from
-   * tearing down before a slower MCP registration has exposed state to clean up.
-   * @param projectDir - Project directory whose Claude Code config is prepared.
-   * @param env - Spawn environment forwarded to MCP tool execution context.
-   * @param token - Lifecycle token captured when initialization started.
+   * Create the hook-driven turn session bound to the active tmux session.
+   * @param tmuxSession - Live tmux session wrapper.
+   * @returns Connector session for queue and turn processing.
    */
-  private async prepareLaunchPrerequisites(
-    projectDir: string,
-    env: Record<string, string>,
-    token: number,
-  ): Promise<void> {
-    const prerequisites = await Promise.allSettled([
-      this.ensureHookWiring(projectDir),
-      this.registerMcpSession(projectDir, env),
-    ]);
-    const failedPrerequisite = prerequisites.find((result) => result.status === 'rejected');
-    if (failedPrerequisite?.status === 'rejected') {
-      throw failedPrerequisite.reason;
-    }
-    this.assertLifecycleCurrent(token);
+  private createConnectorSession(tmuxSession: TmuxSession): TmuxConnectorSession {
+    return new TmuxConnectorSession({
+      tmuxSession,
+      bus: this.config.bus,
+      adapterId: this.adapterId,
+      adapterName: this.adapterName,
+      agentId: this.agentId,
+      onTurnStart: (handle) => {
+        this.pendingMessageHandle = handle;
+      },
+      onTurnComplete: (_handle, result) => {
+        this.lastResult = result;
+        this.pendingMessageHandle = undefined;
+      },
+      emitTurnCompleted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.turn.turn_completed, payload),
+      emitToolUseStarted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, payload),
+      emitToolUseFinished: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.finished, payload),
+      interruptSettleMs: DEFAULT_INTERRUPT_SETTLE_MS,
+    });
   }
 
   /**
@@ -600,15 +603,21 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     this.tmuxSession?.dispose();
     this.tmuxSession = undefined;
 
-    if (options?.cleanupMcp) {
-      await this.cleanupMcpSession(this.cwd);
-    }
+    const cleanupTasks = [
+      ...(options?.cleanupMcp ? [this.cleanupMcpSession(this.cwd)] : []),
+      this.backend?.dispose() ?? Promise.resolve(),
+      MakaioBus.requestOptional(ClientSubjects.sessionConfig.destroy, {
+        clientId: 'claude-code',
+        sessionId: this.sessionId ?? this.agentId,
+      }).catch(() => {}),
+    ];
+    const cleanupResults = await Promise.allSettled(cleanupTasks);
 
-    await this.backend?.dispose();
     this.backend = undefined;
     this.connectorSession = undefined;
     this.userMessageQueue = undefined;
     this.initializationPromise = undefined;
+    throwFirstCleanupError(cleanupResults);
   }
 
   /**
@@ -628,5 +637,16 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     if (!this.isLifecycleCurrent(token)) {
       throw new Error('Claude Code tmux session initialization was superseded by teardown');
     }
+  }
+}
+
+/**
+ * Throw the first failed cleanup phase after all independent phases settled.
+ * @param results - Settled cleanup task results.
+ */
+function throwFirstCleanupError(results: PromiseSettledResult<unknown>[]): void {
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') {
+    throw failed.reason;
   }
 }

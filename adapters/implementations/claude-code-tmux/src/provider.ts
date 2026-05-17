@@ -5,7 +5,7 @@
  * via the Anthropic API. The tmux adapter just runs interactively instead of
  * via stdio JSON streaming.
  */
-export const providerIds = ['anthropic', 'anthropic-oauth', 'opencode-go-anthropic'] as const;
+export const providerIds = ['anthropic', 'anthropic-oauth'] as const;
 
 /** Default provider when no explicit provider is configured. */
 export const defaultPresetId = 'anthropic';

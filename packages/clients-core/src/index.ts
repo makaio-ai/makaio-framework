@@ -31,6 +31,8 @@ export { ClientRuntimeRegistry } from './client-runtime-registry.js';
 export { CLIENT_RUNTIME_STATUSES } from './client-runtime-registry-types.js';
 export type { ClientRuntimeRecord, ClientRuntimeStatus, RuntimeUpsertResult } from './client-runtime-registry-types.js';
 export { ClientRuntimeService } from './client-runtime-service.js';
+export { ClientProfileService } from './client-profile-service.js';
+export { ClientSessionConfigService } from './client-session-config-service.js';
 export {
   buildClientSessionBase,
   canonicalizeClientId,
@@ -69,6 +71,12 @@ export {
   ClientRuntimeStorageSubjects,
   RuntimeRecordSchema,
 } from './storage/runtime-storage-namespace.js';
+export {
+  ClientProfileStorageNamespace,
+  ClientProfileStorageSubjects,
+  ClientProfileRecordSchema,
+} from './storage/profile-storage-namespace.js';
+export type { ClientProfileRecord } from './storage/profile-storage-namespace.js';
 export { resolveClientBinary } from './resolve-client-binary.js';
 export { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from './wiring-helpers.js';
 export type { SessionEventDescriptor } from './wiring-helpers.js';

@@ -9,11 +9,15 @@ import {
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ClientRuntimeService } from './client-runtime-service.js';
 import { ClientBinaryManager } from './client-binary-manager.js';
+import { ClientProfileService } from './client-profile-service.js';
+import { ClientSessionConfigService } from './client-session-config-service.js';
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
 import { registerDrizzleRuntimeStorage } from './storage/runtime-drizzle-handler.js';
 import { registerDrizzleClientBinaryStorage } from './storage/client-binary-drizzle-handler.js';
+import { registerDrizzleProfileStorage } from './storage/profile-drizzle-handler.js';
 import { ClientBinaryStorageNamespace } from './storage/client-binary-storage-namespace.js';
 import { ClientRuntimeStorageNamespace } from './storage/runtime-storage-namespace.js';
+import { ClientProfileStorageNamespace } from './storage/profile-storage-namespace.js';
 import type { StrategyDependencies } from './binary-strategies/index.js';
 import type { PostInstallHandler } from './client-binary-manager-types.js';
 
@@ -22,52 +26,67 @@ import type { PostInstallHandler } from './client-binary-manager-types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Composite service that initialises and destroys both the
- * {@link ClientRuntimeService} and the {@link ClientBinaryManager} under a
- * single {@link ExtensionServiceLifecycle} handle.
+ * Composite service that initialises and destroys the
+ * {@link ClientRuntimeService}, the {@link ClientBinaryManager}, the
+ * {@link ClientProfileService}, and the {@link ClientSessionConfigService}
+ * under a single {@link ExtensionServiceLifecycle} handle.
  *
  * The host coordinator calls `init()` once and `destroy()` once; this class
- * ensures both services participate in the same lifecycle without either
- * requiring knowledge of the other.
+ * ensures all four services participate in the same lifecycle without any
+ * requiring knowledge of the others.
  */
 export class ClientsCoreService implements ExtensionServiceLifecycle {
   /**
    * @param runtimeService - Handles `client.*` runtime observation subjects
    * @param binaryManager - Handles `client.*` binary-management subjects
+   * @param profileService - Handles `client.profile.*` CRUD subjects
+   * @param sessionConfigService - Handles `client.sessionConfig.*` isolation subjects
    */
   public constructor(
     private readonly runtimeService: ClientRuntimeService,
     private readonly binaryManager: ClientBinaryManager,
+    private readonly profileService: ClientProfileService,
+    private readonly sessionConfigService: ClientSessionConfigService,
   ) {}
 
   /**
-   * Initialize both sub-services in parallel.
+   * Initialize all four sub-services in parallel.
    *
-   * Uses {@link Promise.allSettled} so both services always attempt
+   * Uses {@link Promise.allSettled} so every service always attempts
    * initialisation — matching the resilience pattern used by {@link destroy}.
-   * If either service fails, the first rejection is re-thrown after all
-   * attempts have settled.
+   * If any service fails, the first rejection is re-thrown after all attempts
+   * have settled.  Secondary failures are logged for observability.
    */
   public async init(): Promise<void> {
-    const results = await Promise.allSettled([this.runtimeService.init(), this.binaryManager.init()]);
+    const results = await Promise.allSettled([
+      this.runtimeService.init(),
+      this.binaryManager.init(),
+      this.profileService.init(),
+      this.sessionConfigService.init(),
+    ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length > 0) {
-      if (failures.length > 1) {
-        console.warn('[ClientsCoreService] Multiple init failures, secondary:', failures[1].reason);
+      for (let i = 1; i < failures.length; i++) {
+        console.warn('[ClientsCoreService] Multiple init failures, secondary:', failures[i].reason);
       }
       throw failures[0].reason;
     }
   }
 
   /**
-   * Destroy both sub-services in parallel.
+   * Destroy all four sub-services in parallel.
    *
-   * Uses {@link Promise.allSettled} to guarantee both cleanups run even when
+   * Uses {@link Promise.allSettled} to guarantee every cleanup runs even when
    * one rejects. Any rejections are logged for observability — matching the
    * secondary-failure logging pattern used by {@link init}.
    */
   public async destroy(): Promise<void> {
-    const results = await Promise.allSettled([this.runtimeService.destroy(), this.binaryManager.destroy()]);
+    const results = await Promise.allSettled([
+      this.runtimeService.destroy(),
+      this.binaryManager.destroy(),
+      this.profileService.destroy(),
+      this.sessionConfigService.destroy(),
+    ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     for (const failure of failures) {
       console.warn('[ClientsCoreService] destroy failure:', failure.reason);
@@ -187,10 +206,11 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
     displayName: 'Clients Core',
     version: '0.1.0',
     critical: true,
-    namespaces: [ClientBinaryStorageNamespace, ClientRuntimeStorageNamespace],
+    namespaces: [ClientBinaryStorageNamespace, ClientRuntimeStorageNamespace, ClientProfileStorageNamespace],
     storage: {
       /**
-       * Register all persistence handlers (runtime + client binary) on the bus.
+       * Register all persistence handlers (runtime, client binary, and
+       * profile) on the bus.
        * @param bus - Application bus instance
        * @param db - Drizzle database instance
        * @returns Cleanup function that unregisters all storage handlers
@@ -199,6 +219,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
         return registerStorageHandlersWithRollback([
           () => registerDrizzleRuntimeStorage(bus, db, _ctx),
           () => registerDrizzleClientBinaryStorage(bus, db, _ctx),
+          () => registerDrizzleProfileStorage(bus, db, _ctx),
         ]);
       }),
     },
@@ -224,17 +245,25 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
      */
     create: (ctx) => {
       const registry = new ClientDefinitionRegistry(definitionSnapshot);
+      const clientsBasePath = path.join(ctx.makaioHome, 'clients');
       const binaryManager = new ClientBinaryManager(
         ctx.bus,
         {
           basePath: path.join(ctx.makaioHome, 'binaries'),
-          configBasePath: path.join(ctx.makaioHome, 'clients'),
+          configBasePath: clientsBasePath,
           postInstallHandlers,
         },
         registry,
         strategyDependencies,
       );
-      return new ClientsCoreService(new ClientRuntimeService(ctx.bus), binaryManager);
+      const profileService = new ClientProfileService(ctx.bus, clientsBasePath);
+      const sessionConfigService = new ClientSessionConfigService(ctx.bus, clientsBasePath);
+      return new ClientsCoreService(
+        new ClientRuntimeService(ctx.bus),
+        binaryManager,
+        profileService,
+        sessionConfigService,
+      );
     },
   };
 }

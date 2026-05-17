@@ -62,6 +62,8 @@
  * @packageDocumentation
  */
 
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
 import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
@@ -72,6 +74,7 @@ import { ClaudeCodeClientSettings } from './client-settings.js';
 import { normalizeClaudeCodeHook } from './hook-normalizer.js';
 import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
+import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
 
 /** Stable client ID for Claude Code — used to filter `client.runtime.started` events. */
@@ -182,8 +185,9 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Register the hook ingress subscription, all config request handlers, and
-   * all wiring request handlers on the bus.
+   * Register the hook ingress subscription, all config request handlers,
+   * all wiring request handlers, and the session config setup handler on the
+   * bus.
    *
    * Also subscribes to `client.runtime.started` to track adapter-managed
    * sessions for the {@link handleHookReceived} suppression gate.
@@ -258,6 +262,7 @@ export class ClaudeCodeClientService extends BaseService {
       ctx.setResult(await settings.listPlugins());
     });
 
+    this.registerSessionConfigHandler();
     this.registerMcpServersHandlers();
 
     this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
@@ -274,7 +279,7 @@ export class ClaudeCodeClientService extends BaseService {
       if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
         throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
       }
-      const configDir = await this.resolveConfigDir();
+      const configDir = ctx.payload.configDir ?? (await this.resolveConfigDir());
       const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
       // envPairs must flow through to generated hook/statusline commands; the
       // helper owns shell construction, so the service forwards them unchanged.
@@ -361,6 +366,27 @@ export class ClaudeCodeClientService extends BaseService {
       return undefined;
     }
     return result.data.configDir ?? undefined;
+  }
+
+  /**
+   * Register the `sessionConfig.setup` handler.
+   *
+   * Applies the `~/.claude` fallback when `baseConfigDir` equals `sessionDir`,
+   * which the framework sets when no profile was found.  The handler returns the
+   * `CLAUDE_CONFIG_DIR` env var so the spawned process inherits the isolated
+   * session directory as its configuration root.
+   *
+   * Extracted from {@link onInit} to keep the init method within the
+   * max-lines-per-function lint threshold.
+   */
+  private registerSessionConfigHandler(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.sessionConfig.setup, async (ctx) => {
+      const payload = ctx.payload;
+      const effectiveBase =
+        payload.baseConfigDir === payload.sessionDir ? path.join(os.homedir(), '.claude') : payload.baseConfigDir;
+      const result = await handleClaudeCodeSessionConfigSetup({ ...payload, baseConfigDir: effectiveBase });
+      ctx.setResult(result);
+    });
   }
 
   /**

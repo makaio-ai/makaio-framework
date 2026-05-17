@@ -146,3 +146,36 @@ export type {
 } from './session-observed.js';
 export { ClientNamespace, ClientSubjects } from './namespace.js';
 export { createClientDefinition } from './create-definition.js';
+export {
+  ClientProfileSchema,
+  ClientProfileNameSchema,
+  ClientProfileSchemas,
+  ClientSessionConfigSchemas,
+  SessionConfigEnvSchema,
+  SessionConfigIdSchema,
+  SessionConfigSetupRequestSchema,
+  SessionConfigSetupResponseSchema,
+} from './profile.js';
+export type {
+  ClientProfile,
+  ProfileCreateRequest,
+  ProfileCreateResponse,
+  ProfileListRequest,
+  ProfileListResponse,
+  ProfileGetRequest,
+  ProfileGetResponse,
+  ProfileUpdateRequest,
+  ProfileUpdateResponse,
+  ProfileDeleteRequest,
+  ProfileDeleteResponse,
+  ProfileSetDefaultRequest,
+  ProfileSetDefaultResponse,
+  SessionConfigCreateRequest,
+  SessionConfigCreateResponse,
+  SessionConfigDestroyRequest,
+  SessionConfigDestroyResponse,
+  SessionConfigCleanupRequest,
+  SessionConfigCleanupResponse,
+  SessionConfigSetupRequest,
+  SessionConfigSetupResponse,
+} from './profile.js';

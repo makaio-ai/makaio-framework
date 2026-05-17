@@ -21,6 +21,7 @@ export type OptionalAgentRuntimeFields = Partial<
     | 'resumeAdapterSessionId'
     | 'harnessId'
     | 'clientId'
+    | 'clientProfileName'
     | 'reasoningEffort'
     | 'mcpSessionContext'
     | 'toolLedger'
@@ -57,6 +58,7 @@ export function buildOptionalAgentConfig(
     ...(opts.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: opts.resumeAdapterSessionId }),
     ...(opts.harnessId !== undefined && { harnessId: opts.harnessId }),
     ...(opts.clientId !== undefined && { clientId: opts.clientId }),
+    ...(opts.clientProfileName !== undefined && { clientProfileName: opts.clientProfileName }),
     ...(opts.mcpSessionContext !== undefined && { mcpSessionContext: opts.mcpSessionContext }),
     ...(opts.toolLedger !== undefined && { toolLedger: opts.toolLedger }),
     ...(opts.ephemeral !== undefined && { ephemeral: opts.ephemeral }),

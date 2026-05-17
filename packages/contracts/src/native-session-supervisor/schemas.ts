@@ -12,6 +12,7 @@
 
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { ClientProfileNameSchema } from '../client/profile.js';
 
 // ---------------------------------------------------------------------------
 // Shared primitives
@@ -67,6 +68,12 @@ export const NativeSupervisorLaunchSchema = {
      * When provided, the supervisor links the runtime to an existing session.
      */
     sessionId: z.string().optional(),
+
+    /**
+     * Optional client profile name to use when materializing per-session
+     * native client config.
+     */
+    clientProfileName: ClientProfileNameSchema.optional(),
 
     /**
      * Adapter-assigned session ID to correlate with this supervised runtime.
