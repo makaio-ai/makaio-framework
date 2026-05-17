@@ -896,6 +896,75 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('defers client binary resolution for disabled adapters', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['client-backed-adapter', { $schema: 'makaio/adapter-config/v1', enabled: false }],
+      ]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [],
+        clients: [
+          {
+            packageName: '@owner/client-package',
+            definition: createClientDefinition({
+              id: 'claude-code',
+              name: 'Claude Code',
+              version: '1.2.0',
+              defaultApprovalPolicy: 'always-ask',
+            }),
+          },
+        ],
+      });
+    });
+    const resolveHandler = vi.fn();
+    const offResolve = MakaioBus.on(ClientSubjects.resolveBinary, (ctx) => {
+      resolveHandler();
+      ctx.setResult({ binaryPath: null, env: {}, configDir: null, source: 'global', version: null });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/client-backed-package',
+        {
+          name: '@owner/client-backed-package',
+          displayName: '@owner/client-backed-package',
+          version: '0.1.0',
+          adapters: [
+            {
+              ...createContribution('client-backed-adapter', async (options?: unknown) => ({
+                adapterId: readAdapterFactoryOptions(options).adapterId,
+              })),
+              manifest: {
+                name: 'client-backed-adapter',
+                displayName: 'Client Backed Adapter',
+                protocols: ['anthropic'],
+                clients: [{ id: 'claude-code', version: '^1.0.0', binaryVersion: '>=2.0.0' }],
+              },
+            },
+          ],
+        },
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(resolveHandler).not.toHaveBeenCalled();
+      expect(service.getLoadedAdapters()[0]?.name).toBe('client-backed-adapter');
+    } finally {
+      offCatalog();
+      offResolve();
+    }
+  });
+
   it('does not resolve a client binary for universal binaryVersion ranges', async () => {
     const repository = new MemoryRepository(
       new Map(),

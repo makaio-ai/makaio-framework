@@ -39,6 +39,7 @@
     "@makaio/framework": "^0.1.0"
   },
   "devDependencies": {
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*",
     "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/build-tooling": "workspace:*",

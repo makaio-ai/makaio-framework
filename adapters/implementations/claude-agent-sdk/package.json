@@ -44,6 +44,7 @@
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.2.131",
+    "@makaio/ai-adapters-claude-process-shared": "workspace:*",
     "@makaio/ai-adapters-claude-shared": "workspace:*",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
