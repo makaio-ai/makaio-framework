@@ -1,7 +1,7 @@
 {
   "name": "@makaio/kernel",
   "description": "Runtime extension orchestration for the Makaio framework.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "exports": {

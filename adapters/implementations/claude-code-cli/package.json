@@ -1,7 +1,7 @@
 {
   "name": "@makaio/adapter-claude-code-cli",
   "description": "Claude Code CLI adapter for the Makaio framework.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",

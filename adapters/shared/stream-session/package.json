@@ -1,7 +1,7 @@
 {
   "name": "@makaio/ai-adapters-stream-session",
   "description": "Shared infrastructure for stream-based AI adapter implementations.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "types": "src/index.ts",
   "type": "module",
   "private": true,
