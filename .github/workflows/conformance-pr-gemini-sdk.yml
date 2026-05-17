@@ -31,3 +31,4 @@ jobs:
     with:
       adapter: gemini-sdk
       environment: conformance-gemini-sdk
+    secrets: inherit

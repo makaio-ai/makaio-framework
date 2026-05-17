@@ -31,3 +31,4 @@ jobs:
     with:
       adapter: anthropic-sdk
       environment: conformance-anthropic-sdk
+    secrets: inherit
