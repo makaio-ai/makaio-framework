@@ -1,0 +1,8 @@
+import { build } from 'tsdown';
+import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
+
+await build(
+  defineAdapterConfig({
+    external: [/^@google\//, 'zod', 'p-queue'],
+  }),
+);

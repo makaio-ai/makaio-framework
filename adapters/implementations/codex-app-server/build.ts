@@ -1,5 +1,4 @@
+import { build } from 'tsdown';
 import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
 
-export default defineAdapterConfig({
-  external: [/^@agentclientprotocol\//],
-});
+await build(defineAdapterConfig());

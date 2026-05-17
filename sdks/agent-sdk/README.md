@@ -7,7 +7,7 @@ framework.
 
 > [!IMPORTANT]
 > This package is experimental. No npm packages have been published yet — all
-> dependencies are resolved via `workspace:*` within the monorepo. The API
+> dependencies are resolved via `workspace:*` during local framework development. The API
 > surface may change without notice until the first stable release.
 
 ## Why

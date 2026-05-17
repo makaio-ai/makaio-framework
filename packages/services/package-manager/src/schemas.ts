@@ -15,6 +15,46 @@ import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
 
 /**
+ * A single package resolved (installed, upgraded, or confirmed present) during
+ * a batch install via the dependency resolver.
+ */
+export const ResolvedPackageSchema = z.object({
+  /**
+   * npm package name.
+   */
+  npmName: z.string(),
+  /**
+   * Installed or pre-existing version string.
+   */
+  version: z.string(),
+  /**
+   * Installation outcome:
+   * - `'new'` — the package was not present before this resolution.
+   * - `'upgraded'` — the package existed but a newer version was installed.
+   * - `'already-present'` — the existing version satisfies the requested range.
+   */
+  source: z.enum(['new', 'upgraded', 'already-present']),
+});
+
+export type ResolvedPackage = z.infer<typeof ResolvedPackageSchema>;
+
+/**
+ * A package skipped because it is optional and its installation failed.
+ */
+export const SkippedPackageSchema = z.object({
+  /**
+   * npm package name.
+   */
+  npmName: z.string(),
+  /**
+   * Human-readable reason the installation was skipped.
+   */
+  reason: z.string(),
+});
+
+export type SkippedPackage = z.infer<typeof SkippedPackageSchema>;
+
+/**
  * Package installation result.
  */
 export const PackageInstallResultSchema = z.object({
@@ -42,6 +82,22 @@ export const PackageInstallResultSchema = z.object({
    * Error message (if failed).
    */
   error: z.string().optional(),
+
+  /**
+   * All packages installed or confirmed already-present during resolution.
+   * Populated for npm batch installs that go through the dependency resolver.
+   */
+  installed: z.array(ResolvedPackageSchema).optional(),
+
+  /**
+   * Optional dependencies that failed and were skipped during resolution.
+   */
+  skipped: z.array(SkippedPackageSchema).optional(),
+
+  /**
+   * Non-fatal diagnostic messages produced during resolution.
+   */
+  warnings: z.array(z.string()).optional(),
 });
 
 export type PackageInstallResult = z.infer<typeof PackageInstallResultSchema>;
@@ -155,6 +211,14 @@ export const RegistryPackageSchema = z.object({
    * Package tags (official, community, integration).
    */
   tags: z.array(z.string()).optional(),
+
+  /**
+   * Descriptor name used in `descriptor.json`.
+   *
+   * When omitted, descriptor-name resolution falls back to scoped passthrough
+   * and then the `@makaio/<descriptorName>` convention.
+   */
+  descriptorName: z.string().min(1).optional(),
 });
 
 export type RegistryPackage = z.infer<typeof RegistryPackageSchema>;
@@ -232,17 +296,27 @@ export const PackageManagementSchemas = {
   },
 
   /**
-   * Install a package.
+   * Install one or more packages.
    *
-   * Install an extension package from the configured source.
+   * Local installs must use a single entry in `packageNames`.
+   * The optional `force` flag bypasses inverse-dependency version checks
+   * when going through the dependency resolver.
    */
   install: {
-    request: z.object({
-      /** Package name or path to install. */
-      packageName: z.string(),
-      /** Install source type. When omitted, defaults to npm. */
-      source: z.enum(['npm', 'local']).optional(),
-    }),
+    request: z
+      .object({
+        /** Backward-compatible single package name or path to install. */
+        packageName: z.string().optional(),
+        /** Package names or paths to install. */
+        packageNames: z.array(z.string()).min(1).optional(),
+        /** Install source type. When omitted, defaults to npm. */
+        source: z.enum(['npm', 'local']).optional(),
+        /** When `true`, bypass inverse-dependency version checks in the resolver. */
+        force: z.boolean().optional(),
+      })
+      .refine((value) => value.packageName !== undefined || value.packageNames !== undefined, {
+        message: 'Expected packageName or packageNames',
+      }),
     response: PackageInstallResultSchema,
   },
 

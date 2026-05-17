@@ -95,7 +95,7 @@ describe('portable package helper', () => {
     expect(result.peerDependencies?.['@makaio/framework']).toBe('>=0.1.0');
   });
 
-  it('points published entrypoints at dist output', () => {
+  it('points published entrypoints only at dist output', () => {
     const result = createPortablePackageJson(
       {
         name: '@makaio/adapter-test',
@@ -117,7 +117,6 @@ describe('portable package helper', () => {
     expect(result.types).toBe('dist/index.d.ts');
     expect(result.exports).toEqual({
       '.': {
-        source: './src/index.ts',
         types: './dist/index.d.ts',
         default: './dist/index.js',
       },
@@ -167,7 +166,7 @@ describe('portable package helper', () => {
     expect(cjsResult.exports).toMatchObject({ '.': { types: './dist/index.d.cts' } });
   });
 
-  it('derives main/types from object-style root export in publishConfig', () => {
+  it('derives main/types from object-style root export in publishConfig without source conditions', () => {
     const result = createPortablePackageJson(
       {
         name: '@makaio/adapter-conditional-entry',
@@ -195,14 +194,91 @@ describe('portable package helper', () => {
     expect(result.types).toBe('dist/conditional-entry.d.ts');
     expect(result.exports).toEqual({
       '.': {
-        source: './src/conditional-entry.ts',
         types: './dist/conditional-entry.d.ts',
         default: './dist/conditional-entry.js',
       },
     });
   });
 
-  it('aligns fallback exports with publishConfig main and types', () => {
+  it('preserves object-style publish exports without inventing types', () => {
+    const result = createPortablePackageJson(
+      {
+        name: '@makaio/extension-client-hooks',
+        version: '0.1.0',
+        exports: {
+          '.': './src/index.ts',
+          './cli': './src/cli/index.ts',
+        },
+        publishConfig: {
+          exports: {
+            '.': { default: './dist/index.mjs' },
+            './cli': { default: './dist/cli/index.mjs' },
+          },
+        },
+      },
+      { frameworkVersion: '0.1.0' },
+    );
+
+    expect(result.exports).toEqual({
+      '.': {
+        default: './dist/index.mjs',
+      },
+      './cli': {
+        default: './dist/cli/index.mjs',
+      },
+    });
+  });
+
+  it('does not invent root main and types for subpath-only packages', () => {
+    const result = createPortablePackageJson(
+      {
+        name: '@makaio/extension-prompt',
+        version: '0.1.0',
+        exports: {
+          './cli': './src/cli.ts',
+          './package.json': './package.json',
+        },
+        publishConfig: {
+          exports: {
+            './cli': { default: './dist/cli.mjs' },
+            './package.json': './package.json',
+          },
+        },
+      },
+      { frameworkVersion: '0.1.0' },
+    );
+
+    expect(result.main).toBeUndefined();
+    expect(result.types).toBeUndefined();
+    expect(result.exports).toEqual({
+      './cli': {
+        default: './dist/cli.mjs',
+      },
+      './package.json': './package.json',
+    });
+  });
+
+  it('does not synthesize root exports when publishConfig omits exports for a subpath-only package', () => {
+    const result = createPortablePackageJson(
+      {
+        name: '@makaio/extension-subpath-only',
+        version: '0.1.0',
+        exports: {
+          './cli': './src/cli.ts',
+          './package.json': './package.json',
+        },
+      },
+      { frameworkVersion: '0.1.0' },
+    );
+
+    expect(result.main).toBeUndefined();
+    expect(result.types).toBeUndefined();
+    expect(result.exports).toEqual({
+      './package.json': './package.json',
+    });
+  });
+
+  it('aligns fallback exports with publishConfig main and types without source conditions', () => {
     const result = createPortablePackageJson(
       {
         name: '@makaio/adapter-custom-entry',
@@ -227,7 +303,6 @@ describe('portable package helper', () => {
     expect(result.types).toBe('dist/custom-entry.d.ts');
     expect(result.exports).toEqual({
       '.': {
-        source: './src/custom-entry.ts',
         types: './dist/custom-entry.d.ts',
         default: './dist/custom-entry.js',
       },
@@ -235,7 +310,7 @@ describe('portable package helper', () => {
     });
   });
 
-  it('preserves subpath exports when fallback exports align root entrypoints', () => {
+  it('does not preserve source-only subpath exports in publish manifests', () => {
     const result = createPortablePackageJson(
       {
         name: '@makaio/adapter-custom-entry',
@@ -263,14 +338,8 @@ describe('portable package helper', () => {
 
     expect(result.exports).toEqual({
       '.': {
-        source: './src/custom-entry.ts',
         types: './dist/custom-entry.d.ts',
         default: './dist/custom-entry.js',
-      },
-      './feature': {
-        source: './src/feature.ts',
-        types: './src/feature.ts',
-        default: './src/feature.ts',
       },
       './package.json': './package.json',
     });

@@ -1,8 +1,9 @@
 import * as path from 'node:path';
 import { Command, InvalidOptionArgumentError } from 'commander';
+import type { InstallSource } from '@makaio/services-package-manager';
 import { createExtensionScaffold, type ExtensionSurface } from './extension-init.js';
 import { verifyExtensionWorkspace } from './extension-verify.js';
-import { resolveMakaioHome } from '@makaio/runtime-node';
+import { readFrameworkVersion, resolveMakaioHome } from '@makaio/runtime-node';
 
 /**
  * Lazily import the package-manager module.
@@ -20,6 +21,7 @@ async function importPackageManager(): Promise<typeof import('@makaio/services-p
 }
 
 type CommandInstance = InstanceType<typeof Command>;
+type PackageManagerModule = typeof import('@makaio/services-package-manager');
 
 const SUPPORTED_SURFACES = ['server', 'browser', 'cli'] as const satisfies readonly ExtensionSurface[];
 
@@ -78,9 +80,10 @@ export function registerExtensionCommands(program: CommandInstance): void {
     });
 
   extension
-    .command('install <source>')
-    .description('Install an extension from npm or a local path')
-    .action(async (source: string) => runInstall(source));
+    .command('install <sources...>')
+    .description('Install extensions from npm or local paths')
+    .option('--force', 'Skip compatibility checks for dependency upgrades')
+    .action(async (sources: string[], options: { readonly force?: boolean }) => runInstall(sources, options));
 
   extension
     .command('uninstall <name>')
@@ -104,45 +107,184 @@ export function registerExtensionCommands(program: CommandInstance): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Install an extension from a local path or npm registry.
- * @param source - Raw CLI source string (local path or npm package name).
+ * Install one or more extensions from local paths or the npm registry.
+ *
+ * npm sources are batched through the {@link DependencyResolver} so that
+ * transitive descriptor-declared dependencies are resolved in a single pass.
+ * Local symlink installs run after npm succeeds; if any later step fails, local
+ * symlinks installed in this batch are removed and the pre-install npm manifest
+ * snapshot is restored before the error is re-thrown.
+ * @param sources - Raw CLI source strings (local paths or npm package names).
+ * @param options - Install options.
  */
-async function runInstall(source: string): Promise<void> {
+async function runInstall(sources: readonly string[], options: { readonly force?: boolean } = {}): Promise<void> {
   try {
-    const { parseInstallSource, YarnPackageManager, LocalPathInstaller } = await importPackageManager();
+    const {
+      parseInstallSource,
+      YarnPackageManager,
+      LocalPathInstaller,
+      DependencyResolver,
+      DescriptorNameResolver,
+      RegistryService,
+    } = await importPackageManager();
     const makaioHome = resolveMakaioHome();
-    const parsed = parseInstallSource(source);
 
-    if (parsed.kind === 'git') {
-      console.error('Git URL installs are not yet supported.');
+    const parsedSources = sources.map((source) => parseInstallSource(source));
+    const gitSource = parsedSources.find((source) => source.kind === 'git');
+    if (gitSource) {
+      console.error(`Git URL installs are not yet supported: ${gitSource.raw}`);
       process.exitCode = 1;
       return;
     }
 
-    if (parsed.kind === 'local') {
-      const installer = new LocalPathInstaller(path.join(makaioHome, 'extensions'));
-      const result = await installer.install(parsed.resolved);
-      if (!result.success) {
-        console.error(`Install failed: ${result.error}`);
-        process.exitCode = 1;
-        return;
-      }
-      console.info(`Installed ${result.packageName}@${result.version} (local)`);
-      if (result.restartRequired) {
-        console.info('Restart makaio to activate.');
-      }
-      return;
-    }
+    const localSources = parsedSources.filter((source) => source.kind === 'local');
+    const npmSources = parsedSources.filter((source) => source.kind === 'npm');
 
-    // npm install
-    const yarn = new YarnPackageManager(makaioHome);
-    await yarn.initialize();
-    const version = await yarn.installPackage(parsed.resolved);
-    console.info(`Installed ${source}@${version}`);
-    console.info('Restart makaio to activate.');
+    await performInstallTransaction(
+      { YarnPackageManager, LocalPathInstaller, DependencyResolver, DescriptorNameResolver, RegistryService },
+      makaioHome,
+      localSources,
+      npmSources,
+      options,
+    );
+
+    if (npmSources.length > 0 || localSources.length > 0) {
+      console.info('Restart makaio to activate.');
+    }
   } catch (error) {
     console.error(`Install failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
+  }
+}
+
+/**
+ * Execute one install command as a transaction over npm roots and local symlinks.
+ * @param packageManager - Package-manager constructors loaded lazily.
+ * @param makaioHome - Resolved Makaio home directory.
+ * @param localSources - Local path sources to install after npm succeeds.
+ * @param npmSources - npm package sources to resolve through the dependency resolver.
+ * @param options - Install options.
+ */
+async function performInstallTransaction(
+  packageManager: Pick<
+    PackageManagerModule,
+    'YarnPackageManager' | 'LocalPathInstaller' | 'DependencyResolver' | 'DescriptorNameResolver' | 'RegistryService'
+  >,
+  makaioHome: string,
+  localSources: readonly InstallSource[],
+  npmSources: readonly InstallSource[],
+  options: { readonly force?: boolean },
+): Promise<void> {
+  const yarn = new packageManager.YarnPackageManager(makaioHome);
+  await yarn.initialize();
+  const npmSnapshot = npmSources.length > 0 ? await yarn.readManifestSnapshot() : null;
+
+  try {
+    await installNpmSources(packageManager, yarn, npmSources, options);
+    await installLocalSources(new packageManager.LocalPathInstaller(path.join(makaioHome, 'extensions')), localSources);
+  } catch (error) {
+    await restoreNpmSnapshot(yarn, npmSnapshot, error);
+    throw error;
+  }
+}
+
+/**
+ * Install npm roots through the dependency resolver and print the result.
+ * @param packageManager - Package-manager constructors loaded lazily.
+ * @param yarn - Initialized Yarn package manager.
+ * @param npmSources - npm sources to resolve.
+ * @param options - Install options.
+ */
+async function installNpmSources(
+  packageManager: Pick<PackageManagerModule, 'DependencyResolver' | 'DescriptorNameResolver' | 'RegistryService'>,
+  yarn: InstanceType<PackageManagerModule['YarnPackageManager']>,
+  npmSources: readonly InstallSource[],
+  options: { readonly force?: boolean },
+): Promise<void> {
+  if (npmSources.length === 0) return;
+
+  const frameworkVersion = await readFrameworkVersion();
+  await yarn.ensureFrameworkDependency({ versionRange: `^${frameworkVersion}` });
+  const resolver = new packageManager.DependencyResolver(
+    yarn,
+    new packageManager.DescriptorNameResolver(new packageManager.RegistryService()),
+  );
+  const result = await resolver.resolve(
+    npmSources.map((source) => source.resolved),
+    { force: options.force, snapshot: null },
+  );
+
+  for (const pkg of result.installed) {
+    console.info(
+      `${pkg.source === 'already-present' ? 'Already installed' : 'Installed'} ${pkg.npmName}@${pkg.version}`,
+    );
+  }
+  for (const skipped of result.skipped) {
+    console.warn(`Skipped optional dependency ${skipped.npmName}: ${skipped.reason}`);
+  }
+}
+
+/**
+ * Install local sources and roll back local symlinks if a later local install fails.
+ * @param localInstaller - Local path installer.
+ * @param localSources - Local path sources to install.
+ */
+async function installLocalSources(
+  localInstaller: InstanceType<PackageManagerModule['LocalPathInstaller']>,
+  localSources: readonly InstallSource[],
+): Promise<void> {
+  const installedLocalNames: string[] = [];
+  try {
+    for (const source of localSources) {
+      const result = await localInstaller.install(source.resolved);
+      if (!result.success) {
+        throw new Error(result.error ?? `Failed to install ${source.raw}`);
+      }
+      installedLocalNames.push(result.packageName);
+      console.info(`Installed ${result.packageName}@${result.version} (local)`);
+    }
+  } catch (error) {
+    const rollbackErrors: Error[] = [];
+    for (const name of installedLocalNames.reverse()) {
+      try {
+        const result = await localInstaller.uninstall(name);
+        if (!result.success) {
+          rollbackErrors.push(new Error(result.error ?? `Failed to uninstall local extension ${name}`));
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError)));
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      const message = error instanceof Error ? error.message : String(error);
+      const rollbackMessage = rollbackErrors.map((rollbackError) => rollbackError.message).join('; ');
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `Install failed and local rollback failed: ${message}; rollback errors: ${rollbackMessage}`,
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Restore npm package state captured before an install transaction.
+ * @param yarn - Yarn package manager.
+ * @param snapshot - Manifest snapshot, or `null` when no npm sources were installed.
+ * @param installError - Original install failure.
+ */
+async function restoreNpmSnapshot(
+  yarn: InstanceType<PackageManagerModule['YarnPackageManager']>,
+  snapshot: unknown | null,
+  installError: unknown,
+): Promise<void> {
+  if (snapshot === null) return;
+
+  try {
+    await yarn.writeManifestAndReinstall(snapshot);
+  } catch (rollbackError) {
+    const message = installError instanceof Error ? installError.message : String(installError);
+    throw new AggregateError([installError, rollbackError], `Install failed and npm rollback failed: ${message}`);
   }
 }
 

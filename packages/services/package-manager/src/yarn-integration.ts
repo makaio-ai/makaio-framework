@@ -7,11 +7,24 @@ import type { Configuration, Project, Cache, Report } from '@yarnpkg/core';
 import type { PortablePath, Filename } from '@yarnpkg/fslib';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { ExtensionDescriptorSchema } from '@makaio/contracts';
+import { safeParseExtensionDescriptor } from '@makaio/contracts';
+import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { PackageInfo } from './schemas.js';
 
 const NODE_LINKER_SETTING = 'nodeLinker: node-modules';
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+
+/**
+ * An extension package found installed in node_modules with a valid descriptor.
+ */
+export interface InstalledExtensionDescriptor {
+  /** npm package name (e.g., `@acme/weather-tools`). */
+  readonly npmName: string;
+  /** Installed version string. */
+  readonly version: string;
+  /** Validated extension descriptor from `descriptor.json`. */
+  readonly descriptor: ExtensionDescriptor;
+}
 
 /** Framework dependency declaration used for extension installs. */
 export interface FrameworkDependencySpec {
@@ -117,18 +130,13 @@ export class YarnPackageManager {
       const makaioDir = npath.toPortablePath(this.makaioHome);
       const packageJsonPath = ppath.join(makaioDir, 'package.json' as Filename);
 
-      // Ensure directory exists
       await xfs.mkdirpPromise(makaioDir);
-
-      // Ensure Yarn config exists (prefer node-modules linker for compatibility)
       await this.ensureYarnRc(makaioDir, xfs, ppath);
 
-      // Check if package.json already exists
       if (await xfs.existsPromise(packageJsonPath)) {
         return;
       }
 
-      // Create minimal package.json
       const initialPackageJson = {
         name: 'makaio-packages',
         version: '1.0.0',
@@ -228,13 +236,9 @@ export class YarnPackageManager {
       const packageIdent = structUtils.stringifyIdent(descriptor);
       const previousDescriptor = project.topLevelWorkspace.manifest.dependencies.get(descriptor.identHash);
 
-      // Add to manifest dependencies
       project.topLevelWorkspace.manifest.dependencies.set(descriptor.identHash, descriptor);
-
-      // Run installation
       await this.runProjectInstall(configuration, project, cache);
 
-      // Get installed version
       const resolution = project.storedResolutions.get(descriptor.descriptorHash);
       if (!resolution) {
         throw new Error('Package resolution not found after installation');
@@ -282,7 +286,6 @@ export class YarnPackageManager {
         throw new Error(`Package ${packageName} not found in dependencies`);
       }
 
-      // Run installation to update lockfile and remove package
       await this.runProjectInstall(configuration, project, cache);
 
       console.info('[YarnPackageManager] Uninstalled %s', packageName);
@@ -311,11 +314,8 @@ export class YarnPackageManager {
 
       const packages: PackageInfo[] = [];
 
-      // Iterate through dependencies
       for (const [, descriptor] of project.topLevelWorkspace.manifest.dependencies) {
         const name = structUtils.stringifyIdent(descriptor);
-
-        // Get installed version from lockfile
         const resolution = project.storedResolutions.get(descriptor.descriptorHash);
         const pkg = resolution ? project.storedPackages.get(resolution) : undefined;
         const version = pkg?.version ?? structUtils.parseRange(descriptor.range).selector;
@@ -366,49 +366,14 @@ export class YarnPackageManager {
   /**
    * Get latest version from npm registry.
    *
-   * Uses Yarn's resolver to check latest version.
-   * @param packageName - Package to check
-   * @returns Latest version string
+   * Uses Yarn's resolver to check the `latest` dist-tag for the package.
+   * Delegates to {@link resolvePackageVersion} with a bare package name so
+   * the resolver defaults to `latest`.
+   * @param packageName - Package name to check (e.g., `@acme/weather-tools`).
+   * @returns Latest version string.
    */
   public async getLatestVersion(packageName: string): Promise<string> {
-    try {
-      const { structUtils, StreamReport } = await loadYarnLibs();
-      const { configuration, project } = await this.loadYarnState();
-
-      const ident = structUtils.parseIdent(packageName);
-      const descriptor = structUtils.makeDescriptor(ident, 'latest');
-      let version = 'unknown';
-      await StreamReport.start(
-        {
-          configuration,
-          stdout: process.stdout,
-        },
-        async (report: Report) => {
-          const resolver = configuration.makeResolver();
-
-          const candidateLocators = await resolver.getCandidates(
-            descriptor,
-            {},
-            {
-              project,
-              resolver,
-              report,
-            },
-          );
-
-          if (candidateLocators.length > 0) {
-            const locator = candidateLocators[0];
-            // Extract version from reference (e.g., "npm:1.2.3" -> "1.2.3")
-            const refMatch = locator.reference.match(/^npm:(.+)$/);
-            version = refMatch?.[1] ?? locator.reference;
-          }
-        },
-      );
-
-      return version;
-    } catch (error) {
-      throw new Error(`Failed to get latest version for ${packageName}`, { cause: error });
-    }
+    return this.resolvePackageVersion(packageName);
   }
 
   /**
@@ -417,9 +382,22 @@ export class YarnPackageManager {
    * The package manager writes `.yarnrc.yml` with `nodeLinker: node-modules`,
    * so descriptor discovery mirrors runtime filesystem discovery.
    * @param packageName - Installed package ident.
-   * @returns Descriptor presence.
+   * @returns Descriptor presence flag derived from the public reader.
    */
   private async readInstalledDescriptor(packageName: string): Promise<{ hasDescriptor: boolean }> {
+    return { hasDescriptor: (await this.readInstalledExtensionDescriptor(packageName)) !== null };
+  }
+
+  /**
+   * Read and parse the `descriptor.json` for an installed package.
+   *
+   * Looks for the descriptor at `node_modules/<packageName>/descriptor.json`.
+   * Returns `null` when the file is absent, unreadable, or fails schema
+   * validation.
+   * @param packageName - npm package name (e.g., `@acme/weather-tools`).
+   * @returns Validated extension descriptor, or `null` if not present/invalid.
+   */
+  public async readInstalledExtensionDescriptor(packageName: string): Promise<ExtensionDescriptor | null> {
     const descriptorPath = path.join(this.makaioHome, 'node_modules', ...packageName.split('/'), 'descriptor.json');
 
     let parsed: unknown;
@@ -428,17 +406,155 @@ export class YarnPackageManager {
       parsed = JSON.parse(raw) as unknown;
     } catch (error) {
       if (error instanceof SyntaxError || isExpectedDescriptorReadFailure(error)) {
-        return { hasDescriptor: false };
+        return null;
       }
       throw error;
     }
 
-    const result = ExtensionDescriptorSchema.safeParse(parsed);
-    if (!result.success) {
-      return { hasDescriptor: false };
-    }
-    return { hasDescriptor: true };
+    const result = safeParseExtensionDescriptor(parsed);
+    return result.success ? result.data : null;
   }
+
+  /**
+   * List all installed packages that contain a valid extension descriptor.
+   *
+   * Only probes packages declared in the makaio home `package.json`
+   * dependencies — these are the intentionally-installed extension packages.
+   * Transitive npm dependencies and framework internals are skipped.
+   * @returns Array of installed extension descriptor records.
+   */
+  public async listInstalledExtensionDescriptors(): Promise<InstalledExtensionDescriptor[]> {
+    const packageJsonPath = path.join(this.makaioHome, 'package.json');
+
+    let manifest: { dependencies?: Record<string, unknown> };
+    try {
+      const raw = await fs.readFile(packageJsonPath, 'utf-8');
+      manifest = JSON.parse(raw) as typeof manifest;
+    } catch (error) {
+      if (isExpectedDescriptorReadFailure(error)) {
+        return [];
+      }
+      throw error;
+    }
+
+    const declaredNames = Object.keys(manifest.dependencies ?? {});
+    const entries = await Promise.all(
+      declaredNames.map(async (npmName) => {
+        const descriptor = await this.readInstalledExtensionDescriptor(npmName);
+        if (descriptor === null) return null;
+        const version = await this.readInstalledPackageVersion(npmName);
+        return { npmName, version, descriptor };
+      }),
+    );
+
+    return entries.filter((entry): entry is InstalledExtensionDescriptor => entry !== null);
+  }
+
+  /**
+   * Read the installed version for a package from its `package.json`.
+   * @param npmName - npm package name.
+   * @returns Version string, or `'unknown'` if unreadable.
+   */
+  private async readInstalledPackageVersion(npmName: string): Promise<string> {
+    const pkgJsonPath = path.join(this.makaioHome, 'node_modules', ...npmName.split('/'), 'package.json');
+    try {
+      const raw = await fs.readFile(pkgJsonPath, 'utf-8');
+      const pkg = JSON.parse(raw) as { version?: unknown };
+      return typeof pkg.version === 'string' ? pkg.version : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Snapshot the current `package.json` content for later restore.
+   *
+   * The return value is intentionally typed as `unknown` — callers should
+   * treat it as an opaque token and pass it directly to
+   * {@link writeManifestAndReinstall}.
+   * @returns Parsed `package.json` content.
+   */
+  public async readManifestSnapshot(): Promise<unknown> {
+    const packageJsonPath = path.join(this.makaioHome, 'package.json');
+    const raw = await fs.readFile(packageJsonPath, 'utf-8');
+    return JSON.parse(raw) as unknown;
+  }
+
+  /**
+   * Write a previously captured manifest snapshot back to `package.json` and
+   * run `yarn install` to reconcile the on-disk package state.
+   *
+   * Used by the rollback path after a failed batch install to restore the
+   * manifest and node_modules to the pre-install state.
+   * @param snapshot - Opaque snapshot obtained from {@link readManifestSnapshot}.
+   */
+  public async writeManifestAndReinstall(snapshot: unknown): Promise<void> {
+    const packageJsonPath = path.join(this.makaioHome, 'package.json');
+    await fs.writeFile(packageJsonPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf-8');
+
+    const { configuration, project, cache } = await this.loadYarnState();
+    await this.runProjectInstall(configuration, project, cache);
+  }
+
+  /**
+   * Resolve a package specifier to its concrete version via the Yarn resolver.
+   *
+   * Supports arbitrary version ranges (e.g., `@makaio/child@>=1.0.0`), unlike
+   * {@link getLatestVersion} which always uses `latest`. Internally delegates
+   * to the same Yarn resolver infrastructure.
+   * @param packageSpec - Package specifier (e.g., `@acme/pkg` or `@acme/pkg@^1.0.0`).
+   * @returns Resolved version string.
+   */
+  public async resolvePackageVersion(packageSpec: string): Promise<string> {
+    try {
+      const { StreamReport } = await loadYarnLibs();
+      const { configuration, project } = await this.loadYarnState();
+
+      const descriptor = await this.parsePackageDescriptor(packageSpec);
+      let version = 'unknown';
+
+      await StreamReport.start(
+        {
+          configuration,
+          stdout: process.stdout,
+        },
+        async (report: Report) => {
+          const resolver = configuration.makeResolver();
+          const candidateLocators = await resolver.getCandidates(descriptor, {}, { project, resolver, report });
+
+          if (candidateLocators.length > 0) {
+            const locator = candidateLocators[0];
+            const refMatch = locator.reference.match(/^npm:(.+)$/);
+            version = refMatch?.[1] ?? locator.reference;
+          }
+        },
+      );
+
+      return version;
+    } catch (error) {
+      throw new Error(`Failed to resolve version for ${packageSpec}`, { cause: error });
+    }
+  }
+}
+
+/**
+ * Combine an npm package name with an optional version range into a Yarn-
+ * compatible specifier.
+ *
+ * `latest` and `undefined` are treated as "no range" — the bare name is
+ * returned so the Yarn resolver defaults to the `latest` dist-tag.
+ * @param npmName - Fully-qualified npm package name (e.g., `@scope/name`).
+ * @param range - Optional semver range or dist-tag. Pass `undefined` or
+ *   `'latest'` to receive the bare name without a range suffix.
+ * @returns Yarn-compatible package specifier.
+ * @example
+ *   packageSpecWithRange('\@makaio/child', '\>=1.0.0') // '\@makaio/child\@\>=1.0.0'
+ *   packageSpecWithRange('\@makaio/child', undefined)  // '\@makaio/child'
+ *   packageSpecWithRange('\@makaio/child', 'latest')   // '\@makaio/child'
+ */
+export function packageSpecWithRange(npmName: string, range: string | undefined): string {
+  if (!range || range === 'latest') return npmName;
+  return `${npmName}@${range}`;
 }
 
 /**

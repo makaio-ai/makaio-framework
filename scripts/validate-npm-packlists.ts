@@ -1,7 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Validates npm packlist policy for the framework umbrella package and all
- * publishable adapter implementations.
+ * Validates npm packlist policy for all publishable framework packages.
  *
  * Runs `npm pack --dry-run --json` for each package and checks the resulting
  * file list against the policy rules in `npm-packlist-policy.ts`.
@@ -15,9 +14,16 @@
  */
 
 import { execSync } from 'node:child_process';
-import { readdirSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { checkPacklist } from './lib/npm-packlist-policy.js';
+import {
+  checkDescriptorEntrypointFiles,
+  checkManifestExportTargets,
+  checkPacklist,
+  checkRuntimeWorkspaceDependencies,
+} from './lib/npm-packlist-policy.js';
+import { resolveNpmPublishDirectory } from './lib/npm-publish-staging.js';
+import { findPublicPackageDirs, readPackageJson } from './lib/public-package-discovery.js';
 
 const FRAMEWORK_ROOT = resolve(import.meta.dirname, '..');
 
@@ -30,6 +36,15 @@ interface NpmPackFile {
 interface NpmPackEntry {
   readonly name: string;
   readonly files: readonly NpmPackFile[];
+}
+
+/** Minimal descriptor shape needed by this validator. */
+interface DescriptorJson {
+  readonly entrypoints?: {
+    readonly browser?: true | string;
+    readonly server?: true | string;
+    readonly cli?: true | string;
+  };
 }
 
 /**
@@ -50,28 +65,49 @@ function getPacklist(packageDir: string): NpmPackEntry {
   return parsed[0];
 }
 
-const publishableAdapterDirs = readdirSync(join(FRAMEWORK_ROOT, 'adapters/implementations'), { withFileTypes: true })
-  .filter((entry) => entry.isDirectory() && entry.name !== '__tests__')
-  .map((entry) => join(FRAMEWORK_ROOT, 'adapters/implementations', entry.name))
-  .filter((dir) => {
-    const pkgPath = join(dir, 'package.json');
-    if (!existsSync(pkgPath)) return false;
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { publishConfig?: { access?: string } };
-    return pkg.publishConfig?.access === 'public';
-  });
+/**
+ * Validate descriptor-package metadata files.
+ * @param packageName - Package name for reporting.
+ * @param packDir - Directory being packed.
+ * @param files - File paths from npm pack.
+ * @returns Human-readable issues.
+ */
+function checkDescriptorPackageFiles(packageName: string, packDir: string, files: readonly string[]): string[] {
+  const descriptorPath = join(packDir, 'descriptor.json');
+  if (!existsSync(descriptorPath)) {
+    return [];
+  }
 
-const packageDirs = [FRAMEWORK_ROOT, ...publishableAdapterDirs];
+  const descriptor = JSON.parse(readFileSync(descriptorPath, 'utf8')) as DescriptorJson;
+  const fileSet = new Set(files);
+  const missing = ['descriptor.json', 'dist'].filter((required) => {
+    if (required === 'dist') {
+      return !files.some((file) => file.startsWith('dist/'));
+    }
+    return !fileSet.has(required);
+  });
+  return [
+    ...missing.map((file) => `${packageName}: missing descriptor package file: ${file}`),
+    ...checkDescriptorEntrypointFiles(packageName, descriptor, files),
+  ];
+}
+
+const packageDirs = findPublicPackageDirs(FRAMEWORK_ROOT);
 const issues: string[] = [];
 
 for (const dir of packageDirs) {
-  if (!existsSync(join(dir, 'package.json'))) continue;
-
   try {
-    const entry = getPacklist(dir);
-    const result = checkPacklist(
-      entry.name,
-      entry.files.map((f) => f.path),
-    );
+    const sourceManifest = readPackageJson(dir);
+    const packDir = sourceManifest.publishConfig?.directory ? resolveNpmPublishDirectory(dir, sourceManifest) : dir;
+    if (!existsSync(packDir)) {
+      throw new Error(`publish directory does not exist: ${packDir}`);
+    }
+
+    const packedManifest = readPackageJson(packDir);
+    const packageName = packedManifest.name ?? sourceManifest.name ?? dir;
+    const entry = getPacklist(packDir);
+    const files = entry.files.map((f) => f.path);
+    const result = checkPacklist(packageName, files);
 
     if (result.missingRequired.length > 0) {
       issues.push(`${result.packageName}: missing required files: ${result.missingRequired.join(', ')}`);
@@ -79,6 +115,9 @@ for (const dir of packageDirs) {
     if (result.forbidden.length > 0) {
       issues.push(`${result.packageName}: forbidden files: ${result.forbidden.join(', ')}`);
     }
+    issues.push(...checkDescriptorPackageFiles(packageName, packDir, files));
+    issues.push(...checkManifestExportTargets(packedManifest, files));
+    issues.push(...checkRuntimeWorkspaceDependencies(packedManifest));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const stderrValue =
