@@ -1,13 +1,18 @@
 {
   "name": "@makaio/client-codex",
   "version": "1.0.0-dev-1779048017991",
-  "private": true,
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./runtime": "./src/runtime/package.ts",
     "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "bun build.ts"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^0.1.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
@@ -16,5 +21,29 @@
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3"
+  },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./runtime": "./dist/runtime/package.mjs",
+      "./server": "./dist/server.mjs"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "clients/codex"
   }
 }
