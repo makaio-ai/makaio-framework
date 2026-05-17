@@ -35,6 +35,8 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain("github.event.deployment.environment == 'canary'");
     expect(workflow).toContain('ref: ${{ steps.request.outputs.ref }}');
     expect(workflow).toContain('yarn tsx scripts/dev-publish.ts publish');
+    expect(workflow).toContain('permission-issues: write');
+    expect(workflow).toContain('github-token: ${{ steps.app-token.outputs.token }}');
     expect(workflow).not.toContain('issue_comment:');
     expect(workflow).not.toContain('/publish-dev');
   });
