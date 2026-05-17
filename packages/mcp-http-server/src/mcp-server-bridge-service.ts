@@ -19,10 +19,23 @@ interface RegisteredSession {
   contextOverrides: ToolExecutionContextOverrides;
   /** Timestamp (ms) of last read or write access — used for TTL sweep. */
   lastActivity: number;
+  /**
+   * When `true` this session is stored in `pinnedSessions` (plain Map) instead
+   * of the `sessions` QuickLRU, making it exempt from both LRU count-eviction
+   * and idle TTL sweep. Only an explicit `mcp.session.unregister` removes it.
+   */
+  pinned: boolean;
 }
 
 /** Maximum number of sessions to hold in the LRU before evicting oldest. */
 export const MAX_SESSION_COUNT = 1000;
+/**
+ * Safety cap for the `pinnedSessions` Map.  Pinned sessions are never evicted
+ * by TTL or LRU, so a bug in the unregister path can cause unbounded growth.
+ * Exceeding this threshold logs a warning but does not reject the registration
+ * so that functionality is preserved while the leak is investigated.
+ */
+export const MAX_PINNED_SESSION_COUNT = 100;
 /**
  * Minimum idle time (ms) before a session is swept on the periodic tick.
  * Every MCP tool call refreshes `lastActivity` via `resolveOverrides()`,
@@ -41,13 +54,16 @@ const SWEEP_INTERVAL_MS = 60 * 1000;
  * using a coalescing promise so concurrent registrations never start two
  * server instances.
  *
- * The service maintains two parallel session stores:
- * - `sessions` (QuickLRU) — our own TTL/LRU tracking with `contextOverrides`
+ * The service maintains three parallel session stores:
+ * - `pinnedSessions` (plain Map) — sessions exempt from both TTL sweep and
+ *   LRU count-eviction; only removed by explicit `mcp.session.unregister` or
+ *   on server close
+ * - `sessions` (QuickLRU) — non-pinned sessions subject to TTL/LRU eviction
  * - `contextRegistry` (Map-backed, inside the HTTP server handle) — source of
  *   truth for the MCP server's per-request routing
  *
  * The `resolveContextOverrides` callback threaded into `startHttpMcpServer`
- * bridges these two stores so tool execution always uses session-stable
+ * bridges these stores so tool execution always uses session-stable
  * context overrides rather than per-process fallbacks.
  */
 export class McpServerBridgeService extends BaseService {
@@ -59,6 +75,15 @@ export class McpServerBridgeService extends BaseService {
       this.mcpHandle?.contextRegistry.unregister(adapterSessionId);
     },
   });
+  /**
+   * Sessions that are exempt from LRU count-eviction and TTL sweep.
+   * Pinned sessions have fundamentally different lifecycle semantics — no
+   * expiry — so they are kept in a plain Map separate from the QuickLRU.
+   * Only an explicit `mcp.session.unregister` or a server close removes them.
+   * A soft cap of {@link MAX_PINNED_SESSION_COUNT} is enforced via a warning
+   * to detect unregister-path bugs early without disrupting functionality.
+   */
+  private readonly pinnedSessions = new Map<string, RegisteredSession>();
 
   /**
    * @param bus - Bus instance used for handler registration.
@@ -73,7 +98,7 @@ export class McpServerBridgeService extends BaseService {
    */
   protected async onInit(): Promise<void> {
     this.registerHandler(McpSubjects.session.register, async (ctx) => {
-      const { adapterSessionId, agentId, adapterId, adapterName, sessionId, contextOverrides } = ctx.payload;
+      const { adapterSessionId, agentId, adapterId, adapterName, sessionId, contextOverrides, pinned } = ctx.payload;
 
       const handle = await this.ensureStarted();
 
@@ -85,14 +110,30 @@ export class McpServerBridgeService extends BaseService {
         sessionId,
       });
 
-      this.sessions.set(adapterSessionId, {
+      const sessionRecord: RegisteredSession = {
         agentId,
         adapterId,
         adapterName,
         sessionId,
         contextOverrides,
         lastActivity: Date.now(),
-      });
+        pinned: pinned ?? false,
+      };
+
+      this.pinnedSessions.delete(adapterSessionId);
+      this.sessions.delete(adapterSessionId);
+      if (pinned) {
+        this.pinnedSessions.set(adapterSessionId, sessionRecord);
+        if (this.pinnedSessions.size > MAX_PINNED_SESSION_COUNT) {
+          console.warn(
+            `[McpServerBridgeService] pinnedSessions size (${this.pinnedSessions.size}) exceeds` +
+              ` the safety cap of ${MAX_PINNED_SESSION_COUNT}.` +
+              ' This likely indicates a bug in the unregister path — sessions are not being released.',
+          );
+        }
+      } else {
+        this.sessions.set(adapterSessionId, sessionRecord);
+      }
 
       ctx.setResult({ port: handle.port });
     });
@@ -103,6 +144,7 @@ export class McpServerBridgeService extends BaseService {
     // event loop, so ordering is preserved.
     this.registerHandler(McpSubjects.session.unregister, (ctx) => {
       const { adapterSessionId } = ctx.payload;
+      this.pinnedSessions.delete(adapterSessionId);
       this.sessions.delete(adapterSessionId);
       this.mcpHandle?.contextRegistry.unregister(adapterSessionId);
       ctx.setResult({});
@@ -131,6 +173,13 @@ export class McpServerBridgeService extends BaseService {
    * @returns The stored context overrides, or `undefined` if not found.
    */
   private resolveOverrides(adapterSessionId: string): ToolExecutionContextOverrides | undefined {
+    const pinned = this.pinnedSessions.get(adapterSessionId);
+    if (pinned) {
+      // Pinned sessions are not swept by TTL, but we still refresh lastActivity
+      // for observability consistency (e.g. future audit logs or metrics).
+      pinned.lastActivity = Date.now();
+      return pinned.contextOverrides;
+    }
     const session = this.sessions.get(adapterSessionId);
     if (session) {
       session.lastActivity = Date.now();
@@ -162,6 +211,10 @@ export class McpServerBridgeService extends BaseService {
         // unregistered before the transport closed. The TTL sweep remains the
         // safety net, but this reduces the stale-session window to zero on
         // clean server shutdown.
+        for (const [adapterSessionId] of this.pinnedSessions) {
+          handle?.contextRegistry.unregister(adapterSessionId);
+        }
+        this.pinnedSessions.clear();
         for (const [adapterSessionId] of this.sessions) {
           handle?.contextRegistry.unregister(adapterSessionId);
         }

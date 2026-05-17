@@ -24,12 +24,13 @@ describe('buildEntityGraph', () => {
     expect(names).toContain('openai-node');
     expect(names).toContain('claude-code-cli');
     expect(names).toContain('claude-code');
+    expect(names).toContain('claude-code-tmux');
     expect(names).toContain('codex-app-server');
     expect(names).toContain('gemini-sdk');
     expect(names).toContain('github-copilot-sdk');
     expect(names).toContain('pi-sdk');
     expect(names).toContain('qwen-acp');
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
   });
 
   it('discovers all providers', () => {
@@ -151,6 +152,7 @@ describe('buildEntityGraph', () => {
     const names = adapters!.map((a) => a.name);
     expect(names).toContain('claude-code-cli');
     expect(names).toContain('claude-code');
+    expect(names).toContain('claude-code-tmux');
   });
 
   it('maps codex client to codex-app-server adapter', () => {

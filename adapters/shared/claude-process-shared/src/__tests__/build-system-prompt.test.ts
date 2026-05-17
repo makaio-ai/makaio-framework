@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt } from '../buildSystemPrompt.js';
+import { buildSystemPrompt } from '../build-system-prompt.js';
 
 describe('buildSystemPrompt', () => {
   it('replaces the provider prompt when runtime instructions are a string', () => {

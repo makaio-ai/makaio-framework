@@ -4,7 +4,7 @@ import {
   CLAUDE_BASE_URL_ENV,
   readClaudeProviderBaseUrl,
   resolveClaudeProcessEnv,
-} from '../resolveClaudeProcessEnv.js';
+} from '../resolve-claude-process-env.js';
 
 describe('resolveClaudeProcessEnv', () => {
   it('preserves OAuth fallback env when no explicit provider credential is resolved', () => {

@@ -11,6 +11,7 @@ import type {
   ClaudeCodeStatuslineValue,
   ClaudeCodeHookMatcherGroup,
   ClaudeCodePluginEntry,
+  ClaudeCodeMcpServerEntry,
 } from '../schemas/config.js';
 
 /**
@@ -97,4 +98,34 @@ export interface HookRemoveResult {
 export interface PluginsListResult {
   /** Effective plugin entries after last-scope-wins override per plugin name. */
   plugins: ClaudeCodePluginEntry[];
+}
+
+// ---------------------------------------------------------------------------
+// MCP servers (`.mcp.json`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of listing MCP servers from the project's `.mcp.json`.
+ */
+export interface McpServersListResult {
+  /** MCP server entries keyed by server name. */
+  servers: Record<string, ClaudeCodeMcpServerEntry>;
+}
+
+/**
+ * Result of adding an MCP server to `.mcp.json`.
+ */
+export interface McpServerAddResult {
+  /** `true` when the file was written (new entry or replacement). */
+  added: boolean;
+  /** `true` when an existing entry with the same name was replaced. */
+  replaced: boolean;
+}
+
+/**
+ * Result of removing an MCP server from `.mcp.json`.
+ */
+export interface McpServerRemoveResult {
+  /** `true` when a server was actually removed; `false` when not found. */
+  removed: boolean;
 }

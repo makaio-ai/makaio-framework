@@ -16,6 +16,20 @@ export interface ResolveDefaultClientIdOptions {
 }
 
 /**
+ * Validation controls for adapter-declared client references.
+ */
+export interface ValidateAdapterClientRefsOptions {
+  /**
+   * Whether to resolve and validate concrete native binary versions.
+   *
+   * Static client definition compatibility is always checked. Binary
+   * availability is runtime state, so callers that are only registering a
+   * disabled adapter can defer this check until initialization.
+   */
+  readonly checkBinaryVersions?: boolean;
+}
+
+/**
  * Clone adapter client references into adapter-subsystem-owned metadata.
  * @param clients - Client references declared by an adapter contribution.
  * @returns Cloned client references, or undefined when no clients are declared.
@@ -62,12 +76,14 @@ export function resolveDefaultClientId(
  * @param clients - Client refs declared by the adapter manifest.
  * @param catalogClients - Active client definitions from the extension catalog.
  * @param bus - Runtime bus used to resolve active binary versions when needed.
+ * @param options - Validation options controlling runtime binary checks.
  */
 export async function validateAdapterClientRefs(
   adapterName: string,
   clients: readonly AdapterClientRef[] | undefined,
   catalogClients: readonly AdapterClientCatalogEntry[],
   bus: IMakaioBus,
+  options: ValidateAdapterClientRefsOptions = {},
 ): Promise<void> {
   if (clients === undefined || clients.length === 0) return;
 
@@ -84,6 +100,8 @@ export async function validateAdapterClientRefs(
       `Adapter "${adapterName}" client "${ref.id}" definition version ${definition.version}`,
     );
   }
+
+  if (options.checkBinaryVersions === false) return;
 
   const binaryChecks = clients.filter((ref) => ref.binaryVersion !== undefined);
   await Promise.all(

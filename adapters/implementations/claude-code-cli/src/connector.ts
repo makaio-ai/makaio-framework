@@ -10,7 +10,7 @@ import {
   UserMessageQueue,
 } from '@makaio/ai-adapters-core';
 import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
-import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-shared';
+import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { type ClaudeCodeCliConnectorBus, ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import { ClaudeCliSession } from './session.js';
 import { ClaudeCodeCliAdapterName } from './constants.js';
