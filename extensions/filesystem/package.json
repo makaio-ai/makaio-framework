@@ -25,12 +25,18 @@
     "vitest": "4.1.5"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "bun build.ts"
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/index.mjs",
-      "./server": "./dist/server.mjs",
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      },
       "./package.json": "./package.json"
     }
   }

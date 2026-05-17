@@ -57,9 +57,17 @@
       "source": "./package-exports.ts",
       "default": "./package-exports.ts"
     },
+    "./process-env": {
+      "source": "./process-env.ts",
+      "default": "./process-env.ts"
+    },
     "./tsdown-scss": {
       "source": "./tsdown-scss.ts",
       "default": "./tsdown-scss.ts"
+    },
+    "./tsgo-declarations": {
+      "source": "./tsgo-declarations.ts",
+      "default": "./tsgo-declarations.ts"
     }
   },
   "dependencies": {

@@ -22,6 +22,7 @@
     "./native-session-supervisor": "./src/native-session-supervisor/index.ts",
     "./skill": "./src/skill/index.ts",
     "./toast": "./src/toast/index.ts",
+    "./timeout": "./src/timeout/index.ts",
     "./variant": "./src/variant/index.ts",
     "./platform": "./src/platform/index.ts",
     "./package.json": "./package.json"
@@ -40,28 +41,86 @@
     "tsx": "^4.20.5"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "bun build.ts"
   },
   "publishConfig": {
     "exports": {
-      ".": "./dist/index.mjs",
-      "./adapter": "./dist/adapter/index.mjs",
-      "./adapter/schemas/session-lineage": "./dist/adapter/schemas/session-lineage.mjs",
-      "./client": "./dist/client/index.mjs",
-      "./common": "./dist/common/index.mjs",
-      "./config": "./dist/config/index.mjs",
-      "./harness": "./dist/harness/index.mjs",
-      "./host": "./dist/host/index.mjs",
-      "./extension": "./dist/extension/index.mjs",
-      "./model-registry": "./dist/model-registry/index.mjs",
-      "./provider": "./dist/provider/index.mjs",
-      "./session": "./dist/session/index.mjs",
-      "./shared": "./dist/shared/index.mjs",
-      "./native-session-supervisor": "./dist/native-session-supervisor/index.mjs",
-      "./skill": "./dist/skill/index.mjs",
-      "./toast": "./dist/toast/index.mjs",
-      "./variant": "./dist/variant/index.mjs",
-      "./platform": "./dist/platform/index.mjs",
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./adapter": {
+        "types": "./dist/adapter/index.d.ts",
+        "default": "./dist/adapter/index.mjs"
+      },
+      "./adapter/schemas/session-lineage": {
+        "types": "./dist/adapter/schemas/session-lineage.d.ts",
+        "default": "./dist/adapter/schemas/session-lineage.mjs"
+      },
+      "./client": {
+        "types": "./dist/client/index.d.ts",
+        "default": "./dist/client/index.mjs"
+      },
+      "./common": {
+        "types": "./dist/common/index.d.ts",
+        "default": "./dist/common/index.mjs"
+      },
+      "./config": {
+        "types": "./dist/config/index.d.ts",
+        "default": "./dist/config/index.mjs"
+      },
+      "./harness": {
+        "types": "./dist/harness/index.d.ts",
+        "default": "./dist/harness/index.mjs"
+      },
+      "./host": {
+        "types": "./dist/host/index.d.ts",
+        "default": "./dist/host/index.mjs"
+      },
+      "./extension": {
+        "types": "./dist/extension/index.d.ts",
+        "default": "./dist/extension/index.mjs"
+      },
+      "./model-registry": {
+        "types": "./dist/model-registry/index.d.ts",
+        "default": "./dist/model-registry/index.mjs"
+      },
+      "./provider": {
+        "types": "./dist/provider/index.d.ts",
+        "default": "./dist/provider/index.mjs"
+      },
+      "./session": {
+        "types": "./dist/session/index.d.ts",
+        "default": "./dist/session/index.mjs"
+      },
+      "./shared": {
+        "types": "./dist/shared/index.d.ts",
+        "default": "./dist/shared/index.mjs"
+      },
+      "./native-session-supervisor": {
+        "types": "./dist/native-session-supervisor/index.d.ts",
+        "default": "./dist/native-session-supervisor/index.mjs"
+      },
+      "./skill": {
+        "types": "./dist/skill/index.d.ts",
+        "default": "./dist/skill/index.mjs"
+      },
+      "./toast": {
+        "types": "./dist/toast/index.d.ts",
+        "default": "./dist/toast/index.mjs"
+      },
+      "./timeout": {
+        "types": "./dist/timeout/index.d.ts",
+        "default": "./dist/timeout/index.mjs"
+      },
+      "./variant": {
+        "types": "./dist/variant/index.d.ts",
+        "default": "./dist/variant/index.mjs"
+      },
+      "./platform": {
+        "types": "./dist/platform/index.d.ts",
+        "default": "./dist/platform/index.mjs"
+      },
       "./package.json": "./package.json"
     }
   },

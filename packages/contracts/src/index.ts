@@ -26,6 +26,8 @@ export type {
   ProviderDefinition,
   ProviderDefinitionInput,
 } from './provider/index.js';
+export { TimeoutConfigSchema } from './timeout/index.js';
+export type { RequiredTimeoutConfig, TimeoutCategory, TimeoutConfig } from './timeout/index.js';
 export {
   AdapterNamespace,
   AdapterSessionStatusSchema,

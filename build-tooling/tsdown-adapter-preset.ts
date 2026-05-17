@@ -100,6 +100,13 @@ function adapterExternals(extra: ReadonlyArray<string | RegExp> = []): Plugin {
 }
 
 /**
+ * Whether adapter DTS generation is disabled via environment variable.
+ * Set `MAKAIO_SKIP_ADAPTER_DTS=true` to skip expensive eager declaration
+ * generation in CI environments where only runtime JS validation is needed.
+ */
+const skipAdapterDts = process.env['MAKAIO_SKIP_ADAPTER_DTS'] === 'true';
+
+/**
  * Base tsdown preset for adapter implementation packages.
  *
  * Externalizes all framework-owned workspace packages (rewriting specifiers to
@@ -111,14 +118,15 @@ function adapterExternals(extra: ReadonlyArray<string | RegExp> = []): Plugin {
  * - Target Node.js only (`platform: 'node'`)
  * - Generate declarations from the full adapter tsconfig graph
  * - Skip minification (adapters are bundled into the host app)
+ *
+ * Declaration generation can be disabled via `MAKAIO_SKIP_ADAPTER_DTS=true`
+ * for CI environments that only need runtime JS validation.
  */
 export const adapterPreset = {
   ...packageManifestSourcePolicy,
   format: 'esm',
   platform: 'node',
-  dts: {
-    eager: true,
-  },
+  dts: skipAdapterDts ? false : { eager: true },
   minify: false,
   deps: {
     ...dependencyDiagnosticPolicy,
