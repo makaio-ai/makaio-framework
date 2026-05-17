@@ -18,7 +18,7 @@
  *
  * To run the env-gated tests locally:
  * ```
- * MAKAIO_TEST_RUNTIME=1 yarn test framework/sdks/agent-sdk
+ * MAKAIO_TEST_RUNTIME=1 yarn test sdks/agent-sdk
  * ```
  */
 

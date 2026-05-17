@@ -65,6 +65,7 @@ describe('YarnPackageManager', () => {
         ? localPackagePath.replace(/\\/g, '/').replace(/^([A-Za-z]):/, '/$1:')
         : localPackagePath;
 
+    // makaio-boundary-allow-next-line: Windows path fixture verifies Yarn portal URL normalization.
     expect(
       resolveFrameworkDependencyRange({
         versionRange: '^0.1.0',
@@ -81,7 +82,7 @@ describe('YarnPackageManager', () => {
         versionRange: '^0.1.0',
         localPackagePath: 'C:\\Users\\makaio\\AppData\\Local\\Makaio\\node_modules\\@makaio\\framework',
       }),
-    ).toBe('portal:/C:/Users/makaio/AppData/Local/Makaio/node_modules/@makaio/framework');
+    ).toBe('portal:/C:/Users/makaio/AppData/Local/Makaio/node_modules/@makaio/framework'); // makaio-boundary-allow-line: Windows path fixture verifies Yarn portal URL normalization.
   });
 
   it('uses the registry range when no host framework package path is provided', async () => {

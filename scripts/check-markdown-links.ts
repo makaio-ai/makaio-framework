@@ -337,7 +337,7 @@ function lineForIndex(lineStarts: number[], index: number): number {
  * Print CLI usage information.
  */
 function printHelp(): void {
-  console.log(`Usage: tsx framework/scripts/check-markdown-links.ts [--changed|--all] [--path <path>...]
+  console.log(`Usage: tsx scripts/check-markdown-links.ts [--changed|--all] [--path <path>...]
 
 Checks local Markdown links. --changed is the default and scans staged plus unstaged Markdown files.
 Use --path to limit the selected files to one or more Markdown files or directories.

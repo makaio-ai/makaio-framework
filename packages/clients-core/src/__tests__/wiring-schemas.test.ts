@@ -50,7 +50,7 @@ describe('AbsolutePathSchema', () => {
   });
 
   it('accepts a deeply nested absolute path', () => {
-    const result = AbsolutePathSchema.safeParse('/Users/alice/work/makaio/project');
+    const result = AbsolutePathSchema.safeParse('/home/alice/work/project');
     expect(result.success).toBe(true);
   });
 

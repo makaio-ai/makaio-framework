@@ -6,7 +6,7 @@ import { GitHubCopilotSdkProviderConfigSchema } from './schemas.js';
 export const GitHubCopilotConfig = createAdapterConfigFactory<CopilotSessionOptions & { adapterId?: string }>(() => ({
   adapterName: GitHubCopilotSdkAdapterName,
   adapterDefaults: {
-    // Default model sourced from the github-copilot provider definition (framework/providers/github-copilot/src/definition.ts)
+    // Default model sourced from the github-copilot provider definition (providers/github-copilot/src/definition.ts).
     model: 'GPT-5.1-Codex',
   },
   schema: GitHubCopilotSdkProviderConfigSchema,

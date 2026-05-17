@@ -5,7 +5,7 @@
  * Electron composition root) without any Electron APIs. Announces
  * `MAKAIO_PORT=<n>` on stdout for test harness port discovery.
  *
- * Usage: `tsx framework/apps/electron/e2e/harness/runtime-entry.ts`
+ * Usage: `tsx apps/electron/e2e/harness/runtime-entry.ts`
  *
  * Environment variables:
  * - `MAKAIO_PORT` — TCP port to bind (default: `0` = OS-assigned)

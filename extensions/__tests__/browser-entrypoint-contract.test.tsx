@@ -11,8 +11,8 @@
  *
  * Runs in a Node.js Vitest environment so descriptor discovery can use the same
  * synchronous filesystem/esbuild path as the Vite app configs.
- * @see framework/docs/architecture/extensions/browser.md — "Import guidance"
- * @see framework/docs/creating-extensions.md — "Browser Entrypoint"
+ * @see docs/architecture/extensions/browser.md — "Import guidance"
+ * @see docs/creating-extensions.md — "Browser Entrypoint"
  */
 
 import { resolve } from 'node:path';
@@ -38,13 +38,13 @@ function trap(mod: string): () => Record<string, unknown> {
         throw new Error(
           `[browser-contract] Browser entrypoint imported "${mod}" via default import — ` +
             `node:* modules are not available in the browser. ` +
-            `See framework/docs/architecture/extensions/browser.md for import guidance.`,
+            `See docs/architecture/extensions/browser.md for import guidance.`,
         );
       }
       throw new Error(
         `[browser-contract] Browser entrypoint transitively imported "${mod}.${String(prop)}" — ` +
           `node:* modules are not available in the browser. ` +
-          `See framework/docs/architecture/extensions/browser.md for import guidance.`,
+          `See docs/architecture/extensions/browser.md for import guidance.`,
       );
     },
   };

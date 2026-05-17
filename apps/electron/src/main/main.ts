@@ -2,7 +2,7 @@
 /**
  * Electron main-process composition root.
  *
- * Mirrors the CLI serve composition root (`framework/apps/cli/src/serve.ts`)
+ * Mirrors the CLI serve composition root (`apps/cli/src/serve.ts`)
  * with desktop chrome layered on top. Creates the HTTP server, delegates all
  * service/adapter/plugin wiring to {@link bootMakaioRuntime}, then wires
  * Electron-specific concerns: windows, tray, notifications, session

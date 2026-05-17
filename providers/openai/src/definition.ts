@@ -7,8 +7,7 @@ import type { ProviderDefinitionInput } from '@makaio/contracts';
  * Credentials are resolved from `OPENAI_API_KEY`.
  *
  * The model catalog and OpenAI reasoning-effort mappings are populated from
- * `framework/providers/labs/openai.yaml` and
- * `framework/providers/providers/openai.yaml` at boot.
+ * `providers/labs/openai.yaml` and `providers/providers/openai.yaml` at boot.
  */
 export const providerDefinition: ProviderDefinitionInput = {
   id: 'openai',

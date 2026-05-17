@@ -55,8 +55,8 @@ browser factory or host-owned loader bridges them into executable browser regist
 ## Framework web primitives
 
 The former `@makaio/web-core` package has been split into focused packages that live under
-`framework/ui/`. Framework-only renderer surfaces compose these
-packages rather than importing from a single monolithic package.
+`ui/`. Framework-only renderer surfaces compose these packages rather than importing from a
+single monolithic package.
 
 **[`@makaio/ui-kernel`](../../../ui/kernel/README.md)** — pure contracts and registries (no React):
 
@@ -90,14 +90,9 @@ packages rather than importing from a single monolithic package.
   packages because those imports are erased from the browser bundle.
 - Runtime bare imports in extension browser entry bundles must be limited to the
   browser authoring externals: `react`, `react-dom`, `react/jsx-runtime`, and
-  `@makaio/web-framework/extension-browser`.
-- Do not runtime-import the root `@makaio/web-framework` barrel from extension browser
-  entrypoints. Use `@makaio/web-framework/extension-browser` for browser contribution
-  contracts and helpers, and use only documented browser-safe product subpaths for
-  renderer-only UI hooks. The root barrel may still appear in the host shared externals
-  list for legacy host-owned chunks, but it is not an extension browser authoring surface.
-- Do not runtime-import framework internals such as [`@makaio/ui-hooks`](../../../ui/hooks/README.md) from browser entry
-  bundles. The host import map only guarantees the shared externals above.
+  `@makaio/ui-kernel`, `@makaio/ui-hooks`, `@makaio/ui-components`, and `@makaio/ui-views`.
+- Do not runtime-import unsupported framework internals from browser entry bundles. The host
+  import map only guarantees the shared externals above.
 - Extension authors writing shell UI should keep application-specific providers inside
   the shell contribution instead of adding them to framework UI packages.
 

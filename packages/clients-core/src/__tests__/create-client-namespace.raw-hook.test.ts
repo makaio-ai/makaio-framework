@@ -468,10 +468,10 @@ describe('createClientNamespace', () => {
   });
 
   // RS-10: safeEmitRuntimeObserve is an unexported private function inside
-  // framework/extensions/client-hooks/src/cli/client-hook-command.ts, which
+  // extensions/client-hooks/src/cli/client-hook-command.ts, which
   // belongs to a different package (@makaio/client-hooks) than this test file
   // (@makaio/clients-core). It is not exported from that module and is therefore
   // not importable here without adding a cross-package dev dependency. Coverage
   // for safeEmitRuntimeObserve lives in its own package's test suite at
-  // framework/extensions/client-hooks/src/__tests__/client-hook-command.test.ts.
+  // extensions/client-hooks/src/__tests__/client-hook-command.test.ts.
 });

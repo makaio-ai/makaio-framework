@@ -26,7 +26,9 @@ export const reviewPackage: MakaioNodeExtension<IMakaioBus> = {
   storage: {
     migrations: 'drizzle',
     packageRoot: PACKAGE_ROOT,
-    migrationSourceId: 'framework/extensions/review/drizzle',
+    // Source IDs are package-root-relative so bundled migration lookups stay
+    // identical in package-root and prefixed source layouts.
+    migrationSourceId: 'extensions/review/drizzle',
     registerHandlers: registerDrizzleHandlers(registerReviewStorageHandlers),
   },
 

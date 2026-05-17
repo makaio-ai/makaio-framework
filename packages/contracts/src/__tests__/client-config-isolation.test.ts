@@ -261,14 +261,14 @@ describe('ClientResolveBinarySchema.request', () => {
     const result = ClientResolveBinarySchema.request.parse({
       clientId: 'example-client',
       sessionId: 'session-abc-123',
-      projectDir: '/Users/alice/my-project',
+      projectDir: '/home/alice/my-project',
       preferSource: 'managed',
       harnessId: 'harness-xyz',
     });
 
     expect(result.clientId).toBe('example-client');
     expect(result.sessionId).toBe('session-abc-123');
-    expect(result.projectDir).toBe('/Users/alice/my-project');
+    expect(result.projectDir).toBe('/home/alice/my-project');
     expect(result.preferSource).toBe('managed');
     expect(result.harnessId).toBe('harness-xyz');
   });
@@ -346,12 +346,12 @@ describe('ClientExecutionContextSchema', () => {
     const result = ClientExecutionContextSchema.parse({
       binaryPath: null,
       env: {},
-      configDir: '/Users/alice/.example-client',
+      configDir: '/home/alice/.example-client',
       source: 'global',
       version: '2.0.0',
     });
 
-    expect(result.configDir).toBe('/Users/alice/.example-client');
+    expect(result.configDir).toBe('/home/alice/.example-client');
   });
 
   it('rejects an invalid source value', () => {

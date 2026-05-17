@@ -184,7 +184,7 @@ interface FakeWebSocketEventMap {
  * server-side frames to be pushed to the client without network I/O.
  *
  * Mirrors the pattern used in the Python `FakeWebSocket` and the existing
- * `MockWebSocket` in `framework/transports/ws/src/__tests__/test-helpers.ts`.
+ * `MockWebSocket` in `transports/ws/src/__tests__/test-helpers.ts`.
  */
 class FakeWebSocket implements WebSocketLike {
   /** Captured outbound JSON frames (subscribe, request, event, etc.). */

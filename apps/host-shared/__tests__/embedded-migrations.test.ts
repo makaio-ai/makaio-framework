@@ -52,7 +52,7 @@ describe('embedded build migrations', () => {
     );
     const trustedDevicesDir = writeMigrationDir(
       workspaceRoot,
-      'framework/packages/storage-migrations',
+      'packages/storage-migrations',
       2,
       '0000_trusted_devices',
       'CREATE TABLE `trusted_devices` (`id` text PRIMARY KEY NOT NULL);',
@@ -126,7 +126,7 @@ describe('embedded build migrations', () => {
     );
     writeMigrationDir(
       workspaceRoot,
-      'framework/apps/electron/release/mac-arm64/Makaio.app/Contents/Resources/app.asar.unpacked/fake',
+      'apps/electron/release/mac-arm64/Makaio.app/Contents/Resources/app.asar.unpacked/fake',
       4,
       '0000_release_artifact',
       'CREATE TABLE `fake_release` (`id` text PRIMARY KEY NOT NULL);',
@@ -140,9 +140,28 @@ describe('embedded build migrations', () => {
     ]);
   });
 
+  it('uses public source ids when migrations are under a source-tree prefix', () => {
+    const workspaceRoot = createTempDir('makaio-embedded-migrations-prefixed-source-');
+    const migrationsDir = writeMigrationDir(
+      workspaceRoot,
+      path.join('framework', 'extensions', 'account-manager', 'src'),
+      5,
+      '0000_account_manager',
+      'CREATE TABLE `account_metadata` (`id` text PRIMARY KEY NOT NULL);',
+    );
+
+    expect(buildMigrationSourceId(workspaceRoot, migrationsDir)).toBe('extensions/account-manager/src/drizzle');
+    expect(discoverBundledMigrationSources(workspaceRoot)).toEqual([
+      {
+        migrationSourceId: 'extensions/account-manager/src/drizzle',
+        migrationsDir,
+      },
+    ]);
+  });
+
   it('fails with contextual errors when the journal shape is invalid', () => {
     const workspaceRoot = createTempDir('makaio-embedded-migrations-invalid-journal-');
-    const drizzleDir = path.join(workspaceRoot, 'framework/packages/storage-migrations', 'drizzle');
+    const drizzleDir = path.join(workspaceRoot, 'packages/storage-migrations', 'drizzle');
     mkdirSync(path.join(drizzleDir, 'meta'), { recursive: true });
     writeFileSync(path.join(drizzleDir, 'meta', '_journal.json'), JSON.stringify({ entries: [{ tag: '', when: 1 }] }));
 
@@ -158,7 +177,7 @@ describe('embedded build migrations', () => {
 
   it('fails with contextual errors when a journal entry is missing its sql file', () => {
     const workspaceRoot = createTempDir('makaio-embedded-migrations-missing-sql-');
-    const drizzleDir = path.join(workspaceRoot, 'framework/packages/storage-migrations', 'drizzle');
+    const drizzleDir = path.join(workspaceRoot, 'packages/storage-migrations', 'drizzle');
     mkdirSync(path.join(drizzleDir, 'meta'), { recursive: true });
     writeFileSync(
       path.join(drizzleDir, 'meta', '_journal.json'),
@@ -191,7 +210,7 @@ describe('embedded build migrations', () => {
     );
     const blockedDir = writeMigrationDir(
       workspaceRoot,
-      path.join('framework', 'blocked'),
+      'blocked',
       4,
       '0000_blocked',
       'CREATE TABLE `blocked` (`id` text PRIMARY KEY NOT NULL);',

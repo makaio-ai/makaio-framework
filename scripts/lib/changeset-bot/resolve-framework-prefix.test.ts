@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveFrameworkPrefix } from './resolve-framework-prefix.js';
 
 describe('resolveFrameworkPrefix', () => {
-  it('returns framework when the script lives under a framework directory in a larger repository', () => {
+  it('returns framework when the script lives under a prefixed source tree', () => {
     const repositoryRoot = resolve('/repo');
     const scriptDir = resolve('/repo/framework/scripts');
 

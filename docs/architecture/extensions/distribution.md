@@ -102,7 +102,8 @@ authoring contract:
 - CLI entry default export is an executable `CliContribution`
 - browser bundle is parseable/loadable ESM
 - browser bundle uses only framework-owned shared browser externals (`react`, `react-dom`,
-  `react/jsx-runtime`, `@makaio/web-framework`)
+  `react/jsx-runtime`, `@makaio/ui-kernel`, `@makaio/ui-hooks`,
+  `@makaio/ui-components`, `@makaio/ui-views`)
 - browser bundle remains compatible with the host `/extensions/<name>/browser/*`
   static-root contract
 

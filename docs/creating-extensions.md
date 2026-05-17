@@ -415,9 +415,9 @@ The browser entrypoint exports an `ExtensionBrowserFactory` — a function that 
 contribution declarations:
 
 ```typescript
-import type { ProductExtensionBrowserContribution } from '@makaio/web-framework/extension-browser';
+import type { ExtensionBrowserContribution } from '@makaio/ui-kernel';
 
-const browserContribution = (): ProductExtensionBrowserContribution => ({
+const browserContribution = (): ExtensionBrowserContribution => ({
   // All fields are optional — declare only what you contribute
   // shell:           { component: Shell },
   // pages:           [...],
@@ -443,15 +443,15 @@ must use only the framework-owned browser authoring externals:
 - `react`
 - `react-dom`
 - `react/jsx-runtime`
-- `@makaio/web-framework/extension-browser`
+- `@makaio/ui-kernel`
+- `@makaio/ui-hooks`
+- `@makaio/ui-components`
+- `@makaio/ui-views`
 
 Type-only imports from framework packages are erased from the emitted browser bundle. Do not add
-runtime bare imports such as `@makaio/ui-hooks` or the root `@makaio/web-framework` barrel to
-extension browser entrypoints. Use `@makaio/web-framework/extension-browser` for browser
-contribution contracts and helpers; renderer-only UI hooks must come from documented
-browser-safe subpaths. The root barrel may remain in the host shared externals list for legacy
-host-owned chunks, but extension browser entries should not target it. The build preset handles
-the shared externalization automatically.
+unsupported runtime bare imports to extension browser entrypoints. Use `@makaio/ui-kernel` for
+browser contribution contracts and the documented UI packages for renderer helpers. The build
+preset handles the shared externalization automatically.
 
 For the full browser extension architecture, renderer lifecycle, and framework web primitives,
 see [Browser & UI](./architecture/extensions/browser).

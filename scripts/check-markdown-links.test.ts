@@ -90,26 +90,21 @@ describe('check-markdown-links', () => {
     const files = collectMarkdownFiles({
       mode: 'all',
       root: '/repo',
-      scanPaths: ['framework/docs'],
+      scanPaths: ['docs'],
       listGitFiles: () => {
         throw new Error('git file scan should not run');
       },
-      listAllFiles: () => [
-        'README.md',
-        'framework/docs/index.md',
-        'framework/docs/subjects/session.md',
-        'framework/packages/contracts/README.md',
-      ],
+      listAllFiles: () => ['README.md', 'docs/index.md', 'docs/subjects/session.md', 'packages/contracts/README.md'],
     });
 
-    expect(files).toEqual(['framework/docs/index.md', 'framework/docs/subjects/session.md']);
+    expect(files).toEqual(['docs/index.md', 'docs/subjects/session.md']);
   });
 
   it('parses scan paths from --path flags and positional paths', () => {
-    expect(parseCliArgs(['--all', '--path', 'framework/docs', 'README.md'], '/repo')).toEqual({
+    expect(parseCliArgs(['--all', '--path', 'docs', 'README.md'], '/repo')).toEqual({
       mode: 'all',
       root: '/repo',
-      scanPaths: ['README.md', 'framework/docs'],
+      scanPaths: ['README.md', 'docs'],
     });
   });
 

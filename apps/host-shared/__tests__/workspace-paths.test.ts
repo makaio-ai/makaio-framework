@@ -13,7 +13,7 @@ describe('resolveStorageMigrationsDir', () => {
     }
   });
 
-  it('resolves the migrations directory in the parent workspace layout', () => {
+  it('resolves the migrations directory in the prefixed source layout', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'makaio-host-shared-workspace-paths-'));
     tempDirs.push(root);
 
@@ -37,7 +37,7 @@ describe('resolveStorageMigrationsDir', () => {
     expect(resolveStorageMigrationsDir(packageRoot)).toBe(path.join(root, 'packages', 'storage-migrations', 'drizzle'));
   });
 
-  it('throws when neither supported repo layout contains storage migrations', () => {
+  it('throws when neither supported source layout contains storage migrations', () => {
     const root = mkdtempSync(path.join(tmpdir(), 'makaio-host-shared-workspace-paths-'));
     tempDirs.push(root);
 

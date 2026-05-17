@@ -240,8 +240,8 @@ describe('resolveDefaultMakaioCommand', () => {
   });
 
   it('keeps .ts paths containing spaces as one executable path', () => {
-    const result = resolveDefaultMakaioCommand(['/usr/bin/node', '/Users/alice/My Projects/cli-entry.ts']);
-    expect(result).toBe('/Users/alice/My Projects/cli-entry.ts');
+    const result = resolveDefaultMakaioCommand(['/usr/bin/node', '/home/alice/My Projects/cli-entry.ts']);
+    expect(result).toBe('/home/alice/My Projects/cli-entry.ts');
   });
 
   it('returns the script path unchanged when argv[1] ends with .mts (dev mode)', () => {

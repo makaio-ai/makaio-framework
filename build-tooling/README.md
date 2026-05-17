@@ -36,7 +36,7 @@ React/SCSS package builds.
 ### For Vite Packages (React/SCSS)
 
 ```typescript
-// framework/packages/my-ui-package/vite.config.ts
+// packages/my-ui-package/vite.config.ts
 import { createPluginConfig } from '@makaio/build-tooling/plugin';
 
 export default createPluginConfig({

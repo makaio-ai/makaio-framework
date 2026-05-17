@@ -2,7 +2,7 @@
 /**
  * Electrobun main-process composition root.
  *
- * Mirrors the Electron composition root (`framework/apps/electron/src/main/main.ts`)
+ * Mirrors the Electron composition root (`apps/electron/src/main/main.ts`)
  * with the Bun-native Electrobun desktop runtime layered on top. Delegates all
  * service/adapter/plugin wiring to the platform boot, then wires
  * Electrobun-specific concerns: windows, tray, session persistence.
