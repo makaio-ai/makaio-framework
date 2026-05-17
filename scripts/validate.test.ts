@@ -10,6 +10,14 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--no-fix']).flags.fix).toBe(false);
   });
 
+  it('enables validator caches by default', () => {
+    expect(parseCliArgs([]).flags.cache).toBe(true);
+  });
+
+  it('supports opting out of validator caches explicitly', () => {
+    expect(parseCliArgs(['--no-cache']).flags.cache).toBe(false);
+  });
+
   it('accepts both profile syntaxes for valid values', () => {
     expect(parseCliArgs(['--profile', 'full-workspace']).profile).toBe('full-workspace');
     expect(parseCliArgs(['--profile=standalone']).profile).toBe('standalone');
