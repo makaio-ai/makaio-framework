@@ -1,6 +1,11 @@
 {
   "name": "@makaio/framework",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
+    "directory": "packages/framework"
+  },
   "description": "Typed, bus-centric framework for building and orchestrating AI agents with tools, sessions, and events",
   "license": "MIT",
   "type": "module",
