@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { safeParseExtensionDescriptor } from '@makaio/contracts';
 import type { PackageRegistry } from '../namespace.js';
-import { PackageRegistrySchema } from '../namespace.js';
 import { DescriptorNameResolver } from '../descriptor-name-resolver.js';
 
 const registry: PackageRegistry = {
@@ -17,6 +15,12 @@ const registry: PackageRegistry = {
       displayName: 'Claude Code tmux',
       description: 'Claude Code via tmux',
     },
+    {
+      name: '@makaio/provider-anthropic',
+      descriptorName: 'provider-anthropic',
+      displayName: 'Anthropic',
+      description: 'Anthropic provider definition',
+    },
   ],
   extensions: [
     {
@@ -25,8 +29,57 @@ const registry: PackageRegistry = {
       displayName: 'Claude Code',
       description: 'Claude Code client definition',
     },
+    {
+      name: '@makaio/extension-client-hooks',
+      descriptorName: 'client-hooks',
+      displayName: 'Client Hooks',
+      description: 'Client hook extension definition',
+    },
+    {
+      name: '@makaio/extension-claude-code-statusline',
+      descriptorName: 'claude-code-statusline',
+      displayName: 'Claude Code Statusline',
+      description: 'Claude Code statusline extension definition',
+    },
   ],
 };
+
+/**
+ * Check whether a filesystem path exists.
+ * @param filePath - Absolute path to probe.
+ * @returns True when the path is accessible.
+ */
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve a workspace-relative file from this test's package ancestry.
+ * @param startDir - Absolute directory to start searching from.
+ * @param relativePath - Path relative to a candidate ancestor.
+ * @returns Absolute path to the resolved file.
+ */
+async function findWorkspaceFile(startDir: string, relativePath: string): Promise<string> {
+  let currentDir = startDir;
+
+  while (true) {
+    const filePath = path.join(currentDir, relativePath);
+    if (await fileExists(filePath)) {
+      return filePath;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      throw new Error(`Could not find ${relativePath} from ${startDir}.`);
+    }
+    currentDir = parentDir;
+  }
+}
 
 describe('DescriptorNameResolver', () => {
   it('resolves descriptor names from registry metadata', async () => {
@@ -104,22 +157,16 @@ describe('DescriptorNameResolver', () => {
   });
 
   it('maps every Claude Code tmux descriptor dependency through registry metadata', async () => {
-    const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../..');
-    const registryRaw = JSON.parse(
-      await fs.readFile(path.join(repoRoot, 'registry/packages.json'), 'utf-8'),
-    ) as unknown;
-    const actualRegistry = PackageRegistrySchema.parse(registryRaw);
-    const descriptorRaw = JSON.parse(
-      await fs.readFile(
-        path.join(repoRoot, 'framework/adapters/implementations/claude-code-tmux/descriptor.json'),
-        'utf-8',
-      ),
-    ) as unknown;
+    const descriptorPath = await findWorkspaceFile(
+      import.meta.dirname,
+      'adapters/implementations/claude-code-tmux/descriptor.json',
+    );
+    const descriptorRaw = JSON.parse(await fs.readFile(descriptorPath, 'utf-8')) as unknown;
     const descriptorResult = safeParseExtensionDescriptor(descriptorRaw);
     expect(descriptorResult.success).toBe(true);
     if (!descriptorResult.success) return;
 
-    const resolver = new DescriptorNameResolver({ getRegistry: async () => actualRegistry });
+    const resolver = new DescriptorNameResolver({ getRegistry: async () => registry });
     const resolved = await Promise.all(
       (descriptorResult.data.dependencies ?? []).map(async (dependency) => [
         dependency.name,
