@@ -1,6 +1,6 @@
 {
   "name": "@makaio/extension-prompt",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
     "zod": "^4.1.13"

@@ -1,7 +1,7 @@
 {
   "name": "@makaio/storage-migrations",
   "description": "Drizzle migration management: schema discovery, aggregation, and application.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "private": true,
   "exports": {

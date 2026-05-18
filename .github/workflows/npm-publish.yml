@@ -1,49 +1,136 @@
-name: Publish npm Packages
+name: Publish dev npm packages
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'npm dist-tag (dev, canary, latest)'
-        required: true
-        default: 'dev'
-        type: choice
-        options:
-          - dev
-          - canary
-          - latest
-      dry-run:
-        description: 'Dry run (skip actual publish)'
-        required: false
-        default: false
-        type: boolean
-  workflow_call:
-    inputs:
-      tag:
-        description: 'npm dist-tag'
+      packages:
+        description: 'Space-separated @makaio/* package names'
         required: true
         type: string
       dry-run:
-        description: 'Dry run'
+        description: 'Pack only, do not publish or tag'
         required: false
-        default: false
+        default: true
         type: boolean
+  deployment:
 
 permissions:
-  contents: read
+  contents: write
+  deployments: write
   id-token: write
+  issues: write
+
+concurrency:
+  group: npm-dev-publish-${{ github.event.deployment.id || github.ref }}
+  cancel-in-progress: false
 
 env:
   BUN_VERSION: 1.3.12
+  YARN_NPM_REGISTRY_SERVER: https://registry.npmjs.org
 
 jobs:
-  publish:
+  publish-dev:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'deployment' &&
+        github.event.deployment.environment == 'canary'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: ${{ inputs.tag == 'latest' && 'production' || 'canary' }}
+    environment:
+      name: canary
+      deployment: false
 
     steps:
+      - name: Resolve request
+        id: request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              const inputs = context.payload.inputs ?? {};
+              const packages = inputs.packages;
+              if (!packages) {
+                core.setFailed('Workflow dispatch input packages is required.');
+                return;
+              }
+
+              core.setOutput('packages', String(packages));
+              core.setOutput('dry-run', String(inputs['dry-run'] ?? 'true'));
+              core.setOutput('checkout-ref', context.ref);
+              core.setOutput('source-sha', context.sha);
+              core.setOutput('pr-number', '');
+              core.setOutput('deployment-id', '');
+              return;
+            }
+
+            const deployment = context.payload.deployment;
+            const rawPayload = deployment.payload ?? {};
+            const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload || '{}') : rawPayload;
+            const sourceSha = payload.source_sha || deployment.sha || deployment.ref;
+            const checkoutRef = payload.checkout_ref || deployment.ref;
+            const packages = payload.packages;
+
+            if (!packages) {
+              core.setFailed('Deployment payload is missing packages.');
+              return;
+            }
+            if (!sourceSha) {
+              core.setFailed('Deployment payload is missing source SHA.');
+              return;
+            }
+            if (!checkoutRef) {
+              core.setFailed('Deployment payload is missing checkout ref.');
+              return;
+            }
+
+            core.setOutput('packages', String(packages));
+            core.setOutput('dry-run', String(payload.dry_run ?? 'false'));
+            core.setOutput('checkout-ref', String(checkoutRef));
+            core.setOutput('source-sha', String(sourceSha));
+            core.setOutput('pr-number', payload.pr_number ? String(payload.pr_number) : '');
+            core.setOutput('deployment-id', String(deployment.id));
+
+      - name: Set dev publish env
+        run: |
+          {
+            echo "DEV_PUBLISH_MANIFEST=${{ runner.temp }}/dev-publish-packages.json"
+            echo "DEV_PUBLISH_SUMMARY=${{ runner.temp }}/dev-publish-summary.md"
+          } >> "$GITHUB_ENV"
+
+      - name: Mark deployment in progress
+        if: steps.request.outputs.deployment-id != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEPLOYMENT_ID: ${{ steps.request.outputs.deployment-id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: Number(process.env.DEPLOYMENT_ID),
+              state: 'in_progress',
+              environment: 'canary',
+              log_url: process.env.RUN_URL,
+              description: 'Dev package publish started.',
+            });
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.request.outputs.checkout-ref }}
+          fetch-depth: 0
+
+      - name: Verify checked out source
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+        run: |
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$SOURCE_SHA" ]; then
+            echo "::error::Checked out $actual_sha but deployment requested $SOURCE_SHA. Re-run the publish request for the current ref."
+            exit 1
+          fi
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
         with:
@@ -58,6 +145,7 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Restore Yarn cache
+        if: github.ref != ''
         id: yarn-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -68,6 +156,7 @@ jobs:
           restore-keys: yarn-cache-
 
       - name: Restore node_modules
+        if: github.ref != ''
         id: nm-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -78,7 +167,7 @@ jobs:
         run: yarn install --immutable
 
       - name: Save Yarn cache
-        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        if: github.ref != '' && steps.yarn-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
@@ -87,88 +176,106 @@ jobs:
           key: yarn-cache-${{ hashFiles('yarn.lock') }}
 
       - name: Save node_modules
-        if: steps.nm-cache.outputs.cache-hit != 'true'
+        if: github.ref != '' && steps.nm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: '**/node_modules'
           key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
-      - name: Build framework
-        run: yarn build:framework
-
-      - name: Resolve publishable packages
-        id: packages
-        run: |
-          PACKAGES=$(node -e "
-            const { readdirSync, readFileSync } = require('fs');
-            const { join } = require('path');
-            const dirs = [
-              'packages/framework',
-              'packages/contracts',
-              'sdks/typescript',
-              'sdks/agent-sdk',
-              'extensions/account-manager',
-              ...readdirSync('adapters/implementations', { withFileTypes: true })
-                .filter(d => d.isDirectory())
-                .map(d => join('adapters/implementations', d.name))
-            ];
-            const publishable = dirs
-              .map(dir => {
-                try {
-                  const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
-                  return pkg.private ? null : { name: pkg.name, dir };
-                } catch { return null; }
-              })
-              .filter(Boolean);
-            console.log(JSON.stringify(publishable));
-          ")
-          echo "packages=$PACKAGES" >> "$GITHUB_OUTPUT"
-          echo "Publishable packages:"
-          echo "$PACKAGES" | node -e "JSON.parse(require('fs').readFileSync(0,'utf8')).forEach(p => console.log('  ' + p.name + ' (' + p.dir + ')'))"
-
-      - name: Publish packages
-        if: inputs.dry-run == false
+      - name: Prepare dev package versions
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PACKAGES: ${{ steps.request.outputs.packages }}
         run: |
-          TAG="${{ inputs.tag }}"
-          PACKAGES='${{ steps.packages.outputs.packages }}'
+          timestamp="$(node -p 'Date.now().toString()')"
+          yarn tsx scripts/dev-publish.ts prepare \
+            --packages "$PACKAGES" \
+            --timestamp "$timestamp" \
+            --out "$DEV_PUBLISH_MANIFEST"
 
-          echo "$PACKAGES" | node -e "
-            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-            const { execSync } = require('child_process');
-
-            // Topological order: contracts first, then framework, then the rest
-            const order = ['@makaio/contracts', '@makaio/framework'];
-            const sorted = [
-              ...pkgs.filter(p => order.includes(p.name)).sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name)),
-              ...pkgs.filter(p => !order.includes(p.name))
-            ];
-
-            for (const pkg of sorted) {
-              console.log('Publishing ' + pkg.name + '...');
-              try {
-                execSync(
-                  'npm publish --tag ${TAG} --access public --provenance',
-                  { cwd: pkg.dir, stdio: 'inherit' }
-                );
-                console.log('✓ ' + pkg.name);
-              } catch (e) {
-                console.error('✗ ' + pkg.name + ': ' + e.message);
-                process.exit(1);
-              }
-            }
-          "
-
-      - name: Dry run — pack only
-        if: inputs.dry-run == true
+      - name: Build selected package closure
         run: |
-          PACKAGES='${{ steps.packages.outputs.packages }}'
-          echo "$PACKAGES" | node -e "
-            const pkgs = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-            const { execSync } = require('child_process');
-            for (const pkg of pkgs) {
-              console.log('Packing ' + pkg.name + '...');
-              execSync('npm pack --dry-run', { cwd: pkg.dir, stdio: 'inherit' });
-            }
-          "
+          from="$(node -e "const pkgs = JSON.parse(require('fs').readFileSync(process.env.DEV_PUBLISH_MANIFEST, 'utf8')); console.log('{' + pkgs.map((pkg) => pkg.name).join(',') + '}');")"
+          yarn workspaces foreach -Rpt --from "$from" run build
+
+      - name: Pack selected packages
+        run: yarn tsx scripts/dev-publish.ts pack --manifest "$DEV_PUBLISH_MANIFEST"
+
+      - name: Publish selected packages
+        if: steps.request.outputs.dry-run != 'true'
+        run: yarn tsx scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
+
+      - name: Push annotated dev tags
+        if: steps.request.outputs.dry-run != 'true'
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          yarn tsx scripts/dev-publish.ts tag \
+            --manifest "$DEV_PUBLISH_MANIFEST" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-url "$WORKFLOW_URL"
+
+      - name: Write publish summary
+        env:
+          DRY_RUN: ${{ steps.request.outputs.dry-run }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          yarn tsx scripts/dev-publish.ts summary \
+            --manifest "$DEV_PUBLISH_MANIFEST" \
+            --source-sha "$SOURCE_SHA" \
+            --workflow-url "$WORKFLOW_URL" \
+            --dry-run "$DRY_RUN" \
+            --out "$DEV_PUBLISH_SUMMARY"
+          cat "$DEV_PUBLISH_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub App token
+        id: app-token
+        if: steps.request.outputs.pr-number != ''
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Comment on PR
+        if: steps.request.outputs.pr-number != ''
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: fs.readFileSync(process.env.DEV_PUBLISH_SUMMARY, 'utf8'),
+            });
+
+      - name: Mark deployment complete
+        if: always() && steps.request.outputs.deployment-id != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEPLOYMENT_ID: ${{ steps.request.outputs.deployment-id }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const succeeded = process.env.JOB_STATUS === 'success';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: Number(process.env.DEPLOYMENT_ID),
+              state: succeeded ? 'success' : 'failure',
+              environment: 'canary',
+              log_url: process.env.RUN_URL,
+              description: succeeded ? 'Dev package publish completed.' : 'Dev package publish failed.',
+            });

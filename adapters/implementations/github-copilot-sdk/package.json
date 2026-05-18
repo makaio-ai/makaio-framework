@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-github-copilot-sdk",
   "description": "GitHub Copilot SDK adapter for the Makaio AI framework.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/github-copilot-sdk"
   },
   "bugs": {
@@ -44,7 +44,7 @@
   },
   "peerDependencies": {
     "@github/copilot-sdk": "^0.2.2",
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@github/copilot-sdk": "0.2.2",

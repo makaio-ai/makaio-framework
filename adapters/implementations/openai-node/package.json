@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-openai-node",
   "description": "OpenAI adapter using the official OpenAI Node SDK for agentic chat completions.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/openai-node"
   },
   "bugs": {
@@ -36,7 +36,7 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0",
+    "@makaio/framework": "^1.0.0",
     "openai": ">=6.22.0 <7.0.0"
   },
   "devDependencies": {

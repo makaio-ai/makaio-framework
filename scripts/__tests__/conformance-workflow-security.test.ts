@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -87,7 +87,8 @@ describe('conformance workflow security', () => {
     for (const line of tokenActionUses) {
       expect(line).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v[\d.]+)?\s*$/);
     }
-    expect(workflowText).toContain('app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflowText).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflowText).not.toContain('app-id:');
     expect(workflowText).toContain('private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}');
     expect(workflowText).toContain('github-token: ${{ steps.app-token.outputs.token }}');
     expect(workflowText).toContain('<!-- makaio-conformance-report -->');
@@ -159,11 +160,10 @@ describe('conformance workflow security', () => {
     expect(adapterWorkflowText).toContain('path: conformance-artifacts/**');
     expect(adapterWorkflowText).not.toContain('secrets.PROVIDER_API_KEY');
 
-    const openAiPrWorkflowText = readWorkflow('conformance-pr-openai-node.yml');
-    expect(openAiPrWorkflowText).toContain('environment: conformance-openai-node');
-    expect(openAiPrWorkflowText).not.toContain('provider_secret_name:');
-    expect(openAiPrWorkflowText).not.toContain('provider_env_var:');
-    expect(openAiPrWorkflowText).not.toContain('conformance_provider:');
+    const automaticPrWorkflowFiles = readdirSync(resolveFrameworkWorkflowPath('.')).filter(
+      (fileName) => fileName.startsWith('conformance-pr-') && fileName.endsWith('.yml'),
+    );
+    expect(automaticPrWorkflowFiles).toEqual([]);
   });
 
   it('installs only subprocess adapter CLIs through the shared conformance action', () => {

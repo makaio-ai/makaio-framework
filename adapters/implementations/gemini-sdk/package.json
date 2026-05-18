@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-gemini-sdk",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "description": "Gemini SDK adapter for Makaio AI framework",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/gemini-sdk"
   },
   "bugs": {
@@ -42,7 +42,7 @@
   "peerDependencies": {
     "@google/gemini-cli-core": ">=0.29.5 <0.40.0",
     "@google/genai": ">=1.42.0 <2.0.0",
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "0.21.0",

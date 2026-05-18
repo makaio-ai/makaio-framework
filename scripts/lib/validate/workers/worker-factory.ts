@@ -65,9 +65,16 @@ export interface ValidatorWorkerConfig<TTool> {
    * @param tool - The loaded tool module/constructor
    * @param ctx - Validator context for accumulating results
    * @param fix - Whether to auto-fix issues where possible
+   * @param cache - Whether validator caches may be used
    * @returns Validation run result with files checked and config status
    */
-  runValidation: (files: string[], tool: TTool, ctx: ValidatorContext, fix?: boolean) => Promise<ValidationRunResult>;
+  runValidation: (
+    files: string[],
+    tool: TTool,
+    ctx: ValidatorContext,
+    fix?: boolean,
+    cache?: boolean,
+  ) => Promise<ValidationRunResult>;
   /**
    * Optional file filter to select files for this tool.
    * @param files - All input files
@@ -236,7 +243,7 @@ export function createValidatorWorker<TTool>(config: ValidatorWorkerConfig<TTool
       }
 
       // Run validation
-      const result = await config.runValidation(filesToValidate, tool, ctx, input.options.fix);
+      const result = await config.runValidation(filesToValidate, tool, ctx, input.options.fix, input.options.cache);
 
       // Success output
       writeOutput(createSuccessOutput(config, fileResults, result, local));

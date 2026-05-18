@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-codex-app-server",
   "description": "OpenAI Codex App-Server adapter for the Makaio AI framework.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/codex-app-server"
   },
   "bugs": {
@@ -41,7 +41,7 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@makaio/ai-adapters-core": "workspace:*",

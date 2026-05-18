@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-claude-code-tmux",
   "description": "Claude Code tmux adapter for the Makaio framework.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/claude-code-tmux"
   },
   "bugs": {
@@ -36,7 +36,7 @@
     "zod": "^4.1.13"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@makaio/ai-adapters-claude-process-shared": "workspace:*",

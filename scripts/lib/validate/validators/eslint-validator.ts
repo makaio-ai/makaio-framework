@@ -106,6 +106,7 @@ function addFixInfoIfNeeded(
  * @param ESLintCtor - ESLint constructor from loaded module
  * @param ctx - Validator context for storing results
  * @param autoFix - Whether to auto-fix linting issues
+ * @param cache - Whether ESLint cache should be used
  * @returns Promise resolving to object with filesChecked
  */
 export async function validateESLint(
@@ -113,9 +114,11 @@ export async function validateESLint(
   ESLintCtor: typeof import('eslint').ESLint,
   ctx: ValidatorContext,
   autoFix?: boolean,
+  cache = true,
 ): Promise<{ filesChecked: string[] }> {
   const eslint = new ESLintCtor({
-    cache: true,
+    cache,
+    cacheLocation: '.eslintcache',
     fix: autoFix,
   });
 

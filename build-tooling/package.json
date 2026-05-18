@@ -1,6 +1,6 @@
 {
   "name": "@makaio/build-tooling",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "description": "Shared Vite build configuration for extensions and adapters",
   "type": "module",
   "private": true,

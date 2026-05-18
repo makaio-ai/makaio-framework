@@ -1,6 +1,6 @@
 {
   "name": "@makaio/extension-opencode",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -19,11 +19,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "extensions/opencode"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",

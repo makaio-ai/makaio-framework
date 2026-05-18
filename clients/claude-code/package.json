@@ -1,10 +1,10 @@
 {
   "name": "@makaio/client-claude-code",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "clients/claude-code"
   },
   "main": "./src/index.ts",
@@ -17,7 +17,7 @@
     "build": "bun build.ts"
   },
   "peerDependencies": {
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

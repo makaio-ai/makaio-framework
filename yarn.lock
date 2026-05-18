@@ -3768,7 +3768,7 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     "@anthropic-ai/sdk": ">=0.91.1 <1.0.0"
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3793,7 +3793,7 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     "@anthropic-ai/claude-agent-sdk": ^0.2.50
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3813,7 +3813,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3834,7 +3834,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3855,7 +3855,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3882,7 +3882,7 @@ __metadata:
   peerDependencies:
     "@google/gemini-cli-core": ">=0.29.5 <0.40.0"
     "@google/genai": ">=1.42.0 <2.0.0"
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3909,7 +3909,7 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     "@github/copilot-sdk": ^0.2.2
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -3934,7 +3934,7 @@ __metadata:
     openai: "npm:6.22.0"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
     openai: ">=6.22.0 <7.0.0"
   languageName: unknown
   linkType: soft
@@ -3957,7 +3957,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
     "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0"
     "@mariozechner/pi-ai": ">=0.72.0 <0.74.0"
     "@mariozechner/pi-coding-agent": ">=0.72.0 <0.74.0"
@@ -3980,7 +3980,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4267,7 +4267,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4275,12 +4275,17 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/client-codex@workspace:clients/codex"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/clients-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
     zod: "npm:^4.1.13"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4288,7 +4293,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/client-gemini@workspace:clients/gemini"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4296,7 +4306,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/client-github-copilot@workspace:clients/github-copilot"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4304,7 +4319,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/client-qwen@workspace:clients/qwen"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4514,7 +4534,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4551,7 +4571,7 @@ __metadata:
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4577,12 +4597,17 @@ __metadata:
   resolution: "@makaio/extension-opencode@workspace:extensions/opencode"
   dependencies:
     "@makaio/ai-adapters-core": "workspace:*"
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/test-utils": "workspace:*"
+    tsdown: "npm:^0.22.0"
     type-fest: "npm:^4.31.0"
+    typescript: "npm:^6.0.3"
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4590,10 +4615,15 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/extension-pin-message@workspace:extensions/pin-message"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@types/node": "npm:^24.3.0"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
     zod: "npm:^4.1.13"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4629,7 +4659,7 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     "@makaio/bus-core": "*"
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4904,7 +4934,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-alibaba@workspace:providers/alibaba"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4917,7 +4952,7 @@ __metadata:
     tsdown: "npm:^0.22.0"
     typescript: "npm:^6.0.3"
   peerDependencies:
-    "@makaio/framework": ^0.1.0
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4925,7 +4960,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-github-copilot@workspace:providers/github-copilot"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4933,7 +4973,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-google@workspace:providers/google"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4941,7 +4986,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-kimi@workspace:providers/kimi"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4949,7 +4999,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-nanogpt@workspace:providers/nanogpt"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4957,7 +5012,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-openai-codex@workspace:providers/openai-codex"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4965,7 +5025,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-openai@workspace:providers/openai"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4973,7 +5038,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-opencode-go@workspace:providers/opencode-go"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4981,7 +5051,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-openrouter@workspace:providers/openrouter"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4989,7 +5064,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-qwen-acp@workspace:providers/qwen"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -4997,7 +5077,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/provider-z-ai@workspace:providers/z-ai"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
   languageName: unknown
   linkType: soft
 

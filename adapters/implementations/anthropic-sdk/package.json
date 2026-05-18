@@ -1,11 +1,11 @@
 {
   "name": "@makaio/adapter-anthropic-sdk",
   "description": "Anthropic SDK adapter using the official @anthropic-ai/sdk streaming API.",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "adapters/implementations/anthropic-sdk"
   },
   "bugs": {
@@ -37,7 +37,7 @@
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": ">=0.91.1 <1.0.0",
-    "@makaio/framework": "^0.1.0"
+    "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "0.94.0",

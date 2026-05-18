@@ -1,6 +1,11 @@
 {
   "name": "@makaio/sdk",
-  "version": "1.0.0-dev-1779051654000",
+  "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/makaio-ai/makaio-framework",
+    "directory": "sdks/typescript"
+  },
   "description": "TypeScript SDK for the Makaio bus protocol",
   "license": "MIT",
   "type": "module",
