@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -18,16 +18,16 @@ const extensionFactoryFiles = {
   createExtensionStorageNamespace: 'packages/storage/core/src/create-extension-storage-namespace.ts',
 } as const;
 const extensionFactoryNames = ['createExtensionNamespace', 'createExtensionStorageNamespace'] as const;
+const sourceSkipDirs = new Set(['dist', 'node_modules', '__tests__']);
+const packageSkipDirs = new Set(['dist', 'node_modules']);
 
 function listSourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const fullPath = join(dir, entry);
-    if (fullPath.includes('/node_modules/') || fullPath.includes('/dist/') || fullPath.includes('/__tests__/')) {
-      return [];
-    }
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) return listSourceFiles(fullPath);
-    if (!entry.endsWith('.ts') || entry.endsWith('.test.ts')) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory() && sourceSkipDirs.has(entry.name)) return [];
+
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) return listSourceFiles(fullPath);
+    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) return [];
     return [fullPath];
   });
 }
@@ -99,11 +99,11 @@ function getSideEffectfulExtensionFactories(): Set<keyof typeof extensionFactory
 }
 
 function listPackageFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const fullPath = join(dir, entry);
-    if (fullPath.includes('/node_modules/') || fullPath.includes('/dist/')) return [];
-    const stat = statSync(fullPath);
-    if (stat.isDirectory()) return listPackageFiles(fullPath);
-    return entry === 'package.json' ? [fullPath] : [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    if (entry.isDirectory() && packageSkipDirs.has(entry.name)) return [];
+
+    const fullPath = join(dir, entry.name);
+    if (entry.isDirectory()) return listPackageFiles(fullPath);
+    return entry.name === 'package.json' ? [fullPath] : [];
   });
 }
