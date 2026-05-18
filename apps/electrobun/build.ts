@@ -120,7 +120,8 @@ const FRAMEWORK_VERSION = readFrameworkPackageVersion(FRAMEWORK_PACKAGE_JSON_PAT
 const VARIANT_CONFIG = resolveVariantConfig(process.env['MAKAIO_VARIANT'], process.env['MAKAIO_RELEASE_TRACK']);
 
 /** Default MAKAIO_HOME directory name, variant-aware. Stable uses `.makaio`; other tracks use `.makaio-{track}`. */
-const MAKAIO_HOME_DEFAULT = VARIANT_CONFIG.releaseTrack === 'stable' ? '.makaio' : `.makaio-${VARIANT_CONFIG.releaseTrack}`;
+const MAKAIO_HOME_DEFAULT =
+  VARIANT_CONFIG.releaseTrack === 'stable' ? '.makaio' : `.makaio-${VARIANT_CONFIG.releaseTrack}`;
 
 const MAIN_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/main/index.ts');
 const CLI_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/cli-entry.ts');

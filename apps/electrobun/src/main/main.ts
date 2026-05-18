@@ -20,7 +20,6 @@
  * @packageDocumentation
  */
 
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server as HttpServer } from 'node:http';
@@ -58,6 +57,7 @@ import { resolveDevHostOptions, buildDevHostRuntimeOptions } from './dev-host-op
 import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
+import { seedMakaioHome } from '../makaio-home.js';
 
 // ESM-compatible __dirname
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +66,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 6252;
 const WINDOW_SESSION_SCOPE = 'electrobun';
 
+// Dot notation required — matched by the `define` in build.ts at bundle time.
 const IS_DEV = process.env.NODE_ENV !== 'production';
 
 /**
@@ -84,11 +85,6 @@ declare const __ELECTROBUN_PROJECT_ROOT__: string;
  */
 declare const __FRAMEWORK_VERSION__: string;
 
-/**
- * Default MAKAIO_HOME directory name — resolved at build time from the release track.
- * Stable builds use `.makaio`; canary builds use `.makaio-canary`.
- * The user can still override via the `MAKAIO_HOME` environment variable.
- */
 declare const __MAKAIO_HOME_DEFAULT__: string;
 const PKG_ROOT =
   typeof __ELECTROBUN_PROJECT_ROOT__ !== 'undefined'
@@ -308,11 +304,9 @@ function openDefaultWindow(): number {
 
     const honoApp = new Hono();
 
-    const makaioHomeDefault = typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : '.makaio';
-    const makaioHome = process.env['MAKAIO_HOME']?.trim() || path.join(os.homedir(), makaioHomeDefault);
-    if (!process.env['MAKAIO_HOME']?.trim()) {
-      process.env['MAKAIO_HOME'] = makaioHome;
-    }
+    const makaioHome = seedMakaioHome(
+      typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : undefined,
+    );
     const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(makaioHome);
     const runtimeOptions = await applySelectedDesktopRuntimeConfig(baseRuntimeOptions, {
       makaioHome,

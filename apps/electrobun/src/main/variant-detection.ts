@@ -23,28 +23,30 @@ export interface DetectVariantOptions {
  * @returns The resolved {@link VariantConfig} for the running host.
  */
 export function detectVariant(options: DetectVariantOptions = {}): VariantConfig {
+  // Dot notation required — matched by the `define` in build.ts at bundle time.
   const isDev = options.isDev ?? process.env.NODE_ENV !== 'production';
   const env = options.env ?? process.env;
   const execPath = options.execPath ?? process.execPath;
   const resourcesDir = path.join(path.dirname(execPath), '..', 'Resources');
-  const appResourcesDir = path.join(resourcesDir, 'app', 'Resources');
-  const variantPath = fs.existsSync(path.join(resourcesDir, 'variant.json'))
-    ? path.join(resourcesDir, 'variant.json')
-    : path.join(appResourcesDir, 'variant.json');
-  if (fs.existsSync(variantPath)) {
+  const candidates = [
+    path.join(resourcesDir, 'variant.json'),
+    path.join(resourcesDir, 'app', 'Resources', 'variant.json'),
+  ];
+  for (const candidate of candidates) {
     try {
-      const raw = JSON.parse(fs.readFileSync(variantPath, 'utf-8')) as { variant?: string; releaseTrack?: string };
+      const raw = JSON.parse(fs.readFileSync(candidate, 'utf-8')) as { variant?: string; releaseTrack?: string };
       return resolveVariantConfig(raw.variant, raw.releaseTrack);
     } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
       if (!isDev) {
-        throw new Error(`Failed to parse bundled variant descriptor at ${variantPath}`, { cause: err });
+        throw new Error(`Failed to parse bundled variant descriptor at ${candidate}`, { cause: err });
       }
       console.warn('[electrobun] Failed to parse variant.json, falling back to env:', err);
     }
   }
 
   if (!isDev) {
-    throw new Error(`Missing bundled variant descriptor at ${variantPath}`);
+    throw new Error(`Missing bundled variant descriptor (searched: ${candidates.join(', ')})`);
   }
   return resolveVariantConfig(env['MAKAIO_VARIANT'], env['MAKAIO_RELEASE_TRACK']);
 }
