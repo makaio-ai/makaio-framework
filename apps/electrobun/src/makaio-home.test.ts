@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { seedMakaioHome } from './makaio-home.js';
 
 vi.mock('node:os', () => ({
-  homedir: () => '/Users/testuser',
+  homedir: () => '/home/testuser',
 }));
 
 afterEach(() => {
@@ -15,8 +15,8 @@ describe('seedMakaioHome', () => {
 
     const result = seedMakaioHome('.makaio');
 
-    expect(result).toBe('/Users/testuser/.makaio-canary');
-    expect(process.env['MAKAIO_HOME']).toBe('/Users/testuser/.makaio-canary');
+    expect(result).toBe('/home/testuser/.makaio-canary');
+    expect(process.env['MAKAIO_HOME']).toBe('/home/testuser/.makaio-canary');
   });
 
   it('preserves a pre-set absolute MAKAIO_HOME', () => {
@@ -31,8 +31,8 @@ describe('seedMakaioHome', () => {
   it('normalizes a relative build-time default', () => {
     const result = seedMakaioHome('.makaio-canary');
 
-    expect(result).toBe('/Users/testuser/.makaio-canary');
-    expect(process.env['MAKAIO_HOME']).toBe('/Users/testuser/.makaio-canary');
+    expect(result).toBe('/home/testuser/.makaio-canary');
+    expect(process.env['MAKAIO_HOME']).toBe('/home/testuser/.makaio-canary');
   });
 
   it('preserves an absolute build-time default', () => {
