@@ -28,6 +28,9 @@
 import { BrowserWindow, Screen } from 'electrobun/bun';
 import {
   assertNoReservedWindowParams,
+  buildRendererLaunchUrl,
+  createRendererLaunchConfig,
+  type RendererLaunchConfig,
   type WindowManagerState,
   type WindowSessionLiveWindow,
 } from '@makaio/host-shared';
@@ -314,9 +317,8 @@ export class WindowManager {
       }
     }
 
-    // Build the URL with config injected as query parameters.
-    // Electrobun does not use a preload/contextBridge mechanism — the renderer
-    // reads its config directly from `window.location.search`.
+    // Electrobun does not use a preload/contextBridge mechanism; the host
+    // serializes the shared renderer launch config into URL query parameters.
     const url = this.buildUrl(registration, params ?? {});
 
     const win = new BrowserWindow({
@@ -511,18 +513,32 @@ export class WindowManager {
    * @param params - Context parameters appended as query string entries
    * @returns Fully constructed URL string
    */
-  private buildUrl(registration: WindowRegistration, params: Readonly<Record<string, string>>): string {
+  private createLaunchConfig(
+    registration: Pick<WindowRegistration, 'packageName' | 'qualifiedId'>,
+    params: Readonly<Record<string, string>>,
+  ): RendererLaunchConfig {
     assertNoReservedWindowParams(params, RESERVED_BOOTSTRAP_QUERY_KEYS, 'Electrobun');
 
-    const url = new URL(`http://127.0.0.1:${this.port}/`);
-    url.searchParams.set('app', registration.packageName);
-    url.searchParams.set('window', registration.qualifiedId);
-    url.searchParams.set('busUrl', `ws://127.0.0.1:${this.port}/bus`);
-    url.searchParams.set('bootComplete', this.bootComplete ? '1' : '0');
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value);
-    }
-    return url.toString();
+    return createRendererLaunchConfig({
+      baseUrl: `http://127.0.0.1:${this.port}/`,
+      busUrl: `ws://127.0.0.1:${this.port}/bus`,
+      registration,
+      params,
+      bootComplete: this.bootComplete,
+    });
+  }
+
+  /**
+   * Construct the web UI URL for a window registration.
+   * @param registration - Window registration providing packageName and windowId.
+   * @param params - Context parameters appended as query string entries.
+   * @returns Fully constructed URL string.
+   */
+  private buildUrl(registration: WindowRegistration, params: Readonly<Record<string, string>>): string {
+    return buildRendererLaunchUrl(this.createLaunchConfig(registration, params), {
+      includeBootComplete: true,
+      includeBusUrl: true,
+    });
   }
 
   /**

@@ -11,7 +11,7 @@ import { HostSubjects } from '@makaio/contracts';
 import type { WindowManagerState } from '@makaio/host-shared';
 
 export interface ElectrobunWindowsBusHandlerDeps {
-  /** Qualified registration ID for the framework dashboard shell. */
+  /** Qualified registration ID for the dashboard shell. */
   dashboardRegistrationId: string;
   /**
    * Create a host window for the supplied registration.
@@ -33,7 +33,7 @@ export interface ElectrobunWindowsBusHandlerDeps {
   focusWindow: (windowId: number) => boolean;
   /** Focus the most recent window and return its ID, or `null` when no window can be focused. */
   focusAnyWindow: () => number | null;
-  /** Open the default framework shell window. */
+  /** Open the default shell window. */
   openDefaultWindow: () => number;
   /**
    * Called once before the first window is created when upgrading from

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { readElectrobunRendererConfig } from '../src/renderer/config.js';
+import { readElectrobunRendererConfig, readElectrobunSurfaceHint } from '../src/renderer/config.js';
 
 describe('readElectrobunRendererConfig', () => {
   afterEach(() => {
@@ -42,5 +42,23 @@ describe('readElectrobunRendererConfig', () => {
       projectId: null,
       windowId: null,
     });
+  });
+
+  it('defaults to the Electrobun dashboard surface', () => {
+    window.history.replaceState({}, '', '/index.html');
+
+    expect(readElectrobunSurfaceHint()).toBe('electrobun');
+  });
+
+  it('reads the tray surface hint from the Electrobun URL query string', () => {
+    window.history.replaceState({}, '', '/index.html?surface=tray');
+
+    expect(readElectrobunSurfaceHint()).toBe('tray');
+  });
+
+  it('falls back to the Electrobun dashboard surface for unknown hints', () => {
+    window.history.replaceState({}, '', '/index.html?surface=unknown');
+
+    expect(readElectrobunSurfaceHint()).toBe('electrobun');
   });
 });

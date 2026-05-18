@@ -13,8 +13,9 @@ import path from 'node:path';
  *
  * Resolution walks bounded candidate depths from shallowest to deepest. A
  * package root named `framework` is treated as nested source layout only when
- * its parent contains that directory as a workspace marker; other package roots
- * win immediately so checkouts embedded in another workspace do not overshoot.
+ * its parent also has a package manifest and contains that directory as a
+ * workspace marker; other package roots win immediately so checkouts embedded
+ * in another workspace do not overshoot.
  * @param packageDir - Absolute path to a package directory inside the repo
  *   (e.g. the value of `path.dirname(fileURLToPath(import.meta.url))`).
  * @returns Absolute path to the workspace root.
@@ -37,7 +38,11 @@ export function resolveWorkspaceRoot(packageDir: string): string {
   for (const candidate of candidates) {
     if (existsSync(path.join(candidate, 'package.json'))) {
       const parentDir = path.dirname(candidate);
-      if (path.basename(candidate) === 'framework' && existsSync(path.join(parentDir, 'framework', 'package.json'))) {
+      if (
+        path.basename(candidate) === 'framework' &&
+        existsSync(path.join(parentDir, 'package.json')) &&
+        existsSync(path.join(parentDir, 'framework', 'package.json'))
+      ) {
         return parentDir;
       }
       return candidate;

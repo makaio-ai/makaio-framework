@@ -45,7 +45,13 @@ import {
 } from '@makaio/runtime-node';
 import { HostSubjects } from '@makaio/contracts';
 import { TrayMenuSubjects, type TrayMenuListEntry } from '@makaio/services-core/tray-menu';
-import { FRAMEWORK_FALLBACK_WINDOW, saveWindowSession, createDevHealthPlugin } from '@makaio/host-shared';
+import {
+  FRAMEWORK_FALLBACK_WINDOW,
+  applyDesktopMakaioHomeEnv,
+  createDesktopBootContext,
+  createDevHealthPlugin,
+  saveWindowSession,
+} from '@makaio/host-shared';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import Electrobun, { GlobalShortcut } from 'electrobun/bun';
 import { applySelectedDesktopRuntimeConfig } from '@makaio/host-shared/desktop-runtime-config';
@@ -57,7 +63,6 @@ import { resolveDevHostOptions, buildDevHostRuntimeOptions } from './dev-host-op
 import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
-import { seedMakaioHome } from '../makaio-home.js';
 import type { HealthResult } from '../health-probe.js';
 
 // ESM-compatible __dirname
@@ -270,10 +275,10 @@ function createWindow(options: CreateWindowOptions): number {
 // ── First window ──────────────────────────────────────────────────────────────
 
 /**
- * Open the fallback framework shell window.
+ * Open the fallback shell window.
  *
  * Startup overrides are consumed by {@link openInitialWindows}; every later
- * default-window affordance must reopen the framework shell.
+ * default-window affordance must reopen the fallback shell.
  * @returns The window ID of the created window.
  */
 function openDefaultWindow(): number {
@@ -323,27 +328,37 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
 
     const honoApp = new Hono();
 
-    const makaioHome = seedMakaioHome(
-      typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : undefined,
-    );
-    const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(makaioHome);
+    const defaultMakaioHomeDir = typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : undefined;
+    applyDesktopMakaioHomeEnv({
+      env: process.env,
+      ...(defaultMakaioHomeDir !== undefined ? { defaultDir: defaultMakaioHomeDir } : {}),
+    });
+    const bootContext = createDesktopBootContext({
+      env: process.env,
+      ...(defaultMakaioHomeDir !== undefined ? { defaultDir: defaultMakaioHomeDir } : {}),
+      ...(typeof __FRAMEWORK_VERSION__ !== 'undefined' ? { frameworkVersion: __FRAMEWORK_VERSION__ } : {}),
+      frameworkPackagePath: resolveDesktopFrameworkPackagePath(),
+    });
+    const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(bootContext.makaioHome);
     const runtimeOptions = await applySelectedDesktopRuntimeConfig(baseRuntimeOptions, {
-      makaioHome,
+      makaioHome: bootContext.makaioHome,
       env: process.env,
     });
     const runtimeHostCapabilities = IS_DEV
       ? normalizeNodeHostCapabilities(runtimeOptions.hostCapabilities)
       : runtimeOptions.hostCapabilities;
     const frameworkModuleResolver = resolveDesktopFrameworkModuleResolver(runtimeOptions);
-    const frameworkPackagePath = resolveDesktopFrameworkPackagePath();
 
     const commonBootOptions = {
       surface: 'interactive' as const,
       ...runtimeOptions,
+      makaioHome: bootContext.makaioHome,
       ...(runtimeHostCapabilities !== undefined ? { hostCapabilities: runtimeHostCapabilities } : {}),
-      frameworkVersion: typeof __FRAMEWORK_VERSION__ !== 'undefined' ? __FRAMEWORK_VERSION__ : undefined,
+      ...(bootContext.frameworkVersion !== undefined ? { frameworkVersion: bootContext.frameworkVersion } : {}),
       frameworkModuleResolver,
-      frameworkPackagePath,
+      ...(bootContext.frameworkPackagePath !== undefined
+        ? { frameworkPackagePath: bootContext.frameworkPackagePath }
+        : {}),
       onTransportReady({ host, port: readyPort }: { host: string; port: number }) {
         process.stdout.write(`MAKAIO_PORT=${readyPort}\n`);
         console.info('[electrobun] Bus transport ready on %s:%d', host, readyPort);
@@ -424,7 +439,6 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
     // toggleTrayPopover() calls can construct the correct SPA URL.
     initTrayPopover(baseUrl, busUrl);
 
-    process.stdout.write(`MAKAIO_PORT=${boundPort}\n`);
     console.info('[electrobun] Server listening on %s', baseUrl);
 
     bootPromise = bootPromise

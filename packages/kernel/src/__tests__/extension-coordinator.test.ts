@@ -2131,6 +2131,35 @@ describe('ExtensionCoordinator', () => {
       expect(readyEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
     });
 
+    it('emits only serializable boot service identity fields from package metadata', async () => {
+      const servicePayloads: object[] = [];
+      const pkg = makePackage('cyclic-svc', { create: (ctx) => makeMockService(ctx.bus) }) as MakaioExtension & {
+        self?: unknown;
+      };
+      pkg.self = pkg;
+
+      bus.on(BootSubjects.service.starting, (ctx) => {
+        servicePayloads.push(ctx.payload);
+      });
+      bus.on(BootSubjects.service.ready, (ctx) => {
+        servicePayloads.push(ctx.payload);
+      });
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+      });
+      coordinator.load([pkg]);
+      await coordinator.startAll();
+
+      expect(servicePayloads).toHaveLength(2);
+      expect(servicePayloads[0]).toEqual({ name: 'cyclic-svc', displayName: 'cyclic-svc' });
+      expect(servicePayloads[1]).toEqual({
+        name: 'cyclic-svc',
+        displayName: 'cyclic-svc',
+        durationMs: expect.any(Number),
+      });
+    });
+
     it('emits boot.progress with completedCount and totalCount', async () => {
       const progressEvents: Array<{ completedCount: number; totalCount: number }> = [];
 

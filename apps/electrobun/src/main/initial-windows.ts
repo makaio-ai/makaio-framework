@@ -19,7 +19,7 @@ export interface OpenInitialWindowsOptions {
  * Priority:
  * 1. `MAKAIO_INITIAL_WINDOW` env override (integration tests, CLI launch).
  * 2. Persisted window session restore.
- * 3. Fallback framework shell window (`framework-shell:main`).
+ * 3. Fallback shell window (`framework-shell:main`).
  * @param options - Window/session dependencies for startup restore.
  */
 export async function openInitialWindows(options: OpenInitialWindowsOptions): Promise<void> {
@@ -44,7 +44,7 @@ export async function openInitialWindows(options: OpenInitialWindowsOptions): Pr
   }
 
   if (!session) {
-    // No session to restore — open the fallback framework shell window.
+    // No session to restore — open the fallback shell window.
     openDefaultWindow();
     return;
   }

@@ -12,8 +12,7 @@ import { build } from 'esbuild';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { buildMigrationSourceId, discoverBundledMigrationSources } from '@makaio/host-shared/build/embedded-migrations';
-import { resolveStorageMigrationsDir } from '@makaio/host-shared/build/workspace-paths';
-import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
+import { resolveStorageMigrationsDir, resolveWorkspaceRoot } from '@makaio/host-shared/build/workspace-paths';
 import { embeddedMigrationsPlugin } from './src/build/embedded-migrations-plugin.js';
 import { stubAssetsPlugin } from './src/build/stub-assets-plugin.js';
 

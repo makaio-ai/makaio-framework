@@ -85,6 +85,22 @@ describe('variant build smoke — fast', () => {
       expect(scripts['package:cef']).toContain('electrobun build');
       expect(scripts['package:cef']).toContain('--env=stable');
     });
+
+    it('dev uses Electrobun source-dev without prebuilding dist/index.js', () => {
+      const { scripts } = readPackageJson();
+      expect(scripts['dev']).toContain('MAKAIO_ELECTROBUN_SOURCE_DEV=1');
+      expect(scripts['dev']).toContain('NODE_ENV=development');
+      expect(scripts['dev']).toContain('electrobun dev');
+      expect(scripts['dev']).not.toContain('build.ts');
+    });
+
+    it('dev:watch uses the same source-dev path with watch enabled', () => {
+      const { scripts } = readPackageJson();
+      expect(scripts['dev:watch']).toContain('MAKAIO_ELECTROBUN_SOURCE_DEV=1');
+      expect(scripts['dev:watch']).toContain('NODE_ENV=development');
+      expect(scripts['dev:watch']).toContain('electrobun dev --watch');
+      expect(scripts['dev:watch']).not.toContain('build.ts');
+    });
   });
 
   describe('variant.json serialization contract', () => {

@@ -8,7 +8,9 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./desktop-boot-context": "./src/desktop-boot-context.ts",
     "./desktop-runtime-config": "./src/desktop-runtime-config.ts",
+    "./renderer-launch-config": "./src/renderer-launch-config.ts",
     "./bus": "./src/bus/index.ts",
     "./renderer": "./src/renderer/index.ts",
     "./renderer/vite-assets": "./src/renderer/vite-assets.ts",

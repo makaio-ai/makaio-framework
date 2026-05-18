@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/makaio-ai/makaio-framework",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
     "directory": "extensions/account-manager"
   },
   "type": "module",

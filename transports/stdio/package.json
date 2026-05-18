@@ -2,6 +2,11 @@
   "name": "@makaio/bus-transport-stdio",
   "description": "Stdio JSONL transport for @makaio/bus-core enabling cross-process bus communication.",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "transports/stdio"
+  },
   "private": true,
   "type": "module",
   "types": "src/index.ts",

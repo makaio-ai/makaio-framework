@@ -1,7 +1,11 @@
 {
   "name": "@makaio/extension-client-commands",
   "version": "1.0.0",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/client-commands"
+  },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

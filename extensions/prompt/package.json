@@ -1,7 +1,11 @@
 {
   "name": "@makaio/extension-prompt",
   "version": "1.0.0",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/prompt"
+  },
   "type": "module",
   "exports": {
     "./cli": "./src/cli.ts",

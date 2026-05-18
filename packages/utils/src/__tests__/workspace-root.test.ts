@@ -59,6 +59,18 @@ describe('resolveWorkspaceRoot', () => {
     expect(resolveWorkspaceRoot(packageDir)).toBe(root);
   });
 
+  it('does not overshoot a package-root checkout named framework', () => {
+    const parent = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
+    tempDirs.push(parent);
+
+    const root = path.join(parent, 'framework');
+    const packageDir = path.join(root, 'apps', 'electron');
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
+
+    expect(resolveWorkspaceRoot(packageDir)).toBe(root);
+  });
+
   it('does not overshoot an embedded package-root checkout', () => {
     const parent = mkdtempSync(path.join(tmpdir(), 'makaio-workspace-root-'));
     tempDirs.push(parent);

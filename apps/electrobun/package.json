@@ -7,8 +7,8 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "bun build.ts && electrobun dev",
-    "dev:watch": "bun run build.ts && MAKAIO_ELECTROBUN_PKG_ROOT=\"$PWD\" electrobun dev --watch",
+    "dev": "NODE_ENV=development MAKAIO_ELECTROBUN_SOURCE_DEV=1 electrobun dev",
+    "dev:watch": "NODE_ENV=development MAKAIO_ELECTROBUN_SOURCE_DEV=1 electrobun dev --watch",
     "dev:renderer": "NODE_OPTIONS='--import tsx/esm' vite --config vite.renderer.config.ts",
     "build": "bun run build.ts",
     "build:renderer": "vite build --config vite.renderer.config.ts --configLoader runner",

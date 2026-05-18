@@ -1,10 +1,9 @@
 /**
- * Spawn a real framework-only Electron process for E2E testing.
+ * Spawn a real Electron process for E2E testing.
  *
  * This harness intentionally omits host runtime config. It exercises the
- * framework Electron shell as a framework-only source checkout should boot:
- * framework packages only, framework fallback window, no host descriptor
- * discovery.
+ * Electron shell as a source checkout should boot: default packages, fallback
+ * window, and no host descriptor discovery.
  */
 
 import { existsSync } from 'node:fs';
@@ -16,16 +15,14 @@ import { spawnAndDiscoverPort, type SpawnedProcess } from '../shared/spawn-helpe
 const esmRequire = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Root of the framework checkout used by the synced standalone distribution. */
-const FRAMEWORK_ROOT = path.resolve(__dirname, '../..');
+/** Repository root for this source checkout. */
+const REPO_ROOT = path.resolve(__dirname, '../..');
 
 /** Process cwd that owns the installed Electron/tsx dependencies for this checkout. */
-const SPAWN_CWD = existsSync(path.resolve(FRAMEWORK_ROOT, 'node_modules'))
-  ? FRAMEWORK_ROOT
-  : path.resolve(FRAMEWORK_ROOT, '..');
+const SPAWN_CWD = existsSync(path.resolve(REPO_ROOT, 'node_modules')) ? REPO_ROOT : path.resolve(REPO_ROOT, '..');
 
 /** Absolute path to the Electron app entry point. */
-const ELECTRON_ENTRY = path.resolve(FRAMEWORK_ROOT, 'apps/electron/src/main/main.ts');
+const ELECTRON_ENTRY = path.resolve(REPO_ROOT, 'apps/electron/src/main/main.ts');
 
 /** Parent environment keys intentionally forwarded to the child Electron process. */
 const BASE_ENV_KEYS = [
@@ -53,16 +50,16 @@ const BASE_ENV_KEYS = [
   'ELECTRON_EXTRA_LAUNCH_ARGS',
 ] as const;
 
-/** Options for {@link startFrameworkElectron}. */
-export interface StartFrameworkElectronOptions {
+/** Options for {@link startElectron}. */
+export interface StartElectronOptions {
   /** Additional environment variables. Merged on top of minimal defaults. */
   env?: Record<string, string>;
   /** Milliseconds to wait for port announcement. Defaults to 60 000. */
   timeoutMs?: number;
 }
 
-/** Handle to a spawned framework Electron process. */
-export type FrameworkElectronProcess = SpawnedProcess;
+/** Handle to a spawned Electron process. */
+export type ElectronProcess = SpawnedProcess;
 
 /**
  * Resolve the path to the `electron` binary installed in node_modules.
@@ -73,11 +70,11 @@ function resolveElectronBinary(): string {
 }
 
 /**
- * Build a minimal child-process environment for framework-only Electron E2E.
+ * Build a minimal child-process environment for Electron E2E.
  * @param overrides - Caller-provided environment overrides.
  * @returns Sanitized environment without leaked host policy.
  */
-function createFrameworkElectronEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
+function createElectronEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
 
   for (const key of BASE_ENV_KEYS) {
@@ -116,10 +113,10 @@ function createFrameworkElectronEnv(overrides: Record<string, string> = {}): Nod
  * @param options - Spawn configuration.
  * @returns Handle to the spawned process with the discovered port.
  */
-export function startFrameworkElectron(options?: StartFrameworkElectronOptions): Promise<FrameworkElectronProcess> {
+export function startElectron(options?: StartElectronOptions): Promise<ElectronProcess> {
   const timeoutMs = options?.timeoutMs ?? 60_000;
   const electronBin = resolveElectronBinary();
-  const env = createFrameworkElectronEnv(options?.env);
+  const env = createElectronEnv(options?.env);
 
   const extraArgs = (env['ELECTRON_EXTRA_LAUNCH_ARGS'] ?? '').split(/\s+/).filter(Boolean);
 
@@ -128,6 +125,6 @@ export function startFrameworkElectron(options?: StartFrameworkElectronOptions):
     args: [...extraArgs, ELECTRON_ENTRY],
     spawnOptions: { cwd: SPAWN_CWD, env },
     timeoutMs,
-    label: 'startFrameworkElectron',
+    label: 'startElectron',
   });
 }

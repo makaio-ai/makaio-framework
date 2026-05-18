@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   buildAnnotatedTag,
@@ -14,6 +15,7 @@ import {
 
 const REPOSITORY_URL = 'https://github.com/makaio-ai/makaio-framework';
 const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', 'release', '__tests__']);
+const FRAMEWORK_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 function findPackageJsonDirs(rootDir: string): string[] {
   const dirs: string[] = [];
@@ -30,7 +32,7 @@ function findPackageJsonDirs(rootDir: string): string[] {
 }
 
 function toRepositoryDirectory(packageDir: string): string {
-  return relative(process.cwd(), packageDir).split(sep).join('/');
+  return relative(FRAMEWORK_ROOT, packageDir).split(sep).join('/');
 }
 
 describe('parsePackageNames', () => {
@@ -138,7 +140,7 @@ describe('buildPublishArgs', () => {
 describe('publishable package metadata', () => {
   it('declares repository metadata required by npm provenance', () => {
     const failures: string[] = [];
-    for (const packageDir of findPackageJsonDirs(process.cwd())) {
+    for (const packageDir of findPackageJsonDirs(FRAMEWORK_ROOT)) {
       const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
         name?: string;
         private?: boolean;

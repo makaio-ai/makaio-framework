@@ -1,14 +1,14 @@
 /**
- * Vitest configuration for framework-only desktop Electron E2E tests.
+ * Vitest configuration for desktop Electrobun E2E tests.
  *
- * These tests spawn a real Electron process without host runtime config and
- * assert standalone-framework desktop behavior.
+ * These tests spawn a real Electrobun process without host runtime config and
+ * assert source-checkout desktop behavior.
  */
 
 import { join } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
-const frameworkRoot = join(import.meta.dirname, '..', '..');
+const repoRoot = join(import.meta.dirname, '..', '..');
 
 export default defineConfig({
   // resolve.tsconfigPaths is a Vite 8 native feature (not a plugin). It is
@@ -18,9 +18,9 @@ export default defineConfig({
     tsconfigPaths: true,
   },
   test: {
-    name: 'framework-desktop-e2e',
-    root: frameworkRoot,
-    include: ['e2e/desktop/**/*.test.ts'],
+    name: 'desktop-electrobun-e2e',
+    root: repoRoot,
+    include: ['e2e/desktop/electrobun-smoke.test.ts'],
     pool: 'forks',
     fileParallelism: false,
     testTimeout: 90_000,

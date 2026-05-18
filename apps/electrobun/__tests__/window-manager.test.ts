@@ -228,7 +228,21 @@ describe('Electrobun WindowManager', () => {
 
     expect(url.searchParams.get('app')).toBe('test-ext');
     expect(url.searchParams.get('window')).toBe('test-ext:utility');
+    expect(url.searchParams.get('busUrl')).toBe('ws://127.0.0.1:6252/bus');
+    expect(url.searchParams.get('bootComplete')).toBe('0');
     expect(url.searchParams.get('projectId')).toBe('project-123');
+  });
+
+  it('marks windows created after boot as boot-complete in the renderer URL', () => {
+    const manager = createWindowManager();
+    manager.setBootComplete();
+
+    manager.createWindow({ registrationId: 'test-ext:utility' });
+
+    const browserWindow = electrobunMock.instances[0];
+    const url = new URL(browserWindow.url);
+
+    expect(url.searchParams.get('bootComplete')).toBe('1');
   });
 
   it('finds open windows by registration ID', () => {

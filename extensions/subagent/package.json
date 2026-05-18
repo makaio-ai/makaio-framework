@@ -4,7 +4,11 @@
   "version": "1.0.0",
   "type": "module",
   "types": "./src/index.ts",
-  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/subagent"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts",

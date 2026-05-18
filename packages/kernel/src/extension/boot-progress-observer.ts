@@ -31,6 +31,18 @@ interface BootProgressState {
   totalDurationMs?: number;
 }
 
+/**
+ * Create the serializable service identity emitted through boot subjects.
+ * @param pkg - Package metadata supplied by the extension coordinator.
+ * @returns Stable boot-service identity payload.
+ */
+function toBootServiceIdentity(pkg: BootProgressPackage): BootProgressPackage {
+  return {
+    name: pkg.name,
+    displayName: pkg.displayName,
+  };
+}
+
 /** Emits kernel boot namespace events while the extension coordinator starts packages. */
 export class BootProgressObserver {
   private readonly state: BootProgressState;
@@ -75,10 +87,11 @@ export class BootProgressObserver {
    * @param pkg - Package identity.
    */
   public starting(pkg: BootProgressPackage): void {
-    this.state.currentService = pkg.displayName;
+    const identity = toBootServiceIdentity(pkg);
+    this.state.currentService = identity.displayName;
     this.state.currentServiceStartedAt = Date.now();
-    void this.bus.emit(BootSubjects.service.starting, pkg).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.starting emit failed for "${pkg.name}":`, err);
+    void this.bus.emit(BootSubjects.service.starting, identity).catch((err: unknown) => {
+      console.warn(`[ExtensionCoordinator] boot.service.starting emit failed for "${identity.name}":`, err);
     });
   }
 
@@ -87,13 +100,14 @@ export class BootProgressObserver {
    * @param pkg - Package identity.
    */
   public ready(pkg: BootProgressPackage): void {
+    const identity = toBootServiceIdentity(pkg);
     this.state.completedCount += 1;
     const durationMs =
       this.state.currentServiceStartedAt !== undefined
         ? Math.max(0, Date.now() - this.state.currentServiceStartedAt)
         : 0;
-    void this.bus.emit(BootSubjects.service.ready, { ...pkg, durationMs }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.ready emit failed for "${pkg.name}":`, err);
+    void this.bus.emit(BootSubjects.service.ready, { ...identity, durationMs }).catch((err: unknown) => {
+      console.warn(`[ExtensionCoordinator] boot.service.ready emit failed for "${identity.name}":`, err);
     });
     this.emitProgress();
   }
@@ -104,10 +118,11 @@ export class BootProgressObserver {
    * @param errorMessage - Human-readable failure reason.
    */
   public failed(pkg: BootProgressPackage, errorMessage: string): void {
+    const identity = toBootServiceIdentity(pkg);
     this.state.completedCount += 1;
-    this.state.failedServices.push(pkg.name);
-    void this.bus.emit(BootSubjects.service.failed, { ...pkg, errorMessage }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.failed emit failed for "${pkg.name}":`, err);
+    this.state.failedServices.push(identity.name);
+    void this.bus.emit(BootSubjects.service.failed, { ...identity, errorMessage }).catch((err: unknown) => {
+      console.warn(`[ExtensionCoordinator] boot.service.failed emit failed for "${identity.name}":`, err);
     });
     this.emitProgress();
   }
@@ -118,10 +133,11 @@ export class BootProgressObserver {
    * @param reason - Human-readable skip reason.
    */
   public skipped(pkg: BootProgressPackage, reason: string): void {
+    const identity = toBootServiceIdentity(pkg);
     this.state.completedCount += 1;
-    this.state.skippedServices.push(pkg.name);
-    void this.bus.emit(BootSubjects.service.skipped, { ...pkg, reason }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.skipped emit failed for "${pkg.name}":`, err);
+    this.state.skippedServices.push(identity.name);
+    void this.bus.emit(BootSubjects.service.skipped, { ...identity, reason }).catch((err: unknown) => {
+      console.warn(`[ExtensionCoordinator] boot.service.skipped emit failed for "${identity.name}":`, err);
     });
     this.emitProgress();
   }

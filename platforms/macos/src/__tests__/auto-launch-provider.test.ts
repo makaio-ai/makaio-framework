@@ -9,6 +9,7 @@ const mkdirMock = vi.fn<(path: string, options: { recursive: boolean }) => Promi
 const writeFileMock = vi.fn<(path: string, data: string, encoding: string) => Promise<void>>();
 const readFileMock = vi.fn<(path: string, encoding: string) => Promise<string>>();
 const rmMock = vi.fn<(path: string, options: { force: boolean }) => Promise<void>>();
+const TEST_HOME = '/tmp/makaio-test-home';
 
 vi.mock('node:fs/promises', () => ({
   mkdir: (path: string, options: { recursive: boolean }) => mkdirMock(path, options),
@@ -35,7 +36,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 vi.mock('node:os', () => ({
-  homedir: () => '/home/testuser',
+  homedir: () => TEST_HOME,
 }));
 
 // ---------------------------------------------------------------------------
@@ -71,7 +72,7 @@ function writtenPlistContent(): string {
   return calls[0][1];
 }
 
-const EXPECTED_PLIST_PATH = '/home/testuser/Library/LaunchAgents/ai.makaio.app.plist';
+const EXPECTED_PLIST_PATH = `${TEST_HOME}/Library/LaunchAgents/ai.makaio.app.plist`;
 
 // ---------------------------------------------------------------------------
 // Teardown
@@ -142,7 +143,7 @@ describe('MacOSAutoLaunchProvider', () => {
       expect(result).toEqual({ enabled: true });
 
       // Ensure LaunchAgents directory is created.
-      expect(mkdirMock).toHaveBeenCalledWith('/home/testuser/Library/LaunchAgents', { recursive: true });
+      expect(mkdirMock).toHaveBeenCalledWith(`${TEST_HOME}/Library/LaunchAgents`, { recursive: true });
 
       // Plist is written with the correct path.
       expect(writeFileMock).toHaveBeenCalledWith(
