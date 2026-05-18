@@ -11,4 +11,8 @@ permissions:
 
 jobs:
   check:
+    if: >-
+      !contains(github.event.pull_request.labels.*.name, 'skip:changeset') &&
+      !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
+      !contains(github.event.pull_request.labels.*.name, 'skip:all')
     uses: ./.github/workflows/changeset-required-reusable.yml

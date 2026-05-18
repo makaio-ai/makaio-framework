@@ -25,15 +25,15 @@ jobs:
           path: trusted
           fetch-depth: 0
 
-      - name: Check for skip-changeset label
+      - name: Check for skip labels
         id: skip
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const labels = context.payload.pull_request?.labels ?? [];
-            const skip = labels.some(l => l.name === 'skip-changeset');
+            const skip = labels.some(l => ['skip:changeset', 'skip:ci', 'skip:all'].includes(l.name));
             core.setOutput('skip', skip ? 'true' : 'false');
-            if (skip) core.info('skip-changeset label found — skipping check.');
+            if (skip) core.info('skip label found — skipping changeset check.');
 
       - name: Fetch PR head
         if: steps.skip.outputs.skip != 'true'

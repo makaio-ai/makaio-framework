@@ -128,7 +128,7 @@ function main(argv: string[]): void {
 
   console.error(`Changeset required but not found.`);
   console.error(`Affected packages: ${affectedPackages.join(', ')}`);
-  console.error(`Use /changeset on the PR to generate one, or add the 'skip-changeset' label to bypass.`);
+  console.error(`Use /changeset on the PR to generate one, or add the 'skip:changeset' label to bypass.`);
   process.exit(1);
 }
 

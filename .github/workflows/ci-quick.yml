@@ -5,7 +5,7 @@ on:
     branches: [fix/ci]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -18,6 +18,12 @@ concurrency:
 jobs:
   quick:
     name: Quick Checks
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
+        !contains(github.event.pull_request.labels.*.name, 'skip:all')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
