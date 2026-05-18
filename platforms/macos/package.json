@@ -13,8 +13,7 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
-    "@makaio/contracts": "workspace:*",
-    "run-applescript": "^7.0.0"
+    "@makaio/contracts": "workspace:*"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
