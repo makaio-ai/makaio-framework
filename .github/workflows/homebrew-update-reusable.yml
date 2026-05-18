@@ -51,7 +51,13 @@ jobs:
         env:
           DMG_PATTERN: ${{ inputs.dmg-pattern }}
         run: |
-          SHA=$(sha256sum "$DMG_PATTERN" | awk '{print $1}')
+          shopt -s nullglob
+          files=( $DMG_PATTERN )
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "Expected exactly one DMG matching '$DMG_PATTERN', found ${#files[@]}" >&2
+            exit 1
+          fi
+          SHA=$(sha256sum "${files[0]}" | awk '{print $1}')
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Extract version

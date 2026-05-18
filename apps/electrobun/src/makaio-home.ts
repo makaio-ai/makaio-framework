@@ -9,9 +9,22 @@ import * as path from 'node:path';
  */
 export function seedMakaioHome(buildTimeDefault: string | undefined): string {
   const envHome = process.env['MAKAIO_HOME']?.trim() || '';
-  if (envHome) return envHome;
+  if (envHome) {
+    const resolved = resolveMakaioHome(envHome);
+    process.env['MAKAIO_HOME'] = resolved;
+    return resolved;
+  }
   const dirName = buildTimeDefault ?? '.makaio';
-  const resolved = path.join(os.homedir(), dirName);
+  const resolved = resolveMakaioHome(dirName);
   process.env['MAKAIO_HOME'] = resolved;
   return resolved;
+}
+
+/**
+ * Resolve a user- or build-provided Makaio home path.
+ * @param value - Absolute path or home-relative directory.
+ * @returns Absolute path.
+ */
+function resolveMakaioHome(value: string): string {
+  return path.isAbsolute(value) ? value : path.join(os.homedir(), value);
 }

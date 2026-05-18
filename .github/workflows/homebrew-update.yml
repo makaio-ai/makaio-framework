@@ -2,7 +2,7 @@ name: Homebrew Update
 
 on:
   release:
-    types: [released, prereleased]
+    types: [published]
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   update-cask:
     if: >-
-      github.event.action == 'released' &&
+      !github.event.release.prerelease &&
       !contains(github.event.release.tag_name, '-canary.')
     uses: ./.github/workflows/homebrew-update-reusable.yml
     with:
@@ -29,7 +29,7 @@ jobs:
 
   update-canary-cask:
     if: >-
-      github.event.action == 'prereleased' &&
+      github.event.release.prerelease &&
       contains(github.event.release.tag_name, '-canary.')
     uses: ./.github/workflows/homebrew-update-reusable.yml
     with:

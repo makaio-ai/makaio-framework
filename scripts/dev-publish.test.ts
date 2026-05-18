@@ -13,7 +13,7 @@ import {
 } from './dev-publish.js';
 
 const REPOSITORY_URL = 'https://github.com/makaio-ai/makaio-framework';
-const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', '__tests__']);
+const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', 'release', '__tests__']);
 
 function findPackageJsonDirs(rootDir: string): string[] {
   const dirs: string[] = [];

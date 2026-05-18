@@ -155,6 +155,7 @@ const [mainResult, cliResult] = await Promise.all([
     banner: CJS_BANNER,
     naming: 'cli.mjs',
     define: {
+      'process.env.NODE_ENV': JSON.stringify('production'),
       __FRAMEWORK_VERSION__: JSON.stringify(FRAMEWORK_VERSION),
       __MAKAIO_HOME_DEFAULT__: JSON.stringify(MAKAIO_HOME_DEFAULT),
     },

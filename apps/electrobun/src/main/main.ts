@@ -58,6 +58,7 @@ import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
 import { seedMakaioHome } from '../makaio-home.js';
+import type { HealthResult } from '../health-probe.js';
 
 // ESM-compatible __dirname
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -279,28 +280,46 @@ function openDefaultWindow(): number {
   return createWindow({ registrationId: FRAMEWORK_FALLBACK_WINDOW });
 }
 
+/**
+ * Exit this process when a production instance is already reachable.
+ * @param port - Port to probe for an existing production instance.
+ */
+async function exitIfExistingProductionInstance(port: number): Promise<void> {
+  if (IS_DEV) return;
+
+  const { probeHealth } = await import('../health-probe.js');
+  const health = await probeHealth(port);
+  if (!health) return;
+
+  const focused = await focusExistingInstance(port, health);
+  const status = focused ? 'Focused existing instance' : 'Existing instance detected but focus did not complete';
+  const log = focused ? console.info : console.warn;
+  log(`[electrobun] ${status} - exiting.`);
+  process.exit(0);
+}
+
+/**
+ * Best-effort focus handoff to a running desktop instance.
+ * @param port - Port where the running instance serves.
+ * @param health - Health response from the running instance.
+ * @returns Whether the existing instance acknowledged focus.
+ */
+async function focusExistingInstance(port: number, health: HealthResult): Promise<boolean> {
+  try {
+    const { connectAndFocus } = await import('../second-instance.js');
+    return await connectAndFocus(port, health);
+  } catch (err) {
+    console.warn('[electrobun] Failed to focus existing instance:', err);
+    return false;
+  }
+}
+
 (async () => {
   try {
     const rawPort = Number(process.env['MAKAIO_PORT']);
     const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65_535 ? rawPort : DEFAULT_PORT;
 
-    if (!IS_DEV) {
-      const { probeHealth } = await import('../health-probe.js');
-      const health = await probeHealth(port);
-      if (health) {
-        let focused = false;
-        try {
-          const { connectAndFocus } = await import('../second-instance.js');
-          focused = await connectAndFocus(port, health);
-        } catch (err) {
-          console.warn('[electrobun] Failed to focus existing instance:', err);
-        }
-        const status = focused ? 'Focused existing instance' : 'Existing instance detected but focus did not complete';
-        const log = focused ? console.info : console.warn;
-        log(`[electrobun] ${status} - exiting.`);
-        process.exit(0);
-      }
-    }
+    await exitIfExistingProductionInstance(port);
 
     const honoApp = new Hono();
 

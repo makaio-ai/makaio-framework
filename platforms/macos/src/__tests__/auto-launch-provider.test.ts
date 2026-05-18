@@ -310,6 +310,23 @@ describe('MacOSAutoLaunchProvider', () => {
         error: 'Unexpected read failure',
       });
     });
+
+    it('returns enabled=true after enable() with special characters in path', async () => {
+      mkdirMock.mockResolvedValue(undefined);
+      writeFileMock.mockResolvedValue(undefined);
+      execFileSucceeds();
+
+      const provider = new MacOSAutoLaunchProvider({
+        appName: 'App & <Test>',
+        appPath: '/Applications/App & <Test>.app',
+      });
+      await provider.enable(false);
+
+      readFileMock.mockResolvedValue(writtenPlistContent());
+
+      const status = await provider.getStatus();
+      expect(status).toEqual({ enabled: true, supported: true });
+    });
   });
 
   describe('plist content', () => {

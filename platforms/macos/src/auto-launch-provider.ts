@@ -230,7 +230,7 @@ export class MacOSAutoLaunchProvider implements IAutoLaunchProvider {
     try {
       const plistPath = launchAgentPlistPath(LAUNCH_AGENT_LABEL);
       const content = await readFile(plistPath, 'utf-8');
-      const enabled = content.includes(this.appPath);
+      const enabled = content.includes(escapeXml(this.appPath));
       return { enabled, supported: true };
     } catch (err) {
       // ENOENT means no plist — auto-launch is simply not configured.
