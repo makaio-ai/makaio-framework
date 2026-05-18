@@ -20,7 +20,7 @@
     "@makaio/ui-theme": "workspace:*",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
-    "react-resizable-panels": "^4.4.1",
+    "react-resizable-panels": "^4.11.1",
     "react-use": "^17.6.0"
   },
   "peerDependencies": {
