@@ -66,7 +66,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 6252;
 const WINDOW_SESSION_SCOPE = 'electrobun';
 
-const IS_DEV = process.env['NODE_ENV'] !== 'production';
+const IS_DEV = process.env.NODE_ENV !== 'production';
 
 /**
  * Package root directory — resolved at build time via `define` in `build.ts`.
@@ -83,6 +83,13 @@ declare const __ELECTROBUN_PROJECT_ROOT__: string;
  * the version from `@makaio/runtime-node/package.json` at build time.
  */
 declare const __FRAMEWORK_VERSION__: string;
+
+/**
+ * Default MAKAIO_HOME directory name — resolved at build time from the release track.
+ * Stable builds use `.makaio`; canary builds use `.makaio-canary`.
+ * The user can still override via the `MAKAIO_HOME` environment variable.
+ */
+declare const __MAKAIO_HOME_DEFAULT__: string;
 const PKG_ROOT =
   typeof __ELECTROBUN_PROJECT_ROOT__ !== 'undefined'
     ? __ELECTROBUN_PROJECT_ROOT__
@@ -301,7 +308,11 @@ function openDefaultWindow(): number {
 
     const honoApp = new Hono();
 
-    const makaioHome = path.join(os.homedir(), '.makaio');
+    const makaioHomeDefault = typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : '.makaio';
+    const makaioHome = process.env['MAKAIO_HOME']?.trim() || path.join(os.homedir(), makaioHomeDefault);
+    if (!process.env['MAKAIO_HOME']?.trim()) {
+      process.env['MAKAIO_HOME'] = makaioHome;
+    }
     const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(makaioHome);
     const runtimeOptions = await applySelectedDesktopRuntimeConfig(baseRuntimeOptions, {
       makaioHome,

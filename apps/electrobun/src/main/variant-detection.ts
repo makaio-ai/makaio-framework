@@ -23,11 +23,14 @@ export interface DetectVariantOptions {
  * @returns The resolved {@link VariantConfig} for the running host.
  */
 export function detectVariant(options: DetectVariantOptions = {}): VariantConfig {
-  const isDev = options.isDev ?? process.env['NODE_ENV'] !== 'production';
+  const isDev = options.isDev ?? process.env.NODE_ENV !== 'production';
   const env = options.env ?? process.env;
   const execPath = options.execPath ?? process.execPath;
   const resourcesDir = path.join(path.dirname(execPath), '..', 'Resources');
-  const variantPath = path.join(resourcesDir, 'variant.json');
+  const appResourcesDir = path.join(resourcesDir, 'app', 'Resources');
+  const variantPath = fs.existsSync(path.join(resourcesDir, 'variant.json'))
+    ? path.join(resourcesDir, 'variant.json')
+    : path.join(appResourcesDir, 'variant.json');
   if (fs.existsSync(variantPath)) {
     try {
       const raw = JSON.parse(fs.readFileSync(variantPath, 'utf-8')) as { variant?: string; releaseTrack?: string };

@@ -1,6 +1,5 @@
 import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
-import { drizzle as libsqlDrizzle } from 'drizzle-orm/libsql';
 import { isBunRuntime } from '@makaio/utils';
 import type { MakaioDatabase } from './types.js';
 
@@ -181,6 +180,7 @@ async function createBunClient(url: string): Promise<DatabaseClient> {
  * @returns Database client with drizzle ORM instance and close method.
  */
 async function createLibsqlClient(url: string, authToken: string | undefined): Promise<DatabaseClient> {
+  const { drizzle: libsqlDrizzle } = await import('drizzle-orm/libsql');
   const db = libsqlDrizzle({
     connection: {
       url,

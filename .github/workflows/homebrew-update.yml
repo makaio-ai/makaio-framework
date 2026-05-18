@@ -2,7 +2,7 @@ name: Homebrew Update
 
 on:
   release:
-    types: [released]
+    types: [released, prereleased]
 
 permissions:
   contents: read
@@ -13,7 +13,9 @@ concurrency:
 
 jobs:
   update-cask:
-    if: "!contains(github.event.release.tag_name, '-canary.')"
+    if: >-
+      github.event.action == 'released' &&
+      !contains(github.event.release.tag_name, '-canary.')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -55,7 +57,6 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
           SHA256: ${{ steps.sha.outputs.sha256 }}
-          REPO: ${{ github.repository }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -63,34 +64,8 @@ jobs:
           git clone "https://x-access-token:${GH_TOKEN}@github.com/makaio-ai/homebrew-makaio.git"
           cd homebrew-makaio
 
-          cat > Casks/makaio.rb << CASK
-          cask "makaio" do
-            version "${VERSION}"
-            sha256 "${SHA256}"
-
-            url "https://github.com/${REPO}/releases/download/v#{version}/stable-macos-arm64-Makaio.dmg"
-            name "Makaio"
-            desc "Runtime for building and hosting AI agent systems"
-            homepage "https://makaio.dev"
-
-            depends_on macos: ">= :ventura"
-
-            app "Makaio.app"
-
-            postflight do
-              set_permissions "#{appdir}/Makaio.app/Contents/Resources/install-cli.sh", "+x"
-              system_command "#{appdir}/Makaio.app/Contents/Resources/install-cli.sh"
-            end
-
-            uninstall quit: "ai.makaio.app",
-                      delete: "/usr/local/bin/makaio"
-
-            zap trash: [
-              "~/.makaio",
-              "~/Library/Application Support/ai.makaio.app",
-            ]
-          end
-          CASK
+          sed -i 's/version ".*"/version "'"${VERSION}"'"/' Casks/makaio.rb
+          sed -i 's/sha256 ".*"/sha256 "'"${SHA256}"'"/' Casks/makaio.rb
 
           git add Casks/makaio.rb
           if git diff --cached --quiet; then
@@ -98,4 +73,67 @@ jobs:
             exit 0
           fi
           git commit -m "bump makaio to ${VERSION}"
+          git push origin main
+
+  update-canary-cask:
+    if: >-
+      github.event.action == 'prereleased' &&
+      contains(github.event.release.tag_name, '-canary.')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: canary
+
+    steps:
+      - name: Download DMG from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo "${{ github.repository }}" \
+            --pattern "canary-macos-arm64-Makaio-canary.dmg" \
+            --dir .
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          SHA=$(sha256sum canary-macos-arm64-Makaio-canary.dmg | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version
+        id: version
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: makaio-ai
+          repositories: homebrew-makaio
+          permission-contents: write
+
+      - name: Update Homebrew Canary Cask
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/makaio-ai/homebrew-makaio.git"
+          cd homebrew-makaio
+
+          sed -i 's/version ".*"/version "'"${VERSION}"'"/' Casks/makaio-canary.rb
+          sed -i 's/sha256 ".*"/sha256 "'"${SHA256}"'"/' Casks/makaio-canary.rb
+
+          git add Casks/makaio-canary.rb
+          if git diff --cached --quiet; then
+            echo "homebrew-makaio canary already up to date"
+            exit 0
+          fi
+          git commit -m "bump makaio-canary to ${VERSION}"
           git push origin main

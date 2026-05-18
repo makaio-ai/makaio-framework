@@ -40,7 +40,7 @@ import { resolveVariantConfig } from './src/variant-config.js';
  * external imports in the bundle. A post-processing step rewrites them to
  * `@makaio/framework/*` subpath specifiers.
  */
-const EXTERNAL = ['electrobun', 'electrobun/bun', 'vite', ...frameworkExternalPackageNames()];
+const EXTERNAL = ['vite', ...frameworkExternalPackageNames()];
 
 /**
  * CJS interop banner. Bundled `@yarnpkg/*` packages use `eval('require')`
@@ -116,6 +116,12 @@ function readFrameworkPackageVersion(packageJsonPath: string): string {
 /** Framework version read from `@makaio/runtime-node` at build time and injected via `define`. */
 const FRAMEWORK_VERSION = readFrameworkPackageVersion(FRAMEWORK_PACKAGE_JSON_PATH);
 
+/** Variant config resolved at build time for define injection and artifact metadata. */
+const VARIANT_CONFIG = resolveVariantConfig(process.env['MAKAIO_VARIANT'], process.env['MAKAIO_RELEASE_TRACK']);
+
+/** Default MAKAIO_HOME directory name, variant-aware. Stable uses `.makaio`; other tracks use `.makaio-{track}`. */
+const MAKAIO_HOME_DEFAULT = VARIANT_CONFIG.releaseTrack === 'stable' ? '.makaio' : `.makaio-${VARIANT_CONFIG.releaseTrack}`;
+
 const MAIN_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/main/index.ts');
 const CLI_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/cli-entry.ts');
 const DIST_DIR = path.join(PACKAGE_ROOT, 'dist');
@@ -133,8 +139,9 @@ const [mainResult, cliResult] = await Promise.all([
     banner: CJS_BANNER,
     naming: 'index.js',
     define: {
-      __ELECTROBUN_PROJECT_ROOT__: JSON.stringify(PACKAGE_ROOT),
+      'process.env.NODE_ENV': JSON.stringify('production'),
       __FRAMEWORK_VERSION__: JSON.stringify(FRAMEWORK_VERSION),
+      __MAKAIO_HOME_DEFAULT__: JSON.stringify(MAKAIO_HOME_DEFAULT),
     },
     plugins: [embeddedMigrationsPlugin(MIGRATION_SOURCES, DEFAULT_MIGRATION_SOURCE_ID), stubAssetsPlugin()],
   }),
@@ -148,6 +155,7 @@ const [mainResult, cliResult] = await Promise.all([
     naming: 'cli.mjs',
     define: {
       __FRAMEWORK_VERSION__: JSON.stringify(FRAMEWORK_VERSION),
+      __MAKAIO_HOME_DEFAULT__: JSON.stringify(MAKAIO_HOME_DEFAULT),
     },
     plugins: [embeddedMigrationsPlugin(MIGRATION_SOURCES, DEFAULT_MIGRATION_SOURCE_ID)],
   }),
@@ -180,5 +188,4 @@ for (const filename of ['index.js', 'cli.mjs'] as const) {
 }
 
 // Emit variant.json so the packager can copy it into the application bundle.
-const variantConfig = resolveVariantConfig(process.env['MAKAIO_VARIANT'], process.env['MAKAIO_RELEASE_TRACK']);
-writeFileSync(path.join(DIST_DIR, 'variant.json'), `${JSON.stringify(variantConfig, null, 2)}\n`, 'utf-8');
+writeFileSync(path.join(DIST_DIR, 'variant.json'), `${JSON.stringify(VARIANT_CONFIG, null, 2)}\n`, 'utf-8');

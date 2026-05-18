@@ -75,6 +75,33 @@ function rewriteDtsFiles(dir: string): void {
 export const MAKAIO_BUNDLE_PATTERN = /^@makaio\//;
 export const VITEST_BUNDLE_PATTERN = /^@vitest(?:$|\/)/;
 
+/**
+ * Third-party runtime dependencies that are implementation details of the
+ * framework and safe to inline. These have no singleton/identity concerns
+ * with extension code (extensions never import them directly).
+ */
+const FRAMEWORK_INTERNAL_DEPS: Array<string | RegExp> = [
+  'merge-anything',
+  'is-what',
+  'emittery',
+  'p-defer',
+  'p-queue',
+  'p-timeout',
+  'eventemitter3',
+  'globby',
+  /^@sindresorhus\//,
+  'fast-glob',
+  /^@nodelib\//,
+  'glob-parent',
+  'merge2',
+  'micromatch',
+  'ignore',
+  'path-type',
+  'slash',
+  'unicorn-magic',
+  '@agentclientprotocol/sdk',
+];
+
 export type PackageManifestSourcePolicy = Pick<Partial<UserConfig>, 'exports' | 'checks'>;
 
 export type DependencyDiagnosticPolicy = NonNullable<Partial<UserConfig>['deps']>;
@@ -111,7 +138,7 @@ export const frameworkPreset = {
   minify: true,
   deps: {
     ...dependencyDiagnosticPolicy,
-    alwaysBundle: [MAKAIO_BUNDLE_PATTERN],
+    alwaysBundle: [MAKAIO_BUNDLE_PATTERN, ...FRAMEWORK_INTERNAL_DEPS],
     neverBundle: ['vitest', VITEST_BUNDLE_PATTERN],
   },
   plugins: [frameworkExternals()],
@@ -148,6 +175,6 @@ export const frameworkBusPreset = {
   minify: true,
   deps: {
     ...dependencyDiagnosticPolicy,
-    alwaysBundle: [MAKAIO_BUNDLE_PATTERN],
+    alwaysBundle: [MAKAIO_BUNDLE_PATTERN, ...FRAMEWORK_INTERNAL_DEPS],
   },
 } satisfies Partial<UserConfig>;
