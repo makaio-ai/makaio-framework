@@ -95,7 +95,7 @@ describe('CI workflow policy', () => {
     expect(workflow).toContain("core.setOutput('docs_only'");
     expect(workflow).toContain("file.endsWith('.md')");
     expect(workflow).toContain("file.startsWith('docs/')");
-    expect(workflow).toContain("file.startsWith('.changeset/')");
+    expect(workflow).toContain("(file.startsWith('.changeset/') && file.endsWith('.md'))");
     expect(workflow).toContain("steps.changes.outputs.docs_only != 'true'");
   });
 
@@ -109,6 +109,7 @@ describe('CI workflow policy', () => {
     expect(classifyIndex).toBeLessThan(setupIndex);
     expect(classifyIndex).toBeLessThan(installIndex);
     expect(workflow).toContain("publish_relevance.outputs.relevant != 'false'");
-    expect(workflow).toContain('.github/*|docs/*|.changeset/*|*.md');
+    expect(workflow).toContain('.github/*|docs/*|.changeset/*.md|*.md');
+    expect(workflow).not.toContain('.github/*|docs/*|.changeset/*|*.md');
   });
 });

@@ -96,7 +96,7 @@ jobs:
             fi
 
             case "$file" in
-              .github/*|docs/*|.changeset/*|*.md)
+              .github/*|docs/*|.changeset/*.md|*.md)
                 ;;
               *)
                 relevant=true

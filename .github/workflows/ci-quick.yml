@@ -45,7 +45,7 @@ jobs:
             const docsOnly = files.length > 0 && files.every(({ filename: file }) =>
               file.endsWith('.md') ||
               file.startsWith('docs/') ||
-              file.startsWith('.changeset/')
+              (file.startsWith('.changeset/') && file.endsWith('.md'))
             );
             core.setOutput('docs_only', docsOnly ? 'true' : 'false');
             if (docsOnly) core.info('Documentation-only PR; skipping expensive quick validation.');
