@@ -87,7 +87,8 @@ describe('conformance workflow security', () => {
     for (const line of tokenActionUses) {
       expect(line).toMatch(/^\s*uses: actions\/create-github-app-token@[0-9a-fA-F]{40}(?:\s+# v[\d.]+)?\s*$/);
     }
-    expect(workflowText).toContain('app-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflowText).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflowText).not.toContain('app-id:');
     expect(workflowText).toContain('private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}');
     expect(workflowText).toContain('github-token: ${{ steps.app-token.outputs.token }}');
     expect(workflowText).toContain('<!-- makaio-conformance-report -->');

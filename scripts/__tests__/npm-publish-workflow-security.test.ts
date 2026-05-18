@@ -15,6 +15,8 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain('issue_comment:');
     expect(workflow).toContain('pull-requests: read');
     expect(workflow).toContain('permission-deployments: write');
+    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflow).not.toContain('app-id:');
     expect(workflow).toContain('github.rest.repos.createDeployment');
     expect(workflow).toContain("environment: 'canary'");
     expect(workflow).toContain('ref: process.env.CHECKOUT_REF');
@@ -40,6 +42,8 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain('yarn tsx scripts/dev-publish.ts publish');
     expect(workflow).toContain('permission-issues: write');
     expect(workflow).toContain('permission-pull-requests: write');
+    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflow).not.toContain('app-id:');
     expect(workflow).toContain('github-token: ${{ steps.app-token.outputs.token }}');
     expect(workflow).toContain("if: github.ref != ''");
     expect(workflow).toContain('continue-on-error: true');
