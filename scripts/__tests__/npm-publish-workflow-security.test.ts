@@ -15,6 +15,11 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain('issue_comment:');
     expect(workflow).toContain('pull-requests: read');
     expect(workflow).toContain('permission-deployments: write');
+    expect(workflow).toContain('const PACKAGE_NAME_PATTERN = /^@makaio\\/[a-z0-9][a-z0-9._-]*$/u;');
+    expect(workflow).toContain('const normalizedPackageNames = [];');
+    expect(workflow).toContain('const invalidPackageNames = [];');
+    expect(workflow).toContain('Invalid package name(s):');
+    expect(workflow).toContain("core.setOutput('packages', normalizedPackageNames.join(' '));");
     expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflow).not.toContain('app-id:');
     expect(workflow).toContain('github.rest.repos.createDeployment');
@@ -32,6 +37,10 @@ describe('npm publish workflow security', () => {
     const workflow = readWorkflow('npm-publish.yml');
 
     expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).toContain('const inputs = context.payload.inputs ?? {};');
+    expect(workflow).toContain('const packages = inputs.packages;');
+    expect(workflow).toContain("core.setOutput('dry-run', String(inputs['dry-run'] ?? 'true'));");
+    expect(workflow).not.toContain('core.getInput');
     expect(workflow).toContain('deployment:');
     expect(workflow).toContain('name: canary');
     expect(workflow).toContain('deployment: false');

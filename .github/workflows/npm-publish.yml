@@ -49,8 +49,15 @@ jobs:
         with:
           script: |
             if (context.eventName === 'workflow_dispatch') {
-              core.setOutput('packages', core.getInput('packages', { required: true }));
-              core.setOutput('dry-run', core.getInput('dry-run') || 'true');
+              const inputs = context.payload.inputs ?? {};
+              const packages = inputs.packages;
+              if (!packages) {
+                core.setFailed('Workflow dispatch input packages is required.');
+                return;
+              }
+
+              core.setOutput('packages', String(packages));
+              core.setOutput('dry-run', String(inputs['dry-run'] ?? 'true'));
               core.setOutput('checkout-ref', context.ref);
               core.setOutput('source-sha', context.sha);
               core.setOutput('pr-number', '');

@@ -296,6 +296,49 @@ export function buildPublishArgs(packageName: string): string[] {
 }
 
 /**
+ * Builds the Git command arguments used to check whether a tag already exists
+ * on origin.
+ * @param tagName - Fully qualified tag name.
+ * @returns Arguments passed to `git`.
+ */
+export function buildRemoteTagCheckArgs(tagName: string): string[] {
+  return ['ls-remote', '--tags', 'origin', tagName];
+}
+
+/**
+ * Creates and pushes annotated dev tags that are not already present on origin.
+ * @param packages - Published package metadata.
+ * @param sourceSha - Commit SHA the tags should reference.
+ * @param workflowUrl - Workflow URL stored in the tag message.
+ */
+function pushAnnotatedTags(packages: readonly DevPublishPackage[], sourceSha: string, workflowUrl: string): void {
+  for (const pkg of packages) {
+    const tag = buildAnnotatedTag({
+      packageName: pkg.name,
+      version: pkg.version,
+      sourceSha,
+      workflowUrl,
+    });
+    const remoteExists = spawnSync('git', buildRemoteTagCheckArgs(tag.name), {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (remoteExists.status !== 0) {
+      throw new Error(`Failed to check origin for tag ${tag.name}: ${remoteExists.stderr.trim()}`);
+    }
+    if (remoteExists.stdout.trim().length > 0) {
+      console.log(`Tag ${tag.name} already exists on origin; skipping.`);
+      continue;
+    }
+    const localExists = spawnSync('git', ['rev-parse', '--verify', '--quiet', tag.name], { stdio: 'ignore' });
+    if (localExists.status !== 0) {
+      run('git', ['tag', '-a', tag.name, '-m', tag.message, sourceSha]);
+    }
+    run('git', ['push', 'origin', tag.name]);
+  }
+}
+
+/**
  * Reads a required CLI flag.
  * @param flags - Parsed flags.
  * @param name - Flag name.
@@ -381,23 +424,11 @@ function main(argv: readonly string[]): void {
   }
 
   if (command === 'tag') {
-    const sourceSha = requireFlag(flags, 'source-sha');
-    const workflowUrl = requireFlag(flags, 'workflow-url');
-    for (const pkg of readManifest(requireFlag(flags, 'manifest'))) {
-      const tag = buildAnnotatedTag({
-        packageName: pkg.name,
-        version: pkg.version,
-        sourceSha,
-        workflowUrl,
-      });
-      const exists = spawnSync('git', ['rev-parse', '--verify', '--quiet', tag.name], { stdio: 'ignore' });
-      if (exists.status === 0) {
-        console.log(`Tag ${tag.name} already exists; skipping.`);
-        continue;
-      }
-      run('git', ['tag', '-a', tag.name, '-m', tag.message, sourceSha]);
-      run('git', ['push', 'origin', tag.name]);
-    }
+    pushAnnotatedTags(
+      readManifest(requireFlag(flags, 'manifest')),
+      requireFlag(flags, 'source-sha'),
+      requireFlag(flags, 'workflow-url'),
+    );
     return;
   }
 

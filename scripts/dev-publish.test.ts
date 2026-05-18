@@ -5,6 +5,7 @@ import {
   buildAnnotatedTag,
   buildDevVersion,
   buildPublishArgs,
+  buildRemoteTagCheckArgs,
   parsePackageNames,
   renderSummary,
   resolveDevPublishPlan,
@@ -104,6 +105,17 @@ describe('buildAnnotatedTag', () => {
         'workflow: https://github.com/makaio-ai/makaio-framework/actions/runs/1',
       ].join('\n'),
     });
+  });
+});
+
+describe('buildRemoteTagCheckArgs', () => {
+  it('checks origin for the exact annotated tag before pushing', () => {
+    expect(buildRemoteTagCheckArgs('dev/@makaio/contracts/v1.0.0-dev-1780000000000')).toEqual([
+      'ls-remote',
+      '--tags',
+      'origin',
+      'dev/@makaio/contracts/v1.0.0-dev-1780000000000',
+    ]);
   });
 });
 

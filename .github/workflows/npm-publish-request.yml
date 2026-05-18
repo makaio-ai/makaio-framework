@@ -31,12 +31,31 @@ jobs:
             const comment = context.payload.comment;
             const body = comment.body.trim();
             const [command, ...packageNames] = body.split(/\s+/);
+            const PACKAGE_NAME_PATTERN = /^@makaio\/[a-z0-9][a-z0-9._-]*$/u;
 
             if (command !== '/publish-dev') {
               core.setFailed('This workflow only handles /publish-dev comments.');
               return;
             }
-            if (packageNames.length === 0) {
+            const normalizedPackageNames = [];
+            const invalidPackageNames = [];
+            const seenPackageNames = new Set();
+            for (const packageName of packageNames.map((name) => name.trim()).filter(Boolean)) {
+              if (!PACKAGE_NAME_PATTERN.test(packageName)) {
+                invalidPackageNames.push(packageName);
+                continue;
+              }
+              if (!seenPackageNames.has(packageName)) {
+                normalizedPackageNames.push(packageName);
+                seenPackageNames.add(packageName);
+              }
+            }
+
+            if (invalidPackageNames.length > 0) {
+              core.setFailed(`Invalid package name(s): ${invalidPackageNames.join(', ')}`);
+              return;
+            }
+            if (normalizedPackageNames.length === 0) {
               core.setFailed('Usage: /publish-dev @makaio/package-name [@makaio/another-package]');
               return;
             }
@@ -54,7 +73,7 @@ jobs:
               return;
             }
 
-            core.setOutput('packages', packageNames.join(' '));
+            core.setOutput('packages', normalizedPackageNames.join(' '));
             core.setOutput('checkout-ref', pullRequest.head.ref);
             core.setOutput('source-sha', pullRequest.head.sha);
             core.setOutput('pr-number', String(pullRequest.number));
