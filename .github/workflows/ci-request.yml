@@ -1,0 +1,115 @@
+name: Request Full CI
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: full-ci-request-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  request-full-ci:
+    if: |
+      github.event.issue.pull_request &&
+      (github.event.comment.body == '/ci' || startsWith(github.event.comment.body, '/ci ')) &&
+      github.event.comment.user.type != 'Bot' &&
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Resolve CI request
+        id: request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const comment = context.payload.comment;
+            const [command] = comment.body.trim().split(/\s+/);
+            if (command !== '/ci') {
+              core.setFailed('This workflow only handles /ci comments.');
+              return;
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+
+            const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
+            const headRepository = pullRequest.head.repo?.full_name;
+            if (headRepository !== baseRepository) {
+              core.setFailed('/ci rejects fork PRs because full CI runs PR code.');
+              return;
+            }
+
+            core.setOutput('checkout-ref', pullRequest.head.ref);
+            core.setOutput('source-sha', pullRequest.head.sha);
+            core.setOutput('pr-number', String(pullRequest.number));
+            core.setOutput('comment-id', String(comment.id));
+            core.setOutput('comment-url', comment.html_url);
+
+      - name: Dispatch full CI
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
+          COMMENT_URL: ${{ steps.request.outputs.comment-url }}
+        with:
+          script: |
+            await github.rest.repos.createDispatchEvent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              event_type: 'full-ci-requested',
+              client_payload: {
+                pr_number: Number(process.env.PR_NUMBER),
+                comment_id: Number(process.env.COMMENT_ID),
+                comment_url: process.env.COMMENT_URL,
+                requested_by: context.actor,
+                checkout_ref: process.env.CHECKOUT_REF,
+                source_sha: process.env.SOURCE_SHA,
+              },
+            });
+
+      - name: React to comment
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: 'rocket',
+            });
+
+      - name: Comment on PR
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+          PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: [
+                'Full CI requested.',
+                '',
+                `Ref: \`${process.env.CHECKOUT_REF}\``,
+                `SHA: \`${process.env.SOURCE_SHA}\``,
+              ].join('\n'),
+            });

@@ -1,0 +1,9 @@
+name: makaio-codeql
+
+queries:
+  - uses: security-extended
+
+paths-ignore:
+  - '**/dist/**'
+  - '**/node_modules/**'
+  - '**/.makaio-publish/**'

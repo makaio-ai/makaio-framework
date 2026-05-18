@@ -13,8 +13,54 @@ describe('CI workflow policy', () => {
     const workflow = readWorkflow('ci.yml');
 
     expect(workflow).toContain('workflow_dispatch:');
+    expect(workflow).toContain('repository_dispatch:');
+    expect(workflow).toContain('types: [full-ci-requested]');
+    expect(workflow).toContain('checkout_ref');
+    expect(workflow).toContain('source_sha');
+    expect(workflow).toContain('Verify checked out source');
     expect(workflow).not.toContain('pull_request:');
     expect(workflow).not.toContain('push:');
+  });
+
+  it('runs full CI from a maintainer /ci issue comment through a dispatch request workflow', () => {
+    const workflowPath = resolve(workflowsDir, 'ci-request.yml');
+    expect(existsSync(workflowPath)).toBe(true);
+
+    const workflow = readFileSync(workflowPath, 'utf8');
+    expect(workflow).toContain('issue_comment:');
+    expect(workflow).toContain("github.event.comment.body == '/ci'");
+    expect(workflow).toContain("startsWith(github.event.comment.body, '/ci ')");
+    expect(workflow).toContain('contains(fromJSON(\'["OWNER","MEMBER"]\')');
+    expect(workflow).toContain('headRepository !== baseRepository');
+    expect(workflow).toContain("event_type: 'full-ci-requested'");
+    expect(workflow).toContain("core.setOutput('checkout-ref', pullRequest.head.ref)");
+    expect(workflow).toContain("core.setOutput('source-sha', pullRequest.head.sha)");
+    expect(workflow).toContain('checkout_ref: process.env.CHECKOUT_REF');
+    expect(workflow).toContain('source_sha: process.env.SOURCE_SHA');
+    expect(workflow).not.toContain('actions/checkout');
+    expect(workflow).not.toContain('yarn ');
+  });
+
+  it('includes CodeQL advanced setup in full CI', () => {
+    const workflow = readWorkflow('ci.yml');
+    const configPath = resolve(workflowsDir, '../codeql/codeql-config.yml');
+    expect(existsSync(configPath)).toBe(true);
+
+    expect(workflow).toContain('name: CodeQL');
+    expect(workflow).toContain('security-events: write');
+    expect(workflow).toContain('language: [javascript-typescript, actions]');
+    expect(workflow).toContain('github/codeql-action/init@');
+    expect(workflow).toContain('github/codeql-action/analyze@');
+    expect(workflow).toContain('languages: ${{ matrix.language }}');
+    expect(workflow).toContain('build-mode: none');
+    expect(workflow).toContain('config-file: ./.github/codeql/codeql-config.yml');
+    expect(workflow).toContain('category: full-ci/${{ matrix.language }}');
+
+    const config = readFileSync(configPath, 'utf8');
+    expect(config).toContain('security-extended');
+    expect(config).toContain('paths-ignore:');
+    expect(config).toContain("'**/dist/**'");
+    expect(config).toContain("'**/node_modules/**'");
   });
 
   it('runs quick PR CI as one non-matrix job with combined validation and sdk codegen checks', () => {
