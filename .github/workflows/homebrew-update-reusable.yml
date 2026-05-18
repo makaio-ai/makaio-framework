@@ -1,0 +1,103 @@
+name: Homebrew Cask Update (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      dmg-pattern:
+        required: true
+        type: string
+      cask-file:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      repository:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+    secrets:
+      MAKAIO_GITHUB_APP_ID:
+        required: true
+      MAKAIO_GITHUB_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-cask:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ inputs.environment }}
+
+    steps:
+      - name: Download DMG from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ inputs.repository }}
+          DMG_PATTERN: ${{ inputs.dmg-pattern }}
+        run: |
+          gh release download "$TAG" \
+            --repo "$REPO" \
+            --pattern "$DMG_PATTERN" \
+            --dir .
+
+      - name: Compute SHA256
+        id: sha
+        env:
+          DMG_PATTERN: ${{ inputs.dmg-pattern }}
+        run: |
+          shopt -s nullglob
+          files=( $DMG_PATTERN )
+          if [ "${#files[@]}" -ne 1 ]; then
+            echo "Expected exactly one DMG matching '$DMG_PATTERN', found ${#files[@]}" >&2
+            exit 1
+          fi
+          SHA=$(sha256sum "${files[0]}" | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Extract version
+        id: version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: makaio-ai
+          repositories: homebrew-makaio
+          permission-contents: write
+
+      - name: Update Homebrew Cask
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+          CASK_FILE: ${{ inputs.cask-file }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/makaio-ai/homebrew-makaio.git"
+          cd homebrew-makaio
+
+          CASK_NAME="${CASK_FILE%.rb}"
+          sed -i 's/version ".*"/version "'"${VERSION}"'"/' "Casks/${CASK_FILE}"
+          sed -i 's/sha256 ".*"/sha256 "'"${SHA256}"'"/' "Casks/${CASK_FILE}"
+
+          git add "Casks/${CASK_FILE}"
+          if git diff --cached --quiet; then
+            echo "homebrew-makaio ${CASK_NAME} already up to date"
+            exit 0
+          fi
+          git commit -m "bump ${CASK_NAME} to ${VERSION}"
+          git push origin main

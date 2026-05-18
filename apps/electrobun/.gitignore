@@ -1,5 +1,6 @@
 # Build output
 dist/
+artifacts/
 
 # Electrobun CLI build output
 /build/

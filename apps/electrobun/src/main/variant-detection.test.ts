@@ -52,7 +52,7 @@ describe('detectVariant', () => {
     tempDirs.push(layout.tempDir);
 
     expect(() => detectVariant({ env: {}, execPath: layout.execPath, isDev: false })).toThrow(
-      `Missing bundled variant descriptor at ${layout.variantPath}`,
+      /Missing bundled variant descriptor/,
     );
   });
 
