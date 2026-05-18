@@ -4,6 +4,7 @@
  * Encapsulates the MAKAIO_PORT stdout-discovery loop, the SIGKILL escalation
  * helper, and the already-exited-child guard used by E2E test harnesses:
  * - `e2e/desktop/spawn-electron.ts`
+ * - `e2e/desktop/spawn-electrobun.ts`
  * - `apps/electron/e2e/harness/spawn-runtime.ts`
  * - `apps/cli/e2e/harness/spawn-serve.ts`
  */

@@ -8,7 +8,7 @@
 
 appId: ai.makaio.app
 productName: Makaio
-copyright: Copyright © 2026 Makaio AI
+copyright: Copyright © Makaio GmbH
 
 # ── Source layout ──────────────────────────────────────────────────────────
 # electron-builder looks for `package.json` in the app directory and uses

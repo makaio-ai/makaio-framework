@@ -18,7 +18,6 @@
  * @packageDocumentation
  */
 
-import * as os from 'node:os';
 import * as path from 'node:path';
 import type { Server as HttpServer } from 'node:http';
 import { app, BrowserWindow, screen } from 'electron';
@@ -44,6 +43,8 @@ import { TrayMenuSubjects, type TrayMenuListEntry } from '@makaio/services-core/
 import { LocalNotificationSubjects } from '@makaio/services-core/local-notification/namespace';
 import {
   FRAMEWORK_FALLBACK_WINDOW,
+  applyDesktopMakaioHomeEnv,
+  createDesktopBootContext,
   loadWindowSession,
   resolveInitialCustomData,
   resolveInitialWindowState,
@@ -100,6 +101,49 @@ function resolveDesktopFrameworkModuleResolver(
       ? new NoopFrameworkModuleResolver()
       : new NodeFrameworkModuleResolver(path.join(process.resourcesPath, 'framework', 'dist')))
   );
+}
+
+/**
+ * Resolve the bundled framework package root for production extension loading.
+ * @returns App-bundled `@makaio/framework` package root, or undefined in dev.
+ */
+function resolveDesktopFrameworkPackagePath(): string | undefined {
+  return IS_DEV ? undefined : path.join(process.resourcesPath, 'framework');
+}
+
+/**
+ * Resolve shared desktop boot metadata for the Electron host.
+ * @returns Boot context consumed by config loading and runtime boot.
+ */
+function createElectronBootContext(): ReturnType<typeof createDesktopBootContext> {
+  applyDesktopMakaioHomeEnv({ env: process.env });
+  return createDesktopBootContext({
+    env: process.env,
+    frameworkPackagePath: resolveDesktopFrameworkPackagePath(),
+    ...(IS_DEV
+      ? {}
+      : { modelRegistryFallbackSeedPaths: [path.join(process.resourcesPath, 'static/model-registry.yaml')] }),
+  });
+}
+
+/**
+ * Register production renderer static routes on the HTTP route graph.
+ * @param builder - Route graph builder that receives the static fallback.
+ */
+async function registerElectronStaticRoutes(
+  builder: NonNullable<ReturnType<typeof createHttpRouteGraphBuilder>>,
+): Promise<void> {
+  const rendererDir = path.join(PKG_ROOT, 'dist', 'renderer');
+  const { serveStatic } = await import('@hono/node-server/serve-static');
+  builder.add({
+    owner: '__electron-static',
+    phase: 'static-fallback',
+    mount: (app) => {
+      app.use('/assets/*', serveStatic({ root: rendererDir }));
+      app.use('/extensions/*', serveStatic({ root: rendererDir }));
+      app.get('*', serveStatic({ root: rendererDir, rewriteRequestPath: () => '/index.html' }));
+    },
+  });
 }
 
 // ── Single-instance lock ──────────────────────────────────────────────────────
@@ -317,25 +361,15 @@ if (!gotLock) {
 
     // Store for use in whenReady after boot resolves.
     setupResult = { baseUrl, busUrl, iconPath };
-    const makaioHome = path.join(os.homedir(), '.makaio');
-    const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(makaioHome);
+    const bootContext = createElectronBootContext();
+    const baseRuntimeOptions = await buildDesktopBaseRuntimeOptions(bootContext.makaioHome);
     const runtimeOptions = await applySelectedDesktopRuntimeConfig(baseRuntimeOptions, {
-      makaioHome,
+      makaioHome: bootContext.makaioHome,
       env: process.env,
     });
     const frameworkModuleResolver = resolveDesktopFrameworkModuleResolver(runtimeOptions);
     if (builder) {
-      const rendererDir = path.join(PKG_ROOT, 'dist', 'renderer');
-      const { serveStatic } = await import('@hono/node-server/serve-static');
-      builder.add({
-        owner: '__electron-static',
-        phase: 'static-fallback',
-        mount: (app) => {
-          app.use('/assets/*', serveStatic({ root: rendererDir }));
-          app.use('/extensions/*', serveStatic({ root: rendererDir }));
-          app.get('*', serveStatic({ root: rendererDir, rewriteRequestPath: () => '/index.html' }));
-        },
-      });
+      await registerElectronStaticRoutes(builder);
     }
 
     bootPromise = bootMakaioRuntime({
@@ -343,9 +377,13 @@ if (!gotLock) {
       routeGraphBuilder: builder,
       surface: 'interactive',
       ...runtimeOptions,
-      ...(IS_DEV
-        ? {}
-        : { modelRegistryFallbackSeedPaths: [path.join(process.resourcesPath, 'static/model-registry.yaml')] }),
+      makaioHome: bootContext.makaioHome,
+      ...(bootContext.frameworkPackagePath !== undefined
+        ? { frameworkPackagePath: bootContext.frameworkPackagePath }
+        : {}),
+      ...(bootContext.modelRegistryFallbackSeedPaths !== undefined
+        ? { modelRegistryFallbackSeedPaths: bootContext.modelRegistryFallbackSeedPaths }
+        : {}),
       frameworkModuleResolver,
       hostCapabilities: normalizeNodeHostCapabilities(runtimeOptions.hostCapabilities),
       onTransportReady({ host, port: readyPort }) {
@@ -375,10 +413,10 @@ if (!gotLock) {
   // ── First window ──────────────────────────────────────────────────────────
 
   /**
-   * Open the fallback framework shell window.
+   * Open the fallback shell window.
    *
    * Startup overrides are consumed by `openInitialWindows`; every later
-   * default-window affordance must reopen the framework shell.
+   * default-window affordance must reopen the fallback shell.
    * @returns The Electron window ID of the created window.
    */
   function openDefaultWindow(): number {
@@ -391,7 +429,7 @@ if (!gotLock) {
    * Priority:
    * 1. `MAKAIO_INITIAL_WINDOW` env override (integration tests, CLI launch).
    * 2. Persisted window session restore.
-   * 3. Fallback framework shell window (`framework-shell:main`).
+   * 3. Fallback shell window (`framework-shell:main`).
    */
   async function openInitialWindows(): Promise<void> {
     const { registrationId, isOverride } = resolveInitialWindowState();
@@ -414,7 +452,7 @@ if (!gotLock) {
     }
 
     if (!session) {
-      // No session to restore — open the fallback framework shell window.
+      // No session to restore — open the fallback shell window.
       openDefaultWindow();
       return;
     }
@@ -506,7 +544,7 @@ if (!gotLock) {
       // Don't quit — the tray keeps the app alive on all platforms.
     });
 
-    // macOS dock click: open (or focus) the fallback framework shell window.
+    // macOS dock click: open (or focus) the fallback shell window.
     // When started in background mode, restore the Dock icon first.
     app.on('activate', () => {
       restoreFromBackgroundMode();

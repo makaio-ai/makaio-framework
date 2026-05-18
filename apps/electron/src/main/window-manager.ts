@@ -16,7 +16,14 @@
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { app, BrowserWindow, screen } from 'electron';
-import { assertNoReservedWindowParams, type WindowManagerState } from '@makaio/host-shared';
+import {
+  assertNoReservedWindowParams,
+  buildRendererLaunchUrl,
+  createRendererLaunchConfig,
+  encodeRendererParams,
+  type RendererLaunchConfig,
+  type WindowManagerState,
+} from '@makaio/host-shared';
 import type { WindowRegistry, WindowRegistration } from '@makaio/kernel';
 import { createRendererConsoleEvent, logRendererConsoleEvent } from './renderer-console.js';
 
@@ -254,9 +261,11 @@ export class WindowManager {
       }
     }
 
+    const launchConfig = this.createLaunchConfig(registration, params ?? {});
+
     // Encode context params as a single percent-encoded JSON argument so the
     // preload script can decode them without knowing host-specific param names.
-    const paramsJson = encodeURIComponent(JSON.stringify(params ?? {}));
+    const paramsJson = encodeRendererParams(launchConfig.params);
 
     const win = new BrowserWindow({
       width: registration.width,
@@ -278,10 +287,10 @@ export class WindowManager {
         preload: preloadPath,
         additionalArguments: [
           `--makaio-bus-url=${this.busUrl}`,
-          `--makaio-window-id=${registrationId}`,
-          `--makaio-package-name=${registration.packageName}`,
+          `--makaio-window-id=${launchConfig.windowId}`,
+          `--makaio-package-name=${launchConfig.packageName}`,
           `--makaio-params=${paramsJson}`,
-          ...(this.bootComplete ? ['--makaio-boot-complete'] : []),
+          ...(launchConfig.bootComplete ? ['--makaio-boot-complete'] : []),
         ],
       },
     });
@@ -305,7 +314,7 @@ export class WindowManager {
     }
 
     // Load the web UI
-    const url = this.buildUrl(registration, params ?? {});
+    const url = this.buildUrl(launchConfig);
     console.info(`[WindowManager] Loading URL: ${url}`);
     console.info(`[WindowManager] Preload: ${preloadPath}`);
     this.attachWindowContentObservers(win, url);
@@ -484,17 +493,28 @@ export class WindowManager {
    * @param params - Context parameters appended as query string entries
    * @returns Fully constructed URL string
    */
-  private buildUrl(registration: WindowRegistration, params: Readonly<Record<string, string>>): string {
+  private createLaunchConfig(
+    registration: Pick<WindowRegistration, 'packageName' | 'qualifiedId'>,
+    params: Readonly<Record<string, string>>,
+  ): RendererLaunchConfig {
     assertNoReservedWindowParams(params, RESERVED_BOOTSTRAP_QUERY_KEYS, 'Electron');
 
-    const url = new URL(this.baseUrl);
-    url.pathname = url.pathname.replace(/\/$/, '') || '/';
-    url.searchParams.set('app', registration.packageName);
-    url.searchParams.set('window', registration.qualifiedId);
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.set(key, value);
-    }
-    return url.toString();
+    return createRendererLaunchConfig({
+      baseUrl: this.baseUrl,
+      busUrl: this.busUrl,
+      registration,
+      params,
+      bootComplete: this.bootComplete,
+    });
+  }
+
+  /**
+   * Construct the web UI URL from normalized renderer launch config.
+   * @param launchConfig - Renderer launch config.
+   * @returns Fully constructed URL string.
+   */
+  private buildUrl(launchConfig: RendererLaunchConfig): string {
+    return buildRendererLaunchUrl(launchConfig);
   }
 
   /**

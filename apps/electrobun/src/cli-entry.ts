@@ -7,9 +7,13 @@
 
 declare const __MAKAIO_HOME_DEFAULT__: string;
 
-import { seedMakaioHome } from './makaio-home.js';
+import { applyDesktopMakaioHomeEnv } from '@makaio/host-shared';
 
-seedMakaioHome(typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : undefined);
+const defaultMakaioHomeDir = typeof __MAKAIO_HOME_DEFAULT__ !== 'undefined' ? __MAKAIO_HOME_DEFAULT__ : undefined;
+applyDesktopMakaioHomeEnv({
+  env: process.env,
+  ...(defaultMakaioHomeDir !== undefined ? { defaultDir: defaultMakaioHomeDir } : {}),
+});
 
 import { main } from '@makaio/cli';
 

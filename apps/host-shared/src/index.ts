@@ -32,11 +32,30 @@ export {
 } from './dev-host-options.js';
 export { createDevHealthPlugin } from './dev-health-plugin.js';
 export {
+  DEFAULT_DESKTOP_MAKAIO_HOME_DIR,
+  DESKTOP_MAKAIO_HOME_ENV,
+  applyDesktopMakaioHomeEnv,
+  createDesktopBootContext,
+  resolveDesktopMakaioHome,
+  type ApplyDesktopMakaioHomeEnvOptions,
+  type CreateDesktopBootContextOptions,
+  type DesktopBootContext,
+  type ResolveDesktopMakaioHomeOptions,
+} from './desktop-boot-context.js';
+export {
   assertNoReservedWindowParams,
   registerHostNavigationHandler,
   resolveNavigation,
   type ResolvedNavigation,
 } from './navigation-handler.js';
+export {
+  buildRendererLaunchUrl,
+  createRendererLaunchConfig,
+  encodeRendererParams,
+  type BuildRendererLaunchUrlOptions,
+  type CreateRendererLaunchConfigOptions,
+  type RendererLaunchConfig,
+} from './renderer-launch-config.js';
 export {
   FRAMEWORK_FALLBACK_WINDOW,
   resolveInitialCustomData,

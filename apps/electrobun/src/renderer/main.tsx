@@ -7,12 +7,12 @@
  * @packageDocumentation
  */
 import { startRenderer } from '@makaio/host-shared/renderer';
-import { readElectrobunRendererConfig } from './config.js';
+import { readElectrobunRendererConfig, readElectrobunSurfaceHint } from './config.js';
 // Resolved via sharedRendererAliases in vite.renderer.config.ts, not a local file.
 import './main.scss';
 
 void startRenderer({
   config: readElectrobunRendererConfig(__MAKAIO_BUS_URL__),
   logPrefix: 'electrobun-ui',
-  surface: 'electrobun',
+  surface: readElectrobunSurfaceHint(),
 });

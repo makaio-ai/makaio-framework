@@ -1,8 +1,8 @@
 /**
- * Framework desktop E2E smoke test.
+ * Desktop E2E smoke test for the secondary Electron host.
  *
  * Spawns the real Electron composition root without host runtime config and
- * verifies that framework-only startup opens the framework shell window.
+ * verifies that startup opens the default shell window.
  */
 
 import fs from 'node:fs/promises';
@@ -12,10 +12,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { HostSubjects } from '@makaio/host-shared';
 import { BootSubjects, ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
-import { connectTestBus, waitForBoot, waitForRuntimeReady } from '../shared/bus-helpers.js';
-import { startFrameworkElectron, type FrameworkElectronProcess } from './spawn-electron.js';
+import { connectTestBus, waitForBoot, waitForRuntimeReady, waitForUiReady } from '../shared/bus-helpers.js';
+import { resolveFreeLoopbackPort } from '../shared/free-port.js';
+import { startElectron, type ElectronProcess } from './spawn-electron.js';
 
-const EXPECTED_FRAMEWORK_WINDOW = 'framework-shell:main';
+const EXPECTED_SHELL_WINDOW = 'framework-shell:main';
 const STARTUP_TIMEOUT_MS = 60_000;
 
 async function waitForWindowRegistration(
@@ -37,8 +38,8 @@ async function waitForWindowRegistration(
   throw new Error(`Timed out waiting for window '${registrationId}' within ${timeoutMs}ms`);
 }
 
-describe('framework Electron desktop smoke test', { timeout: 200_000 }, () => {
-  let electron: FrameworkElectronProcess | null = null;
+describe('Electron desktop smoke test', { timeout: 200_000 }, () => {
+  let electron: ElectronProcess | null = null;
   let e2eTmpDir: string | null = null;
 
   afterEach(async () => {
@@ -53,16 +54,19 @@ describe('framework Electron desktop smoke test', { timeout: 200_000 }, () => {
     }
   });
 
-  it('boots without host policy, opens the framework shell, and shuts down cleanly', async () => {
-    e2eTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-framework-desktop-e2e-'));
-    electron = await startFrameworkElectron({
+  it('boots without host policy, opens the default shell, and shuts down cleanly', async () => {
+    e2eTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-electron-e2e-'));
+    const hostPort = await resolveFreeLoopbackPort();
+    electron = await startElectron({
       timeoutMs: STARTUP_TIMEOUT_MS,
       env: {
         HOME: e2eTmpDir,
         XDG_CONFIG_HOME: path.join(e2eTmpDir, '.config'),
         MAKAIO_DATABASE_PATH: path.join(e2eTmpDir, 'makaio.db'),
+        MAKAIO_PORT: String(hostPort),
       },
     });
+    expect(electron.port).toBe(hostPort);
 
     // Retry budget matches the startup timeout: the bus WebSocket upgrade
     // handler is ready when port discovery succeeds, but slow CI environments
@@ -80,6 +84,7 @@ describe('framework Electron desktop smoke test', { timeout: 200_000 }, () => {
     if (!bus) throw new Error(`Failed to connect to bus within ${STARTUP_TIMEOUT_MS / 1000}s`);
 
     try {
+      const uiReadyPromise = waitForUiReady(bus, 'electron', STARTUP_TIMEOUT_MS);
       const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
       expect(bootPayload.failedServices).toEqual([]);
 
@@ -99,15 +104,19 @@ describe('framework Electron desktop smoke test', { timeout: 200_000 }, () => {
       const { extensions } = extResp as { extensions: Array<{ name: string; state: string }> };
       expect(extensions.find((extension) => extension.name === 'framework-shell')?.state).toBe('active');
 
-      const openedWindow = await waitForWindowRegistration(bus, EXPECTED_FRAMEWORK_WINDOW, STARTUP_TIMEOUT_MS);
-      expect(openedWindow.registrationId).toBe(EXPECTED_FRAMEWORK_WINDOW);
+      const openedWindow = await waitForWindowRegistration(bus, EXPECTED_SHELL_WINDOW, STARTUP_TIMEOUT_MS);
+      expect(openedWindow.registrationId).toBe(EXPECTED_SHELL_WINDOW);
       expect(openedWindow.windowId).toBeGreaterThan(0);
       await electron.waitForOutput('[WindowManager] Loaded URL:', STARTUP_TIMEOUT_MS);
       expect(electron.getOutput()).not.toContain('[WindowManager] Failed to load');
       expect(electron.getOutput()).not.toContain('[WindowManager] Renderer crashed:');
 
+      const uiReady = await uiReadyPromise;
+      expect(uiReady.surface).toBe('electron');
+      expect(uiReady.timestamp).toBeGreaterThan(0);
+
       const { windows } = await bus.request(HostSubjects.window.list, {});
-      const shellWindow = windows.find((window) => window.registrationId === EXPECTED_FRAMEWORK_WINDOW);
+      const shellWindow = windows.find((window) => window.registrationId === EXPECTED_SHELL_WINDOW);
       expect(shellWindow).toBeDefined();
       expect(shellWindow!.windowId).toBe(openedWindow.windowId);
     } finally {

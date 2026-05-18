@@ -22,7 +22,7 @@ import {
   type EmbeddedMigrationSource,
   loadEmbeddedMigrations,
   renderEmbeddedMigrationsModule,
-} from '@makaio/host-shared/build/embedded-migrations';
+} from '../../../host-shared/src/build/embedded-migrations.ts';
 
 /**
  * Create a Bun build plugin that embeds Drizzle migrations at build time.

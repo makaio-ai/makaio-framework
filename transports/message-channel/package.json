@@ -2,6 +2,11 @@
   "name": "@makaio/bus-transport-message-channel",
   "version": "1.0.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "transports/message-channel"
+  },
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

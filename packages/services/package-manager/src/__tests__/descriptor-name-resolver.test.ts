@@ -107,9 +107,8 @@ async function findWorkspaceFile(startDir: string, relativePath: string): Promis
 /**
  * Load registry metadata from the current checkout layout.
  *
- * The framework may run with the registry beside this checkout or one directory
- * above it. Support both checked-in registry layouts, then fall back to the
- * local fixture for CI.
+ * Support both checked-in registry layouts used by local development and CI,
+ * then fall back to the local fixture when no repository registry is present.
  */
 async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
   const packageRoot = await findPackageRoot(import.meta.dirname);

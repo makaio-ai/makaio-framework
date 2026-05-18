@@ -14,6 +14,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type { WebSocketClientTransportOptions } from '@makaio/bus-transport-websocket';
 import { BootSubjects, KernelSubjects } from '@makaio/kernel';
+import { UiSubjects, type UiReadyEvent } from '@makaio/ui-kernel';
 import type { ContextForSubjectDefinition, ExtractSubjectResponse, SubjectDefinition } from '@makaio/core';
 
 /**
@@ -63,6 +64,9 @@ export interface RuntimeReadyPayload {
   /** Unique machine identifier assigned by the runtime. */
   machineId: string;
 }
+
+/** Payload returned by {@link waitForUiReady}. */
+export type UiReadyPayload = UiReadyEvent;
 
 /**
  * A non-request, non-channel subject definition — safe for use as an event subject
@@ -221,4 +225,24 @@ export async function waitForRuntimeReady(bus: IMakaioBus, timeoutMs = 30_000): 
     (probeResult) => (probeResult.ready ? { ready: true, machineId: probeResult.machineId } : null),
     (ctx) => ({ ready: true, machineId: ctx.payload.machineId }),
   );
+}
+
+/**
+ * Wait for a renderer surface to mount its shared React application.
+ *
+ * Unlike boot and kernel readiness there is no stable UI-ready probe: this is a
+ * renderer-originated lifecycle event, so callers must subscribe before the
+ * window is expected to finish loading.
+ * @param bus - Connected bus instance
+ * @param surface - Renderer surface expected to emit `ui.ready`
+ * @param timeoutMs - Maximum wait time in milliseconds
+ * @returns UI ready payload emitted by the renderer
+ */
+export async function waitForUiReady(
+  bus: IMakaioBus,
+  surface: UiReadyEvent['surface'],
+  timeoutMs = 30_000,
+): Promise<UiReadyPayload> {
+  const ctx = await bus.once(UiSubjects.ready, { filter: { surface }, timeoutMs });
+  return ctx.payload;
 }
