@@ -43,5 +43,6 @@
   },
   "inlinedDependencies": {
     "type-fest": "5.3.1"
-  }
+  },
+  "license": "MIT"
 }

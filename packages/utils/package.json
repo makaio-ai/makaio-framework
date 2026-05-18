@@ -33,5 +33,6 @@
       "./workspace-root": "./dist/workspace-root.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }

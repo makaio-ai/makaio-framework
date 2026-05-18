@@ -25,5 +25,6 @@
     "@makaio/services-log-import": "workspace:*",
     "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
-  }
+  },
+  "license": "MIT"
 }

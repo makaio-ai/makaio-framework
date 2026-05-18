@@ -35,5 +35,6 @@
   },
   "inlinedDependencies": {
     "zod": "4.3.5"
-  }
+  },
+  "license": "MIT"
 }

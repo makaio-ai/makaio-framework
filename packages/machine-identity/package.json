@@ -19,5 +19,6 @@
       ".": "./dist/index.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }

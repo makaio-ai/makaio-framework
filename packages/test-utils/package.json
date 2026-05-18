@@ -46,5 +46,6 @@
       "./drizzle-harness": "./dist/drizzle-harness.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }

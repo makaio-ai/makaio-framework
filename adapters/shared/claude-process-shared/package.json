@@ -20,5 +20,6 @@
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/client-claude-code": "workspace:*",
     "@makaio/contracts": "workspace:*"
-  }
+  },
+  "license": "MIT"
 }

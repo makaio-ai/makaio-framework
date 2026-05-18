@@ -38,5 +38,6 @@
       ".": "./dist/index.mjs",
       "./server": "./dist/server.mjs"
     }
-  }
+  },
+  "license": "MIT"
 }

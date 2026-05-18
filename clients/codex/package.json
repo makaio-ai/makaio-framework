@@ -45,5 +45,6 @@
     "type": "git",
     "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "clients/codex"
-  }
+  },
+  "license": "MIT"
 }

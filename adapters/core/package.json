@@ -46,5 +46,6 @@
       "./node": "./dist/node.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }

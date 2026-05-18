@@ -41,5 +41,6 @@
       "./testing": "./dist/testing/index.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }

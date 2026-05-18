@@ -27,5 +27,6 @@
     "@makaio/test-utils": "workspace:*",
     "typescript": "^6.0.3",
     "vitest": "4.1.5"
-  }
+  },
+  "license": "MIT"
 }

@@ -47,5 +47,6 @@
         "default": "./dist/server.mjs"
       }
     }
-  }
+  },
+  "license": "MIT"
 }

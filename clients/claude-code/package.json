@@ -48,5 +48,6 @@
       "./runtime": "./dist/runtime/package.mjs",
       "./server": "./dist/server.mjs"
     }
-  }
+  },
+  "license": "MIT"
 }
