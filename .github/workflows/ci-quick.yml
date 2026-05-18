@@ -5,11 +5,12 @@ on:
     branches: [fix/ci]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ci-quick-${{ github.event.pull_request.number || github.ref }}
@@ -18,20 +19,51 @@ concurrency:
 jobs:
   quick:
     name: Quick Checks
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
+        !contains(github.event.pull_request.labels.*.name, 'skip:all')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
+      - name: Classify PR changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const docsOnly = files.length > 0 && files.every(({ filename: file }) =>
+              file.endsWith('.md') ||
+              file.startsWith('docs/') ||
+              (file.startsWith('.changeset/') && file.endsWith('.md'))
+            );
+            core.setOutput('docs_only', docsOnly ? 'true' : 'false');
+            if (docsOnly) core.info('Documentation-only PR; skipping expensive quick validation.');
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         with:
           node-version: 24
 
       - name: Enable Corepack
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         run: corepack enable
 
       - name: Restore Yarn cache
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         id: yarn-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -44,6 +76,7 @@ jobs:
             yarn-cache-
 
       - name: Restore ESLint cache
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         id: eslint-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
@@ -54,10 +87,11 @@ jobs:
             eslint-cache-${{ runner.os }}-
 
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         run: yarn install --immutable
 
       - name: Save Yarn cache
-        if: steps.yarn-cache.outputs.cache-hit != 'true'
+        if: (github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true') && steps.yarn-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
@@ -66,13 +100,15 @@ jobs:
           key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
       - name: Run combined validator
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         run: yarn tsx scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json
 
       - name: Check SDK codegen drift
+        if: github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true'
         run: yarn validate:sdk-codegen
 
       - name: Save ESLint cache
-        if: always() && steps.eslint-cache.outputs.cache-hit != 'true'
+        if: always() && (github.event_name != 'pull_request' || steps.changes.outputs.docs_only != 'true') && steps.eslint-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .eslintcache

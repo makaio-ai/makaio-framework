@@ -54,8 +54,79 @@ jobs:
             core.setOutput('pr-number', String(pullRequest.number));
             core.setOutput('comment-id', String(comment.id));
             core.setOutput('comment-url', comment.html_url);
+            const labels = pullRequest.labels?.map((label) => label.name) ?? [];
+            const skipCi = labels.includes('skip:ci') || labels.includes('skip:all');
+            core.setOutput('skip-ci', skipCi ? 'true' : 'false');
+            if (skipCi) core.info('skip:ci/skip:all label found — not dispatching full CI.');
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-issues: write
+          permission-checks: write
+
+      - name: Resolve quick validation reuse
+        id: quick-validation
+        if: steps.request.outputs.skip-ci != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { data } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: process.env.SOURCE_SHA,
+              check_name: 'Quick Checks',
+              filter: 'latest',
+              per_page: 10,
+            });
+
+            const quickCheck = data.check_runs.find((check) =>
+              check.name === 'Quick Checks' &&
+              check.status === 'completed' &&
+              check.conclusion === 'success'
+            );
+
+            const reuse = Boolean(quickCheck);
+            core.setOutput('reuse', reuse ? 'true' : 'false');
+            core.setOutput('check-url', quickCheck?.html_url ?? '');
+
+            if (!quickCheck) {
+              core.info(`No successful Quick Checks run found for ${process.env.SOURCE_SHA}; full CI will run validation.`);
+              return;
+            }
+
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Validation Reused',
+              head_sha: process.env.SOURCE_SHA,
+              status: 'completed',
+              conclusion: 'success',
+              details_url: quickCheck.html_url,
+              external_id: `quick-checks:${quickCheck.id}`,
+              output: {
+                title: 'Validation reused from Quick Checks',
+                summary: [
+                  `Quick Checks already passed for \`${process.env.SOURCE_SHA}\`.`,
+                  '',
+                  `Source check: ${quickCheck.html_url}`,
+                  '',
+                  'Full CI will skip redundant validation matrix jobs for this commit and continue with tests, builds, E2E, and CodeQL.',
+                ].join('\n'),
+              },
+            });
 
       - name: Dispatch full CI
+        if: steps.request.outputs.skip-ci != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
@@ -63,8 +134,12 @@ jobs:
           PR_NUMBER: ${{ steps.request.outputs.pr-number }}
           COMMENT_ID: ${{ steps.request.outputs.comment-id }}
           COMMENT_URL: ${{ steps.request.outputs.comment-url }}
+          REUSE_QUICK_VALIDATION: ${{ steps.quick-validation.outputs.reuse }}
+          QUICK_CHECK_URL: ${{ steps.quick-validation.outputs.check-url }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const reuseQuickValidation = process.env.REUSE_QUICK_VALIDATION === 'true';
             await github.rest.repos.createDispatchEvent({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -76,6 +151,8 @@ jobs:
                 requested_by: context.actor,
                 checkout_ref: process.env.CHECKOUT_REF,
                 source_sha: process.env.SOURCE_SHA,
+                reuse_quick_validation: reuseQuickValidation,
+                quick_check_url: process.env.QUICK_CHECK_URL || undefined,
               },
             });
 
@@ -85,6 +162,7 @@ jobs:
         env:
           COMMENT_ID: ${{ steps.request.outputs.comment-id }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             await github.rest.reactions.createForIssueComment({
               owner: context.repo.owner,
@@ -100,16 +178,31 @@ jobs:
           CHECKOUT_REF: ${{ steps.request.outputs.checkout-ref }}
           SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
           PR_NUMBER: ${{ steps.request.outputs.pr-number }}
+          SKIP_CI: ${{ steps.request.outputs.skip-ci }}
+          REUSE_QUICK_VALIDATION: ${{ steps.quick-validation.outputs.reuse }}
+          QUICK_CHECK_URL: ${{ steps.quick-validation.outputs.check-url }}
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const skipped = process.env.SKIP_CI === 'true';
+            const reused = process.env.REUSE_QUICK_VALIDATION === 'true';
+            const fullCiBody = [
+              'Full CI requested.',
+              '',
+              `Ref: \`${process.env.CHECKOUT_REF}\``,
+              `SHA: \`${process.env.SOURCE_SHA}\``,
+              ...(reused
+                ? [
+                    '',
+                    `Validation will be reused from Quick Checks: ${process.env.QUICK_CHECK_URL}`,
+                  ]
+                : []),
+            ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: Number(process.env.PR_NUMBER),
-              body: [
-                'Full CI requested.',
-                '',
-                `Ref: \`${process.env.CHECKOUT_REF}\``,
-                `SHA: \`${process.env.SOURCE_SHA}\``,
-              ].join('\n'),
+              body: skipped
+                ? 'Full CI request skipped because this PR has `skip:ci` or `skip:all`.'
+                : fullCiBody,
             });
