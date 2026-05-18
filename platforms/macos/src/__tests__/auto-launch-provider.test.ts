@@ -35,7 +35,7 @@ vi.mock('node:child_process', () => ({
 }));
 
 vi.mock('node:os', () => ({
-  homedir: () => '/Users/testuser',
+  homedir: () => '/home/testuser',
 }));
 
 // ---------------------------------------------------------------------------
@@ -71,7 +71,7 @@ function writtenPlistContent(): string {
   return calls[0][1];
 }
 
-const EXPECTED_PLIST_PATH = '/Users/testuser/Library/LaunchAgents/ai.makaio.app.plist';
+const EXPECTED_PLIST_PATH = '/home/testuser/Library/LaunchAgents/ai.makaio.app.plist';
 
 // ---------------------------------------------------------------------------
 // Teardown
@@ -142,7 +142,7 @@ describe('MacOSAutoLaunchProvider', () => {
       expect(result).toEqual({ enabled: true });
 
       // Ensure LaunchAgents directory is created.
-      expect(mkdirMock).toHaveBeenCalledWith('/Users/testuser/Library/LaunchAgents', { recursive: true });
+      expect(mkdirMock).toHaveBeenCalledWith('/home/testuser/Library/LaunchAgents', { recursive: true });
 
       // Plist is written with the correct path.
       expect(writeFileMock).toHaveBeenCalledWith(
