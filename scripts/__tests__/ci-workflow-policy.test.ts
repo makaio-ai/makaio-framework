@@ -87,4 +87,28 @@ describe('CI workflow policy', () => {
     expect(workflow).toContain('yarn validate:sdk-codegen');
     expect(workflow).toContain('.eslintcache');
   });
+
+  it('skips expensive quick PR validation for documentation-only pull requests', () => {
+    const workflow = readWorkflow('ci-quick.yml');
+
+    expect(workflow).toContain('- name: Classify PR changes');
+    expect(workflow).toContain("core.setOutput('docs_only'");
+    expect(workflow).toContain("file.endsWith('.md')");
+    expect(workflow).toContain("file.startsWith('docs/')");
+    expect(workflow).toContain("file.startsWith('.changeset/')");
+    expect(workflow).toContain("steps.changes.outputs.docs_only != 'true'");
+  });
+
+  it('short-circuits the changeset-required gate before dependency install for non-publish diffs', () => {
+    const workflow = readWorkflow('changeset-required-reusable.yml');
+    const classifyIndex = workflow.indexOf('- name: Classify publish relevance');
+    const setupIndex = workflow.indexOf('- name: Setup Node');
+    const installIndex = workflow.indexOf('- name: Install dependencies');
+
+    expect(classifyIndex).toBeGreaterThan(-1);
+    expect(classifyIndex).toBeLessThan(setupIndex);
+    expect(classifyIndex).toBeLessThan(installIndex);
+    expect(workflow).toContain("publish_relevance.outputs.relevant != 'false'");
+    expect(workflow).toContain('.github/*|docs/*|.changeset/*|*.md');
+  });
 });

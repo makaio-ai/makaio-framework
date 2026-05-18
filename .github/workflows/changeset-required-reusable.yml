@@ -75,9 +75,45 @@ jobs:
           fi
         working-directory: trusted
 
+      - name: Classify publish relevance
+        id: publish_relevance
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          framework_root="${{ inputs.framework_root }}"
+          relevant=false
+
+          while IFS= read -r file; do
+            if [ "$framework_root" != "." ]; then
+              case "$file" in
+                "${framework_root%/}/"*) file="${file#"${framework_root%/}/"}" ;;
+                *) continue ;;
+              esac
+            fi
+
+            case "$file" in
+              .github/*|docs/*|.changeset/*|*.md)
+                ;;
+              *)
+                relevant=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only --diff-filter=d "$base...$head")
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          if [ "$relevant" = "false" ]; then
+            echo "::notice::No publish-relevant files changed; skipping dependency install and changeset check."
+          fi
+        working-directory: trusted
+
       - name: Resolve trusted checker
         id: checker
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false'
         shell: bash
         run: |
           set -euo pipefail
@@ -108,17 +144,17 @@ jobs:
         working-directory: trusted
 
       - name: Setup Node
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: 24
 
       - name: Enable Corepack
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         run: corepack enable
 
       - name: Restore Yarn cache
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         id: yarn-cache
         uses: actions/cache/restore@v5
         with:
@@ -129,7 +165,7 @@ jobs:
           restore-keys: yarn-cache-
 
       - name: Restore node_modules
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         id: nm-cache
         uses: actions/cache/restore@v5
         with:
@@ -137,12 +173,12 @@ jobs:
           key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
 
       - name: Install dependencies
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         run: yarn install --immutable
         working-directory: trusted
 
       - name: Save Yarn cache
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |
@@ -151,14 +187,14 @@ jobs:
           key: yarn-cache-${{ hashFiles('trusted/yarn.lock') }}
 
       - name: Save node_modules
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true' && steps.nm-cache.outputs.cache-hit != 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true' && steps.nm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: "trusted/**/node_modules"
           key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
 
       - name: Check changeset
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.checker.outputs.available == 'true'
+        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         run: |
           yarn tsx "${{ steps.checker.outputs.path }}" \
             --base "${{ github.event.pull_request.base.sha }}" \
