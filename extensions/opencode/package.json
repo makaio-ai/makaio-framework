@@ -60,5 +60,6 @@
         "default": "./dist/testing.mjs"
       }
     }
-  }
+  },
+  "license": "MIT"
 }

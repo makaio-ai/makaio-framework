@@ -11,5 +11,6 @@
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/core": "workspace:*"
-  }
+  },
+  "license": "MIT"
 }

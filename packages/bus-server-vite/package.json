@@ -15,5 +15,6 @@
   },
   "peerDependencies": {
     "vite": "^8.0.12"
-  }
+  },
+  "license": "MIT"
 }

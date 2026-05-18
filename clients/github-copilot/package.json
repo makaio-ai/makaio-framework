@@ -38,5 +38,6 @@
     "type": "git",
     "url": "https://github.com/makaio-ai/makaio-framework",
     "directory": "clients/github-copilot"
-  }
+  },
+  "license": "MIT"
 }

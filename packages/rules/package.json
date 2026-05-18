@@ -28,5 +28,6 @@
       "./schemas": "./dist/schemas.mjs",
       "./package.json": "./package.json"
     }
-  }
+  },
+  "license": "MIT"
 }
