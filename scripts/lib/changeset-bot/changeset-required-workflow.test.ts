@@ -42,7 +42,7 @@ describe('changeset-required reusable workflow', () => {
       expect(workflow).toContain('git cat-file -e "$head:$checker_path"');
       expect(workflow).toContain('Trusted changeset checker is being introduced by this PR');
       expect(workflow).toContain('Trusted changeset checker is missing from the base checkout');
-      expect(workflow).toContain('yarn tsx "${{ steps.checker.outputs.path }}"');
+      expect(workflow).toContain('bun "${{ steps.checker.outputs.path }}"');
       expect(workflow).toContain('skip:changeset');
       expect(workflow).toContain('skip:ci');
       expect(workflow).toContain('skip:all');

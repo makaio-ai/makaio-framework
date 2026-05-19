@@ -83,7 +83,7 @@ describe('CI workflow policy', () => {
     expect(workflow).toContain("!contains(github.event.pull_request.labels.*.name, 'skip:ci')");
     expect(workflow).toContain("!contains(github.event.pull_request.labels.*.name, 'skip:all')");
     expect(workflow).not.toContain('matrix:');
-    expect(workflow).toContain('yarn tsx scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json');
+    expect(workflow).toContain('bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json');
     expect(workflow).toContain('yarn validate:sdk-codegen');
     expect(workflow).toContain('.eslintcache');
   });
