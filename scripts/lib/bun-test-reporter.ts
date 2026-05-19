@@ -273,14 +273,22 @@ function printResults(results: ParseResult, elapsed: number, hungFiles?: string[
 
 // region ── per-file mode ────────────────────────────────────────────────────
 
+interface SingleFileResult {
+  status: 'pass' | 'fail' | 'hung';
+  parsed?: ParseResult;
+}
+
 /**
  *
  * @param file
  * @param timeoutMs
  */
-function runSingleFile(file: string, timeoutMs: number): Promise<'pass' | 'fail' | 'hung'> {
+function runSingleFile(file: string, timeoutMs: number): Promise<SingleFileResult> {
   return new Promise((resolve) => {
-    const child = spawn('bun', ['test', file], {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'bun-pf-'));
+    const junitFile = join(tmpDir, 'junit.xml');
+
+    const child = spawn('bun', ['test', '--reporter=junit', `--reporter-outfile=${junitFile}`, file], {
       stdio: ['inherit', 'pipe', 'pipe'],
       env: { ...process.env },
     });
@@ -290,7 +298,8 @@ function runSingleFile(file: string, timeoutMs: number): Promise<'pass' | 'fail'
       if (!settled) {
         settled = true;
         child.kill('SIGKILL');
-        resolve('hung');
+        try { rmSync(tmpDir, { recursive: true }); } catch { /* best-effort */ }
+        resolve({ status: 'hung' });
       }
     }, timeoutMs);
 
@@ -301,7 +310,13 @@ function runSingleFile(file: string, timeoutMs: number): Promise<'pass' | 'fail'
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        resolve(code === 0 ? 'pass' : 'fail');
+        let parsed: ParseResult | undefined;
+        try {
+          const xml = readFileSync(junitFile, 'utf-8');
+          if (xml) parsed = parseJunitXml(xml);
+        } catch { /* file may not exist */ }
+        try { rmSync(tmpDir, { recursive: true }); } catch { /* best-effort */ }
+        resolve({ status: code === 0 ? 'pass' : 'fail', parsed });
       }
     });
   });
@@ -331,8 +346,10 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   let pass = 0;
   let fail = 0;
   let completed = 0;
-  const failFiles: string[] = [];
+  const allFailures: TestFailure[] = [];
   const hungFiles: string[] = [];
+  let aggregatedTests = 0;
+  let aggregatedSkipped = 0;
 
   /**
    *
@@ -340,18 +357,23 @@ async function perFileMain(opts: CliOptions): Promise<void> {
    */
   async function processFile(f: string): Promise<void> {
     const rel = relPath(f);
-    const result = await runSingleFile(f, timeoutMs);
+    const { status, parsed } = await runSingleFile(f, timeoutMs);
     completed++;
 
-    if (result === 'pass') {
+    if (parsed) {
+      aggregatedTests += parsed.totalTests;
+      aggregatedSkipped += parsed.totalSkipped;
+    }
+
+    if (status === 'pass') {
       pass++;
       if (!aiAgent) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
-    } else if (result === 'hung') {
+    } else if (status === 'hung') {
       hungFiles.push(rel);
       process.stderr.write(`${c.yellow}⏱${c.reset} [${completed}/${total}] ${rel} ${c.yellow}(hung)${c.reset}\n`);
     } else {
       fail++;
-      failFiles.push(rel);
+      if (parsed) allFailures.push(...parsed.failures);
       process.stderr.write(`${c.red}✗${c.reset} [${completed}/${total}] ${rel}\n`);
     }
   }
@@ -372,12 +394,14 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   }
 
   const elapsed = Date.now() - startTime;
+  const totalTests = aggregatedTests > 0 ? aggregatedTests : pass + fail;
+  const totalFailures = allFailures.length > 0 ? allFailures.length : fail;
   const results: ParseResult = {
-    failures: failFiles.map((f) => ({ file: f, line: 0, name: '', classname: '', type: '', message: '' })),
-    totalTests: pass + fail,
-    totalFailures: fail,
+    failures: allFailures,
+    totalTests,
+    totalFailures,
     totalErrors: 0,
-    totalSkipped: 0,
+    totalSkipped: aggregatedSkipped,
     fileCount: total,
   };
 
