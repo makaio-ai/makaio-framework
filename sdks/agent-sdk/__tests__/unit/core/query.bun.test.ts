@@ -6,7 +6,6 @@
  * WebSocket server.
  */
 
-/// <reference types="bun-types" />
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
@@ -216,8 +215,8 @@ describe('query()', () => {
 
   it('dispatches async iterable follow-up messages to the same session', async () => {
     async function* prompt(): AsyncIterable<SDKUserMessage> {
-      yield { type: 'user', message: { role: 'user', content: 'First' } };
-      yield { type: 'user', message: { role: 'user', content: 'Second' } };
+      yield { type: 'user', message: { role: 'user', content: 'First' }, parent_tool_use_id: null };
+      yield { type: 'user', message: { role: 'user', content: 'Second' }, parent_tool_use_id: null };
     }
 
     const gen = query({ prompt: prompt(), options: { model: 'sonnet', sessionId: SESSION_ID } });
@@ -240,8 +239,8 @@ describe('query()', () => {
 
   it('honors maxTurns for async iterable prompts', async () => {
     async function* prompt(): AsyncIterable<SDKUserMessage> {
-      yield { type: 'user', message: { role: 'user', content: 'First' } };
-      yield { type: 'user', message: { role: 'user', content: 'Second' } };
+      yield { type: 'user', message: { role: 'user', content: 'First' }, parent_tool_use_id: null };
+      yield { type: 'user', message: { role: 'user', content: 'Second' }, parent_tool_use_id: null };
     }
 
     const gen = query({ prompt: prompt(), options: { model: 'sonnet', sessionId: SESSION_ID, maxTurns: 1 } });

@@ -231,7 +231,7 @@ describe.skipIf(!LIVE_ENABLED)('tool execution — live runtime (requires creden
     MakaioBus.__resetHandlers?.();
   });
 
-  it('query() with a custom tool reaches the handler when the model invokes it', { timeout: 120_000 }, async () => {
+  it('query() with a custom tool reaches the handler when the model invokes it', async () => {
     const callLog: Array<{ text: string }> = [];
 
     const upperTool = tool('upper', 'Uppercase the provided text and return it.', { text: z.string() }, (args) => {

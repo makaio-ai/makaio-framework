@@ -179,55 +179,51 @@ describe('variant build smoke — fast', () => {
 // Slow section — CI_FULL only (requires Electrobun CLI, takes minutes)
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!process.env['CI_FULL'])(
-  'variant build smoke — full package builds (CI_FULL)',
-  { timeout: 600_000 },
-  () => {
-    /**
-     * Run a yarn workspace script and assert it exits cleanly.
-     * @param script - The workspace script name to run (e.g. `package:base`).
-     */
-    function runPackageScript(script: string): void {
-      execFileSync('yarn', ['workspace', '@makaio/electrobun', script], {
-        cwd: WORKSPACE_ROOT,
-        stdio: 'inherit',
-        timeout: 540_000,
-      });
-    }
-
-    /**
-     * Read `dist/variant.json` and return the parsed config.
-     * @returns Parsed {@link VariantConfig} from the dist directory.
-     */
-    function readDistVariantJson(): VariantConfig {
-      const raw = readFileSync(path.join(DIST_DIR, 'variant.json'), 'utf-8');
-      return JSON.parse(raw) as VariantConfig;
-    }
-
-    it('package:base produces dist/variant.json with the base variant', () => {
-      runPackageScript('package:base');
-      expect(readDistVariantJson()).toEqual({
-        variant: 'base',
-        releaseTrack: 'stable',
-        electrobunBuildEnv: 'stable',
-        bundleCEF: false,
-        defaultRenderer: 'native',
-        buildFolder: 'build/base-stable',
-        artifactFolder: 'artifacts/base-stable',
-      });
+describe.skipIf(!process.env['CI_FULL'])('variant build smoke — full package builds (CI_FULL)', () => {
+  /**
+   * Run a yarn workspace script and assert it exits cleanly.
+   * @param script - The workspace script name to run (e.g. `package:base`).
+   */
+  function runPackageScript(script: string): void {
+    execFileSync('yarn', ['workspace', '@makaio/electrobun', script], {
+      cwd: WORKSPACE_ROOT,
+      stdio: 'inherit',
+      timeout: 540_000,
     });
+  }
 
-    it('package:cef produces dist/variant.json with the cef variant', () => {
-      runPackageScript('package:cef');
-      expect(readDistVariantJson()).toEqual({
-        variant: 'cef',
-        releaseTrack: 'stable',
-        electrobunBuildEnv: 'stable',
-        bundleCEF: true,
-        defaultRenderer: 'cef',
-        buildFolder: 'build/cef-stable',
-        artifactFolder: 'artifacts/cef-stable',
-      });
+  /**
+   * Read `dist/variant.json` and return the parsed config.
+   * @returns Parsed {@link VariantConfig} from the dist directory.
+   */
+  function readDistVariantJson(): VariantConfig {
+    const raw = readFileSync(path.join(DIST_DIR, 'variant.json'), 'utf-8');
+    return JSON.parse(raw) as VariantConfig;
+  }
+
+  it('package:base produces dist/variant.json with the base variant', () => {
+    runPackageScript('package:base');
+    expect(readDistVariantJson()).toEqual({
+      variant: 'base',
+      releaseTrack: 'stable',
+      electrobunBuildEnv: 'stable',
+      bundleCEF: false,
+      defaultRenderer: 'native',
+      buildFolder: 'build/base-stable',
+      artifactFolder: 'artifacts/base-stable',
     });
-  },
-);
+  });
+
+  it('package:cef produces dist/variant.json with the cef variant', () => {
+    runPackageScript('package:cef');
+    expect(readDistVariantJson()).toEqual({
+      variant: 'cef',
+      releaseTrack: 'stable',
+      electrobunBuildEnv: 'stable',
+      bundleCEF: true,
+      defaultRenderer: 'cef',
+      buildFolder: 'build/cef-stable',
+      artifactFolder: 'artifacts/cef-stable',
+    });
+  });
+});

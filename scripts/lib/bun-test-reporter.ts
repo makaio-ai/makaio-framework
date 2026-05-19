@@ -157,62 +157,162 @@ function relPath(absPath: string): string {
 
 /**
  *
+ * @param attrs
+ * @param name
+ */
+function intAttr(attrs: string, name: string): number {
+  return parseInt(extractAttr(attrs, name) ?? '0');
+}
+
+/**
+ *
+ * @param attrs
+ * @param name
+ */
+function strAttr(attrs: string, name: string): string {
+  return extractAttr(attrs, name) ?? '';
+}
+
+interface SuiteTotals {
+  totalTests: number;
+  totalFailures: number;
+  totalErrors: number;
+  totalSkipped: number;
+}
+
+/**
+ *
+ * @param xml
+ */
+function aggregateSuiteTotals(xml: string): SuiteTotals {
+  const totals: SuiteTotals = { totalTests: 0, totalFailures: 0, totalErrors: 0, totalSkipped: 0 };
+  const suiteRe = /<testsuite\s+([^>]*)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = suiteRe.exec(xml)) !== null) {
+    totals.totalTests += intAttr(m[1]!, 'tests');
+    totals.totalFailures += intAttr(m[1]!, 'failures');
+    totals.totalErrors += intAttr(m[1]!, 'errors');
+    totals.totalSkipped += intAttr(m[1]!, 'skipped');
+  }
+  return totals;
+}
+
+/**
+ *
+ * @param attrs
+ * @param inner
+ */
+function extractTestcaseFailure(attrs: string, inner: string): TestFailure | undefined {
+  const hasFailure = inner.includes('<failure');
+  const hasError = inner.includes('<error');
+  if (!hasFailure && !hasError) return undefined;
+
+  const tag = hasFailure ? 'failure' : 'error';
+  const fRe = new RegExp(`<${tag}\\s+([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`);
+  const fMatch = inner.match(fRe);
+  const fAttrs = fMatch?.[1] ?? '';
+  const fText = fMatch?.[2]?.trim() ?? '';
+  const line = intAttr(attrs, 'line');
+  const file = strAttr(attrs, 'file');
+  const resolved = resolveFile(file);
+
+  return {
+    file: resolved,
+    line,
+    name: strAttr(attrs, 'name'),
+    classname: strAttr(attrs, 'classname'),
+    type: extractAttr(fAttrs, 'type') ?? 'Error',
+    message: extractAttr(fAttrs, 'message') ?? fText,
+    sourceLine: resolved && line > 0 ? readSourceLine(resolved, line) : undefined,
+  };
+}
+
+/**
+ *
  * @param xml
  */
 function parseJunitXml(xml: string): ParseResult {
   const failures: TestFailure[] = [];
   const files = new Set<string>();
-
-  let totalTests = 0;
-  let totalFailures = 0;
-  let totalErrors = 0;
-  let totalSkipped = 0;
-
-  const suiteRe = /<testsuite\s+([^>]*)>/g;
-  let m: RegExpExecArray | null;
-  while ((m = suiteRe.exec(xml)) !== null) {
-    totalTests += parseInt(extractAttr(m[1]!, 'tests') ?? '0');
-    totalFailures += parseInt(extractAttr(m[1]!, 'failures') ?? '0');
-    totalErrors += parseInt(extractAttr(m[1]!, 'errors') ?? '0');
-    totalSkipped += parseInt(extractAttr(m[1]!, 'skipped') ?? '0');
-  }
+  const totals = aggregateSuiteTotals(xml);
 
   const tcRe = /<testcase\s+([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
+  let m: RegExpExecArray | null;
   while ((m = tcRe.exec(xml)) !== null) {
     const attrs = m[1]!;
     const inner = m[2] ?? '';
-    const file = extractAttr(attrs, 'file') ?? '';
+    const file = strAttr(attrs, 'file');
     if (file) files.add(file);
 
-    const hasFailure = inner.includes('<failure');
-    const hasError = inner.includes('<error');
-    if (!hasFailure && !hasError) continue;
-
-    const tag = hasFailure ? 'failure' : 'error';
-    const fRe = new RegExp(`<${tag}\\s+([^>]*?)(?:/>|>([\\s\\S]*?)</${tag}>)`);
-    const fMatch = inner.match(fRe);
-    const fAttrs = fMatch?.[1] ?? '';
-    const fText = fMatch?.[2]?.trim() ?? '';
-    const line = parseInt(extractAttr(attrs, 'line') ?? '0');
-    const resolved = resolveFile(file);
-
-    failures.push({
-      file: resolved,
-      line,
-      name: extractAttr(attrs, 'name') ?? '',
-      classname: extractAttr(attrs, 'classname') ?? '',
-      type: extractAttr(fAttrs, 'type') ?? 'Error',
-      message: extractAttr(fAttrs, 'message') ?? fText,
-      sourceLine: resolved && line > 0 ? readSourceLine(resolved, line) : undefined,
-    });
+    const failure = extractTestcaseFailure(attrs, inner);
+    if (failure) failures.push(failure);
   }
 
-  return { failures, totalTests, totalFailures, totalErrors, totalSkipped, fileCount: files.size };
+  return { failures, ...totals, fileCount: files.size };
 }
 
 // endregion
 
 // region ── output ───────────────────────────────────────────────────────────
+
+/**
+ *
+ * @param f
+ */
+function printSingleFailure(f: TestFailure): void {
+  const location = f.line > 0 ? `${f.file}:${f.line}` : f.file;
+  const label = f.classname ? `${f.classname} > ${f.name}` : f.name;
+
+  if (quiet) {
+    process.stderr.write(`${c.red}FAIL${c.reset} ${label}\n`);
+  } else {
+    process.stderr.write(`\n${c.red}✗${c.reset} ${label}\n`);
+  }
+  process.stderr.write(`  ${c.dim}${location}${c.reset}\n`);
+
+  if (f.sourceLine) {
+    process.stderr.write(`  ${c.dim}→ ${f.sourceLine}${c.reset}\n`);
+  }
+  if (f.message) {
+    process.stderr.write(`  ${f.message.split('\n')[0]}\n`);
+  }
+}
+
+/**
+ *
+ * @param label
+ * @param color
+ * @param icon
+ * @param items
+ */
+function printFileList(label: string, color: string, icon: string, items: string[]): void {
+  if (items.length === 0) return;
+  process.stderr.write(`\n${color}${c.bold}${label}:${c.reset}\n`);
+  for (const item of items) {
+    process.stderr.write(`  ${color}${icon}${c.reset} ${item}\n`);
+  }
+  process.stderr.write('\n');
+}
+
+/**
+ *
+ * @param results
+ * @param crashedFiles
+ * @param hungFiles
+ */
+function buildSummaryParts(results: ParseResult, crashedFiles: string[], hungFiles: string[]): string[] {
+  const { totalTests, totalFailures, totalErrors, totalSkipped } = results;
+  const passed = totalTests - totalFailures - totalSkipped - totalErrors;
+  const failCount = totalFailures + crashedFiles.length;
+
+  const parts: string[] = [];
+  if (passed > 0) parts.push(`${c.green}${passed} pass${c.reset}`);
+  if (failCount > 0) parts.push(`${c.red}${failCount} fail${c.reset}`);
+  if (totalErrors > 0) parts.push(`${c.red}${totalErrors} error${c.reset}`);
+  if (totalSkipped > 0) parts.push(`${c.yellow}${totalSkipped} skip${c.reset}`);
+  if (hungFiles.length > 0) parts.push(`${c.yellow}${hungFiles.length} hung${c.reset}`);
+  return parts;
+}
 
 /**
  *
@@ -222,60 +322,20 @@ function parseJunitXml(xml: string): ParseResult {
  * @param crashedFiles
  */
 function printResults(results: ParseResult, elapsed: number, hungFiles?: string[], crashedFiles?: string[]): void {
-  const { failures, totalTests, totalFailures, totalErrors, totalSkipped, fileCount } = results;
-  const passed = totalTests - totalFailures - totalSkipped - totalErrors;
+  const { failures, fileCount } = results;
+  const safeHung = hungFiles ?? [];
+  const safeCrashed = crashedFiles ?? [];
 
   if (failures.length > 0) {
     if (!quiet) process.stderr.write(`\n${c.red}${c.bold}FAILURES:${c.reset}\n`);
-
-    for (const f of failures) {
-      const location = f.line > 0 ? `${f.file}:${f.line}` : f.file;
-      const label = f.classname ? `${f.classname} > ${f.name}` : f.name;
-
-      if (quiet) {
-        process.stderr.write(`${c.red}FAIL${c.reset} ${label}\n`);
-        process.stderr.write(`  ${c.dim}${location}${c.reset}\n`);
-      } else {
-        process.stderr.write(`\n${c.red}✗${c.reset} ${label}\n`);
-        process.stderr.write(`  ${c.dim}${location}${c.reset}\n`);
-      }
-
-      if (f.sourceLine) {
-        process.stderr.write(`  ${c.dim}→ ${f.sourceLine}${c.reset}\n`);
-      }
-      if (f.message) {
-        process.stderr.write(`  ${f.message.split('\n')[0]}\n`);
-      }
-    }
-
+    for (const f of failures) printSingleFailure(f);
     if (!quiet) process.stderr.write('\n');
   }
 
-  if (crashedFiles && crashedFiles.length > 0) {
-    process.stderr.write(`\n${c.red}${c.bold}CRASHED (no test output):${c.reset}\n`);
-    for (const cr of crashedFiles) {
-      process.stderr.write(`  ${c.red}✗${c.reset} ${cr}\n`);
-    }
-    process.stderr.write('\n');
-  }
+  printFileList('CRASHED (no test output)', c.red, '✗', safeCrashed);
+  printFileList('HUNG (timed out)', c.yellow, '⏱', safeHung);
 
-  if (hungFiles && hungFiles.length > 0) {
-    process.stderr.write(`\n${c.yellow}${c.bold}HUNG (timed out):${c.reset}\n`);
-    for (const h of hungFiles) {
-      process.stderr.write(`  ${c.yellow}⏱${c.reset} ${h}\n`);
-    }
-    process.stderr.write('\n');
-  }
-
-  const crashCount = crashedFiles?.length ?? 0;
-  const failCount = totalFailures + crashCount;
-  const parts: string[] = [];
-  if (passed > 0) parts.push(`${c.green}${passed} pass${c.reset}`);
-  if (failCount > 0) parts.push(`${c.red}${failCount} fail${c.reset}`);
-  if (totalErrors > 0) parts.push(`${c.red}${totalErrors} error${c.reset}`);
-  if (totalSkipped > 0) parts.push(`${c.yellow}${totalSkipped} skip${c.reset}`);
-  if (hungFiles && hungFiles.length > 0) parts.push(`${c.yellow}${hungFiles.length} hung${c.reset}`);
-
+  const parts = buildSummaryParts(results, safeCrashed, safeHung);
   const secs = (elapsed / 1000).toFixed(2);
   process.stdout.write(`\n${parts.join(' | ')} across ${fileCount} files [${secs}s]\n`);
 }
