@@ -1,26 +1,12 @@
-import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
 import { FILE_ACCESS_RULES_KEY, type FileAccessRules } from '../../types.js';
 import { listDirectoryTool } from '../list-directory.js';
+import { useTempDir } from './test-helpers.js';
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'list-directory-ignore-'));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
-});
+const createTempDir = useTempDir('list-directory-ignore-');
 
 /**
  * Build a MakaioContext with a custom isDenied predicate injected as FileAccessRules.

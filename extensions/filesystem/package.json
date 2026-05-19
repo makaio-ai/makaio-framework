@@ -18,7 +18,9 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/tools-core": "workspace:*",
+    "glob": "^13.0.0",
     "ignore": "^7.0.0",
+    "safe-regex2": "^5.1.1",
     "zod": "^4.1.13"
   },
   "devDependencies": {

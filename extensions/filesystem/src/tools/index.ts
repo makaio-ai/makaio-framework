@@ -31,3 +31,28 @@ export {
   type DeleteFileInput,
   type DeleteFileOutput,
 } from './delete-file.js';
+
+export {
+  editFileTool,
+  EditFileInputSchema,
+  EditFileOutputSchema,
+  type EditFileInput,
+  type EditFileOutput,
+} from './edit-file.js';
+
+export {
+  globFilesTool,
+  GlobFilesInputSchema,
+  GlobFilesOutputSchema,
+  type GlobFilesInput,
+  type GlobFilesOutput,
+} from './glob-files.js';
+
+export {
+  grepFilesTool,
+  GrepFilesInputSchema,
+  GrepFilesOutputSchema,
+  type GrepFilesInput,
+  type GrepFilesOutput,
+  type GrepMatch,
+} from './grep-files.js';

@@ -1,15 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
-import {
-  defineTool,
-  toolSuccess,
-  toolError,
-  ToolErrorCodes,
-  errorToToolResult,
-  type ToolFailure,
-  type ToolSuccess,
-} from '@makaio/tools-core';
-import { resolveAndValidatePath } from '../utils/index.js';
+import { defineTool, toolSuccess, toolError, ToolErrorCodes, type ToolSuccess } from '@makaio/tools-core';
+import { resolveAndValidatePath, handleFsError } from '../utils/index.js';
 
 /**
  * Input schema for the read_file tool.
@@ -86,28 +78,6 @@ async function readAsText(
     totalLines,
     truncated,
   });
-}
-
-/**
- * Handles file system errors and returns appropriate tool error.
- * @param err - Error to handle
- * @param resolvedPath - Path for error messages
- * @returns Tool failure result
- */
-function handleFsError(err: unknown, resolvedPath: string): ToolFailure {
-  if (err instanceof Error && 'code' in err) {
-    const code = (err as NodeJS.ErrnoException).code;
-
-    if (code === 'ENOENT') {
-      return toolError(ToolErrorCodes.RESOURCE_NOT_FOUND, `File not found: ${resolvedPath}`);
-    }
-
-    if (code === 'EACCES' || code === 'EPERM') {
-      return toolError(ToolErrorCodes.PERMISSION_DENIED, `Permission denied: ${resolvedPath}`);
-    }
-  }
-
-  return errorToToolResult(err);
 }
 
 /**

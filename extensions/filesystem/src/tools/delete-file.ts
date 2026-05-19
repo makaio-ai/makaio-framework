@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { z } from 'zod';
-import { defineTool, toolSuccess, toolError, ToolErrorCodes, errorToToolResult } from '@makaio/tools-core';
-import { resolveAndValidatePath } from '../utils/index.js';
+import { defineTool, toolSuccess, toolError, ToolErrorCodes } from '@makaio/tools-core';
+import { resolveAndValidatePath, handleFsError } from '../utils/index.js';
 
 /**
  * Input schema for the delete_file tool.
@@ -49,19 +49,7 @@ export const deleteFileTool = defineTool({
 
       return toolSuccess({ path: resolvedPath });
     } catch (err) {
-      if (err instanceof Error && 'code' in err) {
-        const code = (err as NodeJS.ErrnoException).code;
-
-        if (code === 'ENOENT') {
-          return toolError(ToolErrorCodes.RESOURCE_NOT_FOUND, `File not found: ${resolvedPath}`);
-        }
-
-        if (code === 'EACCES' || code === 'EPERM') {
-          return toolError(ToolErrorCodes.PERMISSION_DENIED, `Permission denied: ${resolvedPath}`);
-        }
-      }
-
-      return errorToToolResult(err);
+      return handleFsError(err, resolvedPath);
     }
   },
 });

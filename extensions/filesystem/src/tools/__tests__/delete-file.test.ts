@@ -1,25 +1,11 @@
-import * as os from 'node:os';
-import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import * as path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
 import { deleteFileTool } from '../delete-file.js';
+import { useTempDir } from './test-helpers.js';
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'delete-file-tool-'));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
-});
+const createTempDir = useTempDir('delete-file-tool-');
 
 describe('delete_file tool', () => {
   it('deletes regular files', async () => {

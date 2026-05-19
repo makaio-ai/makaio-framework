@@ -4762,7 +4762,9 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@types/node": "npm:^24.3.0"
+    glob: "npm:^13.0.0"
     ignore: "npm:^7.0.0"
+    safe-regex2: "npm:^5.1.1"
     tsdown: "npm:^0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.5"
@@ -16295,7 +16297,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"glob@npm:13.0.6, glob@npm:^13.0.1":
+"glob@npm:13.0.6, glob@npm:^13.0.0, glob@npm:^13.0.1":
   version: 13.0.6
   resolution: "glob@npm:13.0.6"
   dependencies:

@@ -1,24 +1,10 @@
-import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createMakaioIgnoreProvider } from '../makaioignore-provider.js';
+import { useTempDir } from '../../tools/__tests__/test-helpers.js';
 
-const tempDirs: string[] = [];
-
-async function createTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaioignore-provider-'));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0, tempDirs.length).map(async (dir) => {
-      await fs.rm(dir, { recursive: true, force: true });
-    }),
-  );
-});
+const createTempDir = useTempDir('makaioignore-provider-');
 
 /** Create a provider with global ignore disabled (isolates tests from host machine). */
 function createIsolatedProvider() {

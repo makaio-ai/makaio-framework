@@ -1,0 +1,14 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`tool-call flow comparison > documents the full message type sequence for review 1`] = `
+[
+  "system/init",
+  "system/session_state_changed",
+  "assistant[tool_use]",
+  "tool_progress",
+  "tool_result",
+  "tool_result",
+  "assistant[text]",
+  "result/success",
+]
+`;

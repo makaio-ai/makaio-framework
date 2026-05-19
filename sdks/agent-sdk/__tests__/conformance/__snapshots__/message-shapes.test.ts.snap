@@ -2,72 +2,112 @@
 
 exports[`agent.complete maps to result message > maps a successful completion to subtype "success" 1`] = `
 {
+  "duration_api_ms": 0,
   "duration_ms": 0,
   "is_error": false,
+  "modelUsage": {},
   "num_turns": 1,
+  "permission_denials": [],
   "result": "Task finished.",
   "session_id": "s1",
+  "stop_reason": null,
   "subtype": "success",
   "total_cost_usd": 0,
   "type": "result",
   "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0,
+    },
     "cache_creation_input_tokens": 0,
     "cache_read_input_tokens": 0,
+    "inference_geo": "",
     "input_tokens": 0,
+    "iterations": [],
     "output_tokens": 0,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0,
+    },
+    "service_tier": "standard",
+    "speed": "standard",
   },
   "uuid": "m1",
 }
 `;
 
-exports[`agent.complete maps to result message > maps an error outcome to subtype "error" 1`] = `
+exports[`agent.complete maps to result message > maps an error outcome to subtype "error_during_execution" 1`] = `
 {
+  "duration_api_ms": 0,
   "duration_ms": 0,
+  "errors": [
+    "Rate limit exceeded.",
+  ],
   "is_error": true,
+  "modelUsage": {},
   "num_turns": 1,
-  "result": "Rate limit exceeded.",
+  "permission_denials": [],
   "session_id": "s1",
-  "subtype": "error",
+  "stop_reason": null,
+  "subtype": "error_during_execution",
   "total_cost_usd": 0,
   "type": "result",
   "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 0,
+      "ephemeral_5m_input_tokens": 0,
+    },
     "cache_creation_input_tokens": 0,
     "cache_read_input_tokens": 0,
+    "inference_geo": "",
     "input_tokens": 0,
+    "iterations": [],
     "output_tokens": 0,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0,
+    },
+    "service_tier": "standard",
+    "speed": "standard",
   },
   "uuid": "m1",
 }
 `;
 
-exports[`agent.contextWindow.updated maps to compact boundary message > emits again when the level escalates from warn to critical 1`] = `
+exports[`agent.contextWindow.updated maps to compact boundary message > emits a second event when token count increases 1`] = `
 {
-  "level": "critical",
-  "percentage": 95,
+  "compact_metadata": {
+    "pre_tokens": 95000,
+    "trigger": "auto",
+  },
   "session_id": "s1",
-  "subtype": "compact",
+  "subtype": "compact_boundary",
   "type": "system",
   "uuid": "m1",
 }
 `;
 
-exports[`agent.contextWindow.updated maps to compact boundary message > produces a "critical" level message 1`] = `
+exports[`agent.contextWindow.updated maps to compact boundary message > produces a compact_boundary message for a high token count 1`] = `
 {
-  "level": "critical",
-  "percentage": 95,
+  "compact_metadata": {
+    "pre_tokens": 95000,
+    "trigger": "auto",
+  },
   "session_id": "s1",
-  "subtype": "compact",
+  "subtype": "compact_boundary",
   "type": "system",
   "uuid": "m1",
 }
 `;
 
-exports[`agent.contextWindow.updated maps to compact boundary message > produces a system/compact message with level and percentage 1`] = `
+exports[`agent.contextWindow.updated maps to compact boundary message > produces a system/compact_boundary message with compact_metadata 1`] = `
 {
-  "level": "warn",
-  "percentage": 75,
+  "compact_metadata": {
+    "pre_tokens": 75000,
+    "trigger": "auto",
+  },
   "session_id": "s1",
-  "subtype": "compact",
+  "subtype": "compact_boundary",
   "type": "system",
   "uuid": "m1",
 }
@@ -78,12 +118,37 @@ exports[`agent.message_delta maps to assistant text message > produces a text Co
   "message": {
     "content": [
       {
+        "citations": null,
         "text": "Hello, world!",
         "type": "text",
       },
     ],
+    "id": "m1",
+    "model": "",
     "role": "assistant",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0,
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "",
+      "input_tokens": 0,
+      "iterations": [],
+      "output_tokens": 0,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0,
+      },
+      "service_tier": "standard",
+      "speed": "standard",
+    },
   },
+  "parent_tool_use_id": null,
   "session_id": "s1",
   "type": "assistant",
   "uuid": "m1",
@@ -95,12 +160,37 @@ exports[`agent.message_delta maps to assistant text message > propagates an empt
   "message": {
     "content": [
       {
+        "citations": null,
         "text": "",
         "type": "text",
       },
     ],
+    "id": "m1",
+    "model": "",
     "role": "assistant",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0,
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "",
+      "input_tokens": 0,
+      "iterations": [],
+      "output_tokens": 0,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0,
+      },
+      "service_tier": "standard",
+      "speed": "standard",
+    },
   },
+  "parent_tool_use_id": null,
   "session_id": "s1",
   "type": "assistant",
   "uuid": "m1",
@@ -112,12 +202,37 @@ exports[`agent.reasoning_delta maps to assistant thinking message > produces a t
   "message": {
     "content": [
       {
+        "signature": "",
         "thinking": "Let me reason about this...",
         "type": "thinking",
       },
     ],
+    "id": "m1",
+    "model": "",
     "role": "assistant",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0,
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "",
+      "input_tokens": 0,
+      "iterations": [],
+      "output_tokens": 0,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0,
+      },
+      "service_tier": "standard",
+      "speed": "standard",
+    },
   },
+  "parent_tool_use_id": null,
   "session_id": "s1",
   "type": "assistant",
   "uuid": "m1",
@@ -126,9 +241,17 @@ exports[`agent.reasoning_delta maps to assistant thinking message > produces a t
 
 exports[`agent.started maps to system init message > produces an SDKSystemMessage with subtype "init" 1`] = `
 {
+  "apiKeySource": "user",
+  "claude_code_version": "",
   "cwd": "/tmp",
+  "mcp_servers": [],
   "model": "sonnet",
+  "output_style": "",
+  "permissionMode": "default",
+  "plugins": [],
   "session_id": "s1",
+  "skills": [],
+  "slash_commands": [],
   "subtype": "init",
   "tools": [],
   "type": "system",
@@ -138,9 +261,17 @@ exports[`agent.started maps to system init message > produces an SDKSystemMessag
 
 exports[`agent.started maps to system init message > uses the model and cwd from the payload 1`] = `
 {
+  "apiKeySource": "user",
+  "claude_code_version": "",
   "cwd": "/workspace/project",
+  "mcp_servers": [],
   "model": "opus",
+  "output_style": "",
+  "permissionMode": "default",
+  "plugins": [],
   "session_id": "s1",
+  "skills": [],
+  "slash_commands": [],
   "subtype": "init",
   "tools": [],
   "type": "system",
@@ -148,20 +279,13 @@ exports[`agent.started maps to system init message > uses the model and cwd from
 }
 `;
 
-exports[`agent.tool.output maps to assistant tool_result message > produces a tool_result ContentBlock with content and id 1`] = `
+exports[`agent.tool.output maps to SDKToolResultMessage > produces a tool_result message with content and tool_use_id 1`] = `
 {
-  "message": {
-    "content": [
-      {
-        "content": "export function hello() {}",
-        "id": "tc-42",
-        "type": "tool_result",
-      },
-    ],
-    "role": "assistant",
-  },
+  "content": "export function hello() {}",
+  "is_error": false,
   "session_id": "s1",
-  "type": "assistant",
+  "tool_use_id": "tc-42",
+  "type": "tool_result",
   "uuid": "m1",
 }
 `;
@@ -177,8 +301,32 @@ exports[`agent.tool.use maps to assistant tool_use message > handles an empty ar
         "type": "tool_use",
       },
     ],
+    "id": "m1",
+    "model": "",
     "role": "assistant",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0,
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "",
+      "input_tokens": 0,
+      "iterations": [],
+      "output_tokens": 0,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0,
+      },
+      "service_tier": "standard",
+      "speed": "standard",
+    },
   },
+  "parent_tool_use_id": null,
   "session_id": "s1",
   "type": "assistant",
   "uuid": "m1",
@@ -192,14 +340,38 @@ exports[`agent.tool.use maps to assistant tool_use message > produces a tool_use
       {
         "id": "tc-42",
         "input": {
-          "path": "/src/index.ts",
+          "file_path": "/src/index.ts",
         },
-        "name": "read_file",
+        "name": "Read",
         "type": "tool_use",
       },
     ],
+    "id": "m1",
+    "model": "",
     "role": "assistant",
+    "stop_reason": null,
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 0,
+      },
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "",
+      "input_tokens": 0,
+      "iterations": [],
+      "output_tokens": 0,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0,
+      },
+      "service_tier": "standard",
+      "speed": "standard",
+    },
   },
+  "parent_tool_use_id": null,
   "session_id": "s1",
   "type": "assistant",
   "uuid": "m1",

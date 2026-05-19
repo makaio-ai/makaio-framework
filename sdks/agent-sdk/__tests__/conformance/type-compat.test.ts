@@ -34,7 +34,10 @@ import type {
   SDKCompactBoundaryMessage,
   SDKMessage,
   SDKResultMessage,
+  SDKSessionStateChangedMessage,
+  SDKStatusMessage,
   SDKSystemMessage,
+  SDKToolProgressMessage,
   SDKUsage,
   SDKUserMessage,
   SdkMcpToolDefinition,
@@ -76,7 +79,7 @@ describe('SDKMessage discriminant invariants', () => {
 
   it('SDKSystemMessage and SDKCompactBoundaryMessage are narrowed by subtype', () => {
     expectTypeOf<SDKSystemMessage['subtype']>().toEqualTypeOf<'init'>();
-    expectTypeOf<SDKCompactBoundaryMessage['subtype']>().toEqualTypeOf<'compact'>();
+    expectTypeOf<SDKCompactBoundaryMessage['subtype']>().toEqualTypeOf<'compact_boundary'>();
   });
 });
 
@@ -94,7 +97,9 @@ describe('required identifier fields', () => {
 
   it('SDKResultMessage has required session_id and uuid', () => {
     expectTypeOf<SDKResultMessage['session_id']>().toEqualTypeOf<string>();
-    expectTypeOf<SDKResultMessage['uuid']>().toEqualTypeOf<string>();
+    // uuid is a UUID template literal (`${string}-${string}-...`), a subtype of
+    // string — use toMatchTypeOf to verify the string constraint holds.
+    expectTypeOf<SDKResultMessage['uuid']>().toMatchTypeOf<string>();
   });
 
   it('SDKSystemMessage has required session_id and uuid', () => {
@@ -140,6 +145,18 @@ describe('SDKMessage union membership', () => {
   it('SDKCompactBoundaryMessage is a member of SDKMessage', () => {
     expectTypeOf<SDKCompactBoundaryMessage>().toMatchTypeOf<SDKMessage>();
   });
+
+  it('SDKToolProgressMessage is a member of SDKMessage', () => {
+    expectTypeOf<SDKToolProgressMessage>().toMatchTypeOf<SDKMessage>();
+  });
+
+  it('SDKStatusMessage is a member of SDKMessage', () => {
+    expectTypeOf<SDKStatusMessage>().toMatchTypeOf<SDKMessage>();
+  });
+
+  it('SDKSessionStateChangedMessage is a member of SDKMessage', () => {
+    expectTypeOf<SDKSessionStateChangedMessage>().toMatchTypeOf<SDKMessage>();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -147,19 +164,25 @@ describe('SDKMessage union membership', () => {
 // ---------------------------------------------------------------------------
 
 describe('ContentBlock structural invariants', () => {
-  it('has a type discriminant covering all four variants', () => {
-    expectTypeOf<ContentBlock['type']>().toEqualTypeOf<'text' | 'thinking' | 'tool_use' | 'tool_result'>();
+  it('has a type discriminant covering three variants', () => {
+    expectTypeOf<ContentBlock['type']>().toEqualTypeOf<'text' | 'thinking' | 'tool_use'>();
   });
 
-  it('text and thinking fields are optional strings', () => {
-    expectTypeOf<ContentBlock['text']>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ContentBlock['thinking']>().toEqualTypeOf<string | undefined>();
+  it('narrows TextBlock with required text field', () => {
+    type Narrowed = Extract<ContentBlock, { type: 'text' }>;
+    expectTypeOf<Narrowed['text']>().toEqualTypeOf<string>();
   });
 
-  it('tool_use fields id, name, and input are optional', () => {
-    expectTypeOf<ContentBlock['id']>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ContentBlock['name']>().toEqualTypeOf<string | undefined>();
-    expectTypeOf<ContentBlock['input']>().toEqualTypeOf<Record<string, unknown> | undefined>();
+  it('narrows ThinkingBlock with required thinking field', () => {
+    type Narrowed = Extract<ContentBlock, { type: 'thinking' }>;
+    expectTypeOf<Narrowed['thinking']>().toEqualTypeOf<string>();
+  });
+
+  it('narrows ToolUseBlock with required id, name, and input', () => {
+    type Narrowed = Extract<ContentBlock, { type: 'tool_use' }>;
+    expectTypeOf<Narrowed['id']>().toEqualTypeOf<string>();
+    expectTypeOf<Narrowed['name']>().toEqualTypeOf<string>();
+    expectTypeOf<Narrowed['input']>().toEqualTypeOf<Record<string, unknown>>();
   });
 });
 
@@ -181,8 +204,14 @@ describe('SDKUsage field types', () => {
 // ---------------------------------------------------------------------------
 
 describe('SDKResultMessage subtype', () => {
-  it('subtype covers "success" and "error"', () => {
-    expectTypeOf<SDKResultMessage['subtype']>().toEqualTypeOf<'success' | 'error'>();
+  it('subtype covers success and all error variants', () => {
+    expectTypeOf<SDKResultMessage['subtype']>().toEqualTypeOf<
+      | 'success'
+      | 'error_during_execution'
+      | 'error_max_turns'
+      | 'error_max_budget_usd'
+      | 'error_max_structured_output_retries'
+    >();
   });
 
   it('is_error is a boolean', () => {
@@ -197,16 +226,24 @@ describe('SDKResultMessage subtype', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. SDKCompactBoundaryMessage level field
+// 7. SDKCompactBoundaryMessage compact_metadata field
 // ---------------------------------------------------------------------------
 
-describe('SDKCompactBoundaryMessage level', () => {
-  it('level is the union "ok" | "warn" | "critical"', () => {
-    expectTypeOf<SDKCompactBoundaryMessage['level']>().toEqualTypeOf<'ok' | 'warn' | 'critical'>();
+describe('SDKCompactBoundaryMessage compact_metadata', () => {
+  it('subtype is the literal "compact_boundary"', () => {
+    expectTypeOf<SDKCompactBoundaryMessage['subtype']>().toEqualTypeOf<'compact_boundary'>();
   });
 
-  it('percentage is a number', () => {
-    expectTypeOf<SDKCompactBoundaryMessage['percentage']>().toEqualTypeOf<number>();
+  it('compact_metadata.trigger covers "manual" and "auto"', () => {
+    expectTypeOf<SDKCompactBoundaryMessage['compact_metadata']['trigger']>().toEqualTypeOf<'manual' | 'auto'>();
+  });
+
+  it('compact_metadata.pre_tokens is a required number', () => {
+    expectTypeOf<SDKCompactBoundaryMessage['compact_metadata']['pre_tokens']>().toEqualTypeOf<number>();
+  });
+
+  it('compact_metadata.post_tokens is an optional number', () => {
+    expectTypeOf<SDKCompactBoundaryMessage['compact_metadata']['post_tokens']>().toEqualTypeOf<number | undefined>();
   });
 });
 
@@ -302,6 +339,16 @@ describe('Claude SDK cross-reference (public type compatibility)', () => {
     expectTypeOf<SDKSystemMessage['model']>().toEqualTypeOf<ClaudeSDKSystemMessage['model']>();
     expectTypeOf<SDKSystemMessage['cwd']>().toEqualTypeOf<ClaudeSDKSystemMessage['cwd']>();
     expectTypeOf<SDKSystemMessage['tools']>().toEqualTypeOf<ClaudeSDKSystemMessage['tools']>();
+    expectTypeOf<SDKSystemMessage['apiKeySource']>().toEqualTypeOf<ClaudeSDKSystemMessage['apiKeySource']>();
+    expectTypeOf<SDKSystemMessage['claude_code_version']>().toEqualTypeOf<
+      ClaudeSDKSystemMessage['claude_code_version']
+    >();
+    expectTypeOf<SDKSystemMessage['permissionMode']>().toEqualTypeOf<ClaudeSDKSystemMessage['permissionMode']>();
+    expectTypeOf<SDKSystemMessage['output_style']>().toEqualTypeOf<ClaudeSDKSystemMessage['output_style']>();
+    expectTypeOf<SDKSystemMessage['mcp_servers']>().toEqualTypeOf<ClaudeSDKSystemMessage['mcp_servers']>();
+    expectTypeOf<SDKSystemMessage['slash_commands']>().toEqualTypeOf<ClaudeSDKSystemMessage['slash_commands']>();
+    expectTypeOf<SDKSystemMessage['skills']>().toEqualTypeOf<ClaudeSDKSystemMessage['skills']>();
+    expectTypeOf<SDKSystemMessage['plugins']>().toEqualTypeOf<ClaudeSDKSystemMessage['plugins']>();
     expectTypeOf<ClaudeSDKSystemMessage['uuid']>().toMatchTypeOf<SDKSystemMessage['uuid']>();
     expectTypeOf<SDKSystemMessage['session_id']>().toEqualTypeOf<ClaudeSDKSystemMessage['session_id']>();
   });
