@@ -46,7 +46,7 @@ export function createSummary(
 /**
  * Generates suggested actions for AI based on validation results.
  *
- * Analyzes validation results to determine which files need prettier/eslint/stylelint
+ * Analyzes validation results to determine which files need biome/eslint/stylelint
  * auto-fixing or manual TypeScript fixes, generating actionable recommendations.
  * @param fileResults - File validation results keyed by file path
  * @returns Array of suggested actions with file paths and descriptions
@@ -56,9 +56,18 @@ export function generateSuggestedActions(fileResults: FileValidationResults): Va
 
   for (const [file, results] of Object.entries(fileResults)) {
     const hasUnfixedPrettier = results.some((r) => r.tool === 'prettier' && r.fixable && !r.fixedAutomatically);
+    const hasUnfixedBiome = results.some((r) => r.tool === 'biome' && r.fixable && !r.fixedAutomatically);
     const hasUnfixedEslint = results.some((r) => r.tool === 'eslint' && r.fixable && !r.fixedAutomatically);
     const hasStylelintErrors = results.some((r) => r.tool === 'stylelint' && r.severity === 'error');
     const hasTypeErrors = results.some((r) => r.tool === 'typescript' && r.severity === 'error');
+
+    if (hasUnfixedBiome) {
+      actions?.push({
+        file,
+        action: 'biome-fix',
+        description: 'Run Biome formatting on this file',
+      });
+    }
 
     if (hasUnfixedPrettier) {
       actions?.push({

@@ -3,6 +3,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { ValidateOptions } from '../types.js';
 
+const VALIDATION_FILE_PATTERN = '**/*.{ts,tsx,js,jsx,cjs,mjs,cts,mts,json,jsonc,css,scss}';
+
 /**
  * Resolves files to validate based on options.
  *
@@ -24,7 +26,7 @@ export async function resolveFiles(options: ValidateOptions): Promise<string[]> 
 
         if (stats.isDirectory()) {
           // Convert directory to glob pattern
-          patterns.push(path.join(absolutePath, '**/*.{ts,tsx,js,jsx,json,scss}'));
+          patterns.push(path.join(absolutePath, VALIDATION_FILE_PATTERN));
         } else {
           // Keep files as-is
           patterns.push(absolutePath);
@@ -44,7 +46,7 @@ export async function resolveFiles(options: ValidateOptions): Promise<string[]> 
     });
   }
 
-  const pattern = options.glob || '**/*.{ts,tsx,js,jsx,json,scss}';
+  const pattern = options.glob || VALIDATION_FILE_PATTERN;
   // Respect .gitignore for sensible defaults; keep node_modules as fallback
   return globby(pattern, {
     ignore: ['**/node_modules/**'],

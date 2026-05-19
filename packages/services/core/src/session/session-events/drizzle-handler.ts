@@ -107,10 +107,8 @@ function extractContentText(event: MakaioSessionEvent): string | null {
     case 'turn.started':
     case 'turn.completed':
     // Message link event - content is in messages table, not here
-    // eslint-disable-next-line no-fallthrough
     case 'message':
     // Branch/squash events - no searchable content
-    // eslint-disable-next-line no-fallthrough
     case 'branch.created':
     case 'branch.merged':
     case 'squash':

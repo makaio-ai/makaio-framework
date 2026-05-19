@@ -1,5 +1,5 @@
 /**
- * Workspace validation for TypeScript, ESLint, and Prettier.
+ * Workspace validation for Biome formatting, ESLint, Stylelint, and TypeScript.
  * @packageDocumentation
  */
 

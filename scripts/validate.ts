@@ -2,7 +2,7 @@
 /**
  * CLI entry point for validation.
  *
- * Runs prettier, eslint, and TypeScript validation on the codebase using the
+ * Runs formatting, eslint, stylelint, and TypeScript validation using the
  * selected runtime profile.
  * @example
  * ```bash
@@ -40,7 +40,7 @@ const DEFAULT_VALIDATE_PROFILE: ValidateProfile = (() => {
   throw new Error(`Invalid MAKAIO_VALIDATE_PROFILE="${raw}". Use "standalone" or "full-workspace".`);
 })();
 
-const VALIDATION_TOOLS: ValidationTool[] = ['prettier', 'eslint', 'stylelint', 'typescript'];
+const VALIDATION_TOOLS: ValidationTool[] = ['biome', 'prettier', 'eslint', 'stylelint', 'typescript'];
 
 export interface ValidateCliHooks {
   /**
@@ -261,9 +261,9 @@ ${chalk.bold('Options:')}
   --no-cache     Disable validator caches
   --profile      Validation topology: standalone or full-workspace
   --tsconfig     Explicit tsconfig.json path for TypeScript validation
-  --tool         Run one validation tool: prettier, eslint, stylelint, typescript
+  --tool         Run one validation tool: biome, prettier, eslint, stylelint, typescript
   --tools        Run comma-separated validation tools
-  --verbose      Show files checked by each tool (prettier, eslint, typescript)
+  --verbose      Show files checked by each tool
   --show-actions Show suggested actions for AI
   --help         Show this help message
 
@@ -502,7 +502,7 @@ export async function runValidateCli(args: string[], hooks: ValidateCliHooks = {
     console.info(output);
 
     return summary.filesWithErrors > 0 ? 1 : anyFailed ? 2 : 0;
-  } catch (error: Error | unknown) {
+  } catch (error: unknown) {
     console.error(chalk.red('Validation failed:'), error instanceof Error ? error.message : String(error));
     return 1;
   }

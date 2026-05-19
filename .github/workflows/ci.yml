@@ -40,8 +40,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Prettier Validation
-            command: yarn validate:prettier
+          - name: Biome Validation
+            command: yarn validate:biome
             validation: true
           - name: ESLint Validation
             command: yarn validate:eslint

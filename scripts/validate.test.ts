@@ -29,12 +29,13 @@ describe('parseCliArgs', () => {
   });
 
   it('accepts a single validation tool', () => {
+    expect(parseCliArgs(['--tool', 'biome']).tools).toEqual(['biome']);
     expect(parseCliArgs(['--tool', 'typescript']).tools).toEqual(['typescript']);
     expect(parseCliArgs(['--tool=eslint']).tools).toEqual(['eslint']);
   });
 
   it('accepts comma-separated validation tools', () => {
-    expect(parseCliArgs(['--tools', 'prettier,stylelint']).tools).toEqual(['prettier', 'stylelint']);
+    expect(parseCliArgs(['--tools', 'biome,stylelint']).tools).toEqual(['biome', 'stylelint']);
     expect(parseCliArgs(['--tools=eslint,typescript']).tools).toEqual(['eslint', 'typescript']);
   });
 
@@ -49,10 +50,10 @@ describe('parseCliArgs', () => {
 
   it('fails fast for invalid tool values', () => {
     expect(() => parseCliArgs(['--tool', 'unknown'])).toThrow(
-      'Invalid value for --tool. Use one of: prettier, eslint, stylelint, typescript.',
+      'Invalid value for --tool. Use one of: biome, prettier, eslint, stylelint, typescript.',
     );
     expect(() => parseCliArgs(['--tools=eslint,unknown'])).toThrow(
-      'Invalid value for --tool. Use one of: prettier, eslint, stylelint, typescript.',
+      'Invalid value for --tool. Use one of: biome, prettier, eslint, stylelint, typescript.',
     );
   });
 });

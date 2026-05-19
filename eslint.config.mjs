@@ -16,6 +16,7 @@ export default tseslint.config(
     {
       ignores: [
         // Plain CJS runtime scripts — not TypeScript source, exempt from TS/ESM rules
+        'apps/electron/src/main/preload.cjs',
         'packages/native-session-supervisor/src/pty/bridge/*.cjs',
       ],
     },

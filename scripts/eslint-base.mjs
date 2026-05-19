@@ -17,9 +17,78 @@ import importPlugin from 'eslint-plugin-import';
 import { jsdoc } from 'eslint-plugin-jsdoc';
 import tsdoc from 'eslint-plugin-tsdoc';
 
+// Keys are ESLint rule IDs disabled because Biome now owns the same checks.
+// Several Biome equivalents use different names, e.g. no-fallthrough maps to
+// noFallthroughSwitchClause, prefer-const maps to useConst, and
+// @typescript-eslint/no-explicit-any maps to noExplicitAny.
+const BIOME_OWNED_TYPESCRIPT_RULES = {
+  'constructor-super': 'off',
+  'for-direction': 'off',
+  'no-case-declarations': 'off',
+  'no-compare-neg-zero': 'off',
+  'no-const-assign': 'off',
+  'no-constant-binary-expression': 'off',
+  'no-constant-condition': 'off',
+  'no-control-regex': 'off',
+  'no-debugger': 'off',
+  'no-dupe-args': 'off',
+  'no-dupe-class-members': 'off',
+  'no-dupe-else-if': 'off',
+  'no-dupe-keys': 'off',
+  'no-duplicate-case': 'off',
+  'no-empty-character-class': 'off',
+  'no-empty-pattern': 'off',
+  'no-empty-static-block': 'off',
+  'no-ex-assign': 'off',
+  'no-extra-boolean-cast': 'off',
+  'no-fallthrough': 'off',
+  'no-func-assign': 'off',
+  'no-global-assign': 'off',
+  'no-import-assign': 'off',
+  'no-irregular-whitespace': 'off',
+  'no-loss-of-precision': 'off',
+  'no-misleading-character-class': 'off',
+  'no-new-native-nonconstructor': 'off',
+  'no-nonoctal-decimal-escape': 'off',
+  'no-redeclare': 'off',
+  'no-regex-spaces': 'off',
+  'no-self-assign': 'off',
+  'no-setter-return': 'off',
+  'no-shadow-restricted-names': 'off',
+  'no-sparse-arrays': 'off',
+  'no-this-before-super': 'off',
+  'no-unreachable': 'off',
+  'no-unsafe-finally': 'off',
+  'no-unsafe-negation': 'off',
+  'no-unsafe-optional-chaining': 'off',
+  'no-unused-labels': 'off',
+  'no-useless-backreference': 'off',
+  'no-useless-catch': 'off',
+  'no-useless-escape': 'off',
+  'no-var': 'off',
+  'no-with': 'off',
+  'prefer-const': 'off',
+  'prefer-rest-params': 'off',
+  'require-yield': 'off',
+  'use-isnan': 'off',
+  'valid-typeof': 'off',
+  '@typescript-eslint/no-array-constructor': 'off',
+  '@typescript-eslint/no-explicit-any': 'off',
+  '@typescript-eslint/no-extra-non-null-assertion': 'off',
+  '@typescript-eslint/no-misused-new': 'off',
+  '@typescript-eslint/no-namespace': 'off',
+  '@typescript-eslint/no-non-null-asserted-optional-chain': 'off',
+  '@typescript-eslint/no-unnecessary-type-constraint': 'off',
+  '@typescript-eslint/no-unsafe-declaration-merging': 'off',
+  '@typescript-eslint/prefer-as-const': 'off',
+  '@typescript-eslint/prefer-namespace-keyword': 'off',
+};
+
 /**
- * @param {{ noComplexInlineReturnType: any, preferBusFilter: any, noSubjectBracketNotation: any }} customRules
- * @param {{ ignores?: string[] }} [options]
+ * Creates the shared flat ESLint configuration used by framework and product roots.
+ * @param {{ noComplexInlineReturnType: any, preferBusFilter: any, noSubjectBracketNotation: any }} customRules - Local custom rule implementations.
+ * @param {{ ignores?: string[] }} [options] - Optional root-specific ignore patterns.
+ * @returns Flat ESLint configuration entries.
  */
 export function createBaseConfig(customRules, options = {}) {
   const { noComplexInlineReturnType, preferBusFilter, noSubjectBracketNotation } = customRules;
@@ -31,6 +100,11 @@ export function createBaseConfig(customRules, options = {}) {
     jsdoc({
       config: 'flat/requirements-typescript',
     }),
+    {
+      rules: {
+        'jsdoc/require-example': 'off',
+      },
+    },
 
     // ── Ignores ───────────────────────────────────────────────────────────────
     {
@@ -102,6 +176,7 @@ export function createBaseConfig(customRules, options = {}) {
             caughtErrorsIgnorePattern: '^_',
           },
         ],
+        ...BIOME_OWNED_TYPESCRIPT_RULES,
       },
       settings: {
         'import/resolver': { node: { extensions: ['.js', '.jsx'] } },
@@ -112,6 +187,7 @@ export function createBaseConfig(customRules, options = {}) {
     {
       files: [
         '**/*.test.{ts,tsx}',
+        '**/*.test.*.{ts,tsx}',
         '**/test/**/*.ts',
         '**/test-*.ts',
         '**/__tests__/**/*.ts',

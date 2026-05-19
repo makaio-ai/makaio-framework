@@ -1,4 +1,7 @@
 import { satisfies } from 'semver';
+import * as fs from 'fs/promises';
+import * as path from 'path';
+import { createRequire } from 'module';
 import {
   resolveLocalModule,
   extractESLintCtor,
@@ -7,12 +10,85 @@ import {
   isTsNamespace,
 } from './module-resolver.js';
 
+const requireFromHere = createRequire(import.meta.url);
+
 const COMPAT = {
+  biome: '>=2.4.0 <3.0.0',
   prettier: '>=3.0.0 <4.0.0',
   eslint: '>=9.0.0 <10.0.0',
   typescript: '>=5.0.0 <8.0.0',
   stylelint: '>=16.0.0 <17.0.0',
 } as const;
+
+/** Biome command line tool resolved from the local project installation. */
+export interface BiomeCli {
+  /** Path to the package-provided Biome launcher script. */
+  binPath: string;
+  /** Installed Biome version. */
+  version: string;
+}
+
+/**
+ * Resolves the local Biome package from the given base directories.
+ * @param baseDirs - Directories to search from, in precedence order.
+ * @returns Resolved Biome CLI metadata or null when unavailable/incompatible.
+ */
+async function resolveLocalBiome(
+  baseDirs: string[],
+): Promise<{ cli: BiomeCli; local: { modulePath: string; version: string } } | null> {
+  const tried = new Set<string>();
+
+  for (const base of baseDirs) {
+    const dir = path.resolve(base);
+    if (tried.has(dir)) continue;
+    tried.add(dir);
+
+    try {
+      const packageJsonPath = requireFromHere.resolve('@biomejs/biome/package.json', {
+        paths: [dir],
+      });
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf-8')) as {
+        version: string;
+        bin?: { biome?: string };
+      };
+
+      if (!satisfies(packageJson.version, COMPAT.biome)) {
+        continue;
+      }
+
+      const relativeBin = packageJson.bin?.biome;
+      if (!relativeBin) {
+        continue;
+      }
+
+      const binPath = path.join(path.dirname(packageJsonPath), relativeBin);
+      return {
+        cli: { binPath, version: packageJson.version },
+        local: { modulePath: binPath, version: packageJson.version },
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Loads Biome with a local-first strategy.
+ * @param baseDirs - Directories to search for local Biome installation.
+ * @returns Resolved Biome CLI metadata and local package info.
+ */
+export async function loadBiome(baseDirs: string[]): Promise<{
+  mod?: BiomeCli;
+  local: { modulePath: string; version: string } | null;
+}> {
+  const resolved = await resolveLocalBiome(baseDirs);
+  if (!resolved) {
+    return { mod: undefined, local: null };
+  }
+  return { mod: resolved.cli, local: resolved.local };
+}
 
 /**
  * Extracts Prettier namespace from an imported module.

@@ -9,9 +9,9 @@ updates:
       production-minor-patch:
         dependency-type: "production"
         update-types: ["minor", "patch"]
-        exclude-patterns: ["eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
+        exclude-patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
       linting:
-        patterns: ["eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
+        patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
 
   - package-ecosystem: "pip"
     directory: "/sdks/python"
