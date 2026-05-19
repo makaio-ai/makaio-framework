@@ -1,0 +1,8 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@octokit/rest": "22.0.1",
+    "human-id": "4.1.3"
+  }
+}

@@ -18,7 +18,7 @@ env:
 
 jobs:
   changeset-required:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Checkout
@@ -146,60 +146,10 @@ jobs:
           exit 1
         working-directory: trusted
 
-      - name: Setup Node
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
-        uses: actions/setup-node@v6
-        with:
-          node-version: 24
-
-      - name: Enable Corepack
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
-        run: corepack enable
-
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Restore Yarn cache
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
-        id: yarn-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            trusted/.yarn/cache
-            trusted/.yarn/install-state.gz
-          key: yarn-cache-${{ hashFiles('trusted/yarn.lock') }}
-          restore-keys: yarn-cache-
-
-      - name: Restore node_modules
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
-        id: nm-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: "trusted/**/node_modules"
-          key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
-
-      - name: Install dependencies
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
-        run: yarn install --immutable
-        working-directory: trusted
-
-      - name: Save Yarn cache
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            trusted/.yarn/cache
-            trusted/.yarn/install-state.gz
-          key: yarn-cache-${{ hashFiles('trusted/yarn.lock') }}
-
-      - name: Save node_modules
-        if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true' && steps.nm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: "trusted/**/node_modules"
-          key: node-modules-v3-${{ hashFiles('trusted/yarn.lock') }}
 
       - name: Check changeset
         if: steps.skip.outputs.skip != 'true' && steps.head_changeset.outputs.present != 'true' && steps.publish_relevance.outputs.relevant != 'false' && steps.checker.outputs.available == 'true'
