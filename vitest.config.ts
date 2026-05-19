@@ -40,6 +40,7 @@ export default defineConfig({
             '**/dist/**',
             '**/*.spec.ts',
             '**/.tmp/**',
+            '**/*.bun.test.ts',
             '**/*.browser.test.ts',
             '**/*.browser.test.tsx',
             '**/*.e2e.test.ts',
@@ -60,7 +61,7 @@ export default defineConfig({
           name: 'ui-jsdom',
           environment: 'jsdom',
           include: ['packages/**/*.test.tsx', 'extensions/**/*.test.tsx', 'ui/**/*.test.tsx', 'apps/**/*.test.tsx'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/*.browser.test.ts', '**/*.browser.test.tsx'],
+          exclude: ['**/node_modules/**', '**/dist/**', '**/*.bun.test.ts', '**/*.browser.test.ts', '**/*.browser.test.tsx'],
         },
       },
       {
@@ -70,6 +71,7 @@ export default defineConfig({
           include: ['adapters/implementations/**/*.test.ts', 'adapters/shared/**/*.test.ts'],
           exclude: [
             '**/node_modules/**',
+            '**/*.bun.test.ts',
             '**/*.integration.test.ts',
             // These are adapter-conformance templates: importing them directly
             // requires MAKAIO_TEST_ADAPTER and a provider-backed test config.
@@ -86,6 +88,7 @@ export default defineConfig({
           include: ['adapters/implementations/**/*.integration.test.ts', 'adapters/shared/**/*.integration.test.ts'],
           exclude: [
             '**/node_modules/**',
+            '**/*.bun.test.ts',
             // See the adapters project above: these files are not standalone
             // integration specs and need the adapter harness environment.
             'adapters/implementations/__tests__/**',
