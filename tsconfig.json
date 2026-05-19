@@ -11,6 +11,8 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowJs": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "rootDir": "./",
     "types": ["node", "vite/client", "@testing-library/jest-dom"],
     "paths": {

@@ -43,18 +43,23 @@ jobs:
           - name: Biome Validation
             command: yarn validate:biome
             validation: true
+            setup_bun: true
           - name: ESLint Validation
             command: yarn validate:eslint
             validation: true
+            setup_bun: true
           - name: Stylelint Validation
             command: yarn validate:stylelint
             validation: true
+            setup_bun: true
           - name: TypeScript Validation
             command: yarn validate:typescript
             validation: true
+            setup_bun: true
           - name: SDK Codegen Drift
             command: yarn validate:sdk-codegen
             validation: true
+            setup_bun: true
           - name: Unit Tests
             command: yarn test
             setup_bun: true

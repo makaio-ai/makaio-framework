@@ -79,7 +79,7 @@ describe('validateTypeScriptWithConfig', () => {
     expect(results[excludedFile]).toBeUndefined();
   });
 
-  it('falls back to TypeScript diagnostics when the tsgo subprocess fails', async () => {
+  it('throws when tsgo subprocess fails', async () => {
     const root = await createTempWorkspace();
     process.chdir(root);
 
@@ -101,14 +101,8 @@ describe('validateTypeScriptWithConfig', () => {
 
     const results: FileValidationResults = {};
     const ctx = new ValidatorContext(results);
-    const output = await validateTypeScriptWithConfig([includedFile], path.join(root, 'tsconfig.json'), ctx);
-
-    expect(output.filesChecked).toEqual([includedFile]);
-    expect(results[includedFile]).toContainEqual(
-      expect.objectContaining({
-        ruleId: 'TS2322',
-        tool: 'typescript',
-      }),
+    await expect(validateTypeScriptWithConfig([includedFile], path.join(root, 'tsconfig.json'), ctx)).rejects.toThrow(
+      'tsgo --noEmit failed',
     );
   });
 });

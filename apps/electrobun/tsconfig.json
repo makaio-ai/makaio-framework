@@ -3,7 +3,9 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "outDir": "./dist",
-    "types": ["node", "vite/client"]
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun-types", "vite/client"]
   },
   "include": ["src/**/*", "vite.renderer.config.ts", "electrobun.config.ts", "build.ts"]
 }

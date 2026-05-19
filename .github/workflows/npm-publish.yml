@@ -187,7 +187,7 @@ jobs:
           PACKAGES: ${{ steps.request.outputs.packages }}
         run: |
           timestamp="$(node -p 'Date.now().toString()')"
-          yarn tsx scripts/dev-publish.ts prepare \
+          bun scripts/dev-publish.ts prepare \
             --packages "$PACKAGES" \
             --timestamp "$timestamp" \
             --out "$DEV_PUBLISH_MANIFEST"
@@ -198,11 +198,11 @@ jobs:
           yarn workspaces foreach -Rpt --from "$from" run build
 
       - name: Pack selected packages
-        run: yarn tsx scripts/dev-publish.ts pack --manifest "$DEV_PUBLISH_MANIFEST"
+        run: bun scripts/dev-publish.ts pack --manifest "$DEV_PUBLISH_MANIFEST"
 
       - name: Publish selected packages
         if: steps.request.outputs.dry-run != 'true'
-        run: yarn tsx scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
+        run: bun scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
 
       - name: Push annotated dev tags
         if: steps.request.outputs.dry-run != 'true'
@@ -212,7 +212,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          yarn tsx scripts/dev-publish.ts tag \
+          bun scripts/dev-publish.ts tag \
             --manifest "$DEV_PUBLISH_MANIFEST" \
             --source-sha "$SOURCE_SHA" \
             --workflow-url "$WORKFLOW_URL"
@@ -223,7 +223,7 @@ jobs:
           SOURCE_SHA: ${{ steps.request.outputs.source-sha }}
           WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          yarn tsx scripts/dev-publish.ts summary \
+          bun scripts/dev-publish.ts summary \
             --manifest "$DEV_PUBLISH_MANIFEST" \
             --source-sha "$SOURCE_SHA" \
             --workflow-url "$WORKFLOW_URL" \

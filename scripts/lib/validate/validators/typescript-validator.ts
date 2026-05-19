@@ -5,12 +5,6 @@ import chalk from 'chalk';
 import { minimatch } from 'minimatch';
 import type { ValidatorContext } from '../util/validator-context.js';
 import { loadTypeScript } from '../util/tool-loader.js';
-import {
-  getTypeCheckRelevantOptions,
-  createOptionsFingerprint,
-  groupConfigsByFingerprint,
-  type ParsedConfigInfo,
-} from '../util/tsconfig-dedup.js';
 
 // ---------------------------------------------------------------------------
 // tsgo subprocess support
@@ -46,7 +40,7 @@ interface TsgoDiagnostic {
 const TSGO_DIAG_RE = /^(.+?)\((\d+),(\d+)\): (error|warning) TS(\d+): (.+)$/;
 
 /**
- * Parses flat tsgo/tsc CLI output into structured diagnostics.
+ * Parses flat tsgo CLI output into structured diagnostics.
  * Context / detail continuation lines that don't match the pattern are ignored.
  * @param output - Raw stdout captured from the tsgo process
  * @returns Parsed diagnostics
@@ -71,9 +65,14 @@ function parseTsgoDiagnostics(output: string): TsgoDiagnostic[] {
 /**
  * Spawns tsgo --noEmit for the given tsconfig and returns all diagnostics.
  * Stdout is piped and parsed; stderr is inherited for debug visibility.
+ *
+ * tsgo uses exit code 0 for clean checks and exit code 2 when diagnostics
+ * are found. Stdout is always parsed regardless of exit code — even crashes
+ * may emit partial diagnostics worth capturing. Only spawn failures (the
+ * process never started) return null.
  * @param tsgoPath - Absolute path to the tsgo binary
  * @param tsConfigFile - Path to tsconfig.json to check
- * @returns Parsed diagnostics, or null when tsgo did not complete successfully
+ * @returns Parsed diagnostics, or null on spawn failure
  */
 function runTsgoCheck(tsgoPath: string, tsConfigFile: string): Promise<TsgoDiagnostic[] | null> {
   return new Promise((resolve) => {
@@ -88,7 +87,9 @@ function runTsgoCheck(tsgoPath: string, tsConfigFile: string): Promise<TsgoDiagn
       stdout += chunk.toString();
     });
 
-    child.on('close', (code) => resolve(code === 0 ? parseTsgoDiagnostics(stdout) : null));
+    child.on('close', () => {
+      resolve(parseTsgoDiagnostics(stdout));
+    });
     child.on('error', () => resolve(null));
   });
 }
@@ -125,7 +126,7 @@ function processTsgoDiagnostics(
  * @param filesByConfig - Map of tsconfig path → files to validate
  * @param tsgoPath - Absolute path to the tsgo binary
  * @param ctx - Validator context
- * @returns All files that were checked, or null when tsgo failed
+ * @returns All files that were checked, or null on spawn failure
  */
 async function validateWithTsgo(
   filesByConfig: Map<string, string[]>,
@@ -252,44 +253,10 @@ function groupFilesByNearestConfig(tsFiles: string[]): Map<string, string[]> {
 }
 
 /**
- * Processes TypeScript diagnostics and adds them to the validator context.
- * @param diagnostics - All diagnostics from TypeScript
- * @param filesToValidate - Set of files we want to validate
- * @param ts - TypeScript namespace
- * @param ctx - Validator context for storing results
- */
-function processDiagnostics(
-  diagnostics: readonly import('typescript').Diagnostic[],
-  filesToValidate: Set<string>,
-  ts: typeof import('typescript'),
-  ctx: ValidatorContext,
-): void {
-  for (const diagnostic of diagnostics) {
-    if (!diagnostic.file) continue;
-    const file = diagnostic.file.fileName;
-    if (!filesToValidate.has(file)) continue;
-    const start = diagnostic.start || 0;
-    const { line, character } = ts.getLineAndCharacterOfPosition(diagnostic.file, start);
-    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
-    const isError = diagnostic.category === ts.DiagnosticCategory.Error;
-    ctx.addResult(file, {
-      tool: 'typescript',
-      message,
-      severity: isError ? 'error' : 'warning',
-      line: line + 1,
-      column: character + 1,
-      ruleId: `TS${diagnostic.code}`,
-      fixable: false,
-    });
-  }
-}
-
-/**
  * Validates TypeScript files using a specific tsconfig.
  *
- * Creates a TypeScript program with the specified config and collects
- * diagnostics for the requested files. Filters diagnostics to only include
- * files in the validation set.
+ * Runs tsgo --noEmit for the given config and filters diagnostics to only
+ * include files in the validation set. Requires tsgo to be installed.
  * @param files - All files being validated (absolute paths)
  * @param tsConfigFile - Explicit tsconfig path to use (absolute path)
  * @param ctx - Validator context for storing results
@@ -312,38 +279,19 @@ export async function validateTypeScriptWithConfig(
   const { config } = ts.readConfigFile(tsConfigFile, ts.sys.readFile);
   const parsed = ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(tsConfigFile));
 
-  // Intersect with the config's file list so we only report files the program
-  // actually includes. Without this, files preserved by filterTsFilesByRootConfig
-  // (because they have a nearer tsconfig) would be counted as checked but never
-  // actually type-checked by this program.
   const checkedFiles = filterFilesIncludedByConfig(tsFiles, parsed);
 
-  // Prefer tsgo when installed — subprocess call, ~10x faster than tsc programmatic API.
   const tsgoPath = findTsgoBinary();
-  if (tsgoPath) {
-    if (parsed.errors.length === 0 && checkedFiles.length > 0) {
-      const tsgoCheckedFiles = await validateWithTsgo(new Map([[tsConfigFile, checkedFiles]]), tsgoPath, ctx);
-      if (tsgoCheckedFiles !== null) {
-        return { filesChecked: tsgoCheckedFiles };
-      }
-    } else {
-      return { filesChecked: checkedFiles };
-    }
+  if (!tsgoPath) {
+    throw new Error('tsgo binary not found. Install @typescript/native-preview as a devDependency.');
   }
 
   if (parsed.errors.length === 0 && checkedFiles.length > 0) {
-    const program = ts.createProgram({
-      rootNames: parsed.fileNames,
-      options: { ...parsed.options, noEmit: true },
-    });
-    const filesToValidate = new Set(checkedFiles);
-    const allDiagnostics = [
-      ...program.getOptionsDiagnostics(),
-      ...program.getGlobalDiagnostics(),
-      ...program.getSemanticDiagnostics(),
-      ...program.getSyntacticDiagnostics(),
-    ];
-    processDiagnostics(allDiagnostics, filesToValidate, ts, ctx);
+    const tsgoCheckedFiles = await validateWithTsgo(new Map([[tsConfigFile, checkedFiles]]), tsgoPath, ctx);
+    if (tsgoCheckedFiles === null) {
+      throw new Error(`tsgo --noEmit failed for ${tsConfigFile}`);
+    }
+    return { filesChecked: tsgoCheckedFiles };
   }
 
   return { filesChecked: checkedFiles };
@@ -385,14 +333,11 @@ function filterFilesIncludedByConfig(configFiles: string[], parsed: import('type
   return configFiles.filter((file) => parsedFileSet.has(path.resolve(file)));
 }
 
-// NOTE: do NOT change without explicit human approval
-/* eslint max-lines-per-function: ["error", { "max": 150 }] */
 /**
  * Validates TypeScript files by discovering tsconfig.json for each file.
  *
- * Groups files by their nearest tsconfig.json (walking up directory tree),
- * then deduplicates configs with identical type-check-relevant compiler options.
- * Configs sharing the same options use a single TypeScript program for efficiency.
+ * Groups files by their nearest tsconfig.json, then runs tsgo --noEmit for
+ * each unique config. Requires tsgo to be installed.
  * @param files - All files being validated (absolute paths)
  * @param ctx - Validator context for storing results
  * @param tsNs - Existing TypeScript namespace (will be loaded if not provided)
@@ -411,110 +356,43 @@ export async function validateTypeScriptByDiscovery(
     return { filesChecked: [] };
   }
 
+  const tsgoPath = findTsgoBinary();
+  if (!tsgoPath) {
+    throw new Error('tsgo binary not found. Install @typescript/native-preview as a devDependency.');
+  }
+
   const filesByConfig = groupFilesByNearestConfig(tsFiles);
-  const allCheckedFiles: string[] = [];
   const totalStart = performance.now();
 
-  // Load TypeScript once
   const firstConfigPath = filesByConfig.keys().next().value;
   const ts = await loadTypeScript(firstConfigPath!, tsNs);
   if (!ts) throw new Error('Could not load TypeScript');
 
-  // Phase 1: Parse all configs and compute fingerprints
   if (verbose) {
-    console.error(chalk.gray(`[tsc] Parsing ${filesByConfig.size} tsconfig.json files...`));
+    console.error(chalk.gray(`[tsgo] Parsing ${filesByConfig.size} tsconfig.json files...`));
   }
-  const parsedConfigs: ParsedConfigInfo[] = [];
+
+  const filteredFilesByConfig = new Map<string, string[]>();
 
   for (const [configPath, configFiles] of filesByConfig.entries()) {
     const parsed = parseConfigWithErrorLogging(configPath, ts);
     if (!parsed) continue;
 
     const filesToValidate = filterFilesIncludedByConfig(configFiles, parsed);
-
     if (filesToValidate.length === 0) continue;
 
-    const relevantOptions = getTypeCheckRelevantOptions(parsed.options);
-    const fingerprint = createOptionsFingerprint(relevantOptions, configPath);
-
-    parsedConfigs.push({
-      configPath,
-      parsed,
-      fingerprint,
-      filesToValidate,
-    });
+    filteredFilesByConfig.set(configPath, filesToValidate);
   }
 
-  // Prefer tsgo when installed — subprocess call, ~10x faster than tsc programmatic API.
-  const tsgoPath = findTsgoBinary();
-  if (tsgoPath) {
-    const filteredFilesByConfig = new Map(parsedConfigs.map((config) => [config.configPath, config.filesToValidate]));
-    const checkedFiles = await validateWithTsgo(filteredFilesByConfig, tsgoPath, ctx);
-    if (checkedFiles !== null) {
-      return { filesChecked: checkedFiles };
-    }
-  }
-
-  // Phase 2: Group by fingerprint to deduplicate
-  const configGroups = groupConfigsByFingerprint(parsedConfigs);
-  const totalGroups = configGroups.size;
-  if (verbose) {
-    console.error(
-      chalk.gray(`[tsc] Deduplicated ${parsedConfigs.length} configs into ${totalGroups} unique compiler option sets`),
-    );
-  }
-
-  // Phase 3: Create one program per unique fingerprint
-  let groupIndex = 0;
-  for (const [_fingerprint, configs] of configGroups.entries()) {
-    groupIndex++;
-    const groupStart = performance.now();
-
-    // Collect all files from all configs in this group
-    const allFilesToValidate = new Set<string>();
-    const allRootNames = new Set<string>();
-
-    for (const config of configs) {
-      for (const file of config.filesToValidate) {
-        allFilesToValidate.add(file);
-      }
-      for (const file of config.parsed.fileNames) {
-        allRootNames.add(file);
-      }
-    }
-
-    allCheckedFiles.push(...allFilesToValidate);
-
-    // Use options from first config (they're all equivalent for type-checking)
-    const representativeConfig = configs[0];
-    const program = ts.createProgram({
-      rootNames: [...allRootNames],
-      options: { ...representativeConfig.parsed.options, noEmit: true },
-    });
-
-    const allDiagnostics = [
-      ...program.getOptionsDiagnostics(),
-      ...program.getGlobalDiagnostics(),
-      ...program.getSemanticDiagnostics(),
-      ...program.getSyntacticDiagnostics(),
-    ];
-
-    processDiagnostics(allDiagnostics, allFilesToValidate, ts, ctx);
-
-    if (verbose) {
-      const elapsed = ((performance.now() - groupStart) / 1000).toFixed(1);
-      const configNames = configs.map((c) => path.relative(process.cwd(), c.configPath)).join(', ');
-      const configLabel = configs.length === 1 ? configNames : `${configs.length} configs`;
-      console.error(
-        chalk.gray(`[tsc] ${groupIndex}/${totalGroups} ${configLabel} (${allRootNames.size} files) ${elapsed}s`),
-      );
-    }
+  const checkedFiles = await validateWithTsgo(filteredFilesByConfig, tsgoPath, ctx);
+  if (checkedFiles === null) {
+    throw new Error('tsgo --noEmit failed during discovery-based validation');
   }
 
   if (verbose) {
     const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
-    console.error(chalk.gray(`[tsc] Total: ${totalElapsed}s`));
+    console.error(chalk.gray(`[tsgo] Total: ${totalElapsed}s`));
   }
 
-  return { filesChecked: allCheckedFiles };
+  return { filesChecked: checkedFiles };
 }

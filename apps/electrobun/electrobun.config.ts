@@ -89,7 +89,7 @@ const packageCopyEntries = {
  * Build Bun options needed only when Electrobun compiles the source entry in dev.
  * @returns Source-dev Bun build options.
  */
-function createSourceDevBunConfig(): Pick<NonNullable<ElectrobunConfig['build']>['bun'], 'define' | 'plugins'> {
+function createSourceDevBunConfig() {
   const migrationSources = discoverBundledMigrationSources(WORKSPACE_ROOT);
   const defaultMigrationSourceId = buildMigrationSourceId(WORKSPACE_ROOT, resolveStorageMigrationsDir(PACKAGE_ROOT));
   const frameworkVersion = readPackageVersion(resolveRuntimeNodePackageJsonPath(WORKSPACE_ROOT));
