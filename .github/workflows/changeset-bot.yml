@@ -9,7 +9,7 @@ permissions: {}
 jobs:
   resolve:
     if: github.event.issue.pull_request != null
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     outputs:
       mode: ${{ steps.detect.outputs.mode }}
