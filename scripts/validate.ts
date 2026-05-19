@@ -443,6 +443,12 @@ function formatIssuesOutput(summary: ValidationSummary, showActions: boolean): s
   }
 
   lines.push(formatSummary(summary, showActions));
+
+  const toolStatus = formatToolStatus(summary.toolStatuses);
+  if (toolStatus) {
+    lines.push(toolStatus);
+  }
+
   return lines.join('\n');
 }
 
