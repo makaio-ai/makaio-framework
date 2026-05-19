@@ -7,7 +7,7 @@ import type { WorkerConfig, WorkerInput, WorkerTool } from './workers/types.js';
 
 const FULL_WORKSPACE_TYPESCRIPT_HEAP_MB = 6144;
 const FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS = 1_200_000;
-const DEFAULT_TOOLS: WorkerTool[] = ['prettier', 'eslint', 'stylelint', 'typescript'];
+const DEFAULT_TOOLS: WorkerTool[] = ['biome', 'eslint', 'stylelint', 'typescript'];
 
 /**
  * Resolves worker configuration for the requested validation profile.
@@ -53,7 +53,7 @@ export function resolveWorkerTools(options: ValidateOptions): WorkerTool[] {
 }
 
 /**
- * Workspace validator for TypeScript, ESLint, Prettier, and Stylelint.
+ * Workspace validator for Biome formatting, ESLint, Stylelint, and TypeScript.
  *
  * Each validator runs in its own forked process with isolated V8 heap memory.
  * When a worker process exits, ALL its memory is immediately reclaimed by the OS.
@@ -72,7 +72,7 @@ export class WorkspaceValidator {
   private fileResults: FileValidationResults = {};
 
   /**
-   * Validates files using Prettier, ESLint, Stylelint, and TypeScript.
+   * Validates files using Biome formatting, ESLint, Stylelint, and TypeScript.
    *
    * Each validator runs in an isolated worker process with its own memory.
    * Workers run in parallel for performance, but memory is isolated.

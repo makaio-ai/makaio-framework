@@ -4,7 +4,7 @@ import type { FileValidationResults, ValidationResult } from '../types.js';
  * Context for validation operations that need to mutate file results.
  *
  * Provides a centralized place to manage validation results across different
- * validators (prettier, eslint, typescript), ensuring consistent result
+ * validators (biome, prettier, eslint, stylelint, typescript), ensuring consistent result
  * structure and avoiding duplicate file entries.
  */
 export class ValidatorContext {
@@ -33,7 +33,7 @@ export class ValidatorContext {
    * Automatically ensures the file entry exists before adding the result.
    * Used by all validators to report findings (errors, warnings, info).
    * @param file - Absolute path to the file
-   * @param result - Validation result from prettier, eslint, or typescript
+   * @param result - Validation result from biome, prettier, eslint, stylelint, or typescript
    */
   public addResult(file: string, result: ValidationResult): void {
     this.ensureFileEntry(file);

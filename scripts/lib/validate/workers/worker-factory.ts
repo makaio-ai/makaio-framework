@@ -2,7 +2,7 @@
  * Factory for creating validation worker main functions.
  *
  * Extracts the common stdin→parse→run→stdout pattern shared by all
- * validation workers (eslint, prettier, stylelint).
+ * validation workers (biome, eslint, prettier, stylelint).
  * @packageDocumentation
  */
 
@@ -27,7 +27,7 @@ export interface ToolLoadResult<T> {
 export interface ValidationRunResult {
   /** Files that were checked by this validator */
   filesChecked: string[];
-  /** Whether a config file was found (for prettier/stylelint) */
+  /** Whether a config file was found when the tool reports that status */
   configFound?: boolean;
 }
 

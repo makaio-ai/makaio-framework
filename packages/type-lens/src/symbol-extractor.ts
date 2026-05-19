@@ -1,4 +1,11 @@
-import { SyntaxKind, type ClassDeclaration, type Node, type SourceFile, type Type, type Symbol } from 'ts-morph';
+import {
+  SyntaxKind,
+  type ClassDeclaration,
+  type Node,
+  type SourceFile,
+  type Type,
+  type Symbol as TsMorphSymbol,
+} from 'ts-morph';
 import type { SymbolNode, SymbolKind } from './schemas.js';
 import { generateId } from './symbol-id.js';
 
@@ -62,7 +69,7 @@ export function getClassHierarchy(sourceFile: SourceFile, name: string): string[
     const baseType: Type | undefined = current.getBaseTypes()[0];
     if (!baseType) break;
 
-    const baseSymbol: Symbol | undefined = baseType.getSymbol();
+    const baseSymbol: TsMorphSymbol | undefined = baseType.getSymbol();
     const baseName = baseSymbol?.getName() ?? baseType.getText();
     if (!baseName || chain.includes(baseName)) break;
 

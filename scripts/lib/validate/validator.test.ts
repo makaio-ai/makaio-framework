@@ -20,6 +20,7 @@ describe('getWorkerConfig', () => {
   });
 
   it('does not inflate format-only workers in the full workspace profile', () => {
+    expect(getWorkerConfig('biome', { profile: 'full-workspace' })).toEqual({ tool: 'biome' });
     expect(getWorkerConfig('prettier', { profile: 'full-workspace' })).toEqual({ tool: 'prettier' });
     expect(getWorkerConfig('stylelint', { profile: 'full-workspace' })).toEqual({ tool: 'stylelint' });
   });
@@ -27,19 +28,19 @@ describe('getWorkerConfig', () => {
 
 describe('resolveWorkerTools', () => {
   it('runs every validation tool by default', () => {
-    expect(resolveWorkerTools({})).toEqual(['prettier', 'eslint', 'stylelint', 'typescript']);
+    expect(resolveWorkerTools({})).toEqual(['biome', 'eslint', 'stylelint', 'typescript']);
   });
 
   it('keeps the default validation tool list immutable across calls', () => {
     const tools = resolveWorkerTools({});
     tools.pop();
 
-    expect(resolveWorkerTools({})).toEqual(['prettier', 'eslint', 'stylelint', 'typescript']);
+    expect(resolveWorkerTools({})).toEqual(['biome', 'eslint', 'stylelint', 'typescript']);
   });
 
   it('runs only explicitly selected validation tools', () => {
     expect(resolveWorkerTools({ tools: ['typescript'] })).toEqual(['typescript']);
-    expect(resolveWorkerTools({ tools: ['eslint', 'prettier'] })).toEqual(['eslint', 'prettier']);
+    expect(resolveWorkerTools({ tools: ['eslint', 'biome'] })).toEqual(['eslint', 'biome']);
   });
 
   it('rejects an explicit empty validation tool selection', () => {

@@ -6,7 +6,7 @@
 /**
  * Validation tools that can run independently.
  */
-export type ValidationTool = 'prettier' | 'eslint' | 'stylelint' | 'typescript';
+export type ValidationTool = 'biome' | 'prettier' | 'eslint' | 'stylelint' | 'typescript';
 
 /** Tool name for built-in or host-provided validation results. */
 export type ValidationToolName = ValidationTool | (string & {});
@@ -117,7 +117,7 @@ export interface ValidationSummary {
   /** Suggested actions for AI agent */
   suggestedActions: Array<{
     file: string;
-    action: 'prettier-fix' | 'eslint-fix' | 'stylelint-fix' | 'manual-fix';
+    action: 'biome-fix' | 'prettier-fix' | 'eslint-fix' | 'stylelint-fix' | 'manual-fix';
     description: string;
   }>;
   /** Per-tool execution status to preserve summary on partial failures */
