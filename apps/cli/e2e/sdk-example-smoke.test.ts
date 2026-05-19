@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, type TestContext } from 'vitest';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { startCliServe } from './harness/spawn-serve.js';
 import { connectTestBus, waitForBoot, waitForRuntimeReady } from './harness/bus-helpers.js';
@@ -31,6 +31,8 @@ const PYTHON_VENV_TIMEOUT_MS = 60_000;
 const PYTHON_SDK_INSTALL_TIMEOUT_MS = 120_000;
 const PYTHON_EXAMPLE_TIMEOUT_MS = 30_000;
 const CLI_SDK_SMOKE_TEST_TIMEOUT_MS = 480_000;
+const PYTHON_SDK_MIN_MAJOR = 3;
+const PYTHON_SDK_MIN_MINOR = 10;
 
 interface PythonCandidate {
   readonly command: string;
@@ -40,6 +42,13 @@ interface PythonCandidate {
 interface PythonRuntime {
   readonly command: string;
   readonly prefixArgs: readonly string[];
+}
+
+class PythonRuntimeUnavailableError extends Error {
+  public constructor() {
+    super(`Unable to find Python ${PYTHON_SDK_MIN_MAJOR}.${PYTHON_SDK_MIN_MINOR}+ for the SDK smoke example`);
+    this.name = 'PythonRuntimeUnavailableError';
+  }
 }
 
 const PYTHON_CANDIDATES: readonly PythonCandidate[] =
@@ -55,31 +64,57 @@ const PYTHON_CANDIDATES: readonly PythonCandidate[] =
       ];
 
 /**
+ * Parses the major/minor version from `python --version` output.
+ * @param output - Combined stdout/stderr text from the version command.
+ * @returns Parsed major/minor pair, or null when the output is not recognized.
+ */
+function parsePythonVersion(output: string): { readonly major: number; readonly minor: number } | null {
+  const match = /Python\s+(\d+)\.(\d+)/u.exec(output);
+  if (match === null) return null;
+  return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+/**
+ * Checks compatibility with the Python SDK package metadata.
+ * @param version - Parsed Python major/minor version.
+ * @returns True when the runtime can install and run the local SDK.
+ */
+function isPythonSdkCompatible(version: { readonly major: number; readonly minor: number }): boolean {
+  return (
+    version.major > PYTHON_SDK_MIN_MAJOR ||
+    (version.major === PYTHON_SDK_MIN_MAJOR && version.minor >= PYTHON_SDK_MIN_MINOR)
+  );
+}
+
+/**
  * Resolve a Python interpreter with platform fallback.
  * @returns Python runtime command and prefix arguments.
  */
 async function resolvePythonRuntime(): Promise<PythonRuntime> {
   for (const candidate of PYTHON_CANDIDATES) {
     try {
-      await execFileAsync(candidate.command, [...candidate.prefixArgs, '--version'], {
+      const { stdout, stderr } = await execFileAsync(candidate.command, [...candidate.prefixArgs, '--version'], {
         encoding: 'utf8',
         timeout: PYTHON_DISCOVERY_TIMEOUT_MS,
       });
+      const version = parsePythonVersion(`${stdout}\n${stderr}`);
+      if (version === null || !isPythonSdkCompatible(version)) {
+        continue;
+      }
       return candidate;
     } catch (error) {
-      const missingExecutable =
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        (error as NodeJS.ErrnoException).code === 'ENOENT';
-      if (missingExecutable) {
+      const errorCode =
+        typeof error === 'object' && error !== null && 'code' in error && (error as NodeJS.ErrnoException).code;
+      const missingExecutable = errorCode === 'ENOENT';
+      const probeFailed = typeof errorCode === 'number';
+      if (missingExecutable || probeFailed) {
         continue;
       }
       throw error;
     }
   }
 
-  throw new Error('Unable to find a Python interpreter for the SDK smoke example');
+  throw new PythonRuntimeUnavailableError();
 }
 
 /**
@@ -240,13 +275,24 @@ async function writeCanonicalFixtureConfig(homeDir: string): Promise<void> {
 describe('CLI SDK example smoke test', { timeout: CLI_SDK_SMOKE_TEST_TIMEOUT_MS }, () => {
   const serve = useServeFixture();
 
-  it('boots from canonical files and runs the Python send_message example against a local-only adapter', async () => {
+  it('boots from canonical files and runs the Python send_message example against a local-only adapter', async (context: TestContext) => {
+    let hostPython: PythonRuntime;
+    try {
+      hostPython = await resolvePythonRuntime();
+    } catch (error) {
+      if (error instanceof PythonRuntimeUnavailableError) {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
+
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-cli-sdk-smoke-'));
     try {
       const homeDir = path.join(tempRoot, 'home');
       await fs.mkdir(homeDir, { recursive: true });
       await writeCanonicalFixtureConfig(homeDir);
-      const python = await createPythonSdkRuntime(await resolvePythonRuntime(), tempRoot);
+      const python = await createPythonSdkRuntime(hostPython, tempRoot);
 
       serve.current = await startCliServe({
         entryPath: SDK_SMOKE_ENTRY,

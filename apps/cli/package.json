@@ -10,7 +10,9 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@makaio/test-utils": "workspace:*"
+    "@makaio/test-utils": "workspace:*",
+    "@types/react": "^19.0.0",
+    "ink-testing-library": "^3.0.0"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
@@ -22,10 +24,13 @@
     "@makaio/runtime-node": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/services-package-manager": "workspace:*",
+    "@makaio/setup": "workspace:*",
     "@makaio/utils": "workspace:*",
     "commander": "^14.0.3",
     "esbuild": "^0.28.0",
     "hono": "^4.12.18",
+    "ink": "^6.5.1",
+    "react": "^19.0.0",
     "zod": "^4.1.13"
   },
   "license": "MIT"

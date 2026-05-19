@@ -25,11 +25,8 @@ import type { HandlerForSubjectDefinition, PayloadFilter, SubjectDefinition, Typ
  * @typeParam Subjects - SubjectRecord for payload types (unused, for type consistency)
  * @typeParam FilterPayload - Pre-computed filter payload type for type-safe withFilter
  */
-export interface IFilteredBus<
-  Namespace extends string = string,
-  Subjects = unknown,
-  FilterPayload = unknown,
-> extends IScopedBusBase<Namespace> {
+export interface IFilteredBus<Namespace extends string = string, Subjects = unknown, FilterPayload = unknown>
+  extends IScopedBusBase<Namespace> {
   /**
    * Get the current base filter.
    */

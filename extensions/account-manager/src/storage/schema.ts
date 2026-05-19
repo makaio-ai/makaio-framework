@@ -22,9 +22,7 @@ export const accounts = sqliteTable(
   (table) => [
     index('idx_accounts_client_active').on(table.clientId, table.active),
     index('idx_accounts_client_linked_client_account').on(table.clientId, table.linkedClientAccountId),
-    uniqueIndex('uniq_accounts_active_client')
-      .on(table.clientId)
-      .where(sql`${table.active} = 1`),
+    uniqueIndex('uniq_accounts_active_client').on(table.clientId).where(sql`${table.active} = 1`),
   ],
 );
 

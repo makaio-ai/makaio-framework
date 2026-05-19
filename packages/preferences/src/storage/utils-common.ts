@@ -77,7 +77,7 @@ export function parseStorageKey(storageKey: string): { key: PreferenceKey; categ
     return null;
   }
 
-  const [, , /* makaio */ /* prefs */ scope, surface, context, viewport, ...categoryParts] = parts;
+  const [, /* makaio */ /* prefs */ , scope, surface, context, viewport, ...categoryParts] = parts;
   const category = categoryParts.join(':');
 
   return {

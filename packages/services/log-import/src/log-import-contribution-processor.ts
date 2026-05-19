@@ -24,11 +24,18 @@ import { classifyLogImporterSource } from './log-import-source.js';
  */
 interface LogImportContributionConfig {
   /** Importer class constructor. */
-  readonly LogImporterClass: new (opts: { adapterId: string; adapterName: string }) => unknown;
+  readonly LogImporterClass: new (opts: {
+    adapterId: string;
+    adapterName: string;
+  }) => unknown;
   /** Full-import orchestrator class constructor, if supported. */
-  readonly LogOrchestratorClass?: new (opts: LogOrchestratorConfig) => LogImportOrchestrator;
+  readonly LogOrchestratorClass?: new (
+    opts: LogOrchestratorConfig,
+  ) => LogImportOrchestrator;
   /** Discovery-mode orchestrator class constructor, if supported. */
-  readonly LogDiscoveryOrchestratorClass?: new (opts: LogOrchestratorConfig) => LogImportOrchestrator;
+  readonly LogDiscoveryOrchestratorClass?: new (
+    opts: LogOrchestratorConfig,
+  ) => LogImportOrchestrator;
   /** Glob pattern for matching log files. */
   readonly logFilePattern?: string;
   /** Optional runtime log-import configuration for orchestrator setup. */

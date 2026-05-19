@@ -73,7 +73,7 @@ interface TurnSessionIdentity {
  */
 export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfig> {
   private transport?: CliStdioTransport;
-  declare protected currentTurn?: ClaudeConnectorTurn;
+  protected declare currentTurn?: ClaudeConnectorTurn;
   private deferredSessionId = new DeferredPromise<string>();
   private confirmedSessionId = false;
   /** Adapter session ID currently registered with the MCP bridge service, if any */

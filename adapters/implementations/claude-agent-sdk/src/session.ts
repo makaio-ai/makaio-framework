@@ -45,7 +45,7 @@ type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { even
 export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionConfig> {
   private queryInstance?: Query;
   private source?: AsyncQuerySource<SdkSDKUserMessage>;
-  declare protected currentTurn?: ClaudeConnectorTurn;
+  protected declare currentTurn?: ClaudeConnectorTurn;
   private readonly lifecycle: SessionLifecycle;
   private deferredSessionId = new DeferredPromise<string>();
   private confirmedSessionId = false;

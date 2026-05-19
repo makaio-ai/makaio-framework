@@ -52,18 +52,18 @@ export async function resolveLocalModule(
  * @param mod - Dynamically imported ESLint module
  * @returns ESLint constructor if found, undefined otherwise
  */
-export function extractESLintCtor(mod: unknown): (typeof import('eslint'))['ESLint'] | undefined {
+export function extractESLintCtor(mod: unknown): typeof import('eslint')['ESLint'] | undefined {
   if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) return undefined;
   const obj = mod as Record<string, unknown>;
   const direct = obj.ESLint as unknown;
-  if (typeof direct === 'function') return direct as (typeof import('eslint'))['ESLint'];
+  if (typeof direct === 'function') return direct as typeof import('eslint')['ESLint'];
   const def = obj.default as unknown;
   if (def && typeof def === 'object') {
     const nested = (def as Record<string, unknown>).ESLint as unknown;
-    if (typeof nested === 'function') return nested as (typeof import('eslint'))['ESLint'];
+    if (typeof nested === 'function') return nested as typeof import('eslint')['ESLint'];
   }
   if (def && typeof def === 'function') {
-    return def as (typeof import('eslint'))['ESLint'];
+    return def as typeof import('eslint')['ESLint'];
   }
   return undefined;
 }

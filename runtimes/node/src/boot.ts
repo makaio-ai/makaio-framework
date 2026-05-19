@@ -380,6 +380,7 @@ export async function bootMakaioRuntimeCore(
         createPackageManagerPackage({
           frameworkPeerRange: `^${runtimeFrameworkVersion}`,
           frameworkPackagePath: options.frameworkPackagePath,
+          devPortalPackages: options.devPortalPackages,
         }),
       );
     }

@@ -517,5 +517,7 @@ export interface LogImportTestConfig<TRecord = unknown, TState = unknown> {
    *
    * Must implement {@link LogImporter} for conformance tests.
    */
-  LogImporterClass: new (config: LogImporterConfig) => LogImporter<TRecord, TState>;
+  LogImporterClass: new (
+    config: LogImporterConfig,
+  ) => LogImporter<TRecord, TState>;
 }

@@ -152,10 +152,7 @@ function registerMetadataReadHandlers(deps: AccountManagerStorageHandlerDeps): A
       });
     }),
     bus.on(AccountManagerStorageSubjects.metadata.hasAnyAccounts, async (ctx) => {
-      const [row] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(accounts)
-        .limit(1);
+      const [row] = await db.select({ count: sql<number>`count(*)` }).from(accounts).limit(1);
       ctx.setResult({ hasAnyAccounts: Number(row?.count ?? 0) > 0 });
     }),
   ];
@@ -363,10 +360,7 @@ function registerSnapshotHandlers({ bus, db }: AccountManagerStorageHandlerDeps)
       ctx.setResult({ entries: rows.map(rowToUsageEntry) });
     }),
     bus.on(AccountManagerStorageSubjects.snapshots.hasAnySnapshots, async (ctx) => {
-      const [row] = await db
-        .select({ count: sql<number>`count(*)` })
-        .from(usageSnapshots)
-        .limit(1);
+      const [row] = await db.select({ count: sql<number>`count(*)` }).from(usageSnapshots).limit(1);
       ctx.setResult({ hasAnySnapshots: Number(row?.count ?? 0) > 0 });
     }),
   ];

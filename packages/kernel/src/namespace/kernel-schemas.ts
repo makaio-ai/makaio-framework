@@ -114,4 +114,24 @@ export const KernelSchemas = {
     request: z.object({}),
     response: z.object({}),
   },
+
+  /**
+   * Request a host restart.
+   *
+   * Subject: `kernel.restart`
+   * Type: Request (RPC)
+   * Purpose: Allows remote callers (e.g., a setup wizard) to request that the
+   *          host process shut down and restart. The host decides whether to
+   *          accept; a declined restart returns `{ accepted: false }`.
+   */
+  restart: {
+    request: z.object({
+      /** Optional reason for the restart request. */
+      reason: z.string().optional(),
+    }),
+    response: z.object({
+      /** Whether the restart was accepted by the host. */
+      accepted: z.boolean(),
+    }),
+  },
 } satisfies SchemaRecord;

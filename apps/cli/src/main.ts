@@ -15,7 +15,7 @@ import type { CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
 import type { CliContribution } from '@makaio/kernel/cli';
-import { resolveConventionEntrypoint, type ExtensionDiscovery } from '@makaio/runtime-node';
+import { resolveConventionEntrypoint, resolveMakaioHome, type ExtensionDiscovery } from '@makaio/runtime-node';
 import { registerContribution } from './schema-adapter.js';
 import {
   connectBusClient,
@@ -36,6 +36,7 @@ import { registerMcpServerCommand } from './mcp-server-command.js';
 import { resolveCliRuntimeConfig } from './runtime-config.js';
 import { registerOpenCommand } from './open-command.js';
 import { registerAutoLaunchCommand } from './auto-launch-command.js';
+import { registerSetupCommand } from './setup-command.js';
 
 export { extractRootConfigArg } from './runtime-config.js';
 
@@ -605,6 +606,7 @@ export async function main(
   // live at the composition root, not inside the framework command module.
   registerNativeClientCommand(program, { bus, connectionError, clients: NATIVE_CLIENTS });
   registerMcpServerCommand(program, { bus, connectionError });
+  registerSetupCommand(program, { bus, makaioHome: resolveMakaioHome() });
 
   // Pre-loaded contributions (testing/DI).
   for (const contribution of contributions) {

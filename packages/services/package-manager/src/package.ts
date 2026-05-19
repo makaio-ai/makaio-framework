@@ -3,6 +3,7 @@ import type { MakaioNodeExtension } from '@makaio/contracts';
 import { PackageManagerService, type DependencyResolverClient } from './package-manager-service.js';
 import type { PackageRegistryClient } from './registry-client.js';
 import { PackageManagementNamespace } from './namespace.js';
+import type { DevPortalMap } from './dev-portal-resolver.js';
 
 /**
  * Options for creating the framework package-manager runtime package.
@@ -28,6 +29,14 @@ export interface PackageManagerPackageOptions {
    * Host-provided `@makaio/framework` package root used by packaged apps.
    */
   readonly frameworkPackagePath?: string;
+  /**
+   * Dev-mode workspace package map used to rewrite install specs to `portal:` ranges.
+   *
+   * When provided and non-empty, the dependency resolver links known workspace
+   * packages directly to local source directories instead of fetching from npm.
+   * Ignored when `dependencyResolver` is also supplied.
+   */
+  readonly devPortalPackages?: DevPortalMap;
 }
 
 /**
@@ -53,6 +62,7 @@ export function createPackageManagerPackage(
         dependencyResolver: options.dependencyResolver,
         frameworkPeerRange: options.frameworkPeerRange,
         frameworkPackagePath: options.frameworkPackagePath,
+        devPortalPackages: options.devPortalPackages,
       }),
   };
 }

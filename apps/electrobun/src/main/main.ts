@@ -21,10 +21,12 @@
  */
 
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Server as HttpServer } from 'node:http';
 import { Hono } from 'hono';
 import { MakaioBus } from '@makaio/bus-core';
+import { KernelSubjects } from '@makaio/kernel';
 import {
   bootMakaioRuntime as bootBunRuntime,
   BunBusServerTransportProvider,
@@ -63,6 +65,7 @@ import { resolveDevHostOptions, buildDevHostRuntimeOptions } from './dev-host-op
 import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
+import { createElectrobunRestartHandler } from './restart-handler.js';
 import type { HealthResult } from '../health-probe.js';
 
 // ESM-compatible __dirname
@@ -496,6 +499,21 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
           process.exit(0);
         });
     };
+
+    const relaunchCurrentProcess = (): void => {
+      const child = spawn(process.execPath, process.argv.slice(1), {
+        detached: true,
+        env: process.env,
+        stdio: 'ignore',
+      });
+      child.unref();
+    };
+    busHandlerCleanups.push(
+      MakaioBus.on(
+        KernelSubjects.restart,
+        createElectrobunRestartHandler({ relaunch: relaunchCurrentProcess, shutdown: handleShutdown }),
+      ),
+    );
 
     const autoLaunchController = createAutoLaunchController({
       refreshTrayMenu: () => refreshTrayMenu?.(),

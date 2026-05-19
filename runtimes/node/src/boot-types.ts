@@ -6,6 +6,7 @@ import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-webso
 import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
 import type { AdapterSubsystemService } from '@makaio/adapter-subsystem';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/clients-core';
+import type { DevPortalMap } from '@makaio/services-package-manager';
 import type {
   ContributionProcessor,
   ExtensionCoordinator,
@@ -254,6 +255,20 @@ export interface CoreBootOptions {
    * Node, Bun, and future runtimes do not inherit Node-shaped I/O implicitly.
    */
   readonly clientBinaryStrategyDependencies?: StrategyDependencies;
+
+  /**
+   * Dev-mode workspace package map used to rewrite extension install specs to
+   * Yarn `portal:` ranges.
+   *
+   * When provided and non-empty, the package-manager service wraps its
+   * dependency resolver so that installs for known workspace packages link
+   * directly to local source directories instead of fetching from npm. This is
+   * the same `portal:` mechanism used for `frameworkPackagePath`, extended to
+   * the full set of extension packages available in the host workspace.
+   *
+   * Has no effect when `enablePackageManager` is `false`.
+   */
+  readonly devPortalPackages?: DevPortalMap;
 
   /**
    * Optional provider for persisted extension configuration and enablement state.

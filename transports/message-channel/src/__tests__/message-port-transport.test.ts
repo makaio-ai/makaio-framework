@@ -534,85 +534,83 @@ describe('createMessagePortTransport — correlation tracking', () => {
 // ---------------------------------------------------------------------------
 
 describe('createMessagePortTransport — real MessageChannel pair', () => {
-  it(
-    'round-trips request/response, event delivery, ready handshake, and disconnect cleanup',
-    { timeout: 10_000 },
-    async () => {
-      const busA = createBusInstance();
-      const busB = createBusInstance();
+  it('round-trips request/response, event delivery, ready handshake, and disconnect cleanup', {
+    timeout: 10_000,
+  }, async () => {
+    const busA = createBusInstance();
+    const busB = createBusInstance();
 
-      const { subjects: SubjectsA } = busA.registerNamespace(
-        createBusNamespace('messageChannelTransport', {
-          ping: {
-            request: z.object({
-              input: z.string(),
-            }),
-            response: z.object({
-              output: z.string(),
-            }),
-          },
-          notice: z.object({
-            label: z.string(),
+    const { subjects: SubjectsA } = busA.registerNamespace(
+      createBusNamespace('messageChannelTransport', {
+        ping: {
+          request: z.object({
+            input: z.string(),
           }),
-        }),
-      );
-
-      const { subjects: SubjectsB } = busB.registerNamespace(
-        createBusNamespace('messageChannelTransport', {
-          ping: {
-            request: z.object({
-              input: z.string(),
-            }),
-            response: z.object({
-              output: z.string(),
-            }),
-          },
-          notice: z.object({
-            label: z.string(),
+          response: z.object({
+            output: z.string(),
           }),
+        },
+        notice: z.object({
+          label: z.string(),
         }),
-      );
+      }),
+    );
 
-      const { port1, port2 } = new MessageChannel();
-      const adaptedPort1 = adaptNodeMessagePort(port1);
-      const adaptedPort2 = adaptNodeMessagePort(port2);
-      const transportA = createMessagePortTransport({ port: adaptedPort1, name: 'real-a' });
-      const transportB = createMessagePortTransport({ port: adaptedPort2, name: 'real-b' });
+    const { subjects: SubjectsB } = busB.registerNamespace(
+      createBusNamespace('messageChannelTransport', {
+        ping: {
+          request: z.object({
+            input: z.string(),
+          }),
+          response: z.object({
+            output: z.string(),
+          }),
+        },
+        notice: z.object({
+          label: z.string(),
+        }),
+      }),
+    );
 
-      const notices: string[] = [];
-      busB.on(SubjectsB.notice, (ctx) => {
-        notices.push(ctx.payload.label);
-      });
-      busB.on(SubjectsB.ping, (ctx) => {
-        ctx.setResult({ output: `pong:${ctx.payload.input}` });
-      });
+    const { port1, port2 } = new MessageChannel();
+    const adaptedPort1 = adaptNodeMessagePort(port1);
+    const adaptedPort2 = adaptNodeMessagePort(port2);
+    const transportA = createMessagePortTransport({ port: adaptedPort1, name: 'real-a' });
+    const transportB = createMessagePortTransport({ port: adaptedPort2, name: 'real-b' });
 
-      busA.registerTransport(transportA);
-      busB.registerTransport(transportB);
+    const notices: string[] = [];
+    busB.on(SubjectsB.notice, (ctx) => {
+      notices.push(ctx.payload.label);
+    });
+    busB.on(SubjectsB.ping, (ctx) => {
+      ctx.setResult({ output: `pong:${ctx.payload.input}` });
+    });
 
-      const readyA = transportA.ready;
-      const readyB = transportB.ready;
+    busA.registerTransport(transportA);
+    busB.registerTransport(transportB);
 
-      await Promise.all([busA.connect(), busB.connect()]);
-      await Promise.all([readyA, readyB]);
+    const readyA = transportA.ready;
+    const readyB = transportB.ready;
 
-      const response = await busA.request(SubjectsA.ping, { input: 'hello' });
-      expect(response).toEqual({ output: 'pong:hello' });
+    await Promise.all([busA.connect(), busB.connect()]);
+    await Promise.all([readyA, readyB]);
 
-      await busA.emit(SubjectsA.notice, { label: 'delivered' });
-      await vi.waitFor(() => {
-        expect(notices).toEqual(['delivered']);
-      });
+    const response = await busA.request(SubjectsA.ping, { input: 'hello' });
+    expect(response).toEqual({ output: 'pong:hello' });
 
-      await Promise.all([busA.disconnect(), busB.disconnect()]);
+    await busA.emit(SubjectsA.notice, { label: 'delivered' });
+    await vi.waitFor(() => {
+      expect(notices).toEqual(['delivered']);
+    });
 
-      expect(adaptedPort1.onmessage).toBeNull();
-      expect(adaptedPort2.onmessage).toBeNull();
+    await Promise.all([busA.disconnect(), busB.disconnect()]);
 
-      port1.close();
-      port2.close();
-    },
-  );
+    expect(adaptedPort1.onmessage).toBeNull();
+    expect(adaptedPort2.onmessage).toBeNull();
+
+    port1.close();
+    port2.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

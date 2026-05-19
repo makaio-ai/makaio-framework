@@ -791,9 +791,8 @@ describe(conformanceCase('reconnect-subscription-replay').title, () => {
     expect(replayFrame.type).toBe('subscribe');
 
     const subjects = replayFrame.subjects as Record<string, number[]>;
-    const replayedRefs = conformanceCase('reconnect-subscription-replay').assertions.find(
-      (a) => a.kind === 'replays',
-    )!.messages!;
+    const replayedRefs = conformanceCase('reconnect-subscription-replay').assertions.find((a) => a.kind === 'replays')!
+      .messages!;
 
     // Both subscriptions must appear in the replayed subscribe frame.
     for (const ref of replayedRefs) {

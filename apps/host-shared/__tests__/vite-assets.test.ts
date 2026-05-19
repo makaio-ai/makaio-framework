@@ -21,10 +21,9 @@ describe('resolveSharedRendererAssetPath', () => {
 });
 
 describe('sharedRendererAliases', () => {
-  it.each(Object.entries(sharedRendererAliases))(
-    'alias %s points to an existing file on disk',
-    (_alias, targetPath) => {
-      expect(existsSync(targetPath)).toBe(true);
-    },
-  );
+  it.each(
+    Object.entries(sharedRendererAliases),
+  )('alias %s points to an existing file on disk', (_alias, targetPath) => {
+    expect(existsSync(targetPath)).toBe(true);
+  });
 });

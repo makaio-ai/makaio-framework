@@ -188,41 +188,39 @@ describe('ClaudeCodeSource', () => {
       expect(result.credential.metadata).toMatchObject({ planType: 'max' });
     });
 
-    it.each([400, 403, 401])(
-      'returns failed when the refresh endpoint returns HTTP %i (client error)',
-      async (status) => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
-        const source = new ClaudeCodeSource(new InMemoryBackend());
-        const credential = makeCredential({
-          refreshToken: 'rt',
-          accessToken: 'at',
-          expiresAt: Date.now() - 1000,
-        });
+    it.each([
+      400, 403, 401,
+    ])('returns failed when the refresh endpoint returns HTTP %i (client error)', async (status) => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
+      const source = new ClaudeCodeSource(new InMemoryBackend());
+      const credential = makeCredential({
+        refreshToken: 'rt',
+        accessToken: 'at',
+        expiresAt: Date.now() - 1000,
+      });
 
-        await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
-          status: 'failed',
-          reason: expect.stringContaining(`HTTP ${status}`),
-        });
-      },
-    );
+      await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
+        status: 'failed',
+        reason: expect.stringContaining(`HTTP ${status}`),
+      });
+    });
 
-    it.each([429, 500, 502, 503])(
-      'returns transient when the refresh endpoint returns retryable HTTP %i',
-      async (status) => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
-        const source = new ClaudeCodeSource(new InMemoryBackend());
-        const credential = makeCredential({
-          refreshToken: 'rt',
-          accessToken: 'at',
-          expiresAt: Date.now() - 1000,
-        });
+    it.each([
+      429, 500, 502, 503,
+    ])('returns transient when the refresh endpoint returns retryable HTTP %i', async (status) => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
+      const source = new ClaudeCodeSource(new InMemoryBackend());
+      const credential = makeCredential({
+        refreshToken: 'rt',
+        accessToken: 'at',
+        expiresAt: Date.now() - 1000,
+      });
 
-        await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
-          status: 'transient',
-          reason: expect.stringContaining(`HTTP ${status}`),
-        });
-      },
-    );
+      await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
+        status: 'transient',
+        reason: expect.stringContaining(`HTTP ${status}`),
+      });
+    });
 
     it('returns transient when the refresh endpoint times out after 5 seconds', async () => {
       vi.useFakeTimers();

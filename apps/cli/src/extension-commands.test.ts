@@ -255,85 +255,77 @@ describe('extension init builtin', () => {
     expect(verifyTest).not.toContain("it('rejects invalid CLI default exports'");
   });
 
-  it(
-    'stages a portable source package from the generated scaffold',
-    {
-      timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS,
-    },
-    async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
-      tempDirs.push(tempRoot);
-      const extensionRoot = path.join(tempRoot, 'portable-ext');
+  it('stages a portable source package from the generated scaffold', {
+    timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS,
+  }, async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
+    tempDirs.push(tempRoot);
+    const extensionRoot = path.join(tempRoot, 'portable-ext');
 
-      const program = createProgram();
-      await program.parseAsync(
-        ['extension', 'init', 'portable-ext', '--surface', 'server,cli', '--out-dir', extensionRoot],
+    const program = createProgram();
+    await program.parseAsync(
+      ['extension', 'init', 'portable-ext', '--surface', 'server,cli', '--out-dir', extensionRoot],
+      {
+        from: 'user',
+      },
+    );
+
+    const generatedPackageJson = JSON.parse(await readFile(path.join(extensionRoot, 'package.json'), 'utf8'));
+    expect(generatedPackageJson.devDependencies['@makaio/build-tooling']).toBe(
+      expectedWorkspaceLink(extensionRoot, 'build-tooling'),
+    );
+    expect(generatedPackageJson.devDependencies['@makaio/cli']).toBe(expectedWorkspaceLink(extensionRoot, 'apps/cli'));
+    expect(generatedPackageJson.devDependencies['@makaio/contracts']).toBe(
+      expectedWorkspaceLink(extensionRoot, 'packages/contracts'),
+    );
+    expect(generatedPackageJson.devDependencies['@makaio/kernel']).toBe(
+      expectedWorkspaceLink(extensionRoot, 'packages/kernel'),
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        ['./scripts/prepare-portable-package.mjs'],
         {
-          from: 'user',
+          cwd: extensionRoot,
+          env: { ...process.env },
+        },
+        (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve();
         },
       );
+    });
 
-      const generatedPackageJson = JSON.parse(await readFile(path.join(extensionRoot, 'package.json'), 'utf8'));
-      expect(generatedPackageJson.devDependencies['@makaio/build-tooling']).toBe(
-        expectedWorkspaceLink(extensionRoot, 'build-tooling'),
-      );
-      expect(generatedPackageJson.devDependencies['@makaio/cli']).toBe(
-        expectedWorkspaceLink(extensionRoot, 'apps/cli'),
-      );
-      expect(generatedPackageJson.devDependencies['@makaio/contracts']).toBe(
-        expectedWorkspaceLink(extensionRoot, 'packages/contracts'),
-      );
-      expect(generatedPackageJson.devDependencies['@makaio/kernel']).toBe(
-        expectedWorkspaceLink(extensionRoot, 'packages/kernel'),
-      );
+    const stagedPackageJson = JSON.parse(
+      await readFile(path.join(extensionRoot, 'build', 'portable-source', 'package.json'), 'utf8'),
+    );
+    const expectedFrameworkVersions = {
+      '@makaio/build-tooling': readRepoPackageVersion('build-tooling/package.json'),
+      '@makaio/cli': readRepoPackageVersion('apps/cli/package.json'),
+      '@makaio/contracts': readRepoPackageVersion('packages/contracts/package.json'),
+      '@makaio/kernel': readRepoPackageVersion('packages/kernel/package.json'),
+    };
 
-      await new Promise<void>((resolve, reject) => {
-        execFile(
-          process.execPath,
-          ['./scripts/prepare-portable-package.mjs'],
-          {
-            cwd: extensionRoot,
-            env: { ...process.env },
-          },
-          (error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-
-            resolve();
-          },
-        );
-      });
-
-      const stagedPackageJson = JSON.parse(
-        await readFile(path.join(extensionRoot, 'build', 'portable-source', 'package.json'), 'utf8'),
-      );
-      const expectedFrameworkVersions = {
-        '@makaio/build-tooling': readRepoPackageVersion('build-tooling/package.json'),
-        '@makaio/cli': readRepoPackageVersion('apps/cli/package.json'),
-        '@makaio/contracts': readRepoPackageVersion('packages/contracts/package.json'),
-        '@makaio/kernel': readRepoPackageVersion('packages/kernel/package.json'),
-      };
-
-      expect(stagedPackageJson.scripts).toEqual({
-        build: 'tsdown',
-        test: 'vitest run --config vitest.config.ts',
-        verify: 'vitest run test/verify.test.ts --config vitest.config.ts',
-      });
-      expect(stagedPackageJson.devDependencies['@makaio/build-tooling']).toBe(
-        `^${expectedFrameworkVersions['@makaio/build-tooling']}`,
-      );
-      expect(stagedPackageJson.devDependencies['@makaio/cli']).toBe(`^${expectedFrameworkVersions['@makaio/cli']}`);
-      expect(stagedPackageJson.devDependencies['@makaio/contracts']).toBe(
-        `^${expectedFrameworkVersions['@makaio/contracts']}`,
-      );
-      expect(stagedPackageJson.devDependencies['@makaio/kernel']).toBe(
-        `^${expectedFrameworkVersions['@makaio/kernel']}`,
-      );
-      expect(stagedPackageJson.devDependencies['tsx']).toBe('^4.20.4');
-    },
-  );
+    expect(stagedPackageJson.scripts).toEqual({
+      build: 'tsdown',
+      test: 'vitest run --config vitest.config.ts',
+      verify: 'vitest run test/verify.test.ts --config vitest.config.ts',
+    });
+    expect(stagedPackageJson.devDependencies['@makaio/build-tooling']).toBe(
+      `^${expectedFrameworkVersions['@makaio/build-tooling']}`,
+    );
+    expect(stagedPackageJson.devDependencies['@makaio/cli']).toBe(`^${expectedFrameworkVersions['@makaio/cli']}`);
+    expect(stagedPackageJson.devDependencies['@makaio/contracts']).toBe(
+      `^${expectedFrameworkVersions['@makaio/contracts']}`,
+    );
+    expect(stagedPackageJson.devDependencies['@makaio/kernel']).toBe(`^${expectedFrameworkVersions['@makaio/kernel']}`);
+    expect(stagedPackageJson.devDependencies['tsx']).toBe('^4.20.4');
+  });
 
   it('escapes special characters in generated entrypoints', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
@@ -524,67 +516,63 @@ describe('extension init builtin', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it(
-    'fails verify when browser output contains unsupported bare imports',
-    { timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS },
-    async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
-      tempDirs.push(tempRoot);
-      const extensionRoot = path.join(tempRoot, 'unsupported-browser-import');
-      const distDir = path.join(extensionRoot, 'dist');
+  it('fails verify when browser output contains unsupported bare imports', {
+    timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS,
+  }, async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
+    tempDirs.push(tempRoot);
+    const extensionRoot = path.join(tempRoot, 'unsupported-browser-import');
+    const distDir = path.join(extensionRoot, 'dist');
 
-      const program = createProgram();
-      await program.parseAsync(
-        ['extension', 'init', 'unsupported-browser-import', '--surface', 'browser', '--out-dir', extensionRoot],
-        { from: 'user' },
-      );
+    const program = createProgram();
+    await program.parseAsync(
+      ['extension', 'init', 'unsupported-browser-import', '--surface', 'browser', '--out-dir', extensionRoot],
+      { from: 'user' },
+    );
 
-      await mkdir(distDir, { recursive: true });
-      await writeFile(path.join(distDir, 'browser.mjs'), "import 'zod';\nexport default () => ({});\n", 'utf8');
-      await rm(path.join(extensionRoot, 'src'), { recursive: true, force: true });
+    await mkdir(distDir, { recursive: true });
+    await writeFile(path.join(distDir, 'browser.mjs'), "import 'zod';\nexport default () => ({});\n", 'utf8');
+    await rm(path.join(extensionRoot, 'src'), { recursive: true, force: true });
 
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      await program.parseAsync(['extension', 'verify', '--cwd', extensionRoot], { from: 'user' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await program.parseAsync(['extension', 'verify', '--cwd', extensionRoot], { from: 'user' });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Extension verify failed: Browser entrypoint contains unsupported bare imports: zod.'),
-      );
-      expect(process.exitCode).toBe(1);
-    },
-  );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Extension verify failed: Browser entrypoint contains unsupported bare imports: zod.'),
+    );
+    expect(process.exitCode).toBe(1);
+  });
 
-  it(
-    'fails verify when the browser bundle is not loadable ESM',
-    { timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS },
-    async () => {
-      const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
-      tempDirs.push(tempRoot);
-      const extensionRoot = path.join(tempRoot, 'invalid-browser-esm');
-      const distDir = path.join(extensionRoot, 'dist');
+  it('fails verify when the browser bundle is not loadable ESM', {
+    timeout: EXTENSION_VERIFY_TEST_TIMEOUT_MS,
+  }, async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
+    tempDirs.push(tempRoot);
+    const extensionRoot = path.join(tempRoot, 'invalid-browser-esm');
+    const distDir = path.join(extensionRoot, 'dist');
 
-      const program = createProgram();
-      await program.parseAsync(
-        ['extension', 'init', 'invalid-browser-esm', '--surface', 'browser', '--out-dir', extensionRoot],
-        { from: 'user' },
-      );
+    const program = createProgram();
+    await program.parseAsync(
+      ['extension', 'init', 'invalid-browser-esm', '--surface', 'browser', '--out-dir', extensionRoot],
+      { from: 'user' },
+    );
 
-      await mkdir(distDir, { recursive: true });
-      await writeFile(
-        path.join(distDir, 'browser.mjs'),
-        "import './missing-chunk.mjs';\nexport default () => ({});\n",
-        'utf8',
-      );
-      await rm(path.join(extensionRoot, 'src'), { recursive: true, force: true });
+    await mkdir(distDir, { recursive: true });
+    await writeFile(
+      path.join(distDir, 'browser.mjs'),
+      "import './missing-chunk.mjs';\nexport default () => ({});\n",
+      'utf8',
+    );
+    await rm(path.join(extensionRoot, 'src'), { recursive: true, force: true });
 
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      await program.parseAsync(['extension', 'verify', '--cwd', extensionRoot], { from: 'user' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await program.parseAsync(['extension', 'verify', '--cwd', extensionRoot], { from: 'user' });
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Extension verify failed: Browser entrypoint is not parseable/loadable ESM:'),
-      );
-      expect(process.exitCode).toBe(1);
-    },
-  );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Extension verify failed: Browser entrypoint is not parseable/loadable ESM:'),
+    );
+    expect(process.exitCode).toBe(1);
+  });
 
   it('fails fast when the target directory is non-empty', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-extension-init-'));
