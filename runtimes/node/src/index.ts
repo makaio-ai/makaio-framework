@@ -76,3 +76,5 @@ export {
   resolveFrameworkSpecifier,
   type FrameworkModuleResolver,
 } from './framework-module-resolver.js';
+export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
+export type { WorkspaceRootInfo } from './find-workspace-root.js';

@@ -52,4 +52,34 @@ describe('discoverSchemas', () => {
 
     await expect(discoverSchemas(tempDir)).rejects.toThrow('Schema file not found');
   });
+
+  it('honors negated workspace entries when discovering schemas', async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'makaio-migrations-'));
+
+    await writeJson(path.join(tempDir, 'package.json'), {
+      workspaces: ['services/*', '!services/excluded'],
+    });
+
+    const includedRoot = path.join(tempDir, 'services', 'included');
+    const excludedRoot = path.join(tempDir, 'services', 'excluded');
+    await ensureDir(path.join(includedRoot, 'src'));
+    await ensureDir(path.join(excludedRoot, 'src'));
+    await writeJson(path.join(includedRoot, 'package.json'), {
+      name: '@makaio/services-included',
+      makaio: { drizzleSchema: './src/schema.ts' },
+    });
+    await writeJson(path.join(excludedRoot, 'package.json'), {
+      name: '@makaio/services-excluded',
+      makaio: { drizzleSchema: './src/schema.ts' },
+    });
+    await writeJson(path.join(includedRoot, 'src', 'schema.ts'), {});
+    await writeJson(path.join(excludedRoot, 'src', 'schema.ts'), {});
+
+    await expect(discoverSchemas(tempDir)).resolves.toEqual([
+      {
+        packageName: '@makaio/services-included',
+        schemaPath: path.join(includedRoot, 'src', 'schema.ts'),
+      },
+    ]);
+  });
 });

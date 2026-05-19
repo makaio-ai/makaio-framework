@@ -18,12 +18,12 @@
   },
   "dependencies": {
     "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.2"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
-    "globby": "^14.1.0",
     "tsx": "^4.20.5"
   },
   "license": "MIT"

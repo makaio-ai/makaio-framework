@@ -9,12 +9,12 @@
     ".": "./src/index.ts"
   },
   "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@makaio/app-mcp-server": "workspace:*",
-    "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/contracts": "workspace:*",

@@ -32,7 +32,10 @@ const FRAMEWORK_PACKAGE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..', 'packages'
 const FRAMEWORK_DIST = path.join(FRAMEWORK_PACKAGE_ROOT, 'dist');
 const FRAMEWORK_PACKAGE_LINK = path.join(PACKAGE_ROOT, 'node_modules', '@makaio', 'framework');
 const REQUIRED_FRAMEWORK_EXPORT = 'FrameworkContractNamespaces';
-const hasFrameworkRuntimeOutput = frameworkOutputExports(FRAMEWORK_DIST, REQUIRED_FRAMEWORK_EXPORT);
+const REQUIRED_FRAMEWORK_FILES = ['utils/workspace-packages.mjs'];
+const hasFrameworkRuntimeOutput =
+  frameworkOutputExports(FRAMEWORK_DIST, REQUIRED_FRAMEWORK_EXPORT) &&
+  REQUIRED_FRAMEWORK_FILES.every((filePath) => existsSync(path.join(FRAMEWORK_DIST, filePath)));
 const itRequiresFramework = hasFrameworkRuntimeOutput ? it : it.skip;
 let releaseBuildLock: (() => void) | undefined;
 let createdFrameworkPackageLink = false;
