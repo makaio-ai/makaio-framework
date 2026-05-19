@@ -131,11 +131,11 @@ describe('agent.tool.use maps to assistant tool_use message', () => {
 });
 
 // ---------------------------------------------------------------------------
-// agent.tool.output → SDKAssistantMessage (tool_result block)
+// agent.tool.output → SDKToolResultMessage
 // ---------------------------------------------------------------------------
 
-describe('agent.tool.output maps to assistant tool_result message', () => {
-  it('produces a tool_result ContentBlock with content and id', () => {
+describe('agent.tool.output maps to SDKToolResultMessage', () => {
+  it('produces a tool_result message with content and tool_use_id', () => {
     const state = createAccumulatorState();
     const result = mapBusEventToSdkMessage(
       'agent.tool.output',
@@ -162,7 +162,7 @@ describe('agent.complete maps to result message', () => {
     expect(normaliseResultMessage(result)).toMatchSnapshot();
   });
 
-  it('maps an error outcome to subtype "error"', () => {
+  it('maps an error outcome to subtype "error_during_execution"', () => {
     const state = createAccumulatorState();
     const result = mapBusEventToSdkMessage(
       'agent.complete',
@@ -222,7 +222,7 @@ describe('agent.complete maps to result message', () => {
 // ---------------------------------------------------------------------------
 
 describe('agent.contextWindow.updated maps to compact boundary message', () => {
-  it('produces a system/compact message with level and percentage', () => {
+  it('produces a system/compact_boundary message with compact_metadata', () => {
     const state = createAccumulatorState();
     const result = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
@@ -232,7 +232,7 @@ describe('agent.contextWindow.updated maps to compact boundary message', () => {
     expect(result).toMatchSnapshot();
   });
 
-  it('produces a "critical" level message', () => {
+  it('produces a compact_boundary message for a high token count', () => {
     const state = createAccumulatorState();
     const result = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
@@ -242,24 +242,23 @@ describe('agent.contextWindow.updated maps to compact boundary message', () => {
     expect(result).toMatchSnapshot();
   });
 
-  it('returns null when the level has not changed (dedup)', () => {
+  it('always emits (no level-based dedup)', () => {
     const state = createAccumulatorState();
-    // First emission sets the level.
-    mapBusEventToSdkMessage(
+    const first = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
       { ...BASE, level: 'warn', percentage: 70, currentTokens: 70000, maxTokens: 100000 },
       state,
     );
-    // Second emission at the same level must be suppressed.
-    const duplicate = mapBusEventToSdkMessage(
+    const second = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
       { ...BASE, level: 'warn', percentage: 80, currentTokens: 80000, maxTokens: 100000 },
       state,
     );
-    expect(duplicate).toBeNull();
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
   });
 
-  it('emits again when the level escalates from warn to critical', () => {
+  it('emits a second event when token count increases', () => {
     const state = createAccumulatorState();
     mapBusEventToSdkMessage(
       'agent.contextWindow.updated',

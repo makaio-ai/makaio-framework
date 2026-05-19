@@ -709,7 +709,7 @@ describe('createQueryGenerator', () => {
     });
   });
 
-  it('yields SDKAssistantMessage with tool_result on agent.tool.completed event', async () => {
+  it('yields SDKToolResultMessage on agent.tool.completed event', async () => {
     const query = createQueryGenerator({
       bus: MakaioBus,
       sessionId: SESSION_ID,
@@ -730,11 +730,11 @@ describe('createQueryGenerator', () => {
 
     expect(result.done).toBe(false);
     expect(result.value).toMatchObject({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'tool_result', content: 'file contents', id: 'tc-1' }],
-      },
+      type: 'tool_result',
+      tool_use_id: 'tc-1',
+      content: 'file contents',
+      is_error: false,
+      session_id: SESSION_ID,
     });
   });
 

@@ -11,5 +11,4 @@ export {
 export { makeStubExtensionContext } from './stub-extension-context.js';
 
 export { waitFor, advanceTimersByTimeAsync, type WaitForOptions } from './async-helpers.js';
-
 export { stubEnv, unstubAllEnvs } from './env-stub.js';

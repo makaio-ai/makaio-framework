@@ -20,7 +20,14 @@ import { AgentSubjects } from '@makaio/contracts';
 import type { AgentComplete, AgentStarted } from '@makaio/contracts';
 import { createQueryGenerator } from '../../src/shared/query-generator.js';
 import type { ResolvedQueryConfig } from '../../src/shared/options.js';
-import type { SDKAssistantMessage, SDKResultMessage, SDKSystemMessage } from '../../src/shared/types.js';
+import type {
+  SDKAssistantMessage,
+  SDKResultError,
+  SDKResultMessage,
+  SDKResultSuccess,
+  SDKSystemMessage,
+  SDKToolResultMessage,
+} from '../../src/shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -153,7 +160,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
     });
   });
 
-  it('agent.tool.output event produces an SDKAssistantMessage with tool_result block', async () => {
+  it('agent.tool.output event produces an SDKToolResultMessage', async () => {
     const gen = makeGenerator();
     cleanups.push(() => gen.close());
 
@@ -169,13 +176,12 @@ describe('bus simulation — full pipeline (always runs)', () => {
     const result = await pullPromise;
 
     expect(result.done).toBe(false);
-    const msg = result.value as SDKAssistantMessage;
-    expect(msg.type).toBe('assistant');
-    expect(msg.message.content[0]).toMatchObject({
-      type: 'tool_result',
-      content: 'HELLO',
-      id: 'tc-sim-1',
-    });
+    const msg = result.value as SDKToolResultMessage;
+    expect(msg.type).toBe('tool_result');
+    expect(msg.tool_use_id).toBe('tc-sim-1');
+    expect(msg.content).toBe('HELLO');
+    expect(msg.is_error).toBe(false);
+    expect(msg.session_id).toBe(SESSION_ID);
   });
 
   it('agent.complete event produces an SDKResultMessage and closes the generator', async () => {
@@ -197,7 +203,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
     expect(msg.type).toBe('result');
     expect(msg.subtype).toBe('success');
     expect(msg.is_error).toBe(false);
-    expect(msg.result).toBe('Task complete.');
+    expect((msg as SDKResultSuccess).result).toBe('Task complete.');
     expect(msg.session_id).toBe(SESSION_ID);
 
     // The next pull must mark the generator as done.
@@ -266,8 +272,9 @@ describe('bus simulation — full pipeline (always runs)', () => {
       message: { content: [{ type: 'tool_use', name: 'upper' }] },
     });
     expect(fourth.value).toMatchObject({
-      type: 'assistant',
-      message: { content: [{ type: 'tool_result', content: 'HELLO' }] },
+      type: 'tool_result',
+      tool_use_id: 'tc-seq-1',
+      content: 'HELLO',
     });
     expect(fifth.value).toMatchObject({
       type: 'assistant',
@@ -344,9 +351,9 @@ describe('bus simulation — full pipeline (always runs)', () => {
 
     const msg = result.value as SDKResultMessage;
     expect(msg.type).toBe('result');
-    expect(msg.subtype).toBe('error');
+    expect(msg.subtype).toBe('error_during_execution');
     expect(msg.is_error).toBe(true);
-    expect(msg.result).toBe('Rate limit exceeded');
+    expect((msg as SDKResultError).errors[0]).toBe('Rate limit exceeded');
   });
 
   // -------------------------------------------------------------------------

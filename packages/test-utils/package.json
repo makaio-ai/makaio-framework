@@ -1,6 +1,6 @@
 {
   "name": "@makaio/test-utils",
-  "description": "Shared test harnesses for bus mocking, SQLite database lifecycle, and bun:test helpers.",
+  "description": "Shared test harnesses for bus mocking and SQLite database lifecycle in Vitest.",
   "version": "1.0.0",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -8,7 +8,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./drizzle-harness": "./src/drizzle-harness.ts",
-    "./matchers": "./src/matchers.ts",
     "./package.json": "./package.json"
   },
   "devDependencies": {
@@ -45,7 +44,6 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./drizzle-harness": "./dist/drizzle-harness.mjs",
-      "./matchers": "./dist/matchers.mjs",
       "./package.json": "./package.json"
     }
   },
