@@ -147,13 +147,15 @@ function registerUpdateStatusHandler(deps: AdapterSessionHandlerDeps): () => voi
   return bus.on(AdapterSessionStorageSubjects.updateStatus, async (ctx) => {
     const { adapterSessionId, status } = ctx.payload;
 
-    const result = await db
+    const updated = await db
       .update(adapterSessions)
       .set({ status })
-      .where(and(eq(adapterSessions.adapterSessionId, adapterSessionId), sql`${adapterSessions.status} <> ${status}`));
+      .where(and(eq(adapterSessions.adapterSessionId, adapterSessionId), sql`${adapterSessions.status} <> ${status}`))
+      .returning({ adapterSessionId: adapterSessions.adapterSessionId });
 
-    // SQLite returns rowsAffected, check if any rows were updated
-    const success = result.rowsAffected > 0;
+    // Use returning() result length: works across both libsql and bun-sqlite drivers.
+    // bun-sqlite returns void from update() without returning(), so rowsAffected is unavailable.
+    const success = updated.length > 0;
     ctx.setResult({ success });
 
     if (success) {

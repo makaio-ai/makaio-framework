@@ -324,7 +324,9 @@ async function handleRemoveVersionAndClearActive(
       .delete(clientBinaryVersions)
       .where(and(eq(clientBinaryVersions.clientId, clientId), eq(clientBinaryVersions.version, version)));
 
-    const wasDeleted = (deleteResult.rowsAffected ?? 0) > 0;
+    // bun:sqlite returns `{ changes }` while libsql returns `{ rowsAffected }`.
+    const wasDeleted =
+      ((deleteResult as unknown as { changes?: number }).changes ?? deleteResult.rowsAffected ?? 0) > 0;
     if (!wasDeleted) {
       return { removedVersion: null, previousActiveVersion, activeVersion: previousActiveVersion };
     }

@@ -431,10 +431,7 @@ export async function startHttpMcpServer(
       // Without this, connections held by the Claude Agent SDK subprocess
       // prevent the server from draining within the test timeout.
       httpServer.closeAllConnections();
-      const results = await Promise.allSettled([
-        mcpServer.close(),
-        new Promise<void>((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve()))),
-      ]);
+      const results = await Promise.allSettled([mcpServer.close(), closeHttpServerSafely(httpServer)]);
       const errors = results
         .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
         .map((result) => (result.reason instanceof Error ? result.reason : new Error(String(result.reason))));

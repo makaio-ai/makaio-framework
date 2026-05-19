@@ -340,7 +340,10 @@ function registerSnapshotHandlers({ bus, db }: AccountManagerStorageHandlerDeps)
             usageSnapshots.fetchedAt,
           ],
         });
-      ctx.setResult({ persisted: (result.rowsAffected ?? 0) > 0 });
+      // bun:sqlite returns `{ changes }` while libsql returns `{ rowsAffected }`.
+      // Read both to stay cross-driver correct.
+      const affected = (result as unknown as { changes?: number }).changes ?? result?.rowsAffected ?? 0;
+      ctx.setResult({ persisted: affected > 0 });
     }),
     bus.on(AccountManagerStorageSubjects.snapshots.read, async (ctx) => {
       const filters = [

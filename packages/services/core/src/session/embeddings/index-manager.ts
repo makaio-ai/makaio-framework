@@ -2,6 +2,23 @@ import { sql } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 
 /**
+ * Reinterpret raw BLOB bytes as a Float32Array, regardless of driver.
+ *
+ * libsql returns BLOB columns as `ArrayBuffer`; bun:sqlite returns them as
+ * `Uint8Array`. `new Float32Array(uint8Array)` treats each byte as an
+ * individual float element instead of reinterpreting the 4-byte chunks, so
+ * we must access the underlying `ArrayBuffer` when a typed array is given.
+ * @param raw - Raw BLOB value from the database driver.
+ * @returns Float32Array over the same underlying bytes.
+ */
+function toFloat32Array(raw: ArrayBuffer | Uint8Array): Float32Array {
+  if (raw instanceof ArrayBuffer) {
+    return new Float32Array(raw);
+  }
+  return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / Float32Array.BYTES_PER_ELEMENT);
+}
+
+/**
  * Manages dynamic embedding index tables per model.
  *
  * Each embedding model gets its own indexed table for efficient
@@ -207,7 +224,9 @@ export class EmbeddingIndexManager {
 
     // Calculate Euclidean distance for each embedding
     const results = rows.map((row) => {
-      const stored = new Float32Array(row.embedding);
+      // bun:sqlite returns BLOB as Uint8Array; libsql returns ArrayBuffer.
+      // Reinterpret the raw bytes as 32-bit floats in either case.
+      const stored = toFloat32Array(row.embedding);
       const distance = this.euclideanDistance(queryEmbedding, stored);
       return {
         entityType: row.entity_type,

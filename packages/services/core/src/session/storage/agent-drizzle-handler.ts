@@ -71,11 +71,15 @@ function toDbValues(agent: MakaioSessionAgent): typeof agents.$inferInsert {
 
 /**
  * Determine whether a Drizzle write mutated at least one row.
- * @param result - Write result with optional affected-row count
+ *
+ * Handles both driver shapes:
+ * - libsql returns `{ rowsAffected: number }`
+ * - bun:sqlite returns `{ changes: number, lastInsertRowid: number }`
+ * @param result - Write result with driver-specific affected-row count
  * @returns True when one or more rows were affected
  */
-function didAffectRows(result: { rowsAffected?: number | null }): boolean {
-  return (result.rowsAffected ?? 0) > 0;
+function didAffectRows(result: { rowsAffected?: number | null; changes?: number | null }): boolean {
+  return (result.rowsAffected ?? result.changes ?? 0) > 0;
 }
 
 /**

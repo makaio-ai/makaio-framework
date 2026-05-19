@@ -212,7 +212,11 @@ function registerDeleteHandler<
     const { id } = ctx.payload;
     const column = getTableColumns(table)[idField];
     const result = await db.delete(table).where(eq(column, id));
-    ctx.setResult({ deleted: (result.rowsAffected ?? 0) > 0 });
+    // `result.rowsAffected` is the libsql / @libsql/client property name.
+    // `bun:sqlite` via drizzle-orm/bun-sqlite exposes the same count as
+    // `changes`. Both properties are read to support either runtime driver.
+    const affected = (result.rowsAffected ?? Reflect.get(result, 'changes') ?? 0) as number;
+    ctx.setResult({ deleted: affected > 0 });
   });
 }
 

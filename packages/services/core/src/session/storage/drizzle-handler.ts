@@ -196,8 +196,11 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
       const insertResult = await db
         .insert(sessions)
         .values({ sessionId, createdAt: session.createdAt, ...dbValues })
-        .onConflictDoNothing();
-      const inserted = (insertResult.rowsAffected ?? 0) > 0;
+        .onConflictDoNothing()
+        .returning({ sessionId: sessions.sessionId });
+      // Use returning() length: works across both libsql and bun-sqlite drivers.
+      // bun-sqlite returns void from insert() without returning(), so rowsAffected is unavailable.
+      const inserted = insertResult.length > 0;
       ctx.setResult({ success: inserted, clientAccountChanged: inserted && session.clientAccountId !== undefined });
       if (inserted) {
         emitSessionClientAccountChangedIfNeeded(bus, null, session);
@@ -216,9 +219,12 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
           target: sessions.sessionId,
           set: dbValues,
           setWhere: buildClientAccountBaselinePredicate(previousRow),
-        });
+        })
+        .returning({ sessionId: sessions.sessionId });
 
-      if ((result.rowsAffected ?? 0) === 0) {
+      // Use returning() length: works across both libsql and bun-sqlite drivers.
+      // bun-sqlite returns void from insert() without returning(), so rowsAffected is unavailable.
+      if (result.length === 0) {
         continue;
       }
 
@@ -268,8 +274,13 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
       return;
     }
     if (!updatesClientAccountState) {
-      const result = await db.update(sessions).set(updateFields).where(eq(sessions.sessionId, sessionId));
-      ctx.setResult({ success: (result.rowsAffected ?? 0) > 0, clientAccountChanged: false });
+      const result = await db
+        .update(sessions)
+        .set(updateFields)
+        .where(eq(sessions.sessionId, sessionId))
+        .returning({ sessionId: sessions.sessionId });
+      // Use returning() length: works across both libsql and bun-sqlite drivers.
+      ctx.setResult({ success: result.length > 0, clientAccountChanged: false });
       return;
     }
     for (let attempt = 0; attempt < CLIENT_ACCOUNT_WRITE_RETRY_LIMIT; attempt++) {
@@ -284,8 +295,10 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
       const result = await db
         .update(sessions)
         .set(updateFields)
-        .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow)));
-      if ((result.rowsAffected ?? 0) === 0) {
+        .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow)))
+        .returning({ sessionId: sessions.sessionId });
+      // Use returning() length: works across both libsql and bun-sqlite drivers.
+      if (result.length === 0) {
         continue;
       }
       ctx.setResult({
