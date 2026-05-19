@@ -48,7 +48,7 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain("github.event.deployment.environment == 'canary'");
     expect(workflow).toContain('ref: ${{ steps.request.outputs.checkout-ref }}');
     expect(workflow).toContain('Verify checked out source');
-    expect(workflow).toContain('yarn tsx scripts/dev-publish.ts publish');
+    expect(workflow).toContain('bun scripts/dev-publish.ts publish');
     expect(workflow).toContain('permission-issues: write');
     expect(workflow).toContain('permission-pull-requests: write');
     expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');

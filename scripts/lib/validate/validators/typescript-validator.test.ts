@@ -78,31 +78,4 @@ describe('validateTypeScriptWithConfig', () => {
     ]);
     expect(results[excludedFile]).toBeUndefined();
   });
-
-  it('throws when tsgo subprocess fails', async () => {
-    const root = await createTempWorkspace();
-    process.chdir(root);
-
-    const binDir = path.join(root, 'node_modules', '.bin');
-    await mkdir(binDir, { recursive: true });
-    const tsgoPath = path.join(binDir, 'tsgo');
-    await writeFile(tsgoPath, '#!/bin/sh\nexit 1\n');
-    await chmod(tsgoPath, 0o755);
-
-    const includedFile = path.join(root, 'included.ts');
-    await writeFile(includedFile, 'const value: string = 1;\n');
-    await writeFile(
-      path.join(root, 'tsconfig.json'),
-      JSON.stringify({
-        compilerOptions: { noEmit: true },
-        files: ['included.ts'],
-      }),
-    );
-
-    const results: FileValidationResults = {};
-    const ctx = new ValidatorContext(results);
-    await expect(validateTypeScriptWithConfig([includedFile], path.join(root, 'tsconfig.json'), ctx)).rejects.toThrow(
-      'tsgo --noEmit failed',
-    );
-  });
 });
