@@ -19,7 +19,7 @@ jobs:
       startsWith(github.event.comment.body, '/publish-dev') &&
       github.event.comment.user.type != 'Bot' &&
       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
 
     steps:
@@ -84,12 +84,10 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-deployments: write
-          permission-issues: write
 
       - name: Create gated canary deployment
         id: deployment
