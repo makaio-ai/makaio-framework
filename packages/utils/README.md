@@ -105,6 +105,7 @@ console.log(explainTimeout(timeouts, 'completion'));
 
 - `@makaio/utils/health-probe` — health probe helpers
 - `@makaio/utils/package-root` — package root resolution
+- `@makaio/utils/workspace-packages` — workspace package glob and index discovery
 - `@makaio/utils/workspace-root` — workspace root resolution
 
 ## Design Philosophy

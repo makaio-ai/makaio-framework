@@ -5500,10 +5500,10 @@ __metadata:
   resolution: "@makaio/storage-migrations@workspace:packages/storage-migrations"
   dependencies:
     "@makaio/storage-drizzle": "workspace:*"
+    "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.2"
-    globby: "npm:^14.1.0"
     tsx: "npm:^4.20.5"
   languageName: unknown
   linkType: soft
@@ -5643,6 +5643,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@types/node": "npm:^24.3.0"
+    glob: "npm:13.0.6"
     p-defer: "npm:^4.0.1"
     tsx: "npm:^4.20.5"
   languageName: unknown

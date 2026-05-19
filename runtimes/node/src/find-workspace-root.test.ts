@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findWorkspaceRoot, WorkspaceRootNotFoundError } from './find-workspace-root.js';
+import { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 
 describe('findWorkspaceRoot', () => {
   let tmpDir: string;
@@ -21,6 +21,32 @@ describe('findWorkspaceRoot', () => {
     await fs.promises.writeFile(path.join(tmpDir, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
 
     expect(findWorkspaceRoot(nestedDir)).toBe(tmpDir);
+  });
+
+  it('returns parsed root package metadata when requested', async () => {
+    const nestedDir = path.join(tmpDir, 'runtimes', 'node', 'dist');
+    await fs.promises.mkdir(nestedDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ workspaces: ['packages/*', '!packages/excluded'] }),
+    );
+
+    expect(findWorkspaceRootInfo(nestedDir)).toEqual({
+      root: tmpDir,
+      packageJsonPath: path.join(tmpDir, 'package.json'),
+      workspaces: ['packages/*', '!packages/excluded'],
+    });
+  });
+
+  it('supports object-form workspace package declarations', async () => {
+    const nestedDir = path.join(tmpDir, 'runtimes', 'node', 'dist');
+    await fs.promises.mkdir(nestedDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({ workspaces: { packages: ['packages/*'] } }),
+    );
+
+    expect(findWorkspaceRootInfo(nestedDir).workspaces).toEqual(['packages/*']);
   });
 
   it('throws a typed error when no workspace root is found', async () => {

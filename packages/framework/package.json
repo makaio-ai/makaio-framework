@@ -347,6 +347,10 @@
       "types": "./dist/utils/health-probe.d.mts",
       "default": "./dist/utils/health-probe.mjs"
     },
+    "./utils/workspace-packages": {
+      "types": "./dist/utils/workspace-packages.d.mts",
+      "default": "./dist/utils/workspace-packages.mjs"
+    },
     "./utils/workspace-root": {
       "types": "./dist/utils/workspace-root.d.mts",
       "default": "./dist/utils/workspace-root.mjs"

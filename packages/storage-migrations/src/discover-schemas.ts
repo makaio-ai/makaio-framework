@@ -6,7 +6,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { globby } from 'globby';
+import { discoverWorkspacePackageJsonPaths, parseWorkspaceGlobs } from '@makaio/utils/workspace-packages';
 
 /**
  * A discovered schema file from a workspace package.
@@ -27,17 +27,11 @@ export interface DiscoveredSchema {
 function resolveWorkspacePatterns(workspaceRoot: string): string[] {
   const rootPackagePath = path.resolve(workspaceRoot, 'package.json');
   const rootPackageRaw = fs.readFileSync(rootPackagePath, 'utf-8');
-  const rootPackage = JSON.parse(rootPackageRaw) as {
-    workspaces?: string[] | { packages?: string[] };
-  };
+  const rootPackage = JSON.parse(rootPackageRaw) as unknown;
+  const workspaces = parseWorkspaceGlobs(rootPackage);
 
-  if (Array.isArray(rootPackage.workspaces)) {
-    return rootPackage.workspaces;
-  }
-
-  const nested = rootPackage.workspaces?.packages;
-  if (nested && nested.length > 0) {
-    return nested;
+  if (workspaces.length > 0) {
+    return [...workspaces];
   }
 
   throw new Error(`No workspaces defined in ${rootPackagePath}`);
@@ -61,14 +55,9 @@ export async function discoverSchemas(workspaceRoot: string, patterns?: string[]
   }
   const workspacePatterns = patterns ?? resolveWorkspacePatterns(workspaceRoot);
 
-  // Find all package.json files in workspace
-  const packageJsonPaths = await globby(
-    workspacePatterns.map((p) => `${p}/package.json`),
-    {
-      cwd: workspaceRoot,
-      absolute: true,
-    },
-  );
+  const packageJsonPaths = await discoverWorkspacePackageJsonPaths(workspaceRoot, {
+    patterns: workspacePatterns,
+  });
 
   const discovered: DiscoveredSchema[] = [];
 

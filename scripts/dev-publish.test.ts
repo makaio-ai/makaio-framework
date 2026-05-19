@@ -35,6 +35,22 @@ function toRepositoryDirectory(packageDir: string): string {
   return relative(FRAMEWORK_ROOT, packageDir).split(sep).join('/');
 }
 
+interface PackageJson {
+  name?: string;
+  private?: boolean;
+  version?: string;
+  dependencies?: Record<string, string>;
+  repository?: {
+    type?: string;
+    url?: string;
+    directory?: string;
+  };
+}
+
+function readPackageJson(packageDir: string): PackageJson {
+  return JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as PackageJson;
+}
+
 describe('parsePackageNames', () => {
   it('accepts explicit Makaio package names and removes duplicates', () => {
     expect(parsePackageNames('@makaio/framework @makaio/contracts\n@makaio/framework')).toEqual([
@@ -141,16 +157,7 @@ describe('publishable package metadata', () => {
   it('declares repository metadata required by npm provenance', () => {
     const failures: string[] = [];
     for (const packageDir of findPackageJsonDirs(FRAMEWORK_ROOT)) {
-      const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
-        name?: string;
-        private?: boolean;
-        repository?: {
-          type?: string;
-          url?: string;
-          directory?: string;
-        };
-        version?: string;
-      };
+      const packageJson = readPackageJson(packageDir);
 
       if (packageJson.private || !packageJson.name?.startsWith('@makaio/') || !packageJson.version) {
         continue;
@@ -163,6 +170,20 @@ describe('publishable package metadata', () => {
         packageJson.repository.directory !== directory
       ) {
         failures.push(`${packageJson.name}: expected git repository metadata for ${directory}`);
+      }
+    }
+
+    expect(failures).toEqual([]);
+  });
+});
+
+describe('framework workspace package metadata', () => {
+  it('keeps build tooling out of production dependencies', () => {
+    const failures: string[] = [];
+    for (const packageDir of findPackageJsonDirs(FRAMEWORK_ROOT)) {
+      const packageJson = readPackageJson(packageDir);
+      if (packageJson.dependencies?.['@makaio/build-tooling'] !== undefined) {
+        failures.push(packageJson.name ?? toRepositoryDirectory(packageDir));
       }
     }
 
