@@ -61,7 +61,13 @@ export default defineConfig({
           name: 'ui-jsdom',
           environment: 'jsdom',
           include: ['packages/**/*.test.tsx', 'extensions/**/*.test.tsx', 'ui/**/*.test.tsx', 'apps/**/*.test.tsx'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/*.bun.test.ts', '**/*.browser.test.ts', '**/*.browser.test.tsx'],
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/*.bun.test.ts',
+            '**/*.browser.test.ts',
+            '**/*.browser.test.tsx',
+          ],
         },
       },
       {
