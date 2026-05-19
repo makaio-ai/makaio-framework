@@ -1,0 +1,46 @@
+import { describe, it, expect } from 'bun:test';
+import { Turn } from '../turn.js';
+
+describe('Turn (moved to entities)', () => {
+  it('creates turn with generated ID', () => {
+    const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1'], turnNumber: 1 });
+
+    expect(turn.turnId).toBeDefined();
+    expect(turn.sessionId).toBe('sess-1');
+    expect(turn.agentIds).toEqual(['agent-1']);
+  });
+
+  it('tracks agent completion and returns state change', () => {
+    const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1', 'agent-2'], turnNumber: 1 });
+
+    const change1 = turn.markAgentCompleted('agent-1');
+    expect(change1.turnComplete).toBe(false);
+
+    const change2 = turn.markAgentCompleted('agent-2');
+    expect(change2.turnComplete).toBe(true);
+    if (change2.turnComplete) {
+      expect(change2.result.success).toBe(true);
+    }
+  });
+
+  it('adds messages to turn', () => {
+    const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1'], turnNumber: 1 });
+
+    turn.addMessage('msg-1');
+    turn.addMessage('msg-2');
+
+    expect(turn.messageIds).toEqual(['msg-1', 'msg-2']);
+  });
+
+  it('defensively copies initiator metadata', () => {
+    const initiator = { source: 'extension' as const, sourceId: 'routine:validation' };
+    const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1'], turnNumber: 1, initiator });
+
+    initiator.sourceId = 'mutated';
+    expect(turn.initiator).toEqual({ source: 'extension', sourceId: 'routine:validation' });
+
+    const returned = turn.initiator;
+    returned.sourceId = 'mutated-again';
+    expect(turn.initiator).toEqual({ source: 'extension', sourceId: 'routine:validation' });
+  });
+});

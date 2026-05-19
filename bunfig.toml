@@ -1,0 +1,9 @@
+[test]
+timeout = 10000
+preload = ["@makaio/test-utils/matchers"]
+pathIgnorePatterns = [
+  "node_modules/**",
+  "dist/**",
+  "**/e2e/**",
+  "**/*.e2e.test.ts",
+]
