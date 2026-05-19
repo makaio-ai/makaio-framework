@@ -23,6 +23,9 @@ import {
   createHttpRouteGraphBuilder,
 } from '@makaio/runtime-node';
 import { normalizeBusSecret } from '@makaio/utils';
+import { MakaioBus } from '@makaio/bus-core';
+import { KernelSubjects } from '@makaio/kernel';
+import type { DevPortalMap } from '@makaio/services-package-manager';
 
 /**
  * Host-owned boot overrides forwarded to {@link bootMakaioRuntime}.
@@ -45,6 +48,23 @@ export interface ServeBootOverrides {
   readonly launcherCommand?: CoreBootOptions['launcherCommand'];
   /** Optional loopback transport registry name. */
   readonly loopbackName?: CoreBootOptions['loopbackName'];
+  /**
+   * Dev-mode workspace package map forwarded to the package-manager service.
+   *
+   * When provided and non-empty, extension install specs for known workspace
+   * packages are rewritten to Yarn `portal:` ranges pointing at local source
+   * directories. Mirrors `frameworkPackagePath` but covers all extension packages.
+   */
+  readonly devPortalPackages?: DevPortalMap;
+  /**
+   * Host-provided `@makaio/framework` package root forwarded to boot.
+   *
+   * In dev mode this is the workspace source directory for
+   * `@makaio/framework`. Packaged hosts pass the app-bundled copy here.
+   * When omitted, no framework package link is created.
+   * @see {@link CoreBootOptions.frameworkPackagePath}
+   */
+  readonly frameworkPackagePath?: CoreBootOptions['frameworkPackagePath'];
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +171,40 @@ export function resolveAuth(lanBind: boolean): DispatchingAuth | HmacAuth | unde
 }
 
 // ---------------------------------------------------------------------------
+// Restart handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a bus handler for `kernel.restart` that schedules a host shutdown.
+ *
+ * The handler responds with `{ accepted: true }` immediately, then defers the
+ * actual shutdown to the next event-loop tick via `schedule` (default:
+ * `setTimeout(task, 0)`). This guarantees the RPC response is sent before the
+ * process begins teardown.
+ * @param options - Handler configuration. `shutdown` is the async function that
+ *   performs host shutdown; `schedule` is an optional scheduler for deferred
+ *   execution (defaults to `setTimeout(task, 0)`).
+ * @returns Bus handler function compatible with `bus.on(KernelSubjects.restart, …)`.
+ */
+export function createRestartHandler(options: {
+  /** Async function that performs host shutdown. */
+  shutdown: () => Promise<void> | void;
+  /** Optional scheduler for deferred execution (defaults to `setTimeout(task, 0)`). */
+  schedule?: (task: () => void) => void;
+}) {
+  const { shutdown, schedule = (task) => setTimeout(task, 0) } = options;
+  let scheduled = false;
+  return (ctx: { setResult: (result: { accepted: boolean }) => void }) => {
+    ctx.setResult({ accepted: true });
+    if (scheduled) return;
+    scheduled = true;
+    schedule(() => {
+      void shutdown();
+    });
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Composition root
 // ---------------------------------------------------------------------------
 
@@ -193,6 +247,28 @@ export async function serve(options: ServeOptions): Promise<void> {
 
   // --- Shared boot sequence ---
   let runtime!: MakaioRuntime;
+  let unsubRestart: (() => void) | undefined;
+
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = async (): Promise<void> => {
+    if (shutdownPromise) {
+      return await shutdownPromise;
+    }
+
+    shutdownPromise = (async () => {
+      unsubRestart?.();
+      try {
+        await runtime.shutdown();
+      } catch (err) {
+        console.error('[serve] Error during runtime shutdown:', err);
+      } finally {
+        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      }
+    })();
+
+    return await shutdownPromise;
+  };
+
   try {
     const bootOverrides = options.boot;
     runtime = await bootMakaioRuntime({
@@ -209,31 +285,13 @@ export async function serve(options: ServeOptions): Promise<void> {
       },
     });
     routeGraph.markReady();
+    unsubRestart = MakaioBus.on(KernelSubjects.restart, createRestartHandler({ shutdown }));
     process.stdout.write(`MAKAIO_PORT=${runtime.port}\n`);
   } catch (err) {
     // Boot failed — close the HTTP server we own
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     throw err;
   }
-
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (): Promise<void> => {
-    if (shutdownPromise) {
-      return await shutdownPromise;
-    }
-
-    shutdownPromise = (async () => {
-      try {
-        await runtime.shutdown();
-      } catch (err) {
-        console.error('[serve] Error during runtime shutdown:', err);
-      } finally {
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-      }
-    })();
-
-    return await shutdownPromise;
-  };
 
   process.once('SIGTERM', () => void shutdown());
   process.once('SIGINT', () => void shutdown());

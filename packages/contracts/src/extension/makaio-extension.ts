@@ -119,9 +119,8 @@ export interface ExtensionRuntimeBootContribution<THostContext extends Extension
  * };
  * ```
  */
-export interface MakaioExtension<
-  THostContext extends ExtensionContext = NodeExtensionContext,
-> extends ExtensionManifest {
+export interface MakaioExtension<THostContext extends ExtensionContext = NodeExtensionContext>
+  extends ExtensionManifest {
   /**
    * Bus namespace definitions owned by this extension.
    *

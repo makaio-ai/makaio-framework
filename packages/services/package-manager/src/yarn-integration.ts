@@ -558,6 +558,29 @@ export function packageSpecWithRange(npmName: string, range: string | undefined)
 }
 
 /**
+ * Extract the npm package name from a Yarn-compatible package specifier.
+ *
+ * Handles both scoped and unscoped names, with or without a range suffix:
+ * - `@scope/pkg` → `@scope/pkg`
+ * - `@scope/pkg@^1.0.0` → `@scope/pkg`
+ * - `plain-pkg` → `plain-pkg`
+ * - `plain-pkg@>=2.0.0` → `plain-pkg`
+ * @param packageSpec - Yarn-compatible package specifier.
+ * @returns The npm package name without any version range suffix.
+ */
+export function extractNpmName(packageSpec: string): string {
+  if (packageSpec.startsWith('@')) {
+    const slashIndex = packageSpec.indexOf('/');
+    if (slashIndex === -1) return packageSpec;
+    const rangeMarker = packageSpec.indexOf('@', slashIndex + 1);
+    return rangeMarker === -1 ? packageSpec : packageSpec.slice(0, rangeMarker);
+  }
+
+  const rangeMarker = packageSpec.indexOf('@');
+  return rangeMarker === -1 ? packageSpec : packageSpec.slice(0, rangeMarker);
+}
+
+/**
  * Resolve the Yarn dependency range for the framework singleton.
  * @param dependency - Desired framework dependency source.
  * @returns Registry semver range or local package portal range.
@@ -574,7 +597,7 @@ export function resolveFrameworkDependencyRange(dependency: FrameworkDependencyS
  * @param packagePath - Native absolute or relative filesystem path.
  * @returns Portable path with forward slashes and Windows drive paths prefixed by `/`.
  */
-function toYarnPortablePath(packagePath: string): string {
+export function toYarnPortablePath(packagePath: string): string {
   const resolved = WINDOWS_ABSOLUTE_PATH.test(packagePath) ? packagePath : path.resolve(packagePath);
   const slashNormalized = resolved.replace(/\\/g, '/');
   return WINDOWS_ABSOLUTE_PATH.test(slashNormalized) ? `/${slashNormalized}` : slashNormalized;

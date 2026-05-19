@@ -4414,11 +4414,16 @@ __metadata:
     "@makaio/runtime-node": "workspace:*"
     "@makaio/services-core": "workspace:*"
     "@makaio/services-package-manager": "workspace:*"
+    "@makaio/setup": "workspace:*"
     "@makaio/test-utils": "workspace:*"
     "@makaio/utils": "workspace:*"
+    "@types/react": "npm:^19.0.0"
     commander: "npm:^14.0.3"
     esbuild: "npm:^0.28.0"
     hono: "npm:^4.12.18"
+    ink: "npm:^6.5.1"
+    ink-testing-library: "npm:^3.0.0"
+    react: "npm:^19.0.0"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
@@ -5450,6 +5455,23 @@ __metadata:
     "@yarnpkg/core": "npm:^4.7.0"
     "@yarnpkg/fslib": "npm:^3.1.4"
     semver: "npm:^7.8.0"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/setup@workspace:*, @makaio/setup@workspace:packages/setup":
+  version: 0.0.0-use.local
+  resolution: "@makaio/setup@workspace:packages/setup"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/kernel": "workspace:*"
+    "@makaio/services-package-manager": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    tsx: "npm:^4.20.5"
+    vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
@@ -17522,7 +17544,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ink@npm:^6.0.0":
+"ink@npm:^6.0.0, ink@npm:^6.5.1":
   version: 6.8.0
   resolution: "ink@npm:6.8.0"
   dependencies:
@@ -22213,7 +22235,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react@npm:^19.2.6":
+"react@npm:^19.0.0, react@npm:^19.2.6":
   version: 19.2.6
   resolution: "react@npm:19.2.6"
   checksum: 10c0/66afde33b9a9ee87b1e1cae39d8e7e040d1262e719524fd70660c4d4ce79929c532ac19fc3df5a911edaf02768fdf2c49de4ede1ba99bc6aad72796e0e26e798

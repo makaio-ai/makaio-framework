@@ -11,7 +11,7 @@
 import { versionSatisfies } from '@makaio/contracts';
 import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { IDescriptorNameResolver } from './descriptor-name-resolver.js';
-import { packageSpecWithRange, type InstalledExtensionDescriptor } from './yarn-integration.js';
+import { extractNpmName, packageSpecWithRange, type InstalledExtensionDescriptor } from './yarn-integration.js';
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -455,31 +455,12 @@ function expectedRootDescriptorName(npmName: string): string | undefined {
  * @returns Parsed package name and optional range.
  */
 function parseRootPackageSpec(packageSpec: string): ParsedRoot {
-  if (packageSpec.startsWith('@')) {
-    const slashIndex = packageSpec.indexOf('/');
-    if (slashIndex === -1) {
-      return { npmName: packageSpec };
-    }
-    const rangeMarker = packageSpec.indexOf('@', slashIndex + 1);
-    if (rangeMarker === -1) {
-      return { npmName: packageSpec };
-    }
-    const requiredRange = packageSpec.slice(rangeMarker + 1);
-    return {
-      npmName: packageSpec.slice(0, rangeMarker),
-      ...(requiredRange === 'latest' ? {} : { requiredRange }),
-    };
+  const npmName = extractNpmName(packageSpec);
+  if (npmName.length === packageSpec.length) {
+    return { npmName };
   }
-
-  const rangeMarker = packageSpec.indexOf('@');
-  if (rangeMarker === -1) {
-    return { npmName: packageSpec };
-  }
-  const requiredRange = packageSpec.slice(rangeMarker + 1);
-  return {
-    npmName: packageSpec.slice(0, rangeMarker),
-    ...(requiredRange === 'latest' ? {} : { requiredRange }),
-  };
+  const requiredRange = packageSpec.slice(npmName.length + 1);
+  return requiredRange === 'latest' ? { npmName } : { npmName, requiredRange };
 }
 
 /**

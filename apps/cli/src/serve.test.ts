@@ -7,9 +7,9 @@
  * `process.env` and restore it in `afterEach`.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DispatchingAuth, HmacAuth } from '@makaio/bus-transport-websocket';
-import { resolveAuth, resolveHost } from './serve.js';
+import { createRestartHandler, resolveAuth, resolveHost } from './serve.js';
 
 const EMPTY_SECRET_ERROR = '[serve] MAKAIO_BUS_SECRET is set but empty; refusing to initialize HmacAuth';
 
@@ -160,5 +160,66 @@ describe('resolveAuth', () => {
       expect(auth).toBeInstanceOf(DispatchingAuth);
       expect(auth).not.toBeInstanceOf(HmacAuth);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createRestartHandler
+// ---------------------------------------------------------------------------
+
+describe('createRestartHandler', () => {
+  it('sets accepted result and schedules shutdown', () => {
+    const shutdownFn = vi.fn();
+    const scheduledTasks: (() => void)[] = [];
+    const handler = createRestartHandler({
+      shutdown: shutdownFn,
+      schedule: (task) => scheduledTasks.push(task),
+    });
+
+    const ctx = { setResult: vi.fn() };
+    handler(ctx);
+
+    expect(ctx.setResult).toHaveBeenCalledWith({ accepted: true });
+    expect(shutdownFn).not.toHaveBeenCalled();
+
+    // Execute the scheduled task
+    scheduledTasks[0]!();
+    expect(shutdownFn).toHaveBeenCalledOnce();
+  });
+
+  it('calls setResult before invoking scheduler', () => {
+    const callOrder: string[] = [];
+    const handler = createRestartHandler({
+      shutdown: () => {
+        callOrder.push('shutdown');
+      },
+      schedule: (task) => {
+        callOrder.push('scheduled');
+        task();
+      },
+    });
+
+    handler({ setResult: () => callOrder.push('setResult') });
+
+    expect(callOrder).toEqual(['setResult', 'scheduled', 'shutdown']);
+  });
+
+  it('defaults schedule to setTimeout when not provided', () => {
+    // Verify the handler does not throw when schedule is omitted.
+    const handler = createRestartHandler({ shutdown: vi.fn() });
+    expect(() => handler({ setResult: vi.fn() })).not.toThrow();
+  });
+
+  it('schedules shutdown only once for duplicate restart requests', () => {
+    const scheduledTasks: (() => void)[] = [];
+    const handler = createRestartHandler({
+      shutdown: vi.fn(),
+      schedule: (task) => scheduledTasks.push(task),
+    });
+
+    handler({ setResult: vi.fn() });
+    handler({ setResult: vi.fn() });
+
+    expect(scheduledTasks).toHaveLength(1);
   });
 });

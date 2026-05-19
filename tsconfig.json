@@ -80,6 +80,7 @@
       "@makaio/services-package-manager/package": ["./packages/services/package-manager/src/package.ts"],
       "@makaio/services-package-manager/schemas": ["./packages/services/package-manager/src/schemas.ts"],
       "@makaio/services-package-manager/namespace": ["./packages/services/package-manager/src/namespace.ts"],
+      "@makaio/setup": ["./packages/setup/src/index.ts"],
       "@makaio/contracts": ["./packages/contracts/src/index.ts"],
       "@makaio/contracts/adapter": ["./packages/contracts/src/adapter/index.ts"],
       "@makaio/contracts/client": ["./packages/contracts/src/client/index.ts"],

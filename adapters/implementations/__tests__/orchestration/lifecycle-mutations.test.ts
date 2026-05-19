@@ -82,176 +82,174 @@ describe('Orchestration: lifecycle mutations', async () => {
     }
   });
 
-  it(
-    'full mutation lifecycle: history recall → cwd change → model change',
-    { timeout: (adapterOptions?.defaultTimeout ?? 45_000) * 3 },
-    async (context) => {
-      const ctx = await getOrchestrationTestContext(adapterName);
-      cleanup = async () => await ctx.adapter.close?.();
+  it('full mutation lifecycle: history recall → cwd change → model change', {
+    timeout: (adapterOptions?.defaultTimeout ?? 45_000) * 3,
+  }, async (context) => {
+    const ctx = await getOrchestrationTestContext(adapterName);
+    cleanup = async () => await ctx.adapter.close?.();
 
-      const systemPrompt = buildSystemPrompt('You are naturally continuing a conversation with user.', adapterName);
+    const systemPrompt = buildSystemPrompt('You are naturally continuing a conversation with user.', adapterName);
 
-      // Collect cwd.changed and model.changed events
-      const mutationEvents: Array<{ subject: string; payload: unknown }> = [];
-      const unsubMutations = MakaioBus.__onAny((event) => {
-        if (event.subject === 'agent.cwd.changed' || event.subject === 'agent.model.changed') {
-          mutationEvents.push({ subject: event.subject, payload: event.payload });
-        }
+    // Collect cwd.changed and model.changed events
+    const mutationEvents: Array<{ subject: string; payload: unknown }> = [];
+    const unsubMutations = MakaioBus.__onAny((event) => {
+      if (event.subject === 'agent.cwd.changed' || event.subject === 'agent.model.changed') {
+        mutationEvents.push({ subject: event.subject, payload: event.payload });
+      }
+    });
+
+    try {
+      // ── Step 1: Start with injected history, verify recall ──────────
+      const response = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: ctx.adapterId,
+        role: 'lead',
+        ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
+        initialMessage: 'My favorite color is blue. What is my name and favorite color?',
+        sessionContext: {
+          messageHistory: [
+            {
+              role: 'user' as const,
+              blocks: [{ type: 'text' as const, content: 'My name is Alice. Reply with OK.' }],
+            },
+            { role: 'assistant' as const, blocks: [{ type: 'text' as const, content: 'OK' }] },
+          ],
+          isFirstTurn: true,
+        },
+        systemPrompt,
       });
 
-      try {
-        // ── Step 1: Start with injected history, verify recall ──────────
-        const response = await MakaioBus.request(AdapterSubjects.startAgent, {
-          adapterId: ctx.adapterId,
-          role: 'lead',
-          ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
-          initialMessage: 'My favorite color is blue. What is my name and favorite color?',
-          sessionContext: {
-            messageHistory: [
-              {
-                role: 'user' as const,
-                blocks: [{ type: 'text' as const, content: 'My name is Alice. Reply with OK.' }],
-              },
-              { role: 'assistant' as const, blocks: [{ type: 'text' as const, content: 'OK' }] },
-            ],
-            isFirstTurn: true,
-          },
-          systemPrompt,
-        });
+      updateMetaFromResponse(context, response);
+      expect(response.success).toBe(true);
+      if (!response.success) throw new Error('startAgent failed');
 
-        updateMetaFromResponse(context, response);
-        expect(response.success).toBe(true);
-        if (!response.success) throw new Error('startAgent failed');
+      const agentId = response.agentId;
+      const adapterId = response.adapterId;
+      const adapterSessionId = response.adapterSessionId;
 
-        const agentId = response.agentId;
-        const adapterId = response.adapterId;
-        const adapterSessionId = response.adapterSessionId;
+      // ── Step 2: Attempt cwd.change during active turn → rejection ───
+      // Fire immediately before awaiting completion — turn is still active
+      const rejectionResult = await MakaioBus.request(AgentSubjects.cwd.change, {
+        agentId,
+        adapterId,
+        adapterName: ctx.adapterName,
+        adapterSessionId,
+        newCwd: path.join(os.tmpdir(), 'mutation-test-reject'),
+      });
+      expect(rejectionResult.success).toBe(false);
+      expect(rejectionResult.reason).toBeDefined();
 
-        // ── Step 2: Attempt cwd.change during active turn → rejection ───
-        // Fire immediately before awaiting completion — turn is still active
-        const rejectionResult = await MakaioBus.request(AgentSubjects.cwd.change, {
+      // Now await completion of Step 1's message, then wait for idle
+      // Register idle listener BEFORE awaiting complete (idle fires shortly after complete)
+      const firstIdle = MakaioBus.once(AgentSubjects.idle, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+      const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+
+      assertCompletedTurn(firstCompleted);
+      expect(firstCompleted.payload.message).toContain('Alice');
+      expect(firstCompleted.payload.message.toLowerCase()).toContain('blue');
+
+      await firstIdle;
+
+      // ── Step 3: cwd.change while idle → success + event ─────────────
+      const newCwd = path.join(os.tmpdir(), `mutation-test-${now}`);
+      fs.mkdirSync(newCwd, { recursive: true });
+
+      const cwdResult = await MakaioBus.request(AgentSubjects.cwd.change, {
+        agentId,
+        adapterId,
+        adapterName: ctx.adapterName,
+        adapterSessionId,
+        newCwd,
+      });
+      expect(cwdResult.success).toBe(true);
+
+      // Verify cwd.changed event was emitted
+      const cwdEvent = mutationEvents.find((e) => e.subject === 'agent.cwd.changed');
+      expect(cwdEvent).toBeDefined();
+
+      // ── Step 4: sendMessage post-swap with history → recall ─────────
+      // Fresh connector has no adapterSessionId → shouldUseNativeResume = false
+      // History injection via sendMessage (the recovery code path)
+      await MakaioBus.request(AgentSubjects.sendMessage, {
+        agentId,
+        adapterId,
+        message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
+        sessionContext: {
+          messageHistory: [
+            {
+              role: 'user' as const,
+              blocks: [{ type: 'text' as const, content: 'My name is Alice. Reply with OK.' }],
+            },
+            {
+              role: 'assistant' as const,
+              blocks: [{ type: 'text' as const, content: 'OK' }],
+            },
+          ],
+          isFirstTurn: true,
+        },
+      });
+
+      const postSwapIdle = MakaioBus.once(AgentSubjects.idle, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+      const postSwapCompleted = await MakaioBus.once(AgentSubjects.complete, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+
+      assertCompletedTurn(postSwapCompleted);
+      expect(postSwapCompleted.payload.message).toContain('Alice');
+
+      await postSwapIdle;
+
+      // ── Step 5: model.change while idle → success + event ───────────
+      // Switch from primaryModel → secondaryModel. Skip if adapter has no model tiers.
+      if (secondaryModelRef && primaryModelRef && secondaryModelRef.modelName !== primaryModelRef.modelName) {
+        const { model: newModel, ...secondaryProvider } = resolveModelRef(
+          secondaryModelRef,
+          ctx.testConfig.testProviderContext,
+        );
+        const modelChangeResult = await MakaioBus.request(AgentSubjects.model.change, {
           agentId,
           adapterId,
           adapterName: ctx.adapterName,
           adapterSessionId,
-          newCwd: path.join(os.tmpdir(), 'mutation-test-reject'),
+          newModel,
+          ...secondaryProvider,
         });
-        expect(rejectionResult.success).toBe(false);
-        expect(rejectionResult.reason).toBeDefined();
+        expect(modelChangeResult.success).toBe(true);
 
-        // Now await completion of Step 1's message, then wait for idle
-        // Register idle listener BEFORE awaiting complete (idle fires shortly after complete)
-        const firstIdle = MakaioBus.once(AgentSubjects.idle, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-        const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
+        const modelEvent = mutationEvents.find((e) => e.subject === 'agent.model.changed');
+        expect(modelEvent).toBeDefined();
 
-        assertCompletedTurn(firstCompleted);
-        expect(firstCompleted.payload.message).toContain('Alice');
-        expect(firstCompleted.payload.message.toLowerCase()).toContain('blue');
-
-        await firstIdle;
-
-        // ── Step 3: cwd.change while idle → success + event ─────────────
-        const newCwd = path.join(os.tmpdir(), `mutation-test-${now}`);
-        fs.mkdirSync(newCwd, { recursive: true });
-
-        const cwdResult = await MakaioBus.request(AgentSubjects.cwd.change, {
-          agentId,
-          adapterId,
-          adapterName: ctx.adapterName,
-          adapterSessionId,
-          newCwd,
-        });
-        expect(cwdResult.success).toBe(true);
-
-        // Verify cwd.changed event was emitted
-        const cwdEvent = mutationEvents.find((e) => e.subject === 'agent.cwd.changed');
-        expect(cwdEvent).toBeDefined();
-
-        // ── Step 4: sendMessage post-swap with history → recall ─────────
-        // Fresh connector has no adapterSessionId → shouldUseNativeResume = false
-        // History injection via sendMessage (the recovery code path)
+        // ── Step 6: sendMessage post-model-change → agent responds ──────
         await MakaioBus.request(AgentSubjects.sendMessage, {
           agentId,
           adapterId,
-          message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
-          sessionContext: {
-            messageHistory: [
-              {
-                role: 'user' as const,
-                blocks: [{ type: 'text' as const, content: 'My name is Alice. Reply with OK.' }],
-              },
-              {
-                role: 'assistant' as const,
-                blocks: [{ type: 'text' as const, content: 'OK' }],
-              },
-            ],
-            isFirstTurn: true,
-          },
+          message: { blocks: [{ type: 'text', content: 'Reply with the single word: OK' }] },
         });
 
-        const postSwapIdle = MakaioBus.once(AgentSubjects.idle, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-        const postSwapCompleted = await MakaioBus.once(AgentSubjects.complete, {
+        const postModelCompleted = await MakaioBus.once(AgentSubjects.complete, {
           filter: { agentId },
           timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
         });
 
-        assertCompletedTurn(postSwapCompleted);
-        expect(postSwapCompleted.payload.message).toContain('Alice');
-
-        await postSwapIdle;
-
-        // ── Step 5: model.change while idle → success + event ───────────
-        // Switch from primaryModel → secondaryModel. Skip if adapter has no model tiers.
-        if (secondaryModelRef && primaryModelRef && secondaryModelRef.modelName !== primaryModelRef.modelName) {
-          const { model: newModel, ...secondaryProvider } = resolveModelRef(
-            secondaryModelRef,
-            ctx.testConfig.testProviderContext,
-          );
-          const modelChangeResult = await MakaioBus.request(AgentSubjects.model.change, {
-            agentId,
-            adapterId,
-            adapterName: ctx.adapterName,
-            adapterSessionId,
-            newModel,
-            ...secondaryProvider,
-          });
-          expect(modelChangeResult.success).toBe(true);
-
-          const modelEvent = mutationEvents.find((e) => e.subject === 'agent.model.changed');
-          expect(modelEvent).toBeDefined();
-
-          // ── Step 6: sendMessage post-model-change → agent responds ──────
-          await MakaioBus.request(AgentSubjects.sendMessage, {
-            agentId,
-            adapterId,
-            message: { blocks: [{ type: 'text', content: 'Reply with the single word: OK' }] },
-          });
-
-          const postModelCompleted = await MakaioBus.once(AgentSubjects.complete, {
-            filter: { agentId },
-            timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-          });
-
-          assertCompletedTurn(postModelCompleted);
-          expect(postModelCompleted.payload.message.trim()).toBe('OK');
-        }
-
-        // Verify same agentId throughout — identity preserved
-        expect(agentId).toBe(response.agentId);
-      } finally {
-        unsubMutations();
+        assertCompletedTurn(postModelCompleted);
+        expect(postModelCompleted.payload.message.trim()).toBe('OK');
       }
-    },
-  );
+
+      // Verify same agentId throughout — identity preserved
+      expect(agentId).toBe(response.agentId);
+    } finally {
+      unsubMutations();
+    }
+  });
 });
 
 /**
@@ -279,108 +277,106 @@ describe('Orchestration: recovery rehydration', async () => {
     }
   });
 
-  it(
-    'rehydrated agent preserves identity and recalls injected history',
-    { timeout: (adapterOptions?.defaultTimeout ?? 45_000) * 3 },
-    async (context) => {
-      const ctx = await getOrchestrationTestContext(adapterName);
-      cleanup = async () => await ctx.adapter.close?.();
+  it('rehydrated agent preserves identity and recalls injected history', {
+    timeout: (adapterOptions?.defaultTimeout ?? 45_000) * 3,
+  }, async (context) => {
+    const ctx = await getOrchestrationTestContext(adapterName);
+    cleanup = async () => await ctx.adapter.close?.();
 
-      const systemPrompt = buildSystemPrompt('You are a helpful assistant. Keep responses very brief.', adapterName);
+    const systemPrompt = buildSystemPrompt('You are a helpful assistant. Keep responses very brief.', adapterName);
 
-      // ── Step 1: Start agent normally ──────────────────────────────────
-      const response = await MakaioBus.request(AdapterSubjects.startAgent, {
-        adapterId: ctx.adapterId,
-        role: 'lead',
-        ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
-        initialMessage: 'My name is Bob. Reply with OK.',
-        systemPrompt,
+    // ── Step 1: Start agent normally ──────────────────────────────────
+    const response = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: ctx.adapterId,
+      role: 'lead',
+      ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
+      initialMessage: 'My name is Bob. Reply with OK.',
+      systemPrompt,
+    });
+
+    updateMetaFromResponse(context, response);
+    expect(response.success).toBe(true);
+    if (!response.success) throw new Error('startAgent failed');
+
+    const agentId = response.agentId;
+    const adapterId = response.adapterId;
+
+    // Auto-approve tool calls for this agent (Gemini's SDK system prompt
+    // instructs the model to use save_memory for user facts — denying it
+    // poisons the context and causes recall failures)
+    const unsubToolApprove = isGeminiAdapter(adapterName)
+      ? MakaioBus.on(AgentSubjects.toolApprove, (ctx) => ctx.setResult({ action: 'allow' }), {
+          filter: { agentId },
+        })
+      : undefined;
+
+    try {
+      // Wait for first message to complete
+      const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+      assertCompletedTurn(firstCompleted);
+
+      // ── Step 2: Verify normal follow-up works ─────────────────────────
+      await MakaioBus.request(AgentSubjects.sendMessage, {
+        agentId,
+        adapterId,
+        message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
       });
 
-      updateMetaFromResponse(context, response);
-      expect(response.success).toBe(true);
-      if (!response.success) throw new Error('startAgent failed');
+      const recallBeforeIdle = MakaioBus.once(AgentSubjects.idle, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+      const recallBefore = await MakaioBus.once(AgentSubjects.complete, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
+      assertCompletedTurn(recallBefore);
+      expect(recallBefore.payload.message).toContain('Bob');
 
-      const agentId = response.agentId;
-      const adapterId = response.adapterId;
+      await recallBeforeIdle;
 
-      // Auto-approve tool calls for this agent (Gemini's SDK system prompt
-      // instructs the model to use save_memory for user facts — denying it
-      // poisons the context and causes recall failures)
-      const unsubToolApprove = isGeminiAdapter(adapterName)
-        ? MakaioBus.on(AgentSubjects.toolApprove, (ctx) => ctx.setResult({ action: 'allow' }), {
-            filter: { agentId },
-          })
-        : undefined;
+      // ── Step 3: Rehydrate — swap connector (simulates crash recovery) ─
+      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+        adapterId,
+        agentId,
+      });
 
-      try {
-        // Wait for first message to complete
-        const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-        assertCompletedTurn(firstCompleted);
+      // ── Step 4: sendMessage with history → recall + identity check ────
+      // Fresh connector has no native history — inject via sessionContext
+      await MakaioBus.request(AgentSubjects.sendMessage, {
+        agentId,
+        adapterId,
+        message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
+        sessionContext: {
+          messageHistory: [
+            {
+              role: 'user' as const,
+              blocks: [{ type: 'text' as const, content: 'My name is Bob. Reply with OK.' }],
+            },
+            {
+              role: 'assistant' as const,
+              blocks: [{ type: 'text' as const, content: 'OK' }],
+            },
+          ],
+          isFirstTurn: true,
+        },
+      });
 
-        // ── Step 2: Verify normal follow-up works ─────────────────────────
-        await MakaioBus.request(AgentSubjects.sendMessage, {
-          agentId,
-          adapterId,
-          message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
-        });
+      const postRehydrate = await MakaioBus.once(AgentSubjects.complete, {
+        filter: { agentId },
+        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+      });
 
-        const recallBeforeIdle = MakaioBus.once(AgentSubjects.idle, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-        const recallBefore = await MakaioBus.once(AgentSubjects.complete, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-        assertCompletedTurn(recallBefore);
-        expect(recallBefore.payload.message).toContain('Bob');
-
-        await recallBeforeIdle;
-
-        // ── Step 3: Rehydrate — swap connector (simulates crash recovery) ─
-        await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-          adapterId,
-          agentId,
-        });
-
-        // ── Step 4: sendMessage with history → recall + identity check ────
-        // Fresh connector has no native history — inject via sessionContext
-        await MakaioBus.request(AgentSubjects.sendMessage, {
-          agentId,
-          adapterId,
-          message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
-          sessionContext: {
-            messageHistory: [
-              {
-                role: 'user' as const,
-                blocks: [{ type: 'text' as const, content: 'My name is Bob. Reply with OK.' }],
-              },
-              {
-                role: 'assistant' as const,
-                blocks: [{ type: 'text' as const, content: 'OK' }],
-              },
-            ],
-            isFirstTurn: true,
-          },
-        });
-
-        const postRehydrate = await MakaioBus.once(AgentSubjects.complete, {
-          filter: { agentId },
-          timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-        });
-
-        assertCompletedTurn(postRehydrate);
-        // Identity preserved — same agentId throughout
-        expect(postRehydrate.payload.agentId).toBe(agentId);
-        // LLM recalls injected history
-        expect(postRehydrate.payload.message).toContain('Bob');
-      } finally {
-        unsubToolApprove?.();
-      }
-    },
-  );
+      assertCompletedTurn(postRehydrate);
+      // Identity preserved — same agentId throughout
+      expect(postRehydrate.payload.agentId).toBe(agentId);
+      // LLM recalls injected history
+      expect(postRehydrate.payload.message).toContain('Bob');
+    } finally {
+      unsubToolApprove?.();
+    }
+  });
 });

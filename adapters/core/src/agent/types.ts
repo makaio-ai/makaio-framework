@@ -87,8 +87,9 @@ export interface MinimalAgentConnectorConfig<TBus extends ScopedBus<string> = Sc
 export interface BaseAgentConnectorConfig<
   TBus extends ScopedBus<string> = ScopedBus<string>,
   TProviderConfig extends object = object,
->
-  extends MinimalAgentConnectorConfig<TBus>, Omit<AgentIdentity, 'adapterId'>, AgentRuntimeOptions {
+> extends MinimalAgentConnectorConfig<TBus>,
+    Omit<AgentIdentity, 'adapterId'>,
+    AgentRuntimeOptions {
   /** Makaio session ID for tool execution context and multi-session correlation */
   sessionId?: string;
   errorHandler?: (error: Error, terminate: boolean) => void;
@@ -177,8 +178,8 @@ export interface BaseAgentConnectorConfig<
 export interface AIAgentConfig<
   TBus extends ScopedBus<string> = ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
->
-  extends Omit<AgentIdentity, 'adapterSessionId'>, AgentRuntimeInput {
+> extends Omit<AgentIdentity, 'adapterSessionId'>,
+    AgentRuntimeInput {
   /** Adapter-specific session identifier for multi-turn conversations */
   adapterSessionId?: string;
   /** Makaio session identifier */

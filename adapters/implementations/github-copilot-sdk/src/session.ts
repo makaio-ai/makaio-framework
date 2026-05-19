@@ -81,7 +81,7 @@ function parseRetryDelay(message: string): number | undefined {
  */
 export class CopilotConnectorSession extends BaseConnectorSession<CopilotSessionConfig> {
   private sdkSession?: CopilotSession;
-  declare protected currentTurn?: CopilotConnectorTurn;
+  protected declare currentTurn?: CopilotConnectorTurn;
   private lastAssistantMessage?: AssistantMessageEvent;
   /** Set when SDK emits 'abort' — the next session.idle is the abort's idle, not a completion. */
   private pendingAbort = false;

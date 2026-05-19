@@ -87,9 +87,8 @@ function createTestConnector(options?: { useSystemPrompt?: boolean; agentId?: st
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe.sequential.todo(
-  'Claude Code Basics',
-  () => {
+describe.sequential
+  .todo('Claude Code Basics', () => {
     // Shared state across tests
     let connector: ClaudeSdkConnector;
     let agentId: string;
@@ -235,6 +234,4 @@ describe.sequential.todo(
         expect(cacheReadTokens).toBeLessThanOrEqual(cacheCreatedTokens * 1.05);
       });
     });
-  },
-  60_000,
-);
+  }, 60_000);

@@ -178,33 +178,36 @@ describe('performOAuthTokenRequest', () => {
     }
   });
 
-  it.each([0, -1, NaN, Infinity, -Infinity])(
-    'falls back to the default 5s timeout when timeoutMs is %s',
-    async (invalidTimeout) => {
-      vi.useFakeTimers();
-      try {
-        mockFetchAbortOnSignal();
+  it.each([
+    0,
+    -1,
+    NaN,
+    Infinity,
+    -Infinity,
+  ])('falls back to the default 5s timeout when timeoutMs is %s', async (invalidTimeout) => {
+    vi.useFakeTimers();
+    try {
+      mockFetchAbortOnSignal();
 
-        let settled = false;
-        const promise = performOAuthTokenRequest(TEST_ENDPOINT, new URLSearchParams(), {
-          timeoutMs: invalidTimeout,
-        }).finally(() => {
-          settled = true;
-        });
+      let settled = false;
+      const promise = performOAuthTokenRequest(TEST_ENDPOINT, new URLSearchParams(), {
+        timeoutMs: invalidTimeout,
+      }).finally(() => {
+        settled = true;
+      });
 
-        await vi.advanceTimersByTimeAsync(4999);
-        expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(settled).toBe(false);
 
-        await vi.advanceTimersByTimeAsync(1);
-        await expect(promise).resolves.toMatchObject({
-          status: 'transient',
-          reason: expect.stringMatching(/abort/i),
-        });
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toMatchObject({
+        status: 'transient',
+        reason: expect.stringMatching(/abort/i),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('returns { status: "transient" } when 200 body is a non-object JSON value', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(

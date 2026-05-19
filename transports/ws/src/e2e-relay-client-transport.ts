@@ -27,10 +27,11 @@ import type { RelayControlRegistry } from './relay-control-registry.js';
  * `messageTransform`, `url`, `codec`, `createWebSocket`, and `autoReconnect`,
  * which are managed internally by this factory).
  */
-export interface E2ERelayClientTransportOptions extends Omit<
-  WebSocketClientTransportOptions,
-  'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'codec' | 'autoReconnect'
-> {
+export interface E2ERelayClientTransportOptions
+  extends Omit<
+    WebSocketClientTransportOptions,
+    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'codec' | 'autoReconnect'
+  > {
   /**
    * Pre-created WebSocket instance to wrap.
    *

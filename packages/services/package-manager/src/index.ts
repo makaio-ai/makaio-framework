@@ -39,3 +39,5 @@ export { DescriptorNameResolver } from './descriptor-name-resolver.js';
 export type { IDescriptorNameResolver } from './descriptor-name-resolver.js';
 export { DependencyResolver } from './dependency-resolver.js';
 export type { DependencyPackageManager, ResolutionOptions, ResolutionResult } from './dependency-resolver.js';
+export { DevPortalPackageManager } from './dev-portal-resolver.js';
+export type { DevPortalMap } from './dev-portal-resolver.js';

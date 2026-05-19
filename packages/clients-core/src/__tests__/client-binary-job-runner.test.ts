@@ -136,10 +136,7 @@ function createPostInstallFailureHarness(
  * @returns A typed install job
  */
 function makeJob(
-  overrides: {
-    makeActive?: boolean;
-    version?: string;
-  } = {},
+  overrides: { makeActive?: boolean; version?: string } = {},
 ): Parameters<typeof ClientBinaryJobRunner.prototype.startJob>[0] {
   return {
     jobId: 'test-job-id',

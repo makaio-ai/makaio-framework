@@ -27,6 +27,7 @@ export const KernelNamespace = createBusNamespace('kernel', KernelSchemas);
  * - ready: Signal full kernel initialization complete (event)
  * - lifecycle.start: Observability hook — lifecycle wiring complete (RPC)
  * - lifecycle.shutdown: Observability hook — lifecycle shutdown complete (RPC)
+ * - restart: Request a host restart (RPC)
  */
 export const KernelSubjects = KernelNamespace.subjects;
 

@@ -61,7 +61,7 @@ export abstract class BaseStreamSession<
   protected static readonly MAX_TOOL_CALL_ITERATIONS = 8;
 
   /** Active turn reference; overwritten on each new turn. */
-  declare protected currentTurn: TTurn | undefined;
+  protected declare currentTurn: TTurn | undefined;
 
   /** Assembled last assistant message content; reset on each new turn. */
   protected lastAssistantMessage: string | undefined;

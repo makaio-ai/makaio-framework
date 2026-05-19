@@ -23,7 +23,9 @@ export interface MemoryStoreTestOps<T> {
   /** Clear all items from the working memory instance. */
   clearItems: (memory: T) => void;
   /** Expected constructor class for `instanceof` checks. */
-  memoryClass: new (...args: never[]) => T;
+  memoryClass: new (
+    ...args: never[]
+  ) => T;
 }
 
 /**

@@ -140,32 +140,30 @@ describe('Subject Coverage', () => {
       }
     });
 
-    it(
-      'emits lifecycle subjects on agent start',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async () => {
-        await awaitedResult;
-        // Verify core lifecycle subjects (agent already completed in beforeAll)
-        expect(collectedSubjects.has('adapter.session.created')).toBe(true);
-        expect(collectedSubjects.has('agent.started')).toBe(true);
-        expect(collectedSubjects.has('agent.complete')).toBe(true);
+    it('emits lifecycle subjects on agent start', {
+      timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000,
+    }, async () => {
+      await awaitedResult;
+      // Verify core lifecycle subjects (agent already completed in beforeAll)
+      expect(collectedSubjects.has('adapter.session.created')).toBe(true);
+      expect(collectedSubjects.has('agent.started')).toBe(true);
+      expect(collectedSubjects.has('agent.complete')).toBe(true);
 
-        // Turn events emitted via MessageLifecycleTracker
-        expect(collectedSubjects.has('agent.turn.started'), 'Missing agent.turn.started subject').toBe(true);
-        expect(collectedSubjects.has('agent.turn.completed'), 'Missing agent.turn.completed subject').toBe(true);
+      // Turn events emitted via MessageLifecycleTracker
+      expect(collectedSubjects.has('agent.turn.started'), 'Missing agent.turn.started subject').toBe(true);
+      expect(collectedSubjects.has('agent.turn.completed'), 'Missing agent.turn.completed subject').toBe(true);
 
-        // User message lifecycle events
-        expect(collectedSubjects.has('agent.user_message.sent'), 'Missing agent.user_message.sent subject').toBe(true);
-        expect(
-          collectedSubjects.has('agent.user_message.acknowledged'),
-          'Missing agent.user_message.acknowledged subject',
-        ).toBe(true);
-        expect(
-          collectedSubjects.has('agent.user_message.completed'),
-          'Missing agent.user_message.completed subject',
-        ).toBe(true);
-      },
-    );
+      // User message lifecycle events
+      expect(collectedSubjects.has('agent.user_message.sent'), 'Missing agent.user_message.sent subject').toBe(true);
+      expect(
+        collectedSubjects.has('agent.user_message.acknowledged'),
+        'Missing agent.user_message.acknowledged subject',
+      ).toBe(true);
+      expect(
+        collectedSubjects.has('agent.user_message.completed'),
+        'Missing agent.user_message.completed subject',
+      ).toBe(true);
+    });
 
     it('has correct messageId', { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 }, async () => {
       const result = await awaitedResult;
@@ -187,37 +185,32 @@ describe('Subject Coverage', () => {
       expect(hasUsageSubject).toBe(true);
     });
 
-    it(
-      'emits context window update after usage',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async () => {
-        await awaitedResult;
+    it('emits context window update after usage', {
+      timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000,
+    }, async () => {
+      await awaitedResult;
 
-        // All adapters should emit context window status after each turn
-        expect(
-          collectedSubjects.has('agent.contextWindow.updated'),
-          'Missing agent.contextWindow.updated subject',
-        ).toBe(true);
-      },
-    );
+      // All adapters should emit context window status after each turn
+      expect(collectedSubjects.has('agent.contextWindow.updated'), 'Missing agent.contextWindow.updated subject').toBe(
+        true,
+      );
+    });
 
-    it(
-      'collected expected subject coverage',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async () => {
-        await awaitedResult;
+    it('collected expected subject coverage', {
+      timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000,
+    }, async () => {
+      await awaitedResult;
 
-        // Required subjects (all adapters should emit these)
-        const required = ['adapter.session.created', 'agent.started', 'agent.complete'];
+      // Required subjects (all adapters should emit these)
+      const required = ['adapter.session.created', 'agent.started', 'agent.complete'];
 
-        for (const subject of required) {
-          expect(collectedSubjects.has(subject), `Missing required subject: ${subject}`).toBe(true);
-        }
+      for (const subject of required) {
+        expect(collectedSubjects.has(subject), `Missing required subject: ${subject}`).toBe(true);
+      }
 
-        // agent.message is mandatory — persistence depends on it for block accumulation
-        expect(collectedSubjects.has('agent.message'), 'Missing required subject: agent.message').toBe(true);
-      },
-    );
+      // agent.message is mandatory — persistence depends on it for block accumulation
+      expect(collectedSubjects.has('agent.message'), 'Missing required subject: agent.message').toBe(true);
+    });
 
     it('emits tool subjects on tool use', { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 }, async () => {
       await awaitedResult;
@@ -241,110 +234,104 @@ describe('Subject Coverage', () => {
       ).toBe(true);
     });
 
-    it(
-      'session.agent.added has distinct sessionId and adapterSessionId',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async () => {
-        await awaitedResult;
+    it('session.agent.added has distinct sessionId and adapterSessionId', {
+      timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000,
+    }, async () => {
+      await awaitedResult;
 
-        const agentAddedEvent = collectedEvents.find((e) => e.subject === 'session.agent.added');
-        expect(agentAddedEvent, 'Missing session.agent.added event').toBeDefined();
+      const agentAddedEvent = collectedEvents.find((e) => e.subject === 'session.agent.added');
+      expect(agentAddedEvent, 'Missing session.agent.added event').toBeDefined();
 
-        const { sessionId: makaioSessionId, adapterSessionId } = agentAddedEvent!.payload as {
-          sessionId: string;
-          adapterSessionId: string;
-        };
+      const { sessionId: makaioSessionId, adapterSessionId } = agentAddedEvent!.payload as {
+        sessionId: string;
+        adapterSessionId: string;
+      };
 
-        expect(makaioSessionId, 'Makaio sessionId should differ from adapterSessionId').not.toBe(adapterSessionId);
-      },
-    );
+      expect(makaioSessionId, 'Makaio sessionId should differ from adapterSessionId').not.toBe(adapterSessionId);
+    });
 
-    it(
-      'adapter-namespaced events have adapterSessionId but not sessionId',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async () => {
-        await awaitedResult;
+    it('adapter-namespaced events have adapterSessionId but not sessionId', {
+      timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000,
+    }, async () => {
+      await awaitedResult;
 
-        // Get reference IDs from session.agent.added
-        const agentAddedEvent = collectedEvents.find((e) => e.subject === 'session.agent.added');
-        const { sessionId: expectedMakaioSessionId, adapterSessionId: expectedAdapterSessionId } = agentAddedEvent!
-          .payload as {
-          sessionId: string;
-          adapterSessionId: string;
-        };
+      // Get reference IDs from session.agent.added
+      const agentAddedEvent = collectedEvents.find((e) => e.subject === 'session.agent.added');
+      const { sessionId: expectedMakaioSessionId, adapterSessionId: expectedAdapterSessionId } = agentAddedEvent!
+        .payload as {
+        sessionId: string;
+        adapterSessionId: string;
+      };
 
-        // Sanity check: Makaio sessionId should differ from adapterSessionId
-        expect(expectedMakaioSessionId).not.toBe(expectedAdapterSessionId);
+      // Sanity check: Makaio sessionId should differ from adapterSessionId
+      expect(expectedMakaioSessionId).not.toBe(expectedAdapterSessionId);
 
-        for (const event of collectedEvents) {
-          if (event.subject.startsWith('adapter:')) {
-            const payload = event.payload as { sessionId?: string; adapterSessionId?: string };
+      for (const event of collectedEvents) {
+        if (event.subject.startsWith('adapter:')) {
+          const payload = event.payload as { sessionId?: string; adapterSessionId?: string };
 
-            // adapter-namespaced events should NOT have sessionId (Makaio ID not meaningful at SDK layer)
-            expect
-              .soft(payload.sessionId, `${event.subject}: sessionId should be undefined on adapter-namespaced events`)
-              .toBeUndefined();
+          // adapter-namespaced events should NOT have sessionId (Makaio ID not meaningful at SDK layer)
+          expect
+            .soft(payload.sessionId, `${event.subject}: sessionId should be undefined on adapter-namespaced events`)
+            .toBeUndefined();
 
-            // adapterSessionId should match the expected value
-            if (payload.adapterSessionId) {
-              expect.soft(payload.adapterSessionId).toBe(expectedAdapterSessionId);
-            }
+          // adapterSessionId should match the expected value
+          if (payload.adapterSessionId) {
+            expect.soft(payload.adapterSessionId).toBe(expectedAdapterSessionId);
           }
         }
-      },
-    );
+      }
+    });
   });
 
   describe.sequential('Tool invocation subjects', async () => {
     const ctx = await getOrchestrationTestContext(adapterName);
     const primaryModelRef = ctx.testConfig.options?.primaryModel;
 
-    it(
-      'fails fast for invalid command',
-      { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 },
-      async ({ task }) => {
-        let unsubscribeApproval = MakaioBus.on(AgentSubjects.toolApprove, (reqCtx) => {
-          reqCtx.setResult({ action: 'allow' });
+    it('fails fast for invalid command', { timeout: ctx.testConfig.options?.defaultTimeout ?? 45_000 }, async ({
+      task,
+    }) => {
+      let unsubscribeApproval = MakaioBus.on(AgentSubjects.toolApprove, (reqCtx) => {
+        reqCtx.setResult({ action: 'allow' });
+      });
+
+      try {
+        const response = await MakaioBus.request(AdapterSubjects.startAgent, {
+          adapterId: ctx.adapterId,
+          role: 'lead',
+          initialMessage:
+            "You MUST execute via bash: '__makaio_subjects_test_missing_command__'. Just do it, and if it fails, immediately STOP and reply with 'OK'.",
+          // This scenario verifies the command/tool execution path, so tool use must be permitted.
+          systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT,
+          ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
         });
 
-        try {
-          const response = await MakaioBus.request(AdapterSubjects.startAgent, {
-            adapterId: ctx.adapterId,
-            role: 'lead',
-            initialMessage:
-              "You MUST execute via bash: '__makaio_subjects_test_missing_command__'. Just do it, and if it fails, immediately STOP and reply with 'OK'.",
-            // This scenario verifies the command/tool execution path, so tool use must be permitted.
-            systemPrompt: TOOL_APPROVAL_SYSTEM_PROMPT,
-            ...resolveModelRef(primaryModelRef, ctx.testConfig.testProviderContext),
-          });
-
-          if (!response.success) throw new Error('startAgent failed');
-          updateMetaFromResponse({ task }, response);
-          expect(response.agentId).toBeDefined();
-          expect(response.messageId).toBeDefined();
-          if (!response.agentId || !response.messageId) {
-            throw new Error('startAgent succeeded without required agentId/messageId');
-          }
-          const previousApprovalUnsubscribe = unsubscribeApproval;
-          const scopedApprovalUnsubscribe = MakaioBus.on(
-            AgentSubjects.toolApprove,
-            (reqCtx) => {
-              reqCtx.setResult({ action: 'allow' });
-            },
-            { filter: { agentId: response.agentId } },
-          );
-          previousApprovalUnsubscribe();
-          unsubscribeApproval = scopedApprovalUnsubscribe;
-
-          const result = await MakaioBus.once(AgentSubjects.complete, {
-            filter: { messageId: response.messageId },
-          });
-          expect(result.payload.messageId).toBe(response.messageId);
-          expect(['completed', 'error']).toContain(result.payload.outcome);
-        } finally {
-          unsubscribeApproval();
+        if (!response.success) throw new Error('startAgent failed');
+        updateMetaFromResponse({ task }, response);
+        expect(response.agentId).toBeDefined();
+        expect(response.messageId).toBeDefined();
+        if (!response.agentId || !response.messageId) {
+          throw new Error('startAgent succeeded without required agentId/messageId');
         }
-      },
-    );
+        const previousApprovalUnsubscribe = unsubscribeApproval;
+        const scopedApprovalUnsubscribe = MakaioBus.on(
+          AgentSubjects.toolApprove,
+          (reqCtx) => {
+            reqCtx.setResult({ action: 'allow' });
+          },
+          { filter: { agentId: response.agentId } },
+        );
+        previousApprovalUnsubscribe();
+        unsubscribeApproval = scopedApprovalUnsubscribe;
+
+        const result = await MakaioBus.once(AgentSubjects.complete, {
+          filter: { messageId: response.messageId },
+        });
+        expect(result.payload.messageId).toBe(response.messageId);
+        expect(['completed', 'error']).toContain(result.payload.outcome);
+      } finally {
+        unsubscribeApproval();
+      }
+    });
   });
 });

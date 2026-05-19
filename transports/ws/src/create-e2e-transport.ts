@@ -29,10 +29,11 @@ import { encryptMessage, decryptMessage, type MaybeEncryptedMessage } from './e2
  * `messageTransform`, `url`, `createWebSocket`, and `autoReconnect`, which
  * are managed internally by this factory).
  */
-export interface E2ETransportOptions extends Omit<
-  WebSocketClientTransportOptions,
-  'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'autoReconnect'
-> {
+export interface E2ETransportOptions
+  extends Omit<
+    WebSocketClientTransportOptions,
+    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'autoReconnect'
+  > {
   /**
    * Pre-created WebSocket instance to wrap.
    *

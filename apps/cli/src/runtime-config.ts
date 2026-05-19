@@ -7,6 +7,7 @@ import {
   type ParsedMakaioConfig,
 } from '@makaio/runtime-node';
 import type { ServeConfig } from './main.js';
+import { discoverDevWorkspacePackages, type DevWorkspacePackages } from './dev-workspace-packages.js';
 
 /** Result of root-level runtime config flag extraction. */
 export interface RootConfigParseResult {
@@ -64,6 +65,12 @@ export function extractRootConfigArg(argv: readonly string[]): RootConfigParseRe
 
 /**
  * Resolve CLI runtime config before command registration.
+ *
+ * In addition to loading `makaio.config.*`, this function probes for a
+ * workspace root only for `makaio serve` and — when found — injects the
+ * {@link DevPortalMap} and `frameworkPackagePath` into the boot overrides so
+ * the package-manager service can install extensions via `portal:` links
+ * without hitting npm in dev mode.
  * @param argv - Raw process argv vector.
  * @param discovery - Optional injected discovery strategy.
  * @param serveConfig - Optional injected serve config.
@@ -85,14 +92,36 @@ export async function resolveCliRuntimeConfig(
   });
   const useConfig = loadedConfig.configPath !== undefined || discovery === undefined;
 
+  const configServeConfig =
+    loadedConfig.configPath !== undefined || serveConfig === undefined
+      ? applyConfigToServeConfig(serveConfig, loadedConfig.config)
+      : serveConfig;
+
+  const devWorkspace = shouldApplyDevWorkspacePackages(parsedRoot.argv)
+    ? await discoverDevWorkspacePackages()
+    : undefined;
+  const effectiveServeConfig = devWorkspace
+    ? applyDevWorkspacePackages(configServeConfig, devWorkspace)
+    : configServeConfig;
+
   return {
     argv: parsedRoot.argv,
     discovery: useConfig ? createMakaioConfigDiscovery(loadedConfig.config) : discovery,
-    serveConfig:
-      loadedConfig.configPath !== undefined || serveConfig === undefined
-        ? applyConfigToServeConfig(serveConfig, loadedConfig.config)
-        : serveConfig,
+    serveConfig: effectiveServeConfig,
   };
+}
+
+/**
+ * Determine whether an invocation needs dev workspace package discovery.
+ *
+ * Only `serve` consumes the resulting boot overrides. Discovery-free client
+ * commands such as `open`, `extension init`, and version output must not scan
+ * the whole repository just to parse their local options.
+ * @param argv - Process argv after root config flags have been removed.
+ * @returns `true` when dev package overrides should be resolved.
+ */
+export function shouldApplyDevWorkspacePackages(argv: readonly string[]): boolean {
+  return argv[2] === 'serve';
 }
 
 /**
@@ -115,6 +144,32 @@ export function applyConfigToServeConfig(
         serveConfig?.boot?.packageConfigDefaults,
         config.packageConfigDefaults,
       ),
+    },
+  };
+}
+
+/**
+ * Apply dev-mode workspace package data to CLI serve boot options.
+ *
+ * Merges `devPortalPackages` and `frameworkPackagePath` into the boot
+ * overrides without overwriting any host-provided values already present.
+ * Host-provided values always take precedence (they come from the programmatic
+ * API or a desktop host that knows better than the workspace scan).
+ * @param serveConfig - Existing serve config, possibly already config-derived.
+ * @param devWorkspace - Workspace package data from {@link discoverDevWorkspacePackages}.
+ * @returns Serve config with dev workspace overrides injected.
+ */
+export function applyDevWorkspacePackages(
+  serveConfig: ServeConfig | undefined,
+  devWorkspace: DevWorkspacePackages,
+): ServeConfig {
+  return {
+    ...serveConfig,
+    boot: {
+      ...serveConfig?.boot,
+      // Only inject when the host has not already provided an explicit value.
+      devPortalPackages: serveConfig?.boot?.devPortalPackages ?? devWorkspace.devPortalPackages,
+      frameworkPackagePath: serveConfig?.boot?.frameworkPackagePath ?? devWorkspace.frameworkPackagePath,
     },
   };
 }

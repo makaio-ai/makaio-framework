@@ -870,12 +870,7 @@ describe('CodexSource', () => {
      * @param opts - Response field overrides.
      */
     function tokenExchangeResponse(
-      opts: {
-        access_token?: string;
-        id_token?: string;
-        refresh_token?: string;
-        expires_in?: number;
-      } = {},
+      opts: { access_token?: string; id_token?: string; refresh_token?: string; expires_in?: number } = {},
     ): Response {
       return new Response(
         JSON.stringify({
@@ -1153,37 +1148,35 @@ describe('CodexSource', () => {
       });
     });
 
-    it.each([400, 403, 401])(
-      'returns failed when the refresh endpoint returns HTTP %i (client error)',
-      async (status) => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
-        const backend = new InMemoryBackend();
-        const source = new CodexSource(backend);
-        const exp = Math.floor((Date.now() - 60_000) / 1000);
-        const credential = createChatgptCredential({ accessTokenExp: exp });
+    it.each([
+      400, 403, 401,
+    ])('returns failed when the refresh endpoint returns HTTP %i (client error)', async (status) => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
+      const backend = new InMemoryBackend();
+      const source = new CodexSource(backend);
+      const exp = Math.floor((Date.now() - 60_000) / 1000);
+      const credential = createChatgptCredential({ accessTokenExp: exp });
 
-        await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
-          status: 'failed',
-          reason: expect.stringContaining(`HTTP ${status}`),
-        });
-      },
-    );
+      await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
+        status: 'failed',
+        reason: expect.stringContaining(`HTTP ${status}`),
+      });
+    });
 
-    it.each([500, 502, 503])(
-      'returns transient when the refresh endpoint returns HTTP %i (server error)',
-      async (status) => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
-        const backend = new InMemoryBackend();
-        const source = new CodexSource(backend);
-        const exp = Math.floor((Date.now() - 60_000) / 1000);
-        const credential = createChatgptCredential({ accessTokenExp: exp });
+    it.each([
+      500, 502, 503,
+    ])('returns transient when the refresh endpoint returns HTTP %i (server error)', async (status) => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status }));
+      const backend = new InMemoryBackend();
+      const source = new CodexSource(backend);
+      const exp = Math.floor((Date.now() - 60_000) / 1000);
+      const credential = createChatgptCredential({ accessTokenExp: exp });
 
-        await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
-          status: 'transient',
-          reason: expect.stringContaining(`HTTP ${status}`),
-        });
-      },
-    );
+      await expect(source.refreshIfNeeded(credential)).resolves.toMatchObject({
+        status: 'transient',
+        reason: expect.stringContaining(`HTTP ${status}`),
+      });
+    });
 
     it('returns transient when the refresh endpoint returns HTTP 429 (rate-limited)', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(null, { status: 429 }));

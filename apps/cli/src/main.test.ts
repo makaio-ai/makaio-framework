@@ -97,6 +97,10 @@ describe('isDiscoveryFreeBuiltin', () => {
   it('does not skip discovery for bare invocation', () => {
     expect(isDiscoveryFreeBuiltin(['node', 'makaio'])).toBe(false);
   });
+
+  it('setup command is not discovery-free', () => {
+    expect(isDiscoveryFreeBuiltin(['node', 'makaio', 'setup'])).toBe(false);
+  });
 });
 
 /** Empty discovery — no local extensions found. */

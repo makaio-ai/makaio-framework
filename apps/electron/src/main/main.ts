@@ -24,6 +24,7 @@ import { app, BrowserWindow, screen } from 'electron';
 import { Hono } from 'hono';
 import { createAdaptorServer } from '@hono/node-server';
 import { MakaioBus } from '@makaio/bus-core';
+import { KernelSubjects } from '@makaio/kernel';
 import {
   waitForServerListening,
   resolveListeningPort,
@@ -59,6 +60,7 @@ import { createTray } from './tray.js';
 import { initTrayPopover } from './tray-popover.js';
 import { registerAllBusHandlers } from './bus-handlers.js';
 import { ElectronNotificationProvider } from './providers/electron-notification-provider.js';
+import { createElectronRestartHandler } from './restart-handler.js';
 import { resolveDevHostOptions, buildDevHostRuntimeOptions } from './dev-host-options.js';
 
 /** Default TCP port for the in-process bus HTTP server. */
@@ -499,6 +501,7 @@ if (!gotLock) {
    */
   function registerShutdownAndLifecycle(destroyTray: () => void): void {
     let shutdownPromise: Promise<void> | null = null;
+    busHandlerCleanups.push(MakaioBus.on(KernelSubjects.restart, createElectronRestartHandler({ app })));
 
     app.on('before-quit', (e) => {
       e.preventDefault();

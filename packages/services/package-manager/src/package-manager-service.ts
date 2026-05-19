@@ -15,6 +15,7 @@ import { parseInstallSource } from './install-source.js';
 import type { PackageInfo, PackageInstallResult, PackageUninstallResult } from './schemas.js';
 import { DependencyResolver, type ResolutionResult, type DependencyPackageManager } from './dependency-resolver.js';
 import { DescriptorNameResolver } from './descriptor-name-resolver.js';
+import { DevPortalPackageManager, type DevPortalMap } from './dev-portal-resolver.js';
 import { RegistryService } from './registry-service.js';
 import type { PackageRegistryClient } from './registry-client.js';
 import * as semver from 'semver';
@@ -131,6 +132,17 @@ export interface PackageManagerServiceOptions {
    * dependency so extension imports resolve to the app-provided singleton.
    */
   frameworkPackagePath?: string;
+  /**
+   * Dev-mode workspace package map used to rewrite install specs to `portal:` ranges.
+   *
+   * When provided and non-empty, the dependency resolver wraps the Yarn manager
+   * with {@link DevPortalPackageManager} so that installs for known workspace
+   * packages link directly to local source directories instead of the npm registry.
+   *
+   * Ignored when `dependencyResolver` is also supplied (caller owns the full
+   * resolver in that case).
+   */
+  devPortalPackages?: DevPortalMap;
 }
 
 /**
@@ -182,9 +194,12 @@ export class PackageManagerService extends BaseService {
     this.localInstaller = options.localInstaller ?? new LocalPathInstaller(path.join(makaioHome, 'extensions'));
     this.frameworkPeerRange = options.frameworkPeerRange ?? DEFAULT_FRAMEWORK_PEER_RANGE;
     this.frameworkPackagePath = options.frameworkPackagePath;
+    const resolverPackages = options.devPortalPackages?.size
+      ? new DevPortalPackageManager(this.yarnManager, options.devPortalPackages)
+      : this.yarnManager;
     this.dependencyResolver =
       options.dependencyResolver ??
-      new DependencyResolver(this.yarnManager, new DescriptorNameResolver(this.registryService));
+      new DependencyResolver(resolverPackages, new DescriptorNameResolver(this.registryService));
   }
 
   /**

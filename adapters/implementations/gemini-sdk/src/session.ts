@@ -138,7 +138,7 @@ function parseRetryDelay(message: string): number | undefined {
  * Handles immediate mode via abort+restart (no true pause). Abort via AbortController.
  */
 export class GeminiConnectorSession extends BaseConnectorSession<GeminiSessionConfig> {
-  declare protected currentTurn?: GeminiConnectorTurn;
+  protected declare currentTurn?: GeminiConnectorTurn;
   private lastTurnContent?: string;
 
   public constructor(config: GeminiSessionConfig) {

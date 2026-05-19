@@ -87,10 +87,8 @@ interface ScheduleMetadataInvalidationOptions {
   onInvalidationError: (clientId: string, error: unknown) => void;
 }
 
-interface ScheduleTrackedMetadataInvalidationsOptions extends Omit<
-  ScheduleMetadataInvalidationOptions,
-  'clientId' | 'accountId'
-> {
+interface ScheduleTrackedMetadataInvalidationsOptions
+  extends Omit<ScheduleMetadataInvalidationOptions, 'clientId' | 'accountId'> {
   trackedKeys: Iterable<string>;
 }
 

@@ -17,9 +17,8 @@ export interface BootstrapDiscoverContext<TBus extends MakaioBusLike = MakaioBus
 export type BootstrapExportContext<TBus extends MakaioBusLike = MakaioBusLike> = BootstrapDiscoverContext<TBus>;
 
 /** Context for import operations - extends discover context with the bootstrap folder path. */
-export interface BootstrapImportContext<
-  TBus extends MakaioBusLike = MakaioBusLike,
-> extends BootstrapDiscoverContext<TBus> {
+export interface BootstrapImportContext<TBus extends MakaioBusLike = MakaioBusLike>
+  extends BootstrapDiscoverContext<TBus> {
   /** Absolute path to the `.makaio/bootstrap/` folder being imported from. */
   bootstrapFolderPath: string;
 }
