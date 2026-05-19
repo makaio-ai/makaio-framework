@@ -4,7 +4,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/makaio-ai/makaio-framework",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
     "directory": "clients/claude-code"
   },
   "main": "./src/index.ts",

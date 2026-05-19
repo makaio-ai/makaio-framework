@@ -13,7 +13,7 @@ import {
   stripPrerelease,
 } from './dev-publish.js';
 
-const REPOSITORY_URL = 'https://github.com/makaio-ai/makaio-framework';
+const REPOSITORY_URL = 'git+https://github.com/makaio-ai/makaio-framework.git';
 const SKIPPED_DIRS = new Set(['.git', '.yarn', 'build', 'dist', 'lib', 'node_modules', 'release', '__tests__']);
 const FRAMEWORK_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -145,6 +145,7 @@ describe('publishable package metadata', () => {
         name?: string;
         private?: boolean;
         repository?: {
+          type?: string;
           url?: string;
           directory?: string;
         };
@@ -156,8 +157,12 @@ describe('publishable package metadata', () => {
       }
 
       const directory = toRepositoryDirectory(packageDir);
-      if (packageJson.repository?.url !== REPOSITORY_URL || packageJson.repository.directory !== directory) {
-        failures.push(`${packageJson.name}: expected ${REPOSITORY_URL}#${directory}`);
+      if (
+        packageJson.repository?.type !== 'git' ||
+        packageJson.repository.url !== REPOSITORY_URL ||
+        packageJson.repository.directory !== directory
+      ) {
+        failures.push(`${packageJson.name}: expected git repository metadata for ${directory}`);
       }
     }
 
