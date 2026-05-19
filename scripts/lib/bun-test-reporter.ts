@@ -19,8 +19,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const aiAgent = 'AI_AGENT' in process.env;
-const useColors = !('NO_COLOR' in process.env) && !aiAgent;
+let quiet = 'AI_AGENT' in process.env;
+const useColors = !('NO_COLOR' in process.env) && !quiet;
 
 const c = useColors
   ? { green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m', dim: '\x1b[2m', bold: '\x1b[1m', reset: '\x1b[0m' }
@@ -32,6 +32,7 @@ interface CliOptions {
   perFile: boolean;
   timeoutSecs: number;
   concurrency: number;
+  verbose: boolean;
   bunArgs: string[];
 }
 
@@ -40,7 +41,7 @@ interface CliOptions {
  * @param argv
  */
 function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = { perFile: false, timeoutSecs: 0, concurrency: 8, bunArgs: [] };
+  const opts: CliOptions = { perFile: false, timeoutSecs: 0, concurrency: 8, verbose: false, bunArgs: [] };
   let i = 0;
   while (i < argv.length) {
     if (argv[i] === '--per-file') {
@@ -51,6 +52,9 @@ function parseArgs(argv: string[]): CliOptions {
       i++;
     } else if (argv[i] === '--concurrency' || argv[i] === '-j') {
       opts.concurrency = parseInt(argv[++i]!, 10);
+      i++;
+    } else if (argv[i] === '--verbose' || argv[i] === '-v') {
+      opts.verbose = true;
       i++;
     } else {
       opts.bunArgs.push(argv[i]!);
@@ -216,22 +220,18 @@ function parseJunitXml(xml: string): ParseResult {
  * @param elapsed
  * @param hungFiles
  */
-function printResults(results: ParseResult, elapsed: number, hungFiles?: string[]): void {
+function printResults(results: ParseResult, elapsed: number, hungFiles?: string[], crashedFiles?: string[]): void {
   const { failures, totalTests, totalFailures, totalErrors, totalSkipped, fileCount } = results;
   const passed = totalTests - totalFailures - totalSkipped - totalErrors;
 
-  if (aiAgent) {
-    process.stderr.write('AI-optimized output: only failures will be shown.\n\n');
-  }
-
   if (failures.length > 0) {
-    if (!aiAgent) process.stderr.write(`\n${c.red}${c.bold}FAILURES:${c.reset}\n`);
+    if (!quiet) process.stderr.write(`\n${c.red}${c.bold}FAILURES:${c.reset}\n`);
 
     for (const f of failures) {
       const location = f.line > 0 ? `${f.file}:${f.line}` : f.file;
       const label = f.classname ? `${f.classname} > ${f.name}` : f.name;
 
-      if (aiAgent) {
+      if (quiet) {
         process.stderr.write(`${c.red}FAIL${c.reset} ${label}\n`);
         process.stderr.write(`  ${c.dim}${location}${c.reset}\n`);
       } else {
@@ -247,7 +247,15 @@ function printResults(results: ParseResult, elapsed: number, hungFiles?: string[
       }
     }
 
-    if (!aiAgent) process.stderr.write('\n');
+    if (!quiet) process.stderr.write('\n');
+  }
+
+  if (crashedFiles && crashedFiles.length > 0) {
+    process.stderr.write(`\n${c.red}${c.bold}CRASHED (no test output):${c.reset}\n`);
+    for (const cr of crashedFiles) {
+      process.stderr.write(`  ${c.red}✗${c.reset} ${cr}\n`);
+    }
+    process.stderr.write('\n');
   }
 
   if (hungFiles && hungFiles.length > 0) {
@@ -258,9 +266,11 @@ function printResults(results: ParseResult, elapsed: number, hungFiles?: string[
     process.stderr.write('\n');
   }
 
+  const crashCount = crashedFiles?.length ?? 0;
+  const failCount = totalFailures + crashCount;
   const parts: string[] = [];
   if (passed > 0) parts.push(`${c.green}${passed} pass${c.reset}`);
-  if (totalFailures > 0) parts.push(`${c.red}${totalFailures} fail${c.reset}`);
+  if (failCount > 0) parts.push(`${c.red}${failCount} fail${c.reset}`);
   if (totalErrors > 0) parts.push(`${c.red}${totalErrors} error${c.reset}`);
   if (totalSkipped > 0) parts.push(`${c.yellow}${totalSkipped} skip${c.reset}`);
   if (hungFiles && hungFiles.length > 0) parts.push(`${c.yellow}${hungFiles.length} hung${c.reset}`);
@@ -343,18 +353,15 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   const jobs = opts.concurrency;
   process.stderr.write(`Testing ${total} files individually (${effectiveTimeout}s timeout, ${jobs} concurrent)...\n\n`);
 
-  let pass = 0;
-  let fail = 0;
+  let passFiles = 0;
+  let failFiles = 0;
   let completed = 0;
   const allFailures: TestFailure[] = [];
+  const crashedFiles: string[] = [];
   const hungFiles: string[] = [];
   let aggregatedTests = 0;
   let aggregatedSkipped = 0;
 
-  /**
-   *
-   * @param f
-   */
   async function processFile(f: string): Promise<void> {
     const rel = relPath(f);
     const { status, parsed } = await runSingleFile(f, timeoutMs);
@@ -366,14 +373,18 @@ async function perFileMain(opts: CliOptions): Promise<void> {
     }
 
     if (status === 'pass') {
-      pass++;
-      if (!aiAgent) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
+      passFiles++;
+      if (!quiet) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
     } else if (status === 'hung') {
       hungFiles.push(rel);
       process.stderr.write(`${c.yellow}⏱${c.reset} [${completed}/${total}] ${rel} ${c.yellow}(hung)${c.reset}\n`);
     } else {
-      fail++;
-      if (parsed) allFailures.push(...parsed.failures);
+      failFiles++;
+      if (parsed && parsed.failures.length > 0) {
+        allFailures.push(...parsed.failures);
+      } else {
+        crashedFiles.push(rel);
+      }
       process.stderr.write(`${c.red}✗${c.reset} [${completed}/${total}] ${rel}\n`);
     }
   }
@@ -394,19 +405,17 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   }
 
   const elapsed = Date.now() - startTime;
-  const totalTests = aggregatedTests > 0 ? aggregatedTests : pass + fail;
-  const totalFailures = allFailures.length > 0 ? allFailures.length : fail;
   const results: ParseResult = {
     failures: allFailures,
-    totalTests,
-    totalFailures,
+    totalTests: aggregatedTests,
+    totalFailures: allFailures.length,
     totalErrors: 0,
     totalSkipped: aggregatedSkipped,
     fileCount: total,
   };
 
-  printResults(results, elapsed, hungFiles);
-  process.exitCode = fail > 0 || hungFiles.length > 0 ? 1 : 0;
+  printResults(results, elapsed, hungFiles, crashedFiles);
+  process.exitCode = failFiles > 0 || hungFiles.length > 0 ? 1 : 0;
 }
 
 // endregion
@@ -496,6 +505,7 @@ async function batchMain(opts: CliOptions): Promise<void> {
 // region ── main ─────────────────────────────────────────────────────────────
 
 const opts = parseArgs(process.argv.slice(2));
+if (opts.verbose) quiet = false;
 
 if (opts.perFile) {
   perFileMain(opts);
