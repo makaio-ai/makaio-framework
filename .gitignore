@@ -28,6 +28,11 @@ sdks/rust/target/
 # Bus subject analysis intermediate (generated Markdown is committed)
 docs/subjects/data/
 
+# individual docs
+docs/memos
+docs/superpowers
+docs/plans
+
 .agents
 .claude
 AGENTS.md
