@@ -24,6 +24,7 @@ import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Server as HttpServer } from 'node:http';
+import type { WebSocketHandler } from 'bun';
 import { Hono } from 'hono';
 import { MakaioBus } from '@makaio/bus-core';
 import { KernelSubjects } from '@makaio/kernel';
@@ -31,6 +32,7 @@ import {
   bootMakaioRuntime as bootBunRuntime,
   BunBusServerTransportProvider,
   createBunRouteGraphFetch,
+  type BunServer,
   type MakaioRuntime,
 } from '@makaio/runtime-bun';
 import {
@@ -423,12 +425,16 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
       });
       const websocket = transport.createWebSocketHandler();
 
+      // The websocket cast from BunWebSocketHandler to WebSocketHandler<undefined>
+      // bridges the bun-types structural mismatch (see relay main.ts).
+      // The Bun.serve return is cast to BunServer because bun-types declares
+      // port as `number | undefined` but it is always set after bind.
       const rawServer = Bun.serve({
         fetch: createBunRouteGraphFetch(routeGraph),
-        websocket,
+        websocket: websocket as WebSocketHandler<undefined>,
         port,
         hostname: '127.0.0.1',
-      });
+      }) as BunServer;
       boundPort = rawServer.port;
       const bunServer = { port: boundPort, hostname: rawServer.hostname };
 
