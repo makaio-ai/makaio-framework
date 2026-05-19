@@ -219,6 +219,7 @@ function parseJunitXml(xml: string): ParseResult {
  * @param results
  * @param elapsed
  * @param hungFiles
+ * @param crashedFiles
  */
 function printResults(results: ParseResult, elapsed: number, hungFiles?: string[], crashedFiles?: string[]): void {
   const { failures, totalTests, totalFailures, totalErrors, totalSkipped, fileCount } = results;
@@ -308,7 +309,11 @@ function runSingleFile(file: string, timeoutMs: number): Promise<SingleFileResul
       if (!settled) {
         settled = true;
         child.kill('SIGKILL');
-        try { rmSync(tmpDir, { recursive: true }); } catch { /* best-effort */ }
+        try {
+          rmSync(tmpDir, { recursive: true });
+        } catch {
+          /* best-effort */
+        }
         resolve({ status: 'hung' });
       }
     }, timeoutMs);
@@ -324,8 +329,14 @@ function runSingleFile(file: string, timeoutMs: number): Promise<SingleFileResul
         try {
           const xml = readFileSync(junitFile, 'utf-8');
           if (xml) parsed = parseJunitXml(xml);
-        } catch { /* file may not exist */ }
-        try { rmSync(tmpDir, { recursive: true }); } catch { /* best-effort */ }
+        } catch {
+          /* file may not exist */
+        }
+        try {
+          rmSync(tmpDir, { recursive: true });
+        } catch {
+          /* best-effort */
+        }
         resolve({ status: code === 0 ? 'pass' : 'fail', parsed });
       }
     });
@@ -353,7 +364,6 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   const jobs = opts.concurrency;
   process.stderr.write(`Testing ${total} files individually (${effectiveTimeout}s timeout, ${jobs} concurrent)...\n\n`);
 
-  let passFiles = 0;
   let failFiles = 0;
   let completed = 0;
   const allFailures: TestFailure[] = [];
@@ -362,6 +372,10 @@ async function perFileMain(opts: CliOptions): Promise<void> {
   let aggregatedTests = 0;
   let aggregatedSkipped = 0;
 
+  /**
+   *
+   * @param f
+   */
   async function processFile(f: string): Promise<void> {
     const rel = relPath(f);
     const { status, parsed } = await runSingleFile(f, timeoutMs);
@@ -373,7 +387,6 @@ async function perFileMain(opts: CliOptions): Promise<void> {
     }
 
     if (status === 'pass') {
-      passFiles++;
       if (!quiet) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
     } else if (status === 'hung') {
       hungFiles.push(rel);

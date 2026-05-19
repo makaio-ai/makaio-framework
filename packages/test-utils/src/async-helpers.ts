@@ -10,6 +10,10 @@ export interface WaitForOptions {
   interval?: number;
 }
 
+/**
+ * @param fn - assertion callback to retry until it passes
+ * @param options - timeout and interval configuration
+ */
 export async function waitFor(fn: () => void | Promise<void>, options?: WaitForOptions): Promise<void> {
   const timeout = options?.timeout ?? 1000;
   const interval = options?.interval ?? 16;
@@ -32,9 +36,11 @@ export async function waitFor(fn: () => void | Promise<void>, options?: WaitForO
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const jest: { advanceTimersByTime(ms: number): void } | undefined;
 
+/**
+ * @param ms - milliseconds to advance fake timers
+ */
 export async function advanceTimersByTimeAsync(ms: number): Promise<void> {
   if (typeof jest !== 'undefined' && jest?.advanceTimersByTime) {
     jest.advanceTimersByTime(ms);
