@@ -32,7 +32,7 @@ import type { AgentComplete } from '@makaio/contracts';
 import { tool } from '../../src/shared/tools.js';
 import { createQueryGenerator } from '../../src/shared/query-generator.js';
 import type { ResolvedQueryConfig } from '../../src/shared/options.js';
-import type { SDKAssistantMessage } from '../../src/shared/types.js';
+import type { SDKAssistantMessage, SDKToolResultMessage } from '../../src/shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -145,7 +145,7 @@ describe('tool execution — bus simulation (always runs)', () => {
     });
   });
 
-  it('agent.tool.output event yields an assistant message with a tool_result content block', async () => {
+  it('agent.tool.output event yields an SDKToolResultMessage', async () => {
     const gen = createQueryGenerator({
       bus: MakaioBus,
       sessionId: SESSION_ID,
@@ -166,13 +166,12 @@ describe('tool execution — bus simulation (always runs)', () => {
     const result = await pullPromise;
     expect(result.done).toBe(false);
 
-    const msg = result.value as SDKAssistantMessage;
-    expect(msg.type).toBe('assistant');
-    expect(msg.message.content[0]).toMatchObject({
-      type: 'tool_result',
-      content: 'HELLO',
-      id: TOOL_CALL_ID,
-    });
+    const msg = result.value as SDKToolResultMessage;
+    expect(msg.type).toBe('tool_result');
+    expect(msg.tool_use_id).toBe(TOOL_CALL_ID);
+    expect(msg.content).toBe('HELLO');
+    expect(msg.is_error).toBe(false);
+    expect(msg.session_id).toBe(SESSION_ID);
   });
 
   it('full tool round-trip: tool_use → tool_result → completion', async () => {
@@ -213,8 +212,10 @@ describe('tool execution — bus simulation (always runs)', () => {
 
     expect(useMsg.value).toMatchObject({ type: 'assistant', message: { content: [{ type: 'tool_use' }] } });
     expect(resultMsg.value).toMatchObject({
-      type: 'assistant',
-      message: { content: [{ type: 'tool_result', content: 'GREET' }] },
+      type: 'tool_result',
+      tool_use_id: TOOL_CALL_ID,
+      content: 'GREET',
+      is_error: false,
     });
     expect(completeMsg.value).toMatchObject({ type: 'result', subtype: 'success' });
     expect(done.done).toBe(true);
@@ -265,7 +266,9 @@ describe.skipIf(!LIVE_ENABLED)('tool execution — live runtime (requires creden
 
       // At least one tool_use message must appear in the stream.
       const toolUseMessages = messages.filter(
-        (m) => m.type === 'assistant' && m.message.content.some((b) => b.type === 'tool_use' && b.name === 'upper'),
+        (m) =>
+          m.type === 'assistant' &&
+          m.message.content.some((b: { type: string; name?: string }) => b.type === 'tool_use' && b.name === 'upper'),
       );
       expect(toolUseMessages.length).toBeGreaterThanOrEqual(1);
     } finally {

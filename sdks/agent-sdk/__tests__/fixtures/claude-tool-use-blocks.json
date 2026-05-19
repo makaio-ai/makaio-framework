@@ -1,0 +1,257 @@
+{
+  "_meta": {
+    "description": "Real Claude Code tool_use blocks extracted from live sessions for conformance testing.",
+    "generated": "2026-05-19",
+    "method": "claude --session-id <uuid> -p <prompt>, then extracted from JSONL transcripts",
+    "sessions": [
+      "ff8fe649-d916-49ad-886e-b1d659ef5baa",
+      "dcdd9c1e-d721-4000-839a-0247b3054bc6",
+      "6effd482-24e9-4334-a5ab-1e2ebc84c3bb",
+      "0acf512a-d536-4d56-866a-0c720ecb559d",
+      "15a7998b-f183-4a30-aa8c-aa09f401605b",
+      "5ce9afa4-6036-4f8b-bfe7-5a47cab99260"
+    ]
+  },
+  "tools": {
+    "Read": {
+      "wire_name": "Read",
+      "input_fields": ["file_path", "limit", "offset", "pages"],
+      "examples": [
+        {
+          "name": "Read",
+          "id": "toolu_01JVX9prthTKU6yJTpZ2qk8N",
+          "input": {
+            "file_path": "/workspace/agent-sdk/package.json"
+          }
+        },
+        {
+          "name": "Read",
+          "id": "toolu_01U3jXosqdE8iMZC2xZv8hpi",
+          "input": {
+            "file_path": "/tmp/claude-verify-test.txt"
+          }
+        }
+      ]
+    },
+    "Write": {
+      "wire_name": "Write",
+      "input_fields": ["file_path", "content"],
+      "examples": [
+        {
+          "name": "Write",
+          "id": "toolu_01CNGtz1EnPRWykx3iuT8yXo",
+          "input": {
+            "file_path": "/tmp/claude-verify-test.txt",
+            "content": "hello"
+          }
+        }
+      ]
+    },
+    "Edit": {
+      "wire_name": "Edit",
+      "input_fields": ["file_path", "old_string", "new_string", "replace_all"],
+      "examples": [
+        {
+          "name": "Edit",
+          "id": "toolu_01GxhJr9PBUbHXoERKPQg2mu",
+          "input": {
+            "replace_all": false,
+            "file_path": "/tmp/claude-verify-test.txt",
+            "old_string": "hello",
+            "new_string": "world"
+          }
+        }
+      ]
+    },
+    "Bash": {
+      "wire_name": "Bash",
+      "input_fields": ["command", "description", "timeout", "run_in_background", "dangerouslyDisableSandbox"],
+      "examples": [
+        {
+          "name": "Bash",
+          "id": "toolu_01EuDStqKYDDFfCJqCbGuVEy",
+          "input": {
+            "command": "cat /tmp/claude-verify-test.txt",
+            "description": "Print file contents"
+          }
+        },
+        {
+          "name": "Bash",
+          "id": "toolu_01Lus37HZGAtfV5NZzHRTxQw",
+          "input": {
+            "command": "sleep 30",
+            "description": "Run sleep 30 in background",
+            "run_in_background": true
+          }
+        }
+      ]
+    },
+    "Glob": {
+      "wire_name": "Glob",
+      "input_fields": ["pattern", "path", "head_limit", "offset", "-i"],
+      "examples": [
+        {
+          "name": "Glob",
+          "id": "toolu_01CJho4XbbvJYod1686VEUkH",
+          "input": {
+            "pattern": "framework/sdks/agent-sdk/src/shared/**/*"
+          }
+        },
+        {
+          "name": "Glob",
+          "id": "toolu_018pLK3UaL79vrNmQ7gnymKL",
+          "input": {
+            "pattern": "claude-verify*",
+            "path": "/tmp"
+          }
+        }
+      ]
+    },
+    "Grep": {
+      "wire_name": "Grep",
+      "input_fields": ["pattern", "path", "glob", "output_mode", "head_limit", "offset", "-A", "-B", "-C", "-i", "-n"],
+      "examples": [
+        {
+          "name": "Grep",
+          "id": "toolu_016Xj1DH7NCreMPjsts6XwQn",
+          "input": {
+            "pattern": "TOOL_NAME_MAP",
+            "path": "/workspace/agent-sdk/src",
+            "output_mode": "content"
+          }
+        }
+      ]
+    },
+    "Agent": {
+      "wire_name": "Agent",
+      "input_fields": ["description", "prompt", "subagent_type", "model", "isolation", "run_in_background"],
+      "examples": [
+        {
+          "name": "Agent",
+          "id": "toolu_01D8HQARVcyaDyBbswtnSAJK",
+          "input": {
+            "description": "Read package.json name field",
+            "prompt": "Read the file at /workspace/agent-sdk/package.json and report back only the value of the \"name\" field.",
+            "subagent_type": "Explore"
+          }
+        }
+      ]
+    },
+    "TaskCreate": {
+      "wire_name": "TaskCreate",
+      "input_fields": ["subject", "description", "activeForm", "metadata"],
+      "examples": [
+        {
+          "name": "TaskCreate",
+          "id": "toolu_011ZxmQ2Px5PLCG2YuXiG5qt",
+          "input": {
+            "subject": "test task",
+            "description": "verify task tools"
+          }
+        }
+      ]
+    },
+    "TaskUpdate": {
+      "wire_name": "TaskUpdate",
+      "input_fields": ["taskId", "status", "subject", "description", "activeForm", "owner", "addBlockedBy", "addBlocks", "metadata"],
+      "examples": [
+        {
+          "name": "TaskUpdate",
+          "id": "toolu_011Kobic9RcZVyuyVQLG2MaY",
+          "input": {
+            "taskId": "1",
+            "status": "in_progress"
+          }
+        }
+      ]
+    },
+    "TaskList": {
+      "wire_name": "TaskList",
+      "input_fields": [],
+      "examples": [
+        {
+          "name": "TaskList",
+          "id": "toolu_01SuzTavwrJtBpWPfPUkqTgB",
+          "input": {}
+        }
+      ]
+    },
+    "TaskGet": {
+      "wire_name": "TaskGet",
+      "input_fields": ["taskId"],
+      "examples": [
+        {
+          "name": "TaskGet",
+          "id": "toolu_01Js92rHiaeDg1NEwhdypvC9",
+          "input": {
+            "taskId": "1"
+          }
+        }
+      ]
+    },
+    "TaskStop": {
+      "wire_name": "TaskStop",
+      "input_fields": ["task_id", "shell_id"],
+      "examples": [
+        {
+          "name": "TaskStop",
+          "id": "toolu_01EkTFD3JvhPyZfzxdn1HU4d",
+          "input": {
+            "task_id": "btjgkguv9"
+          }
+        }
+      ]
+    },
+    "WebSearch": {
+      "wire_name": "WebSearch",
+      "input_fields": ["query"],
+      "examples": [
+        {
+          "name": "WebSearch",
+          "id": "toolu_01B1KooUipwB5nQEUeAaZoNc",
+          "input": {
+            "query": "vitest expectTypeOf"
+          }
+        }
+      ]
+    },
+    "WebFetch": {
+      "wire_name": "WebFetch",
+      "input_fields": ["url", "prompt"],
+      "examples": [
+        {
+          "name": "WebFetch",
+          "id": "toolu_011rEgo6MHLwHXmcRa6M4rZ9",
+          "input": {
+            "url": "https://httpbin.org/get",
+            "prompt": "Return the full JSON response content"
+          }
+        }
+      ]
+    },
+    "SendMessage": {
+      "wire_name": "SendMessage",
+      "input_fields": ["to", "message", "type", "content"],
+      "examples": []
+    },
+    "Skill": {
+      "wire_name": "Skill",
+      "input_fields": ["skill", "args"],
+      "examples": []
+    },
+    "ToolSearch": {
+      "wire_name": "ToolSearch",
+      "input_fields": ["query", "max_results"],
+      "examples": [
+        {
+          "name": "ToolSearch",
+          "id": "toolu_01V2yYKmJU7CDEe46wHmKojf",
+          "input": {
+            "query": "select:TaskCreate",
+            "max_results": 1
+          }
+        }
+      ]
+    }
+  }
+}

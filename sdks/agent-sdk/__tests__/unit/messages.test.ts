@@ -17,9 +17,17 @@ describe('mapBusEventToSdkMessage', () => {
     expect(msg).toEqual({
       type: 'system',
       subtype: 'init',
+      apiKeySource: 'user',
+      claude_code_version: '',
       model: 'sonnet',
       cwd: '/tmp',
       tools: [],
+      mcp_servers: [],
+      permissionMode: 'default',
+      slash_commands: [],
+      output_style: '',
+      skills: [],
+      plugins: [],
       session_id: 'session-1',
       uuid: 'msg-1',
     });
@@ -66,7 +74,7 @@ describe('mapBusEventToSdkMessage', () => {
     });
   });
 
-  it('maps agent.tool.output to SDKAssistantMessage with tool_result block', () => {
+  it('maps agent.tool.output to SDKToolResultMessage', () => {
     const state = createAccumulatorState();
     const msg = mapBusEventToSdkMessage(
       'agent.tool.output',
@@ -74,11 +82,27 @@ describe('mapBusEventToSdkMessage', () => {
       state,
     );
     expect(msg).toMatchObject({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'tool_result', content: 'file contents', id: 'tc-1' }],
-      },
+      type: 'tool_result',
+      tool_use_id: 'tc-1',
+      content: 'file contents',
+      is_error: false,
+      session_id: 'session-1',
+      uuid: 'msg-1',
+    });
+  });
+
+  it('preserves structured agent.tool.output payloads as JSON content', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.output',
+      { ...BASE_EVENT, output: { paths: ['/tmp/a.ts'], totalMatches: 1 }, toolCallId: 'tc-1' },
+      state,
+    );
+
+    expect(msg).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'tc-1',
+      content: '{"paths":["/tmp/a.ts"],"totalMatches":1}',
     });
   });
 
@@ -107,9 +131,9 @@ describe('mapBusEventToSdkMessage', () => {
     );
     expect(msg).toMatchObject({
       type: 'result',
-      subtype: 'error',
+      subtype: 'error_during_execution',
       is_error: true,
-      result: 'Rate limit',
+      errors: ['Rate limit'],
     });
   });
 
@@ -122,13 +146,15 @@ describe('mapBusEventToSdkMessage', () => {
     );
     expect(msg).toMatchObject({
       type: 'system',
-      subtype: 'compact',
-      level: 'warn',
-      percentage: 75,
+      subtype: 'compact_boundary',
+      compact_metadata: {
+        trigger: 'auto',
+        pre_tokens: 75000,
+      },
     });
   });
 
-  it('deduplicates context window events at the same level', () => {
+  it('always emits context window events (no level-based dedup)', () => {
     const state = createAccumulatorState();
     const msg1 = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
@@ -141,10 +167,10 @@ describe('mapBusEventToSdkMessage', () => {
       state,
     );
     expect(msg1).not.toBeNull();
-    expect(msg2).toBeNull();
+    expect(msg2).not.toBeNull();
   });
 
-  it('emits context window event when level changes', () => {
+  it('emits context window event with updated token count', () => {
     const state = createAccumulatorState();
     mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
@@ -156,7 +182,9 @@ describe('mapBusEventToSdkMessage', () => {
       { ...BASE_EVENT, level: 'critical', percentage: 95, currentTokens: 95000, maxTokens: 100000 },
       state,
     );
-    expect(msg).toMatchObject({ level: 'critical', percentage: 95 });
+    expect(msg).toMatchObject({
+      compact_metadata: { trigger: 'auto', pre_tokens: 95000 },
+    });
   });
 
   it('accumulates usage into state', () => {
@@ -211,7 +239,7 @@ describe('mapBusEventToSdkMessage', () => {
     });
   });
 
-  it('maps agent.tool.completed to SDKAssistantMessage with tool_result block', () => {
+  it('maps agent.tool.completed to SDKToolResultMessage', () => {
     const state = createAccumulatorState();
     const msg = mapBusEventToSdkMessage(
       'agent.tool.completed',
@@ -219,11 +247,12 @@ describe('mapBusEventToSdkMessage', () => {
       state,
     );
     expect(msg).toMatchObject({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'tool_result', content: 'output text', id: 'tc-99' }],
-      },
+      type: 'tool_result',
+      tool_use_id: 'tc-99',
+      content: 'output text',
+      is_error: false,
+      session_id: 'session-1',
+      uuid: 'msg-1',
     });
   });
 
@@ -253,13 +282,126 @@ describe('mapBusEventToSdkMessage', () => {
     expect(msg).toBeNull();
   });
 
-  it('normalises an invalid compact level to "ok"', () => {
+  it('normalizes read_file name to Read and path to file_path', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'read_file', args: { path: '/tmp/x' }, toolCallId: 'tc-n1' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/tmp/x' } }] },
+    });
+  });
+
+  it('normalizes write_file name to Write and path to file_path', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'write_file', args: { path: '/tmp/x', content: 'hi' }, toolCallId: 'tc-n1b' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: '/tmp/x', content: 'hi' } }] },
+    });
+  });
+
+  it('normalizes shell_exec to Bash (input unchanged)', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'shell_exec', args: { command: 'ls' }, toolCallId: 'tc-n2' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] },
+    });
+  });
+
+  it('normalizes shell_kill shellId to task_id', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'shell_kill', args: { shellId: 'sh-1' }, toolCallId: 'tc-n2b' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'TaskStop', input: { task_id: 'sh-1' } }] },
+    });
+  });
+
+  it('normalizes spawn_subagent task to prompt', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'spawn_subagent', args: { task: 'do something' }, toolCallId: 'tc-n2c' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'Agent', input: { prompt: 'do something' } }] },
+    });
+  });
+
+  it('normalizes send_to_subagent subagentId→to and content→message', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      {
+        ...BASE_EVENT,
+        toolName: 'send_to_subagent',
+        args: { subagentId: 'sa-1', content: 'hello' },
+        toolCallId: 'tc-n2d',
+      },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'SendMessage', input: { to: 'sa-1', message: 'hello' } }] },
+    });
+  });
+
+  it('passes through unknown tool names and inputs unchanged', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.use',
+      { ...BASE_EVENT, toolName: 'my_custom_mcp_tool', args: { foo: 'bar' }, toolCallId: 'tc-n3' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', name: 'my_custom_mcp_tool', input: { foo: 'bar' } }] },
+    });
+  });
+
+  it('normalizes tool names in tool_progress messages', () => {
+    const state = createAccumulatorState();
+    const msg = mapBusEventToSdkMessage(
+      'agent.tool.started',
+      { ...BASE_EVENT, toolName: 'write_file', toolCallId: 'tc-n4' },
+      state,
+    );
+    expect(msg).toMatchObject({
+      type: 'tool_progress',
+      tool_name: 'Write',
+    });
+  });
+
+  it('maps agent.contextWindow.updated without currentTokens to pre_tokens 0', () => {
     const state = createAccumulatorState();
     const msg = mapBusEventToSdkMessage(
       'agent.contextWindow.updated',
-      { ...BASE_EVENT, level: 'catastrophic', percentage: 99 },
+      { ...BASE_EVENT, level: 'critical', percentage: 99 },
       state,
     );
-    expect(msg).toMatchObject({ type: 'system', subtype: 'compact', level: 'ok' });
+    expect(msg).toMatchObject({
+      type: 'system',
+      subtype: 'compact_boundary',
+      compact_metadata: { trigger: 'auto', pre_tokens: 0 },
+    });
   });
 });

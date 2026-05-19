@@ -57,7 +57,7 @@ const subscribeAgentIdOnce = (
 const getMessageText = (msg: SDKUserMessage): string => {
   const { content } = msg.message;
   if (typeof content === 'string') return content;
-  const textBlock = content.find((b) => b.type === 'text' && typeof b.text === 'string');
+  const textBlock = content.find((b): b is import('./types.js').TextBlock => b.type === 'text');
   return textBlock?.text ?? '';
 };
 

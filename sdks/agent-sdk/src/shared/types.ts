@@ -2,87 +2,48 @@ import type { z } from 'zod/v3';
 import type { TransportAuth } from '@makaio/bus-transport-websocket';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { SDKMessage, SDKUserMessage } from './sdk-messages.js';
 
 // ---------------------------------------------------------------------------
-// SDK Message Types (Claude Agent SDK-compatible shapes)
+// SDK Message Types — re-exported from sdk-messages.ts
 // ---------------------------------------------------------------------------
 
-/** Discriminated union of all messages yielded by a query. */
-export type SDKMessage =
-  | SDKAssistantMessage
-  | SDKUserMessage
-  | SDKResultMessage
-  | SDKSystemMessage
-  | SDKCompactBoundaryMessage;
-
-export interface SDKAssistantMessage {
-  readonly type: 'assistant';
-  readonly message: {
-    readonly role: 'assistant';
-    readonly content: readonly ContentBlock[];
-  };
-  readonly uuid: string;
-  readonly session_id: string;
-}
-
-export interface ContentBlock {
-  readonly type: 'text' | 'thinking' | 'tool_use' | 'tool_result';
-  readonly text?: string;
-  readonly thinking?: string;
-  readonly id?: string;
-  readonly name?: string;
-  readonly input?: Record<string, unknown>;
-  readonly content?: string;
-}
-
-export interface SDKUserMessage {
-  readonly type: 'user';
-  readonly message: {
-    readonly role: 'user';
-    readonly content: string | readonly ContentBlock[];
-  };
-  readonly uuid?: string;
-  readonly session_id?: string;
-}
-
-export interface SDKResultMessage {
-  readonly type: 'result';
-  readonly subtype: 'success' | 'error';
-  readonly duration_ms: number;
-  readonly is_error: boolean;
-  readonly num_turns: number;
-  readonly result: string;
-  readonly total_cost_usd: number;
-  readonly usage: SDKUsage;
-  readonly session_id: string;
-  readonly uuid: string;
-}
-
-export interface SDKUsage {
-  readonly input_tokens: number;
-  readonly output_tokens: number;
-  readonly cache_read_input_tokens: number;
-  readonly cache_creation_input_tokens: number;
-}
-
-export interface SDKSystemMessage {
-  readonly type: 'system';
-  readonly subtype: 'init';
-  readonly model: string;
-  readonly cwd: string;
-  readonly tools: string[];
-  readonly session_id: string;
-  readonly uuid: string;
-}
-
-export interface SDKCompactBoundaryMessage {
-  readonly type: 'system';
-  readonly subtype: 'compact';
-  readonly level: 'ok' | 'warn' | 'critical';
-  readonly percentage: number;
-  readonly session_id: string;
-  readonly uuid: string;
-}
+export type {
+  SDKUUID,
+  SDKMessage,
+  SDKAssistantMessagePayload,
+  SDKAssistantMessageError,
+  SDKCacheCreation,
+  SDKServerToolUsage,
+  SDKMessageIterationUsage,
+  SDKCompactionIterationUsage,
+  SDKAdvisorIterationUsage,
+  SDKIterationUsage,
+  SDKAssistantMessage,
+  TextBlock,
+  ThinkingBlock,
+  ToolUseBlock,
+  TextCitation,
+  ContentBlock,
+  SDKToolResultMessage,
+  SDKToolProgressMessage,
+  SDKStatus,
+  SDKStatusMessage,
+  SDKSessionStateChangedMessage,
+  SDKMessageOrigin,
+  SDKUserMessage,
+  ModelUsage,
+  SDKPermissionDenial,
+  SDKUsage,
+  SDKResultSuccess,
+  SDKResultError,
+  SDKResultMessage,
+  ApiKeySource,
+  PermissionMode,
+  FastModeState,
+  SDKSystemMessage,
+  SDKCompactBoundaryMessage,
+} from './sdk-messages.js';
 
 // ---------------------------------------------------------------------------
 // Query API Types

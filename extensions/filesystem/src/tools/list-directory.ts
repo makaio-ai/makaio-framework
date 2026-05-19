@@ -1,8 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { defineTool, toolSuccess, toolError, ToolErrorCodes, errorToToolResult } from '@makaio/tools-core';
-import { getFileAccessRules, resolveAndValidatePath } from '../utils/index.js';
+import { defineTool, toolSuccess, toolError, ToolErrorCodes } from '@makaio/tools-core';
+import { getFileAccessRules, handleFsError, resolveAndValidatePath } from '../utils/index.js';
 import { isHiddenName } from '../utils/platform.js';
 import type { MakaioContext } from '@makaio/core';
 import type { FileAccessRules } from '../types.js';
@@ -281,24 +281,10 @@ export const listDirectoryTool = defineTool({
         totalCount: entries.length,
       });
     } catch (err) {
-      // Handle specific error codes
-      if (err instanceof Error && 'code' in err) {
-        const code = (err as NodeJS.ErrnoException).code;
-
-        if (code === 'ENOENT') {
-          return toolError(ToolErrorCodes.RESOURCE_NOT_FOUND, `Directory not found: ${resolvedPath}`);
-        }
-
-        if (code === 'EACCES' || code === 'EPERM') {
-          return toolError(ToolErrorCodes.PERMISSION_DENIED, `Permission denied: ${resolvedPath}`);
-        }
-
-        if (code === 'ENOTDIR') {
-          return toolError(ToolErrorCodes.VALIDATION_FAILED, `Path is not a directory: ${resolvedPath}`);
-        }
+      if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'ENOTDIR') {
+        return toolError(ToolErrorCodes.VALIDATION_FAILED, `Path is not a directory: ${resolvedPath}`);
       }
-
-      return errorToToolResult(err);
+      return handleFsError(err, resolvedPath);
     }
   },
 });
