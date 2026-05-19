@@ -1,8 +1,17 @@
 name: Request Full CI
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      comment_id:
+        required: true
+        type: number
+      comment_url:
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -10,36 +19,28 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: full-ci-request-${{ github.event.issue.number }}
+  group: full-ci-request-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   request-full-ci:
-    if: |
-      github.event.issue.pull_request &&
-      (github.event.comment.body == '/ci' || startsWith(github.event.comment.body, '/ci ')) &&
-      github.event.comment.user.type != 'Bot' &&
-      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
 
     steps:
       - name: Resolve CI request
         id: request
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+          COMMENT_URL: ${{ inputs.comment_url }}
         with:
           script: |
-            const comment = context.payload.comment;
-            const [command] = comment.body.trim().split(/\s+/);
-            if (command !== '/ci') {
-              core.setFailed('This workflow only handles /ci comments.');
-              return;
-            }
-
             const { data: pullRequest } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.issue.number,
+              pull_number: Number(process.env.PR_NUMBER),
             });
 
             const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
@@ -51,9 +52,9 @@ jobs:
 
             core.setOutput('checkout-ref', pullRequest.head.ref);
             core.setOutput('source-sha', pullRequest.head.sha);
-            core.setOutput('pr-number', String(pullRequest.number));
-            core.setOutput('comment-id', String(comment.id));
-            core.setOutput('comment-url', comment.html_url);
+            core.setOutput('pr-number', process.env.PR_NUMBER);
+            core.setOutput('comment-id', process.env.COMMENT_ID);
+            core.setOutput('comment-url', process.env.COMMENT_URL);
             const labels = pullRequest.labels?.map((label) => label.name) ?? [];
             const skipCi = labels.includes('skip:ci') || labels.includes('skip:all');
             core.setOutput('skip-ci', skipCi ? 'true' : 'false');
@@ -61,15 +62,12 @@ jobs:
 
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}
+          client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}
           private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
-          permission-contents: write
-          permission-issues: write
-          permission-checks: write
 
       - name: Resolve quick validation reuse
         id: quick-validation
@@ -154,21 +152,6 @@ jobs:
                 reuse_quick_validation: reuseQuickValidation,
                 quick_check_url: process.env.QUICK_CHECK_URL || undefined,
               },
-            });
-
-      - name: React to comment
-        continue-on-error: true
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: Number(process.env.COMMENT_ID),
-              content: 'rocket',
             });
 
       - name: Comment on PR

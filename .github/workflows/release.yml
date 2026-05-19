@@ -1,8 +1,15 @@
 name: Stable Release
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      bump_type:
+        required: true
+        type: string
+        description: 'patch, minor, or major'
+      pr_number:
+        required: true
+        type: number
 
 permissions:
   contents: write
@@ -17,44 +24,23 @@ env:
 
 jobs:
   prepare:
-    if: >-
-      github.event.issue.pull_request &&
-      github.event.comment.author_association == 'OWNER' &&
-      startsWith(github.event.comment.body, '/release ')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     outputs:
       version: ${{ steps.bump.outputs.version }}
       tag: ${{ steps.bump.outputs.tag }}
-      bump_type: ${{ steps.parse.outputs.bump_type }}
+      bump_type: ${{ inputs.bump_type }}
 
     steps:
-      - name: Parse release command
-        id: parse
-        env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
+      - name: Validate bump type
         run: |
-          case "$COMMENT_BODY" in
-            "/release patch"|"/release minor"|"/release major")
-              BUMP_TYPE="${COMMENT_BODY#/release }"
-              ;;
+          case "${{ inputs.bump_type }}" in
+            patch|minor|major) ;;
             *)
-              echo "::error::Invalid release command. Use: /release patch|minor|major"
+              echo "::error::Invalid bump type '${{ inputs.bump_type }}'. Use: patch, minor, or major"
               exit 1
               ;;
           esac
-          echo "bump_type=$BUMP_TYPE" >> "$GITHUB_OUTPUT"
-
-      - name: React with rocket
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket',
-            });
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -72,10 +58,11 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           BASE_VERSION: ${{ steps.base.outputs.version }}
+          PR_NUMBER: ${{ inputs.pr_number }}
         with:
           script: |
             const baseVersion = process.env.BASE_VERSION;
-            const prNumber = context.payload.issue.number;
+            const prNumber = Number(process.env.PR_NUMBER);
             const expectedTagPrefix = `v${baseVersion}-canary.`;
             const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
@@ -102,7 +89,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           cd apps/electrobun
-          npm version ${{ steps.parse.outputs.bump_type }} --no-git-tag-version
+          npm version ${{ inputs.bump_type }} --no-git-tag-version
           NEW_VERSION=$(node -p "require('./package.json').version")
           cd ../..
 
@@ -222,7 +209,7 @@ jobs:
 
   publish:
     needs: [prepare, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
       pull-requests: write
@@ -248,6 +235,8 @@ jobs:
 
       - name: Comment on PR
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
         with:
           script: |
             const tag = '${{ needs.prepare.outputs.tag }}';
@@ -256,6 +245,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
+              issue_number: Number(process.env.PR_NUMBER),
               body: `🚀 Stable release **${version}** created as [pre-release](${releaseUrl}).\n\nPromote to full release in the GitHub UI to update Homebrew.`,
             });
