@@ -2,7 +2,5 @@
 timeout = 10000
 pathIgnorePatterns = [
   "node_modules/**",
-  "dist/**",
-  "**/e2e/**",
-  "**/*.e2e.test.ts",
+  "dist/**"
 ]
