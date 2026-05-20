@@ -1,0 +1,191 @@
+name: Slash Command Dispatcher
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions: {}
+
+jobs:
+  resolve:
+    if: github.event.issue.pull_request != null
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    outputs:
+      command: ${{ steps.detect.outputs.command }}
+      pr_number: ${{ steps.detect.outputs.pr_number }}
+      comment_id: ${{ steps.detect.outputs.comment_id }}
+      comment_body: ${{ steps.detect.outputs.comment_body }}
+      comment_url: ${{ steps.detect.outputs.comment_url }}
+      changeset_mode: ${{ steps.detect.outputs.changeset_mode }}
+      bump_type: ${{ steps.detect.outputs.bump_type }}
+    steps:
+      - name: Detect command
+        id: detect
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { action } = context.payload;
+            const body = context.payload.comment.body ?? '';
+            const prNumber = context.payload.issue.number;
+            const commentId = context.payload.comment.id;
+            const commentUrl = context.payload.comment.html_url;
+            const association = context.payload.comment.author_association;
+            const isTrusted = ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(association);
+            const isOrgMember = ['OWNER', 'MEMBER'].includes(association);
+            const isOwner = association === 'OWNER';
+            const isBot = context.payload.comment.user?.type === 'Bot';
+
+            function emit(command) {
+              core.setOutput('command', command);
+              core.setOutput('pr_number', prNumber);
+              core.setOutput('comment_id', commentId);
+              core.setOutput('comment_body', body);
+              core.setOutput('comment_url', commentUrl);
+            }
+
+            // /changeset (created by trusted users)
+            if (isTrusted && action === 'created' && body.trim().startsWith('/changeset')) {
+              emit('changeset');
+              core.setOutput('changeset_mode', 'post-config');
+              return;
+            }
+
+            // Changeset config comment edited → generate mode
+            const hasConfigMarker = body.includes('<!-- changeset-config:');
+            const trustedConfigComment =
+              context.payload.comment.user?.login === 'github-actions[bot]' && hasConfigMarker;
+            if (action === 'edited' && (isTrusted || trustedConfigComment) && hasConfigMarker) {
+              if (/- \[x\] 🚀 Generate Changeset/.test(body)) {
+                emit('changeset');
+                core.setOutput('changeset_mode', 'generate');
+                return;
+              }
+            }
+
+            // All remaining commands: created + non-bot only
+            if (action !== 'created' || isBot) {
+              core.setOutput('command', '');
+              return;
+            }
+
+            const trimmed = body.trim();
+
+            if (isOrgMember && (trimmed === '/ci' || trimmed.startsWith('/ci '))) {
+              emit('ci');
+              return;
+            }
+
+            if (isOrgMember && (trimmed === '/conformance' || trimmed.startsWith('/conformance '))) {
+              emit('conformance');
+              return;
+            }
+
+            if (isOrgMember && trimmed.startsWith('/publish-dev')) {
+              emit('publish-dev');
+              return;
+            }
+
+            if (isOwner && trimmed.startsWith('/release ')) {
+              const bump = trimmed.split(/\s+/)[1];
+              if (['patch', 'minor', 'major'].includes(bump)) {
+                emit('release');
+                core.setOutput('bump_type', bump);
+                return;
+              }
+            }
+
+            core.setOutput('command', '');
+
+      - name: Create GitHub App token
+        if: steps.detect.outputs.command != ''
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: React to comment
+        if: steps.detect.outputs.command != ''
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket',
+            });
+
+  # ── Changeset Bot ──────────────────────────────────────────────────
+  changeset:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'changeset'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/changeset-bot-reusable.yml
+    secrets: inherit
+    with:
+      mode: ${{ needs.resolve.outputs.changeset_mode }}
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
+      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
+
+  # ── Full CI Request ────────────────────────────────────────────────
+  ci:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'ci'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/ci-request.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
+      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
+      comment_url: ${{ needs.resolve.outputs.comment_url }}
+
+  # ── Conformance Tests ──────────────────────────────────────────────
+  conformance:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'conformance'
+    uses: ./.github/workflows/conformance-reusable.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
+      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
+      comment_body: ${{ needs.resolve.outputs.comment_body }}
+
+  # ── Dev Publish Request ────────────────────────────────────────────
+  publish-dev:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'publish-dev'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/npm-publish-request.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
+      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
+      comment_url: ${{ needs.resolve.outputs.comment_url }}
+      comment_body: ${{ needs.resolve.outputs.comment_body }}
+
+  # ── Stable Release ─────────────────────────────────────────────────
+  release:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'release'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/release.yml
+    secrets: inherit
+    with:
+      bump_type: ${{ needs.resolve.outputs.bump_type }}
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
