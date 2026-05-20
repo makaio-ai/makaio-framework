@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Integration tests for scroll-gated AccountsPanel rendering.
  *

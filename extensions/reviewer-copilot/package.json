@@ -17,5 +17,8 @@
   "devDependencies": {
     "@types/node": "^24.3.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }

@@ -19,5 +19,8 @@
     "@makaio/runtime-node": "workspace:*",
     "hono": "^4.12.18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }

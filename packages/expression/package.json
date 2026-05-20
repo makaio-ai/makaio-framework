@@ -13,5 +13,8 @@
     "@makaio/contracts": "workspace:*",
     "jexl-extended": "^1.4.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }

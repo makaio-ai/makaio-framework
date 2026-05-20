@@ -15,7 +15,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

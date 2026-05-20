@@ -23,7 +23,8 @@
     "tsx": "^4.20.5"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "publishConfig": {
     "exports": {

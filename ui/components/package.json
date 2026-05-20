@@ -14,7 +14,8 @@
     "./style.css": "./dist/style.css"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "dependencies": {
     "@makaio/ui-theme": "workspace:*",

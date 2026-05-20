@@ -8,7 +8,8 @@
     "@makaio/test-utils": "workspace:*"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "exports": {
     ".": "./src/index.ts",
