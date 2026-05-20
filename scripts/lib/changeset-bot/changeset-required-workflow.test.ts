@@ -27,14 +27,14 @@ describe('changeset-required reusable workflow', () => {
       const fetchIndex = workflow.indexOf('- name: Fetch PR head');
       const detectIndex = workflow.indexOf('- name: Detect package release changeset');
       const checkerIndex = workflow.indexOf('- name: Resolve trusted checker');
-      const installIndex = workflow.indexOf('- name: Install dependencies');
+      const setupBunIndex = workflow.indexOf('uses: oven-sh/setup-bun@', checkerIndex);
       const checkIndex = workflow.indexOf('- name: Check changeset');
 
       expect(fetchIndex).toBeGreaterThanOrEqual(0);
       expect(detectIndex).toBeGreaterThan(fetchIndex);
       expect(checkerIndex).toBeGreaterThan(detectIndex);
-      expect(installIndex).toBeGreaterThan(checkerIndex);
-      expect(checkIndex).toBeGreaterThan(installIndex);
+      expect(setupBunIndex).toBeGreaterThan(checkerIndex);
+      expect(checkIndex).toBeGreaterThan(setupBunIndex);
       expect(workflow).toContain("steps.head_changeset.outputs.present != 'true'");
       expect(workflow).toContain('changeset_prefix="${framework_root%/}/.changeset/"');
       expect(workflow).toContain("steps.checker.outputs.available == 'true'");

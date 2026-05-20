@@ -81,7 +81,7 @@ jobs:
               return;
             }
 
-            if (isOrgMember && trimmed.startsWith('/publish-dev')) {
+            if (isOrgMember && (trimmed === '/publish-dev' || trimmed.startsWith('/publish-dev '))) {
               emit('publish-dev');
               return;
             }

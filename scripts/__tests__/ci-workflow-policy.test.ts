@@ -25,23 +25,27 @@ describe('CI workflow policy', () => {
     expect(workflow).not.toContain('push:');
   });
 
-  it('runs full CI from a maintainer /ci issue comment through a dispatch request workflow', () => {
+  it('runs full CI from a maintainer /ci issue comment through the dispatcher and request workflow', () => {
     const workflowPath = resolve(workflowsDir, 'ci-request.yml');
     expect(existsSync(workflowPath)).toBe(true);
 
+    const dispatcher = readWorkflow('slash-command-dispatcher.yml');
+    expect(dispatcher).toContain('issue_comment:');
+    expect(dispatcher).toContain("trimmed === '/ci' || trimmed.startsWith('/ci ')");
+    expect(dispatcher).toContain("['OWNER', 'MEMBER'].includes(association)");
+    expect(dispatcher).toContain('uses: ./.github/workflows/ci-request.yml');
+    expect(dispatcher).toContain('secrets: inherit');
+
     const workflow = readFileSync(workflowPath, 'utf8');
-    expect(workflow).toContain('issue_comment:');
-    expect(workflow).toContain("github.event.comment.body == '/ci'");
-    expect(workflow).toContain("startsWith(github.event.comment.body, '/ci ')");
-    expect(workflow).toContain('contains(fromJSON(\'["OWNER","MEMBER"]\')');
+    expect(workflow).toContain('workflow_call:');
+    expect(workflow).not.toContain('issue_comment:');
     expect(workflow).toContain('headRepository !== baseRepository');
     expect(workflow).toContain("event_type: 'full-ci-requested'");
     expect(workflow).toContain("core.setOutput('checkout-ref', pullRequest.head.ref)");
     expect(workflow).toContain("core.setOutput('source-sha', pullRequest.head.sha)");
     expect(workflow).toContain("labels.includes('skip:ci') || labels.includes('skip:all')");
-    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflow).toContain('client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}');
     expect(workflow).toContain('github-token: ${{ steps.app-token.outputs.token }}');
-    expect(workflow).toContain('permission-checks: write');
     expect(workflow).toContain("check_name: 'Quick Checks'");
     expect(workflow).toContain("name: 'Validation Reused'");
     expect(workflow).toContain('reuse_quick_validation: reuseQuickValidation');
@@ -99,15 +103,15 @@ describe('CI workflow policy', () => {
     expect(workflow).toContain("steps.changes.outputs.docs_only != 'true'");
   });
 
-  it('short-circuits the changeset-required gate before dependency install for non-publish diffs', () => {
+  it('ensures classification runs before trusted checker resolution and changeset check for non-publish diffs', () => {
     const workflow = readWorkflow('changeset-required-reusable.yml');
     const classifyIndex = workflow.indexOf('- name: Classify publish relevance');
-    const setupIndex = workflow.indexOf('- name: Setup Node');
-    const installIndex = workflow.indexOf('- name: Install dependencies');
+    const checkerIndex = workflow.indexOf('- name: Resolve trusted checker');
+    const checkIndex = workflow.indexOf('- name: Check changeset');
 
     expect(classifyIndex).toBeGreaterThan(-1);
-    expect(classifyIndex).toBeLessThan(setupIndex);
-    expect(classifyIndex).toBeLessThan(installIndex);
+    expect(classifyIndex).toBeLessThan(checkerIndex);
+    expect(classifyIndex).toBeLessThan(checkIndex);
     expect(workflow).toContain("publish_relevance.outputs.relevant != 'false'");
     expect(workflow).toContain('.github/*|docs/*|.changeset/*.md|*.md');
     expect(workflow).not.toContain('.github/*|docs/*|.changeset/*|*.md');

@@ -184,14 +184,14 @@ describe('conformance workflow security', () => {
   });
 
   it('only inherits conformance secrets for trusted commenters on pull request comments', () => {
-    const callerWorkflowText = readWorkflow('conformance.yml');
+    const dispatcherText = readWorkflow('slash-command-dispatcher.yml');
 
-    expect(callerWorkflowText).toContain(
-      'contains(fromJSON(\'["OWNER","MEMBER"]\'), github.event.comment.author_association)',
-    );
-    expect(callerWorkflowText).not.toContain('github.event.issue.author_association');
-    expect(callerWorkflowText).not.toContain('github.event.pull_request.author_association');
-    expect(callerWorkflowText).toContain('comment_body: ${{ github.event.comment.body }}');
-    expect(callerWorkflowText).toContain('secrets: inherit');
+    expect(dispatcherText).toContain("['OWNER', 'MEMBER'].includes(association)");
+    expect(dispatcherText).toContain("trimmed === '/conformance' || trimmed.startsWith('/conformance ')");
+    expect(dispatcherText).not.toContain('github.event.issue.author_association');
+    expect(dispatcherText).not.toContain('github.event.pull_request.author_association');
+    expect(dispatcherText).toContain('comment_body: ${{ needs.resolve.outputs.comment_body }}');
+    expect(dispatcherText).toContain('uses: ./.github/workflows/conformance-reusable.yml');
+    expect(dispatcherText).toContain('secrets: inherit');
   });
 });
