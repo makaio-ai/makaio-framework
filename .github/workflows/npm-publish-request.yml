@@ -1,24 +1,31 @@
 name: Request dev npm package publish
 
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+      comment_id:
+        required: true
+        type: number
+      comment_url:
+        required: true
+        type: string
+      comment_body:
+        required: true
+        type: string
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: npm-dev-publish-request-${{ github.event.issue.number }}
+  group: npm-dev-publish-request-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   request-dev-publish:
-    if: |
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/publish-dev') &&
-      github.event.comment.user.type != 'Bot' &&
-      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
     runs-on: ubuntu-slim
     timeout-minutes: 5
 
@@ -26,10 +33,14 @@ jobs:
       - name: Resolve publish request
         id: request
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_BODY: ${{ inputs.comment_body }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          COMMENT_ID: ${{ inputs.comment_id }}
+          COMMENT_URL: ${{ inputs.comment_url }}
         with:
           script: |
-            const comment = context.payload.comment;
-            const body = comment.body.trim();
+            const body = process.env.COMMENT_BODY.trim();
             const [command, ...packageNames] = body.split(/\s+/);
             const PACKAGE_NAME_PATTERN = /^@makaio\/[a-z0-9][a-z0-9._-]*$/u;
 
@@ -63,7 +74,7 @@ jobs:
             const { data: pullRequest } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.issue.number,
+              pull_number: Number(process.env.PR_NUMBER),
             });
 
             const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
@@ -76,9 +87,9 @@ jobs:
             core.setOutput('packages', normalizedPackageNames.join(' '));
             core.setOutput('checkout-ref', pullRequest.head.ref);
             core.setOutput('source-sha', pullRequest.head.sha);
-            core.setOutput('pr-number', String(pullRequest.number));
-            core.setOutput('comment-id', String(comment.id));
-            core.setOutput('comment-url', comment.html_url);
+            core.setOutput('pr-number', process.env.PR_NUMBER);
+            core.setOutput('comment-id', process.env.COMMENT_ID);
+            core.setOutput('comment-url', process.env.COMMENT_URL);
 
       - name: Create GitHub App token
         id: app-token
@@ -125,21 +136,6 @@ jobs:
             });
 
             core.setOutput('deployment-id', String(deployment.id));
-
-      - name: React to comment
-        continue-on-error: true
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          COMMENT_ID: ${{ steps.request.outputs.comment-id }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: Number(process.env.COMMENT_ID),
-              content: 'rocket',
-            });
 
       - name: Comment on PR
         continue-on-error: true
