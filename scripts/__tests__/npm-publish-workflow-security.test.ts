@@ -11,16 +11,20 @@ function readWorkflow(name: string): string {
 describe('npm publish workflow security', () => {
   it('keeps the slash-command request workflow unprivileged', () => {
     const workflow = readWorkflow('npm-publish-request.yml');
+    const dispatcher = readWorkflow('slash-command-dispatcher.yml');
 
-    expect(workflow).toContain('issue_comment:');
+    expect(workflow).toContain('workflow_call:');
+    expect(dispatcher).toContain('issue_comment:');
+    expect(dispatcher).toContain("trimmed === '/publish-dev' || trimmed.startsWith('/publish-dev ')");
+    expect(dispatcher).toContain('uses: ./.github/workflows/npm-publish-request.yml');
+    expect(dispatcher).toContain('secrets: inherit');
     expect(workflow).toContain('pull-requests: read');
-    expect(workflow).toContain('permission-deployments: write');
     expect(workflow).toContain('const PACKAGE_NAME_PATTERN = /^@makaio\\/[a-z0-9][a-z0-9._-]*$/u;');
     expect(workflow).toContain('const normalizedPackageNames = [];');
     expect(workflow).toContain('const invalidPackageNames = [];');
     expect(workflow).toContain('Invalid package name(s):');
     expect(workflow).toContain("core.setOutput('packages', normalizedPackageNames.join(' '));");
-    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
+    expect(workflow).toContain('client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}');
     expect(workflow).not.toContain('app-id:');
     expect(workflow).toContain('github.rest.repos.createDeployment');
     expect(workflow).toContain("environment: 'canary'");
