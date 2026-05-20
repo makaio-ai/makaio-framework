@@ -25,7 +25,7 @@
   ],
   "scripts": {
     "build": "tsdown",
-    "test": "vitest run",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

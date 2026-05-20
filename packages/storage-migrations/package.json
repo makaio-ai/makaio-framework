@@ -14,7 +14,8 @@
     "db:generate:fresh": "rm -rf drizzle && tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) generate",
     "db:push": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) push",
     "db:studio": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) studio",
-    "db:reset": "rm -f ~/.makaio/makaio.db ~/.makaio/makaio.db-wal ~/.makaio/makaio.db-shm && echo '✓ Database deleted. Fresh schema will apply on next startup.'"
+    "db:reset": "rm -f ~/.makaio/makaio.db ~/.makaio/makaio.db-wal ~/.makaio/makaio.db-shm && echo '✓ Database deleted. Fresh schema will apply on next startup.'",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "dependencies": {
     "@makaio/storage-drizzle": "workspace:*",

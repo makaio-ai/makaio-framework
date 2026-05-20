@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="10" assertions="15" failures="0" skipped="0" time="0.025121">
+  <testsuite name="apps/cli/src/command-runtime.bun.test.ts" file="apps/cli/src/command-runtime.bun.test.ts" tests="10" assertions="15" failures="0" skipped="0" time="0" hostname="MacStudio-von-Chris.local">
+    <testsuite name="createProcessCommandContext" file="apps/cli/src/command-runtime.bun.test.ts" line="7" tests="6" assertions="8" failures="0" skipped="0" time="0.002" hostname="MacStudio-von-Chris.local">
+      <testcase name="returns a context with the supplied args and bus" classname="createProcessCommandContext" time="0.000232" file="apps/cli/src/command-runtime.bun.test.ts" line="22" assertions="2" />
+      <testcase name="aborts the signal when SIGINT is emitted" classname="createProcessCommandContext" time="0.000049" file="apps/cli/src/command-runtime.bun.test.ts" line="35" assertions="1" />
+      <testcase name="cleanup() removes the SIGINT listener so subsequent signal does not abort" classname="createProcessCommandContext" time="0.000017" file="apps/cli/src/command-runtime.bun.test.ts" line="46" assertions="1" />
+      <testcase name="cleanup() is safe to call multiple times without throwing" classname="createProcessCommandContext" time="0.000027" file="apps/cli/src/command-runtime.bun.test.ts" line="57" assertions="1" />
+      <testcase name="registers output writers that forward to process streams" classname="createProcessCommandContext" time="0.002474" file="apps/cli/src/command-runtime.bun.test.ts" line="67" assertions="2" />
+      <testcase name="setExitCode() updates process.exitCode" classname="createProcessCommandContext" time="0.000039" file="apps/cli/src/command-runtime.bun.test.ts" line="86" assertions="1" />
+    </testsuite>
+    <testsuite name="disconnectBusSafely" file="apps/cli/src/command-runtime.bun.test.ts" line="101" tests="3" assertions="6" failures="0" skipped="0" time="0" hostname="MacStudio-von-Chris.local">
+      <testcase name="does not warn when disconnect succeeds" classname="disconnectBusSafely" time="0.00006" file="apps/cli/src/command-runtime.bun.test.ts" line="102" assertions="2" />
+      <testcase name="swallows disconnect errors and logs a warning" classname="disconnectBusSafely" time="0.000057" file="apps/cli/src/command-runtime.bun.test.ts" line="114" assertions="2" />
+      <testcase name="swallows primitive disconnect throws and logs the raw value" classname="disconnectBusSafely" time="0.000022" file="apps/cli/src/command-runtime.bun.test.ts" line="129" assertions="2" />
+    </testsuite>
+    <testsuite name="evaluateBeforeRunGate" file="apps/cli/src/command-runtime.bun.test.ts" line="145" tests="1" assertions="1" failures="0" skipped="0" time="0" hostname="MacStudio-von-Chris.local">
+      <testcase name="blocks malformed beforeRun results" classname="evaluateBeforeRunGate" time="0.000093" file="apps/cli/src/command-runtime.bun.test.ts" line="152" assertions="1" />
+    </testsuite>
+  </testsuite>
+</testsuites>

@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "vitest run",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts",
     "test:watch": "vitest"
   },
   "dependencies": {

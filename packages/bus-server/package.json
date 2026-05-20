@@ -24,7 +24,8 @@
     "ws": "^8.16.0"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "publishConfig": {
     "exports": {

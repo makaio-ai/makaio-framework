@@ -33,7 +33,8 @@
     "vitest": "4.1.5"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "publishConfig": {
     "exports": {

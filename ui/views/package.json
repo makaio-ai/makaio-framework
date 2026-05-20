@@ -14,7 +14,8 @@
     "./style.css": "./dist/style.css"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

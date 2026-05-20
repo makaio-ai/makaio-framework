@@ -31,7 +31,8 @@
     "vitest": "4.1.5"
   },
   "scripts": {
-    "build": "bun build.ts"
+    "build": "bun build.ts",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "publishConfig": {
     "exports": {

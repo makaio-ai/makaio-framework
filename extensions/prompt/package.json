@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts"
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",

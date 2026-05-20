@@ -8,5 +8,8 @@
   "type": "module",
   "sideEffects": [
     "**/*.scss"
-  ]
+  ],
+  "scripts": {
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
+  }
 }

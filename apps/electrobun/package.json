@@ -18,7 +18,8 @@
     "package:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=stable electrobun build --env=stable",
     "package:canary:base": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=canary yarn build:all && MAKAIO_VARIANT=base MAKAIO_RELEASE_TRACK=canary electrobun build --env=canary",
     "package:canary:cef": "tsx ../host-shared/src/build/prepare-framework-dist.ts && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary yarn build:all && MAKAIO_VARIANT=cef MAKAIO_RELEASE_TRACK=canary electrobun build --env=canary",
-    "package:all-variants": "yarn package:base && yarn package:cef"
+    "package:all-variants": "yarn package:base && yarn package:cef",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

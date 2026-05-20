@@ -27,5 +27,8 @@
     "vitest": "4.1.5",
     "zod": "^4.1.13"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
+  }
 }

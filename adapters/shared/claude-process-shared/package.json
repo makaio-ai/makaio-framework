@@ -21,5 +21,8 @@
     "@makaio/client-claude-code": "workspace:*",
     "@makaio/contracts": "workspace:*"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "bun ../../../scripts/lib/bun-test-inspector.ts"
+  }
 }

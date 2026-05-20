@@ -32,7 +32,7 @@
   "scripts": {
     "build": "bun build.ts",
     "dev": "tsx src/agent.ts",
-    "test": "echo 'ERROR: Tests must be run via `yarn test` from repository root!' && exit 1",
+    "test": "bun ../../../scripts/lib/bun-test-inspector.ts",
     "test:watch": "vitest",
     "runner": "tsx src/runner.ts"
   },

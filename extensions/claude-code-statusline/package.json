@@ -15,7 +15,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "peerDependencies": {
     "@makaio/framework": "^1.0.0"

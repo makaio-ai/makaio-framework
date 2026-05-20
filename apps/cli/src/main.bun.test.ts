@@ -42,6 +42,9 @@ import { createTestTTYFixture } from './test-tty-fixture.js';
 
 const TEST_FRAMEWORK_RANGE = '>=0.1.0';
 
+/** Empty discovery — no local extensions found. */
+const emptyDiscovery = new ExplicitDescriptorDiscovery([]);
+
 describe('extractRootConfigArg', () => {
   it('strips root-level --config before the command and returns the path', () => {
     const result = extractRootConfigArg(['node', 'makaio', '--config', './makaio.config.json', 'serve']);
@@ -106,8 +109,6 @@ describe('isDiscoveryFreeBuiltin', () => {
   });
 });
 
-/** Empty discovery — no local extensions found. */
-const emptyDiscovery = new ExplicitDescriptorDiscovery([]);
 
 describe('main — remote manifest behavior', () => {
   beforeEach(() => {

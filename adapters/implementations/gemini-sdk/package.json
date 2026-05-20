@@ -32,8 +32,7 @@
   "scripts": {
     "build": "bun build.ts",
     "dev": "tsx src/test-run.ts",
-    "test": "echo 'ERROR: Tests must be run via `yarn test` from repository root!' && exit 1",
-    "lint": "echo 'ERROR: Run `yarn validate path/to/package` from repository root instead!' && exit 1"
+    "test": "bun ../../../scripts/lib/bun-test-inspector.ts"
   },
   "dependencies": {
     "p-queue": "^9.0.0",

@@ -370,7 +370,7 @@ function runSingleFile(file: string, timeoutMs: number): Promise<SingleFileResul
         settled = true;
         child.kill('SIGKILL');
         try {
-          rmSync(tmpDir, { recursive: true });
+          // FIXME: rmSync(tmpDir, { recursive: true });
         } catch {
           /* best-effort */
         }
@@ -393,7 +393,7 @@ function runSingleFile(file: string, timeoutMs: number): Promise<SingleFileResul
           /* file may not exist */
         }
         try {
-          rmSync(tmpDir, { recursive: true });
+          // FIXME: rmSync(tmpDir, { recursive: true });
         } catch {
           /* best-effort */
         }
@@ -446,19 +446,21 @@ async function perFileMain(opts: CliOptions): Promise<void> {
       aggregatedSkipped += parsed.totalSkipped;
     }
 
-    if (status === 'pass') {
-      if (!quiet) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
-    } else if (status === 'hung') {
+    if (status === 'hung') {
       hungFiles.push(rel);
       process.stderr.write(`${c.yellow}⏱${c.reset} [${completed}/${total}] ${rel} ${c.yellow}(hung)${c.reset}\n`);
-    } else {
+    } else if (parsed && parsed.totalTests > 0 && parsed.failures.length === 0) {
+      if (!quiet) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
+    } else if (parsed && parsed.failures.length > 0) {
       failFiles++;
-      if (parsed && parsed.failures.length > 0) {
-        allFailures.push(...parsed.failures);
-      } else {
-        crashedFiles.push(rel);
-      }
+      allFailures.push(...parsed.failures);
       process.stderr.write(`${c.red}✗${c.reset} [${completed}/${total}] ${rel}\n`);
+    } else if (!parsed || parsed.totalTests === 0) {
+      failFiles++;
+      crashedFiles.push(rel);
+      process.stderr.write(`${c.red}✗${c.reset} [${completed}/${total}] ${rel} ${c.red}(crashed)${c.reset}\n`);
+    } else {
+      if (!quiet) process.stderr.write(`${c.green}✓${c.reset} [${completed}/${total}] ${rel}\n`);
     }
   }
 
@@ -505,7 +507,11 @@ async function batchMain(opts: CliOptions): Promise<void> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'bun-test-'));
   const junitFile = join(tmpDir, 'junit.xml');
 
-  const child = spawn('bun', ['test', '--reporter=junit', `--reporter-outfile=${junitFile}`, ...opts.bunArgs], {
+  const args = ['test', '--isolate', '--reporter=junit', `--reporter-outfile=${junitFile}`, ...opts.bunArgs];
+
+  console.log('spawning bun with args', args.join(' '));
+
+  const child = spawn('bun',args, {
     stdio: ['inherit', 'pipe', 'pipe'],
     env: { ...process.env },
   });
@@ -527,7 +533,11 @@ async function batchMain(opts: CliOptions): Promise<void> {
   child.stdout!.on('data', () => {});
 
   const stderrChunks: Buffer[] = [];
-  child.stderr!.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+  if (quiet) {
+    child.stderr!.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+  } else {
+    child.stderr!.pipe(process.stderr);
+  }
 
   return new Promise((resolve) => {
     child.on('close', (code) => {
@@ -543,7 +553,7 @@ async function batchMain(opts: CliOptions): Promise<void> {
       }
 
       try {
-        rmSync(tmpDir, { recursive: true });
+        //FIXME: rmSync(tmpDir, { recursive: true });
       } catch {
         /* best-effort */
       }
@@ -559,13 +569,6 @@ async function batchMain(opts: CliOptions): Promise<void> {
 
       const results = parseJunitXml(junitXml);
       printResults(results, elapsed);
-
-      if (results.totalFailures === 0 && results.totalErrors === 0) {
-        const stderr = Buffer.concat(stderrChunks).toString().trim();
-        if (stderr) {
-          process.stderr.write(`\n${c.yellow}stderr:${c.reset}\n${stderr}\n`);
-        }
-      }
 
       process.exitCode = results.totalFailures > 0 || results.totalErrors > 0 ? 1 : (code ?? 0);
       resolve();

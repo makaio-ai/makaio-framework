@@ -50,7 +50,8 @@
     "tsx": "^4.20.5"
   },
   "scripts": {
-    "build": "bun build.ts"
+    "build": "bun build.ts",
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "publishConfig": {
     "exports": {

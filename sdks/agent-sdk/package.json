@@ -39,7 +39,7 @@
   },
   "scripts": {
     "build": "tsdown",
-    "test": "vitest run"
+    "test": "bun ../../scripts/lib/bun-test-inspector.ts"
   },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": ">=0.2.50"
