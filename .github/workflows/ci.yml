@@ -287,3 +287,20 @@ jobs:
 
       - name: Rust SDK
         run: yarn test:sdk:rust
+
+  gate:
+    name: CI Gate
+    if: always()
+    needs: [validation, test, sdk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Check results
+        run: |
+          results=( "${{ needs.validation.result }}" "${{ needs.test.result }}" "${{ needs.sdk.result }}" )
+          for r in "${results[@]}"; do
+            if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
+              echo "::error::Upstream job failed or was cancelled ($r)"
+              exit 1
+            fi
+          done
