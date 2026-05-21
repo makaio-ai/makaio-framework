@@ -16,12 +16,7 @@ import type { SurfaceType } from '@makaio/contracts';
 import { HostSubjects } from '@makaio/host-shared';
 import { BootSubjects, ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
 import type { SpawnedProcess } from '../shared/spawn-helpers.js';
-import {
-  connectTestBus,
-  waitForBoot,
-  waitForRuntimeReady,
-  waitForUiReady,
-} from '../shared/bus-helpers.js';
+import { connectTestBus, waitForBoot, waitForRuntimeReady, waitForUiReady } from '../shared/bus-helpers.js';
 import { resolveFreeLoopbackPort } from '../shared/free-port.js';
 
 /** Start function supplied by a host-specific desktop launcher. */
