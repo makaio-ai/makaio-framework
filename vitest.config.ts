@@ -62,6 +62,11 @@ const shards: Record<string, string[]> = {
   Apps: ['apps', 'ui', 'sdks'],
 };
 
+/**
+ * Builds test file include patterns for the selected workspace directories.
+ * @param dirs - Workspace root directories included in the Vitest project.
+ * @returns Glob patterns for enabled test categories.
+ */
 function categoryIncludes(dirs: string[]): string[] {
   const patterns: string[] = [];
   const wantUnit = enabledCategories.has('unit');

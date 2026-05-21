@@ -154,5 +154,5 @@ outcomes include `error`, `cancelled`, `superseded`, `merged`, and `rejected`.
 
 ## See Also
 
-- [Creating Adapters](../../../docs/adapters/creating.md) - Current adapter implementation guide
-- [Capabilities](./capabilities.md) - Capability declaration and querying
+- [Creating Adapters](/guides/creating-adapters/) - Current adapter implementation guide
+- [Capabilities](/guides/creating-adapters/#capabilities) - Capability declaration and querying

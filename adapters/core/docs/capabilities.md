@@ -135,5 +135,5 @@ await MakaioBus.request(AgentSubjects.sendMessage, {
 
 ## See Also
 
-- [Creating Adapters](../../../docs/adapters/creating.md) - Current adapter implementation guide
+- [Creating Adapters](/guides/creating-adapters/) - Current adapter implementation guide
 - [Message Handling](./message-handling.md) - Bus subjects for start, follow-up, and infer

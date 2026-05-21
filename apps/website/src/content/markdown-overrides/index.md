@@ -11,20 +11,20 @@ Pick the path that matches what you need:
 
 ### I want to understand the architecture
 - [Why Makaio](/why/) — what it is, where it fits, how it differs from SDKs and agent frameworks
-- [Bus Overview](/guides/bus/) — the typed event and RPC system at the core
-- [Bus Patterns](/guides/bus/patterns/) — common messaging patterns (events, requests, subscriptions)
+- [Bus Overview](/architecture/bus/) — the typed event and RPC system at the core
+- [Bus Patterns](/architecture/bus/patterns/) — common messaging patterns (events, requests, subscriptions)
 - [Configuration](/guides/configuration/) — runtime configuration and environment setup
 
 ### I want to build an extension
-- [Creating Extensions](/guides/extensions/creating/) — extension structure, manifests, namespace ownership
-- [Extension Discovery & Loading](/guides/extensions/discovery/) — how extensions are found and loaded
-- [Browser & UI Extensions](/guides/extensions/browser/) — contributing UI components and widgets
-- [Extension Distribution](/guides/extensions/distribution/) — packaging and publishing extensions
+- [Creating Extensions](/guides/creating-extensions/) — extension structure, manifests, namespace ownership
+- [Extension Discovery & Loading](/architecture/extensions/discovery/) — how extensions are found and loaded
+- [Browser & UI Extensions](/architecture/extensions/browser/) — contributing UI components and widgets
+- [Extension Distribution](/architecture/extensions/distribution/) — packaging and publishing extensions
 
 ### I want to connect an AI provider
-- [Adapters Overview](/guides/adapters/) — the three-layer adapter stack (Adapter → Agent → Connector)
-- [Creating Adapters](/guides/adapters/creating/) — write a new adapter for any AI provider
-- [Models & Providers](/guides/adapters/models-and-providers/) — model enumeration and capability tags
+- [Adapters Overview](/architecture/adapters/) — the three-layer adapter stack (Adapter → Agent → Connector)
+- [Creating Adapters](/guides/creating-adapters/) — write a new adapter for any AI provider
+- [Models & Providers](/architecture/adapters/models-and-providers/) — model enumeration and capability tags
 
 ### I want to work with tools
 - [`@makaio/tools-core`](/packages/tools-core/) — typed tool definitions with Zod I/O schemas
@@ -33,9 +33,9 @@ Pick the path that matches what you need:
 - [`@makaio/extension-subagent`](/extensions/subagent/) — subagent delegation tools
 
 ### I want to use storage
-- [Bus Storage Guide](/guides/bus/storage/) — bus-mediated, backend-agnostic storage
-- [`@makaio/storage-core`](/storage/core/) — storage contracts and interfaces
-- [`@makaio/storage-drizzle`](/storage/drizzle/) — SQLite/Drizzle backend
+- [Bus Storage Guide](/architecture/bus/storage/) — bus-mediated, backend-agnostic storage
+- [`@makaio/storage-core`](/packages/core/) — storage contracts and interfaces
+- [`@makaio/storage-drizzle`](/packages/drizzle/) — SQLite/Drizzle backend
 - [`@makaio/storage-migrations`](/packages/storage-migrations/) — schema migration system
 
 ### I want to integrate from another language

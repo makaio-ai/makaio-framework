@@ -5,7 +5,7 @@ import { glob } from 'astro/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 import { generateWebsiteDocsId } from './content-route-id';
 
-const frameworkRoot = path.resolve(import.meta.dirname, '..', '..', '..', '..');
+const frameworkRoot = path.resolve(import.meta.dirname, '..', '..', '..');
 const gitignoreExcludes = fs
   .readFileSync(path.join(frameworkRoot, '.gitignore'), 'utf-8')
   .split('\n')

@@ -2,7 +2,7 @@
 
 This file is retained only as a legacy entry point. The current adapter authoring guide is:
 
-- [docs/adapters/creating.md](../../../docs/adapters/creating.md)
+- [docs/creating-adapters.md](../../../docs/creating-adapters.md)
 
 Do not use the old object-interface examples that returned an `AIAdapter` literal with
 `sendMessage()` and `getCapabilities()` methods. Current adapters use the three-layer class
