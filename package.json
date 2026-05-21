@@ -43,7 +43,8 @@
     "clients/*",
     "sdks/*",
     "extensions/*",
-    "ui/*"
+    "ui/*",
+    "storage/*"
   ],
   "scripts": {
     "build": "bun packages/framework/build.ts",

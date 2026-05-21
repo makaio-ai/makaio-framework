@@ -45,10 +45,10 @@ const packages: PackageEntry[] = [
   { readme: 'ui/hooks/README.md' },
   { readme: 'ui/views/README.md' },
 
-  { readme: 'packages/storage/core/README.md' },
-  { readme: 'packages/storage/drizzle/README.md' },
-  { readme: 'packages/storage/handlers/README.md' },
-  { readme: 'packages/storage-migrations/README.md' },
+  { readme: 'storage/core/README.md' },
+  { readme: 'storage/drizzle/README.md' },
+  { readme: 'storage/handlers/README.md' },
+  { readme: 'storage-migrations/README.md' },
 
   { readme: 'packages/tools-core/README.md' },
   { readme: 'extensions/filesystem/README.md' },

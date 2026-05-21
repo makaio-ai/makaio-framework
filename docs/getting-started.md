@@ -382,4 +382,4 @@ Package-level READMEs:
 | Kernel | [`../packages/kernel/README.md`](../packages/kernel/README.md) |
 | Adapter contracts | [`../adapters/core/README.md`](../adapters/core/README.md) |
 | Tools core | [`../packages/tools-core/README.md`](../packages/tools-core/README.md) |
-| Storage core | [`../packages/storage/core/README.md`](../packages/storage/core/README.md) |
+| Storage core | [`../packages/storage/core/README.md`](../storage/core/README.md) |

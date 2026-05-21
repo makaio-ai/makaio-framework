@@ -34,8 +34,8 @@ Pick the path that matches what you need:
 
 ### I want to use storage
 - [Bus Storage Guide](/guides/bus/storage/) — bus-mediated, backend-agnostic storage
-- [`@makaio/storage-core`](/packages/storage/core/) — storage contracts and interfaces
-- [`@makaio/storage-drizzle`](/packages/storage/drizzle/) — SQLite/Drizzle backend
+- [`@makaio/storage-core`](/storage/core/) — storage contracts and interfaces
+- [`@makaio/storage-drizzle`](/storage/drizzle/) — SQLite/Drizzle backend
 - [`@makaio/storage-migrations`](/packages/storage-migrations/) — schema migration system
 
 ### I want to integrate from another language
