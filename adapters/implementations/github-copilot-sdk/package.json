@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "p-defer": "^4.0.1",
-    "p-queue": "^9.0.0",
+    "p-queue": "^9.3.0",
     "quick-lru": "^7.3.0",
     "zod": "^4.1.13"
   },

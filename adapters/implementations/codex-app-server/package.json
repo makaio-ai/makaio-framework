@@ -37,7 +37,7 @@
   },
   "dependencies": {
     "@makaio/subprocess": "workspace:*",
-    "p-queue": "^9.0.0",
+    "p-queue": "^9.3.0",
     "zod": "^4.1.13"
   },
   "peerDependencies": {
