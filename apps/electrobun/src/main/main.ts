@@ -127,7 +127,13 @@ async function shutdownGracefully(destroyTray: (() => void) | null): Promise<voi
     } catch (err: unknown) {
       console.warn('[electrobun] Failed to save window session:', err);
     }
-    windowManager.closeAllWindows();
+    try {
+      // Native window teardown is best-effort after the session is saved; a
+      // close failure must not skip runtime, bus, tray, or Vite cleanup.
+      windowManager.closeAllWindows();
+    } catch (err: unknown) {
+      console.warn('[electrobun] Failed to close windows during shutdown:', err);
+    }
   }
 
   try {

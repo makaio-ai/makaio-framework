@@ -123,7 +123,7 @@ function expectOnlyAllowedFailedServices(
  * @param hostLabel - Host label used in diagnostics.
  * @returns Matching window state.
  */
-async function waitForWindowRegistration(
+export async function waitForWindowRegistration(
   bus: IMakaioBus,
   registrationId: string,
   hostLabel: string,
@@ -131,10 +131,21 @@ async function waitForWindowRegistration(
   const deadline = Date.now() + WINDOW_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    const { windows } = await bus.request(HostSubjects.window.list, {});
-    const match = windows.find((window) => window.registrationId === registrationId);
-    if (match) {
-      return { windowId: match.windowId, registrationId: match.registrationId };
+    try {
+      const { windows } = await bus.request(HostSubjects.window.list, {});
+      const match = windows.find((window) => window.registrationId === registrationId);
+      if (match) {
+        return { windowId: match.windowId, registrationId: match.registrationId };
+      }
+    } catch (err) {
+      // Window list is a readiness probe during host startup; transient bus
+      // failures should consume a poll attempt, not fail the whole smoke.
+      console.info(
+        '[desktop-e2e:%s] Window list request failed while waiting for registration %s: %s',
+        hostLabel,
+        registrationId,
+        err instanceof Error ? err.message : err,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }

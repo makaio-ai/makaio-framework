@@ -33,6 +33,7 @@ import { initTrayPopover } from './tray-popover.js';
 import { registerAllBusHandlers } from './bus-handlers.js';
 import { ElectronNotificationProvider } from './providers/electron-notification-provider.js';
 import { createElectronRestartHandler } from './restart-handler.js';
+import { createElectronForegroundRequestController } from './foreground-requests.js';
 import {
   buildDesktopBaseRuntimeOptions,
   createElectronBootContext,
@@ -58,6 +59,7 @@ export function startApp() {
   let windowManager: WindowManager | null = null;
   let bootPromise: Promise<MakaioRuntime | null> = Promise.resolve(null);
   let httpServer: HttpServer | null = null;
+  let initialWindowsComplete = false;
   /**
    * Infrastructure parameters computed during {@link setupInfrastructure},
    * needed to construct the {@link WindowManager} after boot resolves.
@@ -321,6 +323,17 @@ export function startApp() {
     return createWindow({ registrationId: FRAMEWORK_FALLBACK_WINDOW });
   }
 
+  // Foreground OS events can arrive before WindowManager exists, or while
+  // startup restore is still opening windows. Replay one request after startup
+  // settles so the event is not lost and does not race session restore.
+  const foregroundRequests = createElectronForegroundRequestController({
+    isReady: () => windowManager !== null && initialWindowsComplete,
+    hasOpenWindows: () => BrowserWindow.getAllWindows().length > 0,
+    focusWindow: () => windowManager!.focusWindow(),
+    openDefaultWindow,
+    restoreFromBackgroundMode,
+  });
+
   /**
    * Open the initial window(s) at startup.
    *
@@ -392,7 +405,7 @@ export function startApp() {
   // ── Shutdown + lifecycle registration ─────────────────────────────────────
 
   /**
-   * Register the `before-quit` shutdown handler and macOS lifecycle hooks.
+   * Register the `before-quit` shutdown handler and app lifecycle hooks.
    * @param destroyTray - Tray teardown callback invoked during shutdown.
    */
   function registerShutdownAndLifecycle(destroyTray: () => void): void {
@@ -449,24 +462,18 @@ export function startApp() {
     app.on('window-all-closed', () => {
       // Don't quit — the tray keeps the app alive on all platforms.
     });
-
-    // macOS dock click: open (or focus) the fallback shell window.
-    // When started in background mode, restore the Dock icon first.
-    app.on('activate', () => {
-      restoreFromBackgroundMode();
-      if (BrowserWindow.getAllWindows().length === 0 && windowManager) {
-        openDefaultWindow();
-      }
-    });
   }
 
   // ── Boot sequence ─────────────────────────────────────────────────────────
 
   app.on('second-instance', () => {
-    restoreFromBackgroundMode();
-    if (windowManager && !windowManager.focusWindow()) {
-      openDefaultWindow();
-    }
+    foregroundRequests.request('second-instance');
+  });
+
+  // Register early so macOS activate events during boot are queued instead
+  // of disappearing before WindowManager construction.
+  app.on('activate', () => {
+    foregroundRequests.request('activate');
   });
 
   app
@@ -576,6 +583,8 @@ export function startApp() {
       if (!startedInBackgroundMode) {
         await openInitialWindows();
       }
+      initialWindowsComplete = true;
+      foregroundRequests.flush();
     })
     .catch(async (err: unknown) => {
       console.error('[electron] Fatal startup error:', err);
