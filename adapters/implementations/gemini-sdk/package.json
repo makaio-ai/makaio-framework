@@ -36,7 +36,7 @@
     "lint": "echo 'ERROR: Run `yarn validate path/to/package` from repository root instead!' && exit 1"
   },
   "dependencies": {
-    "p-queue": "^9.0.0",
+    "p-queue": "^9.3.0",
     "zod": "^4.1.13"
   },
   "peerDependencies": {
