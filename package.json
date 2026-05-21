@@ -59,7 +59,7 @@
     "docs:bus:release": "bun scripts/analyze-bus-namespaces.ts --no-callsites -o docs/subjects/data/namespaces.json --summary && bun scripts/generate-bus-docs.ts -i docs/subjects/data/namespaces.json -o docs/subjects --branch main",
     "dev": "yarn workspace @makaio/electron dev:renderer",
     "dev:electron": "yarn workspace @makaio/electron dev",
-    "test": "vitest run",
+    "test": "yarn test:all",
     "test:unit": "MAKAIO_TEST_CATEGORIES=unit vitest run",
     "test:ui": "MAKAIO_TEST_CATEGORIES=ui vitest run",
     "test:integration": "MAKAIO_TEST_CATEGORIES=integration vitest run",

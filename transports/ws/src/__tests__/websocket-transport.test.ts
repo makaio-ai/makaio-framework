@@ -8,7 +8,7 @@
  * - Reconnect lifecycle
  *
  * Note: Generic transport interface compliance is tested via integration tests
- * in libs/bus/core/src/__tests__/transport-integration.test.ts
+ * in core/bus-core/src/__tests__/transport.integration.test.ts
  */
 
 import { describe, it, expect, vi } from 'vitest';
