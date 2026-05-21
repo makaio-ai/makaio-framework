@@ -30,8 +30,8 @@ describe('createRepoDevAliases', () => {
     const aliases = createRepoDevAliases(extensionRoot);
 
     expect(aliases).toEqual({
-      '@makaio/bus-core': path.join('/repo', 'framework/packages/bus-core/src'),
-      '@makaio/contracts': path.join('/repo', 'framework/packages/contracts/src'),
+      '@makaio/bus-core': path.join('/repo', 'framework/core/bus-core/src'),
+      '@makaio/contracts': path.join('/repo', 'framework/core/contracts/src'),
       '@makaio/runtime-node': path.join('/repo', 'framework/runtimes/node/src'),
       '@makaio/service-base': path.join('/repo', 'framework/packages/services/base/src'),
     });
@@ -50,12 +50,12 @@ describe('createPortablePackageJson', () => {
         'prepare:portable-package': 'tsx ./scripts/prepare-portable-package.ts',
       },
       peerDependencies: {
-        '@makaio/bus-core': 'link:../../framework/packages/bus-core',
+        '@makaio/bus-core': 'link:../../framework/core/bus-core',
         ink: '^6.3.1',
       },
       devDependencies: {
         '@makaio/build-tooling': 'link:../../framework/build-tooling',
-        '@makaio/contracts': 'link:../../framework/packages/contracts',
+        '@makaio/contracts': 'link:../../framework/core/contracts',
         '@makaio/runtime-node': '^0.9.0',
         '@makaio/service-base': 'file:../../framework/packages/services/base',
         ...Object.fromEntries(UI_PACKAGE_REFERENCES),

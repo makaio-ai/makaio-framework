@@ -276,7 +276,7 @@ describe('extension init builtin', () => {
     );
     expect(generatedPackageJson.devDependencies['@makaio/cli']).toBe(expectedWorkspaceLink(extensionRoot, 'apps/cli'));
     expect(generatedPackageJson.devDependencies['@makaio/contracts']).toBe(
-      expectedWorkspaceLink(extensionRoot, 'packages/contracts'),
+      expectedWorkspaceLink(extensionRoot, 'core/contracts'),
     );
     expect(generatedPackageJson.devDependencies['@makaio/kernel']).toBe(
       expectedWorkspaceLink(extensionRoot, 'packages/kernel'),
@@ -307,7 +307,7 @@ describe('extension init builtin', () => {
     const expectedFrameworkVersions = {
       '@makaio/build-tooling': readRepoPackageVersion('build-tooling/package.json'),
       '@makaio/cli': readRepoPackageVersion('apps/cli/package.json'),
-      '@makaio/contracts': readRepoPackageVersion('packages/contracts/package.json'),
+      '@makaio/contracts': readRepoPackageVersion('core/contracts/package.json'),
       '@makaio/kernel': readRepoPackageVersion('packages/kernel/package.json'),
     };
 

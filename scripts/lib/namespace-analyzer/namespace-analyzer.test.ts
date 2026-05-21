@@ -48,7 +48,7 @@ describe('parseAnalysisResult', () => {
 
 describe('classifyTier', () => {
   it('classifies non-extension files as framework when the analysis root is the framework distribution', () => {
-    expect(classifyTier('/repo/framework/packages/contracts/src/namespace.ts', '/repo/framework')).toBe('framework');
+    expect(classifyTier('/repo/framework/core/contracts/src/namespace.ts', '/repo/framework')).toBe('framework');
     expect(classifyTier('/repo/framework/extensions/opencode/src/namespace.ts', '/repo/framework')).toBe('extension');
   });
 
@@ -61,9 +61,7 @@ describe('classifyTier', () => {
   });
 
   it('keeps framework paths outside the host tier policy', () => {
-    expect(classifyTier('/repo/framework/packages/contracts/src/namespace.ts', '/repo', () => 'host')).toBe(
-      'framework',
-    );
+    expect(classifyTier('/repo/framework/core/contracts/src/namespace.ts', '/repo', () => 'host')).toBe('framework');
     expect(classifyTier('/repo/framework/extensions/opencode/src/namespace.ts', '/repo', () => 'host')).toBe(
       'extension',
     );

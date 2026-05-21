@@ -3,12 +3,12 @@
   "name": "Makaio Framework",
   "plugin": ["typedoc-plugin-markdown"],
   "entryPoints": [
-    "packages/bus-core",
-    "packages/contracts",
+    "core/bus-core",
+    "core/contracts",
     "packages/kernel",
     "packages/hooks",
     "packages/utils",
-    "packages/tools-core",
+    "core/tools-core",
     "adapters/core",
     "packages/services/core"
   ],

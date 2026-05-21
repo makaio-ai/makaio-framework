@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { mapFilesToPackages } from './map-files-to-packages.js';
 
 describe('mapFilesToPackages', () => {
-  it('maps packages/contracts/ to @makaio/contracts', () => {
-    expect(mapFilesToPackages(['packages/contracts/src/index.ts'])).toEqual(['@makaio/contracts']);
+  it('maps core/contracts/ to @makaio/contracts', () => {
+    expect(mapFilesToPackages(['core/contracts/src/index.ts'])).toEqual(['@makaio/contracts']);
   });
 
   it('maps packages/kernel/ to @makaio/framework', () => {
@@ -42,7 +42,7 @@ describe('mapFilesToPackages', () => {
     expect(
       mapFilesToPackages([
         'packages/kernel/src/index.ts',
-        'packages/contracts/src/types.ts',
+        'core/contracts/src/types.ts',
         'adapters/implementations/openai-node/src/connector.ts',
       ]),
     ).toEqual(['@makaio/adapter-openai-node', '@makaio/contracts', '@makaio/framework']);
@@ -53,7 +53,7 @@ describe('mapFilesToPackages', () => {
   });
 
   it('deduplicates when two files belong to the same package', () => {
-    expect(mapFilesToPackages(['packages/contracts/src/index.ts', 'packages/contracts/src/types.ts'])).toEqual([
+    expect(mapFilesToPackages(['core/contracts/src/index.ts', 'core/contracts/src/types.ts'])).toEqual([
       '@makaio/contracts',
     ]);
   });

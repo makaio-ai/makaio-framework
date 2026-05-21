@@ -7,14 +7,14 @@ const frameworkRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..
 
 const allowedFiles = new Set([
   'adapters/core/src/factory/create-adapter-namespace.ts',
-  'packages/bus-core/src/bus.ts',
-  'packages/bus-core/src/channel/channel-endpoint.ts',
+  'core/bus-core/src/bus.ts',
+  'core/bus-core/src/channel/channel-endpoint.ts',
   'packages/clients-core/src/create-client-namespace.ts',
   'storage/core/src/create-storage-namespace.ts',
 ]);
 
 const extensionFactoryFiles = {
-  createExtensionNamespace: 'packages/bus-core/src/create-extension-namespace.ts',
+  createExtensionNamespace: 'core/bus-core/src/create-extension-namespace.ts',
   createExtensionStorageNamespace: 'storage/core/src/create-extension-storage-namespace.ts',
 } as const;
 const extensionFactoryNames = ['createExtensionNamespace', 'createExtensionStorageNamespace'] as const;

@@ -15,7 +15,7 @@
  *   yarn test:unit                         # unit only
  *   yarn test:ui                           # ui/jsdom only
  *   yarn test:integration                  # integration only
- *   yarn test --dir packages/bus-core      # all categories, scoped to bus-core
+ *   yarn test --dir core/bus-core      # all categories, scoped to bus-core
  *   yarn workspace \@makaio/bus-core test   # same, from package directory
  *
  * E2E, browser, SDK, and conformance tests have separate configs and scripts.

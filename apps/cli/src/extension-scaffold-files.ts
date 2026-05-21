@@ -80,7 +80,7 @@ function buildPackageJson(options: ExtensionScaffoldBuildOptions): string {
   const devDependencies: Record<string, string> = {
     '@makaio/build-tooling': toWorkspaceLink(options.rootDir, 'build-tooling'),
     '@makaio/cli': toWorkspaceLink(options.rootDir, 'apps/cli'),
-    '@makaio/contracts': toWorkspaceLink(options.rootDir, 'packages/contracts'),
+    '@makaio/contracts': toWorkspaceLink(options.rootDir, 'core/contracts'),
     ...DEFAULT_DEV_DEPENDENCY_VERSIONS,
   };
 

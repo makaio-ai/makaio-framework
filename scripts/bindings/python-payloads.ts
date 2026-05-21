@@ -6,7 +6,7 @@ import type {
   MakaioProtocolManifest,
   MakaioProtocolRequestSubject,
   MakaioProtocolSubject,
-} from '../../packages/contracts/src/protocol/types.js';
+} from '../../core/contracts/src/protocol/types.js';
 import { PYTHON_PAYLOADS_DIR } from '../lib/sdk-generation-paths.js';
 
 // ---------------------------------------------------------------------------

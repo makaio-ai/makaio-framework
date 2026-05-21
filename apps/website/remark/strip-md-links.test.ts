@@ -51,7 +51,7 @@ describe('remarkStripMdLinks', () => {
   });
 
   it('handles links to README.md (non-docs paths)', async () => {
-    const result = await transform('[Readme](../packages/bus-core/README.md)');
-    expect(result).toBe('[Readme](../packages/bus-core/README)');
+    const result = await transform('[Readme](../core/bus-core/README.md)');
+    expect(result).toBe('[Readme](../core/bus-core/README)');
   });
 });

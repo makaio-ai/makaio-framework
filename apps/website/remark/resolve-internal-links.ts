@@ -25,6 +25,8 @@ const ROUTE_RULES: ReadonlyArray<{ fsPrefix: string; routePrefix: string }> = [
   { fsPrefix: 'docs', routePrefix: 'guides' },
   { fsPrefix: 'apps/website/src/content/docs', routePrefix: '' },
   { fsPrefix: 'extensions', routePrefix: 'extensions' },
+  { fsPrefix: 'core', routePrefix: 'packages' },
+  { fsPrefix: 'storage', routePrefix: 'packages' },
   { fsPrefix: 'packages', routePrefix: 'packages' },
   { fsPrefix: 'adapters', routePrefix: 'adapters' },
   { fsPrefix: 'clients', routePrefix: 'clients' },

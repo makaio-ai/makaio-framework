@@ -44,7 +44,8 @@
     "sdks/*",
     "extensions/*",
     "ui/*",
-    "storage/*"
+    "storage/*",
+    "core/*"
   ],
   "scripts": {
     "build": "bun packages/framework/build.ts",

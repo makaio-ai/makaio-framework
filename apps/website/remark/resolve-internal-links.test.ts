@@ -50,7 +50,7 @@ describe('mapToRoute', () => {
   });
 
   it('maps packages, adapters, clients, providers, sdks', () => {
-    expect(mapToRoute('packages/bus-core')).toBe('packages/bus-core');
+    expect(mapToRoute('core/bus-core')).toBe('packages/bus-core');
     expect(mapToRoute('adapters/openai-node')).toBe('adapters/openai-node');
     expect(mapToRoute('clients/claude-code')).toBe('clients/claude-code');
     expect(mapToRoute('providers/anthropic')).toBe('providers/anthropic');

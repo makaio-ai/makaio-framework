@@ -186,6 +186,8 @@ jobs:
       matrix:
         include:
           - shard: Core
+            filter: core/ storage/
+          - shard: Packages
             filter: packages/
           - shard: Scripts & Build Tooling
             filter: scripts/ build-tooling/

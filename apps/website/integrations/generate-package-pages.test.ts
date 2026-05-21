@@ -99,7 +99,7 @@ describe('convertGitHubCallouts', () => {
 
 describe('readmeToSlugPath', () => {
   it('strips leading "packages/" segment so URLs do not nest under /packages/packages/', () => {
-    expect(readmeToSlugPath('packages/bus-core/README.md')).toBe('bus-core');
+    expect(readmeToSlugPath('core/bus-core/README.md')).toBe('bus-core');
     expect(readmeToSlugPath('packages/services/base/README.md')).toBe('services/base');
   });
 
