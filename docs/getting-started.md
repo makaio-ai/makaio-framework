@@ -377,9 +377,9 @@ Package-level READMEs:
 
 | Package | README |
 |---------|--------|
-| Bus core | [`../packages/bus-core/README.md`](../packages/bus-core/README.md) |
-| Contracts | [`../packages/contracts/README.md`](../packages/contracts/README.md) |
-| Kernel | [`../packages/kernel/README.md`](../packages/kernel/README.md) |
-| Adapter contracts | [`../adapters/core/README.md`](../adapters/core/README.md) |
-| Tools core | [`../packages/tools-core/README.md`](../packages/tools-core/README.md) |
-| Storage core | [`../packages/storage/core/README.md`](../packages/storage/core/README.md) |
+| Bus core | [`@makaio/bus-core`](/packages/bus-core/) |
+| Contracts | [`@makaio/contracts`](/packages/contracts/) |
+| Kernel | [`@makaio/kernel`](/packages/kernel/) |
+| Adapter contracts | [`@makaio/ai-adapters-core`](/packages/adapters/core/) |
+| Tools core | [`@makaio/tools-core`](/packages/tools-core/) |
+| Storage core | [`@makaio/storage-core`](/packages/core/) |

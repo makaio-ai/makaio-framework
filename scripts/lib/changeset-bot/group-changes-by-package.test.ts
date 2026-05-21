@@ -4,7 +4,7 @@ import type { CodeRabbitChangeRow } from './parse-coderabbit-summary.js';
 
 const ROWS: CodeRabbitChangeRow[] = [
   {
-    paths: ['framework/packages/contracts/src/extension/', 'framework/packages/contracts/src/index.ts'],
+    paths: ['framework/core/contracts/src/extension/', 'framework/core/contracts/src/index.ts'],
     summary: 'Adds DetachedTransportSchema and descriptor types.',
   },
   {
@@ -56,7 +56,7 @@ describe('groupChangesByPackage', () => {
 
   it('works without prefix', () => {
     const standaloneRows: CodeRabbitChangeRow[] = [
-      { paths: ['packages/contracts/src/index.ts'], summary: 'Update contracts.' },
+      { paths: ['core/contracts/src/index.ts'], summary: 'Update contracts.' },
       { paths: ['packages/kernel/src/boot.ts'], summary: 'Fix boot sequence.' },
     ];
 
@@ -71,7 +71,7 @@ describe('groupChangesByPackage', () => {
   it('merges multiple rows into the same package', () => {
     const rows: CodeRabbitChangeRow[] = [
       { paths: ['packages/kernel/src/a.ts'], summary: 'Change A.' },
-      { paths: ['packages/bus-core/src/b.ts'], summary: 'Change B.' },
+      { paths: ['core/bus-core/src/b.ts'], summary: 'Change B.' },
     ];
 
     const result = groupChangesByPackage(rows, '');
@@ -96,7 +96,7 @@ describe('groupChangesByPackage', () => {
   it('handles a row whose paths span multiple packages', () => {
     const rows: CodeRabbitChangeRow[] = [
       {
-        paths: ['packages/contracts/src/foo.ts', 'packages/kernel/src/bar.ts'],
+        paths: ['core/contracts/src/foo.ts', 'packages/kernel/src/bar.ts'],
         summary: 'Cross-cutting change.',
       },
     ];

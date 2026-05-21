@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { format, resolveConfig } from 'prettier';
-import { PublicProtocolNamespaces } from '../packages/contracts/src/protocol/catalog.js';
-import type { MakaioProtocolManifest } from '../packages/contracts/src/protocol/types.js';
+import { PublicProtocolNamespaces } from '../core/contracts/src/protocol/catalog.js';
+import type { MakaioProtocolManifest } from '../core/contracts/src/protocol/types.js';
 import { exportProtocolManifest, formatProtocolManifest } from './protocol/export-manifest.js';
 import {
   generatePythonNamespaceInit,

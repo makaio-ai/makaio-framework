@@ -13,13 +13,13 @@
  * @example
  * ```bash
  * # Inventory mode: print symbol table
- * tsx scripts/barrel-inventory.ts packages/contracts/src/index.ts
+ * tsx scripts/barrel-inventory.ts core/contracts/src/index.ts
  *
  * # Generate mode: emit replacement barrel (dead exports removed)
- * tsx scripts/barrel-inventory.ts --generate --cross-check packages/contracts/src/index.ts
+ * tsx scripts/barrel-inventory.ts --generate --cross-check core/contracts/src/index.ts
  *
  * # Audit all entry points of a package
- * tsx scripts/barrel-inventory.ts --audit-package packages/contracts
+ * tsx scripts/barrel-inventory.ts --audit-package core/contracts
  * ```
  */
 

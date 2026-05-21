@@ -24,7 +24,7 @@ afterEach(() => {
 describe('createPublicApiEntryPoints', () => {
   it('creates stable docs entrypoints from package exports', () => {
     const frameworkRoot = path.join(tempDir, 'source-root');
-    const packageRoot = path.join(frameworkRoot, 'packages/contracts');
+    const packageRoot = path.join(frameworkRoot, 'core/contracts');
     fs.mkdirSync(path.join(packageRoot, 'src/skill'), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, 'src/cli'), { recursive: true });
     fs.writeFileSync(
@@ -52,14 +52,14 @@ describe('createPublicApiEntryPoints', () => {
       path.join(entrypointRoot, 'contracts/skill/index.ts'),
     ]);
     expect(fs.readFileSync(path.join(entrypointRoot, 'contracts/skill/index.ts'), 'utf8')).toBe(
-      "export * from '../../../source-root/packages/contracts/src/skill/index.js';\n",
+      "export * from '../../../source-root/core/contracts/src/skill/index.js';\n",
     );
     expect(fs.existsSync(path.join(entrypointRoot, 'contracts/cli/register/index.ts'))).toBe(false);
   });
 
   it('uses supported conditional export targets', () => {
     const frameworkRoot = path.join(tempDir, 'source-root');
-    const packageRoot = path.join(frameworkRoot, 'packages/contracts');
+    const packageRoot = path.join(frameworkRoot, 'core/contracts');
     fs.mkdirSync(path.join(packageRoot, 'src'), { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, 'package.json'),
@@ -83,7 +83,7 @@ describe('createPublicApiEntryPoints', () => {
 
   it('rejects export targets outside the package root', () => {
     const frameworkRoot = path.join(tempDir, 'source-root');
-    const packageRoot = path.join(frameworkRoot, 'packages/contracts');
+    const packageRoot = path.join(frameworkRoot, 'core/contracts');
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(
       path.join(packageRoot, 'package.json'),

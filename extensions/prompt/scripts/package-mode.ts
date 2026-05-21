@@ -14,16 +14,16 @@ export type { ExtensionPackageJson };
 
 const FRAMEWORK_PACKAGE_PATHS = {
   '@makaio/build-tooling': 'build-tooling',
-  '@makaio/bus-core': 'packages/bus-core',
-  '@makaio/contracts': 'packages/contracts',
-  '@makaio/core': 'packages/makaio-core',
+  '@makaio/bus-core': 'core/bus-core',
+  '@makaio/contracts': 'core/contracts',
+  '@makaio/core': 'core/makaio-core',
   '@makaio/kernel': 'packages/kernel',
   '@makaio/test-utils': 'packages/test-utils',
 } as const;
 
 const REPO_DEV_ALIAS_PATHS = {
-  '@makaio/bus-core': 'packages/bus-core/src',
-  '@makaio/contracts': 'packages/contracts/src',
+  '@makaio/bus-core': 'core/bus-core/src',
+  '@makaio/contracts': 'core/contracts/src',
   '@makaio/kernel': 'packages/kernel/src',
   '@makaio/kernel/cli': 'packages/kernel/src/cli/index.ts',
 } as const;

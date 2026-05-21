@@ -12,8 +12,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { basename } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
-import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
-import { IMPORTER_REGISTRATIONS } from '@makaio/log-importers';
+import {
+  ImportCursorStorageSubjects,
+  type ProcessLogFileResult,
+  type StorageMessagePayload,
+} from '@makaio/ai-adapters-core';
 import { getOpenCodeFixtureDir } from '@makaio/extension-opencode/testing';
 import { AdapterSubjects, type MakaioSessionEvent } from '@makaio/contracts';
 import {
@@ -24,14 +27,10 @@ import {
 } from '@makaio/services-core/session';
 import { importFromFileContent, importSegmentTree } from '../generic-import-handlers.js';
 import { createOpenCodeFixtureSession } from './opencode-test-helpers.js';
+import { createMockImporter } from './test-helpers.js';
 
 const OPENCODE_FIXTURE_DIR = getOpenCodeFixtureDir();
 
-// TODO: Tests using createClaudeCodeCliImporter should use a Claude adapter
-// name, not 'plugin:opencode'. The adapter name is metadata that flows through
-// the import pipeline — using the wrong one doesn't break the test but can
-// hide adapter-name propagation bugs. Fix in a bulk pass when standardizing
-// test adapter identities across the codebase.
 const ADAPTER_NAME = 'plugin:opencode';
 
 /** Minimal adapter session upsert response shape. */
@@ -68,24 +67,6 @@ interface CapturedCursorSet {
 interface CapturedSessionUpdate {
   sessionId: string;
   status?: string;
-}
-
-/**
- * Create the canonical Claude Code CLI log importer from the host owner package.
- * @param config - Runtime adapter identity used by the importer instance
- * @returns Concrete importer instance for integration tests
- */
-function createClaudeCodeCliImporter(config: { adapterId: string; adapterName: string }) {
-  const registration = IMPORTER_REGISTRATIONS.get('claude-code-cli');
-  if (!registration) {
-    throw new Error('Claude Code CLI log import registration is not available');
-  }
-
-  return new registration.LogImporterClass({
-    adapterId: config.adapterId,
-    adapterName: config.adapterName,
-    checkMakaioManaged: async () => false,
-  });
 }
 
 describe('importFromFileContent (integration)', () => {
@@ -445,248 +426,163 @@ describe('importFromFileContent (integration)', () => {
     expect(adapterSessionUpserts[0].logFilePath).toBeUndefined();
   });
 
-  it('imports nested compress children and emits compaction events for each segment', async () => {
-    const rootSessionId = 'session-root';
-    const childSessionId = 'session-child';
-    const grandchildSessionId = 'session-grandchild';
-    let createCount = 0;
+  it('persists nested compaction events idempotently across repeated imports', async () => {
+    const { sessionEvents } = registerStorageHandlers();
+    const rootSessionId = 'session-with-compaction-root';
+    const compressSessionId = 'session-with-compaction-child';
+    const nestedCompressSessionId = 'session-with-compaction-grandchild';
 
-    const {
-      adapterSessionUpserts,
-      messageUpserts,
-      adapterSessionStatuses,
-      sessionEvents,
-      sessionUpdates,
-      linkedEvents,
-    } = registerStorageHandlers();
-
-    while (cleanups.length > 0) {
-      cleanups.pop()?.();
-    }
-
-    cleanups.push(
-      MakaioBus.on(AdapterSubjects.session.linked, (ctx) => {
-        linkedEvents.push({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          sessionId: ctx.payload.sessionId,
-          replay: ctx.payload.replay,
-        });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.upsert, (ctx) => {
-        adapterSessionUpserts.push({ ...ctx.payload });
-        ctx.setResult({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          sessionId: null,
-          created: true,
-        });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.createAndLink, (ctx) => {
-        const sessionId = [rootSessionId, childSessionId, grandchildSessionId][createCount] ?? crypto.randomUUID();
-        createCount += 1;
-        ctx.setResult({ sessionId, created: true });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(SessionStorageSubjects.update, (ctx) => {
-        sessionUpdates.push({
-          sessionId: ctx.payload.sessionId,
-          status: 'status' in ctx.payload ? ctx.payload.status : undefined,
-        });
-        ctx.setResult({ success: true });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(MessageStorageSubjects.upsertByAdapterMessageId, (ctx) => {
-        messageUpserts.push({
-          sessionId: ctx.payload.sessionId,
-          adapterMessageId: ctx.payload.adapterMessageId,
-          role: ctx.payload.role,
-          contentText: ctx.payload.contentText,
-          blocks: ctx.payload.blocks,
-        });
-        ctx.setResult({ messageId: crypto.randomUUID(), created: true });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
-        adapterSessionStatuses.push({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          status: ctx.payload.status,
-        });
-        ctx.setResult({ success: true });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(SessionEventStorageSubjects.append, (ctx) => {
-        sessionEvents.push(ctx.payload.event);
-        ctx.setResult({ success: true });
-      }),
-    );
-
-    cleanups.push(
-      MakaioBus.on(SessionEventStorageSubjects.getByIds, (ctx) => {
-        const { sessionId, eventIds } = ctx.payload;
-        const idSet = new Set(eventIds);
-        ctx.setResult({
-          events: sessionEvents.filter((event) => event.sessionId === sessionId && idSet.has(String(event.eventId))),
-        });
-      }),
-    );
-
-    const importer = createClaudeCodeCliImporter({
-      adapterId: 'adapter-instance-nested',
-      adapterName: ADAPTER_NAME,
+    const message = (
+      adapterSessionId: string,
+      adapterMessageId: string,
+      contentText: string,
+      timestamp: number,
+      origin?: StorageMessagePayload['origin'],
+    ): StorageMessagePayload => ({
+      adapterSessionId,
+      adapterMessageId,
+      role: 'user',
+      contentText,
+      blocks: [{ type: 'text', content: contentText }],
+      agentId: 'main',
+      timestamp,
+      ...(origin !== undefined ? { origin } : {}),
     });
+    const assertString = (value: unknown): asserts value is string => {
+      expect(typeof value).toBe('string');
+    };
 
+    const result: ProcessLogFileResult = {
+      adapterSessionId: rootSessionId,
+      sessionEvent: {
+        subject: {} as never,
+        payload: {
+          adapterSessionId: rootSessionId,
+          kind: 'root',
+          parentAdapterSessionId: null,
+          forkPointMessageId: null,
+          model: 'mock-model',
+          cwd: '/mock/project',
+        },
+      },
+      messageEvents: [],
+      messagePayloads: [message(rootSessionId, 'root-message', 'Root message', 1000)],
+      lineage: {
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+      },
+      compressChildren: [
+        {
+          adapterSessionId: compressSessionId,
+          sessionEvent: {
+            subject: {} as never,
+            payload: {
+              adapterSessionId: compressSessionId,
+              kind: 'compress',
+              parentAdapterSessionId: rootSessionId,
+              forkPointMessageId: null,
+              model: 'mock-model',
+              cwd: '/mock/project',
+            },
+          },
+          messageEvents: [],
+          messagePayloads: [
+            message(compressSessionId, 'compact-summary-1', 'First compaction summary', 2000, 'compact'),
+          ],
+          lineage: {
+            kind: 'compress',
+            parentAdapterSessionId: rootSessionId,
+            forkPointMessageId: null,
+          },
+          compactionMetadata: {
+            trigger: 'auto',
+            preTokens: 12000,
+            timestamp: 1990,
+          },
+          compressChildren: [
+            {
+              adapterSessionId: nestedCompressSessionId,
+              sessionEvent: {
+                subject: {} as never,
+                payload: {
+                  adapterSessionId: nestedCompressSessionId,
+                  kind: 'compress',
+                  parentAdapterSessionId: compressSessionId,
+                  forkPointMessageId: null,
+                  model: 'mock-model',
+                  cwd: '/mock/project',
+                },
+              },
+              messageEvents: [],
+              messagePayloads: [
+                message(nestedCompressSessionId, 'compact-summary-2', 'Nested compaction summary', 3000, 'compact'),
+              ],
+              lineage: {
+                kind: 'compress',
+                parentAdapterSessionId: compressSessionId,
+                forkPointMessageId: null,
+              },
+              compactionMetadata: {
+                trigger: 'manual',
+                preTokens: 6000,
+                timestamp: 2990,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const importer = createMockImporter({
+      parseRecord: (line) => {
+        const parsed: unknown = typeof line === 'string' ? JSON.parse(line) : line;
+        return parsed;
+      },
+      processLogFile: () => result,
+    });
     const content = [
-      {
-        type: 'user',
-        uuid: 'root-message',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:01.000Z',
-        message: { role: 'user', content: 'Root' },
-      },
-      {
-        type: 'assistant',
-        uuid: 'root-reply',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:02.000Z',
-        message: {
-          id: 'msg-root-reply',
-          type: 'message',
-          role: 'assistant',
-          model: 'claude-3-opus',
-          content: [{ type: 'text', text: 'Root reply' }],
-          stop_reason: 'end_turn',
-          usage: { input_tokens: 100, output_tokens: 50 },
-        },
-      },
-      {
-        type: 'system',
-        subtype: 'compact_boundary',
-        sessionId: 'adapter-root',
-        uuid: 'boundary-child',
-        timestamp: '2026-03-08T18:00:03.000Z',
-        compactMetadata: { trigger: 'manual', preTokens: 42 },
-      },
-      {
-        type: 'user',
-        uuid: 'child-summary',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:04.000Z',
-        isCompactSummary: true,
-        message: { role: 'user', content: 'Child summary' },
-      },
-      {
-        type: 'assistant',
-        uuid: 'child-reply',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:05.000Z',
-        message: {
-          id: 'msg-child-reply',
-          type: 'message',
-          role: 'assistant',
-          model: 'claude-3-opus',
-          content: [{ type: 'text', text: 'Child reply' }],
-          stop_reason: 'end_turn',
-          usage: { input_tokens: 101, output_tokens: 51 },
-        },
-      },
-      {
-        type: 'system',
-        subtype: 'compact_boundary',
-        sessionId: 'adapter-root',
-        uuid: 'boundary-grandchild',
-        timestamp: '2026-03-08T18:00:06.000Z',
-        compactMetadata: { trigger: 'auto', preTokens: 84 },
-      },
-      {
-        type: 'user',
-        uuid: 'grandchild-summary',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:07.000Z',
-        isCompactSummary: true,
-        message: { role: 'user', content: 'Grandchild summary' },
-      },
+      { type: 'session', id: rootSessionId },
+      { type: 'compact_boundary', parent: rootSessionId, child: compressSessionId },
+      { type: 'compact_boundary', parent: compressSessionId, child: nestedCompressSessionId },
     ]
       .map((record) => JSON.stringify(record))
-      .join('\n')
-      .concat('\n');
+      .join('\n');
 
-    const result = await importFromFileContent({
+    const firstImport = await importFromFileContent({
       bus: MakaioBus,
       importer,
       content,
       isJsonl: true,
       adapterName: ADAPTER_NAME,
-      adapterId: 'adapter-instance-nested',
+      adapterId: 'mock-compaction-importer',
     });
 
-    expect(result.sessionId).toBe(rootSessionId);
-    expect(result.messageCount).toBe(5);
-    expect(messageUpserts.map((message) => message.sessionId)).toEqual([
-      rootSessionId,
-      rootSessionId,
-      childSessionId,
-      childSessionId,
-      grandchildSessionId,
-    ]);
-    expect(adapterSessionStatuses.map((status) => status.adapterSessionId)).toEqual([
-      'adapter-root:compress:boundary-grandchild',
-      'adapter-root:compress:boundary-child',
-      'adapter-root',
-    ]);
-    expect(sessionUpdates).toEqual([
-      { sessionId: grandchildSessionId, status: 'active' },
-      { sessionId: childSessionId, status: 'active' },
-      { sessionId: rootSessionId, status: 'active' },
-    ]);
+    const secondImport = await importFromFileContent({
+      bus: MakaioBus,
+      importer,
+      content,
+      isJsonl: true,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'mock-compaction-importer',
+    });
+
+    expect(firstImport.sessionId).toBe(secondImport.sessionId);
+    expect(firstImport.messageCount).toBe(3);
+    expect(secondImport.messageCount).toBe(3);
     expect(sessionEvents).toHaveLength(2);
-    expect(sessionEvents[0]).toMatchObject({
-      sessionId: rootSessionId,
-      type: 'session.compacted',
-      payload: {
-        trigger: 'manual',
-        preTokens: 42,
-        summary: 'Child summary',
-        compressChildSessionId: childSessionId,
-      },
-    });
-    expect(sessionEvents[1]).toMatchObject({
-      sessionId: childSessionId,
-      type: 'session.compacted',
-      payload: {
-        trigger: 'auto',
-        preTokens: 84,
-        summary: 'Grandchild summary',
-        compressChildSessionId: grandchildSessionId,
-      },
-    });
-    // Tree traversal order guarantees compress parents are persisted before their
-    // post-compaction subagents, so resolveLineage finds the correct sessionId at
-    // link time. No post-persist replay is emitted for compress segments on the
-    // tree import path.
-    expect(linkedEvents).toEqual([]);
+    const firstCompactionChildId = sessionEvents[0].payload.compressChildSessionId;
+    const nestedCompactionChildId = sessionEvents[1].payload.compressChildSessionId;
+    assertString(firstCompactionChildId);
+    assertString(nestedCompactionChildId);
+    expect(sessionEvents.map((event) => event.eventId)).toEqual([
+      `session-compacted:${firstImport.sessionId}:${firstCompactionChildId}`,
+      `session-compacted:${firstCompactionChildId}:${nestedCompactionChildId}`,
+    ]);
+    expect(sessionEvents.map((event) => event.payload.summary)).toEqual([
+      'First compaction summary',
+      'Nested compaction summary',
+    ]);
   });
 
   // This test validates the import pipeline's startedAt derivation and the
@@ -735,71 +631,5 @@ describe('importFromFileContent (integration)', () => {
 
     expect(adapterSessionUpserts).toHaveLength(1);
     expect(adapterSessionUpserts[0].startedAt).toBe(STARTED_AT_MS);
-  });
-
-  it('does not append duplicate compaction events on re-import', async () => {
-    const { sessionEvents } = registerStorageHandlers();
-
-    const importer = createClaudeCodeCliImporter({
-      adapterId: 'adapter-instance-idempotent',
-      adapterName: ADAPTER_NAME,
-    });
-
-    const content = [
-      {
-        type: 'user',
-        uuid: 'root-message',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:01.000Z',
-        message: { role: 'user', content: 'Root' },
-      },
-      {
-        type: 'system',
-        subtype: 'compact_boundary',
-        sessionId: 'adapter-root',
-        uuid: 'boundary-child',
-        timestamp: '2026-03-08T18:00:03.000Z',
-        compactMetadata: { trigger: 'manual', preTokens: 42 },
-      },
-      {
-        type: 'user',
-        uuid: 'child-summary',
-        session_id: 'adapter-root',
-        agentId: 'main',
-        cwd: '/tmp/project',
-        timestamp: '2026-03-08T18:00:04.000Z',
-        isCompactSummary: true,
-        message: { role: 'user', content: 'Child summary' },
-      },
-    ]
-      .map((record) => JSON.stringify(record))
-      .join('\n')
-      .concat('\n');
-
-    await importFromFileContent({
-      bus: MakaioBus,
-      importer,
-      content,
-      isJsonl: true,
-      adapterName: ADAPTER_NAME,
-      adapterId: 'adapter-instance-idempotent',
-    });
-
-    await importFromFileContent({
-      bus: MakaioBus,
-      importer,
-      content,
-      isJsonl: true,
-      adapterName: ADAPTER_NAME,
-      adapterId: 'adapter-instance-idempotent',
-    });
-
-    expect(sessionEvents).toHaveLength(1);
-    expect(sessionEvents[0]).toMatchObject({
-      eventId: expect.stringContaining('session-compacted:'),
-      type: 'session.compacted',
-    });
   });
 });

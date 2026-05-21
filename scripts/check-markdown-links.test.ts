@@ -94,7 +94,7 @@ describe('check-markdown-links', () => {
       listGitFiles: () => {
         throw new Error('git file scan should not run');
       },
-      listAllFiles: () => ['README.md', 'docs/index.md', 'docs/subjects/session.md', 'packages/contracts/README.md'],
+      listAllFiles: () => ['README.md', 'docs/index.md', 'docs/subjects/session.md', 'core/contracts/README.md'],
     });
 
     expect(files).toEqual(['docs/index.md', 'docs/subjects/session.md']);

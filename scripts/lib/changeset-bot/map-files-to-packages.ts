@@ -7,7 +7,7 @@
  * explicit `@makaio/framework` fallback for framework-wide infrastructure.
  *
  * Direct package roots:
- * - `packages/contracts/`
+ * - `core/contracts/`
  * - `packages/framework/`
  * - `adapters/implementations/<name>/`
  * - `clients/<name>/`
@@ -86,7 +86,7 @@ function resolveLookupDirectory(frameworkRoot: string, file: string): string {
  * @returns True when the direct package name should be used.
  */
 function isDirectChangesetPackage(packageDir: string): boolean {
-  if (packageDir === 'packages/contracts' || packageDir === 'packages/framework') {
+  if (packageDir === 'core/contracts' || packageDir === 'packages/framework') {
     return true;
   }
   if (packageDir === 'sdks/typescript') {

@@ -76,7 +76,7 @@ function readPackageEntries(packageRoot: string): Record<string, string> {
  * Build the tsdown entry object for a set of framework packages.
  *
  * Maps each package export to a framework dist output path:
- *   `packages/contracts/src/adapter/index.ts`
+ *   `core/contracts/src/adapter/index.ts`
  *     entry key `contracts/adapter/index`
  *     output `dist/contracts/adapter/index.mjs` + `.d.mts`
  * @param packages - Framework packages to include.

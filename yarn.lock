@@ -4320,9 +4320,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/bus-core@workspace:*, @makaio/bus-core@workspace:packages/bus-core":
+"@makaio/bus-core@workspace:*, @makaio/bus-core@workspace:core/bus-core":
   version: 0.0.0-use.local
-  resolution: "@makaio/bus-core@workspace:packages/bus-core"
+  resolution: "@makaio/bus-core@workspace:core/bus-core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/core": "workspace:*"
@@ -4526,9 +4526,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/contracts@workspace:*, @makaio/contracts@workspace:packages/contracts":
+"@makaio/contracts@workspace:*, @makaio/contracts@workspace:core/contracts":
   version: 0.0.0-use.local
-  resolution: "@makaio/contracts@workspace:packages/contracts"
+  resolution: "@makaio/contracts@workspace:core/contracts"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/core": "workspace:*"
@@ -4542,9 +4542,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/core@workspace:*, @makaio/core@workspace:packages/makaio-core":
+"@makaio/core@workspace:*, @makaio/core@workspace:core/makaio-core":
   version: 0.0.0-use.local
-  resolution: "@makaio/core@workspace:packages/makaio-core"
+  resolution: "@makaio/core@workspace:core/makaio-core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -5478,9 +5478,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/storage-core@workspace:*, @makaio/storage-core@workspace:packages/storage/core":
+"@makaio/storage-core@workspace:*, @makaio/storage-core@workspace:storage/core":
   version: 0.0.0-use.local
-  resolution: "@makaio/storage-core@workspace:packages/storage/core"
+  resolution: "@makaio/storage-core@workspace:storage/core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -5490,9 +5490,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/storage-drizzle@workspace:*, @makaio/storage-drizzle@workspace:packages/storage/drizzle":
+"@makaio/storage-drizzle@workspace:*, @makaio/storage-drizzle@workspace:storage/drizzle":
   version: 0.0.0-use.local
-  resolution: "@makaio/storage-drizzle@workspace:packages/storage/drizzle"
+  resolution: "@makaio/storage-drizzle@workspace:storage/drizzle"
   dependencies:
     "@libsql/client": "npm:^0.17.3"
     "@makaio/build-tooling": "workspace:*"
@@ -5505,9 +5505,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/storage-handlers@workspace:*, @makaio/storage-handlers@workspace:packages/storage/handlers":
+"@makaio/storage-handlers@workspace:*, @makaio/storage-handlers@workspace:storage/handlers":
   version: 0.0.0-use.local
-  resolution: "@makaio/storage-handlers@workspace:packages/storage/handlers"
+  resolution: "@makaio/storage-handlers@workspace:storage/handlers"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -5558,9 +5558,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/tools-core@workspace:*, @makaio/tools-core@workspace:packages/tools-core":
+"@makaio/tools-core@workspace:*, @makaio/tools-core@workspace:core/tools-core":
   version: 0.0.0-use.local
-  resolution: "@makaio/tools-core@workspace:packages/tools-core"
+  resolution: "@makaio/tools-core@workspace:core/tools-core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/core": "workspace:*"

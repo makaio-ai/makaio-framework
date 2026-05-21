@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
-import { PublicProtocolNamespaces } from '../../packages/contracts/src/protocol/catalog.js';
+import { PublicProtocolNamespaces } from '../../core/contracts/src/protocol/catalog.js';
 import { exportProtocolManifest } from '../protocol/export-manifest.js';
-import type { MakaioProtocolManifest } from '../../packages/contracts/src/protocol/types.js';
+import type { MakaioProtocolManifest } from '../../core/contracts/src/protocol/types.js';
 import { RUST_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
 import {
   extractHandAuthoredSection,

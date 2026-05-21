@@ -80,7 +80,7 @@ describe('resolveDevPublishPlan', () => {
       [
         {
           name: '@makaio/contracts',
-          location: 'packages/contracts',
+          location: 'core/contracts',
           version: '1.0.0',
           dependencies: {},
         },

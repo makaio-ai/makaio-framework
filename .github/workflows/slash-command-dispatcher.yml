@@ -155,6 +155,10 @@ jobs:
   conformance:
     needs: resolve
     if: needs.resolve.outputs.command == 'conformance'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
     uses: ./.github/workflows/conformance-reusable.yml
     secrets: inherit
     with:

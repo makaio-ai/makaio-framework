@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../packages/contracts/src/protocol/types.js';
+import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../core/contracts/src/protocol/types.js';
 import { RUST_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
 import { rustSubjectPayloadType } from './rust-payloads.js';
 

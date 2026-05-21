@@ -25,12 +25,12 @@ const YAML_MULTILINE = /[\n\r]/;
 const YAML_EDGE_WHITESPACE = /^\s|\s$/;
 
 const packages: PackageEntry[] = [
-  { readme: 'packages/bus-core/README.md' },
-  { readme: 'packages/contracts/README.md' },
+  { readme: 'core/bus-core/README.md' },
+  { readme: 'core/contracts/README.md' },
   { readme: 'packages/kernel/README.md' },
   { readme: 'packages/hooks/README.md' },
   { readme: 'packages/utils/README.md' },
-  { readme: 'packages/makaio-core/README.md' },
+  { readme: 'core/makaio-core/README.md' },
   { readme: 'packages/providers/README.md' },
   { readme: 'packages/expression/README.md' },
   { readme: 'packages/preferences/README.md' },
@@ -45,12 +45,12 @@ const packages: PackageEntry[] = [
   { readme: 'ui/hooks/README.md' },
   { readme: 'ui/views/README.md' },
 
-  { readme: 'packages/storage/core/README.md' },
-  { readme: 'packages/storage/drizzle/README.md' },
-  { readme: 'packages/storage/handlers/README.md' },
+  { readme: 'storage/core/README.md' },
+  { readme: 'storage/drizzle/README.md' },
+  { readme: 'storage/handlers/README.md' },
   { readme: 'packages/storage-migrations/README.md' },
 
-  { readme: 'packages/tools-core/README.md' },
+  { readme: 'core/tools-core/README.md' },
   { readme: 'extensions/filesystem/README.md' },
   { readme: 'extensions/shell/README.md' },
   { readme: 'extensions/subagent/README.md' },
@@ -71,14 +71,17 @@ const packages: PackageEntry[] = [
 
 /**
  * Derives the docs slug path (relative to /packages/) from a README path.
- * Strips the framework's top-level `packages/` segment because the website
- * already lives under `/packages/` — keeping it would yield `/packages/packages/...`.
+ * Strips top-level repo directories whose packages are rendered inside the
+ * website's `/packages/` section to avoid double-nesting (e.g. `/packages/packages/…`).
  * @param readme - README path relative to the framework root.
  * @returns Slug path (e.g. `bus-core`, `ui/components`, `adapters/implementations/anthropic-sdk`).
  */
 export function readmeToSlugPath(readme: string): string {
   const stripped = readme.replace(/\/README\.md$/u, '');
-  return stripped.startsWith('packages/') ? stripped.slice('packages/'.length) : stripped;
+  for (const prefix of ['packages/', 'core/', 'storage/']) {
+    if (stripped.startsWith(prefix)) return stripped.slice(prefix.length);
+  }
+  return stripped;
 }
 
 /**

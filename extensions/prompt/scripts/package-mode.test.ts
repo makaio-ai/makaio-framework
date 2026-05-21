@@ -24,8 +24,8 @@ describe('createRepoDevAliases', () => {
     const aliases = createRepoDevAliases(extensionRoot);
 
     expect(aliases).toEqual({
-      '@makaio/bus-core': path.join('/repo', 'framework/packages/bus-core/src'),
-      '@makaio/contracts': path.join('/repo', 'framework/packages/contracts/src'),
+      '@makaio/bus-core': path.join('/repo', 'framework/core/bus-core/src'),
+      '@makaio/contracts': path.join('/repo', 'framework/core/contracts/src'),
       '@makaio/kernel': path.join('/repo', 'framework/packages/kernel/src'),
       '@makaio/kernel/cli': path.join('/repo', 'framework/packages/kernel/src/cli/index.ts'),
     });
@@ -47,8 +47,8 @@ describe('createPortablePackageJson', () => {
       },
       devDependencies: {
         '@makaio/build-tooling': 'workspace:*',
-        '@makaio/contracts': 'link:../../framework/packages/contracts',
-        '@makaio/core': 'file:../../framework/packages/makaio-core',
+        '@makaio/contracts': 'link:../../framework/core/contracts',
+        '@makaio/core': 'file:../../framework/core/makaio-core',
         '@makaio/kernel': 'workspace:^',
         '@makaio/test-utils': '^0.9.0',
         tsx: '^4.20.4',
@@ -142,9 +142,9 @@ async function createPackageFixture(
   const repoRoot = await mkdtemp(path.join(tmpdir(), 'makaio-prompt-package-mode-'));
   const packagePaths = {
     '@makaio/build-tooling': 'build-tooling',
-    '@makaio/bus-core': 'packages/bus-core',
-    '@makaio/contracts': 'packages/contracts',
-    '@makaio/core': 'packages/makaio-core',
+    '@makaio/bus-core': 'core/bus-core',
+    '@makaio/contracts': 'core/contracts',
+    '@makaio/core': 'core/makaio-core',
     '@makaio/kernel': 'packages/kernel',
     '@makaio/test-utils': 'packages/test-utils',
   } as const;

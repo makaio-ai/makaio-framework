@@ -18,7 +18,7 @@ export interface CodeRabbitChangeRow {
 /**
  * Strips trailing glob wildcards so the path can be matched as a directory prefix.
  *
- * `framework/packages/contracts/src/extension/*` → `framework/packages/contracts/src/extension/`
+ * `framework/core/contracts/src/extension/*` → `framework/core/contracts/src/extension/`
  * `**\/__tests__/**` → `__tests__/`
  * @param raw - Raw path string from the CodeRabbit comment.
  * @returns Cleaned path.

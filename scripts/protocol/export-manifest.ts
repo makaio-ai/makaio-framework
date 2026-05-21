@@ -12,17 +12,17 @@ import type {
   ProtocolExportSubjectAudit,
   ProtocolNamespaceCatalog,
   ProtocolNamespaceCatalogEntry,
-} from '../../packages/contracts/src/protocol/types.js';
+} from '../../core/contracts/src/protocol/types.js';
 import {
   createAuditIssue,
   createSubjectAudit,
   formatProtocolExportAuditIssues,
   getCatalogEntries,
   getCatalogSubjectKeys,
-} from '../../packages/contracts/src/protocol/export-manifest-audit-utils.js';
-import { defaultRustModelChecker } from '../../packages/contracts/src/protocol/export-manifest-rust-checker.js';
-import { toManifestJsonSchema } from '../../packages/contracts/src/protocol/export-manifest-json-utils.js';
-import { compareStrings } from '../../packages/contracts/src/protocol/export-manifest-string-utils.js';
+} from '../../core/contracts/src/protocol/export-manifest-audit-utils.js';
+import { defaultRustModelChecker } from '../../core/contracts/src/protocol/export-manifest-rust-checker.js';
+import { toManifestJsonSchema } from '../../core/contracts/src/protocol/export-manifest-json-utils.js';
+import { compareStrings } from '../../core/contracts/src/protocol/export-manifest-string-utils.js';
 
 export { defaultRustModelChecker };
 

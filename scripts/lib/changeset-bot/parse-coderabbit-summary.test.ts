@@ -20,7 +20,7 @@ synthesis and boot, MCP tool bridge.
 
 |Layer / File(s)|Summary|
 |---|---|
-|**Data/Contracts** <br> \`framework/packages/contracts/src/extension/*\`, \`framework/packages/contracts/src/index.ts\`|Adds DetachedTransportSchema.|
+|**Data/Contracts** <br> \`framework/core/contracts/src/extension/*\`, \`framework/core/contracts/src/index.ts\`|Adds DetachedTransportSchema.|
 |**Subprocess infra** <br> \`framework/packages/subprocess/*\`|New workspace package.|
 |**StdIO transports** <br> \`framework/transports/stdio/*\`, \`framework/transports/stdio/package.json\`|Adds JSONL framing helpers.|
 |**Adapter refactor** <br> \`framework/adapters/implementations/codex-app-server/*\`|Refactors JSON-RPC client.|
@@ -44,7 +44,7 @@ describe('parseCodeRabbitChanges', () => {
 
     expect(rows).toHaveLength(6);
     expect(rows[0]).toEqual({
-      paths: ['framework/packages/contracts/src/extension/', 'framework/packages/contracts/src/index.ts'],
+      paths: ['framework/core/contracts/src/extension/', 'framework/core/contracts/src/index.ts'],
       summary: 'Adds DetachedTransportSchema.',
     });
     expect(rows[1]).toEqual({

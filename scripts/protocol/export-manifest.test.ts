@@ -2,10 +2,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import {
-  FrameworkContractNamespaces,
-  FrameworkStorageNamespaces,
-} from '../../packages/contracts/src/namespace-catalog.js';
+import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '../../core/contracts/src/namespace-catalog.js';
 import {
   defaultRustModelChecker,
   auditProtocolExport,
@@ -15,14 +12,14 @@ import {
 
 MakaioBus.registerNamespaces(FrameworkContractNamespaces);
 MakaioBus.registerNamespaces(FrameworkStorageNamespaces);
-import { PublicProtocolNamespaces } from '../../packages/contracts/src/protocol/index.js';
+import { PublicProtocolNamespaces } from '../../core/contracts/src/protocol/index.js';
 import type {
   JsonObject,
   MakaioProtocolManifest,
   MakaioProtocolSubject,
   ProtocolNamespaceCatalog,
   RustModelRepresentabilityChecker,
-} from '../../packages/contracts/src/protocol/index.js';
+} from '../../core/contracts/src/protocol/index.js';
 
 function getSubject(manifest: MakaioProtocolManifest, fullSubject: string): MakaioProtocolSubject {
   const subject = manifest.subjects.find((entry) => entry.fullSubject === fullSubject);

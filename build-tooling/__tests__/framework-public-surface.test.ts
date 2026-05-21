@@ -85,13 +85,13 @@ describe('FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS', () => {
     const entry = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.find((e) => e.packageName === '@makaio/bus-core');
     expect(entry).toBeDefined();
     expect(entry?.frameworkSubpath).toBe('bus');
-    expect(entry?.packageRoot).toBe('packages/bus-core');
+    expect(entry?.packageRoot).toBe('core/bus-core');
   });
 
   it('tools-core maps to the primary tools subpath, not tools/testing', () => {
     const entry = FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.find((e) => e.packageName === '@makaio/tools-core');
     expect(entry?.frameworkSubpath).toBe('tools');
-    expect(entry?.packageRoot).toBe('packages/tools-core');
+    expect(entry?.packageRoot).toBe('core/tools-core');
   });
 
   it('does not expose descriptor-owned tool extensions as tools subpaths', () => {
@@ -112,7 +112,7 @@ describe('getFrameworkDistSubpathMap', () => {
     const map = getFrameworkDistSubpathMap();
     const entry = map.get('bus');
     expect(entry?.packageName).toBe('@makaio/bus-core');
-    expect(entry?.sourceDist).toBe('packages/bus-core/dist');
+    expect(entry?.sourceDist).toBe('core/bus-core/dist');
   });
 
   it('returns undefined for an unknown subpath', () => {
@@ -125,7 +125,7 @@ describe('getFrameworkPublicPackageByName', () => {
   it('resolves a known package name to its entry', () => {
     const entry = getFrameworkPublicPackageByName('@makaio/bus-core');
     expect(entry?.frameworkSubpath).toBe('bus');
-    expect(entry?.packageRoot).toBe('packages/bus-core');
+    expect(entry?.packageRoot).toBe('core/bus-core');
   });
 
   it('returns undefined for an unknown package name', () => {

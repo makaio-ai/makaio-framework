@@ -44,11 +44,11 @@ export interface FrameworkPublicPackageSubpath {
  * (e.g. `tools/testing`) appear more than once.
  */
 export const FRAMEWORK_DIST_SUBPATHS = [
-  { subpath: 'bus', sourceDist: 'packages/bus-core/dist', packageName: '@makaio/bus-core' },
-  { subpath: 'core', sourceDist: 'packages/makaio-core/dist', packageName: '@makaio/core' },
+  { subpath: 'bus', sourceDist: 'core/bus-core/dist', packageName: '@makaio/bus-core' },
+  { subpath: 'core', sourceDist: 'core/makaio-core/dist', packageName: '@makaio/core' },
   { subpath: 'utils', sourceDist: 'packages/utils/dist', packageName: '@makaio/utils' },
   { subpath: 'service-base', sourceDist: 'packages/services/base/dist', packageName: '@makaio/service-base' },
-  { subpath: 'contracts', sourceDist: 'packages/contracts/dist', packageName: '@makaio/contracts' },
+  { subpath: 'contracts', sourceDist: 'core/contracts/dist', packageName: '@makaio/contracts' },
   { subpath: 'hooks', sourceDist: 'packages/hooks/dist', packageName: '@makaio/hooks' },
   { subpath: 'kernel', sourceDist: 'packages/kernel/dist', packageName: '@makaio/kernel' },
   { subpath: 'services', sourceDist: 'packages/services/core/dist', packageName: '@makaio/services-core' },
@@ -59,11 +59,11 @@ export const FRAMEWORK_DIST_SUBPATHS = [
     packageName: '@makaio/services-log-import',
   },
   { subpath: 'providers', sourceDist: 'packages/providers/dist', packageName: '@makaio/providers' },
-  { subpath: 'storage', sourceDist: 'packages/storage/core/dist', packageName: '@makaio/storage-core' },
-  { subpath: 'storage/drizzle', sourceDist: 'packages/storage/drizzle/dist', packageName: '@makaio/storage-drizzle' },
+  { subpath: 'storage', sourceDist: 'storage/core/dist', packageName: '@makaio/storage-core' },
+  { subpath: 'storage/drizzle', sourceDist: 'storage/drizzle/dist', packageName: '@makaio/storage-drizzle' },
   {
     subpath: 'storage/handlers',
-    sourceDist: 'packages/storage/handlers/dist',
+    sourceDist: 'storage/handlers/dist',
     packageName: '@makaio/storage-handlers',
   },
   { subpath: 'adapters', sourceDist: 'adapters/core/dist', packageName: '@makaio/ai-adapters-core' },
@@ -82,8 +82,8 @@ export const FRAMEWORK_DIST_SUBPATHS = [
     sourceDist: 'adapters/shared/acp-client/dist',
     packageName: '@makaio/ai-adapters-acp-client',
   },
-  { subpath: 'tools', sourceDist: 'packages/tools-core/dist', packageName: '@makaio/tools-core' },
-  { subpath: 'tools/testing', sourceDist: 'packages/tools-core/dist/testing', packageName: '@makaio/tools-core' },
+  { subpath: 'tools', sourceDist: 'core/tools-core/dist', packageName: '@makaio/tools-core' },
+  { subpath: 'tools/testing', sourceDist: 'core/tools-core/dist/testing', packageName: '@makaio/tools-core' },
   { subpath: 'node/bus-server', sourceDist: 'packages/bus-server/dist', packageName: '@makaio/bus-server' },
   { subpath: 'node/transports', sourceDist: 'transports/ws/dist', packageName: '@makaio/bus-transport-websocket' },
   {
@@ -149,11 +149,11 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
  * umbrella subpath in built output.
  */
 export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
-  { packageName: '@makaio/bus-core', frameworkSubpath: 'bus', packageRoot: 'packages/bus-core' },
-  { packageName: '@makaio/core', frameworkSubpath: 'core', packageRoot: 'packages/makaio-core' },
+  { packageName: '@makaio/bus-core', frameworkSubpath: 'bus', packageRoot: 'core/bus-core' },
+  { packageName: '@makaio/core', frameworkSubpath: 'core', packageRoot: 'core/makaio-core' },
   { packageName: '@makaio/utils', frameworkSubpath: 'utils', packageRoot: 'packages/utils' },
   { packageName: '@makaio/service-base', frameworkSubpath: 'service-base', packageRoot: 'packages/services/base' },
-  { packageName: '@makaio/contracts', frameworkSubpath: 'contracts', packageRoot: 'packages/contracts' },
+  { packageName: '@makaio/contracts', frameworkSubpath: 'contracts', packageRoot: 'core/contracts' },
   { packageName: '@makaio/hooks', frameworkSubpath: 'hooks', packageRoot: 'packages/hooks' },
   { packageName: '@makaio/kernel', frameworkSubpath: 'kernel', packageRoot: 'packages/kernel' },
   { packageName: '@makaio/services-core', frameworkSubpath: 'services', packageRoot: 'packages/services/core' },
@@ -164,16 +164,16 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
     packageRoot: 'packages/services/log-import',
   },
   { packageName: '@makaio/providers', frameworkSubpath: 'providers', packageRoot: 'packages/providers' },
-  { packageName: '@makaio/storage-core', frameworkSubpath: 'storage', packageRoot: 'packages/storage/core' },
+  { packageName: '@makaio/storage-core', frameworkSubpath: 'storage', packageRoot: 'storage/core' },
   {
     packageName: '@makaio/storage-drizzle',
     frameworkSubpath: 'storage/drizzle',
-    packageRoot: 'packages/storage/drizzle',
+    packageRoot: 'storage/drizzle',
   },
   {
     packageName: '@makaio/storage-handlers',
     frameworkSubpath: 'storage/handlers',
-    packageRoot: 'packages/storage/handlers',
+    packageRoot: 'storage/handlers',
   },
   { packageName: '@makaio/ai-adapters-core', frameworkSubpath: 'adapters', packageRoot: 'adapters/core' },
   {
@@ -186,7 +186,7 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
     frameworkSubpath: 'adapters/acp-client',
     packageRoot: 'adapters/shared/acp-client',
   },
-  { packageName: '@makaio/tools-core', frameworkSubpath: 'tools', packageRoot: 'packages/tools-core' },
+  { packageName: '@makaio/tools-core', frameworkSubpath: 'tools', packageRoot: 'core/tools-core' },
   { packageName: '@makaio/bus-server', frameworkSubpath: 'node/bus-server', packageRoot: 'packages/bus-server' },
   {
     packageName: '@makaio/bus-transport-websocket',

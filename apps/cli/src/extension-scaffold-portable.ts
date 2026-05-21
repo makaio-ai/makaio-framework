@@ -191,7 +191,7 @@ function buildFrameworkPackageVersions(options: ExtensionScaffoldBuildOptions): 
   const frameworkPackageVersions: Record<string, string> = {
     '@makaio/build-tooling': readFrameworkPackageVersion('build-tooling/package.json'),
     '@makaio/cli': readFrameworkPackageVersion('apps/cli/package.json'),
-    '@makaio/contracts': readFrameworkPackageVersion('packages/contracts/package.json'),
+    '@makaio/contracts': readFrameworkPackageVersion('core/contracts/package.json'),
   };
 
   if (options.surfaces.includes('browser')) {

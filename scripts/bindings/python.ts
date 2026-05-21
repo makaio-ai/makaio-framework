@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../packages/contracts/src/protocol/types.js';
+import type { MakaioProtocolManifest, MakaioProtocolSubject } from '../../core/contracts/src/protocol/types.js';
 import { PYTHON_GENERATED_DIR, PYTHON_SUBJECTS_PATH } from '../lib/sdk-generation-paths.js';
 import { camelToSnake, capitalize, fullSubjectToPascalClass, groupByNamespace } from './python-payloads.js';
 

@@ -256,6 +256,6 @@ export default defineConfig({
       packageSpecifierPattern: PACKAGE_SPECIFIER_PATTERN,
       sourceOnlyLinks: SOURCE_ONLY_PACKAGE_LINKS,
     }),
-    sitemap({ filter: (page) => !page.includes('/reference/') }),
+    sitemap({ filter: (page: string) => !page.includes('/reference/') }),
   ],
 });
