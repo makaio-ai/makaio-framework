@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

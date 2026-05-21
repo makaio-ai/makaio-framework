@@ -17,5 +17,8 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/core": "workspace:*"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }

@@ -20,7 +20,8 @@
     "tsx": "^4.20.5"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "inlinedDependencies": {
     "@jridgewell/sourcemap-codec": "1.5.5",

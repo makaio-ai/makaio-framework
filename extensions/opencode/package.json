@@ -9,7 +9,8 @@
     "./testing": "./src/testing.ts"
   },
   "scripts": {
-    "build": "bun build.ts"
+    "build": "bun build.ts",
+    "test": "vitest run"
   },
   "files": [
     "dist",

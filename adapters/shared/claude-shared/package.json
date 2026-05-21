@@ -26,5 +26,8 @@
     "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }

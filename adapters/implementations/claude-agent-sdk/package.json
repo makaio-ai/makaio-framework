@@ -31,7 +31,8 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "dev": "tsx src/test-run.ts"
+    "dev": "tsx src/test-run.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "p-defer": "^4.0.1",

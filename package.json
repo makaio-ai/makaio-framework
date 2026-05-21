@@ -59,6 +59,10 @@
     "dev": "yarn workspace @makaio/electron dev:renderer",
     "dev:electron": "yarn workspace @makaio/electron dev",
     "test": "vitest run",
+    "test:unit": "MAKAIO_TEST_CATEGORIES=unit vitest run",
+    "test:ui": "MAKAIO_TEST_CATEGORIES=ui vitest run",
+    "test:integration": "MAKAIO_TEST_CATEGORIES=integration vitest run",
+    "test:all": "MAKAIO_TEST_CATEGORIES=unit,ui,integration vitest run",
     "generate:sdk": "bun scripts/generate-sdk-bindings.ts",
     "smoke:managed-binaries": "bun scripts/smoke-managed-binaries.ts",
     "test:conformance": "bun scripts/test-adapters.ts",
@@ -120,8 +124,8 @@
     }
   },
   "devDependencies": {
-    "@changesets/cli": "^2.29.0",
     "@biomejs/biome": "2.4.15",
+    "@changesets/cli": "^2.29.0",
     "@eslint/js": "^9.36.0",
     "@makaio/build-tooling": "workspace:*",
     "@octokit/rest": "^22.0.1",

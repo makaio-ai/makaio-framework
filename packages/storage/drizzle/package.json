@@ -23,7 +23,8 @@
     "drizzle-orm": "0.45.2"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "publishConfig": {
     "exports": {

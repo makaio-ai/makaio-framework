@@ -30,7 +30,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "bun build.ts"
+    "build": "bun build.ts",
+    "test": "vitest run"
   },
   "dependencies": {
     "zod": "^4.1.13"

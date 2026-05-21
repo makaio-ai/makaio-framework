@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import type { IMakaioBus } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadExtensionBrowserContributions } from './shared-browser-loader.js';

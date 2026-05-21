@@ -22,7 +22,8 @@
     "zod": "^4.1.13"
   },
   "scripts": {
-    "build": "tsdown"
+    "build": "tsdown",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

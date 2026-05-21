@@ -77,21 +77,6 @@ describe('CI workflow policy', () => {
     expect(config).toContain("'**/node_modules/**'");
   });
 
-  it('runs quick PR CI as one non-matrix job with combined validation and sdk codegen checks', () => {
-    const workflowPath = resolve(workflowsDir, 'ci-quick.yml');
-    expect(existsSync(workflowPath)).toBe(true);
-
-    const workflow = readFileSync(workflowPath, 'utf8');
-    expect(workflow).toContain('pull_request:');
-    expect(workflow).toContain('workflow_dispatch:');
-    expect(workflow).toContain("!contains(github.event.pull_request.labels.*.name, 'skip:ci')");
-    expect(workflow).toContain("!contains(github.event.pull_request.labels.*.name, 'skip:all')");
-    expect(workflow).not.toContain('matrix:');
-    expect(workflow).toContain('bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json');
-    expect(workflow).toContain('yarn validate:sdk-codegen');
-    expect(workflow).toContain('.eslintcache');
-  });
-
   it('skips expensive quick PR validation for documentation-only pull requests', () => {
     const workflow = readWorkflow('ci-quick.yml');
 

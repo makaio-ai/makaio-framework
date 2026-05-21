@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { createBusInstance } from '@makaio/bus-core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { Account, AccountUsage, SourceInfo, UsageWindow } from '../bus/schemas.js';

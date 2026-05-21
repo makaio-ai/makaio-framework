@@ -16,5 +16,8 @@
   "peerDependencies": {
     "vite": "^8.0.12"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "scripts": {
+    "test": "vitest run"
+  }
 }
