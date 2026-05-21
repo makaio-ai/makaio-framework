@@ -10,6 +10,10 @@ updates:
         dependency-type: "production"
         update-types: ["minor", "patch"]
         exclude-patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
+      dev-minor-patch:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+        exclude-patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
       linting:
         patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
 
