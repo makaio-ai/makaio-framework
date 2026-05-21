@@ -1,0 +1,244 @@
+name: PR E2E Tests
+
+on:
+  push:
+    branches: [fix/ci]
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_HOME: /tmp/.cache/corepack
+
+jobs:
+  cache:
+    name: Cache
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
+        !contains(github.event.pull_request.labels.*.name, 'skip:all') &&
+        !contains(github.event.pull_request.labels.*.name, 'skip:e2e')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      docs_only: ${{ steps.changes.outputs.docs_only }}
+    steps:
+      - name: Classify PR changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const docsOnly = files.length > 0 && files.every(({ filename: file }) =>
+              file.endsWith('.md') ||
+              file.startsWith('docs/') ||
+              (file.startsWith('.changeset/') && file.endsWith('.md'))
+            );
+            core.setOutput('docs_only', docsOnly ? 'true' : 'false');
+            if (docsOnly) core.info('Documentation-only PR; skipping E2E.');
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: steps.changes.outputs.docs_only != 'true'
+
+      - name: Restore Yarn cache
+        if: steps.changes.outputs.docs_only != 'true'
+        id: yarn-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            yarn-cache-${{ runner.os }}-node-24-
+            yarn-cache-
+
+      - name: Restore node_modules + toolchain
+        if: steps.changes.outputs.docs_only != 'true'
+        id: nm-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
+        run: yarn install --immutable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      - name: Save Yarn cache
+        if: steps.changes.outputs.docs_only != 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+
+      - name: Save node_modules + toolchain
+        if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
+
+  cli:
+    name: CLI E2E
+    needs: cache
+    if: needs.cache.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          fail-on-cache-miss: true
+
+      - name: Restore node_modules + toolchain
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      - name: Run CLI E2E tests
+        run: yarn test:e2e:cli
+
+  desktop:
+    name: Desktop E2E (Electrobun)
+    needs: cache
+    if: needs.cache.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          fail-on-cache-miss: true
+
+      - name: Restore node_modules + toolchain
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      - name: Install Electrobun system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Run Desktop E2E tests
+        run: xvfb-run --auto-servernum yarn test:e2e:desktop
+
+  browser:
+    name: Browser E2E
+    needs: cache
+    if: needs.cache.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Restore Yarn cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            .yarn/cache
+            .yarn/install-state.gz
+          key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          fail-on-cache-miss: true
+
+      - name: Restore node_modules + toolchain
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
+          fail-on-cache-miss: true
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      - name: Install Playwright browsers
+        run: yarn playwright install --with-deps chromium chromium-headless-shell
+
+      - name: Run Browser E2E tests
+        run: yarn test:e2e:browser
