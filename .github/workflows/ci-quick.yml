@@ -189,10 +189,8 @@ jobs:
             filter: core/ storage/
           - shard: Packages
             filter: packages/
-          - shard: Scripts & Build Tooling
-            filter: scripts/ build-tooling/
-          - shard: Platform
-            filter: platforms/ runtimes/ transports/ clients/ providers/
+          - shard: Platform, Scripts & Build Tooling
+            filter: platforms/ runtimes/ transports/ clients/ providers/ scripts/ build-tooling/
           - shard: Adapters
             filter: adapters/
           - shard: Extensions
