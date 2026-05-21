@@ -2,7 +2,7 @@
  * Vitest configuration for Makaio Framework.
  *
  * Test categories are controlled by MAKAIO_TEST_CATEGORIES (comma-separated).
- * Default: unit,ui
+ * Default: unit,ui,integration
  *
  * Categories:
  *   unit        — *.test.ts   (node environment)
@@ -11,12 +11,12 @@
  *   adapters    — adapters only (subset of unit, for isolated runs)
  *
  * Usage:
- *   yarn test                              # unit + ui (default)
+ *   yarn test                              # unit + ui + integration (default)
  *   yarn test:unit                         # unit only
  *   yarn test:ui                           # ui/jsdom only
+ *   yarn test:integration                  # integration only
  *   yarn test --dir packages/bus-core      # all categories, scoped to bus-core
  *   yarn workspace \@makaio/bus-core test   # same, from package directory
- *   MAKAIO_TEST_CATEGORIES=integration yarn test  # integration tests
  *
  * E2E, browser, SDK, and conformance tests have separate configs and scripts.
  */
@@ -26,7 +26,9 @@ import { resolve } from 'path';
 // Absolute paths so vitest resolves these correctly from package subdirectories.
 const root = import.meta.dirname;
 
-const enabledCategories = new Set((process.env.MAKAIO_TEST_CATEGORIES ?? 'unit,ui').split(',').map((c) => c.trim()));
+const enabledCategories = new Set(
+  (process.env.MAKAIO_TEST_CATEGORIES ?? 'unit,ui,integration').split(',').map((c) => c.trim()),
+);
 
 const include: string[] = [];
 const exclude: string[] = [

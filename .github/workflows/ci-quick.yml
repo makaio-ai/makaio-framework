@@ -115,8 +115,8 @@ jobs:
             /tmp/.cache/corepack
           key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
-  quick:
-    name: Quick Checks
+  validation:
+    name: Validation
     needs: cache
     if: needs.cache.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
@@ -185,14 +185,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: core
+          - shard: Core
             filter: packages/
-          - shard: adapters
-            filter: adapters/ sdks/
-          - shard: extensions
-            filter: extensions/ ui/ clients/
-          - shard: apps
-            filter: apps/ runtimes/ transports/ scripts/ build-tooling/
+          - shard: Scripts & Build Tooling
+            filter: scripts/ build-tooling/
+          - shard: Platform
+            filter: platforms/ runtimes/ transports/ clients/ providers/
+          - shard: Adapters
+            filter: adapters/
+          - shard: Extensions
+            filter: extensions/
+          - shard: Apps, SDKs & UI
+            filter: apps/ ui/ sdks/
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
