@@ -503,6 +503,13 @@ if (!gotLock) {
     let shutdownPromise: Promise<void> | null = null;
     busHandlerCleanups.push(MakaioBus.on(KernelSubjects.restart, createElectronRestartHandler({ app })));
 
+    busHandlerCleanups.push(
+      MakaioBus.on(HostSubjects.app.shutdown, (ctx) => {
+        ctx.setResult({});
+        queueMicrotask(() => app.quit());
+      }),
+    );
+
     app.on('before-quit', (e) => {
       e.preventDefault();
       if (shutdownPromise) return;

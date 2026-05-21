@@ -246,6 +246,20 @@ export const HostSchemas = {
       windowId: z.number().int().nonnegative().nullable(),
     }),
   },
+
+  /**
+   * Request graceful application shutdown.
+   *
+   * Saves the window session, closes all windows, tears down the runtime,
+   * bus handlers, tray, and dev server, then exits the process.
+   *
+   * Subject: `host.app.shutdown`
+   * Type: Request (RPC)
+   */
+  'app.shutdown': {
+    request: z.object({}),
+    response: z.object({}),
+  },
 } satisfies SchemaRecord;
 
 // ── Type exports ──────────────────────────────────────────────────────────────

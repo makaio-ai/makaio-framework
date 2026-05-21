@@ -447,6 +447,22 @@ export class WindowManager {
   }
 
   /**
+   * Close all managed windows.
+   *
+   * Called during graceful shutdown so native Electrobun render processes are
+   * torn down before the Node main process exits. Without this, render
+   * processes survive as orphans because `process.exit()` does not propagate
+   * to Electrobun's native window host.
+   */
+  public closeAllWindows(): void {
+    for (const [, entry] of this.registry) {
+      if (!entry.win.isDestroyed()) {
+        entry.win.browserWindow.close();
+      }
+    }
+  }
+
+  /**
    * Find the first open window with a given registration ID.
    * @param registrationId - Qualified window registration ID to look up.
    * @returns State snapshot of the matching window, or `undefined` if not found.

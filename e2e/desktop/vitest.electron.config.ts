@@ -20,7 +20,7 @@ export default defineConfig({
   test: {
     name: 'desktop-electron-e2e',
     root: repoRoot,
-    include: ['e2e/desktop/desktop-smoke.test.ts'],
+    include: ['e2e/desktop/electron/**/*.test.ts'],
     pool: 'forks',
     fileParallelism: false,
     testTimeout: 90_000,

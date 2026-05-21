@@ -20,7 +20,7 @@ export default defineConfig({
   test: {
     name: 'desktop-electrobun-e2e',
     root: repoRoot,
-    include: ['e2e/desktop/electrobun-smoke.test.ts'],
+    include: ['e2e/desktop/electrobun/**/*.test.ts'],
     pool: 'forks',
     fileParallelism: false,
     testTimeout: 90_000,

@@ -197,6 +197,7 @@ async function shutdownGracefully(destroyTray: (() => void) | null): Promise<voi
     } catch (err: unknown) {
       console.warn('[electrobun] Failed to save window session:', err);
     }
+    windowManager.closeAllWindows();
   }
 
   try {
@@ -220,12 +221,15 @@ async function shutdownGracefully(destroyTray: (() => void) | null): Promise<voi
   } catch (trayErr: unknown) {
     console.warn('[electrobun] Tray teardown error:', trayErr);
   }
-
   try {
-    await viteClose?.();
+    if (viteClose) {
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
+      await Promise.race([viteClose(), timeout]);
+    }
   } catch (viteErr: unknown) {
     console.warn('[electrobun] Vite close error:', viteErr);
   }
+
 }
 
 // ── Window creation helper ────────────────────────────────────────────────────
@@ -391,7 +395,12 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
       const httpServer = vite.httpServer!;
       const viteAddress = httpServer.address();
       boundPort = typeof viteAddress === 'object' && viteAddress ? viteAddress.port : port;
-      viteClose = () => vite.close();
+      viteClose = async () => {
+        console.debug("before vite close")
+        return vite.close().catch((err: unknown) => {
+          console.warn('[electrobun] Vite close error:', err);
+        });
+      }
       console.info('[electrobun] Vite dev server listening on http://127.0.0.1:%d', boundPort);
 
       bootPromise = bootNodeRuntime({
@@ -493,11 +502,11 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
     let shutdownInProgress = false;
     let destroyTray: (() => void) | null = null;
 
-    const handleShutdown = (): void => {
+    const handleShutdown = async (): Promise<void> => {
       if (shutdownInProgress) return;
       shutdownInProgress = true;
 
-      shutdownGracefully(destroyTray)
+      return shutdownGracefully(destroyTray)
         .catch((err: unknown) => {
           console.error('[electrobun] Shutdown error:', err);
         })
@@ -557,7 +566,7 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
             console.warn('[electrobun] Failed to open dashboard from tray menu:', err);
           });
       },
-      onQuit: handleShutdown,
+      onQuit: () => void handleShutdown(),
       get autoLaunchEnabled() {
         return autoLaunchController.enabled;
       },
@@ -611,6 +620,13 @@ async function focusExistingInstance(port: number, health: HealthResult): Promis
 
     await refreshTrayEntries();
     await autoLaunchController.refreshStatus();
+
+    busHandlerCleanups.push(
+      MakaioBus.on(HostSubjects.app.shutdown, (ctx) => {
+        ctx.setResult({});
+        queueMicrotask(handleShutdown);
+      }),
+    );
 
     process.on('SIGTERM', handleShutdown);
     process.on('SIGINT', handleShutdown);
