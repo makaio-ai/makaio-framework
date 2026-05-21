@@ -6,7 +6,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { HostSubjects, type WindowState } from '@makaio/host-shared';
-import { runMakaioDevDesktopSmoke, waitForWindowRegistration } from '../desktop-smoke-contract.js';
+import {
+  removeDesktopE2eHome,
+  runMakaioDevDesktopSmoke,
+  waitForWindowRegistration,
+} from '../desktop-smoke-contract.js';
 import { startElectrobun } from './spawn.js';
 
 const REGISTRATION_ID = 'framework-shell:main';
@@ -57,6 +61,21 @@ describe('waitForWindowRegistration', () => {
       REGISTRATION_ID,
       expect.stringContaining('transient list failure'),
     );
+  });
+});
+
+describe('removeDesktopE2eHome', () => {
+  it('uses retry-capable recursive removal for native graphics cache teardown races', async () => {
+    const remove = vi.fn<NonNullable<Parameters<typeof removeDesktopE2eHome>[1]>>().mockResolvedValue(undefined);
+
+    await removeDesktopE2eHome('/tmp/makaio-electrobun-desktop-e2e-test', remove);
+
+    expect(remove).toHaveBeenCalledWith('/tmp/makaio-electrobun-desktop-e2e-test', {
+      force: true,
+      maxRetries: 10,
+      recursive: true,
+      retryDelay: 100,
+    });
   });
 });
 

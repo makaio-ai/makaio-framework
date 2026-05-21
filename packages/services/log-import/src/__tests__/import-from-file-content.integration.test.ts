@@ -12,7 +12,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { basename } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
-import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
+import {
+  ImportCursorStorageSubjects,
+  type ProcessLogFileResult,
+  type StorageMessagePayload,
+} from '@makaio/ai-adapters-core';
 import { getOpenCodeFixtureDir } from '@makaio/extension-opencode/testing';
 import { AdapterSubjects, type MakaioSessionEvent } from '@makaio/contracts';
 import {
@@ -23,6 +27,7 @@ import {
 } from '@makaio/services-core/session';
 import { importFromFileContent, importSegmentTree } from '../generic-import-handlers.js';
 import { createOpenCodeFixtureSession } from './opencode-test-helpers.js';
+import { createMockImporter } from './test-helpers.js';
 
 const OPENCODE_FIXTURE_DIR = getOpenCodeFixtureDir();
 
@@ -421,11 +426,164 @@ describe('importFromFileContent (integration)', () => {
     expect(adapterSessionUpserts[0].logFilePath).toBeUndefined();
   });
 
-  // TODO(coverage): Compaction-event integration coverage (nested compress children,
-  // duplicate-event idempotency on re-import) lived here against a now-removed
-  // `@makaio/log-importers` package and the dropped `claude-code-cli` LogImporter.
-  // Re-implement against a mock importer (see `createMockImporter` in test-helpers)
-  // or the surviving OpenCode importer once it gains compact_boundary records.
+  it('persists nested compaction events idempotently across repeated imports', async () => {
+    const { sessionEvents } = registerStorageHandlers();
+    const rootSessionId = 'session-with-compaction-root';
+    const compressSessionId = 'session-with-compaction-child';
+    const nestedCompressSessionId = 'session-with-compaction-grandchild';
+
+    const message = (
+      adapterSessionId: string,
+      adapterMessageId: string,
+      contentText: string,
+      timestamp: number,
+      origin?: StorageMessagePayload['origin'],
+    ): StorageMessagePayload => ({
+      adapterSessionId,
+      adapterMessageId,
+      role: 'user',
+      contentText,
+      blocks: [{ type: 'text', content: contentText }],
+      agentId: 'main',
+      timestamp,
+      ...(origin !== undefined ? { origin } : {}),
+    });
+    const assertString = (value: unknown): asserts value is string => {
+      expect(typeof value).toBe('string');
+    };
+
+    const result: ProcessLogFileResult = {
+      adapterSessionId: rootSessionId,
+      sessionEvent: {
+        subject: {} as never,
+        payload: {
+          adapterSessionId: rootSessionId,
+          kind: 'root',
+          parentAdapterSessionId: null,
+          forkPointMessageId: null,
+          model: 'mock-model',
+          cwd: '/mock/project',
+        },
+      },
+      messageEvents: [],
+      messagePayloads: [message(rootSessionId, 'root-message', 'Root message', 1000)],
+      lineage: {
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+      },
+      compressChildren: [
+        {
+          adapterSessionId: compressSessionId,
+          sessionEvent: {
+            subject: {} as never,
+            payload: {
+              adapterSessionId: compressSessionId,
+              kind: 'compress',
+              parentAdapterSessionId: rootSessionId,
+              forkPointMessageId: null,
+              model: 'mock-model',
+              cwd: '/mock/project',
+            },
+          },
+          messageEvents: [],
+          messagePayloads: [
+            message(compressSessionId, 'compact-summary-1', 'First compaction summary', 2000, 'compact'),
+          ],
+          lineage: {
+            kind: 'compress',
+            parentAdapterSessionId: rootSessionId,
+            forkPointMessageId: null,
+          },
+          compactionMetadata: {
+            trigger: 'auto',
+            preTokens: 12000,
+            timestamp: 1990,
+          },
+          compressChildren: [
+            {
+              adapterSessionId: nestedCompressSessionId,
+              sessionEvent: {
+                subject: {} as never,
+                payload: {
+                  adapterSessionId: nestedCompressSessionId,
+                  kind: 'compress',
+                  parentAdapterSessionId: compressSessionId,
+                  forkPointMessageId: null,
+                  model: 'mock-model',
+                  cwd: '/mock/project',
+                },
+              },
+              messageEvents: [],
+              messagePayloads: [
+                message(nestedCompressSessionId, 'compact-summary-2', 'Nested compaction summary', 3000, 'compact'),
+              ],
+              lineage: {
+                kind: 'compress',
+                parentAdapterSessionId: compressSessionId,
+                forkPointMessageId: null,
+              },
+              compactionMetadata: {
+                trigger: 'manual',
+                preTokens: 6000,
+                timestamp: 2990,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const importer = createMockImporter({
+      parseRecord: (line) => {
+        const parsed: unknown = typeof line === 'string' ? JSON.parse(line) : line;
+        return parsed;
+      },
+      processLogFile: () => result,
+    });
+    const content = [
+      { type: 'session', id: rootSessionId },
+      { type: 'compact_boundary', parent: rootSessionId, child: compressSessionId },
+      { type: 'compact_boundary', parent: compressSessionId, child: nestedCompressSessionId },
+    ]
+      .map((record) => JSON.stringify(record))
+      .join('\n');
+
+    const firstImport = await importFromFileContent({
+      bus: MakaioBus,
+      importer,
+      content,
+      isJsonl: true,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'mock-compaction-importer',
+    });
+
+    const secondImport = await importFromFileContent({
+      bus: MakaioBus,
+      importer,
+      content,
+      isJsonl: true,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'mock-compaction-importer',
+    });
+
+    expect(firstImport.sessionId).toBe(secondImport.sessionId);
+    expect(firstImport.messageCount).toBe(3);
+    expect(secondImport.messageCount).toBe(3);
+    expect(sessionEvents).toHaveLength(2);
+    const firstCompactionChildId = sessionEvents[0].payload.compressChildSessionId;
+    const nestedCompactionChildId = sessionEvents[1].payload.compressChildSessionId;
+    assertString(firstCompactionChildId);
+    assertString(nestedCompactionChildId);
+    expect(sessionEvents.map((event) => event.eventId)).toEqual([
+      `session-compacted:${firstImport.sessionId}:${firstCompactionChildId}`,
+      `session-compacted:${firstCompactionChildId}:${nestedCompactionChildId}`,
+    ]);
+    expect(sessionEvents.map((event) => event.payload.summary)).toEqual([
+      'First compaction summary',
+      'Nested compaction summary',
+    ]);
+  });
 
   // This test validates the import pipeline's startedAt derivation and the
   // payload shape sent to the storage handler. End-to-end persistence through

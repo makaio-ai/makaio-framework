@@ -67,6 +67,26 @@ const DEFAULT_EXPECTED_REGISTRATION_ID = 'makaio-dev.project-overview:main';
 const STARTUP_TIMEOUT_MS = 60_000;
 const WINDOW_TIMEOUT_MS = 120_000;
 
+type RemoveDirectory = typeof fs.rm;
+
+/**
+ * Remove the isolated desktop E2E home after the native host exits.
+ *
+ * Linux desktop stacks can write graphics cache entries under `XDG_CACHE_HOME`
+ * during teardown. Node's retry-capable recursive removal handles the short
+ * `ENOTEMPTY` window without masking a persistent leaked process.
+ * @param homeDir - Temporary home directory owned by the desktop smoke test.
+ * @param remove - Directory removal implementation; injectable for focused tests.
+ */
+export async function removeDesktopE2eHome(homeDir: string, remove: RemoveDirectory = fs.rm): Promise<void> {
+  await remove(homeDir, {
+    force: true,
+    maxRetries: 10,
+    recursive: true,
+    retryDelay: 100,
+  });
+}
+
 /**
  * Connect a bus client to a desktop host, retrying until the startup deadline
  * for socket readiness.
@@ -177,6 +197,7 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
       timeoutMs: STARTUP_TIMEOUT_MS,
       env: {
         HOME: e2eTmpDir,
+        XDG_CACHE_HOME: path.join(e2eTmpDir, '.cache'),
         XDG_CONFIG_HOME: path.join(e2eTmpDir, '.config'),
         MAKAIO_DATABASE_PATH: path.join(e2eTmpDir, 'makaio.db'),
         MAKAIO_PORT: String(hostPort),
@@ -239,6 +260,6 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
     if (host && !hostExited) {
       await host.kill();
     }
-    await fs.rm(e2eTmpDir, { recursive: true, force: true });
+    await removeDesktopE2eHome(e2eTmpDir);
   }
 }
