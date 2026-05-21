@@ -16,6 +16,11 @@ concurrency:
   group: ci-quick-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # Relocate toolchain caches into the workspace so they ride along with the
+  # node_modules cache and don't need to be re-downloaded in every job.
+  COREPACK_HOME: /tmp/.cache/corepack
+
 jobs:
   cache:
     name: Cache
@@ -67,13 +72,15 @@ jobs:
             yarn-cache-${{ runner.os }}-node-24-
             yarn-cache-
 
-      - name: Restore node_modules
+      - name: Restore node_modules + toolchain
         if: steps.changes.outputs.docs_only != 'true'
         id: nm-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
         if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
@@ -88,6 +95,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
         run: yarn install --immutable
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
       - name: Save Yarn cache
         if: steps.changes.outputs.docs_only != 'true' && steps.yarn-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -97,12 +106,14 @@ jobs:
             .yarn/install-state.gz
           key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
 
-      - name: Save node_modules
+      - name: Save node_modules + toolchain
         if: steps.changes.outputs.docs_only != 'true' && steps.nm-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
 
   quick:
     name: Quick Checks
@@ -123,11 +134,13 @@ jobs:
           key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
           fail-on-cache-miss: true
 
-      - name: Restore node_modules
+      - name: Restore node_modules + toolchain
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
           fail-on-cache-miss: true
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
@@ -137,7 +150,7 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 
       - name: Restore ESLint cache
         id: eslint-cache
@@ -193,11 +206,13 @@ jobs:
           key: yarn-cache-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
           fail-on-cache-miss: true
 
-      - name: Restore node_modules
+      - name: Restore node_modules + toolchain
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
-          path: '**/node_modules'
-          key: node-modules-v4-${{ runner.os }}-node-24-${{ hashFiles('yarn.lock') }}
+          path: |
+            **/node_modules
+            /tmp/.cache/corepack
+          key: node-modules-v5-${{ runner.os }}-node-24-corepack-${{ hashFiles('yarn.lock', 'package.json') }}
           fail-on-cache-miss: true
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
@@ -206,6 +221,8 @@ jobs:
 
       - name: Enable Corepack
         run: corepack enable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 
       - name: Run tests
         run: |
