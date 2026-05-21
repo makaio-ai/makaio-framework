@@ -6,14 +6,36 @@ updates:
       interval: "weekly"
       day: "monday"
     groups:
+      adapter-anthropic:
+        patterns: ["@anthropic-ai/*"]
+      adapter-gemini:
+        patterns: ["@google/gemini*", "@google/genai"]
+      adapter-github-copilot:
+        patterns: ["@github/copilot*"]
+      adapter-openai:
+        patterns: ["openai"]
+      adapter-pi:
+        patterns: ["@mariozechner/pi-*"]
+      adapter-qwen:
+        patterns: ["@agentclientprotocol/*"]
       production-minor-patch:
         dependency-type: "production"
         update-types: ["minor", "patch"]
-        exclude-patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
+        exclude-patterns:
+          - "@biomejs/biome"
+          - "eslint*"
+          - "@typescript-eslint*"
+          - "prettier*"
+          - "stylelint*"
       dev-minor-patch:
         dependency-type: "development"
         update-types: ["minor", "patch"]
-        exclude-patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
+        exclude-patterns:
+          - "@biomejs/biome"
+          - "eslint*"
+          - "@typescript-eslint*"
+          - "prettier*"
+          - "stylelint*"
       linting:
         patterns: ["@biomejs/biome", "eslint*", "@typescript-eslint*", "prettier*", "stylelint*"]
 
