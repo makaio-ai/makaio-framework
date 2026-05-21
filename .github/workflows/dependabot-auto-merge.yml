@@ -24,8 +24,22 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
+      - name: Check for adapter dependency group
+        id: adapter-check
+        shell: bash
+        run: |
+          group="${{ steps.metadata.outputs.dependency-group }}"
+          if [[ "$group" == adapter-* ]]; then
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping auto-merge — adapter dependency group: $group"
+          else
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Auto-merge patch and minor updates
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-major' &&
+          steps.adapter-check.outputs.blocked != 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
