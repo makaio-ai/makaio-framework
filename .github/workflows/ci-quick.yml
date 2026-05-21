@@ -184,19 +184,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - shard: Core
-            filter: core/ storage/
-          - shard: Packages
-            filter: packages/
-          - shard: Platform, Scripts & Build Tooling
-            filter: platforms/ runtimes/ transports/ clients/ providers/ scripts/ build-tooling/
-          - shard: Adapters
-            filter: adapters/
-          - shard: Extensions
-            filter: extensions/
-          - shard: Apps, SDKs & UI
-            filter: apps/ ui/ sdks/
+        shard: [Core, Packages, Platform, Adapters, Extensions, Apps]
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -235,7 +223,7 @@ jobs:
             echo "::notice::Debug logging active — switching vitest to verbose reporter"
             extra+=(--reporter verbose)
           fi
-          yarn vitest run ${{ matrix.filter }} "${extra[@]}"
+          yarn vitest run --project "${{ matrix.shard }}" "${extra[@]}"
 
   sdk:
     name: SDK Tests
