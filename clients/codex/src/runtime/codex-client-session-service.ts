@@ -41,7 +41,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
-import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
+import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
 import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';

@@ -1,4 +1,4 @@
-# @makaio/mcp-http-server
+# @makaio/subsystem-mcp-http-server
 
 HTTP and stdio Model Context Protocol (MCP) server bridge for the Makaio
 framework. Subprocess-based adapters (e.g. `claude-agent-sdk`,
@@ -10,7 +10,7 @@ back to the Makaio bus without knowing about the bus transport directly.
 ### HTTP MCP server (adapter subprocesses)
 
 ```typescript
-import { startHttpMcpServer, McpContextRegistry } from '@makaio/mcp-http-server';
+import { startHttpMcpServer, McpContextRegistry } from '@makaio/subsystem-mcp-http-server';
 
 const handle = await startHttpMcpServer(bus, {
   port: 0, // OS assigns a free port
@@ -34,7 +34,7 @@ await handle.close();
 ### stdio MCP server (local tooling)
 
 ```typescript
-import { startMcpServer } from '@makaio/mcp-http-server';
+import { startMcpServer } from '@makaio/subsystem-mcp-http-server';
 
 const handle = await startMcpServer(bus, sessionId, { transport: 'stdio' });
 // Reads/writes MCP protocol over stdin/stdout
@@ -48,7 +48,7 @@ extension. It starts the HTTP MCP server lazily on the first
 `mcp.session.register` bus call and manages session TTL eviction automatically.
 
 ```typescript
-import { McpServerBridgeService } from '@makaio/mcp-http-server';
+import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 
 // Instantiated by the extension coordinator via the adapter subsystem.
 const service = new McpServerBridgeService(bus);
@@ -76,8 +76,8 @@ const service = new McpServerBridgeService(bus);
 
 ## Installation
 
-`@makaio/mcp-http-server` is a private workspace package:
+`@makaio/subsystem-mcp-http-server` is a private workspace package:
 
 ```json
-{ "@makaio/mcp-http-server": "workspace:*" }
+{ "@makaio/subsystem-mcp-http-server": "workspace:*" }
 ```

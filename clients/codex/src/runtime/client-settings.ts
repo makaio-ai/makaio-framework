@@ -10,7 +10,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { atomicModifyFile } from '@makaio/clients-core';
+import { atomicModifyFile } from '@makaio/subsystem-client';
 import { CodexNativeCommandHookSchema, CodexNativeHooksFileSchema } from '../schemas/config.js';
 import type {
   CodexHookEntry,

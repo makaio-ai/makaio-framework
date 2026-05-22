@@ -59,7 +59,7 @@ const SupervisorRuntimeUpdateSchema = z.object({
  * subjects only, never importing directly from storage implementations.
  * @example
  * ```typescript
- * import { SupervisorRuntimeStorageSubjects } from '@makaio/native-session-supervisor';
+ * import { SupervisorRuntimeStorageSubjects } from '@makaio/subsystem-native-session-supervisor';
  *
  * // Retrieve a runtime by its canonical ID
  * const { runtime } = await bus.request(SupervisorRuntimeStorageSubjects.get, {

@@ -1,5 +1,5 @@
 /**
- * `@makaio/adapter-subsystem`
+ * `@makaio/subsystem-adapter`
  *
  * Framework-owned adapter subsystem service for file-backed adapter and
  * provider-config management.

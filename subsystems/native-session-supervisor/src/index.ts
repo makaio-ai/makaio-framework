@@ -1,5 +1,5 @@
 /**
- * \@makaio/native-session-supervisor
+ * \@makaio/subsystem-native-session-supervisor
  *
  * Shared framework package that owns the supervised native process runtime
  * lifecycle: spawning, tracking, and querying processes managed by the
@@ -18,7 +18,7 @@
  *
  * ## Usage
  * ```typescript
- * import { nativeSessionSupervisorPackage } from '@makaio/native-session-supervisor/package';
+ * import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
  * ```
  * @packageDocumentation
  */

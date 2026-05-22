@@ -1,9 +1,9 @@
 {
-  "name": "@makaio/adapter-subsystem",
+  "name": "@makaio/subsystem-mcp-http-server",
   "version": "1.0.0",
-  "private": true,
-  "type": "module",
   "types": "src/index.ts",
+  "type": "module",
+  "private": true,
   "exports": {
     ".": "./src/index.ts",
     "./package.json": "./package.json"
@@ -13,25 +13,23 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@makaio/build-tooling": "workspace:*"
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
-    "@makaio/kernel": "workspace:*",
     "@makaio/service-base": "workspace:*",
-    "@makaio/services-core": "workspace:*"
+    "@makaio/tools-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "quick-lru": "^7.3.0"
   },
   "publishConfig": {
-    "types": "./dist/index.d.ts",
     "exports": {
       ".": "./dist/index.mjs",
       "./package.json": "./package.json"
     }
-  },
-  "inlinedDependencies": {
-    "type-fest": "5.3.1",
-    "zod": "4.3.5"
   },
   "license": "MIT"
 }

@@ -15,8 +15,8 @@ next: false
 | Kind | bus |
 | Schema record | `<inline>` |
 | Tier | framework |
-| Package | `@makaio/clients-core` |
-| Defined in | [`packages/clients-core/src/storage/runtime-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/clients-core/src/storage/runtime-storage-namespace.ts) |
+| Package | `@makaio/subsystem-client` |
+| Defined in | [`subsystems/client/src/storage/runtime-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/subsystems/client/src/storage/runtime-storage-namespace.ts) |
 
 ## Subjects
 

@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientWiringRemoveResponseSchema } from '@makaio/clients-core';
+import { ClientWiringRemoveResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { runClientUnwireCommand, type ClientUnwireCommandContext } from '../cli/unwire-handler.js';

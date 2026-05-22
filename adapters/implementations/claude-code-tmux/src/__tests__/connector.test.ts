@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import type { IPtyProcess } from '@makaio/native-session-supervisor';
+import type { IPtyProcess } from '@makaio/subsystem-native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
@@ -110,8 +110,8 @@ const mockSpawn = vi.hoisted(() =>
   } as IPtyProcess),
 );
 
-vi.mock('@makaio/native-session-supervisor', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@makaio/native-session-supervisor')>();
+vi.mock('@makaio/subsystem-native-session-supervisor', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@makaio/subsystem-native-session-supervisor')>();
 
   class TmuxBackend {
     public async spawn(file: string, args: string[], opts: unknown): Promise<IPtyProcess> {

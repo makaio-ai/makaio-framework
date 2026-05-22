@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import {
   CLAUDE_CODE_HOOK_SESSION_START,
   CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT,

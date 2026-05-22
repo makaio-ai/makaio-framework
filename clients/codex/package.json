@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",

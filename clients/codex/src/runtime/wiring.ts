@@ -15,8 +15,8 @@
  * @packageDocumentation
  */
 
-import type { ClientWiringEntry, ClientWiringApplyResponse, ClientWiringRemoveResponse } from '@makaio/clients-core';
-import { buildHookCommand, deriveSessionEventDescriptors } from '@makaio/clients-core';
+import type { ClientWiringEntry, ClientWiringApplyResponse, ClientWiringRemoveResponse } from '@makaio/subsystem-client';
+import { buildHookCommand, deriveSessionEventDescriptors } from '@makaio/subsystem-client';
 import { clientDefinition } from '../definition.js';
 import type { CodexClientSettings } from './client-settings.js';
 import type { CodexScope } from '../schemas/config.js';

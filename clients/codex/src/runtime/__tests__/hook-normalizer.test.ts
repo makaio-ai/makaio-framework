@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import { normalizeCodexHook } from '../hook-normalizer.js';
 import type { RawClientHookPayload } from '../schemas.js';
 

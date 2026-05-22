@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientWiringApplyResponseSchema } from '@makaio/clients-core';
+import { ClientWiringApplyResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import {

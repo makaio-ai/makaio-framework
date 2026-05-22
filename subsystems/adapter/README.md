@@ -1,4 +1,4 @@
-# @makaio/adapter-subsystem
+# @makaio/subsystem-adapter
 
 Framework-owned service that manages the full adapter lifecycle: contribution
 loading, config persistence, runtime initialization, and identity resolution.
@@ -15,7 +15,7 @@ import {
   createAdapterSubsystemPackage,
   createAdapterSubsystemContributionProcessor,
   FileAdapterConfigRepository,
-} from '@makaio/adapter-subsystem';
+} from '@makaio/subsystem-adapter';
 
 // Build the contribution processor and register it before startAll().
 const contributionProcessor = createAdapterSubsystemContributionProcessor({
@@ -56,9 +56,9 @@ await coordinator.startAll();
 
 ## Installation
 
-`@makaio/adapter-subsystem` is a private workspace package. Add it with the
+`@makaio/subsystem-adapter` is a private workspace package. Add it with the
 workspace protocol:
 
 ```json
-{ "@makaio/adapter-subsystem": "workspace:*" }
+{ "@makaio/subsystem-adapter": "workspace:*" }
 ```

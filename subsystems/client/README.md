@@ -1,4 +1,4 @@
-# @makaio/clients-core
+# @makaio/subsystem-client
 
 Framework package for managing external client binaries (e.g. Claude Code CLI),
 their installation lifecycle, version resolution, and runtime registry. Also
@@ -10,7 +10,7 @@ Makaio session model.
 ### Register the package in the composition root
 
 ```typescript
-import { createClientsCorePackage } from '@makaio/clients-core';
+import { createClientsCorePackage } from '@makaio/subsystem-client';
 
 const clientsCoreExt = createClientsCorePackage({
   definitions: clientDefinitions,
@@ -21,7 +21,7 @@ coordinator.load([clientsCoreExt]);
 ### Install and manage a client binary
 
 ```typescript
-import { ClientBinaryManager } from '@makaio/clients-core';
+import { ClientBinaryManager } from '@makaio/subsystem-client';
 
 const manager = new ClientBinaryManager(bus, config, registry, strategyDependencies);
 await manager.install('claude-code', { source: 'npm' });
@@ -31,7 +31,7 @@ const binary = await manager.resolve('claude-code');
 ### Listen for client hook events
 
 ```typescript
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 
 MakaioBus.on(ClientSubjects.hookReceived, ({ payload }) => {
   console.log('Hook from', payload.clientId, payload.event);
@@ -66,8 +66,8 @@ MakaioBus.on(ClientSubjects.hookReceived, ({ payload }) => {
 
 ## Installation
 
-`@makaio/clients-core` is a private workspace package:
+`@makaio/subsystem-client` is a private workspace package:
 
 ```json
-{ "@makaio/clients-core": "workspace:*" }
+{ "@makaio/subsystem-client": "workspace:*" }
 ```

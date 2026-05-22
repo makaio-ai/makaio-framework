@@ -1,5 +1,5 @@
 /**
- * Public API for \@makaio/clients-core.
+ * Public API for \@makaio/subsystem-client.
  * @packageDocumentation
  */
 

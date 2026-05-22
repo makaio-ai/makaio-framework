@@ -3956,7 +3956,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -3980,7 +3980,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -4000,9 +4000,9 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    "@makaio/native-session-supervisor": "workspace:*"
+    "@makaio/subsystem-native-session-supervisor": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
@@ -4019,7 +4019,7 @@ __metadata:
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/subprocess": "workspace:*"
     "@makaio/utils": "workspace:*"
@@ -4068,7 +4068,7 @@ __metadata:
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/utils": "workspace:*"
@@ -4146,7 +4146,7 @@ __metadata:
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -4154,19 +4154,6 @@ __metadata:
     zod: "npm:^4.1.13"
   peerDependencies:
     "@makaio/framework": ^1.0.0
-  languageName: unknown
-  linkType: soft
-
-"@makaio/adapter-subsystem@workspace:*, @makaio/adapter-subsystem@workspace:packages/adapter-subsystem":
-  version: 0.0.0-use.local
-  resolution: "@makaio/adapter-subsystem@workspace:packages/adapter-subsystem"
-  dependencies:
-    "@makaio/build-tooling": "workspace:*"
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@makaio/kernel": "workspace:*"
-    "@makaio/service-base": "workspace:*"
-    "@makaio/services-core": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -4261,16 +4248,16 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/ai-adapters-core@workspace:adapters/core"
   dependencies:
-    "@makaio/adapter-subsystem": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/file-watcher": "workspace:*"
     "@makaio/hooks": "workspace:*"
     "@makaio/services-core": "workspace:*"
     "@makaio/storage-core": "workspace:*"
+    "@makaio/subsystem-adapter": "workspace:*"
     "@makaio/utils": "workspace:*"
     emittery: "npm:^1.2.0"
     type-fest: "npm:^5.2.0"
@@ -4434,7 +4421,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
@@ -4455,7 +4442,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
@@ -4506,9 +4493,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/clients-core@workspace:*, @makaio/clients-core@workspace:packages/clients-core":
+"@makaio/subsystem-client@workspace:*, @makaio/subsystem-client@workspace:subsystems/client":
   version: 0.0.0-use.local
-  resolution: "@makaio/clients-core@workspace:packages/clients-core"
+  resolution: "@makaio/subsystem-client@workspace:subsystems/client"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -4722,7 +4709,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/kernel": "workspace:*"
@@ -4740,7 +4727,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -5072,9 +5059,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/mcp-http-server@workspace:*, @makaio/mcp-http-server@workspace:packages/mcp-http-server":
+"@makaio/mcp-http-server@workspace:*, @makaio/mcp-http-server@workspace:subsystems/mcp-http-server":
   version: 0.0.0-use.local
-  resolution: "@makaio/mcp-http-server@workspace:packages/mcp-http-server"
+  resolution: "@makaio/mcp-http-server@workspace:subsystems/mcp-http-server"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -5088,9 +5075,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/native-session-supervisor@workspace:*, @makaio/native-session-supervisor@workspace:packages/native-session-supervisor":
+"@makaio/subsystem-native-session-supervisor@workspace:*, @makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor":
   version: 0.0.0-use.local
-  resolution: "@makaio/native-session-supervisor@workspace:packages/native-session-supervisor"
+  resolution: "@makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor"
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
@@ -5346,13 +5333,12 @@ __metadata:
   resolution: "@makaio/runtime-node@workspace:runtimes/node"
   dependencies:
     "@hono/node-server": "npm:^1.14.1"
-    "@makaio/adapter-subsystem": "workspace:*"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server": "workspace:*"
     "@makaio/bus-transport-stdio": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
-    "@makaio/clients-core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/kernel": "workspace:*"
@@ -5367,6 +5353,7 @@ __metadata:
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/storage-migrations": "workspace:*"
     "@makaio/subprocess": "workspace:*"
+    "@makaio/subsystem-adapter": "workspace:*"
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"
@@ -5548,6 +5535,19 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/core": "workspace:*"
     "@types/node": "npm:^24.3.0"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subsystem-adapter@workspace:*, @makaio/subsystem-adapter@workspace:subsystems/adapter":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-adapter@workspace:subsystems/adapter"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/kernel": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/services-core": "workspace:*"
   languageName: unknown
   linkType: soft
 

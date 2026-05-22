@@ -12,8 +12,8 @@ import {
   ModelRegistryToken,
   SessionOrchestratorToken,
 } from '@makaio/services-core';
-import { AdapterSubsystemToken } from '@makaio/adapter-subsystem';
-import { ClientsCoreToken } from '@makaio/clients-core';
+import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
+import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { bootMakaioRuntimeCore, type MakaioRuntime } from '../boot.js';

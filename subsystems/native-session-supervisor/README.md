@@ -1,4 +1,4 @@
-# @makaio/native-session-supervisor
+# @makaio/subsystem-native-session-supervisor
 
 Framework package that owns the supervised native-process runtime lifecycle:
 spawning PTY sessions, tracking running processes, and persisting their state
@@ -10,7 +10,7 @@ to a Drizzle-backed storage namespace. Adapters that launch CLI subprocesses
 ### Register the extension package
 
 ```typescript
-import { nativeSessionSupervisorPackage } from '@makaio/native-session-supervisor/package';
+import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
 
 coordinator.load([nativeSessionSupervisorPackage]);
 ```
@@ -22,7 +22,7 @@ import {
   PtyRuntime,
   createNodePtyBackend,
   OutputBuffer,
-} from '@makaio/native-session-supervisor';
+} from '@makaio/subsystem-native-session-supervisor';
 
 const backend = await createNodePtyBackend();
 const buffer = new OutputBuffer();
@@ -45,7 +45,7 @@ await pty.kill();
 ### Use the runtime registry
 
 ```typescript
-import { RuntimeRegistry } from '@makaio/native-session-supervisor';
+import { RuntimeRegistry } from '@makaio/subsystem-native-session-supervisor';
 
 const registry = new RuntimeRegistry(bus);
 await registry.init({ supervisorSessionId: 'sup-1', clientId: 'claude-code', ... });
@@ -76,8 +76,8 @@ const runtime = registry.get('sup-1');
 
 ## Installation
 
-`@makaio/native-session-supervisor` is a private workspace package:
+`@makaio/subsystem-native-session-supervisor` is a private workspace package:
 
 ```json
-{ "@makaio/native-session-supervisor": "workspace:*" }
+{ "@makaio/subsystem-native-session-supervisor": "workspace:*" }
 ```

@@ -20,8 +20,8 @@
  * @packageDocumentation
  */
 
-import type { ClientWiringEntry } from '@makaio/clients-core';
-import { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from '@makaio/clients-core';
+import type { ClientWiringEntry } from '@makaio/subsystem-client';
+import { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from '@makaio/subsystem-client';
 
 import { clientDefinition } from '../definition.js';
 import type { ClaudeCodeClientSettings } from './client-settings.js';

@@ -4,8 +4,8 @@ import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
 import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
-import type { AdapterSubsystemService } from '@makaio/adapter-subsystem';
-import type { PostInstallHandler, StrategyDependencies } from '@makaio/clients-core';
+import type { AdapterSubsystemService } from '@makaio/subsystem-adapter';
+import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type { DevPortalMap } from '@makaio/services-package-manager';
 import type {
   ContributionProcessor,

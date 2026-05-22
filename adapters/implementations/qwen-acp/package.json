@@ -45,7 +45,7 @@
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, type RawClientHookPayload } from '@makaio/clients-core';
+import { ClientSubjects, type RawClientHookPayload } from '@makaio/subsystem-client';
 import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { CodexClientSubjects } from '../namespace.js';
 import { CodexClientSessionService, MANAGED_SESSION_CAP } from '../codex-client-session-service.js';

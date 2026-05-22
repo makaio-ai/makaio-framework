@@ -4,7 +4,7 @@ import { CredentialSubjects } from '@makaio/contracts';
 import { CredentialRefSchema } from '@makaio/contracts/config';
 import { resolveSessionEnvironment } from '../resolve-session-environment.js';
 
-vi.mock('@makaio/clients-core', () => ({
+vi.mock('@makaio/subsystem-client', () => ({
   resolveClientBinary: vi.fn().mockResolvedValue(undefined),
 }));
 

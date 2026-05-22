@@ -1,4 +1,4 @@
-import { createClientNamespace } from '@makaio/clients-core';
+import { createClientNamespace } from '@makaio/subsystem-client';
 import { ClaudeCodeConfigPrimeSchemas } from '../schemas/config-prime.js';
 import { ClaudeCodeConfigSchemas } from '../schemas/config.js';
 import { ClaudeCodeSessionConfigSchemas } from '../schemas/session-config.js';

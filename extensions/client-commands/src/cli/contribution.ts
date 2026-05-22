@@ -19,7 +19,7 @@
  */
 
 import { z } from 'zod';
-import { AbsolutePathSchema } from '@makaio/clients-core';
+import { AbsolutePathSchema } from '@makaio/subsystem-client';
 import { defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
 import { handleClientWire, type ClientWireArgs } from './wire-handler.js';
 import { handleClientUnwire, type ClientUnwireArgs } from './unwire-handler.js';

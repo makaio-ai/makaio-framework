@@ -23,7 +23,7 @@
  * @packageDocumentation
  */
 
-import { createClientNamespace } from '@makaio/clients-core';
+import { createClientNamespace } from '@makaio/subsystem-client';
 import {
   ClientConfigPrimeSchema,
   SessionConfigSetupRequestSchema,

@@ -1,5 +1,5 @@
 {
-  "name": "@makaio/native-session-supervisor",
+  "name": "@makaio/subsystem-native-session-supervisor",
   "version": "1.0.0",
   "types": "src/index.ts",
   "type": "module",

@@ -14,7 +14,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ClientWiringRemoveResponse } from '@makaio/clients-core';
+import type { ClientWiringRemoveResponse } from '@makaio/subsystem-client';
 import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { createClientWiringRemoveSubjectDef } from '../subjects.js';
 

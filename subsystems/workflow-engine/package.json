@@ -1,5 +1,5 @@
 {
-  "name": "@makaio/workflow-engine",
+  "name": "@makaio/subsystem-workflow-engine",
   "description": "Workflow execution engine: DAG interpreter, checkpoint recovery, step runners, context resolution.",
   "version": "1.0.0",
   "type": "module",

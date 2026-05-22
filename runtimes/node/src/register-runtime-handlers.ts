@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { AIModel, EntityUIConfig } from '@makaio/contracts';
-import type { LoadedAdapter, AdapterInstance } from '@makaio/adapter-subsystem';
+import type { LoadedAdapter, AdapterInstance } from '@makaio/subsystem-adapter';
 import type { BindingRecord } from '@makaio/services-core/adapter-subsystem';
 import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';

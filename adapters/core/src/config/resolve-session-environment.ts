@@ -1,7 +1,7 @@
 import type { MakaioBusContext } from '@makaio/bus-core';
 import type { CredentialRef } from '@makaio/contracts/config';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
-import { resolveClientBinary } from '@makaio/clients-core';
+import { resolveClientBinary } from '@makaio/subsystem-client';
 import { resolveConnectorCredentials } from './resolve-connector-credentials.js';
 import { buildCredentialEnv } from './build-credential-env.js';
 import { cleanEnvForAdapter } from '../utils/cleanEnvForAdapter.js';

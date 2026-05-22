@@ -14,7 +14,7 @@
 
 import { MakaioBus } from '@makaio/bus-core';
 import { DeferredPromise } from '@makaio/utils';
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import { CLAUDE_PROMPT_INDICATOR, CLAUDE_STATUS_TOKEN_MARKER } from './constants.js';
 import type { ITmuxPtyProcess } from './types.js';

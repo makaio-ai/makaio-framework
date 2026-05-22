@@ -24,7 +24,7 @@
  * @packageDocumentation
  */
 
-import { ClientSubjects, pickNonEmptyString } from '@makaio/clients-core';
+import { ClientSubjects, pickNonEmptyString } from '@makaio/subsystem-client';
 import type {
   ClientSessionStarted,
   ClientSessionUserPromptSubmitted,

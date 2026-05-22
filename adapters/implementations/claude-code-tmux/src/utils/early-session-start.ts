@@ -1,6 +1,6 @@
 import { MakaioBus } from '@makaio/bus-core';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 
 /**
  * Subscribe before spawning so an immediate SessionStart hook cannot be lost

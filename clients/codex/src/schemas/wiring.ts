@@ -19,7 +19,7 @@ import {
   ClientWiringApplyResponseSchema,
   ClientWiringListResponseSchema,
   ClientWiringRemoveResponseSchema,
-} from '@makaio/clients-core';
+} from '@makaio/subsystem-client';
 
 import { AbsolutePathSchema, CodexScopeSchema } from './config.js';
 
@@ -36,7 +36,7 @@ import { AbsolutePathSchema, CodexScopeSchema } from './config.js';
  * - `wiring.remove`
  * @example
  * ```typescript
- * import { createClientNamespace } from '@makaio/clients-core';
+ * import { createClientNamespace } from '@makaio/subsystem-client';
  * import { CodexConfigSchemas } from './schemas/config.js';
  * import { CodexWiringSchemas } from './schemas/wiring.js';
  *

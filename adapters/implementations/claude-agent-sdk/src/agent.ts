@@ -6,7 +6,7 @@ import {
 import type { AgentStartResult, NormalizedMessageInput, StartAgentOptions } from '@makaio/ai-adapters-core';
 import { AgentSubjects, ClientSubjects } from '@makaio/contracts';
 import type { MessageInput } from '@makaio/contracts';
-import { buildClientSessionBase, emitBestEffort } from '@makaio/clients-core';
+import { buildClientSessionBase, emitBestEffort } from '@makaio/subsystem-client';
 import { ClaudeSdkConnector } from './connector.js';
 import { ClaudeCodeConnectorNamespace } from './namespace/index.js';
 

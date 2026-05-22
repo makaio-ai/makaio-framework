@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import { normalizeClaudeCodeHook } from '../hook-normalizer.js';
 import type { ClaudeCodeNormalizedEvent } from '../hook-normalizer.js';
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import {
   CLAUDE_CODE_HOOK_SESSION_START,
   CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT,

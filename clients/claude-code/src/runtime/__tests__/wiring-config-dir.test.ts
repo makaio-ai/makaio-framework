@@ -21,7 +21,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { BinaryNotFoundError, ClientSubjects } from '@makaio/clients-core';
+import { BinaryNotFoundError, ClientSubjects } from '@makaio/subsystem-client';
 
 import { ClaudeCodeClientSettings } from '../client-settings.js';
 import { applyClaudeCodeWiring, buildClaudeCodeWiringList } from '../wiring.js';
