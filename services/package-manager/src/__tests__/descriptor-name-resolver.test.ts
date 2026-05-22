@@ -94,7 +94,7 @@ async function findPackageRoot(startDir: string): Promise<string> {
  */
 async function findWorkspaceFile(startDir: string, relativePath: string): Promise<string> {
   const packageRoot = await findPackageRoot(startDir);
-  const workspaceRoot = path.resolve(packageRoot, '../../..');
+  const workspaceRoot = path.resolve(packageRoot, '../..');
   const filePath = path.join(workspaceRoot, relativePath);
 
   if (await fileExists(filePath)) {
@@ -112,7 +112,7 @@ async function findWorkspaceFile(startDir: string, relativePath: string): Promis
  */
 async function readRegistryForCurrentCheckout(): Promise<PackageRegistry> {
   const packageRoot = await findPackageRoot(import.meta.dirname);
-  const workspaceRoot = path.resolve(packageRoot, '../../..');
+  const workspaceRoot = path.resolve(packageRoot, '../..');
   const registryPaths = [
     path.join(workspaceRoot, 'registry/packages.json'),
     path.join(workspaceRoot, '../registry/packages.json'),

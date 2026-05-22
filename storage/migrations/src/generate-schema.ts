@@ -39,7 +39,7 @@ export interface GenerateSchemaOptions {
  */
 export async function generateSchema(options: GenerateSchemaOptions = {}): Promise<void> {
   const logger = options.logger ?? console;
-  // Workspace root is 3 levels up from src/: src -> storage-migrations -> packages -> repository root.
+  // Workspace root is 3 levels up from src/: src -> migrations -> storage -> repository root.
   const workspaceRoot = options.workspaceRoot ?? path.resolve(import.meta.dirname, '../../..');
   logger.info(`Workspace root: ${workspaceRoot}`);
 

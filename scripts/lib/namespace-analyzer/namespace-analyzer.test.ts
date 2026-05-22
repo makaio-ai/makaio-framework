@@ -404,9 +404,7 @@ describe('generateMarkdown', () => {
       (entry) => entry.path === 'services/service-demo.md',
     );
 
-    expect(file?.content).toContain(
-      '[`services/core/src/namespace.ts`](../../../services/core/src/namespace.ts)',
-    );
+    expect(file?.content).toContain('[`services/core/src/namespace.ts`](../../../services/core/src/namespace.ts)');
     expect(file?.content).toContain('[`schemas.ts`](../../../services/core/src/schemas.ts)');
   });
 

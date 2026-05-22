@@ -68,8 +68,8 @@ export function resolvePackageSetRoot(workspaceRoot: string): string {
 export function resolveStorageMigrationsDir(packageRoot: string): string {
   const workspaceRoot = resolveWorkspaceRoot(packageRoot);
   const candidates = [
-    path.join(workspaceRoot, 'packages', 'storage-migrations', 'drizzle'),
-    path.join(workspaceRoot, 'framework', 'packages', 'storage-migrations', 'drizzle'),
+    path.join(workspaceRoot, 'storage', 'migrations', 'drizzle'),
+    path.join(workspaceRoot, 'framework', 'storage', 'migrations', 'drizzle'),
   ];
 
   for (const candidate of candidates) {

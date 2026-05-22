@@ -78,7 +78,7 @@ const packages: PackageEntry[] = [
  */
 export function readmeToSlugPath(readme: string): string {
   const stripped = readme.replace(/\/README\.md$/u, '');
-  for (const prefix of ['packages/', 'core/', 'storage/']) {
+  for (const prefix of ['packages/', 'core/', 'storage/', 'subsystems/', 'services/']) {
     if (stripped.startsWith(prefix)) return stripped.slice(prefix.length);
   }
   return stripped;

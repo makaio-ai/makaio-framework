@@ -293,36 +293,42 @@ Representative high-level tree for the framework distribution. It lists the main
 │   └── mcp-server/            MCP server bridge
 ├── build-tooling/             Shared Vite/tsdown configs for packages and extensions
 ├── clients/                   External tool client integrations (Claude Code, Codex, Gemini, Copilot, Qwen)
+├── core/
+│   ├── bus-core/              Typed event bus — pub/sub, RPC, namespaces, scoped/filtered buses
+│   ├── contracts/             Zod schemas, subject taxonomy, wire format
+│   ├── makaio-core/           Foundational types, errors, OptionalResult
+│   └── tools-core/            Tool contract, defineTool(), defineToolset(), executor
 ├── docs/                      Framework documentation
 ├── extensions/                Framework-shipped extensions
 ├── packages/
-│   ├── adapter-subsystem/     Adapter contribution loading, runtime registry, identity
-│   ├── bus-core/              Typed event bus — pub/sub, RPC, namespaces, scoped/filtered buses
 │   ├── bus-server/            HTTP + WebSocket server lifecycle
 │   ├── bus-server-vite/       Vite dev-server bus integration
-│   ├── clients-core/          Managed client/runtime/binary services
-│   ├── contracts/             Zod schemas, subject taxonomy, wire format
 │   ├── expression/            Expression evaluator over contracts
 │   ├── file-watcher/          File watching abstraction
 │   ├── hooks/                 Bus-event hook system
-│   ├── machine-identity/      Stable machine ID (keypair)
-│   ├── makaio-core/           Foundational types, errors, OptionalResult
-│   ├── mcp-http-server/       MCP-over-HTTP bridge
-│   ├── native-session-supervisor/ Native client session observation
 │   ├── kernel/                ExtensionCoordinator, service lifecycle, boot observability
-│   ├── services/base/         BaseService lifecycle primitive
-│   ├── services/core/         Core services: session, orchestrator, tool registry, model registry
-│   ├── services/log-import/   Session log import service
-│   ├── services/package-manager/ Package discovery and management service
-│   ├── storage/core/          Storage namespace contracts
-│   ├── storage/drizzle/       Drizzle/SQLite client helpers, FTS, transactions
-│   ├── storage/handlers/      Bus-backed CRUD + list handler factories
-│   ├── storage-migrations/    Migration runner + schema discovery
-│   ├── preferences/           User preferences storage
+│   ├── machine-identity/      Stable machine ID (keypair)
 │   ├── providers/             Config/provider runtime helpers
 │   ├── rules/                 Runtime rule helpers
+│   ├── service-base/          BaseService lifecycle primitive
 │   ├── test-utils/            Test helpers, bus fixtures, SQLite test harness
 │   └── utils/                 Shared utilities
+├── services/
+│   ├── core/                  Core services: session, orchestrator, tool registry, model registry
+│   ├── log-import/            Session log import service
+│   └── package-manager/       Package discovery and management service
+├── storage/
+│   ├── core/                  Storage namespace contracts
+│   ├── drizzle/               Drizzle/SQLite client helpers, FTS, transactions
+│   ├── handlers/              Bus-backed CRUD + list handler factories
+│   ├── migrations/            Migration runner + schema discovery
+│   └── preferences/           User preferences storage
+├── subsystems/
+│   ├── adapter/               Adapter contribution loading, runtime registry, identity
+│   ├── client/                Managed client/runtime/binary services
+│   ├── mcp-http-server/       MCP-over-HTTP bridge
+│   ├── native-session-supervisor/ Native client session observation
+│   └── workflow-engine/       DAG workflow executor with checkpoint recovery
 ├── providers/                 Provider metadata packages (model catalogs, capability tags)
 ├── runtimes/
 │   ├── bun/                   Bun host assembly helpers
@@ -333,11 +339,6 @@ Representative high-level tree for the framework distribution. It lists the main
 │   ├── rust/                  Rust SDK (tokio, WebSocket + stdio)
 │   ├── manifest/              Language-neutral protocol definition (generated)
 │   └── conformance/           Shared wire-level conformance fixtures
-├── tools/
-│   ├── core/                  Tool contract, defineTool(), defineToolset(), executor
-│   ├── filesystem/            File read/write/search tools
-│   ├── shell/                 Shell execution tool
-│   └── subagent/              Sub-agent spawning tool
 ├── transports/
 │   ├── ws/                    WebSocket transport (HMAC auth, E2E encryption, relay)
 │   └── message-channel/       MessageChannel transport (SharedWorker, iframe)
