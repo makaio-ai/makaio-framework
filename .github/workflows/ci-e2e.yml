@@ -1,19 +1,36 @@
 name: PR E2E Tests
 
+run-name: >-
+  ${{ inputs.skip_e2e == 'true' && format('Skip PR E2E Tests for #{0}', inputs.pr_number) || github.event.pull_request.title || format('PR E2E Tests {0}', github.ref_name) }}
+
 on:
   push:
     branches: [fix/ci]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number when dispatched by CI Label Controller.
+        required: false
+        type: string
+      source_sha:
+        description: Pull request head SHA when dispatched by CI Label Controller.
+        required: false
+        type: string
+      skip_e2e:
+        description: Set to true to publish a lightweight skipped E2E result.
+        required: false
+        default: 'false'
+        type: string
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: ci-e2e-${{ github.event.pull_request.number || github.ref }}
+  group: ci-e2e-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -23,11 +40,14 @@ jobs:
   cache:
     name: Cache
     if: >-
-      github.event_name != 'pull_request' ||
+      inputs.skip_e2e != 'true' &&
       (
-        !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
-        !contains(github.event.pull_request.labels.*.name, 'skip:all') &&
-        !contains(github.event.pull_request.labels.*.name, 'skip:e2e')
+        github.event_name != 'pull_request' ||
+        (
+          !contains(github.event.pull_request.labels.*.name, 'skip:ci') &&
+          !contains(github.event.pull_request.labels.*.name, 'skip:all') &&
+          !contains(github.event.pull_request.labels.*.name, 'skip:e2e')
+        )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -58,6 +78,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         if: steps.changes.outputs.docs_only != 'true'
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Restore Yarn cache
@@ -126,6 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Restore Yarn cache
@@ -168,6 +190,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Restore Yarn cache
@@ -216,6 +239,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Restore Yarn cache

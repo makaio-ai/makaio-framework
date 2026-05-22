@@ -1,0 +1,160 @@
+name: CI Label Controller
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [labeled, unlabeled]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-label-controller-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  reconcile:
+    if: >-
+      github.event.label.name == 'skip:ci' ||
+      github.event.label.name == 'skip:all' ||
+      github.event.label.name == 'skip:e2e'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+
+    steps:
+      - name: Reconcile CI label policy
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            const baseRepository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pullRequest.head.repo?.full_name !== baseRepository) {
+              core.info('Fork PR detected; CI label controller does not dispatch privileged workflows.');
+              return;
+            }
+
+            const labels = new Set((pullRequest.labels ?? []).map((label) => label.name));
+            const sourceSha = pullRequest.head.sha;
+            const headRef = pullRequest.head.ref;
+            const skipCi = labels.has('skip:ci') || labels.has('skip:all');
+            const skipE2e = skipCi || labels.has('skip:e2e');
+
+            const workflows = [
+              {
+                filename: 'ci.yml',
+                label: 'PR - CI',
+                skip: skipCi,
+                skipInput: 'skip_ci',
+                skipTitlePrefix: 'Skip PR - CI',
+              },
+              {
+                filename: 'ci-e2e.yml',
+                label: 'PR E2E Tests',
+                skip: skipE2e,
+                skipInput: 'skip_e2e',
+                skipTitlePrefix: 'Skip PR E2E Tests',
+              },
+            ];
+            const activeStatuses = new Set(['queued', 'in_progress', 'requested', 'waiting', 'pending']);
+
+            async function listRuns(workflow) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflow.filename,
+                branch: headRef,
+                per_page: 50,
+              });
+              return data.workflow_runs;
+            }
+
+            function isActive(run) {
+              return activeStatuses.has(run.status);
+            }
+
+            function isSkipRun(workflow, run) {
+              return (run.display_title ?? '').startsWith(workflow.skipTitlePrefix);
+            }
+
+            function isCurrentHead(run) {
+              return run.head_sha === sourceSha;
+            }
+
+            function sleep(milliseconds) {
+              return new Promise((resolve) => setTimeout(resolve, milliseconds));
+            }
+
+            async function listRunsAfterPendingStartup(workflow) {
+              let runs = await listRuns(workflow);
+              for (let attempt = 1; attempt <= 3; attempt += 1) {
+                const activeRuns = runs.filter(isActive);
+                const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+                const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
+                if (activeWorkRun || activeSkipRun) return runs;
+
+                core.info(`${workflow.label}: no active run visible yet; waiting for startup propagation.`);
+                await sleep(5000);
+                runs = await listRuns(workflow);
+              }
+              return runs;
+            }
+
+            async function dispatch(workflow, skip) {
+              const inputs = {
+                pr_number: String(prNumber),
+                source_sha: sourceSha,
+              };
+              if (skip) inputs[workflow.skipInput] = 'true';
+
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflow.filename,
+                ref: headRef,
+                inputs,
+              });
+            }
+
+            for (const workflow of workflows) {
+              const runs = workflow.skip ? await listRunsAfterPendingStartup(workflow) : await listRuns(workflow);
+              const activeRuns = runs.filter(isActive);
+              const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+              const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
+              const currentHeadPassed = runs.some((run) =>
+                isCurrentHead(run) &&
+                !isSkipRun(workflow, run) &&
+                run.status === 'completed' &&
+                run.conclusion === 'success'
+              );
+
+              if (workflow.skip) {
+                if (activeWorkRun && !activeSkipRun) {
+                  await dispatch(workflow, true);
+                  core.info(`${workflow.label}: dispatched skip run to cancel active work for PR #${prNumber}.`);
+                } else {
+                  core.info(`${workflow.label}: skip label active; no active work run needs cancellation.`);
+                }
+                continue;
+              }
+
+              if (activeWorkRun) {
+                core.info(`${workflow.label}: active work run already exists for PR #${prNumber}.`);
+                continue;
+              }
+
+              if (currentHeadPassed) {
+                core.info(`${workflow.label}: current head ${sourceSha} already has a successful run.`);
+                continue;
+              }
+
+              await dispatch(workflow, false);
+              core.info(`${workflow.label}: dispatched run for PR #${prNumber} at ${sourceSha}.`);
+            }
