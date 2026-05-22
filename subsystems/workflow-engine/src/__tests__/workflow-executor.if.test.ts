@@ -27,14 +27,14 @@ describe('WorkflowExecutor — if conditional step execution', () => {
   }> {
     const completedSteps: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.stepCompleted, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.step.completed, (ctx) => {
         completedSteps.push(ctx.payload.stepId);
       }),
     );
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -70,16 +70,16 @@ describe('WorkflowExecutor — if conditional step execution', () => {
 
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
-    const skippedEvents: Array<{ stepId: string; condition: string }> = [];
+    const skippedEvents: Array<{ stepId: string; condition: string | undefined }> = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.stepSkipped, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.step.skipped, (ctx) => {
         skippedEvents.push({ stepId: ctx.payload.stepId, condition: ctx.payload.condition });
       }),
     );
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -200,7 +200,7 @@ describe('WorkflowExecutor — if conditional step execution', () => {
 
     const skippedSteps: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.stepSkipped, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.step.skipped, (ctx) => {
         skippedSteps.push(ctx.payload.stepId);
       }),
     );

@@ -135,11 +135,15 @@ export async function setupWorkflowExecutorTest(): Promise<WorkflowExecutorTestS
     }),
   );
   cleanupFns.push(
-    MakaioBus.on(SubagentSubjects.spawned, async (ctx) => {
-      await MakaioBus.request(SubagentSubjects.completeTask, {
-        subagentId: ctx.payload.subagentId,
-        result: `completed:${ctx.payload.task}`,
-      });
+    MakaioBus.on(SubagentSubjects.spawned, (ctx) => {
+      // Defer completeTask to the next event-loop tick so SubagentSubjects.await
+      // can register its pending resolver before the completion fires.
+      setTimeout(() => {
+        void MakaioBus.request(SubagentSubjects.completeTask, {
+          subagentId: ctx.payload.subagentId,
+          result: `completed:${ctx.payload.task}`,
+        });
+      }, 0);
     }),
   );
 

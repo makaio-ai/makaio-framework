@@ -12,6 +12,7 @@ import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { runShellStep } from './executor-helpers.js';
 import { markStepFailed } from './workflow-execution-finalizer.js';
+import { emitBeforeStepStart } from './step-lifecycle.js';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 
@@ -102,7 +103,15 @@ async function awaitAndSettleSubagent(
   }
 
   if (result.status === 'failed') {
-    await markStepFailed(bus, execution, executionId, stepId, stepState, result.error ?? 'Subagent execution failed');
+    await markStepFailed(
+      bus,
+      execution,
+      executionId,
+      stepId,
+      step.type,
+      stepState,
+      result.error ?? 'Subagent execution failed',
+    );
     return;
   }
 
@@ -112,6 +121,7 @@ async function awaitAndSettleSubagent(
       execution,
       executionId,
       stepId,
+      step.type,
       stepState,
       `Subagent ended with unexpected status: ${result.status}`,
     );
@@ -123,9 +133,10 @@ async function awaitAndSettleSubagent(
   stepState.completedAt = Date.now();
   const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.stepCompleted, {
+  await bus.emit(WorkflowSubjects.step.completed, {
     executionId,
     stepId,
+    stepType: step.type,
     result: stepState.result,
     duration,
   });
@@ -149,14 +160,18 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
   }
 
   const stepState = execution.steps[stepId];
-  stepState.status = 'running';
-  stepState.startedAt = Date.now();
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
 
   // Track outside the try so the catch block can kill an already-spawned subagent.
   let subagentId: string | undefined;
 
   try {
+    // Emit beforeStart before any state mutation so interceptors can reject the step.
+    await emitBeforeStepStart(bus, executionId, step);
+
+    stepState.status = 'running';
+    stepState.startedAt = Date.now();
+    await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
     const resolvedPrompt = resolveTemplate(step.prompt, buildExpressionContext(execution, activeExecutions, stepId));
 
     const currentActive = activeExecutions.get(executionId);
@@ -175,7 +190,7 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
       depth: 0,
     });
     if (!spawnResult.handled) {
-      await markStepFailed(bus, execution, executionId, stepId, stepState, 'Subagent system not available');
+      await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, 'Subagent system not available');
       return;
     }
     subagentId = spawnResult.data.subagentId;
@@ -190,9 +205,10 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
       return;
     }
 
-    await bus.emit(WorkflowSubjects.stepStarted, {
+    await bus.emit(WorkflowSubjects.step.started, {
       executionId,
       stepId,
+      stepType: step.type,
       sessionId: execution.coordinatorSessionId ?? '',
       subagentId,
     });
@@ -205,7 +221,7 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
       await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Step execution error' }).catch(() => {});
     }
     const message = error instanceof Error ? error.message : String(error);
-    await markStepFailed(bus, execution, executionId, stepId, stepState, message);
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
   }
 }
 
@@ -227,10 +243,8 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
   }
 
   const stepState = execution.steps[stepId];
-  stepState.status = 'running';
-  stepState.startedAt = Date.now();
 
-  // Register the AbortController before persisting so any cancellation that
+  // Register the AbortController before state mutation so any cancellation that
   // arrives after setExecution resolves can abort the shell process.
   const controller = new AbortController();
   const stepKey = `${executionId}:${stepId}`;
@@ -238,6 +252,12 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
 
   let outcome: Awaited<ReturnType<typeof runShellStep>>;
   try {
+    // Emit beforeStart before any state mutation so interceptors can reject the step.
+    await emitBeforeStepStart(bus, executionId, step);
+
+    stepState.status = 'running';
+    stepState.startedAt = Date.now();
+
     // The controller remains registered for the entire launch window so
     // cancellation can abort a process as soon as one exists, and failures in
     // that same window still release the cancellation handle.
@@ -248,9 +268,10 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
     });
     const workspaceRoot = session?.targetWorkingDirectory ?? process.cwd();
 
-    await bus.emit(WorkflowSubjects.stepStarted, {
+    await bus.emit(WorkflowSubjects.step.started, {
       executionId,
       stepId,
+      stepType: step.type,
       sessionId: execution.coordinatorSessionId ?? '',
     });
 
@@ -265,7 +286,7 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
   } catch (error) {
     if (execution.status !== 'running') return;
     const message = error instanceof Error ? error.message : String(error);
-    await markStepFailed(bus, execution, executionId, stepId, stepState, message);
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
     return;
   } finally {
     shellAbortControllers.delete(stepKey);
@@ -274,7 +295,7 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
   if (execution.status !== 'running') return;
 
   if (outcome.status === 'failed') {
-    await markStepFailed(bus, execution, executionId, stepId, stepState, outcome.error);
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, outcome.error);
     return;
   }
 
@@ -283,9 +304,10 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
   stepState.completedAt = Date.now();
   const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.stepCompleted, {
+  await bus.emit(WorkflowSubjects.step.completed, {
     executionId,
     stepId,
+    stepType: step.type,
     result: outcome.stdout,
     duration,
   });
@@ -310,6 +332,10 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
   }
 
   const stepState = execution.steps[stepId];
+
+  // Emit beforeStart before any state mutation so interceptors can reject the step.
+  await emitBeforeStepStart(bus, executionId, step);
+
   stepState.status = 'waiting';
   stepState.startedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
@@ -321,9 +347,10 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
   const timeoutMs = typeof step.timeoutMs === 'number' ? step.timeoutMs : null;
   const resolutionPromise = gateCoordinator.awaitResolution(executionId, stepId, step.autoAction, timeoutMs);
 
-  await bus.emit(WorkflowSubjects.gate.request, {
+  await bus.emit(WorkflowSubjects.gate.requested, {
     executionId,
     stepId,
+    stepType: step.type,
     workflowId: workflow.id,
     workflowName: workflow.name,
     title,
@@ -338,7 +365,13 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
   // Check if execution was cancelled while waiting
   if (execution.status !== 'running') return;
 
-  await bus.emit(WorkflowSubjects.gateResolved, { executionId, stepId, action, source });
+  await bus.emit(WorkflowSubjects.gate.resolved, {
+    executionId,
+    stepId,
+    stepType: step.type,
+    action,
+    source,
+  });
 
   if (action === 'approve') {
     stepState.status = 'completed';
@@ -346,14 +379,15 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
     stepState.completedAt = Date.now();
     await bus.request(WorkflowStorageSubjects.setExecution, { execution });
     const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
-    await bus.emit(WorkflowSubjects.stepCompleted, {
+    await bus.emit(WorkflowSubjects.step.completed, {
       executionId,
       stepId,
+      stepType: step.type,
       result: stepState.result,
       duration,
     });
   } else {
     const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
-    await markStepFailed(bus, execution, executionId, stepId, stepState, reason);
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
   }
 }

@@ -26,7 +26,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     delayMs = 50,
   ): { gateRequests: Array<{ executionId: string; stepId: string }>; cleanup: () => void } {
     const gateRequests: Array<{ executionId: string; stepId: string }> = [];
-    const cleanup = MakaioBus.on(WorkflowSubjects.gate.request, (ctx) => {
+    const cleanup = MakaioBus.on(WorkflowSubjects.gate.requested, (ctx) => {
       gateRequests.push({ executionId: ctx.payload.executionId, stepId: ctx.payload.stepId });
       setTimeout(() => {
         void MakaioBus.request(WorkflowSubjects.gate.respond, {
@@ -64,7 +64,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -90,7 +90,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     });
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.gate.request, async (ctx) => {
+      MakaioBus.on(WorkflowSubjects.gate.requested, async (ctx) => {
         await MakaioBus.request(WorkflowSubjects.gate.respond, {
           executionId: ctx.payload.executionId,
           stepId: ctx.payload.stepId,
@@ -101,7 +101,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -125,7 +125,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const failedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -151,7 +151,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -177,7 +177,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const failedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -203,7 +203,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -231,14 +231,14 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
 
     let lateResponseAccepted: boolean | undefined;
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.gate.request, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.gate.requested, (ctx) => {
         setTimeout(async () => {
           const result = await MakaioBus.request(WorkflowSubjects.gate.respond, {
             executionId: ctx.payload.executionId,
@@ -272,14 +272,14 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     let gateRequested = false;
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.gate.request, () => {
+      MakaioBus.on(WorkflowSubjects.gate.requested, () => {
         gateRequested = true;
       }),
     );
 
     const cancelledExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.cancelled, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
         cancelledExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -290,8 +290,8 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     await vi.waitFor(() => expect(gateRequested).toBe(true));
 
-    const { success } = await MakaioBus.request(WorkflowSubjects.cancel, { executionId });
-    expect(success).toBe(true);
+    const { cancelled } = await MakaioBus.request(WorkflowSubjects.cancel, { executionId });
+    expect(cancelled).toBe(true);
 
     await vi.waitFor(() => expect(cancelledExecutions).toEqual([executionId]));
 
@@ -316,7 +316,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const capturedMessages: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.gate.request, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.gate.requested, (ctx) => {
         capturedMessages.push(ctx.payload.message);
       }),
     );
@@ -326,7 +326,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -354,7 +354,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     const stepStatuses: string[] = [];
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.gate.request, async (ctx) => {
+      MakaioBus.on(WorkflowSubjects.gate.requested, async (ctx) => {
         const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
           executionId: ctx.payload.executionId,
         });
@@ -373,7 +373,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const completedExecutions: string[] = [];
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );

@@ -39,13 +39,13 @@ describe('WorkflowExecutor', () => {
     const completedExecutions: string[] = [];
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.stepCompleted, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.step.completed, (ctx) => {
         completedSteps.push(ctx.payload.stepId);
       }),
     );
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -134,13 +134,13 @@ describe('WorkflowExecutor', () => {
     const completedExecutions: string[] = [];
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.stepCompleted, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.step.completed, (ctx) => {
         completedSteps.push(ctx.payload.stepId);
       }),
     );
 
     setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -285,5 +285,80 @@ describe('WorkflowExecutor', () => {
     await expect(MakaioBus.request(WorkflowSubjects.listTriggerTypes, {})).rejects.toThrow(
       'No handler registered for request subject "workflow.listTriggerTypes"',
     );
+  });
+
+  it('emits dotted lifecycle events around step execution', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-lifecycle-events',
+      steps: [{ id: 'one', type: 'agent', prompt: 'Step one', adapter: 'claude-code' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const events: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.started, () => {
+        events.push('execution.started');
+      }),
+    );
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.step.beforeStart, () => {
+        events.push('step.beforeStart');
+      }),
+    );
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.step.started, () => {
+        events.push('step.started');
+      }),
+    );
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.step.completed, () => {
+        events.push('step.completed');
+      }),
+    );
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, () => {
+        events.push('execution.completed');
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+    await vi.waitFor(() => expect(events.at(-1)).toBe('execution.completed'));
+
+    expect(events).toEqual([
+      'execution.started',
+      'step.beforeStart',
+      'step.started',
+      'step.completed',
+      'execution.completed',
+    ]);
+    expect(executionId).toEqual(expect.any(String));
+  });
+
+  it('fails the step when a beforeStart interceptor throws', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-before-start-interceptor',
+      steps: [{ id: 'one', type: 'agent', prompt: 'Step one', adapter: 'claude-code' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    setup.cleanupFns.push(
+      MakaioBus.intercept(WorkflowSubjects.step.beforeStart, () => {
+        throw new Error('battery rejected step');
+      }),
+    );
+
+    const failedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        failedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+    await vi.waitFor(() => expect(failedExecutions).toEqual([executionId]));
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.steps.one?.status).toBe('failed');
+    expect(execution?.steps.one?.error).toBe('battery rejected step');
   });
 });

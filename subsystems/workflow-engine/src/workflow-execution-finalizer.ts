@@ -23,7 +23,7 @@ export async function completeExecutionWithSuccess(
   execution.status = 'completed';
   execution.completedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.completed, { executionId, totalDuration: Date.now() - startTime });
+  await bus.emit(WorkflowSubjects.execution.completed, { executionId, totalDuration: Date.now() - startTime });
   activeExecutions.delete(executionId);
 }
 
@@ -48,7 +48,7 @@ export async function completeExecutionWithFailure(
   execution.error = error;
   execution.completedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.failed, { executionId, error, failedStepId });
+  await bus.emit(WorkflowSubjects.execution.failed, { executionId, error, failedStepId });
   activeExecutions.delete(executionId);
 }
 
@@ -58,6 +58,7 @@ export async function completeExecutionWithFailure(
  * @param execution - Mutable execution state.
  * @param executionId - Execution identifier.
  * @param stepId - Failed step identifier.
+ * @param stepType - Step type ('agent' | 'shell' | 'gate') for lifecycle event payload.
  * @param stepState - Mutable step state.
  * @param error - Human-readable step failure reason.
  */
@@ -66,6 +67,7 @@ export async function markStepFailed(
   execution: WorkflowExecution,
   executionId: string,
   stepId: string,
+  stepType: 'agent' | 'shell' | 'gate',
   stepState: StepState,
   error: string,
 ): Promise<void> {
@@ -73,7 +75,7 @@ export async function markStepFailed(
   stepState.error = error;
   stepState.completedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.stepFailed, { executionId, stepId, error });
+  await bus.emit(WorkflowSubjects.step.failed, { executionId, stepId, stepType, error });
 }
 
 /**
@@ -143,7 +145,14 @@ export async function cancelExecution(
 
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
   for (const stepId of cancelledStepIds) {
-    await bus.emit(WorkflowSubjects.stepFailed, { executionId, stepId, error: 'Workflow cancelled' });
+    const stepType = active.stepMap.get(stepId)?.type ?? 'agent';
+    const resolvedStepType = stepType === 'for-each' ? 'agent' : stepType;
+    await bus.emit(WorkflowSubjects.step.failed, {
+      executionId,
+      stepId,
+      stepType: resolvedStepType as 'agent' | 'shell' | 'gate',
+      error: 'Workflow cancelled',
+    });
   }
   await bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
 

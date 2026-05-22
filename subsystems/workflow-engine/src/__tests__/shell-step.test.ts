@@ -85,7 +85,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const completedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -120,7 +120,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const failedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -224,7 +224,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const completedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -258,7 +258,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const completedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -293,7 +293,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const failedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -329,7 +329,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const completedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -367,7 +367,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const completedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.completed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
         completedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -402,7 +402,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const failedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );
@@ -436,7 +436,7 @@ describe('WorkflowExecutor — shell steps', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
     const failedExecutions: string[] = [];
     cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.failed, (ctx) => {
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
         failedExecutions.push(ctx.payload.executionId);
       }),
     );

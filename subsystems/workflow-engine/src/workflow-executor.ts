@@ -193,7 +193,7 @@ export class WorkflowExecutor extends BaseService {
       stepMap: new Map(expandedSteps.map((step) => [step.id, step])),
       stepContext,
     });
-    await this.bus.emit(WorkflowSubjects.started, { executionId, workflowId, coordinatorSessionId });
+    await this.bus.emit(WorkflowSubjects.execution.started, { executionId, workflowId, coordinatorSessionId });
     void this.runExecution(executionId);
     return executionId;
   }
@@ -276,9 +276,10 @@ export class WorkflowExecutor extends BaseService {
         stepState.status = 'skipped';
         stepState.completedAt = Date.now();
         await this.bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
-        await this.bus.emit(WorkflowSubjects.stepSkipped, {
+        await this.bus.emit(WorkflowSubjects.step.skipped, {
           executionId,
           stepId,
+          stepType: step.type as 'agent' | 'shell' | 'gate',
           condition: step.if,
         });
         return;
