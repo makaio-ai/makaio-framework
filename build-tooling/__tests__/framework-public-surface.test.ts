@@ -31,7 +31,7 @@ describe('FRAMEWORK_DIST_SUBPATHS', () => {
     }
   });
 
-  it('includes the clients subpath that maps to clients-core', () => {
+  it('includes the clients subpath that maps to subsystem-client', () => {
     const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'clients');
     expect(entry).toBeDefined();
     expect(entry?.packageName).toBe('@makaio/subsystem-client');
@@ -132,7 +132,7 @@ describe('getFrameworkPublicPackageByName', () => {
     expect(getFrameworkPublicPackageByName('@makaio/nonexistent')).toBeUndefined();
   });
 
-  it('resolves clients-core correctly', () => {
+  it('resolves subsystem-client correctly', () => {
     const entry = getFrameworkPublicPackageByName('@makaio/subsystem-client');
     expect(entry?.frameworkSubpath).toBe('clients');
     expect(entry?.packageRoot).toBe('subsystems/client');
