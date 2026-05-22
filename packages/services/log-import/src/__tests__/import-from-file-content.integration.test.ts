@@ -448,8 +448,14 @@ describe('importFromFileContent (integration)', () => {
       timestamp,
       ...(origin !== undefined ? { origin } : {}),
     });
-    const assertString = (value: unknown): asserts value is string => {
-      expect(typeof value).toBe('string');
+    const compactionPayload = (event: MakaioSessionEvent): { compressChildSessionId: string; summary: string } => {
+      const payload = event.payload as Record<string, unknown>;
+      expect(typeof payload['compressChildSessionId']).toBe('string');
+      expect(typeof payload['summary']).toBe('string');
+      return {
+        compressChildSessionId: payload['compressChildSessionId'] as string,
+        summary: payload['summary'] as string,
+      };
     };
 
     const result: ProcessLogFileResult = {
@@ -571,15 +577,13 @@ describe('importFromFileContent (integration)', () => {
     expect(firstImport.messageCount).toBe(3);
     expect(secondImport.messageCount).toBe(3);
     expect(sessionEvents).toHaveLength(2);
-    const firstCompactionChildId = sessionEvents[0].payload.compressChildSessionId;
-    const nestedCompactionChildId = sessionEvents[1].payload.compressChildSessionId;
-    assertString(firstCompactionChildId);
-    assertString(nestedCompactionChildId);
+    const firstCompactionPayload = compactionPayload(sessionEvents[0]);
+    const nestedCompactionPayload = compactionPayload(sessionEvents[1]);
     expect(sessionEvents.map((event) => event.eventId)).toEqual([
-      `session-compacted:${firstImport.sessionId}:${firstCompactionChildId}`,
-      `session-compacted:${firstCompactionChildId}:${nestedCompactionChildId}`,
+      `session-compacted:${firstImport.sessionId}:${firstCompactionPayload.compressChildSessionId}`,
+      `session-compacted:${firstCompactionPayload.compressChildSessionId}:${nestedCompactionPayload.compressChildSessionId}`,
     ]);
-    expect(sessionEvents.map((event) => event.payload.summary)).toEqual([
+    expect(sessionEvents.map((event) => compactionPayload(event).summary)).toEqual([
       'First compaction summary',
       'Nested compaction summary',
     ]);
