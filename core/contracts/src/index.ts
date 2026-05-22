@@ -550,6 +550,7 @@ export type {
   WorkflowStepBlock,
   WorkflowTriggerBlock,
 } from './workflow/index.js';
+export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './workflow/index.js';
 export { WorkflowBlocksNamespace, WorkflowBlocksSchemas, WorkflowBlocksSubjects } from './workflow-blocks/index.js';
 export {
   BrowserEntrypointSchema,
