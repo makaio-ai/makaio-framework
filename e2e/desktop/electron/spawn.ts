@@ -20,7 +20,7 @@ const esmRequire = createRequire(import.meta.url);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Root of the monorepo — two levels up from e2e/desktop/. */
+/** Root of the framework checkout — two levels up from e2e/desktop/. */
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 
 /** Absolute path to the Electron desktop composition root. */
