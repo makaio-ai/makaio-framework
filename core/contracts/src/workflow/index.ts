@@ -41,3 +41,41 @@ export type {
   WorkflowTrigger,
 } from './schemas.js';
 export type { IWorkflowTriggerTypeRegistry, WorkflowTriggerTypeRecord } from './trigger-type-registry.js';
+export {
+  WorkflowStepTypeSchema,
+  TokenUsageSchema,
+  StepTelemetrySchema,
+  StepRunConfigSchema,
+  StepRunResultSchema,
+} from './step-runner.js';
+export type {
+  WorkflowStepType,
+  TokenUsage,
+  StepTelemetry,
+  StepRunConfig,
+  StepRunResult,
+  IStepRunner,
+} from './step-runner.js';
+export {
+  SpanStatusSchema,
+  SpanRecordSchema,
+  ExecutionLinkTypeSchema,
+  ExecutionLinkSchema,
+} from './span.js';
+export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink } from './span.js';
+export {
+  ArtifactQuerySourceSchema,
+  BusRequestSourceSchema,
+  ContextSourceSchema,
+  ArtifactPublishTargetSchema,
+  BusEventPublishTargetSchema,
+  ContextPublishTargetSchema,
+  ResolvedContextEntrySchema,
+  ContextBundleSchema,
+} from './context.js';
+export type {
+  ContextSource,
+  ContextPublishTarget,
+  ResolvedContextEntry,
+  ContextBundle,
+} from './context.js';
