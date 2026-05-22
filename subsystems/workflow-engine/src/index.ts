@@ -10,17 +10,22 @@
  * @packageDocumentation
  */
 
-// Re-export contract types for convenience
+export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
+export { WorkflowExecutor } from './workflow-executor.js';
+export { WorkflowEngineToken, workflowEnginePackage } from './package.js';
+export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
+export { registerDrizzleWorkflowStorage } from './storage/handler.js';
+export type { ActiveExecution, ExecutorConfig } from './types.js';
 export type {
+  ContextBundle,
+  ContextPublishTarget,
+  ContextSource,
+  ExecutionLink,
+  ExecutionLinkType,
   IStepRunner,
+  SpanRecord,
   StepRunConfig,
   StepRunResult,
   StepTelemetry,
   WorkflowStepType,
-  SpanRecord,
-  ExecutionLink,
-  ExecutionLinkType,
-  ContextSource,
-  ContextPublishTarget,
-  ContextBundle,
 } from '@makaio/contracts';

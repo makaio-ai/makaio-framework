@@ -112,6 +112,8 @@
       "@makaio/preferences/package": ["./storage/preferences/src/package.ts"],
       "@makaio/subsystem-native-session-supervisor": ["./subsystems/native-session-supervisor/src/index.ts"],
       "@makaio/subsystem-native-session-supervisor/package": ["./subsystems/native-session-supervisor/src/package.ts"],
+      "@makaio/subsystem-workflow-engine": ["./subsystems/workflow-engine/src/index.ts"],
+      "@makaio/subsystem-workflow-engine/package": ["./subsystems/workflow-engine/src/package.ts"],
       "@makaio/extension-review": ["./extensions/review/src/index.ts"],
       "@makaio/extension-opencode": ["./extensions/opencode/src/index.ts"],
       "@makaio/extension-opencode/testing": ["./extensions/opencode/src/testing.ts"],
