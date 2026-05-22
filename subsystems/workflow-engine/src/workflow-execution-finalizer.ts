@@ -83,6 +83,7 @@ export async function markStepFailed(
  * @param shellAbortControllers - Shell step abort controllers keyed by execution and step.
  * @param gateCoordinator - Gate coordinator used to release waiting gate steps.
  * @param executionId - Execution identifier to cancel.
+ * @param reason - Optional human-readable cancellation reason.
  * @returns True when an active running execution was cancelled.
  */
 export async function cancelExecution(
@@ -91,6 +92,7 @@ export async function cancelExecution(
   shellAbortControllers: Map<string, AbortController>,
   gateCoordinator: WorkflowGateCoordinator,
   executionId: string,
+  reason?: string,
 ): Promise<boolean> {
   const active = activeExecutions.get(executionId);
 
@@ -143,7 +145,7 @@ export async function cancelExecution(
   for (const stepId of cancelledStepIds) {
     await bus.emit(WorkflowSubjects.stepFailed, { executionId, stepId, error: 'Workflow cancelled' });
   }
-  await bus.emit(WorkflowSubjects.cancelled, { executionId });
+  await bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
 
   activeExecutions.delete(executionId);
 

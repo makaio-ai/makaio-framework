@@ -3,6 +3,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowExecutor } from '../workflow-executor.js';
 import { createWorkflowDefinition } from './shared.js';
 import {
   setupWorkflowExecutorTest,
@@ -269,5 +270,20 @@ describe('WorkflowExecutor', () => {
 
     const { total: totalAfter } = await MakaioBus.request(SessionSubjects.list, { status: 'all' });
     expect(totalAfter).toBe(totalBefore);
+  });
+
+  it('registers handlers through idempotent service lifecycle', async () => {
+    // Tear down the setup executor so its handlers don't interfere with the assertion.
+    await setup.workflowExecutor.destroy();
+
+    const executor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 });
+    await executor.init();
+    await executor.init();
+    await executor.destroy();
+    await executor.destroy();
+
+    await expect(MakaioBus.request(WorkflowSubjects.listTriggerTypes, {})).rejects.toThrow(
+      'No handler registered for request subject "workflow.listTriggerTypes"',
+    );
   });
 });

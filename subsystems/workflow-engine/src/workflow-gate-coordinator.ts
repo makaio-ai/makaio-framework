@@ -23,25 +23,44 @@ export class WorkflowGateCoordinator {
   public constructor(private readonly bus: IMakaioBus) {}
 
   /**
-   * Register `workflow.gate.respond` handler.
-   * @param cleanupFns - Cleanup array owned by executor.
+   * Register `workflow.gate.respond` handler, routing its cleanup to the
+   * provided sink so the executor's `BaseService` lifecycle owns teardown.
+   * @param addCleanup - Cleanup sink from the owning service.
    */
-  public registerResponseHandler(cleanupFns: Array<() => void>): void {
-    cleanupFns.push(
+  public registerResponseHandler(addCleanup: (cleanup: () => void) => void): void {
+    addCleanup(
       this.bus.on(WorkflowSubjects.gate.respond, (ctx) => {
-        const key = this.getKey(ctx.payload.executionId, ctx.payload.stepId);
-        const pendingResolution = this.pending.get(key);
-        if (!pendingResolution) {
-          ctx.setResult({ accepted: false });
-          return;
-        }
-
-        this.pending.delete(key);
-        if (pendingResolution.timeout !== undefined) clearTimeout(pendingResolution.timeout);
-        pendingResolution.resolve({ action: ctx.payload.action, source: 'user' });
-        ctx.setResult({ accepted: true });
+        const { executionId, stepId, action, reason } = ctx.payload;
+        ctx.setResult({ accepted: this.resolve(executionId, stepId, action, 'user', reason) });
       }),
     );
+  }
+
+  /**
+   * Resolve a pending gate by key, applying the given action from the given source.
+   * @param executionId - Execution identifier.
+   * @param stepId - Gate step identifier.
+   * @param action - Resolution action to apply.
+   * @param source - Source of the resolution (user or timeout).
+   * @param _reason - Optional reason string (reserved for future use).
+   * @returns True if a pending gate was found and resolved, false otherwise.
+   */
+  private resolve(
+    executionId: string,
+    stepId: string,
+    action: 'approve' | 'reject',
+    source: 'user' | 'timeout',
+    _reason?: string,
+  ): boolean {
+    const key = this.getKey(executionId, stepId);
+    const pendingResolution = this.pending.get(key);
+    if (!pendingResolution) {
+      return false;
+    }
+    this.pending.delete(key);
+    if (pendingResolution.timeout !== undefined) clearTimeout(pendingResolution.timeout);
+    pendingResolution.resolve({ action, source });
+    return true;
   }
 
   /**

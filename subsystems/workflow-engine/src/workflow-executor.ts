@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IWorkflowTriggerTypeRegistry, type WorkflowExecution } from '@makaio/contracts';
+import { BaseService } from '@makaio/service-base';
 import { evaluateSync } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -36,18 +37,16 @@ import {
  * - Tracks progress and emits lifecycle events
  * - Manages cancellation and cleanup
  */
-export class WorkflowExecutor {
+export class WorkflowExecutor extends BaseService {
   /** Drizzle storage handler registration for the composition root. */
   public static readonly storage = {
     drizzle: registerDrizzleWorkflowStorage,
   } as const;
-  private readonly bus: IMakaioBus;
+
   private readonly config: ExecutorConfig;
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
   private readonly gateCoordinator: WorkflowGateCoordinator;
-  private readonly cleanupFns: Array<() => void> = [];
-  private initialized = false;
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
   /**
@@ -56,7 +55,7 @@ export class WorkflowExecutor {
    * @param config - Optional partial configuration (merged with defaults)
    */
   public constructor(bus: IMakaioBus, config?: Partial<ExecutorConfig>) {
-    this.bus = bus;
+    super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
     this.gateCoordinator = new WorkflowGateCoordinator(bus);
   }
@@ -81,65 +80,58 @@ export class WorkflowExecutor {
   }
 
   /**
-   * Initialize the executor and register bus handlers.
+   * Register all bus handlers via BaseService lifecycle.
+   * Called once by `init()` — idempotency is handled by BaseService.
    */
-  public async init(): Promise<void> {
-    if (this.initialized) return;
-
+  protected onInit(): void {
     this.registerExecutionHandlers();
-    this.cleanupFns.push(...registerWorkflowStorageDelegationHandlers(this.bus));
-    this.cleanupFns.push(...registerWorkflowTriggerTypeHandlers(this.bus, () => this.triggerTypeRegistry));
-    this.gateCoordinator.registerResponseHandler(this.cleanupFns);
-
-    this.initialized = true;
-  }
-
-  /** Register execution control handlers (start, cancel). */
-  private registerExecutionHandlers(): void {
-    this.cleanupFns.push(
-      this.bus.on(WorkflowSubjects.start, async (ctx) => {
-        const { workflowId, inputs = {}, parentSessionId, triggerPayload } = ctx.payload;
-        try {
-          const executionId = await this.startExecution(workflowId, inputs, parentSessionId, triggerPayload);
-          ctx.setResult({ executionId });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`Failed to start workflow: ${message}`);
-        }
-      }),
-    );
-
-    this.cleanupFns.push(
-      this.bus.on(WorkflowSubjects.cancel, async (ctx) => {
-        const { executionId } = ctx.payload;
-        const success = await cancelExecution(
-          this.bus,
-          this.activeExecutions,
-          this.shellAbortControllers,
-          this.gateCoordinator,
-          executionId,
-        );
-        ctx.setResult({ success });
-      }),
-    );
+    for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {
+      this.addCleanup(cleanup);
+    }
+    for (const cleanup of registerWorkflowTriggerTypeHandlers(this.bus, () => this.triggerTypeRegistry)) {
+      this.addCleanup(cleanup);
+    }
+    this.gateCoordinator.registerResponseHandler((cleanup) => this.addCleanup(cleanup));
   }
 
   /**
-   * Destroy the executor and cleanup resources.
+   * Release in-flight executions and abort shell processes.
+   * Called by `destroy()` before handler unsubscription.
    */
-  public destroy(): void {
-    if (!this.initialized) return;
-    this.initialized = false;
+  protected onDestroy(): void {
     this.gateCoordinator.dispose();
-    this.cleanupFns.forEach((fn) => fn());
-    this.cleanupFns.length = 0;
-    // Do not issue async bus requests during destroy; callers may tear down
-    // storage/session handlers immediately after this returns.
     this.activeExecutions.clear();
     for (const controller of this.shellAbortControllers.values()) {
       controller.abort();
     }
     this.shellAbortControllers.clear();
+  }
+
+  /** Register execution control handlers (start, cancel). */
+  private registerExecutionHandlers(): void {
+    this.registerHandler(WorkflowSubjects.start, async (ctx) => {
+      const { workflowId, inputs = {}, parentSessionId, triggerPayload } = ctx.payload;
+      try {
+        const executionId = await this.startExecution(workflowId, inputs, parentSessionId, triggerPayload);
+        ctx.setResult({ executionId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to start workflow: ${message}`);
+      }
+    });
+
+    this.registerHandler(WorkflowSubjects.cancel, async (ctx) => {
+      const { executionId, reason } = ctx.payload;
+      const cancelled = await cancelExecution(
+        this.bus,
+        this.activeExecutions,
+        this.shellAbortControllers,
+        this.gateCoordinator,
+        executionId,
+        reason,
+      );
+      ctx.setResult({ cancelled });
+    });
   }
 
   /**
