@@ -5,7 +5,8 @@
   "type": "module",
   "private": true,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
@@ -22,11 +23,16 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
-    "tsx": "^4.20.5"
+    "tsdown": "^0.22.0",
+    "tsx": "^4.20.5",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.5"
   },
   "scripts": {
+    "build": "bun build.ts",
     "db:generate": "tsx $(yarn bin drizzle-kit) generate",
     "db:generate:fresh": "rm -rf drizzle && tsx $(yarn bin drizzle-kit) generate",
     "test": "vitest run"

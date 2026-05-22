@@ -204,4 +204,5 @@ export type {
   WidgetProps,
   WidgetRenderers,
   WidgetSize,
+  ExtensionWorkflowBlocksContribution,
 } from './contributions/index.js';

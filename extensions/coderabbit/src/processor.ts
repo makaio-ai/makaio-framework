@@ -341,7 +341,7 @@ export function commentToFinding(comment: VCSReviewComment, params: ProcessComme
     status: comment.isResolved ? 'verified' : 'open',
     addressedBy: null,
     addressedAt: null,
-    verifiedAt: null,
+    verifiedAt: comment.isResolved ? updatedAt : null,
     dismissedReason: null,
     createdAt,
     updatedAt,

@@ -13,6 +13,7 @@ import { MakaioSessionService } from './session/session-service.js';
 import { ToolApprovalService } from './tool-approval/tool-approval-service.js';
 import { ToolRegistry } from './tools/tool-registry.js';
 import { TrayMenuService } from './tray-menu/tray-menu-service.js';
+import { WorkflowBlockRegistry } from './workflow-blocks/workflow-block-registry.js';
 import { registerDrizzleSessionStorage } from './session/storage/drizzle-handler.js';
 import { registerDrizzleAgentStorage } from './session/storage/agent-drizzle-handler.js';
 import { registerFtsSearchHandler } from './session/storage/fts-search-handler.js';
@@ -51,6 +52,8 @@ export const TrayMenuToken = extensionToken<TrayMenuService>('tray-menu');
 export const CapabilityToken = extensionToken<CapabilityService>('capability');
 /** Token for the model registry service. */
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
+/** Token for the workflow block registry service. */
+export const WorkflowBlockRegistryToken = extensionToken<WorkflowBlockRegistry>('workflow-block-registry');
 
 /** Package that registers framework session storage handlers. */
 export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
@@ -171,6 +174,15 @@ export const capabilityPackage: MakaioNodeExtension<IMakaioBus> = {
   create: (ctx) => new CapabilityService(ctx.bus),
 };
 
+/** Package that starts the framework workflow block registry. */
+export const workflowBlockRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: WorkflowBlockRegistryToken.name,
+  displayName: 'Workflow Block Registry',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new WorkflowBlockRegistry(ctx.bus),
+};
+
 /**
  * Create the model-registry package with a host-provided fetcher chain.
  * @param fetcher - Registry fetcher chain for this host.
@@ -200,4 +212,5 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   harnessPackage,
   canonicalModelPackage,
   frameworkShellWindowPackage,
+  workflowBlockRegistryPackage,
 ];

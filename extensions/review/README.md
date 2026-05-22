@@ -16,7 +16,7 @@ Persistent review findings management extension. It receives raw VCS data snapsh
 The service acts as a coordinator between three distinct extension roles:
 
 - **Review sources** (`IReviewSource`) — extensions that know how to fetch or trigger reviews from a specific reviewer (CodeRabbit, Copilot, etc.). Registered via `CapabilityService`.
-- **Reviewer processors** (`IReviewerProcessor`) — stateless transformers that convert raw VCS comment/review data into normalized `ReviewFinding` records. Registered via `CapabilityService` (see `reviewer-coderabbit` and `reviewer-copilot`).
+- **Reviewer processors** (`IReviewerProcessor`) — stateless transformers that convert raw VCS comment/review data into normalized `ReviewFinding` records. Registered via `CapabilityService` (see `coderabbit` and `reviewer-copilot`).
 - **Review extension (this package)** — discovers sources and processors dynamically, orchestrates fetch → process → reconcile → persist, and handles lifecycle status transitions.
 
 ## Reconciliation Rules
@@ -56,7 +56,7 @@ Posts a review trigger to the first available source with `canTrigger` capabilit
 
 ```json
 { "op": "start", "pr": 42 }
-{ "op": "start", "pr": 42, "sourceId": "coderabbit-source-id" }
+{ "op": "start", "pr": 42, "sourceId": "coderabbit" }
 ```
 
 ### `update_status` — transition a finding's lifecycle
@@ -145,6 +145,6 @@ makaio extension install ./extensions/review
 Reviewer processor extensions must also be installed to actually receive findings from external services:
 
 ```bash
-makaio extension install ./extensions/reviewer-coderabbit
+makaio extension install ./extensions/coderabbit
 makaio extension install ./extensions/reviewer-copilot
 ```

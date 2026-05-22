@@ -4753,6 +4753,22 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/extension-coderabbit@workspace:extensions/coderabbit":
+  version: 0.0.0-use.local
+  resolution: "@makaio/extension-coderabbit@workspace:extensions/coderabbit"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/services-core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.5"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/extension-filesystem@workspace:*, @makaio/extension-filesystem@workspace:extensions/filesystem":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-filesystem@workspace:extensions/filesystem"
@@ -4847,6 +4863,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/extension-review@workspace:extensions/review"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
@@ -4860,7 +4877,10 @@ __metadata:
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.2"
     nanoid: "npm:3.3.8"
+    tsdown: "npm:^0.22.0"
     tsx: "npm:^4.20.5"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
@@ -5279,17 +5299,6 @@ __metadata:
     "@types/react": "npm:^19.2.2"
     merge-anything: "npm:^6.0.6"
     tsx: "npm:^4.20.5"
-    zod: "npm:^4.1.13"
-  languageName: unknown
-  linkType: soft
-
-"@makaio/reviewer-coderabbit@workspace:extensions/reviewer-coderabbit":
-  version: 0.0.0-use.local
-  resolution: "@makaio/reviewer-coderabbit@workspace:extensions/reviewer-coderabbit"
-  dependencies:
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft

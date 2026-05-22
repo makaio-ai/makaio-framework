@@ -64,9 +64,10 @@ function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
 /**
  * Build an inline VCS review comment fixture for processor tests.
  * @param id - Comment ID
+ * @param overrides - Fields to override on the default comment
  * @returns VCS review comment fixture
  */
-function makeComment(id: number): VCSReviewComment {
+function makeComment(id: number, overrides: Partial<VCSReviewComment> = {}): VCSReviewComment {
   return {
     id,
     author: 'reviewer[bot]',
@@ -78,6 +79,7 @@ function makeComment(id: number): VCSReviewComment {
     inReplyToId: null,
     threadId: null,
     isResolved: false,
+    ...overrides,
   };
 }
 
@@ -131,6 +133,8 @@ function makeProcessor(reviewer: string): IReviewerProcessor {
           startLine: comment.line,
           endLine: comment.line,
           rawCommentId: comment.id,
+          status: comment.isResolved ? 'verified' : 'open',
+          verifiedAt: comment.isResolved ? NOW : null,
         }),
       );
     },
@@ -245,6 +249,96 @@ describe('ReviewFindingsService', () => {
     expect(result.updated).toBe(0);
     expect(harness.store.get('source-a:inline:1')?.status).toBe('open');
     expect(harness.store.get('source-b:inline:1')?.status).toBe('open');
+  });
+
+  it('updates an existing open finding when the fresh source marks the same ID verified', async () => {
+    harness.store.set('source-a:inline:1', makeFinding({ id: 'source-a:inline:1', sourceId: 'source-a' }));
+
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+      provider: makeSource('source-a', 'alpha', [makeComment(1, { isResolved: true })]),
+    });
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+      provider: makeProcessor('alpha'),
+    });
+
+    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+      target: TARGET,
+      repoPath: '/repo',
+    });
+
+    expect(result.updated).toBe(1);
+    const updated = harness.store.get('source-a:inline:1')!;
+    expect(updated).toMatchObject({
+      status: 'verified',
+      verifiedAt: NOW,
+    });
+    expect(updated.updatedAt).toBeGreaterThanOrEqual(NOW);
+  });
+
+  it('keeps an existing verified finding verified when the fresh source still reports it verified', async () => {
+    harness.store.set(
+      'source-a:inline:1',
+      makeFinding({
+        id: 'source-a:inline:1',
+        sourceId: 'source-a',
+        status: 'verified',
+        verifiedAt: NOW - 1000,
+      }),
+    );
+
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+      provider: makeSource('source-a', 'alpha', [makeComment(1, { isResolved: true })]),
+    });
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+      provider: makeProcessor('alpha'),
+    });
+
+    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+      target: TARGET,
+      repoPath: '/repo',
+    });
+
+    expect(result.updated).toBe(0);
+    expect(harness.store.get('source-a:inline:1')).toMatchObject({
+      status: 'verified',
+      verifiedAt: NOW - 1000,
+    });
+  });
+
+  it('preserves user-dismissed status when the source re-fetches the same finding as open', async () => {
+    harness.store.set(
+      'source-a:inline:1',
+      makeFinding({
+        id: 'source-a:inline:1',
+        sourceId: 'source-a',
+        status: 'dismissed',
+        dismissedReason: 'false positive',
+      }),
+    );
+
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
+      provider: makeSource('source-a', 'alpha', [makeComment(1)]),
+    });
+    await harness.bus.emit(CapabilitySubjects.register, {
+      capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
+      provider: makeProcessor('alpha'),
+    });
+
+    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+      target: TARGET,
+      repoPath: '/repo',
+    });
+
+    expect(result.updated).toBe(0);
+    expect(harness.store.get('source-a:inline:1')).toMatchObject({
+      status: 'dismissed',
+      dismissedReason: 'false positive',
+    });
   });
 
   it('rejects status updates for findings outside the requested target', async () => {

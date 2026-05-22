@@ -443,7 +443,9 @@ export class ReviewFindingsService extends BaseService {
    * Rules:
    * - New IDs not in storage → upsert as-is (open).
    * - Existing open findings whose IDs are absent from fresh → mark `verified`.
-   * - Existing verified/addressed findings whose IDs appear in fresh → re-open.
+   * - Existing verified/addressed findings whose IDs appear in fresh as open → re-open.
+   * - Existing open findings whose fresh counterpart reports `verified` → mark `verified`.
+   * - User-owned statuses (`dismissed`, `deferred`) are never overridden by fresh data.
    * @param existing - Currently stored findings for this target
    * @param fresh - Freshly extracted findings from the source
    * @returns Counts of created and updated records
@@ -463,7 +465,8 @@ export class ReviewFindingsService extends BaseService {
 
     // Existing findings that need status transitions
     for (const storedFinding of existingById.values()) {
-      const inFresh = freshById.has(storedFinding.id);
+      const freshFinding = freshById.get(storedFinding.id);
+      const inFresh = freshFinding !== undefined;
 
       if (!inFresh && storedFinding.status === 'open') {
         // Finding resolved externally → mark verified
@@ -473,15 +476,27 @@ export class ReviewFindingsService extends BaseService {
           verifiedAt: now,
           updatedAt: now,
         });
-      } else if (inFresh && (storedFinding.status === 'verified' || storedFinding.status === 'addressed')) {
+      } else if (
+        freshFinding !== undefined &&
+        freshFinding.status === 'open' &&
+        (storedFinding.status === 'verified' || storedFinding.status === 'addressed')
+      ) {
         // Finding re-raised → re-open
         toUpsert.push({
-          ...freshById.get(storedFinding.id)!,
+          ...freshFinding,
           status: 'open',
           verifiedAt: null,
           addressedAt: null,
           addressedBy: null,
           createdAt: storedFinding.createdAt,
+          updatedAt: now,
+        });
+      } else if (freshFinding !== undefined && storedFinding.status === 'open' && freshFinding.status === 'verified') {
+        // Source reports resolved (e.g., isResolved on the VCS comment) → verify
+        toUpsert.push({
+          ...storedFinding,
+          status: 'verified',
+          verifiedAt: freshFinding.verifiedAt ?? now,
           updatedAt: now,
         });
       }

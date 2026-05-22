@@ -1,0 +1,17 @@
+{
+  "name": "coderabbit",
+  "displayName": "CodeRabbit",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "surface": "headless",
+  "dependencies": [{ "type": "extension", "name": "review", "version": ">=0.1.0" }],
+  "entrypoints": {
+    "server": "index"
+  },
+  "execution": "embedded",
+  "contributions": {
+    "create": true
+  }
+}
