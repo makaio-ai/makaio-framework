@@ -26,12 +26,16 @@
  */
 import { defineConfig } from 'vitest/config';
 import { resolve } from 'path';
+import {
+  categoryIncludes,
+  frameworkShards as shards,
+  FRAMEWORK_ADAPTER_DIRS as ADAPTER_DIRS,
+  parseTestCategories,
+} from './scripts/lib/vitest-categories.js';
 
 const root = import.meta.dirname;
 
-const enabledCategories = new Set(
-  (process.env.MAKAIO_TEST_CATEGORIES ?? 'unit,ui,integration').split(',').map((c) => c.trim()),
-);
+const enabledCategories = parseTestCategories(process.env.MAKAIO_TEST_CATEGORIES);
 
 const exclude: string[] = [
   '**/node_modules/**',
@@ -53,34 +57,8 @@ if (!enabledCategories.has('integration')) {
   exclude.push('**/*.integration.test.ts');
 }
 
-const shards: Record<string, string[]> = {
-  Core: ['core', 'storage'],
-  Packages: ['packages'],
-  Platform: ['platforms', 'runtimes', 'transports', 'clients', 'providers', 'scripts', 'build-tooling'],
-  Adapters: ['adapters'],
-  Extensions: ['extensions'],
-  Apps: ['apps', 'ui', 'sdks'],
-};
-
-/**
- * Builds test file include patterns for the selected workspace directories.
- * @param dirs - Workspace root directories included in the Vitest project.
- * @returns Glob patterns for enabled test categories.
- */
-function categoryIncludes(dirs: string[]): string[] {
-  const patterns: string[] = [];
-  const wantUnit = enabledCategories.has('unit');
-  const wantAdapters = enabledCategories.has('adapters') && !wantUnit;
-
-  for (const dir of dirs) {
-    if (wantUnit || (wantAdapters && dir === 'adapters')) {
-      patterns.push(`${dir}/**/*.test.ts`);
-    }
-    if (enabledCategories.has('ui')) patterns.push(`${dir}/**/*.test.tsx`);
-    if (enabledCategories.has('integration')) patterns.push(`${dir}/**/*.integration.test.ts`);
-  }
-  return patterns;
-}
+/** Re-export for the test runner script and CI. */
+export { shards };
 
 export default defineConfig({
   test: {
@@ -97,7 +75,7 @@ export default defineConfig({
       extends: true,
       test: {
         name,
-        include: categoryIncludes(dirs),
+        include: categoryIncludes(dirs, enabledCategories, ADAPTER_DIRS),
       },
     })),
   },
