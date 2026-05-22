@@ -46,7 +46,8 @@
     "ui/*",
     "storage/*",
     "core/*",
-    "subsystems/*"
+    "subsystems/*",
+    "services/*"
   ],
   "scripts": {
     "build": "bun packages/framework/build.ts",

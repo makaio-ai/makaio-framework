@@ -16,19 +16,19 @@ next: false
 | Schema record | `TurnStorageSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/turn/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/namespace.ts) |
+| Defined in | [`services/core/src/turn/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `complete` | [`storage:turn.complete`](#storage:turn.complete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `create` | [`storage:turn.create`](#storage:turn.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `get` | [`storage:turn.get`](#storage:turn.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `getActive` | [`storage:turn.getActive`](#storage:turn.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `getBySession` | [`storage:turn.getBySession`](#storage:turn.getBySession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `listActive` | [`storage:turn.listActive`](#storage:turn.listActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
-| `set` | [`storage:turn.set`](#storage:turn.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/turn/schemas.ts) |
+| `complete` | [`storage:turn.complete`](#storage:turn.complete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `create` | [`storage:turn.create`](#storage:turn.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `get` | [`storage:turn.get`](#storage:turn.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `getActive` | [`storage:turn.getActive`](#storage:turn.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `getBySession` | [`storage:turn.getBySession`](#storage:turn.getBySession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `listActive` | [`storage:turn.listActive`](#storage:turn.listActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `set` | [`storage:turn.set`](#storage:turn.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 
 ## Subject Details
 

@@ -100,7 +100,7 @@ describe('convertGitHubCallouts', () => {
 describe('readmeToSlugPath', () => {
   it('strips leading "packages/" segment so URLs do not nest under /packages/packages/', () => {
     expect(readmeToSlugPath('core/bus-core/README.md')).toBe('bus-core');
-    expect(readmeToSlugPath('packages/services/base/README.md')).toBe('services/base');
+    expect(readmeToSlugPath('packages/service-base/README.md')).toBe('services/base');
   });
 
   it('keeps non-packages framework subtrees intact for nested sidebar groups', () => {

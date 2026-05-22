@@ -33,7 +33,7 @@ describe('createRepoDevAliases', () => {
       '@makaio/bus-core': path.join('/repo', 'framework/core/bus-core/src'),
       '@makaio/contracts': path.join('/repo', 'framework/core/contracts/src'),
       '@makaio/runtime-node': path.join('/repo', 'framework/runtimes/node/src'),
-      '@makaio/service-base': path.join('/repo', 'framework/packages/services/base/src'),
+      '@makaio/service-base': path.join('/repo', 'framework/packages/service-base/src'),
     });
   });
 });
@@ -57,7 +57,7 @@ describe('createPortablePackageJson', () => {
         '@makaio/build-tooling': 'link:../../framework/build-tooling',
         '@makaio/contracts': 'link:../../framework/core/contracts',
         '@makaio/runtime-node': '^0.9.0',
-        '@makaio/service-base': 'file:../../framework/packages/services/base',
+        '@makaio/service-base': 'file:../../framework/packages/service-base',
         ...Object.fromEntries(UI_PACKAGE_REFERENCES),
         tsx: '^4.20.4',
       },

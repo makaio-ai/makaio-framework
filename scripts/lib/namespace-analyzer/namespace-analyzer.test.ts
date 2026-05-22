@@ -387,13 +387,13 @@ describe('generateMarkdown', () => {
       sourceCommit: 'abc123',
       namespaces: [
         {
-          ...createNamespace('@makaio/services-core', 'service.demo', 'packages/services/core/src/namespace.ts'),
+          ...createNamespace('@makaio/services-core', 'service.demo', 'services/core/src/namespace.ts'),
           subjects: [
             {
               key: 'changed',
               wire: 'service.demo.changed',
               type: 'event',
-              schemaFile: 'packages/services/core/src/schemas.ts',
+              schemaFile: 'services/core/src/schemas.ts',
             },
           ],
         },
@@ -405,9 +405,9 @@ describe('generateMarkdown', () => {
     );
 
     expect(file?.content).toContain(
-      '[`packages/services/core/src/namespace.ts`](../../../packages/services/core/src/namespace.ts)',
+      '[`services/core/src/namespace.ts`](../../../services/core/src/namespace.ts)',
     );
-    expect(file?.content).toContain('[`schemas.ts`](../../../packages/services/core/src/schemas.ts)');
+    expect(file?.content).toContain('[`schemas.ts`](../../../services/core/src/schemas.ts)');
   });
 
   it('uses absolute source URLs when configured by caller policy', () => {

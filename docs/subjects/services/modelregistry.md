@@ -16,18 +16,18 @@ next: false
 | Schema record | `ModelRegistrySchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/model-registry/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/namespace.ts) |
+| Defined in | [`services/core/src/model-registry/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `changed` | [`modelRegistry.changed`](#modelRegistry.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
-| `checkModelInProviders` | [`modelRegistry.checkModelInProviders`](#modelRegistry.checkModelInProviders) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
-| `getForProvider` | [`modelRegistry.getForProvider`](#modelRegistry.getForProvider) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
-| `getLabModels` | [`modelRegistry.getLabModels`](#modelRegistry.getLabModels) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
-| `getProviderModels` | [`modelRegistry.getProviderModels`](#modelRegistry.getProviderModels) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
-| `refresh` | [`modelRegistry.refresh`](#modelRegistry.refresh) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/model-registry/schemas.ts) |
+| `changed` | [`modelRegistry.changed`](#modelRegistry.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
+| `checkModelInProviders` | [`modelRegistry.checkModelInProviders`](#modelRegistry.checkModelInProviders) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
+| `getForProvider` | [`modelRegistry.getForProvider`](#modelRegistry.getForProvider) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
+| `getLabModels` | [`modelRegistry.getLabModels`](#modelRegistry.getLabModels) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
+| `getProviderModels` | [`modelRegistry.getProviderModels`](#modelRegistry.getProviderModels) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
+| `refresh` | [`modelRegistry.refresh`](#modelRegistry.refresh) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/model-registry/schemas.ts) |
 
 ## Subject Details
 

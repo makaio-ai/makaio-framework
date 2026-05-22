@@ -35,8 +35,8 @@ const packages: PackageEntry[] = [
   { readme: 'packages/expression/README.md' },
   { readme: 'packages/preferences/README.md' },
   { readme: 'packages/bus-server/README.md' },
-  { readme: 'packages/services/base/README.md' },
-  { readme: 'packages/services/log-import/README.md' },
+  { readme: 'packages/service-base/README.md' },
+  { readme: 'services/log-import/README.md' },
   { readme: 'packages/test-utils/README.md' },
 
   { readme: 'ui/theme/README.md' },

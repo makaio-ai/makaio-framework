@@ -16,13 +16,13 @@ next: false
 | Schema record | `CodebaseSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/codebase/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/codebase/namespace.ts) |
+| Defined in | [`services/core/src/codebase/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/codebase/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `changed` | [`codebase.changed`](#codebase.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/codebase/schemas.ts) |
+| `changed` | [`codebase.changed`](#codebase.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/codebase/schemas.ts) |
 
 ## Subject Details
 

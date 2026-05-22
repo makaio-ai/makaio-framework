@@ -5381,18 +5381,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/service-base@workspace:*, @makaio/service-base@workspace:packages/services/base":
+"@makaio/service-base@workspace:*, @makaio/service-base@workspace:packages/service-base":
   version: 0.0.0-use.local
-  resolution: "@makaio/service-base@workspace:packages/services/base"
+  resolution: "@makaio/service-base@workspace:packages/service-base"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
   languageName: unknown
   linkType: soft
 
-"@makaio/services-core@workspace:*, @makaio/services-core@workspace:packages/services/core":
+"@makaio/services-core@workspace:*, @makaio/services-core@workspace:services/core":
   version: 0.0.0-use.local
-  resolution: "@makaio/services-core@workspace:packages/services/core"
+  resolution: "@makaio/services-core@workspace:services/core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -5412,9 +5412,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/services-log-import@workspace:*, @makaio/services-log-import@workspace:packages/services/log-import":
+"@makaio/services-log-import@workspace:*, @makaio/services-log-import@workspace:services/log-import":
   version: 0.0.0-use.local
-  resolution: "@makaio/services-log-import@workspace:packages/services/log-import"
+  resolution: "@makaio/services-log-import@workspace:services/log-import"
   dependencies:
     "@libsql/client": "npm:^0.17.3"
     "@makaio/ai-adapters-claude-shared": "workspace:*"
@@ -5437,9 +5437,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/services-package-manager@workspace:*, @makaio/services-package-manager@workspace:packages/services/package-manager":
+"@makaio/services-package-manager@workspace:*, @makaio/services-package-manager@workspace:services/package-manager":
   version: 0.0.0-use.local
-  resolution: "@makaio/services-package-manager@workspace:packages/services/package-manager"
+  resolution: "@makaio/services-package-manager@workspace:services/package-manager"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"

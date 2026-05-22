@@ -16,18 +16,18 @@ next: false
 | Schema record | `WorkerKernelSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/worker/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/namespace.ts) |
+| Defined in | [`services/core/src/worker/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `completed` | [`worker.completed`](#worker.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `get` | [`worker.get`](#worker.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `kill` | [`worker.kill`](#worker.kill) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `send` | [`worker.send`](#worker.send) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `spawn` | [`worker.spawn`](#worker.spawn) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `spawned` | [`worker.spawned`](#worker.spawned) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
+| `completed` | [`worker.completed`](#worker.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `get` | [`worker.get`](#worker.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `kill` | [`worker.kill`](#worker.kill) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `send` | [`worker.send`](#worker.send) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `spawn` | [`worker.spawn`](#worker.spawn) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `spawned` | [`worker.spawned`](#worker.spawned) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
 
 ## Subject Details
 

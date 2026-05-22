@@ -16,16 +16,16 @@ next: false
 | Schema record | `PreferencesSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/preferences/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/preferences/storage-namespace.ts) |
+| Defined in | [`services/core/src/preferences/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/preferences/storage-namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `delete` | [`preferences.delete`](#preferences.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/preferences/schemas.ts) |
-| `get` | [`preferences.get`](#preferences.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/preferences/schemas.ts) |
-| `list` | [`preferences.list`](#preferences.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/preferences/schemas.ts) |
-| `set` | [`preferences.set`](#preferences.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/preferences/schemas.ts) |
+| `delete` | [`preferences.delete`](#preferences.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/preferences/schemas.ts) |
+| `get` | [`preferences.get`](#preferences.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/preferences/schemas.ts) |
+| `list` | [`preferences.list`](#preferences.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/preferences/schemas.ts) |
+| `set` | [`preferences.set`](#preferences.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/preferences/schemas.ts) |
 
 ## Subject Details
 

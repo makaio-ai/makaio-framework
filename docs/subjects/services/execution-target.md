@@ -16,20 +16,20 @@ next: false
 | Schema record | `ExecutionTargetSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/execution-target/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/namespace.ts) |
+| Defined in | [`services/core/src/execution-target/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `created` | [`execution-target.created`](#execution-target.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `delete` | [`execution-target.delete`](#execution-target.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `deleted` | [`execution-target.deleted`](#execution-target.deleted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `get` | [`execution-target.get`](#execution-target.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `list` | [`execution-target.list`](#execution-target.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `resolve` | [`execution-target.resolve`](#execution-target.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `set` | [`execution-target.set`](#execution-target.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
-| `updated` | [`execution-target.updated`](#execution-target.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/schemas.ts) |
+| `created` | [`execution-target.created`](#execution-target.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `delete` | [`execution-target.delete`](#execution-target.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `deleted` | [`execution-target.deleted`](#execution-target.deleted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `get` | [`execution-target.get`](#execution-target.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `list` | [`execution-target.list`](#execution-target.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `resolve` | [`execution-target.resolve`](#execution-target.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `set` | [`execution-target.set`](#execution-target.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
+| `updated` | [`execution-target.updated`](#execution-target.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/schemas.ts) |
 
 ## Subject Details
 

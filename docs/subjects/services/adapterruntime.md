@@ -16,14 +16,14 @@ next: false
 | Schema record | `AdapterRuntimeSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/adapter-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/adapter-runtime/namespace.ts) |
+| Defined in | [`services/core/src/adapter-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `resolveId` | [`adapterRuntime.resolveId`](#adapterRuntime.resolveId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/adapter-runtime/schemas.ts) |
-| `resolveName` | [`adapterRuntime.resolveName`](#adapterRuntime.resolveName) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/adapter-runtime/schemas.ts) |
+| `resolveId` | [`adapterRuntime.resolveId`](#adapterRuntime.resolveId) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
+| `resolveName` | [`adapterRuntime.resolveName`](#adapterRuntime.resolveName) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/adapter-runtime/schemas.ts) |
 
 ## Subject Details
 

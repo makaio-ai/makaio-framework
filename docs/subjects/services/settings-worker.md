@@ -16,17 +16,17 @@ next: false
 | Schema record | `WorkerSettingsSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/settings/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/namespace.ts) |
+| Defined in | [`services/core/src/settings/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `create` | [`settings:worker.create`](#settings:worker.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `delete` | [`settings:worker.delete`](#settings:worker.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `get` | [`settings:worker.get`](#settings:worker.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `list` | [`settings:worker.list`](#settings:worker.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
-| `update` | [`settings:worker.update`](#settings:worker.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/worker/schemas.ts) |
+| `create` | [`settings:worker.create`](#settings:worker.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `delete` | [`settings:worker.delete`](#settings:worker.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `get` | [`settings:worker.get`](#settings:worker.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `list` | [`settings:worker.list`](#settings:worker.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `update` | [`settings:worker.update`](#settings:worker.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
 
 ## Subject Details
 

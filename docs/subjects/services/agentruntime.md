@@ -16,18 +16,18 @@ next: false
 | Schema record | `AgentRuntimeSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/agent-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/namespace.ts) |
+| Defined in | [`services/core/src/agent-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `completed` | [`agentRuntime.completed`](#agentRuntime.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
-| `get` | [`agentRuntime.get`](#agentRuntime.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
-| `kill` | [`agentRuntime.kill`](#agentRuntime.kill) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
-| `send` | [`agentRuntime.send`](#agentRuntime.send) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
-| `spawn` | [`agentRuntime.spawn`](#agentRuntime.spawn) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
-| `spawned` | [`agentRuntime.spawned`](#agentRuntime.spawned) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/agent-runtime/schemas.ts) |
+| `completed` | [`agentRuntime.completed`](#agentRuntime.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
+| `get` | [`agentRuntime.get`](#agentRuntime.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
+| `kill` | [`agentRuntime.kill`](#agentRuntime.kill) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
+| `send` | [`agentRuntime.send`](#agentRuntime.send) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
+| `spawn` | [`agentRuntime.spawn`](#agentRuntime.spawn) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
+| `spawned` | [`agentRuntime.spawned`](#agentRuntime.spawned) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/agent-runtime/schemas.ts) |
 
 ## Subject Details
 

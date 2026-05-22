@@ -16,14 +16,14 @@ next: false
 | Schema record | `FsSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/filesystem/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/filesystem/namespace.ts) |
+| Defined in | [`services/core/src/filesystem/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/filesystem/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `batch` | [`fs.batch`](#fs.batch) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/filesystem/schemas.ts) |
-| `changed` | [`fs.changed`](#fs.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/filesystem/schemas.ts) |
+| `batch` | [`fs.batch`](#fs.batch) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/filesystem/schemas.ts) |
+| `changed` | [`fs.changed`](#fs.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/filesystem/schemas.ts) |
 | `getHomeDir` | [`fs.getHomeDir`](#fs.getHomeDir) | rpc | — |
 | `glob` | [`fs.glob`](#fs.glob) | rpc | — |
 | `listDirectory` | [`fs.listDirectory`](#fs.listDirectory) | rpc | — |

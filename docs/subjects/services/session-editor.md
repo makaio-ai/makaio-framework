@@ -16,13 +16,13 @@ next: false
 | Schema record | `SessionEditorSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/session-editor/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/session-editor/namespace.ts) |
+| Defined in | [`services/core/src/session-editor/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/session-editor/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `listActions` | [`session-editor.listActions`](#session-editor.listActions) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/session-editor/schemas.ts) |
+| `listActions` | [`session-editor.listActions`](#session-editor.listActions) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/session-editor/schemas.ts) |
 
 ## Subject Details
 

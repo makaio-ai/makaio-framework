@@ -16,14 +16,14 @@ next: false
 | Schema record | `DialogSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/dialog/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/dialog/namespace.ts) |
+| Defined in | [`services/core/src/dialog/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/dialog/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `confirm` | [`dialog.confirm`](#dialog.confirm) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/dialog/schemas.ts) |
-| `prompt` | [`dialog.prompt`](#dialog.prompt) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/dialog/schemas.ts) |
+| `confirm` | [`dialog.confirm`](#dialog.confirm) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/dialog/schemas.ts) |
+| `prompt` | [`dialog.prompt`](#dialog.prompt) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/dialog/schemas.ts) |
 
 ## Subject Details
 

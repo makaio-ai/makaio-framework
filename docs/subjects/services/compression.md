@@ -16,14 +16,14 @@ next: false
 | Schema record | `CompressionSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/compression/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/compression/namespace.ts) |
+| Defined in | [`services/core/src/compression/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/compression/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `compress` | [`compression.compress`](#compression.compress) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/compression/schemas.ts) |
-| `getHistory` | [`compression.getHistory`](#compression.getHistory) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/compression/schemas.ts) |
+| `compress` | [`compression.compress`](#compression.compress) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/compression/schemas.ts) |
+| `getHistory` | [`compression.getHistory`](#compression.getHistory) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/compression/schemas.ts) |
 
 ## Subject Details
 

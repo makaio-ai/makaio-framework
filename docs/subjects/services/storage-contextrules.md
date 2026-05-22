@@ -16,7 +16,7 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/context-rules/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/context-rules/storage-namespace.ts) |
+| Defined in | [`services/core/src/context-rules/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/context-rules/storage-namespace.ts) |
 
 ## Subjects
 
