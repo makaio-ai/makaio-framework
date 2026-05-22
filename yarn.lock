@@ -5692,6 +5692,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/workflow-engine@workspace:packages/workflow-engine":
+  version: 0.0.0-use.local
+  resolution: "@makaio/workflow-engine@workspace:packages/workflow-engine"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/expression": "workspace:*"
+    vitest: "npm:4.1.5"
+  languageName: unknown
+  linkType: soft
+
 "@malept/cross-spawn-promise@npm:^1.1.0":
   version: 1.1.1
   resolution: "@malept/cross-spawn-promise@npm:1.1.1"
