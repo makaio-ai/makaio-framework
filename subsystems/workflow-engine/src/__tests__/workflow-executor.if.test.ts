@@ -60,7 +60,7 @@ describe('WorkflowExecutor — if conditional step execution', () => {
     expect(completedSteps).toEqual(['step1']);
   });
 
-  it('skips step when if evaluates to false, emits stepSkipped event', async () => {
+  it('skips step when if evaluates to false, emits step.skipped event', async () => {
     const workflow = createWorkflowDefinition({
       id: 'wf-if-false',
       steps: [
