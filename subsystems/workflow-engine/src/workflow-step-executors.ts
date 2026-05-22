@@ -1,0 +1,359 @@
+import type { IMakaioBus } from '@makaio/bus-core';
+import {
+  SessionSubjects,
+  SubagentSubjects,
+  type AgentWorkflowStep,
+  type ShellWorkflowStep,
+  type StepState,
+  type WorkflowExecution,
+} from '@makaio/contracts';
+import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { WorkflowSubjects } from './namespace.js';
+import { WorkflowStorageSubjects } from './storage/namespace.js';
+import { runShellStep } from './executor-helpers.js';
+import { markStepFailed } from './workflow-execution-finalizer.js';
+import type { ActiveExecution, ExecutorConfig } from './types.js';
+import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
+
+/**
+ * Runtime dependencies injected into standalone step executor functions.
+ * Groups the executor-owned state references that each step executor needs
+ * without coupling the functions back to the WorkflowExecutor class.
+ */
+export interface StepExecutorDeps {
+  /** Message bus for storage requests and event emission. */
+  bus: IMakaioBus;
+  /** Live execution map — read and cleared by step executors. */
+  activeExecutions: Map<string, ActiveExecution>;
+  /** Per-step AbortControllers for shell process cancellation. */
+  shellAbortControllers: Map<string, AbortController>;
+  /** Gate coordinator for human-approval steps. */
+  gateCoordinator: WorkflowGateCoordinator;
+  /** Resolved executor configuration. */
+  config: ExecutorConfig;
+}
+
+/**
+ * Build the expression context from all started steps and trigger payload.
+ * Includes all non-pending steps so that `if` conditions can reference
+ * the status of preceding steps (e.g., `steps.validate.status == 'completed'`).
+ * Merges optional for-each item/index context when the step is inside a for-each.
+ * @param execution - The current execution state
+ * @param activeExecutions - Active execution map used to look up per-step context
+ * @param stepId - Optional step ID to resolve for-each item/index context
+ * @returns Expression context for jexl evaluation and template interpolation
+ */
+export function buildExpressionContext(
+  execution: WorkflowExecution,
+  activeExecutions: Map<string, ActiveExecution>,
+  stepId?: string,
+): ExpressionContext {
+  const ctx: ExpressionContext = {
+    trigger: execution.triggerPayload ?? {},
+    steps: Object.fromEntries(
+      Object.entries(execution.steps)
+        .filter(([, state]) => state.status !== 'pending')
+        .map(([id, state]) => [id, { result: state.result, status: state.status }]),
+    ),
+    inputs: execution.inputs,
+  };
+  if (stepId) {
+    const active = activeExecutions.get(execution.id);
+    const forEachCtx = active?.stepContext.get(stepId);
+    if (forEachCtx) {
+      ctx.item = forEachCtx.item;
+      ctx.index = forEachCtx.index;
+    }
+  }
+  return ctx;
+}
+
+/**
+ * Await subagent completion and settle the step state based on the result.
+ * Extracted from executeAgentStep to keep the parent under complexity limits.
+ * @param bus - Message bus
+ * @param execution - Current workflow execution
+ * @param executionId - Execution ID
+ * @param stepId - Step ID
+ * @param stepState - Mutable step state to settle
+ * @param step - Agent step definition (for onComplete config)
+ * @param subagentId - Spawned subagent ID
+ * @param config - Executor configuration
+ */
+async function awaitAndSettleSubagent(
+  bus: IMakaioBus,
+  execution: WorkflowExecution,
+  executionId: string,
+  stepId: string,
+  stepState: StepState,
+  step: AgentWorkflowStep,
+  subagentId: string,
+  config: ExecutorConfig,
+): Promise<void> {
+  const result = await bus.request(SubagentSubjects.await, {
+    subagentId,
+    timeoutMs: config.stepTimeoutMs,
+  });
+
+  if (execution.status !== 'running') return;
+
+  if (result.status !== 'completed') {
+    await bus.request(SubagentSubjects.kill, { subagentId }).catch(() => {});
+  }
+
+  if (result.status === 'failed') {
+    await markStepFailed(bus, execution, executionId, stepId, stepState, result.error ?? 'Subagent execution failed');
+    return;
+  }
+
+  if (result.status !== 'completed') {
+    await markStepFailed(
+      bus,
+      execution,
+      executionId,
+      stepId,
+      stepState,
+      `Subagent ended with unexpected status: ${result.status}`,
+    );
+    return;
+  }
+
+  stepState.status = 'completed';
+  stepState.result = step.onComplete?.extract === 'none' ? '' : (result.result ?? '');
+  stepState.completedAt = Date.now();
+  const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+  await bus.emit(WorkflowSubjects.stepCompleted, {
+    executionId,
+    stepId,
+    result: stepState.result,
+    duration,
+  });
+}
+
+/**
+ * Execute an agent step by spawning a subagent with the resolved prompt.
+ * @param deps - Executor dependencies (bus, maps, config)
+ * @param executionId - The execution ID
+ * @param stepId - The step ID to execute
+ */
+export async function executeAgentStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+  const { bus, activeExecutions, config } = deps;
+  const active = activeExecutions.get(executionId);
+  if (!active || active.execution.status !== 'running') return;
+
+  const { execution, workflow, stepMap } = active;
+  const step = stepMap.get(stepId);
+  if (!step || step.type !== 'agent') {
+    throw new Error(`Agent step not found: ${stepId}`);
+  }
+
+  const stepState = execution.steps[stepId];
+  stepState.status = 'running';
+  stepState.startedAt = Date.now();
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+  // Track outside the try so the catch block can kill an already-spawned subagent.
+  let subagentId: string | undefined;
+
+  try {
+    const resolvedPrompt = resolveTemplate(step.prompt, buildExpressionContext(execution, activeExecutions, stepId));
+
+    const currentActive = activeExecutions.get(executionId);
+    if (!currentActive || currentActive.execution.status !== 'running') return;
+
+    const spawnResult = await bus.requestOptional(SubagentSubjects.spawn, {
+      parentSessionId: execution.coordinatorSessionId!,
+      config: {
+        task: resolvedPrompt,
+        contextMode: 'fork',
+        adapterName: step.adapter,
+        model: step.model,
+        executionTargetId: step.executionTargetId ?? workflow.defaultExecutionTargetId,
+        responseSchema: step.outputSchema,
+      },
+      depth: 0,
+    });
+    if (!spawnResult.handled) {
+      await markStepFailed(bus, execution, executionId, stepId, stepState, 'Subagent system not available');
+      return;
+    }
+    subagentId = spawnResult.data.subagentId;
+
+    stepState.subagentId = subagentId;
+    await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    // Re-check after persisting subagentId: cancellation may have arrived during spawn.
+    // Now that subagentId is recorded, we can kill the just-spawned subagent.
+    if (execution.status !== 'running') {
+      await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+      return;
+    }
+
+    await bus.emit(WorkflowSubjects.stepStarted, {
+      executionId,
+      stepId,
+      sessionId: execution.coordinatorSessionId ?? '',
+      subagentId,
+    });
+
+    await awaitAndSettleSubagent(bus, execution, executionId, stepId, stepState, step, subagentId, config);
+  } catch (error) {
+    // On cancellation the caller handles cleanup; avoid double-failing.
+    if (execution.status !== 'running') return;
+    if (subagentId !== undefined) {
+      await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Step execution error' }).catch(() => {});
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    await markStepFailed(bus, execution, executionId, stepId, stepState, message);
+  }
+}
+
+/**
+ * Execute a shell step by running an external process via `execFile`.
+ * @param deps - Executor dependencies (bus, maps, config)
+ * @param executionId - The execution ID
+ * @param stepId - The step ID to execute
+ */
+export async function executeShellStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+  const { bus, activeExecutions, shellAbortControllers } = deps;
+  const active = activeExecutions.get(executionId);
+  if (!active || active.execution.status !== 'running') return;
+
+  const { execution, stepMap } = active;
+  const step = stepMap.get(stepId);
+  if (!step || step.type !== 'shell') {
+    throw new Error(`Shell step not found: ${stepId}`);
+  }
+
+  const stepState = execution.steps[stepId];
+  stepState.status = 'running';
+  stepState.startedAt = Date.now();
+
+  // Register the AbortController before persisting so any cancellation that
+  // arrives after setExecution resolves can abort the shell process.
+  const controller = new AbortController();
+  const stepKey = `${executionId}:${stepId}`;
+  shellAbortControllers.set(stepKey, controller);
+
+  let outcome: Awaited<ReturnType<typeof runShellStep>>;
+  try {
+    // The controller remains registered for the entire launch window so
+    // cancellation can abort a process as soon as one exists, and failures in
+    // that same window still release the cancellation handle.
+    await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    const { session } = await bus.request(SessionSubjects.get, {
+      sessionId: execution.coordinatorSessionId!,
+    });
+    const workspaceRoot = session?.targetWorkingDirectory ?? process.cwd();
+
+    await bus.emit(WorkflowSubjects.stepStarted, {
+      executionId,
+      stepId,
+      sessionId: execution.coordinatorSessionId ?? '',
+    });
+
+    const expressionContext = buildExpressionContext(execution, activeExecutions, stepId);
+
+    outcome = await runShellStep({
+      step: step as ShellWorkflowStep,
+      workspaceRoot,
+      expressionContext,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (execution.status !== 'running') return;
+    const message = error instanceof Error ? error.message : String(error);
+    await markStepFailed(bus, execution, executionId, stepId, stepState, message);
+    return;
+  } finally {
+    shellAbortControllers.delete(stepKey);
+  }
+
+  if (execution.status !== 'running') return;
+
+  if (outcome.status === 'failed') {
+    await markStepFailed(bus, execution, executionId, stepId, stepState, outcome.error);
+    return;
+  }
+
+  stepState.status = 'completed';
+  stepState.result = outcome.stdout;
+  stepState.completedAt = Date.now();
+  const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+  await bus.emit(WorkflowSubjects.stepCompleted, {
+    executionId,
+    stepId,
+    result: outcome.stdout,
+    duration,
+  });
+}
+
+/**
+ * Execute a gate step — pause for human approval.
+ * Emits a gate request event, awaits user response or timeout, then completes or fails the step.
+ * @param deps - Executor dependencies (bus, maps, config)
+ * @param executionId - The execution ID
+ * @param stepId - The step ID to execute
+ */
+export async function executeGateStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+  const { bus, activeExecutions, gateCoordinator } = deps;
+  const active = activeExecutions.get(executionId);
+  if (!active || active.execution.status !== 'running') return;
+
+  const { execution, workflow, stepMap } = active;
+  const step = stepMap.get(stepId);
+  if (!step || step.type !== 'gate') {
+    throw new Error(`Gate step not found: ${stepId}`);
+  }
+
+  const stepState = execution.steps[stepId];
+  stepState.status = 'waiting';
+  stepState.startedAt = Date.now();
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+  const expressionContext = buildExpressionContext(execution, activeExecutions, stepId);
+  const message = resolveTemplate(step.prompt, expressionContext);
+  const title = step.title ? resolveTemplate(step.title, expressionContext) : 'Workflow Approval Required';
+  const openedAt = Date.now();
+  const timeoutMs = typeof step.timeoutMs === 'number' ? step.timeoutMs : null;
+  const resolutionPromise = gateCoordinator.awaitResolution(executionId, stepId, step.autoAction, timeoutMs);
+
+  await bus.emit(WorkflowSubjects.gate.request, {
+    executionId,
+    stepId,
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    title,
+    message,
+    autoAction: step.autoAction,
+    timeoutMs,
+    openedAt,
+  });
+
+  const { action, source } = await resolutionPromise;
+
+  // Check if execution was cancelled while waiting
+  if (execution.status !== 'running') return;
+
+  await bus.emit(WorkflowSubjects.gateResolved, { executionId, stepId, action, source });
+
+  if (action === 'approve') {
+    stepState.status = 'completed';
+    stepState.result = source === 'user' ? 'Approved by user' : 'Auto-approved (timeout)';
+    stepState.completedAt = Date.now();
+    await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+    const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
+    await bus.emit(WorkflowSubjects.stepCompleted, {
+      executionId,
+      stepId,
+      result: stepState.result,
+      duration,
+    });
+  } else {
+    const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
+    await markStepFailed(bus, execution, executionId, stepId, stepState, reason);
+  }
+}
