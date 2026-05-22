@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 
-export { RawClientHookPayloadSchema, type RawClientHookPayload } from '@makaio/clients-core';
+export { RawClientHookPayloadSchema, type RawClientHookPayload } from '@makaio/subsystem-client';
 
 /**
  * Hook events emitted by Codex that map to the v1 observed-semantics set.

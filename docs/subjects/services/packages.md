@@ -16,20 +16,20 @@ next: false
 | Schema record | `PackageManagementSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-package-manager` |
-| Defined in | [`packages/services/package-manager/src/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/namespace.ts) |
+| Defined in | [`services/package-manager/src/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `checkUpdates` | [`packages.checkUpdates`](#packages.checkUpdates) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `getLatestVersion` | [`packages.getLatestVersion`](#packages.getLatestVersion) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `getRegistry` | [`packages.getRegistry`](#packages.getRegistry) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `install` | [`packages.install`](#packages.install) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `installed` | [`packages.installed`](#packages.installed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `list` | [`packages.list`](#packages.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `uninstall` | [`packages.uninstall`](#packages.uninstall) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
-| `uninstalled` | [`packages.uninstalled`](#packages.uninstalled) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/package-manager/src/schemas.ts) |
+| `checkUpdates` | [`packages.checkUpdates`](#packages.checkUpdates) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `getLatestVersion` | [`packages.getLatestVersion`](#packages.getLatestVersion) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `getRegistry` | [`packages.getRegistry`](#packages.getRegistry) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `install` | [`packages.install`](#packages.install) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `installed` | [`packages.installed`](#packages.installed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `list` | [`packages.list`](#packages.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `uninstall` | [`packages.uninstall`](#packages.uninstall) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
+| `uninstalled` | [`packages.uninstalled`](#packages.uninstalled) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/package-manager/src/schemas.ts) |
 
 ## Subject Details
 

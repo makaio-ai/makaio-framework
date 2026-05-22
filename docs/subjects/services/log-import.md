@@ -16,24 +16,24 @@ next: false
 | Schema record | `LogImportSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-log-import` |
-| Defined in | [`packages/services/log-import/src/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/namespace.ts) |
+| Defined in | [`services/log-import/src/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `confirmation.request` | [`log-import.confirmation.request`](#log-import.confirmation.request) | rpc | [`confirmation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/confirmation.ts) |
-| `confirmation.response` | [`log-import.confirmation.response`](#log-import.confirmation.response) | rpc | [`confirmation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/confirmation.ts) |
-| `getMode` | [`log-import.getMode`](#log-import.getMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas.ts) |
-| `getStats` | [`log-import.getStats`](#log-import.getStats) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/stats.ts) |
-| `importAll` | [`log-import.importAll`](#log-import.importAll) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/stats.ts) |
-| `importSession` | [`log-import.importSession`](#log-import.importSession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas.ts) |
-| `listImporters` | [`log-import.listImporters`](#log-import.listImporters) | rpc | [`list-importers.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/list-importers.ts) |
-| `listSettings` | [`log-import.listSettings`](#log-import.listSettings) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas.ts) |
-| `progress` | [`log-import.progress`](#log-import.progress) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/stats.ts) |
-| `scan` | [`log-import.scan`](#log-import.scan) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/stats.ts) |
-| `setMode` | [`log-import.setMode`](#log-import.setMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas.ts) |
-| `uploadFiles` | [`log-import.uploadFiles`](#log-import.uploadFiles) | rpc | [`upload.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/log-import/src/schemas/upload.ts) |
+| `confirmation.request` | [`log-import.confirmation.request`](#log-import.confirmation.request) | rpc | [`confirmation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/confirmation.ts) |
+| `confirmation.response` | [`log-import.confirmation.response`](#log-import.confirmation.response) | rpc | [`confirmation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/confirmation.ts) |
+| `getMode` | [`log-import.getMode`](#log-import.getMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
+| `getStats` | [`log-import.getStats`](#log-import.getStats) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
+| `importAll` | [`log-import.importAll`](#log-import.importAll) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
+| `importSession` | [`log-import.importSession`](#log-import.importSession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
+| `listImporters` | [`log-import.listImporters`](#log-import.listImporters) | rpc | [`list-importers.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/list-importers.ts) |
+| `listSettings` | [`log-import.listSettings`](#log-import.listSettings) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
+| `progress` | [`log-import.progress`](#log-import.progress) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
+| `scan` | [`log-import.scan`](#log-import.scan) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
+| `setMode` | [`log-import.setMode`](#log-import.setMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
+| `uploadFiles` | [`log-import.uploadFiles`](#log-import.uploadFiles) | rpc | [`upload.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/upload.ts) |
 
 ## Subject Details
 

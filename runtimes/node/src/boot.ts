@@ -47,7 +47,7 @@ import {
   createAdapterSubsystemContributionProcessor,
   FileAdapterConfigRepository,
   type AdapterSubsystemService,
-} from '@makaio/adapter-subsystem';
+} from '@makaio/subsystem-adapter';
 import {
   createModelRegistryPackage,
   createToolContributionProcessor,
@@ -61,7 +61,7 @@ import { registerAdapterRuntimeIdentityHandlers } from '@makaio/services-core/ad
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
-import { createClientsCorePackage } from '@makaio/clients-core';
+import { createClientsCorePackage } from '@makaio/subsystem-client';
 import { createNodeClientBinaryStrategyDependencies } from './client-binary-strategy-dependencies.js';
 import { registerAdapterNameResolver } from './register-adapter-name-resolver.js';
 import { tryImport } from './optional-package.js';

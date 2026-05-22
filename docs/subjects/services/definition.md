@@ -16,14 +16,14 @@ next: false
 | Schema record | `DefinitionSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/definition/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/definition/namespace.ts) |
+| Defined in | [`services/core/src/definition/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/definition/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `getConfigSchema` | [`definition.getConfigSchema`](#definition.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/definition/schemas.ts) |
-| `getCredentialSchema` | [`definition.getCredentialSchema`](#definition.getCredentialSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/definition/schemas.ts) |
+| `getConfigSchema` | [`definition.getConfigSchema`](#definition.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/definition/schemas.ts) |
+| `getCredentialSchema` | [`definition.getCredentialSchema`](#definition.getCredentialSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/definition/schemas.ts) |
 
 ## Subject Details
 

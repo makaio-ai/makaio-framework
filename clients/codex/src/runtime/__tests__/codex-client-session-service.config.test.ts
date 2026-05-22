@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import { CodexClientSettings } from '../client-settings.js';
 import { CodexClientSessionService } from '../codex-client-session-service.js';
 import { CodexClientSubjects } from '../namespace.js';

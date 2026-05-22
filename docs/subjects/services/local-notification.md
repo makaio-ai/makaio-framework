@@ -16,14 +16,14 @@ next: false
 | Schema record | `LocalNotificationSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/local-notification/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/local-notification/namespace.ts) |
+| Defined in | [`services/core/src/local-notification/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/local-notification/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `getProvider` | [`local-notification.getProvider`](#local-notification.getProvider) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/local-notification/schemas.ts) |
-| `notify` | [`local-notification.notify`](#local-notification.notify) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/local-notification/schemas.ts) |
+| `getProvider` | [`local-notification.getProvider`](#local-notification.getProvider) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/local-notification/schemas.ts) |
+| `notify` | [`local-notification.notify`](#local-notification.notify) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/local-notification/schemas.ts) |
 
 ## Subject Details
 

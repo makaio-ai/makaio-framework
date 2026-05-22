@@ -20,8 +20,8 @@
  * @packageDocumentation
  */
 
-import { ClientSubjects, pickNonEmptyString } from '@makaio/clients-core';
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import { ClientSubjects, pickNonEmptyString } from '@makaio/subsystem-client';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import type {
   ClientSessionStarted,
   ClientSessionUserPromptSubmitted,

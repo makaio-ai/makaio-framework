@@ -51,8 +51,8 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/client-claude-code": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsx": "^4.20.5"

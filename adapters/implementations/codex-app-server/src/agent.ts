@@ -25,7 +25,7 @@ import { CodexAppServerConnector } from './connector.js';
 import { CodexAppServerSubjects, type CodexAppServerBus } from './namespaces/index.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
 import { AgentSubjects, ClientSubjects, type SessionMessageBlock } from '@makaio/contracts';
-import { buildClientSessionBase, emitBestEffort } from '@makaio/clients-core';
+import { buildClientSessionBase, emitBestEffort } from '@makaio/subsystem-client';
 
 /**
  * Maximum number of characters retained in `toolOutputCache` per tool call.

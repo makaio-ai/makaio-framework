@@ -33,10 +33,10 @@ const packages: PackageEntry[] = [
   { readme: 'core/makaio-core/README.md' },
   { readme: 'packages/providers/README.md' },
   { readme: 'packages/expression/README.md' },
-  { readme: 'packages/preferences/README.md' },
+  { readme: 'storage/preferences/README.md' },
   { readme: 'packages/bus-server/README.md' },
-  { readme: 'packages/services/base/README.md' },
-  { readme: 'packages/services/log-import/README.md' },
+  { readme: 'packages/service-base/README.md' },
+  { readme: 'services/log-import/README.md' },
   { readme: 'packages/test-utils/README.md' },
 
   { readme: 'ui/theme/README.md' },
@@ -48,7 +48,7 @@ const packages: PackageEntry[] = [
   { readme: 'storage/core/README.md' },
   { readme: 'storage/drizzle/README.md' },
   { readme: 'storage/handlers/README.md' },
-  { readme: 'packages/storage-migrations/README.md' },
+  { readme: 'storage/migrations/README.md' },
 
   { readme: 'core/tools-core/README.md' },
   { readme: 'extensions/filesystem/README.md' },
@@ -78,7 +78,7 @@ const packages: PackageEntry[] = [
  */
 export function readmeToSlugPath(readme: string): string {
   const stripped = readme.replace(/\/README\.md$/u, '');
-  for (const prefix of ['packages/', 'core/', 'storage/']) {
+  for (const prefix of ['packages/', 'core/', 'storage/', 'subsystems/', 'services/']) {
     if (stripped.startsWith(prefix)) return stripped.slice(prefix.length);
   }
   return stripped;

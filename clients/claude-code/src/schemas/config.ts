@@ -1,6 +1,6 @@
 import type { SchemaRecord } from '@makaio/core';
 import { z } from 'zod';
-import { AbsolutePathSchema } from '@makaio/clients-core';
+import { AbsolutePathSchema } from '@makaio/subsystem-client';
 
 /**
  * Scope at which a Claude Code configuration entry is written or read.

@@ -1,0 +1,35 @@
+{
+  "name": "@makaio/subsystem-mcp-http-server",
+  "version": "1.0.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "quick-lru": "^7.3.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package.json": "./package.json"
+    }
+  },
+  "license": "MIT"
+}

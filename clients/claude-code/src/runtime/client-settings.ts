@@ -11,7 +11,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { atomicModifyFile } from '@makaio/clients-core';
+import { atomicModifyFile } from '@makaio/subsystem-client';
 import type {
   ClaudeCodeScope,
   ClaudeCodeStatuslineValue,

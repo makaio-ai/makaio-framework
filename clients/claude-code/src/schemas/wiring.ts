@@ -19,7 +19,7 @@ import {
   ClientWiringApplyResponseSchema,
   ClientWiringListResponseSchema,
   ClientWiringRemoveResponseSchema,
-} from '@makaio/clients-core';
+} from '@makaio/subsystem-client';
 
 import { AbsolutePathSchema, ClaudeCodeScopeSchema } from './config.js';
 

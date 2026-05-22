@@ -16,22 +16,22 @@ next: false
 | Schema record | `SettingsSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/settings/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/namespace.ts) |
+| Defined in | [`services/core/src/settings/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `adapter.defaults.get` | [`settings.adapter.defaults.get`](#settings.adapter.defaults.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.defaults.update` | [`settings.adapter.defaults.update`](#settings.adapter.defaults.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.getConfig` | [`settings.adapter.getConfig`](#settings.adapter.getConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.getConfigSchema` | [`settings.adapter.getConfigSchema`](#settings.adapter.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.list` | [`settings.adapter.list`](#settings.adapter.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.setEnabled` | [`settings.adapter.setEnabled`](#settings.adapter.setEnabled) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `adapter.updateConfig` | [`settings.adapter.updateConfig`](#settings.adapter.updateConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `extension.getConfigSchema` | [`settings.extension.getConfigSchema`](#settings.extension.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `runtime.get` | [`settings.runtime.get`](#settings.runtime.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
-| `runtime.update` | [`settings.runtime.update`](#settings.runtime.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/settings/schemas.ts) |
+| `adapter.defaults.get` | [`settings.adapter.defaults.get`](#settings.adapter.defaults.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.defaults.update` | [`settings.adapter.defaults.update`](#settings.adapter.defaults.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.getConfig` | [`settings.adapter.getConfig`](#settings.adapter.getConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.getConfigSchema` | [`settings.adapter.getConfigSchema`](#settings.adapter.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.list` | [`settings.adapter.list`](#settings.adapter.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.setEnabled` | [`settings.adapter.setEnabled`](#settings.adapter.setEnabled) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `adapter.updateConfig` | [`settings.adapter.updateConfig`](#settings.adapter.updateConfig) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `extension.getConfigSchema` | [`settings.extension.getConfigSchema`](#settings.extension.getConfigSchema) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `runtime.get` | [`settings.runtime.get`](#settings.runtime.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
+| `runtime.update` | [`settings.runtime.update`](#settings.runtime.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/schemas.ts) |
 
 ## Subject Details
 

@@ -76,8 +76,8 @@ type WiringApplySubjectDef = {
 /**
  * Build a non-owning subject definition for `client:<clientId>.wiring.apply`.
  *
- * Avoids importing from `@makaio/clients-core` to prevent the circular
- * dependency chain: `runtime → clients-core → services-core → runtime`.
+ * Avoids importing from `@makaio/subsystem-client` to prevent the circular
+ * dependency chain: `runtime → subsystem-client → services-core → runtime`.
  * Returns a plain object whose shape matches what the bus uses at runtime to
  * route requests: `subject` and `$meta.namespace`.
  * @param clientId - Stable client identifier (e.g. `'claude-code'`).

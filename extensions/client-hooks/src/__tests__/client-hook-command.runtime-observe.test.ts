@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { runClientHookCommand } from '../cli/client-hook-command.js';
 
@@ -401,7 +401,7 @@ describe('runClientHookCommand — runtime.observe fail-open', () => {
 
   it('still emits hook.received even when the observe handler throws', async () => {
     const bus = createBusInstance();
-    const { subjects } = (await import('@makaio/clients-core')).createClientNamespace('fail-observe-client');
+    const { subjects } = (await import('@makaio/subsystem-client')).createClientNamespace('fail-observe-client');
     const hookReceived: unknown[] = [];
 
     const hookCleanup = bus.on(subjects.hook.received, ({ payload }) => {

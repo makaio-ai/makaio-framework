@@ -18,7 +18,7 @@ const FRAMEWORK_PACKAGE_PATHS = {
   '@makaio/contracts': 'core/contracts',
   '@makaio/core': 'core/makaio-core',
   '@makaio/runtime-node': 'runtimes/node',
-  '@makaio/service-base': 'packages/services/base',
+  '@makaio/service-base': 'packages/service-base',
   '@makaio/test-utils': 'packages/test-utils',
   '@makaio/ui-hooks': 'ui/hooks',
   '@makaio/ui-kernel': 'ui/kernel',
@@ -30,7 +30,7 @@ const REPO_DEV_ALIAS_PATHS = {
   '@makaio/bus-core': 'core/bus-core/src',
   '@makaio/contracts': 'core/contracts/src',
   '@makaio/runtime-node': 'runtimes/node/src',
-  '@makaio/service-base': 'packages/services/base/src',
+  '@makaio/service-base': 'packages/service-base/src',
 } as const;
 
 type FrameworkPackageName = keyof typeof FRAMEWORK_PACKAGE_PATHS;

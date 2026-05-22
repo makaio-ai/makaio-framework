@@ -63,7 +63,7 @@
  */
 
 import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
-import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/clients-core';
+import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
 import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';

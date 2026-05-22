@@ -16,7 +16,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ClientWiringApplyResponse } from '@makaio/clients-core';
+import type { ClientWiringApplyResponse } from '@makaio/subsystem-client';
 import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { createClientWiringApplySubjectDef } from '../subjects.js';
 

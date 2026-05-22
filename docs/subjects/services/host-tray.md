@@ -16,19 +16,19 @@ next: false
 | Schema record | `TrayMenuSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/tray-menu/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/namespace.ts) |
+| Defined in | [`services/core/src/tray-menu/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `changed` | [`host:tray.changed`](#host:tray.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `group.register` | [`host:tray.group.register`](#host:tray.group.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `group.unregister` | [`host:tray.group.unregister`](#host:tray.group.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `item.clicked` | [`host:tray.item.clicked`](#host:tray.item.clicked) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `list` | [`host:tray.list`](#host:tray.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `register` | [`host:tray.register`](#host:tray.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
-| `unregister` | [`host:tray.unregister`](#host:tray.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/tray-menu/schemas.ts) |
+| `changed` | [`host:tray.changed`](#host:tray.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `group.register` | [`host:tray.group.register`](#host:tray.group.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `group.unregister` | [`host:tray.group.unregister`](#host:tray.group.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `item.clicked` | [`host:tray.item.clicked`](#host:tray.item.clicked) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `list` | [`host:tray.list`](#host:tray.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `register` | [`host:tray.register`](#host:tray.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
+| `unregister` | [`host:tray.unregister`](#host:tray.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/tray-menu/schemas.ts) |
 
 ## Subject Details
 

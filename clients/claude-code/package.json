@@ -22,10 +22,10 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   },

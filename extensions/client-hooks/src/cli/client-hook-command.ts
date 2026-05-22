@@ -25,7 +25,7 @@
 import { text as readStreamText } from 'node:stream/consumers';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
-import { createRawClientHookReceivedSubject, pickNonEmptyStringValue } from '@makaio/clients-core';
+import { createRawClientHookReceivedSubject, pickNonEmptyStringValue } from '@makaio/subsystem-client';
 import type { CommandContext } from '@makaio/kernel/cli';
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import {
 import { resolveSessionEnvironment } from '@makaio/ai-adapters-core/config';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
 import { MakaioBus } from '@makaio/bus-core';
-import { isTmuxAvailable, TmuxBackend } from '@makaio/native-session-supervisor';
+import { isTmuxAvailable, TmuxBackend } from '@makaio/subsystem-native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import { McpSubjects } from '@makaio/contracts';
 import { ClientSubjects } from '@makaio/contracts/client';

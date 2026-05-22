@@ -116,9 +116,9 @@ After boot, adapters are queryable through the bus:
 | `../../packages/contracts/src/extension/extension-contributions.ts` | `AdapterContribution` type |
 | `../../packages/contracts/src/extension/adapter-definition.ts` | `AdapterDefinitionContract` |
 | `../../packages/contracts/src/extension/contribution-manifest.ts` | `AdapterManifest` |
-| `../../packages/adapter-subsystem/src/adapter-contribution-processor.ts` | Boot-time adapter wiring |
-| `../../packages/adapter-subsystem/src/adapter-runtime-registry.ts` | Runtime adapter registry |
-| `../../packages/adapter-subsystem/src/adapter-subsystem-service.ts` | Adapter subsystem service |
+| `../../subsystems/adapter/src/adapter-contribution-processor.ts` | Boot-time adapter wiring |
+| `../../subsystems/adapter/src/adapter-runtime-registry.ts` | Runtime adapter registry |
+| `../../subsystems/adapter/src/adapter-subsystem-service.ts` | Adapter subsystem service |
 | `../../runtimes/node/src/boot.ts` | Boot sequence integration |
 
 <!-- /web:hide -->

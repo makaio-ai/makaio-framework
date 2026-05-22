@@ -10,7 +10,7 @@ import {
 } from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import type { ChannelEndpoint } from '@makaio/bus-core';
-import { AdapterSubsystemService } from '@makaio/adapter-subsystem';
+import { AdapterSubsystemService } from '@makaio/subsystem-adapter';
 import type { ExtensionCoordinator } from '@makaio/kernel';
 import { resolveProviderResolution } from '../resolve-provider-resolution.js';
 

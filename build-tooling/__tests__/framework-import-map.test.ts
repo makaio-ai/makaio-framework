@@ -10,7 +10,7 @@ describe('framework import map', () => {
     expect(rewriteFrameworkImportSpecifier('@makaio/bus-core')).toBe('@makaio/framework/bus');
     expect(rewriteFrameworkImportSpecifier('@makaio/contracts')).toBe('@makaio/framework/contracts');
     expect(rewriteFrameworkImportSpecifier('@makaio/ai-adapters-core')).toBe('@makaio/framework/adapters');
-    expect(rewriteFrameworkImportSpecifier('@makaio/clients-core')).toBe('@makaio/framework/clients');
+    expect(rewriteFrameworkImportSpecifier('@makaio/subsystem-client')).toBe('@makaio/framework/clients');
   });
 
   it('rewrites framework-owned package subpaths', () => {

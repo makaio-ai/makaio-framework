@@ -16,7 +16,7 @@ next: false
 | Schema record | `ProviderRuntimeSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/provider-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/provider-runtime/namespace.ts) |
+| Defined in | [`services/core/src/provider-runtime/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/provider-runtime/namespace.ts) |
 
 ## Subjects
 

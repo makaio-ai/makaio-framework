@@ -16,22 +16,22 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@makaio/clients-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/file-watcher": "workspace:*",
     "@makaio/hooks": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/storage-core": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "emittery": "^1.2.0",
     "type-fest": "^5.2.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@makaio/adapter-subsystem": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
-    "@makaio/bus-core": "workspace:*"
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/subsystem-adapter": "workspace:*"
   },
   "inlinedDependencies": {
     "drizzle-orm": "0.45.2",

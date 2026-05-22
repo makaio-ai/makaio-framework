@@ -16,19 +16,19 @@ next: false
 | Schema record | `DockerSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/execution-target/container-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/container-namespace.ts) |
+| Defined in | [`services/core/src/execution-target/container-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `container.created` | [`docker.container.created`](#docker.container.created) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/container-schemas.ts) |
-| `container.destroyed` | [`docker.container.destroyed`](#docker.container.destroyed) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/container-schemas.ts) |
+| `container.created` | [`docker.container.created`](#docker.container.created) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
+| `container.destroyed` | [`docker.container.destroyed`](#docker.container.destroyed) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 | `container.spawn` | [`docker.container.spawn`](#docker.container.spawn) | rpc | — |
-| `container.started` | [`docker.container.started`](#docker.container.started) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/container-schemas.ts) |
+| `container.started` | [`docker.container.started`](#docker.container.started) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 | `container.status` | [`docker.container.status`](#docker.container.status) | rpc | — |
 | `container.stop` | [`docker.container.stop`](#docker.container.stop) | rpc | — |
-| `container.stopped` | [`docker.container.stopped`](#docker.container.stopped) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/execution-target/container-schemas.ts) |
+| `container.stopped` | [`docker.container.stopped`](#docker.container.stopped) | event | [`container-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/execution-target/container-schemas.ts) |
 
 ## Subject Details
 

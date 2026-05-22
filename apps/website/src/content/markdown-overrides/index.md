@@ -36,7 +36,7 @@ Pick the path that matches what you need:
 - [Bus Storage Guide](/architecture/bus/storage/) — bus-mediated, backend-agnostic storage
 - [`@makaio/storage-core`](/packages/core/) — storage contracts and interfaces
 - [`@makaio/storage-drizzle`](/packages/drizzle/) — SQLite/Drizzle backend
-- [`@makaio/storage-migrations`](/packages/storage-migrations/) — schema migration system
+- [`@makaio/storage-migrations`](/storage/migrations/) — schema migration system
 
 ### I want to integrate from another language
 - [SDKs Overview](/sdks/) — multi-language bus protocol clients

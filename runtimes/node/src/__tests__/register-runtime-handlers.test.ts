@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus, NoHandlerError } from '@makaio/bus-core';
 import type { AIModel } from '@makaio/contracts';
-import type { AdapterInstance, LoadedAdapter } from '@makaio/adapter-subsystem';
+import type { AdapterInstance, LoadedAdapter } from '@makaio/subsystem-adapter';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ProviderRuntimeSubjects } from '@makaio/services-core/provider-runtime';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';

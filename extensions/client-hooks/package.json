@@ -21,8 +21,8 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
     "@makaio/kernel": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {

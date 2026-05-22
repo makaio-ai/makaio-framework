@@ -16,13 +16,13 @@ next: false
 | Schema record | `ContextRulesServiceSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/context-rules/service-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/context-rules/service-namespace.ts) |
+| Defined in | [`services/core/src/context-rules/service-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/context-rules/service-namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `changed` | [`contextRules.changed`](#contextRules.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/context-rules/schemas.ts) |
+| `changed` | [`contextRules.changed`](#contextRules.changed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/context-rules/schemas.ts) |
 | `resolve` | [`contextRules.resolve`](#contextRules.resolve) | rpc | — |
 
 ## Subject Details

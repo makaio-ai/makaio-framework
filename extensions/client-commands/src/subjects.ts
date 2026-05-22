@@ -9,8 +9,8 @@
  */
 
 import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
-import type { ClientWiringApplyResponse, ClientWiringRemoveResponse } from '@makaio/clients-core';
-import { createClientWiringSubjectDef } from '@makaio/clients-core';
+import type { ClientWiringApplyResponse, ClientWiringRemoveResponse } from '@makaio/subsystem-client';
+import { createClientWiringSubjectDef } from '@makaio/subsystem-client';
 
 // ---------------------------------------------------------------------------
 // wiring.apply

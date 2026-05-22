@@ -48,8 +48,8 @@
     "@makaio/ai-adapters-stream-session": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
-    "@makaio/clients-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
     "vitest": "4.1.5"

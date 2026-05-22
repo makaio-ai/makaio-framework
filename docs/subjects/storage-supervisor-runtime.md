@@ -15,8 +15,8 @@ next: false
 | Kind | storage |
 | Schema record | `<inline>` |
 | Tier | framework |
-| Package | `@makaio/native-session-supervisor` |
-| Defined in | [`packages/native-session-supervisor/src/storage/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/native-session-supervisor/src/storage/namespace.ts) |
+| Package | `@makaio/subsystem-native-session-supervisor` |
+| Defined in | [`subsystems/native-session-supervisor/src/storage/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/subsystems/native-session-supervisor/src/storage/namespace.ts) |
 
 ## Subjects
 

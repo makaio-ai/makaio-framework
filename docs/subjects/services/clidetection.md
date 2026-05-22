@@ -16,7 +16,7 @@ next: false
 | Schema record | `CLIDetectionSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
-| Defined in | [`packages/services/core/src/cli-detection/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/services/core/src/cli-detection/namespace.ts) |
+| Defined in | [`services/core/src/cli-detection/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/cli-detection/namespace.ts) |
 
 ## Subjects
 

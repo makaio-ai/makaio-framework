@@ -30,7 +30,7 @@ import {
 import { CredentialRefSchema } from '@makaio/contracts/config';
 import { type EventContext } from '@makaio/core';
 import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
-import { startHttpMcpServer } from '@makaio/mcp-http-server';
+import { startHttpMcpServer } from '@makaio/subsystem-mcp-http-server';
 import { createMcpTestServerLifecycle } from './mcp-test-server-lifecycle.js';
 
 // Module augmentation for vitest TaskMeta lives in scripts/lib/vitest-meta.d.ts.

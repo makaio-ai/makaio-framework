@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/clients-core';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import {
   type ClientAccountIdentifier,
   type ClientRuntimeStarted,

@@ -67,10 +67,10 @@ describe('resolveStorageMigrationsDir', () => {
 
     const packageRoot = path.join(root, 'framework', 'apps', 'electron');
     writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
-    mkdirSync(path.join(root, 'framework', 'packages', 'storage-migrations', 'drizzle'), { recursive: true });
+    mkdirSync(path.join(root, 'framework', 'storage', 'migrations', 'drizzle'), { recursive: true });
 
     expect(resolveStorageMigrationsDir(packageRoot)).toBe(
-      path.join(root, 'framework', 'packages', 'storage-migrations', 'drizzle'),
+      path.join(root, 'framework', 'storage', 'migrations', 'drizzle'),
     );
   });
 
@@ -80,9 +80,9 @@ describe('resolveStorageMigrationsDir', () => {
 
     const packageRoot = path.join(root, 'apps', 'electron');
     writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
-    mkdirSync(path.join(root, 'packages', 'storage-migrations', 'drizzle'), { recursive: true });
+    mkdirSync(path.join(root, 'storage', 'migrations', 'drizzle'), { recursive: true });
 
-    expect(resolveStorageMigrationsDir(packageRoot)).toBe(path.join(root, 'packages', 'storage-migrations', 'drizzle'));
+    expect(resolveStorageMigrationsDir(packageRoot)).toBe(path.join(root, 'storage', 'migrations', 'drizzle'));
   });
 
   it('throws when neither supported source layout contains storage migrations', () => {

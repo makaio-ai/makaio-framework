@@ -70,7 +70,7 @@ vi.mock('@github/copilot-sdk', () => {
 
 vi.mock('@makaio/ai-adapters-core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@makaio/ai-adapters-core/config')>();
-  const { resolveClientBinary } = await import('@makaio/clients-core');
+  const { resolveClientBinary } = await import('@makaio/subsystem-client');
   return {
     ...actual,
     resolveSessionEnvironment: vi

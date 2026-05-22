@@ -1,4 +1,4 @@
-import type { HttpMcpServerHandle } from '@makaio/mcp-http-server';
+import type { HttpMcpServerHandle } from '@makaio/subsystem-mcp-http-server';
 
 /**
  * Worker-scoped lifecycle for the shared MCP HTTP test server.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { RawClientHookPayload } from '@makaio/clients-core';
+import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import { createHookEventRouter, type HookEventCallbacks } from '../utils/hook-event-router.js';
 
 function makeRaw(eventName: string, payload: Record<string, unknown>): RawClientHookPayload {

@@ -47,10 +47,10 @@ describe('runMigrations', () => {
       // Harness table — declared in @makaio/services-core (framework tier)
       await assertTableExists(db, 'harness_definitions');
 
-      // Client runtime tables — declared in @makaio/clients-core
+      // Client runtime tables — declared in @makaio/subsystem-client
       await assertTableExists(db, 'client_runtimes');
 
-      // Managed binary tables — declared in @makaio/clients-core
+      // Managed binary tables — declared in @makaio/subsystem-client
       const managedBinaryTables = await db.all<{ name: string }>(sql`
         SELECT name
         FROM sqlite_master

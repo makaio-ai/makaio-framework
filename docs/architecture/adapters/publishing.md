@@ -182,7 +182,7 @@ with the framework dist surface.
 | `../../adapters/implementations/*/package.json` | Adapter package configs |
 | `../../scripts/validate-build-surface.ts` | Dist surface validation script |
 | `../../.github/workflows/conformance.yml` | Conformance test CI |
-| `../../packages/clients-core/src/client-binary-manager.ts` | ClientBinaryManager (decoupled) |
+| `../../subsystems/client/src/client-binary-manager.ts` | ClientBinaryManager (decoupled) |
 | `../../runtimes/node/src/boot-model-registry.ts` | Dynamic model registry |
 
 <!-- /web:hide -->

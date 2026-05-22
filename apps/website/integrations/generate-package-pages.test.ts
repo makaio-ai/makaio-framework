@@ -98,9 +98,12 @@ describe('convertGitHubCallouts', () => {
 });
 
 describe('readmeToSlugPath', () => {
-  it('strips leading "packages/" segment so URLs do not nest under /packages/packages/', () => {
+  it('strips leading workspace-group segments so URLs do not double-nest', () => {
     expect(readmeToSlugPath('core/bus-core/README.md')).toBe('bus-core');
-    expect(readmeToSlugPath('packages/services/base/README.md')).toBe('services/base');
+    expect(readmeToSlugPath('packages/service-base/README.md')).toBe('service-base');
+    expect(readmeToSlugPath('storage/migrations/README.md')).toBe('migrations');
+    expect(readmeToSlugPath('subsystems/adapter/README.md')).toBe('adapter');
+    expect(readmeToSlugPath('services/core/README.md')).toBe('core');
   });
 
   it('keeps non-packages framework subtrees intact for nested sidebar groups', () => {

@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { startMcpServer, type StdioMcpServerHandle } from '@makaio/mcp-http-server';
+import { startMcpServer, type StdioMcpServerHandle } from '@makaio/subsystem-mcp-http-server';
 
 /**
  * Options for the MCP stdio bridge.

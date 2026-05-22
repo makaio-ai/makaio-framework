@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { AbsolutePathSchema } from '@makaio/clients-core';
+import { AbsolutePathSchema } from '@makaio/subsystem-client';
 
 export { AbsolutePathSchema };
 
@@ -333,7 +333,7 @@ export type CodexConfigHooksRemoveResponse = z.infer<typeof CodexConfigHooksRemo
  * - `config.hooks.remove`
  * @example
  * ```typescript
- * import { createClientNamespace } from '@makaio/clients-core';
+ * import { createClientNamespace } from '@makaio/subsystem-client';
  * import { CodexConfigSchemas } from './schemas/index.js';
  *
  * const { subjects } = createClientNamespace('codex', CodexConfigSchemas);

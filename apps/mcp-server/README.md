@@ -4,7 +4,7 @@ MCP stdio bridge for Makaio. Connects to a running Makaio bus server as a bus cl
 
 ## Architecture Role
 
-Surfaces sit at the top of the Kernel → Runtime → Platform → Surface layering. `@makaio/app-mcp-server` is a thin client surface: it connects outward to a hosted kernel (via `@makaio/bus-core`) and bridges inward to the MCP stdio transport provided by `@makaio/mcp-http-server`.
+Surfaces sit at the top of the Kernel → Runtime → Platform → Surface layering. `@makaio/app-mcp-server` is a thin client surface: it connects outward to a hosted kernel (via `@makaio/bus-core`) and bridges inward to the MCP stdio transport provided by `@makaio/subsystem-mcp-http-server`.
 
 ```
 MCP host (e.g. Claude Desktop)

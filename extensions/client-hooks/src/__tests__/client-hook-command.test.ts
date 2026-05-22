@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { RawClientHookPayloadSchema } from '@makaio/clients-core';
+import { RawClientHookPayloadSchema } from '@makaio/subsystem-client';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { runClientHookCommand } from '../cli/client-hook-command.js';
 

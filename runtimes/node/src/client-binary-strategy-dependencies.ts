@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
-import type { StrategyDependencies } from '@makaio/clients-core';
+import type { StrategyDependencies } from '@makaio/subsystem-client';
 
 const execFileAsync = promisify(execFile);
 

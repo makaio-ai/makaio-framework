@@ -10,7 +10,7 @@
     "packages/utils",
     "core/tools-core",
     "adapters/core",
-    "packages/services/core"
+    "services/core"
   ],
   "entryPointStrategy": "packages",
   "entryFileName": "index",
