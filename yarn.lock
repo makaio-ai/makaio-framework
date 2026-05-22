@@ -3956,8 +3956,8 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     p-defer: "npm:^4.0.1"
@@ -3980,8 +3980,8 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     zod: "npm:^4.1.13"
@@ -4000,8 +4000,8 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/client-claude-code": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/subsystem-native-session-supervisor": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -4019,9 +4019,9 @@ __metadata:
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/subprocess": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     p-queue: "npm:^9.3.0"
@@ -4068,9 +4068,9 @@ __metadata:
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     openai: "npm:^6.34.0"
@@ -4146,8 +4146,8 @@ __metadata:
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     vitest: "npm:4.1.5"
@@ -4250,7 +4250,6 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/file-watcher": "workspace:*"
@@ -4258,6 +4257,7 @@ __metadata:
     "@makaio/services-core": "workspace:*"
     "@makaio/storage-core": "workspace:*"
     "@makaio/subsystem-adapter": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     emittery: "npm:^1.2.0"
     type-fest: "npm:^5.2.0"
@@ -4284,7 +4284,7 @@ __metadata:
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    "@makaio/mcp-http-server": "workspace:*"
+    "@makaio/subsystem-mcp-http-server": "workspace:*"
     "@makaio/test-utils": "workspace:*"
   languageName: unknown
   linkType: soft
@@ -4421,10 +4421,10 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:^0.22.0"
@@ -4442,10 +4442,10 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     tsdown: "npm:^0.22.0"
     typescript: "npm:^6.0.3"
     zod: "npm:^4.1.13"
@@ -4490,26 +4490,6 @@ __metadata:
     typescript: "npm:^6.0.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
-  languageName: unknown
-  linkType: soft
-
-"@makaio/subsystem-client@workspace:*, @makaio/subsystem-client@workspace:subsystems/client":
-  version: 0.0.0-use.local
-  resolution: "@makaio/subsystem-client@workspace:subsystems/client"
-  dependencies:
-    "@makaio/build-tooling": "workspace:*"
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@makaio/core": "workspace:*"
-    "@makaio/service-base": "workspace:*"
-    "@makaio/services-core": "workspace:*"
-    "@makaio/storage-drizzle": "workspace:*"
-    "@makaio/test-utils": "workspace:*"
-    "@types/node": "npm:^24.3.0"
-    drizzle-orm: "npm:0.45.2"
-    tsx: "npm:^4.20.5"
-    vitest: "npm:4.1.5"
-    zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
 
@@ -4709,10 +4689,10 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/kernel": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:^0.22.0"
     typescript: "npm:^6.0.3"
@@ -4727,9 +4707,9 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/kernel": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:^0.22.0"
     typescript: "npm:^6.0.3"
@@ -5059,39 +5039,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/mcp-http-server@workspace:*, @makaio/mcp-http-server@workspace:subsystems/mcp-http-server":
-  version: 0.0.0-use.local
-  resolution: "@makaio/mcp-http-server@workspace:subsystems/mcp-http-server"
-  dependencies:
-    "@makaio/build-tooling": "workspace:*"
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@makaio/service-base": "workspace:*"
-    "@makaio/tools-core": "workspace:*"
-    "@modelcontextprotocol/sdk": "npm:^1.29.0"
-    "@types/node": "npm:^24.3.0"
-    quick-lru: "npm:^7.3.0"
-    tsx: "npm:^4.20.5"
-  languageName: unknown
-  linkType: soft
-
-"@makaio/subsystem-native-session-supervisor@workspace:*, @makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor":
-  version: 0.0.0-use.local
-  resolution: "@makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor"
-  dependencies:
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@makaio/service-base": "workspace:*"
-    "@makaio/storage-core": "workspace:*"
-    "@makaio/storage-drizzle": "workspace:*"
-    "@makaio/test-utils": "workspace:*"
-    drizzle-orm: "npm:0.45.2"
-    node-pty: "npm:^1.2.0-beta.8"
-    typescript: "npm:^6.0.3"
-    vitest: "npm:4.1.5"
-  languageName: unknown
-  linkType: soft
-
 "@makaio/platform-macos@workspace:*, @makaio/platform-macos@workspace:platforms/macos":
   version: 0.0.0-use.local
   resolution: "@makaio/platform-macos@workspace:platforms/macos"
@@ -5103,9 +5050,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/preferences@workspace:*, @makaio/preferences@workspace:packages/preferences":
+"@makaio/preferences@workspace:*, @makaio/preferences@workspace:storage/preferences":
   version: 0.0.0-use.local
-  resolution: "@makaio/preferences@workspace:packages/preferences"
+  resolution: "@makaio/preferences@workspace:storage/preferences"
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
@@ -5338,12 +5285,10 @@ __metadata:
     "@makaio/bus-server": "workspace:*"
     "@makaio/bus-transport-stdio": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
-    "@makaio/subsystem-client": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/machine-identity": "workspace:*"
-    "@makaio/mcp-http-server": "workspace:*"
     "@makaio/platform-macos": "workspace:*"
     "@makaio/preferences": "workspace:*"
     "@makaio/providers": "workspace:*"
@@ -5354,6 +5299,8 @@ __metadata:
     "@makaio/storage-migrations": "workspace:*"
     "@makaio/subprocess": "workspace:*"
     "@makaio/subsystem-adapter": "workspace:*"
+    "@makaio/subsystem-client": "workspace:*"
+    "@makaio/subsystem-mcp-http-server": "workspace:*"
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"
@@ -5515,9 +5462,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/storage-migrations@workspace:*, @makaio/storage-migrations@workspace:packages/storage-migrations":
+"@makaio/storage-migrations@workspace:*, @makaio/storage-migrations@workspace:storage/migrations":
   version: 0.0.0-use.local
-  resolution: "@makaio/storage-migrations@workspace:packages/storage-migrations"
+  resolution: "@makaio/storage-migrations@workspace:storage/migrations"
   dependencies:
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/utils": "workspace:*"
@@ -5548,6 +5495,72 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@makaio/services-core": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subsystem-client@workspace:*, @makaio/subsystem-client@workspace:subsystems/client":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-client@workspace:subsystems/client"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/services-core": "workspace:*"
+    "@makaio/storage-drizzle": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    drizzle-orm: "npm:0.45.2"
+    tsx: "npm:^4.20.5"
+    vitest: "npm:4.1.5"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subsystem-mcp-http-server@workspace:*, @makaio/subsystem-mcp-http-server@workspace:subsystems/mcp-http-server":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-mcp-http-server@workspace:subsystems/mcp-http-server"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/tools-core": "workspace:*"
+    "@modelcontextprotocol/sdk": "npm:^1.29.0"
+    "@types/node": "npm:^24.3.0"
+    quick-lru: "npm:^7.3.0"
+    tsx: "npm:^4.20.5"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subsystem-native-session-supervisor@workspace:*, @makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-native-session-supervisor@workspace:subsystems/native-session-supervisor"
+  dependencies:
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/storage-core": "workspace:*"
+    "@makaio/storage-drizzle": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
+    drizzle-orm: "npm:0.45.2"
+    node-pty: "npm:^1.2.0-beta.8"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.5"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/subsystem-workflow-engine@workspace:subsystems/workflow-engine":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-workflow-engine@workspace:subsystems/workflow-engine"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/expression": "workspace:*"
+    vitest: "npm:4.1.5"
   languageName: unknown
   linkType: soft
 
@@ -5698,19 +5711,6 @@ __metadata:
     typedoc: "npm:^0.28.19"
     typedoc-plugin-markdown: "npm:^4.11.0"
     typescript: "npm:^6.0.3"
-  languageName: unknown
-  linkType: soft
-
-"@makaio/workflow-engine@workspace:packages/workflow-engine":
-  version: 0.0.0-use.local
-  resolution: "@makaio/workflow-engine@workspace:packages/workflow-engine"
-  dependencies:
-    "@makaio/build-tooling": "workspace:*"
-    "@makaio/bus-core": "workspace:*"
-    "@makaio/contracts": "workspace:*"
-    "@makaio/core": "workspace:*"
-    "@makaio/expression": "workspace:*"
-    vitest: "npm:4.1.5"
   languageName: unknown
   linkType: soft
 

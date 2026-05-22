@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { HttpMcpServerHandle } from '@makaio/mcp-http-server';
+import type { HttpMcpServerHandle } from '@makaio/subsystem-mcp-http-server';
 import { createMcpTestServerLifecycle } from './mcp-test-server-lifecycle.js';
 
 type Deferred<T> = {

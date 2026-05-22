@@ -14,7 +14,7 @@ import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { StdioServerTransport } from '@makaio/bus-transport-stdio';
 import { createProcessLifecycle, type ProcessLifecycleHandle } from '@makaio/subprocess';
-import type { McpClientBridgeHandle } from '@makaio/mcp-http-server';
+import type { McpClientBridgeHandle } from '@makaio/subsystem-mcp-http-server';
 import { z } from 'zod';
 
 const DetachedLifecycleContextSchema = z.object({
@@ -341,7 +341,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
    * @see startMcpClientBridge
    */
   public async init(): Promise<void> {
-    const { startMcpClientBridge } = await import('@makaio/mcp-http-server');
+    const { startMcpClientBridge } = await import('@makaio/subsystem-mcp-http-server');
     const { transport: transportConfig } = this.descriptor;
 
     this.bridge = await startMcpClientBridge({

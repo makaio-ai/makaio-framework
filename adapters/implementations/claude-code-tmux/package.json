@@ -46,8 +46,8 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/client-claude-code": "workspace:*",
-    "@makaio/subsystem-client": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/subsystem-native-session-supervisor": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0"

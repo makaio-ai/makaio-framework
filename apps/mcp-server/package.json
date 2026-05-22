@@ -12,7 +12,7 @@
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
-    "@makaio/mcp-http-server": "workspace:*"
+    "@makaio/subsystem-mcp-http-server": "workspace:*"
   },
   "devDependencies": {
     "@makaio/test-utils": "workspace:*"
