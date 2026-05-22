@@ -125,6 +125,7 @@ describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT
   });
 
   afterEach(() => {
+    window.dispatchEvent(new Event('unload'));
     vi.restoreAllMocks();
   });
 
