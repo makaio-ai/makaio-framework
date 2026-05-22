@@ -92,3 +92,5 @@ export type {
   UiScope,
   UiScopeMap,
 } from './ui-context-types.js';
+
+export type { ExtensionWorkflowBlocksContribution } from './workflow-block-types.js';

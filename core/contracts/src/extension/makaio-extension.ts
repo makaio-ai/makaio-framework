@@ -18,6 +18,7 @@ import type { ClientDefinition } from '../client/definition.js';
 import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
+import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
 
 /**
  * Awaited contribution processor registered with the runtime coordinator.
@@ -342,6 +343,16 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * - Project import: extension data can be restored from `.makaio/bootstrap/`
    */
   readonly bootstrap?: ExtensionBootstrap<THostContext['bus']>;
+
+  /**
+   * Workflow trigger and step block declarations for the workflow builder.
+   *
+   * When present, the runtime reads `blocks` during extension activation and
+   * registers each block with the workflow block registry. Blocks are purely
+   * declarative — no runtime context is required. Use {@link WorkflowTriggerBlock}
+   * and {@link WorkflowStepBlock} to define blocks with typed Zod schemas.
+   */
+  readonly workflowBlocks?: ExtensionWorkflowBlocksContribution;
 
   /**
    * Bus namespace introspection for this extension.

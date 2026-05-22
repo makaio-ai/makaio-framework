@@ -143,6 +143,7 @@ export type {
   TurnStateChange,
 } from './session/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
+export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
 export type {
   ListToolsFilter,
   ToolRegistryOptions,
@@ -231,6 +232,8 @@ export {
   ToolRegistryToken,
   trayMenuPackage,
   TrayMenuToken,
+  workflowBlockRegistryPackage,
+  WorkflowBlockRegistryToken,
 } from './framework-packages.js';
 export { FrameworkServicesCoreNamespaces } from './namespace-catalog.js';
 export {

@@ -1,0 +1,21 @@
+{
+  "name": "review",
+  "displayName": "Review Findings",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "surface": "headless",
+  "entrypoints": {
+    "server": "index"
+  },
+  "execution": "embedded",
+  "storage": {
+    "migrations": "drizzle",
+    "migrationSourceId": "extensions/review/drizzle"
+  },
+  "contributions": {
+    "create": true,
+    "tools": true
+  }
+}

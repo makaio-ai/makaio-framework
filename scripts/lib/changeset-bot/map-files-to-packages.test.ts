@@ -25,9 +25,10 @@ describe('mapFilesToPackages', () => {
   });
 
   it('uses real package names when directory conventions differ from package.json names', () => {
-    expect(
-      mapFilesToPackages(['extensions/reviewer-coderabbit/src/index.ts', 'providers/qwen/src/package.ts']),
-    ).toEqual(['@makaio/provider-qwen-acp', '@makaio/reviewer-coderabbit']);
+    expect(mapFilesToPackages(['extensions/coderabbit/src/index.ts', 'providers/qwen/src/package.ts'])).toEqual([
+      '@makaio/extension-coderabbit',
+      '@makaio/provider-qwen-acp',
+    ]);
   });
 
   it('maps extensions to @makaio/extension-<name>', () => {

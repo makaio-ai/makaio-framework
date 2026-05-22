@@ -115,7 +115,7 @@ describe('groupChangesByPackage', () => {
         summary: 'Retypes many packages.',
       },
       {
-        paths: ['framework/extensions/reviewer-coderabbit/src/index.ts'],
+        paths: ['framework/extensions/coderabbit/src/index.ts'],
         summary: 'Adds reviewer extension metadata.',
       },
       {
@@ -132,16 +132,16 @@ describe('groupChangesByPackage', () => {
 
     expect(result).toEqual([
       {
+        packageName: '@makaio/extension-coderabbit',
+        summaries: ['Adds reviewer extension metadata.'],
+      },
+      {
         packageName: '@makaio/framework',
         summaries: ['Updates shared adapter test setup.'],
       },
       {
         packageName: '@makaio/provider-qwen-acp',
         summaries: ['Updates Qwen provider registration.'],
-      },
-      {
-        packageName: '@makaio/reviewer-coderabbit',
-        summaries: ['Adds reviewer extension metadata.'],
       },
     ]);
   });

@@ -79,3 +79,11 @@ export type {
   ResolvedContextEntry,
   ContextBundle,
 } from './context.js';
+export type {
+  RegisteredStepBlock,
+  RegisteredTriggerBlock,
+  WorkflowBlockCollection,
+  WorkflowBlockMetadata,
+  WorkflowStepBlock,
+  WorkflowTriggerBlock,
+} from './blocks.js';

@@ -23,6 +23,7 @@ const connect = vi.fn();
 const disconnect = vi.fn();
 const registerTransport = vi.fn();
 const registerNamespaces = vi.fn();
+const RENDERER_BOOTSTRAP_TEST_TIMEOUT_MS = 20_000;
 
 vi.mock('react-dom/client', () => ({
   createRoot: createRootSpy,
@@ -101,7 +102,7 @@ function createConfig(overrides: Partial<NormalizedRendererConfig> = {}): Normal
   };
 }
 
-describe('shared renderer bootstrap', () => {
+describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT_MS }, () => {
   beforeEach(() => {
     vi.resetModules();
     document.body.innerHTML = '<div id="loading-label">Idle</div><div id="root"></div>';

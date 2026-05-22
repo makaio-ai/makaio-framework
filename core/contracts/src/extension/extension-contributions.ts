@@ -174,3 +174,5 @@ export interface ExtensionUiContribution {
    */
   readonly configComponent?: ExtensionConfigComponentLoader;
 }
+
+export type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';

@@ -1,13 +1,15 @@
-# Makaio Reviewer — CodeRabbit
+# Makaio — CodeRabbit
 
-Reviewer processor extension for CodeRabbit. Registers the `codeRabbitProcessor` with the capability bus so the `review` extension can normalize raw CodeRabbit VCS data into `ReviewFinding` records.
+CodeRabbit integration extension. Registers the `CodeRabbitSource` and `codeRabbitProcessor` with the capability bus so the `review` extension can fetch and normalize raw CodeRabbit VCS data into `ReviewFinding` records.
 
 ## What It Provides
 
 | Surface | Detail |
 |---------|--------|
-| Background service | Registers `codeRabbitProcessor` with the capability bus on `init` |
+| Background service | Registers `CodeRabbitSource` and `codeRabbitProcessor` with the capability bus on `init` |
+| Review source | `review-source` with id `coderabbit`, VCS-agnostic snapshot fetching |
 | Capability | `reviewer-processor` with key `makaio/coderabbit`, reviewer family `coderabbit` |
+| Workflow blocks | Trigger: `coderabbit.review-posted`; Step: `coderabbit.fetch-findings` |
 
 This extension contributes no CLI commands, tools, or storage of its own. All findings management is handled by the `review` extension.
 
@@ -51,11 +53,11 @@ IDs are stable across fetches: the same comment always produces the same ID so r
 
 ## Dependency
 
-Requires the `review` extension to be loaded and running. The processor is registered via `CapabilityService` — if `review` is not loaded, the processor registration silently succeeds but has no effect.
+Requires the `review` extension to be loaded and running. The extension declares `dep('review')`, so descriptor-driven startup treats that as a hard activation dependency.
 
 ## Installation
 
 ```bash
-makaio extension install ./extensions/reviewer-coderabbit
+makaio extension install ./extensions/coderabbit
 makaio extension install ./extensions/review
 ```
