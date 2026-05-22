@@ -136,6 +136,58 @@ describe('workflow storage handlers', () => {
     expect(completedOnly.map((item) => item.id)).toEqual([completedExecution.id]);
   });
 
+  it('persists workflow step spans and execution links', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-span-storage' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const execution = createWorkflowExecution({ id: 'execution-span-storage', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
+      span: {
+        executionId: execution.id,
+        stepId: 'plan',
+        stepType: 'agent',
+        status: 'completed',
+        startedAt: 10,
+        completedAt: 20,
+        durationMs: 10,
+        inputTokens: 12,
+        outputTokens: 5,
+        estimatedCost: 0.01,
+        toolCallCount: 2,
+        input: '{"prompt":"Plan"}',
+        output: '{"verdict":"ok"}',
+      },
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
+      link: {
+        sourceExecutionId: execution.id,
+        targetExecutionId: 'execution-next',
+        linkType: 'triggered-by',
+        metadata: { subject: 'github.issue.labeled' },
+      },
+    });
+
+    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId: execution.id });
+    expect(spans).toHaveLength(1);
+    expect(spans[0]?.stepId).toBe('plan');
+    expect(spans[0]?.estimatedCost).toBe(0.01);
+
+    const { links } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {
+      sourceExecutionId: execution.id,
+    });
+    expect(links).toEqual([
+      {
+        sourceExecutionId: execution.id,
+        targetExecutionId: 'execution-next',
+        linkType: 'triggered-by',
+        metadata: { subject: 'github.issue.labeled' },
+      },
+    ]);
+  });
+
   describe('Lifecycle events', () => {
     const cleanups: Array<() => void> = [];
 

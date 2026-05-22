@@ -1,7 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
+import type { ExtensionContext , SpanRecord, ExecutionLink } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createDrizzleCrudHandlers, createDrizzleListHandler, buildScopePredicates } from '@makaio/storage-handlers';
 import {
@@ -11,10 +11,18 @@ import {
   type WorkflowExecution,
   type WorkflowListQuery,
 } from './namespace.js';
-import { workflowDefinitions, workflowExecutions, type InsertWorkflowExecution } from './schema.js';
+import {
+  workflowDefinitions,
+  workflowExecutions,
+  workflowStepSpans,
+  workflowExecutionLinks,
+  type InsertWorkflowExecution,
+} from './schema.js';
 
 type DbDefinitionRow = typeof workflowDefinitions.$inferSelect;
 type DbExecutionRow = typeof workflowExecutions.$inferSelect;
+type DbSpanRow = typeof workflowStepSpans.$inferSelect;
+type DbExecutionLinkRow = typeof workflowExecutionLinks.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────
 // Definition Handlers
@@ -222,12 +230,128 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// Span and Execution Link Mappers
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Maps database row to SpanRecord API type.
+ * Converts nullable DB columns to optional undefined values.
+ * @param row - Database row from workflow_step_spans table
+ * @returns Mapped SpanRecord with optional fields as undefined
+ */
+function mapSpan(row: DbSpanRow): SpanRecord {
+  return {
+    executionId: row.executionId,
+    stepId: row.stepId,
+    stepType: row.stepType,
+    status: row.status,
+    startedAt: row.startedAt ?? undefined,
+    completedAt: row.completedAt ?? undefined,
+    durationMs: row.durationMs ?? undefined,
+    inputTokens: row.inputTokens ?? undefined,
+    outputTokens: row.outputTokens ?? undefined,
+    estimatedCost: row.estimatedCost ?? undefined,
+    toolCallCount: row.toolCallCount ?? undefined,
+    input: row.input ?? undefined,
+    output: row.output ?? undefined,
+  };
+}
+
+/**
+ * Maps database row to ExecutionLink API type.
+ * Converts nullable metadata to optional undefined.
+ * @param row - Database row from workflow_execution_links table
+ * @returns Mapped ExecutionLink with optional fields as undefined
+ */
+function mapExecutionLink(row: DbExecutionLinkRow): ExecutionLink {
+  return {
+    sourceExecutionId: row.sourceExecutionId,
+    targetExecutionId: row.targetExecutionId,
+    linkType: row.linkType,
+    metadata: row.metadata ?? undefined,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Span and Execution Link Handlers
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Registers span and execution link handlers.
+ *
+ * Handles:
+ * - Span CRUD: setSpan, listSpans
+ * - Execution link CRUD: setExecutionLink, listExecutionLinks
+ * @param bus - MakaioBus instance for message handling
+ * @param db - Drizzle database instance
+ * @returns Cleanup function to unregister handlers
+ */
+function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const unsubSetSpan = bus.on(WorkflowStorageSubjects.setSpan, async (ctx) => {
+    const { span } = ctx.payload;
+    await db
+      .insert(workflowStepSpans)
+      .values(span)
+      .onConflictDoUpdate({
+        target: [workflowStepSpans.executionId, workflowStepSpans.stepId],
+        set: span,
+      });
+    ctx.setResult({ id: `${span.executionId}:${span.stepId}` });
+  });
+
+  const unsubListSpans = bus.on(WorkflowStorageSubjects.listSpans, async (ctx) => {
+    const rows = await db
+      .select()
+      .from(workflowStepSpans)
+      .where(eq(workflowStepSpans.executionId, ctx.payload.executionId));
+    ctx.setResult({ spans: rows.map(mapSpan) });
+  });
+
+  const unsubSetExecutionLink = bus.on(WorkflowStorageSubjects.setExecutionLink, async (ctx) => {
+    const { link } = ctx.payload;
+    await db
+      .insert(workflowExecutionLinks)
+      .values(link)
+      .onConflictDoUpdate({
+        target: [workflowExecutionLinks.sourceExecutionId, workflowExecutionLinks.targetExecutionId],
+        set: link,
+      });
+    ctx.setResult({ id: `${link.sourceExecutionId}:${link.targetExecutionId}` });
+  });
+
+  const unsubListExecutionLinks = bus.on(WorkflowStorageSubjects.listExecutionLinks, async (ctx) => {
+    const { sourceExecutionId, targetExecutionId } = ctx.payload;
+    const predicates = [
+      ...(sourceExecutionId ? [eq(workflowExecutionLinks.sourceExecutionId, sourceExecutionId)] : []),
+      ...(targetExecutionId ? [eq(workflowExecutionLinks.targetExecutionId, targetExecutionId)] : []),
+    ];
+    const query =
+      predicates.length > 0
+        ? db
+            .select()
+            .from(workflowExecutionLinks)
+            .where(and(...predicates))
+        : db.select().from(workflowExecutionLinks);
+    ctx.setResult({ links: (await query).map(mapExecutionLink) });
+  });
+
+  return () => {
+    unsubSetSpan();
+    unsubListSpans();
+    unsubSetExecutionLink();
+    unsubListExecutionLinks();
+  };
+}
+
 /**
  * Registers all Drizzle-based workflow storage handlers with the bus.
  *
  * Handles:
  * - Definition CRUD: get, set, delete, list
  * - Execution CRUD: getExecution, setExecution, listExecutions
+ * - Span CRUD: setSpan, listSpans
+ * - Execution link CRUD: setExecutionLink, listExecutionLinks
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)
@@ -241,10 +365,12 @@ export function registerDrizzleWorkflowStorage(
   const definitionCrudCleanup = registerDefinitionCrud(bus, db);
   const definitionListCleanup = registerDefinitionList(bus, db);
   const executionCleanup = registerExecutionHandlers(bus, db);
+  const spanCleanup = registerSpanHandlers(bus, db);
 
   return () => {
     definitionCrudCleanup();
     definitionListCleanup();
     executionCleanup();
+    spanCleanup();
   };
 }

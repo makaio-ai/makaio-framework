@@ -6,8 +6,10 @@ import {
   WorkflowExecutionSchema,
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
+  ExecutionLinkSchema,
+  SpanRecordSchema,
 } from '@makaio/contracts';
-import { workflowDefinitions, workflowExecutions } from './schema.js';
+import { workflowDefinitions, workflowExecutions, workflowExecutionLinks, workflowStepSpans } from './schema.js';
 
 /**
  * Storage namespace for workflow persistence.
@@ -70,11 +72,44 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       request: ExecutionListQuerySchema,
       response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
     },
+
+    // ─────────────────────────────────────────────────────────────
+    // Span CRUD
+    // ─────────────────────────────────────────────────────────────
+
+    setSpan: {
+      request: z.object({ span: SpanRecordSchema }),
+      response: z.object({ id: z.string() }),
+    },
+
+    listSpans: {
+      request: z.object({ executionId: z.string() }),
+      response: z.object({ spans: z.array(SpanRecordSchema) }),
+    },
+
+    // ─────────────────────────────────────────────────────────────
+    // Execution Link CRUD
+    // ─────────────────────────────────────────────────────────────
+
+    setExecutionLink: {
+      request: z.object({ link: ExecutionLinkSchema }),
+      response: z.object({ id: z.string() }),
+    },
+
+    listExecutionLinks: {
+      request: z.object({
+        sourceExecutionId: z.string().optional(),
+        targetExecutionId: z.string().optional(),
+      }),
+      response: z.object({ links: z.array(ExecutionLinkSchema) }),
+    },
   },
   extensions: {
     drizzle: {
       workflowDefinitions,
       workflowExecutions,
+      workflowStepSpans,
+      workflowExecutionLinks,
     },
   },
 });

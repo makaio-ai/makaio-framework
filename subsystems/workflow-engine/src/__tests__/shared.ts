@@ -40,11 +40,45 @@ const CREATE_WORKFLOW_EXECUTIONS_TABLE_SQL = sql`
   )
 `;
 
+const CREATE_WORKFLOW_STEP_SPANS_TABLE_SQL = sql`
+  CREATE TABLE IF NOT EXISTS workflow_step_spans (
+    execution_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    step_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    duration_ms INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    estimated_cost REAL,
+    tool_call_count INTEGER,
+    input TEXT,
+    output TEXT,
+    PRIMARY KEY (execution_id, step_id),
+    FOREIGN KEY (execution_id) REFERENCES workflow_executions(id) ON DELETE CASCADE
+  )
+`;
+
+const CREATE_WORKFLOW_EXECUTION_LINKS_TABLE_SQL = sql`
+  CREATE TABLE IF NOT EXISTS workflow_execution_links (
+    source_execution_id TEXT NOT NULL,
+    target_execution_id TEXT NOT NULL,
+    link_type TEXT NOT NULL,
+    metadata TEXT,
+    PRIMARY KEY (source_execution_id, target_execution_id)
+  )
+`;
+
 const CREATE_WORKFLOW_INDICES_SQL = [
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_workflow_definitions_name_scope ON workflow_definitions(name, scope)`,
   sql`CREATE INDEX IF NOT EXISTS idx_workflow_definitions_project_id ON workflow_definitions(project_id)`,
   sql`CREATE INDEX IF NOT EXISTS idx_workflow_executions_workflow_id ON workflow_executions(workflow_id)`,
   sql`CREATE INDEX IF NOT EXISTS idx_workflow_executions_status ON workflow_executions(status)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_workflow_step_spans_execution_id ON workflow_step_spans(execution_id)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_workflow_step_spans_status ON workflow_step_spans(status)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_workflow_execution_links_source ON workflow_execution_links(source_execution_id)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_workflow_execution_links_target ON workflow_execution_links(target_execution_id)`,
 ];
 
 /**
@@ -109,6 +143,8 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
 
   await db.run(CREATE_WORKFLOW_DEFINITIONS_TABLE_SQL);
   await db.run(CREATE_WORKFLOW_EXECUTIONS_TABLE_SQL);
+  await db.run(CREATE_WORKFLOW_STEP_SPANS_TABLE_SQL);
+  await db.run(CREATE_WORKFLOW_EXECUTION_LINKS_TABLE_SQL);
   for (const statement of CREATE_WORKFLOW_INDICES_SQL) {
     await db.run(statement);
   }
