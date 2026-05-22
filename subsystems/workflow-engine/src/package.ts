@@ -7,7 +7,7 @@ import { WorkflowExecutor } from './workflow-executor.js';
 import { WorkflowStorageNamespace } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
 
-const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
 /** Typed package token for retrieving the workflow executor service. */
 export const WorkflowEngineToken = extensionToken<WorkflowExecutor>('makaio.workflow-engine');
