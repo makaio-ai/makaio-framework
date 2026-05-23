@@ -88,7 +88,8 @@ jobs:
               per_page: 100,
             });
 
-            const docsOnly = files.length > 0 && files.every(({ filename: file }) =>
+            const requiresValidation = files.some(({ filename: file }) => file === 'docs/package-overview.md');
+            const docsOnly = files.length > 0 && !requiresValidation && files.every(({ filename: file }) =>
               file.endsWith('.md') ||
               file.startsWith('docs/') ||
               (file.startsWith('.changeset/') && file.endsWith('.md'))
@@ -208,6 +209,10 @@ jobs:
 
       - name: Run combined validator
         run: ${{ inputs.validation_command }}
+
+      - name: Check package overview drift
+        run: yarn validate:package-overview
+        working-directory: ${{ inputs.framework_root }}
 
       - name: Check SDK codegen drift
         run: yarn validate:sdk-codegen
