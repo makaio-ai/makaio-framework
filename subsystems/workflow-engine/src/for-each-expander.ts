@@ -22,6 +22,16 @@ export interface ExpansionResult {
 }
 
 /**
+ * Expanded replacement for a single for-each step.
+ */
+interface ForEachExpansion {
+  /** Flat steps produced by the for-each expansion. */
+  steps: WorkflowStep[];
+  /** Leaf step IDs produced across all iterations. */
+  leafIds: string[];
+}
+
+/**
  * Namespace an inner step ID relative to a for-each step iteration.
  * @param forEachId - The for-each step's ID
  * @param index - The iteration index
@@ -121,31 +131,34 @@ function cloneInnerStep(innerStep: WorkflowStep, expandedId: string, namespacedN
 /**
  * Expand a single for-each step into its flattened WorkflowStep array.
  *
- * Assumes all inner for-each steps have already been recursively expanded
- * and the collection has already been resolved by the caller.
+ * Nested for-each steps are expanded separately for each concrete iteration so
+ * their collection expressions can resolve this iteration's item/index scope.
  * @param forEachStep - The for-each step to expand
  * @param collection - Pre-resolved collection array (non-empty)
+ * @param context - Expression context for evaluating nested for-each steps
  * @param stepContext - Mutable map to record per-step context overrides
- * @param innerContext - Context map from recursively-expanded inner for-each scopes
- * @returns Expanded steps replacing this for-each step
+ * @returns Expanded steps and leaf IDs replacing this for-each step
  */
 function expandSingleForEachWithCollection(
   forEachStep: ForEachWorkflowStep,
   collection: unknown[],
+  context: ExpressionContext,
   stepContext: Map<string, ForEachStepContext>,
-  innerContext: ReadonlyMap<string, ForEachStepContext>,
-): WorkflowStep[] {
-  const innerSteps = forEachStep.steps;
-  const innerRootIds = new Set(innerSteps.filter((s) => !s.needs || s.needs.length === 0).map((s) => s.id));
-  const innerLeafIds = findInnerLeafIds(innerSteps);
+): ForEachExpansion {
   const batchSize = forEachStep.concurrency && forEachStep.concurrency > 0 ? forEachStep.concurrency : 0;
 
   const expanded: WorkflowStep[] = [];
+  const leafIds: string[] = [];
   let previousBatchLeafIds: string[] = [];
   let currentBatchLeafIds: string[] = [];
 
   for (let i = 0; i < collection.length; i++) {
     const item = collection[i];
+    const iterationContext: ExpressionContext = { ...context, item, index: i };
+    const { steps: innerSteps, stepContext: innerContext } = expandForEachSteps(forEachStep.steps, iterationContext);
+    const innerRootIds = new Set(innerSteps.filter((s) => !s.needs || s.needs.length === 0).map((s) => s.id));
+    const innerLeafIds = findInnerLeafIds(innerSteps);
+    const namespacedLeafIds = innerLeafIds.map((leafId) => namespacedId(forEachStep.id, i, leafId));
     const extraConcurrencyNeeds = concurrencyNeeds(i, batchSize, collection.length, previousBatchLeafIds);
 
     for (const innerStep of innerSteps) {
@@ -165,10 +178,9 @@ function expandSingleForEachWithCollection(
     }
 
     if (batchSize > 0) {
-      for (const leafId of innerLeafIds) {
-        currentBatchLeafIds.push(namespacedId(forEachStep.id, i, leafId));
-      }
+      currentBatchLeafIds.push(...namespacedLeafIds);
     }
+    leafIds.push(...namespacedLeafIds);
 
     // Update batch boundary tracking
     if (batchSize > 0 && batchInfo(i, batchSize, collection.length).isLast) {
@@ -177,25 +189,7 @@ function expandSingleForEachWithCollection(
     }
   }
 
-  return expanded;
-}
-
-/**
- * Compute the set of all expanded leaf step IDs across all iterations.
- * @param forEachId - The for-each step's ID
- * @param collection - The resolved collection array
- * @param expandedInner - Recursively expanded inner steps
- * @returns All leaf step IDs across every iteration
- */
-function collectAllLeafIds(forEachId: string, collection: unknown[], expandedInner: WorkflowStep[]): string[] {
-  const innerLeafIds = findInnerLeafIds(expandedInner);
-  const allLeafIds: string[] = [];
-  for (let i = 0; i < collection.length; i++) {
-    for (const leafId of innerLeafIds) {
-      allLeafIds.push(namespacedId(forEachId, i, leafId));
-    }
-  }
-  return allLeafIds;
+  return { steps: expanded, leafIds };
 }
 
 /**
@@ -231,7 +225,7 @@ function rewireNeeds(steps: WorkflowStep[], forEachLeafMap: Map<string, string[]
  * 2. For each item, copies inner steps with namespaced IDs: `{forEachId}.{index}.{innerStepId}`.
  * 3. Rewires `needs` on inner steps and downstream dependents.
  * 4. Applies concurrency batching via synthetic `needs` edges between batches.
- * 5. Recurses into nested for-each steps before expanding the outer for-each.
+ * 5. Recurses into nested for-each steps once each parent iteration context exists.
  *
  * The function is pure: no bus access, no side effects.
  * Collection expression errors propagate to the caller (caught by `runExecution`).
@@ -270,9 +264,6 @@ export function expandForEachSteps(steps: WorkflowStep[], context: ExpressionCon
     // already contain dots as part of internal namespacing and are expected.
     assertNamespacingSafeIds(forEachStep.id, forEachStep.steps);
 
-    // Recursively expand any nested for-each steps in the inner DAG first
-    const { steps: expandedInner, stepContext: innerContext } = expandForEachSteps(forEachStep.steps, context);
-
     // Evaluate collection once, reuse for both expansion and leaf ID computation
     const collection = evaluateSync(forEachStep.collection, context);
     if (!Array.isArray(collection)) {
@@ -281,20 +272,13 @@ export function expandForEachSteps(steps: WorkflowStep[], context: ExpressionCon
       );
     }
 
-    // Expand with the recursively flattened inner steps.
-    // Note: innerContext keys are relative to the inner DAG and are re-namespaced
-    // inside expandSingleForEachWithCollection; do not merge into outer stepContext.
-    const forEachWithExpanded: ForEachWorkflowStep = { ...forEachStep, steps: expandedInner };
-    const expandedSteps =
+    const expandedForEach =
       collection.length > 0
-        ? expandSingleForEachWithCollection(forEachWithExpanded, collection, stepContext, innerContext)
-        : [];
+        ? expandSingleForEachWithCollection(forEachStep, collection, context, stepContext)
+        : { steps: [], leafIds: [] };
+    forEachLeafMap.set(forEachStep.id, expandedForEach.leafIds);
 
-    // Compute leaf IDs for downstream needs rewiring
-    const allLeafIds = collection.length > 0 ? collectAllLeafIds(forEachStep.id, collection, expandedInner) : [];
-    forEachLeafMap.set(forEachStep.id, allLeafIds);
-
-    expanded.push(...expandedSteps);
+    expanded.push(...expandedForEach.steps);
   }
 
   return { steps: rewireNeeds(expanded, forEachLeafMap), stepContext };

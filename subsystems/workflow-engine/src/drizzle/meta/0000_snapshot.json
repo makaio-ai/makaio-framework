@@ -388,7 +388,26 @@
           "isUnique": false
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "workflow_execution_links_source_execution_id_workflow_executions_id_fk": {
+          "name": "workflow_execution_links_source_execution_id_workflow_executions_id_fk",
+          "tableFrom": "workflow_execution_links",
+          "columnsFrom": ["source_execution_id"],
+          "tableTo": "workflow_executions",
+          "columnsTo": ["id"],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        },
+        "workflow_execution_links_target_execution_id_workflow_executions_id_fk": {
+          "name": "workflow_execution_links_target_execution_id_workflow_executions_id_fk",
+          "tableFrom": "workflow_execution_links",
+          "columnsFrom": ["target_execution_id"],
+          "tableTo": "workflow_executions",
+          "columnsTo": ["id"],
+          "onUpdate": "no action",
+          "onDelete": "cascade"
+        }
+      },
       "compositePrimaryKeys": {
         "workflow_execution_links_source_execution_id_target_execution_id_pk": {
           "columns": ["source_execution_id", "target_execution_id"],

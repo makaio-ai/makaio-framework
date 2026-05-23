@@ -60,6 +60,26 @@ interface CapturedStart {
   triggerPayload: Record<string, unknown> | undefined;
 }
 
+const NEGATIVE_START_OBSERVATION_MS = 100;
+
+async function expectNoCapturedStarts(capturedStarts: readonly CapturedStart[]): Promise<void> {
+  const initialStartCount = capturedStarts.length;
+  let observedStart = false;
+
+  try {
+    await vi.waitUntil(() => capturedStarts.length !== initialStartCount, {
+      timeout: NEGATIVE_START_OBSERVATION_MS,
+      interval: 5,
+    });
+    observedStart = true;
+  } catch {
+    observedStart = false;
+  }
+
+  expect(observedStart).toBe(false);
+  expect(capturedStarts).toHaveLength(initialStartCount);
+}
+
 // ─────────────────────────────────────────────────────────────
 // Suite
 // ─────────────────────────────────────────────────────────────
@@ -143,8 +163,7 @@ describe('BusEventTriggerEvaluator', () => {
 
     await MakaioBus.emit(TestSessionSubjects.closed, { sessionId: 'sess-1' });
 
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -175,8 +194,7 @@ describe('BusEventTriggerEvaluator', () => {
 
     await MakaioBus.emit(TestRepoSubjects.worktree, { path: '/repo', event: 'added' });
 
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   it('fires workflow when no filter is specified (matches any payload)', async () => {
@@ -259,8 +277,7 @@ describe('BusEventTriggerEvaluator', () => {
     // Reset captures and confirm no more fires.
     capturedStarts.length = 0;
     await MakaioBus.emit(TestRepoSubjects.worktree, { path: '/repo', event: 'removed' });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -321,8 +338,7 @@ describe('BusEventTriggerEvaluator', () => {
 
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 3, status: 'failure' });
 
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -365,8 +381,7 @@ describe('BusEventTriggerEvaluator', () => {
 
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 3, status: 'success' });
 
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -395,14 +410,12 @@ describe('BusEventTriggerEvaluator', () => {
     // filter passes but filterExpression fails
     capturedStarts.length = 0;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 2, status: 'success' });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
 
     // filter fails (filterExpression never evaluated)
     capturedStarts.length = 0;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'develop', count: 10, status: 'success' });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(capturedStarts).toHaveLength(0);
+    await expectNoCapturedStarts(capturedStarts);
   });
 
   // ─────────────────────────────────────────────────────────────

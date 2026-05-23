@@ -43,6 +43,25 @@ export function stringifyStepValue(value: unknown): string | undefined {
 }
 
 /**
+ * Project the runner expression context into the values that are direct step inputs.
+ * @param resolvedInputs - Expression context passed to the runner.
+ * @returns Serializable span input without trigger payloads or previous step state.
+ */
+function buildSpanInput(resolvedInputs: Record<string, unknown>): Record<string, unknown> | undefined {
+  const spanInput: Record<string, unknown> = {};
+  if ('inputs' in resolvedInputs) {
+    spanInput.inputs = resolvedInputs.inputs;
+  }
+  if ('item' in resolvedInputs) {
+    spanInput.item = resolvedInputs.item;
+  }
+  if ('index' in resolvedInputs) {
+    spanInput.index = resolvedInputs.index;
+  }
+  return Object.keys(spanInput).length > 0 ? spanInput : undefined;
+}
+
+/**
  * Persist initial state for runners that return pure results instead of mutating execution state.
  * @param bus - Runtime bus.
  * @param active - Active execution state.
@@ -172,7 +191,7 @@ export async function persistStepSpan(
       outputTokens: telemetry?.tokenUsage?.output,
       estimatedCost: telemetry?.estimatedCost,
       toolCallCount: telemetry?.toolCalls,
-      input: stringifyStepValue(resolvedInputs),
+      input: stringifyStepValue(buildSpanInput(resolvedInputs)),
       output,
     },
   });

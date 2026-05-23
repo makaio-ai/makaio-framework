@@ -259,21 +259,70 @@ export class WorkflowExecutor extends BaseService {
       triggerPayload: sanitizedTriggerPayload,
     };
 
-    await this.bus.request(WorkflowStorageSubjects.setExecution, { execution });
-    this.activeExecutions.set(executionId, {
-      execution,
-      workflow,
-      expandedSteps,
-      stepMap: new Map(expandedSteps.map((step) => [step.id, step])),
-      stepContext,
+    let launched = false;
+    try {
+      await this.bus.request(WorkflowStorageSubjects.setExecution, { execution });
+      this.activeExecutions.set(executionId, {
+        execution,
+        workflow,
+        expandedSteps,
+        stepMap: new Map(expandedSteps.map((step) => [step.id, step])),
+        stepContext,
+      });
+
+      let startExecutionTask: () => void = () => {};
+      const executionTask = new Promise<void>((resolve, reject) => {
+        startExecutionTask = () => {
+          void this.runExecution(executionId).then(resolve, reject);
+        };
+      }).finally(() => {
+        this.executionTasks.delete(executionId);
+      });
+      this.executionTasks.set(executionId, executionTask);
+      launched = true;
+      void executionTask;
+
+      await this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
+      startExecutionTask();
+      return executionId;
+    } catch (error) {
+      if (!launched) {
+        this.activeExecutions.delete(executionId);
+        this.executionTasks.delete(executionId);
+        await this.closeCoordinatorSession(coordinatorSessionId);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Emit the execution-started lifecycle event without letting observer failures
+   * prevent an already-persisted execution from running.
+   * @param payload - Execution lifecycle payload.
+   */
+  private async emitExecutionStarted(payload: {
+    executionId: string;
+    workflowId: string;
+    coordinatorSessionId: string;
+  }): Promise<void> {
+    try {
+      await this.bus.emit(WorkflowSubjects.execution.started, payload);
+    } catch (error) {
+      console.error('[WorkflowExecutor] execution.started listener failed:', error);
+    }
+  }
+
+  /**
+   * Close a coordinator session created for an execution that failed before launch.
+   * @param sessionId - Coordinator session ID.
+   */
+  private async closeCoordinatorSession(sessionId: string): Promise<void> {
+    await this.bus.request(SessionSubjects.close, { sessionId }).catch((error: unknown) => {
+      console.error(
+        `[WorkflowExecutor] Failed to close coordinator session "${sessionId}" after launch failure:`,
+        error,
+      );
     });
-    await this.bus.emit(WorkflowSubjects.execution.started, { executionId, workflowId, coordinatorSessionId });
-    const executionTask = this.runExecution(executionId).finally(() => {
-      this.executionTasks.delete(executionId);
-    });
-    this.executionTasks.set(executionId, executionTask);
-    void executionTask;
-    return executionId;
   }
 
   /**

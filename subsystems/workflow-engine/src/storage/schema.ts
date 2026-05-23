@@ -150,9 +150,13 @@ export const workflowExecutionLinks = sqliteTable(
   'workflow_execution_links',
   {
     /** Execution that caused the link. */
-    sourceExecutionId: text('source_execution_id').notNull(),
+    sourceExecutionId: text('source_execution_id')
+      .notNull()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
     /** Execution that was created as a result. */
-    targetExecutionId: text('target_execution_id').notNull(),
+    targetExecutionId: text('target_execution_id')
+      .notNull()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
     /** Relationship type. */
     linkType: text('link_type').$type<ExecutionLinkType>().notNull(),
     /** Optional metadata (e.g., reason, target station). */

@@ -117,59 +117,63 @@ export async function cancelExecution(
   execution.status = 'cancelled';
   execution.completedAt = Date.now();
 
-  const activeStepEntries = Object.entries(execution.steps).filter(
-    ([, state]) => state.status === 'running' || state.status === 'waiting',
-  );
+  try {
+    const activeStepEntries = Object.entries(execution.steps).filter(
+      ([, state]) => state.status === 'running' || state.status === 'waiting',
+    );
 
-  await Promise.all(
-    activeStepEntries
-      .filter((entry): entry is [string, StepState & { subagentId: string }] => typeof entry[1].subagentId === 'string')
-      .map(([, state]) =>
-        bus
-          .request(SubagentSubjects.kill, {
-            subagentId: state.subagentId,
-            reason: 'Workflow cancelled',
-          })
-          .catch(() => {}),
-      ),
-  );
+    await Promise.all(
+      activeStepEntries
+        .filter(
+          (entry): entry is [string, StepState & { subagentId: string }] => typeof entry[1].subagentId === 'string',
+        )
+        .map(([, state]) =>
+          bus
+            .request(SubagentSubjects.kill, {
+              subagentId: state.subagentId,
+              reason: 'Workflow cancelled',
+            })
+            .catch(() => {}),
+        ),
+    );
 
-  const cancelledStepIds: string[] = [];
-  for (const [stepId, stepState] of activeStepEntries) {
-    gateCoordinator.resolveForCancellation(executionId, stepId);
+    const cancelledStepIds: string[] = [];
+    for (const [stepId, stepState] of activeStepEntries) {
+      gateCoordinator.resolveForCancellation(executionId, stepId);
 
-    execution.steps[stepId] = {
-      ...stepState,
-      status: 'failed',
-      error: 'Workflow cancelled',
-      completedAt: Date.now(),
-    };
-    cancelledStepIds.push(stepId);
-  }
-
-  for (const [key, controller] of shellAbortControllers) {
-    if (key.startsWith(`${executionId}:`)) {
-      controller.abort();
-      shellAbortControllers.delete(key);
-    }
-  }
-
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await Promise.all(
-    cancelledStepIds.map((stepId) => {
-      const stepType = active.stepMap.get(stepId)?.type ?? 'agent';
-      const resolvedStepType = stepType === 'for-each' ? 'agent' : stepType;
-      return bus.emit(WorkflowSubjects.step.failed, {
-        executionId,
-        stepId,
-        stepType: resolvedStepType as 'agent' | 'shell' | 'gate',
+      execution.steps[stepId] = {
+        ...stepState,
+        status: 'failed',
         error: 'Workflow cancelled',
-      });
-    }),
-  );
-  await bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
+        completedAt: Date.now(),
+      };
+      cancelledStepIds.push(stepId);
+    }
 
-  activeExecutions.delete(executionId);
+    for (const [key, controller] of shellAbortControllers) {
+      if (key.startsWith(`${executionId}:`)) {
+        controller.abort();
+        shellAbortControllers.delete(key);
+      }
+    }
+
+    await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await Promise.all(
+      cancelledStepIds.map((stepId) => {
+        const stepType = active.stepMap.get(stepId)?.type ?? 'agent';
+        const resolvedStepType = stepType === 'for-each' ? 'agent' : stepType;
+        return bus.emit(WorkflowSubjects.step.failed, {
+          executionId,
+          stepId,
+          stepType: resolvedStepType as 'agent' | 'shell' | 'gate',
+          error: 'Workflow cancelled',
+        });
+      }),
+    );
+    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
+  } finally {
+    activeExecutions.delete(executionId);
+  }
 
   return true;
 }

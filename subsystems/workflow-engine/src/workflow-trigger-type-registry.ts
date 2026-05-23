@@ -19,8 +19,10 @@ export class WorkflowTriggerTypeRegistry implements IWorkflowTriggerTypeRegistry
     this.records.set(record.type, record);
     this.notifyListeners();
     return () => {
-      this.records.delete(record.type);
-      this.notifyListeners();
+      if (this.records.get(record.type) === record) {
+        this.records.delete(record.type);
+        this.notifyListeners();
+      }
     };
   }
 

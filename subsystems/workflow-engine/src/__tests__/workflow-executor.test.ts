@@ -282,6 +282,57 @@ describe('WorkflowExecutor', () => {
     expect(totalAfter).toBe(totalBefore);
   });
 
+  it('closes the coordinator session when execution persistence fails before launch', async () => {
+    const { sessions: activeBefore } = await MakaioBus.request(SessionSubjects.list, { status: 'active' });
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-persistence-failure-closes-session',
+      steps: [{ id: 'one', type: 'agent', prompt: 'Step one', adapter: 'claude-code' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const failSetExecution = MakaioBus.on(
+      WorkflowStorageSubjects.setExecution,
+      () => {
+        throw new Error('setExecution unavailable');
+      },
+      { priority: 1_000 },
+    );
+    try {
+      await expect(MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} })).rejects.toThrow(
+        'setExecution unavailable',
+      );
+    } finally {
+      failSetExecution();
+    }
+
+    const { sessions: activeAfter } = await MakaioBus.request(SessionSubjects.list, { status: 'active' });
+    expect(activeAfter.map((session) => session.sessionId).sort()).toEqual(
+      activeBefore.map((session) => session.sessionId).sort(),
+    );
+  });
+
+  it('continues a persisted execution when execution.started observers fail', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-started-observer-failure',
+      steps: [{ id: 'one', type: 'agent', prompt: 'Step one', adapter: 'claude-code' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.started, () => {
+        throw new Error('started listener failed');
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+
+    await vi.waitFor(async () => {
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('completed');
+    });
+  });
+
   it('registers handlers through idempotent service lifecycle', async () => {
     // Tear down the setup executor so its handlers don't interfere with the assertion.
     await setup.workflowExecutor.destroy();
@@ -329,6 +380,7 @@ describe('WorkflowExecutor', () => {
     const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
       workflowId: workflow.id,
       inputs: { title: 'Runner input' },
+      triggerPayload: { source: 'not-span-input' },
     });
 
     await vi.waitFor(async () => {
@@ -342,6 +394,7 @@ describe('WorkflowExecutor', () => {
       result: '{"answer":42}',
     });
     expect(seenConfigs[0]?.resolvedInputs.inputs).toEqual({ title: 'Runner input' });
+    expect(seenConfigs[0]?.resolvedInputs.trigger).toEqual({ source: 'not-span-input' });
 
     const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId });
     expect(spans[0]).toMatchObject({
@@ -352,6 +405,7 @@ describe('WorkflowExecutor', () => {
       outputTokens: 4,
       estimatedCost: 0.01,
       toolCallCount: 2,
+      input: JSON.stringify({ inputs: { title: 'Runner input' } }),
       output: '{"answer":42}',
     });
   });

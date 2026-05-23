@@ -142,7 +142,7 @@ export async function setupWorkflowExecutorTest(): Promise<WorkflowExecutorTestS
         void MakaioBus.request(SubagentSubjects.completeTask, {
           subagentId: ctx.payload.subagentId,
           result: `completed:${ctx.payload.task}`,
-        });
+        }).catch(() => {});
       }, 0);
     }),
   );

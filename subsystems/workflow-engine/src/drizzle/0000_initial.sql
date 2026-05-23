@@ -57,7 +57,9 @@ CREATE TABLE `workflow_execution_links` (
 	`target_execution_id` text NOT NULL,
 	`link_type` text NOT NULL,
 	`metadata` text,
-	PRIMARY KEY(`source_execution_id`, `target_execution_id`)
+	PRIMARY KEY(`source_execution_id`, `target_execution_id`),
+	FOREIGN KEY (`source_execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`target_execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
 CREATE INDEX `idx_workflow_execution_links_source` ON `workflow_execution_links` (`source_execution_id`);--> statement-breakpoint

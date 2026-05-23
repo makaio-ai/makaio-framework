@@ -11,6 +11,8 @@ import {
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
   stepId: z.string(),
+  // Composite `forEach` steps are expanded into executable leaf steps before
+  // runtime, so lifecycle events only expose step types an executor can run.
   stepType: z.enum(['agent', 'shell', 'gate']),
 });
 

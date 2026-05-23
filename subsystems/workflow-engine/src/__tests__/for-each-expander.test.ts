@@ -438,6 +438,43 @@ describe('expandForEachSteps', () => {
       expect(stepContext.get('outer.1.inner.1.leaf')).toEqual({ item: 'y', index: 1 });
     });
 
+    it('evaluates nested collections with the outer item and index in scope', () => {
+      const steps: WorkflowStep[] = [
+        {
+          id: 'outer',
+          type: 'for-each',
+          collection: 'trigger.parents',
+          steps: [
+            {
+              id: 'inner',
+              type: 'for-each',
+              collection: 'item.childrenByOuterIndex[index]',
+              steps: [{ id: 'leaf', type: 'agent', prompt: 'Leaf' }],
+            } satisfies ForEachWorkflowStep,
+          ],
+        } satisfies ForEachWorkflowStep,
+      ];
+
+      const { steps: result, stepContext } = expandForEachSteps(steps, {
+        ...baseContext,
+        trigger: {
+          parents: [
+            { childrenByOuterIndex: [['outer-0-child'], ['wrong-index']] },
+            { childrenByOuterIndex: [['wrong-index'], ['outer-1-child-a', 'outer-1-child-b']] },
+          ],
+        },
+      });
+
+      expect(result.map((step) => step.id)).toEqual([
+        'outer.0.inner.0.leaf',
+        'outer.1.inner.0.leaf',
+        'outer.1.inner.1.leaf',
+      ]);
+      expect(stepContext.get('outer.0.inner.0.leaf')).toEqual({ item: 'outer-0-child', index: 0 });
+      expect(stepContext.get('outer.1.inner.0.leaf')).toEqual({ item: 'outer-1-child-a', index: 0 });
+      expect(stepContext.get('outer.1.inner.1.leaf')).toEqual({ item: 'outer-1-child-b', index: 1 });
+    });
+
     it('does not leak inner stepContext when outer collection is empty', () => {
       const steps: WorkflowStep[] = [
         {

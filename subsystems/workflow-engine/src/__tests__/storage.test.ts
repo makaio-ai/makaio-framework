@@ -141,7 +141,11 @@ describe('workflow storage handlers', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
     const execution = createWorkflowExecution({ id: 'execution-span-storage', workflowId: workflow.id });
+    const nextExecution = createWorkflowExecution({ id: 'execution-next', workflowId: workflow.id });
+    const previousExecution = createWorkflowExecution({ id: 'execution-previous', workflowId: workflow.id });
     await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: nextExecution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: previousExecution });
 
     await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
       span: {
@@ -164,14 +168,14 @@ describe('workflow storage handlers', () => {
     await MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
       link: {
         sourceExecutionId: execution.id,
-        targetExecutionId: 'execution-next',
+        targetExecutionId: nextExecution.id,
         linkType: 'triggered-by',
         metadata: { subject: 'github.issue.labeled' },
       },
     });
     await MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
       link: {
-        sourceExecutionId: 'execution-previous',
+        sourceExecutionId: previousExecution.id,
         targetExecutionId: execution.id,
         linkType: 'triggered-by',
       },
@@ -188,7 +192,7 @@ describe('workflow storage handlers', () => {
     expect(links).toEqual([
       {
         sourceExecutionId: execution.id,
-        targetExecutionId: 'execution-next',
+        targetExecutionId: nextExecution.id,
         linkType: 'triggered-by',
         metadata: { subject: 'github.issue.labeled' },
       },
@@ -199,11 +203,26 @@ describe('workflow storage handlers', () => {
     });
     expect(targetLinks).toEqual([
       {
-        sourceExecutionId: 'execution-previous',
+        sourceExecutionId: previousExecution.id,
         targetExecutionId: execution.id,
         linkType: 'triggered-by',
       },
     ]);
+  });
+
+  it('rejects execution links without existing source and target executions', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-link-fks' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
+        link: {
+          sourceExecutionId: 'missing-source-execution',
+          targetExecutionId: 'missing-target-execution',
+          linkType: 'triggered-by',
+        },
+      }),
+    ).rejects.toThrow();
   });
 
   it('requires a source or target filter when listing execution links', async () => {

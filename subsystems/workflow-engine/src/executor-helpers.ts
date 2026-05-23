@@ -72,6 +72,16 @@ function isExecFileError(err: unknown): err is Error & {
 }
 
 /**
+ * Resolve the executable token from a command array.
+ * @param command - Process command array.
+ * @returns Executable token, or null when the command is empty.
+ */
+function resolveExecutable(command: string[]): string | null {
+  const binary = command[0];
+  return binary === undefined || binary.trim() === '' ? null : binary;
+}
+
+/**
  * Options for spawning an external process.
  */
 export interface SpawnProcessOptions {
@@ -98,7 +108,11 @@ export interface SpawnProcessOptions {
  */
 export function spawnProcess(options: SpawnProcessOptions): Promise<{ stdout: string; stderr: string }> {
   const { command, cwd, env, timeoutMs, signal } = options;
-  const [binary, ...args] = command;
+  const binary = resolveExecutable(command);
+  if (binary === null) {
+    return Promise.reject(new Error('Shell step command is empty'));
+  }
+  const args = command.slice(1);
 
   return new Promise((resolve, reject) => {
     let graceKillTimer: ReturnType<typeof setTimeout> | null = null;
@@ -202,6 +216,9 @@ export async function runShellStep(options: RunShellStepOptions): Promise<ShellS
   }
 
   const resolvedCommand = step.command.map((token) => resolveTemplate(token, expressionContext));
+  if (resolveExecutable(resolvedCommand) === null) {
+    return { status: 'failed', error: 'Shell step command is empty' };
+  }
   const resolvedEnv = Object.fromEntries(
     Object.entries(step.env ?? {}).map(([k, v]) => [k, resolveTemplate(v, expressionContext)]),
   );

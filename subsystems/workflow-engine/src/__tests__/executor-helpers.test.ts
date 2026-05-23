@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveShellCwd } from '../executor-helpers.js';
+import { resolveShellCwd, runShellStep } from '../executor-helpers.js';
 import type { ExpressionContext } from '@makaio/expression';
 
 const symlinkTest = process.platform === 'win32' ? it.skip : it;
@@ -50,6 +50,40 @@ describe('resolveShellCwd', () => {
       const resolved = resolveShellCwd('inner', workspaceRoot, makeExpressionContext());
 
       expect(resolved).toBe(realpathSync(innerDir));
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('runShellStep', () => {
+  it('fails before spawning when the command array is empty', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'workflow-executor-helpers-'));
+
+    try {
+      const outcome = await runShellStep({
+        step: { command: [] },
+        workspaceRoot: tempRoot,
+        expressionContext: makeExpressionContext(),
+      });
+
+      expect(outcome).toEqual({ status: 'failed', error: 'Shell step command is empty' });
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails before spawning when template resolution clears the executable', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'workflow-executor-helpers-'));
+
+    try {
+      const outcome = await runShellStep({
+        step: { command: ['{{ inputs.missingBinary }}'] },
+        workspaceRoot: tempRoot,
+        expressionContext: makeExpressionContext(),
+      });
+
+      expect(outcome).toEqual({ status: 'failed', error: 'Shell step command is empty' });
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
