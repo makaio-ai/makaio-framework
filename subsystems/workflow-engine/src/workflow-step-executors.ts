@@ -366,63 +366,67 @@ export async function executeGateStep(
 
   const stepState = execution.steps[stepId];
 
-  // Emit beforeStart before any state mutation so interceptors can reject the step.
-  await emitBeforeStepStart(bus, executionId, step);
+  try {
+    await emitBeforeStepStart(bus, executionId, step);
 
-  stepState.status = 'waiting';
-  stepState.startedAt = Date.now();
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-  const expressionContext = buildExpressionContext(execution, activeExecutions, stepId);
-  const message = resolveTemplate(step.prompt, expressionContext);
-  const title = step.title ? resolveTemplate(step.title, expressionContext) : 'Workflow Approval Required';
-  const openedAt = Date.now();
-  const timeoutMs = typeof step.timeoutMs === 'number' ? step.timeoutMs : null;
-  const resolutionPromise = gateCoordinator.awaitResolution(executionId, stepId, step.autoAction, timeoutMs);
-
-  await bus.emit(WorkflowSubjects.gate.requested, {
-    executionId,
-    stepId,
-    stepType: step.type,
-    workflowId: workflow.id,
-    workflowName: workflow.name,
-    title,
-    message,
-    autoAction: step.autoAction,
-    timeoutMs,
-    openedAt,
-  });
-
-  const { action, source } = await resolutionPromise;
-
-  // Check if execution was cancelled while waiting
-  if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
-
-  await bus.emit(WorkflowSubjects.gate.resolved, {
-    executionId,
-    stepId,
-    stepType: step.type,
-    action,
-    source,
-  });
-
-  if (action === 'approve') {
-    stepState.status = 'completed';
-    stepState.result = source === 'user' ? 'Approved by user' : 'Auto-approved (timeout)';
-    stepState.completedAt = Date.now();
+    stepState.status = 'waiting';
+    stepState.startedAt = Date.now();
     await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-    const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
-    await bus.emit(WorkflowSubjects.step.completed, {
+
+    const expressionContext = buildExpressionContext(execution, activeExecutions, stepId);
+    const message = resolveTemplate(step.prompt, expressionContext);
+    const title = step.title ? resolveTemplate(step.title, expressionContext) : 'Workflow Approval Required';
+    const openedAt = Date.now();
+    const timeoutMs = typeof step.timeoutMs === 'number' ? step.timeoutMs : null;
+    const resolutionPromise = gateCoordinator.awaitResolution(executionId, stepId, step.autoAction, timeoutMs);
+
+    await bus.emit(WorkflowSubjects.gate.requested, {
       executionId,
       stepId,
       stepType: step.type,
-      result: stepState.result,
-      duration,
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      title,
+      message,
+      autoAction: step.autoAction,
+      timeoutMs,
+      openedAt,
     });
-    return okResult(startedAt, stepState.result);
-  }
 
-  const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
-  await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
-  return failResult(reason, startedAt);
+    const { action, source } = await resolutionPromise;
+
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+
+    await bus.emit(WorkflowSubjects.gate.resolved, {
+      executionId,
+      stepId,
+      stepType: step.type,
+      action,
+      source,
+    });
+
+    if (action === 'approve') {
+      stepState.status = 'completed';
+      stepState.result = source === 'user' ? 'Approved by user' : 'Auto-approved (timeout)';
+      stepState.completedAt = Date.now();
+      await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+      const duration = stepState.completedAt - (stepState.startedAt ?? stepState.completedAt);
+      await bus.emit(WorkflowSubjects.step.completed, {
+        executionId,
+        stepId,
+        stepType: step.type,
+        result: stepState.result,
+        duration,
+      });
+      return okResult(startedAt, stepState.result);
+    }
+
+    const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
+    return failResult(reason, startedAt);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
+    return failResult(message, startedAt);
+  }
 }
