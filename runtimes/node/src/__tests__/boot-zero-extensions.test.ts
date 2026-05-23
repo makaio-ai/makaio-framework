@@ -15,6 +15,7 @@ import {
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
+import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { bootMakaioRuntimeCore, type MakaioRuntime } from '../boot.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
@@ -38,6 +39,7 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,
   ...frameworkCorePackages.filter(isHeadlessPackage).map((pkg) => pkg.name),
+  WorkflowEngineToken.name,
   ModelRegistryToken.name,
   LogImportRegistryToken.name,
   ...(process.platform === 'darwin' ? ['platform-macos'] : []),

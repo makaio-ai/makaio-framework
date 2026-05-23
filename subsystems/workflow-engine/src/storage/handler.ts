@@ -1,7 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext , SpanRecord, ExecutionLink } from '@makaio/contracts';
+import type { ExtensionContext, SpanRecord, ExecutionLink } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createDrizzleCrudHandlers, createDrizzleListHandler, buildScopePredicates } from '@makaio/storage-handlers';
 import {
