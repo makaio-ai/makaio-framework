@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import { WorkflowSubjects } from '../namespace.js';
+import { WorkflowSubjects } from '@makaio/contracts';
 import { BusEventTriggerEvaluator } from '../bus-event-trigger-evaluator.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createTestDb, createWorkflowDefinition, type TestDbContext } from './shared.js';
