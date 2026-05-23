@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { SessionSubjects } from '@makaio/contracts';
-import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
+import { ExecutionTargetSubjects } from '@makaio/services-core';
 import { WorkflowSubjects } from '../namespace.js';
 import {
   registerMemorySessionStorage,
