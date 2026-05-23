@@ -2,7 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { matchesSubscription, matchesFilter } from '@makaio/bus-core';
 import type { WildcardSubjectDefinition, WildcardUnifiedHandler, PayloadFilter } from '@makaio/core';
 import type { WorkflowDefinition } from '@makaio/contracts';
-import { WorkflowSubjects } from './namespace.js';
+import { WorkflowSubjects } from '@makaio/contracts';
 import { compile, type CompiledExpression } from '@makaio/expression';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 

@@ -19,6 +19,24 @@ describe('CronTriggerEvaluator', () => {
     dbContext.cleanup();
   });
 
+  it('schedules project-scoped cron workflows and stops them on destroy', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-cron-schedule',
+      projectId: 'project-1',
+      triggers: [{ type: 'cron', schedule: '* * * * *' }],
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    await evaluator.init();
+
+    expect(evaluator.activeJobCount()).toBe(1);
+
+    evaluator.destroy();
+
+    expect(evaluator.activeJobCount()).toBe(0);
+  });
+
   it('skips invalid cron trigger definitions instead of failing init', async () => {
     const invalidWorkflow = createWorkflowDefinition({
       id: 'workflow-invalid-chrono',

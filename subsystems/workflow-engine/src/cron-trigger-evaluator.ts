@@ -9,7 +9,7 @@
 import { Cron } from 'croner';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { WorkflowDefinition } from '@makaio/contracts';
-import { WorkflowSubjects } from './namespace.js';
+import { WorkflowSubjects } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -130,6 +130,17 @@ export class CronTriggerEvaluator {
     this.cleanupFns.length = 0;
     this.stopAllJobs();
     this.initialized = false;
+  }
+
+  /**
+   * Returns the number of currently active cron jobs.
+   *
+   * Useful for testing lifecycle correctness — jobs should be non-zero after
+   * init with cron-triggered workflows and zero after destroy.
+   * @returns Count of active cron job entries
+   */
+  public activeJobCount(): number {
+    return this.jobs.size;
   }
 
   // ─────────────────────────────────────────────────────────────
