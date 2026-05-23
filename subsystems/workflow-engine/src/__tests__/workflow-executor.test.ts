@@ -334,6 +334,33 @@ describe('WorkflowExecutor', () => {
     expect(executionId).toEqual(expect.any(String));
   });
 
+  it('applies workflow input defaults and rejects missing required inputs', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-input-binding',
+      inputs: [
+        { name: 'title', type: 'string', required: true },
+        { name: 'dryRun', type: 'boolean', default: true },
+      ],
+      steps: [{ id: 'one', type: 'agent', prompt: 'Title {{ inputs.title }} dry {{ inputs.dryRun }}' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    await expect(MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} })).rejects.toThrow(
+      'Missing required workflow input: title',
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      inputs: { title: 'Voucher' },
+    });
+
+    await vi.waitFor(async () => {
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('completed');
+      expect(execution?.inputs).toEqual({ title: 'Voucher', dryRun: true });
+    });
+  });
+
   it('fails the step when a beforeStart interceptor throws', async () => {
     const workflow = createWorkflowDefinition({
       id: 'workflow-before-start-interceptor',

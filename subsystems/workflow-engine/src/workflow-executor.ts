@@ -3,6 +3,7 @@ import {
   SessionSubjects,
   type IStepRunner,
   type IWorkflowTriggerTypeRegistry,
+  type WorkflowDefinition,
   type WorkflowExecution,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
@@ -27,6 +28,42 @@ import {
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { buildExpressionContext } from './workflow-step-executors.js';
 import { InProcessStepRunner } from './in-process-step-runner.js';
+
+/**
+ * Merge provided inputs with workflow input definitions, applying defaults and
+ * throwing for missing required inputs.
+ * @param definitions - Workflow input parameter definitions
+ * @param provided - Caller-supplied input values
+ * @returns Bound input record with defaults applied
+ */
+function bindWorkflowInputs(
+  definitions: WorkflowDefinition['inputs'] | undefined,
+  provided: Record<string, unknown>,
+): Record<string, unknown> {
+  const bound: Record<string, unknown> = {};
+
+  for (const input of definitions ?? []) {
+    if (Object.prototype.hasOwnProperty.call(provided, input.name)) {
+      bound[input.name] = provided[input.name];
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'default')) {
+      bound[input.name] = input.default;
+      continue;
+    }
+    if (input.required) {
+      throw new Error(`Missing required workflow input: ${input.name}`);
+    }
+  }
+
+  for (const [key, value] of Object.entries(provided)) {
+    if (!Object.prototype.hasOwnProperty.call(bound, key)) {
+      bound[key] = value;
+    }
+  }
+
+  return bound;
+}
 
 /**
  * Core workflow executor service.
@@ -167,12 +204,13 @@ export class WorkflowExecutor extends BaseService {
 
     const executionId = generateId('wfx');
     const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
+    const boundInputs = bindWorkflowInputs(workflow.inputs, inputs);
 
     // Expand for-each steps into the flat DAG before building execution state
     const initialContext = {
       trigger: sanitizedTriggerPayload ?? {},
       steps: {},
-      inputs,
+      inputs: boundInputs,
     };
     const { steps: expandedSteps, stepContext } = expandForEachSteps(workflow.steps, initialContext);
     const { sessionId: coordinatorSessionId } = await this.bus.request(SessionSubjects.create, {
@@ -191,7 +229,7 @@ export class WorkflowExecutor extends BaseService {
       workflowId,
       coordinatorSessionId,
       status: 'running',
-      inputs,
+      inputs: boundInputs,
       steps,
       startedAt: Date.now(),
       triggerPayload: sanitizedTriggerPayload,
