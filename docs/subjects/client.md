@@ -16,37 +16,47 @@ next: false
 | Schema record | `ClientSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/client/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/namespace.ts) |
+| Defined in | [`core/contracts/src/client/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `account.activate` | [`client.account.activate`](#client.account.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
-| `account.getActive` | [`client.account.getActive`](#client.account.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
-| `account.observe` | [`client.account.observe`](#client.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/account-identity.ts) |
-| `install` | [`client.install`](#client.install) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `installJob.completed` | [`client.installJob.completed`](#client.installJob.completed) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `installJob.progress` | [`client.installJob.progress`](#client.installJob.progress) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `list` | [`client.list`](#client.list) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `resolveBinary` | [`client.resolveBinary`](#client.resolveBinary) | rpc | [`binary-resolution.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-resolution.ts) |
-| `runtime.observe` | [`client.runtime.observe`](#client.runtime.observe) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/runtime-observation.ts) |
-| `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/runtime-observation.ts) |
-| `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
-| `session.account.observe` | [`client.session.account.observe`](#client.session.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/account-identity.ts) |
-| `session.started` | [`client.session.started`](#client.session.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `session.tool.post` | [`client.session.tool.post`](#client.session.tool.post) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `session.tool.pre` | [`client.session.tool.pre`](#client.session.tool.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `session.turn.completed` | [`client.session.turn.completed`](#client.session.turn.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `session.turn.started` | [`client.session.turn.started`](#client.session.turn.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `session.userPrompt.submitted` | [`client.session.userPrompt.submitted`](#client.session.userPrompt.submitted) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/session-observed.ts) |
-| `setActive` | [`client.setActive`](#client.setActive) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `uninstall` | [`client.uninstall`](#client.uninstall) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `update` | [`client.update`](#client.update) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `usage.ingest` | [`client.usage.ingest`](#client.usage.ingest) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/account-identity.ts) |
-| `usage.snapshot` | [`client.usage.snapshot`](#client.usage.snapshot) | event | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/account-identity.ts) |
-| `version.changed` | [`client.version.changed`](#client.version.changed) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/binary-management.ts) |
-| `wiring.list` | [`client.wiring.list`](#client.wiring.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/client/schemas.ts) |
+| `account.activate` | [`client.account.activate`](#client.account.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
+| `account.getActive` | [`client.account.getActive`](#client.account.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
+| `account.observe` | [`client.account.observe`](#client.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
+| `config.prime` | [`client.config.prime`](#client.config.prime) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `install` | [`client.install`](#client.install) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `installJob.completed` | [`client.installJob.completed`](#client.installJob.completed) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `installJob.progress` | [`client.installJob.progress`](#client.installJob.progress) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `list` | [`client.list`](#client.list) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `profile.create` | [`client.profile.create`](#client.profile.create) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `profile.delete` | [`client.profile.delete`](#client.profile.delete) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `profile.get` | [`client.profile.get`](#client.profile.get) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `profile.list` | [`client.profile.list`](#client.profile.list) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `profile.setDefault` | [`client.profile.setDefault`](#client.profile.setDefault) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `profile.update` | [`client.profile.update`](#client.profile.update) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `resolveBinary` | [`client.resolveBinary`](#client.resolveBinary) | rpc | [`binary-resolution.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-resolution.ts) |
+| `runtime.observe` | [`client.runtime.observe`](#client.runtime.observe) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
+| `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
+| `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
+| `session.account.observe` | [`client.session.account.observe`](#client.session.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
+| `session.started` | [`client.session.started`](#client.session.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.tool.post` | [`client.session.tool.post`](#client.session.tool.post) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.tool.pre` | [`client.session.tool.pre`](#client.session.tool.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.turn.completed` | [`client.session.turn.completed`](#client.session.turn.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.turn.started` | [`client.session.turn.started`](#client.session.turn.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.userPrompt.submitted` | [`client.session.userPrompt.submitted`](#client.session.userPrompt.submitted) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `sessionConfig.cleanup` | [`client.sessionConfig.cleanup`](#client.sessionConfig.cleanup) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `sessionConfig.create` | [`client.sessionConfig.create`](#client.sessionConfig.create) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `sessionConfig.destroy` | [`client.sessionConfig.destroy`](#client.sessionConfig.destroy) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `setActive` | [`client.setActive`](#client.setActive) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `uninstall` | [`client.uninstall`](#client.uninstall) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `update` | [`client.update`](#client.update) | rpc | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `usage.ingest` | [`client.usage.ingest`](#client.usage.ingest) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
+| `usage.snapshot` | [`client.usage.snapshot`](#client.usage.snapshot) | event | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
+| `version.changed` | [`client.version.changed`](#client.version.changed) | event | [`binary-management.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-management.ts) |
+| `wiring.list` | [`client.wiring.list`](#client.wiring.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
 
 ## Subject Details
 
@@ -125,6 +135,39 @@ Type: Request (RPC)
 | `clientAccountId` | `string` | yes |
 | `displayLabel` | `string \| undefined` | no |
 
+### <a id="client.config.prime"></a>`client.config.prime` (rpc)
+
+Request and response schemas for `client.config.prime`.
+
+The generic `client.config.prime` handler delegates to the per-client
+`client:<clientId>.config.prime` subject via `requestOptional`.  If no
+client-specific handler is registered the call is a no-op.
+
+This allows client packages to perform one-time or per-session config
+initialisation (e.g. writing settings templates, injecting MCP server
+entries) at well-defined lifecycle points without the framework needing to
+know the client's config file format.
+
+Subject: `client.config.prime`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string \| undefined` | no |
+| `binaryVersion` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `configDir` | `string` | yes |
+| `phase` | `"managed-install" \| "profile-create" \| "session-create"` | yes |
+| `projectDir` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `primed` | `boolean` | yes |
+
 ### <a id="client.install"></a>`client.install` (rpc)
 
 Request and response schemas for `client.install`.
@@ -169,8 +212,8 @@ Type: Event
 | `installPath` | `string \| undefined` | no |
 | `jobId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
-| `status` | `"success" \| "error"` | yes |
-| `strategy` | `"manifest-bucket" \| "npm" \| "github-release"` | yes |
+| `status` | `"error" \| "success"` | yes |
+| `strategy` | `"npm" \| "signed-binary-bucket"` | yes |
 | `version` | `string \| undefined` | no |
 
 ### <a id="client.installJob.progress"></a>`client.installJob.progress` (event)
@@ -192,15 +235,15 @@ Type: Event
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 | `progress` | `number \| null` | yes |
 | `stage` | `"downloading" \| "resolving" \| "verifying" \| "extracting" \| "installing" \| "post-install" \| "activating"` | yes |
-| `strategy` | `"manifest-bucket" \| "npm" \| "github-release"` | yes |
+| `strategy` | `"npm" \| "signed-binary-bucket"` | yes |
 | `version` | `string \| undefined` | no |
 
 ### <a id="client.list"></a>`client.list` (rpc)
 
 Request and response schemas for `client.list`.
 
-Returns the local installation inventory for all managed clients, enriched
-with the latest-available-version from the upstream index.
+Returns the local installation inventory for all managed clients, including
+their pinned version and whether the active version matches the current pin.
 
 Subject: `client.list`
 Type: Request (RPC)
@@ -215,7 +258,131 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `clients` | `{ clientId: string; installedVersions: { version: string; installPath: string; installedAt: number; isActive: boolean; }[]; activeVersion: string \| null; latestAvailableVersion: string \| null; latestVersionLastCheckedAt: number \| null; latestVersionSourceStatus: "error" \| "fresh" \| "cached"; updateAvailable: boolean; }[]` | yes |
+| `clients` | `{ clientId: string; installedVersions: { version: string; installPath: string; installedAt: number; isActive: boolean; }[]; activeVersion: string \| null; pinnedVersion: string; updateAvailable: boolean; }[]` | yes |
+
+### <a id="client.profile.create"></a>`client.profile.create` (rpc)
+
+Create a new profile for a client.
+
+Subject: `client.profile.create`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `description` | `string \| undefined` | no |
+| `name` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `profile` | `{ id: string; clientId: string; name: string; description: string \| null; configDir: string; isDefault: boolean; createdAt: number; updatedAt: number; }` | yes |
+
+### <a id="client.profile.delete"></a>`client.profile.delete` (rpc)
+
+Delete a profile by client ID and name.
+
+Subject: `client.profile.delete`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `name` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
+### <a id="client.profile.get"></a>`client.profile.get` (rpc)
+
+Get a profile by client ID and name.
+
+Returns `null` in the response when no matching profile exists rather
+than throwing, so callers can handle the absent-profile case inline.
+
+Subject: `client.profile.get`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `name` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `profile` | `{ id: string; clientId: string; name: string; description: string \| null; configDir: string; isDefault: boolean; createdAt: number; updatedAt: number; } \| null` | yes |
+
+### <a id="client.profile.list"></a>`client.profile.list` (rpc)
+
+List all profiles for a client.
+
+Subject: `client.profile.list`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `profiles` | `{ id: string; clientId: string; name: string; description: string \| null; configDir: string; isDefault: boolean; createdAt: number; updatedAt: number; }[]` | yes |
+
+### <a id="client.profile.setDefault"></a>`client.profile.setDefault` (rpc)
+
+Mark a profile as the default for its client.
+
+Subject: `client.profile.setDefault`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `name` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `profile` | `{ id: string; clientId: string; name: string; description: string \| null; configDir: string; isDefault: boolean; createdAt: number; updatedAt: number; }` | yes |
+
+### <a id="client.profile.update"></a>`client.profile.update` (rpc)
+
+Update an existing profile's mutable fields.
+
+Subject: `client.profile.update`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `description` | `string \| undefined` | no |
+| `name` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `profile` | `{ id: string; clientId: string; name: string; description: string \| null; configDir: string; isDefault: boolean; createdAt: number; updatedAt: number; }` | yes |
 
 ### <a id="client.resolveBinary"></a>`client.resolveBinary` (rpc)
 
@@ -489,6 +656,77 @@ Type: Event
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
 
+### <a id="client.sessionConfig.cleanup"></a>`client.sessionConfig.cleanup` (rpc)
+
+Clean up stale session config directories.
+
+When `clientId` is supplied only that client's orphaned directories are
+removed; omit it to clean across all clients.
+
+Subject: `client.sessionConfig.cleanup`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `removed` | `string[]` | yes |
+
+### <a id="client.sessionConfig.create"></a>`client.sessionConfig.create` (rpc)
+
+Create an isolated configuration directory for a session.
+
+The service seeds the directory from the named profile (or the client
+default when `profileName` is omitted) and returns the path together
+with any environment variables the client process should inherit.
+
+Subject: `client.sessionConfig.create`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `baseConfigDir` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `configInheritance` | `"auth-only" \| "full" \| "empty" \| undefined` | no |
+| `profileName` | `string \| undefined` | no |
+| `projectDir` | `string \| undefined` | no |
+| `sessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `env` | `Record<string, string>` | yes |
+| `sessionDir` | `string` | yes |
+
+### <a id="client.sessionConfig.destroy"></a>`client.sessionConfig.destroy` (rpc)
+
+Destroy the isolated configuration directory for a session.
+
+Subject: `client.sessionConfig.destroy`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `sessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
 ### <a id="client.setActive"></a>`client.setActive` (rpc)
 
 Request and response schemas for `client.setActive`.
@@ -545,8 +783,8 @@ Type: Request (RPC)
 
 Request and response schemas for `client.update`.
 
-Enqueues an update job that installs the latest available version and
-activates it. Callers can track progress via `client.installJob.progress` and
+Enqueues an update job that installs the client package pin and activates it.
+Callers can track progress via `client.installJob.progress` and
 `client.installJob.completed` events using the returned `jobId`.
 
 Subject: `client.update`

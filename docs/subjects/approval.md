@@ -16,14 +16,14 @@ next: false
 | Schema record | `ApprovalSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/approval/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/approval/namespace.ts) |
+| Defined in | [`core/contracts/src/approval/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/approval/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `request` | [`approval.request`](#approval.request) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/approval/schemas.ts) |
-| `resolveEnrichedPolicy` | [`approval.resolveEnrichedPolicy`](#approval.resolveEnrichedPolicy) | rpc | [`enriched-policy.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/approval/enriched-policy.ts) |
+| `request` | [`approval.request`](#approval.request) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/approval/schemas.ts) |
+| `resolveEnrichedPolicy` | [`approval.resolveEnrichedPolicy`](#approval.resolveEnrichedPolicy) | rpc | [`enriched-policy.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/approval/enriched-policy.ts) |
 
 ## Subject Details
 

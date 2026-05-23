@@ -1,0 +1,165 @@
+---
+title: "extension:shell"
+editUrl: false
+prev: false
+next: false
+---
+
+# `extension:shell`
+
+| Field | Value |
+|-------|-------|
+| Prefix | `extension:shell` |
+| Namespace constant | `ShellNamespace` |
+| Subjects constant | `ShellSubjects` |
+| Kind | extension |
+| Schema record | `ShellServiceSchemas` |
+| Tier | extension |
+| Package | `@makaio/extension-shell` |
+| Defined in | [`extensions/shell/src/bus/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/namespace.ts) |
+
+## Subjects
+
+| Key | Wire | Type | Schema |
+|-----|------|------|--------|
+| `exec` | [`extension:shell.exec`](#extension:shell.exec) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+| `grep` | [`extension:shell.grep`](#extension:shell.grep) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+| `kill` | [`extension:shell.kill`](#extension:shell.kill) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+| `output` | [`extension:shell.output`](#extension:shell.output) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+| `send` | [`extension:shell.send`](#extension:shell.send) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+| `status` | [`extension:shell.status`](#extension:shell.status) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/extensions/shell/src/bus/schemas.ts) |
+
+## Subject Details
+
+### <a id="extension:shell.exec"></a>`extension:shell.exec` (rpc)
+
+Subject: `extension:shell.exec`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `context` | `{ cwd: string; platform: "windows" \| "posix"; constraints?: unknown; }` | yes |
+| `input` | `{ command: string; colors: boolean; cwd?: string \| undefined; env?: Record<string, string> \| undefined; timeout?: number \| undefined; }` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `pid` | `number` | yes |
+| `shell` | `string` | yes |
+| `shellId` | `string` | yes |
+
+### <a id="extension:shell.grep"></a>`extension:shell.grep` (rpc)
+
+Subject: `extension:shell.grep`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `context` | `number` | yes |
+| `maxMatches` | `number` | yes |
+| `offset` | `number` | yes |
+| `pattern` | `string` | yes |
+| `shellId` | `string` | yes |
+| `stream` | `"both" \| "stdout" \| "stderr"` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `matches` | `{ lineNumber: number; stream: "stdout" \| "stderr"; line: string; before: string[]; after: string[]; }[]` | yes |
+| `totalMatches` | `number` | yes |
+| `truncated` | `boolean` | yes |
+
+### <a id="extension:shell.kill"></a>`extension:shell.kill` (rpc)
+
+Subject: `extension:shell.kill`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `shellId` | `string` | yes |
+| `signal` | `"SIGTERM" \| "SIGKILL" \| "SIGINT"` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `killed` | `boolean` | yes |
+| `signal` | `string` | yes |
+
+### <a id="extension:shell.output"></a>`extension:shell.output` (rpc)
+
+Subject: `extension:shell.output`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `limit` | `number` | yes |
+| `offset` | `number` | yes |
+| `shellId` | `string` | yes |
+| `stream` | `"both" \| "stdout" \| "stderr"` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `content` | `string` | yes |
+| `hasMore` | `boolean` | yes |
+| `offset` | `number` | yes |
+| `stream` | `"stdout" \| "stderr" \| "interleaved"` | yes |
+| `totalSize` | `number` | yes |
+
+### <a id="extension:shell.send"></a>`extension:shell.send` (rpc)
+
+Subject: `extension:shell.send`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `input` | `string` | yes |
+| `shellId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `bytesWritten` | `number` | yes |
+| `sent` | `boolean` | yes |
+
+### <a id="extension:shell.status"></a>`extension:shell.status` (rpc)
+
+Subject: `extension:shell.status`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `shellId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `exitCode` | `number \| undefined` | no |
+| `runtimeMs` | `number` | yes |
+| `shellId` | `string` | yes |
+| `status` | `"running" \| "exited"` | yes |
+| `stderrSize` | `number` | yes |
+| `stdoutSize` | `number` | yes |
+| `truncated` | `boolean` | yes |
+
+---
+
+*Auto-generated by `yarn docs:bus`. Do not edit manually.*

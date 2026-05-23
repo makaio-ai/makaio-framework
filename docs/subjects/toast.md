@@ -16,16 +16,16 @@ next: false
 | Schema record | `ToastSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/toast/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/toast/namespace.ts) |
+| Defined in | [`core/contracts/src/toast/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/toast/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `dismiss` | [`toast.dismiss`](#toast.dismiss) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/toast/schemas.ts) |
-| `dismissed` | [`toast.dismissed`](#toast.dismissed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/toast/schemas.ts) |
-| `interacted` | [`toast.interacted`](#toast.interacted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/toast/schemas.ts) |
-| `show` | [`toast.show`](#toast.show) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/toast/schemas.ts) |
+| `dismiss` | [`toast.dismiss`](#toast.dismiss) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/toast/schemas.ts) |
+| `dismissed` | [`toast.dismissed`](#toast.dismissed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/toast/schemas.ts) |
+| `interacted` | [`toast.interacted`](#toast.interacted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/toast/schemas.ts) |
+| `show` | [`toast.show`](#toast.show) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/toast/schemas.ts) |
 
 ## Subject Details
 
@@ -80,7 +80,7 @@ Type: Event
 |-------|------|----------|
 | `actions` | `{ id: string; label: string; variant?: "default" \| "destructive" \| "outline" \| undefined; }[] \| undefined` | no |
 | `durationMs` | `number \| null \| undefined` | no |
-| `level` | `"success" \| "error" \| "info" \| "warning"` | yes |
+| `level` | `"error" \| "success" \| "info" \| "warning"` | yes |
 | `message` | `string` | yes |
 | `title` | `string \| undefined` | no |
 | `toastId` | `string \| undefined` | no |

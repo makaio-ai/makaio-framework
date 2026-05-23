@@ -24,6 +24,8 @@ next: false
 | `config.hooks.add` | [`client:codex.config.hooks.add`](#client:codex.config.hooks.add) | rpc | [`config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/config.ts) |
 | `config.hooks.list` | [`client:codex.config.hooks.list`](#client:codex.config.hooks.list) | rpc | [`config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/config.ts) |
 | `config.hooks.remove` | [`client:codex.config.hooks.remove`](#client:codex.config.hooks.remove) | rpc | [`config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/config.ts) |
+| `config.prime` | [`client:codex.config.prime`](#client:codex.config.prime) | rpc | [`profile.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/profile.ts) |
+| `sessionConfig.setup` | [`client:codex.sessionConfig.setup`](#client:codex.sessionConfig.setup) | rpc | — |
 | `wiring.apply` | [`client:codex.wiring.apply`](#client:codex.wiring.apply) | rpc | [`wiring.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/wiring.ts) |
 | `wiring.list` | [`client:codex.wiring.list`](#client:codex.wiring.list) | rpc | [`wiring.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/wiring.ts) |
 | `wiring.remove` | [`client:codex.wiring.remove`](#client:codex.wiring.remove) | rpc | [`wiring.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/clients/codex/src/schemas/wiring.ts) |
@@ -99,6 +101,60 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `removed` | `number` | yes |
+
+### <a id="client:codex.config.prime"></a>`client:codex.config.prime` (rpc)
+
+Request and response schemas for `client.config.prime`.
+
+The generic `client.config.prime` handler delegates to the per-client
+`client:<clientId>.config.prime` subject via `requestOptional`.  If no
+client-specific handler is registered the call is a no-op.
+
+This allows client packages to perform one-time or per-session config
+initialisation (e.g. writing settings templates, injecting MCP server
+entries) at well-defined lifecycle points without the framework needing to
+know the client's config file format.
+
+Subject: `client:codex.config.prime`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string \| undefined` | no |
+| `binaryVersion` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `configDir` | `string` | yes |
+| `phase` | `"managed-install" \| "profile-create" \| "session-create"` | yes |
+| `projectDir` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `primed` | `boolean` | yes |
+
+### <a id="client:codex.sessionConfig.setup"></a>`client:codex.sessionConfig.setup` (rpc)
+
+Subject: `client:codex.sessionConfig.setup`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `baseConfigDir` | `string` | yes |
+| `configInheritance` | `"auth-only" \| "full" \| "empty"` | yes |
+| `platform` | `"darwin" \| "linux" \| "win32"` | yes |
+| `projectDir` | `string \| undefined` | no |
+| `sessionDir` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `env` | `Record<string, string> \| undefined` | no |
 
 ### <a id="client:codex.wiring.apply"></a>`client:codex.wiring.apply` (rpc)
 

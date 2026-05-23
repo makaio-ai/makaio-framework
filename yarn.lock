@@ -5301,6 +5301,7 @@ __metadata:
     "@makaio/subsystem-adapter": "workspace:*"
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/subsystem-mcp-http-server": "workspace:*"
+    "@makaio/subsystem-workflow-engine": "workspace:*"
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"
@@ -5551,7 +5552,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/subsystem-workflow-engine@workspace:subsystems/workflow-engine":
+"@makaio/subsystem-workflow-engine@workspace:*, @makaio/subsystem-workflow-engine@workspace:subsystems/workflow-engine":
   version: 0.0.0-use.local
   resolution: "@makaio/subsystem-workflow-engine@workspace:subsystems/workflow-engine"
   dependencies:
@@ -5560,7 +5561,18 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/expression": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/services-core": "workspace:*"
+    "@makaio/storage-core": "workspace:*"
+    "@makaio/storage-drizzle": "workspace:*"
+    "@makaio/storage-handlers": "workspace:*"
+    "@makaio/storage-migrations": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    croner: "npm:^9.0.0"
+    drizzle-orm: "npm:0.45.2"
     vitest: "npm:4.1.5"
+    zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
 
@@ -13005,6 +13017,13 @@ __metadata:
   dependencies:
     buffer: "npm:^5.1.0"
   checksum: 10c0/1a0da36e5f95b19cd2a7b2eab5306a08f1c47bdd22da6f761ab764e2222e8e90a877398907cea94108bd5e41a6d311ea84d7914eaca67da2baa4050bd6384b3d
+  languageName: node
+  linkType: hard
+
+"croner@npm:^9.0.0":
+  version: 9.1.0
+  resolution: "croner@npm:9.1.0"
+  checksum: 10c0/7debd8d171e84b2519a2adfe6a4ed6f761890da3d15239511de87f16f46ae040b1a5d89a40ad58bb89f0e4546d3a9bf093a5a65ce0484a89451d97de139ad64a
   languageName: node
   linkType: hard
 

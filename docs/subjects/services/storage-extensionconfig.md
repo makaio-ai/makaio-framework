@@ -92,7 +92,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `extensionConfig` | `{ id: string; enabled: boolean; scope: string; extensionName: string; config?: Record<string, unknown> \| undefined; }` | yes |
+| `extensionConfig` | `{ enabled: boolean; id: string; scope: string; extensionName: string; config?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 

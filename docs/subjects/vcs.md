@@ -16,23 +16,23 @@ next: false
 | Schema record | `VCSSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capabilities/vcs/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/namespace.ts) |
+| Defined in | [`core/contracts/src/capabilities/vcs/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `capability.write` | [`vcs.capability.write`](#vcs.capability.write) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `checks.get` | [`vcs.checks.get`](#vcs.checks.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `comments.create` | [`vcs.comments.create`](#vcs.comments.create) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `comments.list` | [`vcs.comments.list`](#vcs.comments.list) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `comments.reply` | [`vcs.comments.reply`](#vcs.comments.reply) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `comments.resolveThread` | [`vcs.comments.resolveThread`](#vcs.comments.resolveThread) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `pr.get` | [`vcs.pr.get`](#vcs.pr.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `pr.list` | [`vcs.pr.list`](#vcs.pr.list) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `pr.listForFile` | [`vcs.pr.listForFile`](#vcs.pr.listForFile) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `repository.get` | [`vcs.repository.get`](#vcs.repository.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
-| `statuses.get` | [`vcs.statuses.get`](#vcs.statuses.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `capability.write` | [`vcs.capability.write`](#vcs.capability.write) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `checks.get` | [`vcs.checks.get`](#vcs.checks.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `comments.create` | [`vcs.comments.create`](#vcs.comments.create) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `comments.list` | [`vcs.comments.list`](#vcs.comments.list) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `comments.reply` | [`vcs.comments.reply`](#vcs.comments.reply) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `comments.resolveThread` | [`vcs.comments.resolveThread`](#vcs.comments.resolveThread) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `pr.get` | [`vcs.pr.get`](#vcs.pr.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `pr.list` | [`vcs.pr.list`](#vcs.pr.list) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `pr.listForFile` | [`vcs.pr.listForFile`](#vcs.pr.listForFile) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `repository.get` | [`vcs.repository.get`](#vcs.repository.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
+| `statuses.get` | [`vcs.statuses.get`](#vcs.statuses.get) | rpc | [`index.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/schemas/index.ts) |
 
 ## Subject Details
 
@@ -261,7 +261,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `statuses` | `{ id: number; state: "success" \| "error" \| "failure" \| "pending"; description: string \| null; targetUrl: string \| null; context: string; createdAt: string; updatedAt: string; creator: string \| null; }[]` | yes |
+| `statuses` | `{ id: number; state: "error" \| "success" \| "failure" \| "pending"; description: string \| null; targetUrl: string \| null; context: string; createdAt: string; updatedAt: string; creator: string \| null; }[]` | yes |
 
 ---
 

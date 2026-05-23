@@ -87,3 +87,4 @@ export type {
   WorkflowStepBlock,
   WorkflowTriggerBlock,
 } from './blocks.js';
+export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';

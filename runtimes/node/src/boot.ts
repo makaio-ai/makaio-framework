@@ -55,6 +55,7 @@ import {
   FrameworkServicesCoreNamespaces,
 } from '@makaio/services-core';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
+import { workflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { registerAdapterRuntimeIdentityHandlers } from '@makaio/services-core/adapter-runtime';
@@ -393,6 +394,7 @@ export async function bootMakaioRuntimeCore(
         platformDefaults: { cwd: os.tmpdir() },
       }),
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
+      workflowEnginePackage,
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
     );

@@ -16,13 +16,13 @@ next: false
 | Schema record | `HarnessSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/harness/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/harness/namespace.ts) |
+| Defined in | [`core/contracts/src/harness/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/harness/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `created` | [`harness.created`](#harness.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/harness/schemas.ts) |
+| `created` | [`harness.created`](#harness.created) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/harness/schemas.ts) |
 | `delete` | [`harness.delete`](#harness.delete) | rpc | — |
 | `deleted` | [`harness.deleted`](#harness.deleted) | event | — |
 | `get` | [`harness.get`](#harness.get) | rpc | — |
@@ -31,7 +31,7 @@ next: false
 | `list` | [`harness.list`](#harness.list) | rpc | — |
 | `resolve` | [`harness.resolve`](#harness.resolve) | rpc | — |
 | `set` | [`harness.set`](#harness.set) | rpc | — |
-| `updated` | [`harness.updated`](#harness.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/harness/schemas.ts) |
+| `updated` | [`harness.updated`](#harness.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/harness/schemas.ts) |
 
 ## Subject Details
 

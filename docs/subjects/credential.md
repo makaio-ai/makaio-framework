@@ -16,7 +16,7 @@ next: false
 | Schema record | `CredentialSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/credential/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/credential/namespace.ts) |
+| Defined in | [`core/contracts/src/credential/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/credential/namespace.ts) |
 
 ## Subjects
 

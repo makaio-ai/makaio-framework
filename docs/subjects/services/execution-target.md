@@ -138,7 +138,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executionTarget` | `{ type: "local"; id: string; name: string; enabled: boolean; scope: string; description?: string \| undefined; } \| { type: "container-local"; id: string; name: string; enabled: boolean; scope: string; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; busUrl?: string \| undefined; } \| { type: "container-isolated"; id: string; name: string; enabled: boolean; scope: string; busMode: "relay" \| "host"; gitCredentialMode: "token" \| "ssh-agent"; description?: string \| undefined; image?: string \| undefined; env?: Record<string, string> \| undefined; relayUrl?: string \| undefined; repoUrl?: string \| undefined; }` | yes |
+| `executionTarget` | `{ type: "local"; name: string; enabled: boolean; id: string; scope: string; description?: string \| undefined; } \| { type: "container-local"; name: string; enabled: boolean; id: string; scope: string; image?: string \| undefined; env?: Record<string, string> \| undefined; description?: string \| undefined; busUrl?: string \| undefined; } \| { type: "container-isolated"; name: string; enabled: boolean; id: string; scope: string; busMode: "relay" \| "host"; gitCredentialMode: "token" \| "ssh-agent"; image?: string \| undefined; env?: Record<string, string> \| undefined; description?: string \| undefined; relayUrl?: string \| undefined; repoUrl?: string \| undefined; }` | yes |
 
 **Response:**
 

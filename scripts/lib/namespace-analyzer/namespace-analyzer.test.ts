@@ -8,6 +8,7 @@ import { parseAnalysisResult } from './cli.js';
 import { extractNamespaces } from './extract-namespaces.js';
 import { findCallsites } from './find-callsites.js';
 import { generateMarkdown } from './generate-markdown.js';
+import { isFrameworkDistributionRoot } from './path-utils.js';
 import { classifyTier, createAnalysisProgram } from './program.js';
 import type { AnalysisResult, NamespaceEntry } from './types.js';
 
@@ -47,6 +48,14 @@ describe('parseAnalysisResult', () => {
 });
 
 describe('classifyTier', () => {
+  it('recognizes the standalone framework workspace package as a framework root', () => {
+    const root = createTempRoot();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: '@makaio/framework-workspace' }));
+
+    expect(isFrameworkDistributionRoot(root)).toBe(true);
+    expect(classifyTier(join(root, 'core/contracts/src/namespace.ts'), root)).toBe('framework');
+  });
+
   it('classifies non-extension files as framework when the analysis root is the framework distribution', () => {
     expect(classifyTier('/repo/framework/core/contracts/src/namespace.ts', '/repo/framework')).toBe('framework');
     expect(classifyTier('/repo/framework/extensions/opencode/src/namespace.ts', '/repo/framework')).toBe('extension');
@@ -69,6 +78,52 @@ describe('classifyTier', () => {
 });
 
 describe('extractNamespaces', () => {
+  it('extracts plain createBusNamespace factory calls', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        declare function createBusNamespace(domain: string, schemas: unknown): unknown;
+
+        export const DemoNamespace = createBusNamespace('demo', {
+          changed: { shape: 'event' },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces).toMatchObject([
+      {
+        prefix: 'demo',
+        kind: 'bus',
+        subjects: [{ key: 'changed', wire: 'demo.changed', type: 'event' }],
+      },
+    ]);
+  });
+
+  it('extracts createStorageNamespaceDefinition factory calls', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        declare function createStorageNamespaceDefinition(domain: string, config: { schemas: unknown }): unknown;
+
+        export const DemoStorageNamespace = createStorageNamespaceDefinition('demo', {
+          schemas: {
+            get: { request: {}, response: {} },
+          },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces).toMatchObject([
+      {
+        prefix: 'storage:demo',
+        kind: 'storage',
+        subjects: [{ key: 'get', wire: 'storage:demo.get', type: 'rpc' }],
+      },
+    ]);
+  });
+
   it('extracts subjects from config shorthand schemas', () => {
     const root = createTempProject({
       'namespace.ts': `

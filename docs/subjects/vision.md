@@ -16,13 +16,13 @@ next: false
 | Schema record | `VisionSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capabilities/vision/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vision/namespace.ts) |
+| Defined in | [`core/contracts/src/capabilities/vision/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vision/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `analyze` | [`vision.analyze`](#vision.analyze) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vision/schemas.ts) |
+| `analyze` | [`vision.analyze`](#vision.analyze) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vision/schemas.ts) |
 
 ## Subject Details
 

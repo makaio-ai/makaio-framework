@@ -16,16 +16,16 @@ next: false
 | Schema record | `NativeSessionSupervisorSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/native-session-supervisor/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/native-session-supervisor/namespace.ts) |
+| Defined in | [`core/contracts/src/native-session-supervisor/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/native-session-supervisor/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `attach` | [`native-session-supervisor.attach`](#native-session-supervisor.attach) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/native-session-supervisor/schemas.ts) |
-| `launch` | [`native-session-supervisor.launch`](#native-session-supervisor.launch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/native-session-supervisor/schemas.ts) |
-| `status` | [`native-session-supervisor.status`](#native-session-supervisor.status) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/native-session-supervisor/schemas.ts) |
-| `stop` | [`native-session-supervisor.stop`](#native-session-supervisor.stop) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/native-session-supervisor/schemas.ts) |
+| `attach` | [`native-session-supervisor.attach`](#native-session-supervisor.attach) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/native-session-supervisor/schemas.ts) |
+| `launch` | [`native-session-supervisor.launch`](#native-session-supervisor.launch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/native-session-supervisor/schemas.ts) |
+| `status` | [`native-session-supervisor.status`](#native-session-supervisor.status) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/native-session-supervisor/schemas.ts) |
+| `stop` | [`native-session-supervisor.stop`](#native-session-supervisor.stop) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/native-session-supervisor/schemas.ts) |
 
 ## Subject Details
 
@@ -65,6 +65,7 @@ Type: Request (RPC)
 | `adapterSessionId` | `string \| undefined` | no |
 | `args` | `string[]` | yes |
 | `clientId` | `string` | yes |
+| `clientProfileName` | `string \| undefined` | no |
 | `command` | `string` | yes |
 | `cwd` | `string` | yes |
 | `env` | `Record<string, string> \| undefined` | no |

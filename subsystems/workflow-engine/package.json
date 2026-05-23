@@ -1,25 +1,45 @@
 {
   "name": "@makaio/subsystem-workflow-engine",
-  "description": "Workflow execution engine: DAG interpreter, checkpoint recovery, step runners, context resolution.",
   "version": "1.0.0",
+  "types": "src/index.ts",
   "type": "module",
   "private": true,
   "exports": {
     ".": "./src/index.ts",
+    "./package": "./src/package.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
-    "@makaio/expression": "workspace:*"
+    "@makaio/expression": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/storage-core": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/storage-handlers": "workspace:*",
+    "croner": "^9.0.0",
+    "drizzle-orm": "0.45.2",
+    "zod": "^4.1.13"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/storage-migrations": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "@types/node": "^24.3.0",
     "vitest": "4.1.5"
   },
   "scripts": {
+    "build": "tsdown",
     "test": "vitest run"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./package": "./dist/package.mjs",
+      "./package.json": "./package.json"
+    }
   },
   "license": "MIT"
 }

@@ -7,10 +7,11 @@ next: false
 
 # extensions
 
-2 namespaces, 9 subjects (0 events, 9 RPCs).
+3 namespaces, 15 subjects (0 events, 15 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
+| [`extension:shell`](./extension-shell.md) | extension | 6 | 0E / 6R |
 | [`storage:extension:pin-message`](./storage-extension-pin-message.md) | extension-storage | 5 | 0E / 5R |
 | [`storage:extension:review`](./storage-extension-review.md) | extension-storage | 4 | 0E / 4R |
 

@@ -94,15 +94,17 @@ _Empty object._
 | Field | Type | Required |
 |-------|------|----------|
 | `$schema` | `string` | yes |
-| `adapters` | `{ name: string; displayName: string; description: string; icon?: string \| undefined; tags?: string[] \| undefined; }[]` | yes |
-| `extensions` | `{ name: string; displayName: string; description: string; icon?: string \| undefined; tags?: string[] \| undefined; }[]` | yes |
+| `adapters` | `{ name: string; displayName: string; description: string; icon?: string \| undefined; tags?: string[] \| undefined; descriptorName?: string \| undefined; }[]` | yes |
+| `extensions` | `{ name: string; displayName: string; description: string; icon?: string \| undefined; tags?: string[] \| undefined; descriptorName?: string \| undefined; }[]` | yes |
 | `updatedAt` | `string` | yes |
 
 ### <a id="packages.install"></a>`packages.install` (rpc)
 
-Install a package.
+Install one or more packages.
 
-Install an extension package from the configured source.
+Local installs must use a single entry in `packageNames`.
+The optional `force` flag bypasses inverse-dependency version checks
+when going through the dependency resolver.
 
 Subject: `packages.install`
 Type: Request (RPC)
@@ -111,7 +113,9 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `packageName` | `string` | yes |
+| `force` | `boolean \| undefined` | no |
+| `packageName` | `string \| undefined` | no |
+| `packageNames` | `string[] \| undefined` | no |
 | `source` | `"local" \| "npm" \| undefined` | no |
 
 **Response:**
@@ -119,10 +123,13 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `error` | `string \| undefined` | no |
+| `installed` | `{ npmName: string; version: string; source: "new" \| "upgraded" \| "already-present"; }[] \| undefined` | no |
 | `packageName` | `string` | yes |
 | `restartRequired` | `boolean` | yes |
+| `skipped` | `{ npmName: string; reason: string; }[] \| undefined` | no |
 | `success` | `boolean` | yes |
 | `version` | `string \| undefined` | no |
+| `warnings` | `string[] \| undefined` | no |
 
 ### <a id="packages.installed"></a>`packages.installed` (event)
 

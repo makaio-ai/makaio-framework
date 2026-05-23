@@ -16,13 +16,13 @@ next: false
 | Schema record | `AgentResolutionSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/agent-resolution/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent-resolution/namespace.ts) |
+| Defined in | [`core/contracts/src/agent-resolution/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent-resolution/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `resolve` | [`agentResolution.resolve`](#agentResolution.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent-resolution/schemas.ts) |
+| `resolve` | [`agentResolution.resolve`](#agentResolution.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent-resolution/schemas.ts) |
 
 ## Subject Details
 
@@ -42,7 +42,7 @@ domain service based on `kind`.
 | Field | Type | Required |
 |-------|------|----------|
 | `context` | `{ sessionId?: string \| undefined; projectId?: string \| undefined; promptText?: string \| undefined; sessionContext?: unknown; } \| undefined` | no |
-| `selection` | `{ [x: string]: unknown; kind: string; providerConfigId?: string \| undefined; model?: string \| undefined; reasoningEffort?: "none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined; cwd?: string \| undefined; systemPrompt?: string \| { mode: "append"; content: string; } \| undefined; allowedTools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; }` | yes |
+| `selection` | `{ [x: string]: unknown; kind: string; providerConfigId?: string \| undefined; model?: string \| undefined; reasoningEffort?: "none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined; cwd?: string \| undefined; systemPrompt?: string \| { mode: "append"; content: string; } \| undefined; allowedTools?: string[] \| undefined; disallowedTools?: string[] \| undefined; env?: Record<string, string> \| undefined; mcpSessionContext?: { sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| undefined; allowedDirectories?: string[] \| undefined; }` | yes |
 
 **Response:**
 

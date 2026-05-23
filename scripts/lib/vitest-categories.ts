@@ -98,7 +98,7 @@ export function resolveShardForFile(filePath: string, shards: Record<string, str
 export const frameworkShards: Record<string, string[]> = {
   Core: ['core', 'storage'],
   Packages: ['packages'],
-  Platform: ['platforms', 'runtimes', 'transports', 'clients', 'providers', 'scripts', 'build-tooling'],
+  Platform: ['platforms', 'runtimes', 'transports', 'clients', 'providers', 'scripts', 'build-tooling', 'subsystems'],
   Adapters: ['adapters'],
   Extensions: ['extensions'],
   Apps: ['apps', 'ui', 'sdks'],
