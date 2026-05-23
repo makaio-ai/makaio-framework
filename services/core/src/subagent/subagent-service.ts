@@ -363,6 +363,7 @@ export class SubagentService extends BaseService {
       systemPrompt: config.systemPrompt,
       allowedTools: config.tools,
       disallowedTools: config.disallowedTools,
+      ...(config.harnessId !== undefined && { harnessId: config.harnessId }),
     });
 
     // Treat malformed or falsy responses as adapter-start failures.

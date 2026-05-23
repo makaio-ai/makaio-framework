@@ -5,14 +5,15 @@ import {
   WorkflowDefinitionInputSchemaTyped,
   WorkflowDefinitionSchemaTyped,
   WorkflowExecutionSchema,
+  WorkflowExecutionScopeSchema,
   WorkflowListQuerySchema,
 } from './schemas.js';
 
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
   stepId: z.string(),
-  // Composite `forEach` steps are expanded into executable leaf steps before
-  // runtime, so lifecycle events only expose step types an executor can run.
+  // Composite `for-each` steps are runtime scheduler coordination nodes, not
+  // executor targets, so lifecycle events only expose runner-executable steps.
   stepType: z.enum(['agent', 'shell', 'gate']),
 });
 
@@ -43,6 +44,12 @@ export const WorkflowSchemas = {
       inputs: z.record(z.string(), z.unknown()).optional(),
       parentSessionId: z.string().optional(),
       triggerPayload: z.record(z.string(), z.unknown()).optional(),
+      /**
+       * Scope override for this execution.
+       * When provided, supersedes the scope declared on the workflow definition.
+       * When omitted, the executor uses the workflow definition's required scope.
+       */
+      scope: WorkflowExecutionScopeSchema.optional(),
     }),
     response: z.object({ executionId: z.string() }),
   },

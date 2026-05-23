@@ -1,42 +1,28 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
-  SubagentSubjects,
   type IStepRunner,
   type IWorkflowTriggerTypeRegistry,
   type WorkflowDefinition,
   type WorkflowExecution,
+  type WorkflowExecutionScope,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
-import { evaluateSync } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
-import { groupByTopoLevel } from './dag-utils.js';
 import { DEFAULT_EXECUTOR_CONFIG, type ExecutorConfig, type ActiveExecution } from './types.js';
-import { generateId, sleep } from './executor-helpers.js';
-import { expandForEachSteps } from './for-each-expander.js';
+import { generateId } from './executor-helpers.js';
 import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import {
   registerWorkflowStorageDelegationHandlers,
   registerWorkflowTriggerTypeHandlers,
 } from './workflow-executor-handlers.js';
-import {
-  completeExecutionWithFailure,
-  completeExecutionWithSuccess,
-  cancelExecution,
-} from './workflow-execution-finalizer.js';
+import { cancelExecution, type FinalizerDeps } from './workflow-execution-finalizer.js';
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
-import { buildExpressionContext } from './workflow-step-executors.js';
 import { InProcessStepRunner } from './in-process-step-runner.js';
-import {
-  applyStepRunResult,
-  persistStepSpan,
-  prepareRunnerManagedStep,
-  runnerManagesWorkflowLifecycle,
-  type FailedStepExecutionOutcome,
-  type StepExecutionOutcome,
-} from './workflow-step-result.js';
+import { WorkflowScheduler } from './workflow-scheduler.js';
+import { validateAuthoredWorkflowSteps } from './dag-utils.js';
 
 /**
  * Merge provided inputs with workflow input definitions, applying defaults and
@@ -79,7 +65,7 @@ function bindWorkflowInputs(
  *
  * Orchestrates workflow execution lifecycle:
  * - Creates coordinator session for each execution
- * - Executes steps in topological order
+ * - Executes steps via the mutable DAG scheduler
  * - Spawns subagents for each step
  * - Tracks progress and emits lifecycle events
  * - Manages cancellation and cleanup
@@ -158,16 +144,15 @@ export class WorkflowExecutor extends BaseService {
    * Called by `destroy()` before handler unsubscription.
    */
   protected async onDestroy(): Promise<void> {
+    const finalizerDeps: FinalizerDeps = {
+      bus: this.bus,
+      activeExecutions: this.activeExecutions,
+      shellAbortControllers: this.shellAbortControllers,
+      gateCoordinator: this.gateCoordinator,
+    };
     await Promise.allSettled(
       [...this.activeExecutions.keys()].map((executionId) =>
-        cancelExecution(
-          this.bus,
-          this.activeExecutions,
-          this.shellAbortControllers,
-          this.gateCoordinator,
-          executionId,
-          'Workflow engine shutdown',
-        ),
+        cancelExecution(finalizerDeps, executionId, 'Workflow engine shutdown'),
       ),
     );
     this.gateCoordinator.dispose();
@@ -183,9 +168,14 @@ export class WorkflowExecutor extends BaseService {
   /** Register execution control handlers (start, cancel). */
   private registerExecutionHandlers(): void {
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
-      const { workflowId, inputs = {}, parentSessionId, triggerPayload } = ctx.payload;
+      const { workflowId, inputs = {}, parentSessionId, triggerPayload, scope } = ctx.payload;
       try {
-        const executionId = await this.startExecution(workflowId, inputs, parentSessionId, triggerPayload);
+        const executionId = await this.startExecution(workflowId, {
+          inputs,
+          parentSessionId,
+          triggerPayload,
+          scopeOverride: scope,
+        });
         ctx.setResult({ executionId });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -195,14 +185,13 @@ export class WorkflowExecutor extends BaseService {
 
     this.registerHandler(WorkflowSubjects.cancel, async (ctx) => {
       const { executionId, reason } = ctx.payload;
-      const cancelled = await cancelExecution(
-        this.bus,
-        this.activeExecutions,
-        this.shellAbortControllers,
-        this.gateCoordinator,
-        executionId,
-        reason,
-      );
+      const finalizerDeps: FinalizerDeps = {
+        bus: this.bus,
+        activeExecutions: this.activeExecutions,
+        shellAbortControllers: this.shellAbortControllers,
+        gateCoordinator: this.gateCoordinator,
+      };
+      const cancelled = await cancelExecution(finalizerDeps, executionId, reason);
       ctx.setResult({ cancelled });
     });
   }
@@ -210,42 +199,44 @@ export class WorkflowExecutor extends BaseService {
   /**
    * Start a new workflow execution.
    * @param workflowId - The workflow definition ID
-   * @param inputs - Input values for the workflow
-   * @param parentSessionId - Optional parent session ID
-   * @param triggerPayload - Optional payload from the firing trigger
+   * @param options - Execution options
    * @returns The execution ID
    */
   private async startExecution(
     workflowId: string,
-    inputs: Record<string, unknown>,
-    parentSessionId?: string,
-    triggerPayload?: Record<string, unknown>,
+    options: {
+      inputs?: Record<string, unknown>;
+      parentSessionId?: string;
+      triggerPayload?: Record<string, unknown>;
+      scopeOverride?: WorkflowExecutionScope;
+    } = {},
   ): Promise<string> {
+    const { inputs = {}, parentSessionId, triggerPayload, scopeOverride } = options;
     const { workflow } = await this.bus.request(WorkflowStorageSubjects.get, { id: workflowId });
     if (!workflow) {
       throw new Error(`Workflow not found: ${workflowId}`);
     }
+    validateAuthoredWorkflowSteps(workflow.steps);
 
     const executionId = generateId('wfx');
     const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
     const boundInputs = bindWorkflowInputs(workflow.inputs, inputs);
 
-    // Expand for-each steps into the flat DAG before building execution state
-    const initialContext = {
-      trigger: sanitizedTriggerPayload ?? {},
-      steps: {},
-      inputs: boundInputs,
-    };
-    const { steps: expandedSteps, stepContext } = expandForEachSteps(workflow.steps, initialContext);
+    // Resolve execution scope: caller override wins; otherwise use the definition's required scope.
+    const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
+
     const { sessionId: coordinatorSessionId } = await this.bus.request(SessionSubjects.create, {
       parentSessionId,
       branchKind: 'coordinator',
       title: `Workflow: ${workflow.name}`,
     });
 
+    // Initialize step states from authored steps.
+    // For-each steps get composite state; all others get executable state.
     const steps: WorkflowExecution['steps'] = {};
-    for (const step of expandedSteps) {
-      steps[step.id] = { status: 'pending' };
+    for (const step of workflow.steps) {
+      steps[step.id] =
+        step.type === 'for-each' ? { kind: 'composite', status: 'pending' } : { kind: 'executable', status: 'pending' };
     }
 
     const execution: WorkflowExecution = {
@@ -257,17 +248,21 @@ export class WorkflowExecutor extends BaseService {
       steps,
       startedAt: Date.now(),
       triggerPayload: sanitizedTriggerPayload,
+      scope: resolvedScope,
     };
 
     let launched = false;
     try {
       await this.bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+      // Seed stepMap from authored steps (scheduler adds children as for-each nodes expand).
+      const stepMap = new Map(workflow.steps.map((step) => [step.id, step]));
+
       this.activeExecutions.set(executionId, {
         execution,
         workflow,
-        expandedSteps,
-        stepMap: new Map(expandedSteps.map((step) => [step.id, step])),
-        stepContext,
+        stepMap,
+        stepContext: new Map(),
       });
 
       const startedEventTask = this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
@@ -323,157 +318,28 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
-   * Main execution loop - executes steps in parallel topological levels.
-   * All steps within a level are started concurrently; the next level begins
-   * only after every step in the current level has settled.
+   * Main execution loop — delegates to the mutable DAG scheduler.
+   *
+   * The scheduler finds ready nodes at each tick, expands composite for-each
+   * nodes on-demand, and runs executable nodes via the step runner.
    * @param executionId - The execution ID
    */
   private async runExecution(executionId: string): Promise<void> {
     const active = this.activeExecutions.get(executionId);
     if (!active) return;
 
-    const { execution, expandedSteps } = active;
-    const startTime = Date.now();
-
-    try {
-      const levels = groupByTopoLevel(expandedSteps);
-
-      for (const level of levels) {
-        if (execution.status !== 'running') return;
-
-        const failedOutcome = await this.runTopoLevel(executionId, level);
-        if (execution.status !== 'running') return;
-
-        if (failedOutcome) {
-          await completeExecutionWithFailure(
-            this.bus,
-            this.activeExecutions,
-            execution,
-            executionId,
-            failedOutcome.error,
-            failedOutcome.failedStepId,
-          );
-          await this.releaseLevelResources(
-            executionId,
-            execution,
-            level.filter((stepId) => stepId !== failedOutcome.stepId),
-          );
-          return;
-        }
-
-        if (this.config.stepCooldownMs > 0) {
-          await sleep(this.config.stepCooldownMs);
-        }
-      }
-
-      await completeExecutionWithSuccess(this.bus, this.activeExecutions, execution, executionId, startTime);
-    } catch (error) {
-      if (execution.status !== 'running') return;
-      const message = error instanceof Error ? error.message : String(error);
-      await completeExecutionWithFailure(this.bus, this.activeExecutions, execution, executionId, message);
-    }
-  }
-
-  /**
-   * Run one topological level concurrently, returning as soon as any step fails.
-   * @param executionId - The execution ID.
-   * @param level - Step IDs in the current topological level.
-   * @returns First failed step outcome, or undefined when all steps complete or skip.
-   */
-  private async runTopoLevel(executionId: string, level: string[]): Promise<FailedStepExecutionOutcome | undefined> {
-    const pending = new Map<string, Promise<StepExecutionOutcome & { stepId: string }>>();
-
-    for (const stepId of level) {
-      pending.set(
-        stepId,
-        this.executeStep(executionId, stepId)
-          .then((outcome) => ({ ...outcome, stepId }))
-          .catch((error: unknown) => ({
-            stepId,
-            status: 'failed' as const,
-            error: error instanceof Error ? error.message : String(error),
-            failedStepId: stepId,
-          })),
-      );
-    }
-
-    while (pending.size > 0) {
-      const outcome = await Promise.race(pending.values());
-      pending.delete(outcome.stepId);
-      if (outcome.status === 'failed') return outcome;
-    }
-
-    return undefined;
-  }
-
-  private async releaseLevelResources(
-    executionId: string,
-    execution: WorkflowExecution,
-    stepIds: string[],
-  ): Promise<void> {
-    execution.status = 'failed';
-    await Promise.all(
-      stepIds.map(async (stepId) => {
-        this.gateCoordinator.resolveForCancellation(executionId, stepId);
-        this.shellAbortControllers.get(`${executionId}:${stepId}`)?.abort();
-        const subagentId = execution.steps[stepId]?.subagentId;
-        if (subagentId) {
-          await this.bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow step failed' }).catch(() => {});
-        }
-      }),
-    );
-  }
-
-  private async executeStep(executionId: string, stepId: string): Promise<StepExecutionOutcome> {
-    const active = this.activeExecutions.get(executionId);
-    if (!active) return { status: 'failed', error: 'Execution no longer active', failedStepId: stepId };
-
-    const step = active.stepMap.get(stepId);
-    if (!step) throw new Error(`Step not found: ${stepId}`);
-
-    if (step.if) {
-      const context = buildExpressionContext(active.execution, this.activeExecutions, stepId);
-      const result = evaluateSync(step.if, context);
-      if (!result) {
-        const stepState = active.execution.steps[stepId];
-        stepState.status = 'skipped';
-        stepState.completedAt = Date.now();
-        await this.bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
-        await persistStepSpan(this.bus, active, stepId, 'skipped');
-        await this.bus.emit(WorkflowSubjects.step.skipped, {
-          executionId,
-          stepId,
-          stepType: step.type as 'agent' | 'shell' | 'gate',
-          condition: step.if,
-        });
-        return { status: 'skipped' };
-      }
-    }
-
-    if (step.type === 'for-each') {
-      throw new Error(`for-each step '${stepId}' should have been expanded before execution`);
-    }
-
-    const resolvedInputs: Record<string, unknown> = {
-      ...buildExpressionContext(active.execution, this.activeExecutions, stepId),
-    };
-    const stepRunnerManagesLifecycle = runnerManagesWorkflowLifecycle(this.stepRunner);
-    if (!stepRunnerManagesLifecycle) {
-      await prepareRunnerManagedStep(this.bus, active, stepId);
-      if (active.execution.status !== 'running') {
-        return { status: 'failed', error: 'Execution cancelled', failedStepId: stepId };
-      }
-    }
-
-    const result = await this.stepRunner.run({
+    const scheduler = new WorkflowScheduler(
+      {
+        bus: this.bus,
+        activeExecutions: this.activeExecutions,
+        shellAbortControllers: this.shellAbortControllers,
+        gateCoordinator: this.gateCoordinator,
+        stepRunner: this.stepRunner,
+        config: this.config,
+      },
       executionId,
-      workflowId: active.workflow.id,
-      stepId,
-      stepType: step.type,
-      stepDefinition: step,
-      resolvedInputs,
-    });
+    );
 
-    return applyStepRunResult(this.bus, active, stepId, result, resolvedInputs);
+    await scheduler.run(active.workflow.steps);
   }
 }

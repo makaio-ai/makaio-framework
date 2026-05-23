@@ -1,8 +1,9 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IStepRunner, SpanRecord, StepRunResult, WorkflowStepType } from '@makaio/contracts';
+import type { ExecutableStepState, IStepRunner, SpanRecord, StepRunResult, WorkflowStepType } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
+import { persistStepState } from './workflow-execution-persistence.js';
 import { markStepFailed } from './workflow-execution-finalizer.js';
 import { emitBeforeStepStart } from './step-lifecycle.js';
 
@@ -78,10 +79,11 @@ export async function prepareRunnerManagedStep(
   await emitBeforeStepStart(bus, active.execution.id, step);
   if (active.execution.status !== 'running') return;
 
-  const stepState = active.execution.steps[stepId];
-  stepState.status = step.type === 'gate' ? 'waiting' : 'running';
-  stepState.startedAt = Date.now();
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
+  const rawState = active.execution.steps[stepId];
+  if (!rawState || rawState.kind !== 'executable') throw new Error(`Unexpected state kind for step: ${stepId}`);
+  rawState.status = step.type === 'gate' ? 'waiting' : 'running';
+  rawState.startedAt = Date.now();
+  await persistStepState(bus, active.execution, stepId);
   await bus.emit(WorkflowSubjects.step.started, {
     executionId: active.execution.id,
     stepId,
@@ -109,7 +111,11 @@ export async function applyStepRunResult(
   const step = active.stepMap.get(stepId);
   if (!step || step.type === 'for-each') throw new Error(`Executable step not found: ${stepId}`);
 
-  const stepState = active.execution.steps[stepId];
+  const rawState = active.execution.steps[stepId];
+  if (!rawState || rawState.kind !== 'executable') {
+    throw new Error(`Unexpected state kind for step: ${stepId}`);
+  }
+  const stepState: ExecutableStepState = rawState;
   const output = stringifyStepValue(result.output);
   if (active.execution.status !== 'running') {
     return { status: 'failed', error: 'Execution no longer running', failedStepId: stepId };
@@ -120,7 +126,7 @@ export async function applyStepRunResult(
       stepState.status = 'completed';
       stepState.result = output;
       stepState.completedAt = Date.now();
-      await bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
+      await persistStepState(bus, active.execution, stepId);
       await bus.emit(WorkflowSubjects.step.completed, {
         executionId: active.execution.id,
         stepId,
@@ -171,9 +177,10 @@ export async function persistStepSpan(
   const step = active.stepMap.get(stepId);
   if (!step || step.type === 'for-each') return;
 
-  const stepState = active.execution.steps[stepId];
-  const startedAt = stepState.startedAt;
-  const completedAt = stepState.completedAt;
+  const rawState = active.execution.steps[stepId];
+  if (!rawState || rawState.kind !== 'executable') return;
+  const startedAt = rawState.startedAt;
+  const completedAt = rawState.completedAt;
   const durationMs =
     telemetry?.duration ??
     (startedAt !== undefined && completedAt !== undefined ? Math.max(0, completedAt - startedAt) : undefined);

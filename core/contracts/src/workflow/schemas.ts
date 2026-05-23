@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ContextModeSchema } from '../subagent/schemas.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -186,6 +187,10 @@ export const AgentWorkflowStepSchema = WorkflowStepBaseSchema.extend({
    * to the prompt as a JSON constraint instruction.
    */
   outputSchema: z.record(z.string(), z.unknown()).optional(),
+  /** Harness ID for per-role tool governance. */
+  harnessId: z.string().optional(),
+  /** Subagent context mode. Workflow steps default to fresh at execution time. */
+  contextMode: ContextModeSchema.optional(),
 });
 
 export type AgentWorkflowStep = z.infer<typeof AgentWorkflowStepSchema>;
@@ -283,7 +288,7 @@ export type WorkflowStep = AgentWorkflowStep | ShellWorkflowStep | GateWorkflowS
 
 /**
  * For-each step variant — iterates over a collection, expanding inner steps per item.
- * Forms an inner DAG that is flattened into the parent DAG before execution.
+ * Forms an inner DAG that is expanded by the runtime scheduler after its needs settle.
  *
  * NOTE: The `steps` field uses `z.lazy()` to reference `WorkflowStepSchema`, creating
  * a circular schema reference. The schema output type is cast to `ForEachWorkflowStep`
@@ -314,6 +319,40 @@ export const WorkflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
 );
 
 // ─────────────────────────────────────────────────────────────
+// Workflow Execution Scope
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Generic scope descriptor for workflow definitions and executions.
+ *
+ * Discriminated union covering the full scope hierarchy without tying
+ * the workflow engine to product-specific identifiers like `projectId`.
+ *
+ * - `global`: framework-wide, no owner constraint
+ * - `workspace`: tied to a named workspace (id = workspace identifier)
+ * - `session`: tied to a single session (id = session identifier)
+ * - `external`: host-product-defined scope with an opaque `kind` and `id`
+ * @example
+ * ```typescript
+ * const scope: WorkflowExecutionScope = { type: 'external', kind: 'project', id: 'proj-1' };
+ * ```
+ */
+export const WorkflowExecutionScopeSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('global') }).strict(),
+  z.object({ type: z.literal('workspace'), id: z.string().min(1) }).strict(),
+  z.object({ type: z.literal('session'), id: z.string().min(1) }).strict(),
+  z
+    .object({
+      type: z.literal('external'),
+      kind: z.string().min(1),
+      id: z.string().min(1),
+    })
+    .strict(),
+]);
+
+export type WorkflowExecutionScope = z.infer<typeof WorkflowExecutionScopeSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // Workflow Definition (stored entity)
 // ─────────────────────────────────────────────────────────────
 
@@ -328,8 +367,6 @@ export const WorkflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
 export const WorkflowDefinitionSchema = z.object({
   /** Unique workflow identifier. */
   id: z.string(),
-  /** Project this workflow belongs to (null = global template). Intentionally nullable, not optional. */
-  projectId: z.string().nullable(),
   /** Workflow name. */
   name: z.string(),
   /** Human-readable description. */
@@ -338,8 +375,11 @@ export const WorkflowDefinitionSchema = z.object({
   inputs: z.array(WorkflowInputSchema).optional(),
   /** Workflow steps (DAG nodes). */
   steps: z.array(WorkflowStepSchema),
-  /** Scope identifier ('default' or projectId). */
-  scope: z.string(),
+  /**
+   * Scope this workflow definition is bound to.
+   * Use `{ type: 'global' }` for framework-wide workflow definitions.
+   */
+  scope: WorkflowExecutionScopeSchema,
   /** Creation timestamp. */
   createdAt: z.number(),
   /** Last update timestamp. */
@@ -415,9 +455,12 @@ export const StepStatusSchema = z.enum(['pending', 'running', 'waiting', 'comple
 export type StepStatus = z.infer<typeof StepStatusSchema>;
 
 /**
- * Runtime state of a single step execution.
+ * Runtime state of a single executable step (agent / shell / gate).
+ * The `kind` discriminant separates executable state from composite state.
  */
-export const StepStateSchema = z.object({
+export const ExecutableStepStateSchema = z.object({
+  /** Discriminant: always `'executable'` for agent, shell, and gate steps. */
+  kind: z.literal('executable'),
   /** Current execution status. */
   status: StepStatusSchema,
   /** Worker session ID executing this step. */
@@ -434,7 +477,98 @@ export const StepStateSchema = z.object({
   completedAt: z.number().optional(),
 });
 
-export type StepState = z.infer<typeof StepStateSchema>;
+export type ExecutableStepState = z.infer<typeof ExecutableStepStateSchema>;
+
+/**
+ * Persisted snapshot of a single `for-each` expansion.
+ *
+ * Captures everything needed to rebuild the scheduler graph for the expanded
+ * iterations without re-evaluating the collection expression at resume time.
+ */
+export const ForEachExpansionSnapshotSchema = z.object({
+  /** ID of the for-each step that owns this expansion. */
+  parentStepId: z.string(),
+  /**
+   * Fully expanded child steps with namespaced IDs and rewired `needs` edges.
+   * These are the flat WorkflowStep nodes inserted into the scheduler graph.
+   */
+  childSteps: z.array(WorkflowStepSchema),
+  /**
+   * Per-child-step item/index context keyed by expanded step ID.
+   * Used for expression resolution when running a child step.
+   */
+  stepContext: z.record(
+    z.string(),
+    z.object({
+      /** Collection item for this child step's iteration. */
+      item: z.unknown(),
+      /** Zero-based iteration index. */
+      index: z.number(),
+    }),
+  ),
+  /**
+   * IDs of the expanded child steps that are leaves of the iteration DAG.
+   * Downstream steps that depend on the for-each step are rewired to wait for
+   * all leaf steps before starting.
+   */
+  leafStepIds: z.array(z.string()),
+});
+
+export type ForEachExpansionSnapshot = z.infer<typeof ForEachExpansionSnapshotSchema>;
+
+/**
+ * Runtime state of a composite `for-each` step.
+ *
+ * Composite steps are not executed directly; they orchestrate a set of
+ * dynamically expanded child steps. Lifecycle events for individual
+ * child steps are emitted only when those children (executable steps) run.
+ */
+export const CompositeStepStateSchema = z.object({
+  /** Discriminant: always `'composite'` for for-each steps. */
+  kind: z.literal('composite'),
+  /**
+   * Composite step execution status.
+   * - `pending`   – not yet started
+   * - `expanding` – scheduler has started expansion and generated children are active
+   * - `completed` – all child steps have completed or been skipped
+   * - `skipped`   – the for-each `if` condition was falsy
+   * - `failed`    – at least one child step failed
+   * - `cancelled` – the execution was cancelled while this step was active
+   */
+  status: z.enum(['pending', 'expanding', 'completed', 'skipped', 'failed', 'cancelled']),
+  /** Epoch ms when expansion or first child execution began. */
+  startedAt: z.number().optional(),
+  /** Epoch ms when all child steps settled. */
+  completedAt: z.number().optional(),
+  /** Human-readable error message when `status` is `'failed'`. */
+  error: z.string().optional(),
+  /**
+   * Persisted expansion snapshot.
+   * Present after the scheduler has evaluated the collection expression and
+   * produced child steps. Absent while still in `pending` state.
+   */
+  expansion: ForEachExpansionSnapshotSchema.optional(),
+});
+
+export type CompositeStepState = z.infer<typeof CompositeStepStateSchema>;
+
+/**
+ * Runtime state of a single workflow step.
+ *
+ * Discriminated union of executable (agent / shell / gate) and composite
+ * (for-each) step states. Use the `kind` field to narrow.
+ * Storage adapters normalize legacy persisted executable step JSON that
+ * predates this discriminant before returning `WorkflowExecution` values.
+ * @example
+ * ```typescript
+ * if (state.kind === 'executable') {
+ *   // state.subagentId is available here
+ * }
+ * ```
+ */
+export const StepStateSchema = z.discriminatedUnion('kind', [ExecutableStepStateSchema, CompositeStepStateSchema]);
+
+export type StepState = ExecutableStepState | CompositeStepState;
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Execution (runtime state)
@@ -477,6 +611,12 @@ export const WorkflowExecutionSchema = z.object({
    * Absent for manual starts.
    */
   triggerPayload: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * Scope this execution is bound to.
+   * Inherited from the workflow definition at start time, or overridden
+   * by the caller via {@link WorkflowSubjects.start}.
+   */
+  scope: WorkflowExecutionScopeSchema,
 });
 
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
@@ -489,20 +629,48 @@ export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
  * Query parameters for listing workflow definitions.
  */
 export const WorkflowListQuerySchema = z.object({
-  /** Filter by project ID. */
-  projectId: z.string().optional(),
+  /** Filter by scope. When omitted, returns all definitions. */
+  scope: WorkflowExecutionScopeSchema.optional(),
 });
 
 export type WorkflowListQuery = z.infer<typeof WorkflowListQuerySchema>;
 
 /**
- * Query parameters for listing workflow executions.
+ * Cursor for keyset pagination over workflow executions.
+ *
+ * Combines `startedAt` and `id` so ordering is stable even when multiple
+ * executions share the same timestamp.
  */
-export const ExecutionListQuerySchema = z.object({
-  /** Filter by workflow ID. */
-  workflowId: z.string().optional(),
-  /** Filter by execution status. */
-  status: ExecutionStatusSchema.optional(),
+export const ExecutionListCursorSchema = z.object({
+  /** Start timestamp of the last item on the previous page (epoch ms). */
+  startedAt: z.number(),
+  /** ID of the last item on the previous page. */
+  id: z.string(),
 });
+
+export type ExecutionListCursor = z.infer<typeof ExecutionListCursorSchema>;
+
+/**
+ * Query parameters for listing workflow executions.
+ *
+ * At least one of `workflowId` or `scope` is required to avoid unbounded scans.
+ * Results are ordered by `startedAt desc, id desc` and always limited.
+ */
+export const ExecutionListQuerySchema = z
+  .object({
+    /** Filter by workflow ID. */
+    workflowId: z.string().min(1).optional(),
+    /** Filter by execution scope. */
+    scope: WorkflowExecutionScopeSchema.optional(),
+    /** Filter by execution status. */
+    status: ExecutionStatusSchema.optional(),
+    /** Maximum number of executions to return. Defaults to 50, max 500. */
+    limit: z.number().int().min(1).max(500).default(50),
+    /** Keyset pagination cursor from the previous page. */
+    cursor: ExecutionListCursorSchema.optional(),
+  })
+  .refine((query) => query.workflowId !== undefined || query.scope !== undefined, {
+    message: 'Either workflowId or scope is required.',
+  });
 
 export type ExecutionListQuery = z.infer<typeof ExecutionListQuerySchema>;

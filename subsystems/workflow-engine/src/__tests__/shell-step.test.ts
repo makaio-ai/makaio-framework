@@ -14,7 +14,13 @@ import { WorkflowExecutor } from '../workflow-executor.js';
 import { executeShellStep } from '../workflow-step-executors.js';
 import { WorkflowGateCoordinator } from '../workflow-gate-coordinator.js';
 import { DEFAULT_EXECUTOR_CONFIG, type ActiveExecution } from '../types.js';
-import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
+import {
+  asExecutable,
+  createTestDb,
+  createWorkflowDefinition,
+  createWorkflowExecution,
+  type TestDbContext,
+} from './shared.js';
 
 describe('WorkflowExecutor — shell steps', () => {
   let dbContext: TestDbContext;
@@ -103,7 +109,7 @@ describe('WorkflowExecutor — shell steps', () => {
 
     expect(execution?.status).toBe('completed');
     expect(execution?.steps['echo-step']?.status).toBe('completed');
-    expect(execution?.steps['echo-step']?.result).toBe('hello world\n');
+    expect(asExecutable(execution?.steps['echo-step'])?.result).toBe('hello world\n');
   });
 
   it('captures stderr as error and marks step failed on non-zero exit', async () => {
@@ -172,15 +178,16 @@ describe('WorkflowExecutor — shell steps', () => {
       id: 'execution-shell-prelaunch-failure',
       workflowId: workflow.id,
       coordinatorSessionId: 'coordinator-session',
-      steps: { 'prelaunch-failure-step': { status: 'pending' } },
+      steps: { 'prelaunch-failure-step': { kind: 'executable', status: 'pending' } },
     });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
     const activeExecutions = new Map<string, ActiveExecution>([
       [
         execution.id,
         {
           execution,
           workflow,
-          expandedSteps: workflow.steps,
           stepMap: new Map(workflow.steps.map((step) => [step.id, step])),
           stepContext: new Map(),
         },
@@ -241,7 +248,7 @@ describe('WorkflowExecutor — shell steps', () => {
     });
 
     expect(execution?.steps['silent-step']?.status).toBe('completed');
-    expect(execution?.steps['silent-step']?.result).toBe('');
+    expect(asExecutable(execution?.steps['silent-step'])?.result).toBe('');
   });
 
   it('resolves {{ }} template expressions in command args', async () => {
@@ -275,7 +282,7 @@ describe('WorkflowExecutor — shell steps', () => {
     });
 
     expect(execution?.steps['template-step']?.status).toBe('completed');
-    expect(execution?.steps['template-step']?.result).toBe('world\n');
+    expect(asExecutable(execution?.steps['template-step'])?.result).toBe('world\n');
   });
 
   it('fails step when cwd is outside workspace root', async () => {
@@ -349,7 +356,7 @@ describe('WorkflowExecutor — shell steps', () => {
 
     expect(execution?.steps['cwd-step']?.status).toBe('completed');
     // The output should be process.cwd() since session has no targetWorkingDirectory.
-    expect(execution?.steps['cwd-step']?.result?.trim()).toBe(process.cwd());
+    expect(asExecutable(execution?.steps['cwd-step'])?.result?.trim()).toBe(process.cwd());
   });
 
   it('merges step env vars into the child process environment', async () => {
@@ -384,7 +391,7 @@ describe('WorkflowExecutor — shell steps', () => {
     });
 
     expect(execution?.steps['env-step']?.status).toBe('completed');
-    expect(execution?.steps['env-step']?.result?.trim()).toBe('hello-from-env');
+    expect(asExecutable(execution?.steps['env-step'])?.result?.trim()).toBe('hello-from-env');
   });
 
   it('kills process and fails step on timeout', async () => {

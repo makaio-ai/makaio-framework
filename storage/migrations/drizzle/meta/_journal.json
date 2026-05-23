@@ -5,15 +5,8 @@
     {
       "idx": 0,
       "version": "6",
-      "when": 1779397583269,
-      "tag": "0000_giant_genesis",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "6",
-      "when": 1779540703558,
-      "tag": "0001_complex_hairball",
+      "when": 1779572176069,
+      "tag": "0000_silky_doctor_faustus",
       "breakpoints": true
     }
   ]

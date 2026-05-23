@@ -11,15 +11,15 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 92 |
-| Subjects | 757 (333 events, 424 RPCs) |
-| framework | 89 |
+| Namespaces | 91 |
+| Subjects | 749 (333 events, 416 RPCs) |
+| framework | 88 |
 | extension | 3 |
 | kind: bus | 67 |
 | kind: adapter | 8 |
 | kind: client | 2 |
 | kind: extension | 1 |
-| kind: storage | 12 |
+| kind: storage | 11 |
 | kind: extension-storage | 2 |
 
 ## Directories
@@ -29,14 +29,14 @@ next: false
 | [adapters/](./adapters/index.md) | 1 | 3 |
 | [clients/](./clients/index.md) | 2 | 24 |
 | [extensions/](./extensions/index.md) | 3 | 15 |
-| [services/](./services/index.md) | 32 | 184 |
+| [services/](./services/index.md) | 31 | 176 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
-| [`adapter`](./adapter.md) | bus | 19 | 11E / 8R |
+| [`adapter`](./adapter.md) | bus | 17 | 9E / 8R |
 | [`adapter:anthropic-sdk`](./adapter-anthropic-sdk.md) | adapter | 19 | 18E / 1R |
 | [`adapter:claude-code-tmux`](./adapter-claude-code-tmux.md) | adapter | 9 | 8E / 1R |
 | [`adapter:codex-app-server`](./adapter-codex-app-server.md) | adapter | 23 | 20E / 3R |
@@ -71,7 +71,7 @@ next: false
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
-| [`session`](./session.md) | bus | 53 | 27E / 26R |
+| [`session`](./session.md) | bus | 55 | 29E / 26R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
 | [`storage:workflow`](./storage-workflow.md) | storage | 11 | 0E / 11R |

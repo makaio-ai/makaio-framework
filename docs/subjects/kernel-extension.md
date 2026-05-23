@@ -86,7 +86,7 @@ Returns `{ extension: null }` when no extension with the given name is registere
 
 | Field | Type | Required |
 |-------|------|----------|
-| `extension` | `{ name: string; displayName: string; state: "discovered" \| "active" \| "skipped" \| "failed" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; } \| null` | yes |
+| `extension` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "skipped" \| "failed" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; } \| null` | yes |
 
 ### <a id="kernel:extension.list"></a>`kernel:extension.list` (rpc)
 
@@ -106,7 +106,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `extensions` | `{ name: string; displayName: string; state: "discovered" \| "active" \| "skipped" \| "failed" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; }[]` | yes |
+| `extensions` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "skipped" \| "failed" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; }[]` | yes |
 
 ### <a id="kernel:extension.setEnabled"></a>`kernel:extension.setEnabled` (rpc)
 
@@ -146,9 +146,9 @@ boot progress UI, adapter subsystem) subscribe to track extension health.
 | `contributes` | `{ adapters: boolean; tools: boolean; triggers: boolean; providers: boolean; clients: boolean; ui: boolean; storage: boolean; sessionEventActions: boolean; } \| undefined` | no |
 | `displayName` | `string` | yes |
 | `error` | `string \| undefined` | no |
-| `from` | `"discovered" \| "active" \| "skipped" \| "failed" \| "stopped" \| "initializing"` | yes |
+| `from` | `"active" \| "discovered" \| "skipped" \| "failed" \| "stopped" \| "initializing"` | yes |
 | `name` | `string` | yes |
-| `to` | `"discovered" \| "active" \| "skipped" \| "failed" \| "stopped" \| "initializing"` | yes |
+| `to` | `"active" \| "discovered" \| "skipped" \| "failed" \| "stopped" \| "initializing"` | yes |
 
 ### <a id="kernel:extension.warnings.changed"></a>`kernel:extension.warnings.changed` (event)
 

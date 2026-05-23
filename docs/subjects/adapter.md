@@ -339,48 +339,6 @@ Type: Event
 | `startedAt` | `number \| undefined` | no |
 | `title` | `string \| undefined` | no |
 
-### <a id="adapter.session.linked"></a>`adapter.session.linked` (event)
-
-Adapter session linked to a Makaio session.
-
-Subject: `adapter.session.linked`
-Type: Event (fire-and-forget)
-Emitted when: An imported adapter session is linked to a Makaio session
-
-Unlike session.discovered (which has no sessionId because the session
-doesn't exist yet), this event confirms the linkage has been established.
-Used to resolve parent relationships for sessions imported out of order.
-
-`adapterId` is optional here because linkage can occur during log import
-before the owning adapter instance has been configured or started. Consumers
-that need a resolved adapterId should use `AdapterRuntimeSubjects.resolveId`
-separately through the runtime identity handlers.
-
-| Field | Type | Required |
-|-------|------|----------|
-| `adapterId` | `string \| undefined` | no |
-| `adapterName` | `string` | yes |
-| `adapterSessionId` | `string` | yes |
-| `replay` | `boolean \| undefined` | no |
-| `sessionId` | `string` | yes |
-
-### <a id="adapter.session.statusChanged"></a>`adapter.session.statusChanged` (event)
-
-Adapter session status changed.
-
-Subject: `adapter.session.statusChanged`
-Type: Event (fire-and-forget)
-Emitted when: An adapter session's import status transitions
-(e.g., discovered → imported, discovered → tracking).
-
-Used by the entity cache to keep `adapterSessions` reactive in the UI.
-Emitted by the storage layer, so `adapterId` is not available.
-
-| Field | Type | Required |
-|-------|------|----------|
-| `adapterSessionId` | `string` | yes |
-| `status` | `"discovered" \| "imported" \| "live" \| "tracking"` | yes |
-
 ### <a id="adapter.session.usage"></a>`adapter.session.usage` (event)
 
 Session-level cumulative usage metrics.

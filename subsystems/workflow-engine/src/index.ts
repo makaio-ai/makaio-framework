@@ -2,11 +2,11 @@
  * Workflow execution engine for Makaio.
  *
  * Provides:
- * - DAG interpreter with checkpoint-based crash recovery
- * - Pluggable StepRunners (Piscina, Docker, Lambda)
- * - Context resolution (pull) and publication (push) pipelines
- * - OTel-style span tracing for cost and performance tracking
- * - Durable gates via DB-backed bus listeners
+ * - Mutable DAG scheduler with persisted runtime for-each expansion snapshots
+ * - Pluggable in-process step execution through the IStepRunner seam
+ * - Workflow expression context from inputs, trigger payloads, step results, and for-each item/index overlays
+ * - OTel-style span records for step duration and future usage ingestion
+ * - Durable gate state through workflow execution checkpoints
  * @packageDocumentation
  */
 

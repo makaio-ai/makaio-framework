@@ -1,14 +1,12 @@
-import { fileURLToPath } from 'node:url';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
-import type { StepState } from '@makaio/contracts';
+import type { ExecutableStepState, StepState } from '@makaio/contracts';
 import type { WorkflowDefinitionInput, WorkflowExecution } from '../storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from '../storage/handler.js';
 
-const WORKFLOW_MIGRATIONS_DIR = fileURLToPath(new URL('../drizzle', import.meta.url));
 const TEST_MIGRATIONS_TABLE = '__drizzle_migrations_test_workflow_engine_storage';
 
 /**
@@ -21,7 +19,6 @@ export function createWorkflowDefinition(overrides: Partial<WorkflowDefinitionIn
   const id = overrides.id ?? `workflow-${Math.random().toString(36).slice(2)}`;
   return {
     id,
-    projectId: null,
     name: overrides.name ?? `test-workflow-${id}`,
     description: 'Test workflow',
     inputs: [],
@@ -30,7 +27,7 @@ export function createWorkflowDefinition(overrides: Partial<WorkflowDefinitionIn
       { id: 'implement', type: 'agent' as const, prompt: 'Implement the work', needs: ['plan'] },
       { id: 'review', type: 'agent' as const, prompt: 'Review the work', needs: ['implement'] },
     ],
-    scope: 'default',
+    scope: { type: 'global' },
     ...overrides,
   };
 }
@@ -42,9 +39,9 @@ export function createWorkflowDefinition(overrides: Partial<WorkflowDefinitionIn
  */
 export function createWorkflowExecution(overrides: Partial<WorkflowExecution> = {}): WorkflowExecution {
   const steps: Record<string, StepState> = {
-    plan: { status: 'pending' },
-    implement: { status: 'pending' },
-    review: { status: 'pending' },
+    plan: { kind: 'executable', status: 'pending' },
+    implement: { kind: 'executable', status: 'pending' },
+    review: { kind: 'executable', status: 'pending' },
   };
 
   return {
@@ -58,20 +55,36 @@ export function createWorkflowExecution(overrides: Partial<WorkflowExecution> = 
     completedAt: undefined,
     error: undefined,
     currentStepId: undefined,
+    scope: { type: 'global' },
     ...overrides,
   };
+}
+
+/**
+ * Narrow a step state to {@link ExecutableStepState} for test assertions.
+ *
+ * All agent, shell, and gate step states are `ExecutableStepState`. This helper
+ * surfaces `result`, `subagentId`, and other executable-only fields in test code
+ * without requiring per-assertion `if (state.kind === 'executable')` guards.
+ * @param state - Step state to narrow (may be undefined for missing steps)
+ * @returns `ExecutableStepState` or `undefined` when the state is absent or composite
+ */
+export function asExecutable(state: StepState | undefined): ExecutableStepState | undefined {
+  if (!state || state.kind !== 'executable') return undefined;
+  return state;
 }
 
 export type { TestDbContextWithCleanup as TestDbContext };
 
 /**
  * Creates an isolated test database with workflow storage handlers registered.
+ * Uses the central framework migrations so the schema matches the runtime DB.
  * @returns Test database context with cleanup function
  */
 export async function createTestDb(): Promise<TestDbContextWithCleanup> {
   const { db, close, dbPath } = await createTempDb('workflow');
 
-  await applyMigrations(db, readMigrations(WORKFLOW_MIGRATIONS_DIR), TEST_MIGRATIONS_TABLE);
+  await applyMigrations(db, readMigrations(), TEST_MIGRATIONS_TABLE);
 
   const handlerCleanup = registerDrizzleWorkflowStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);

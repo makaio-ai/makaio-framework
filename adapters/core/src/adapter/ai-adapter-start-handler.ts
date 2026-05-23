@@ -122,6 +122,7 @@ async function persistAndEmitAgent(
         createdAt: now,
         lastActivityAt: now,
         ...(resolvedClientId !== undefined && { clientId: resolvedClientId }),
+        ...(payload.harnessId !== undefined && { harnessId: payload.harnessId }),
       },
     });
   } catch (error) {

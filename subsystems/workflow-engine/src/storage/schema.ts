@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, uniqueIndex, index, primaryKey, real } from 'drizzle-orm/sqlite-core';
 import type {
+  WorkflowExecutionScope,
   WorkflowInput,
   WorkflowStep,
   WorkflowTrigger,
@@ -10,6 +11,22 @@ import type {
 } from '@makaio/contracts';
 
 /**
+ * Scope columns shared by `workflowDefinitions` and `workflowExecutions`.
+ * @returns Column definitions for `scopeType`, `scopeKind`, and `scopeId`
+ */
+function scopeColumns() {
+  return {
+    scopeType: text('scope_type', {
+      enum: ['global', 'workspace', 'session', 'external'],
+    })
+      .notNull()
+      .$type<WorkflowExecutionScope['type']>(),
+    scopeKind: text('scope_kind').notNull().default(''),
+    scopeId: text('scope_id').notNull().default(''),
+  } as const;
+}
+
+/**
  * Workflow definitions table.
  * Stores workflow templates with their steps and input parameters.
  */
@@ -18,8 +35,6 @@ export const workflowDefinitions = sqliteTable(
   {
     /** Unique workflow identifier. */
     id: text('id').primaryKey(),
-    /** Project this workflow belongs to (null = global template). */
-    projectId: text('project_id'),
     /** Workflow name. */
     name: text('name').notNull(),
     /** Human-readable description. */
@@ -32,8 +47,7 @@ export const workflowDefinitions = sqliteTable(
     defaultExecutionTargetId: text('default_execution_target_id'),
     /** Trigger configuration (JSON array). Null means manual-only default. */
     triggers: text('triggers', { mode: 'json' }).$type<WorkflowTrigger[]>(),
-    /** Scope identifier ('default' or projectId). */
-    scope: text('scope').notNull(),
+    ...scopeColumns(),
     /** Creation timestamp. */
     createdAt: integer('created_at').notNull(),
     /** Last update timestamp. */
@@ -42,13 +56,10 @@ export const workflowDefinitions = sqliteTable(
     canvasLayout: text('canvas_layout', { mode: 'json' }).$type<Record<string, unknown>>(),
   },
   (table) => [
-    // (name, scope) is sufficient because scope already encodes project
-    // identity: scope === projectId for project-scoped rows, 'default'
-    // for global templates. Adding projectId would be redundant and would
-    // break global-row uniqueness (SQL NULL != NULL in unique indexes).
-    uniqueIndex('uniq_workflow_definitions_name_scope').on(table.name, table.scope),
-    // Index on projectId for efficient filtering
-    index('idx_workflow_definitions_project_id').on(table.projectId),
+    // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.
+    uniqueIndex('uniq_workflow_definitions_name_scope').on(table.name, table.scopeType, table.scopeKind, table.scopeId),
+    // Index on scope columns for efficient filtering.
+    index('idx_workflow_definitions_scope').on(table.scopeType, table.scopeKind, table.scopeId),
   ],
 );
 
@@ -85,12 +96,15 @@ export const workflowExecutions = sqliteTable(
     completedAt: integer('completed_at'),
     /** Trigger payload from the firing trigger (JSON object). */
     triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, unknown>>(),
+    ...scopeColumns(),
   },
   (table) => [
-    // Index on workflowId for efficient filtering
-    index('idx_workflow_executions_workflow_id').on(table.workflowId),
-    // Index on status for efficient filtering
+    // Index on status for efficient filtering.
     index('idx_workflow_executions_status').on(table.status),
+    // Index on scope columns + startedAt for bounded scope listing with ordering.
+    index('idx_workflow_executions_scope_started').on(table.scopeType, table.scopeKind, table.scopeId, table.startedAt),
+    // Index on workflowId + startedAt for per-workflow listing with ordering.
+    index('idx_workflow_executions_workflow_started').on(table.workflowId, table.startedAt),
   ],
 );
 
@@ -98,6 +112,33 @@ export type InsertWorkflowDefinition = typeof workflowDefinitions.$inferInsert;
 export type SelectWorkflowDefinition = typeof workflowDefinitions.$inferSelect;
 export type InsertWorkflowExecution = typeof workflowExecutions.$inferInsert;
 export type SelectWorkflowExecution = typeof workflowExecutions.$inferSelect;
+
+/**
+ * Workflow execution step states table.
+ *
+ * Stores each step state as its own row so single-step lifecycle transitions do
+ * not rewrite the full `workflow_executions.steps` compatibility snapshot.
+ */
+export const workflowExecutionSteps = sqliteTable(
+  'workflow_execution_steps',
+  {
+    /** Workflow execution this step state belongs to. */
+    executionId: text('execution_id')
+      .notNull()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+    /** Step identifier within the execution. */
+    stepId: text('step_id').notNull(),
+    /** Current persisted step state. */
+    state: text('state', { mode: 'json' }).$type<StepState>().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.executionId, table.stepId] }),
+    index('idx_workflow_execution_steps_execution_id').on(table.executionId),
+  ],
+);
+
+export type InsertWorkflowExecutionStep = typeof workflowExecutionSteps.$inferInsert;
+export type SelectWorkflowExecutionStep = typeof workflowExecutionSteps.$inferSelect;
 
 /**
  * Workflow step spans table.

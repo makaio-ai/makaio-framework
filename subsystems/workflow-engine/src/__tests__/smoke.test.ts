@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { createWorkflowDefinition } from './shared.js';
+import { asExecutable, createWorkflowDefinition } from './shared.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
+  setupWorkflowExecutorWithSubagentServiceTest,
+  teardownWorkflowExecutorWithSubagentServiceTest,
   type WorkflowExecutorTestSetup,
+  type WorkflowExecutorWithSubagentServiceTestSetup,
 } from './workflow-executor.test-setup.js';
 
 describe('workflow engine smoke', () => {
@@ -90,7 +93,72 @@ describe('workflow engine smoke', () => {
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
-    expect(execution?.steps.verify?.result?.trim()).toBe('Hello from Makaio');
+    expect(asExecutable(execution?.steps.verify)?.result?.trim()).toBe('Hello from Makaio');
     expect(events).toEqual(['write-file', 'verify', 'execution.completed']);
+  });
+});
+
+describe('workflow engine agent smoke — real SubagentService path', () => {
+  let setup: WorkflowExecutorWithSubagentServiceTestSetup | undefined;
+
+  beforeEach(async () => {
+    setup = await setupWorkflowExecutorWithSubagentServiceTest();
+  });
+
+  afterEach(async () => {
+    if (setup) {
+      await teardownWorkflowExecutorWithSubagentServiceTest(setup);
+      setup = undefined;
+    }
+  });
+
+  it('runs an agent step through SubagentService → AdapterSubjects.startAgent and back', async () => {
+    if (!setup) {
+      throw new Error('Smoke test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'agent-smoke',
+      name: 'Agent Smoke',
+      steps: [
+        {
+          id: 'review',
+          type: 'agent',
+          adapter: 'claude-code',
+          prompt: 'Review {{ inputs.file }}',
+          harnessId: 'harness-reviewer',
+          contextMode: 'fresh',
+        },
+      ],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const events: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.step.completed, (ctx) => {
+        events.push(ctx.payload.stepId);
+      }),
+    );
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, () => {
+        events.push('execution.completed');
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      inputs: { file: 'README.md' },
+    });
+
+    await vi.waitFor(() => expect(events.at(-1)).toBe('execution.completed'), { timeout: 10_000 });
+
+    expect(setup.adapterStartCalls[0]).toMatchObject({
+      harnessId: 'harness-reviewer',
+      initialMessage: 'Review README.md',
+    });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.steps.review?.status).toBe('completed');
+    expect(asExecutable(execution?.steps.review)?.result).toBe('completed:Review README.md');
   });
 });
