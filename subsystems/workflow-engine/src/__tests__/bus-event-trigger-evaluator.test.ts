@@ -62,8 +62,10 @@ interface CapturedStart {
 
 const NEGATIVE_START_OBSERVATION_MS = 100;
 
-async function expectNoCapturedStarts(capturedStarts: readonly CapturedStart[]): Promise<void> {
-  const initialStartCount = capturedStarts.length;
+async function expectNoCapturedStarts(
+  capturedStarts: readonly CapturedStart[],
+  initialStartCount: number,
+): Promise<void> {
   let observedStart = false;
 
   try {
@@ -161,9 +163,10 @@ describe('BusEventTriggerEvaluator', () => {
     evaluator.destroy();
     await evaluator.init();
 
+    const initialStartCount = capturedStarts.length;
     await MakaioBus.emit(TestSessionSubjects.closed, { sessionId: 'sess-1' });
 
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, initialStartCount);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -192,9 +195,10 @@ describe('BusEventTriggerEvaluator', () => {
     evaluator.destroy();
     await evaluator.init();
 
+    const initialStartCount = capturedStarts.length;
     await MakaioBus.emit(TestRepoSubjects.worktree, { path: '/repo', event: 'added' });
 
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, initialStartCount);
   });
 
   it('fires workflow when no filter is specified (matches any payload)', async () => {
@@ -276,8 +280,9 @@ describe('BusEventTriggerEvaluator', () => {
 
     // Reset captures and confirm no more fires.
     capturedStarts.length = 0;
+    const initialStartCount = capturedStarts.length;
     await MakaioBus.emit(TestRepoSubjects.worktree, { path: '/repo', event: 'removed' });
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, initialStartCount);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -336,9 +341,10 @@ describe('BusEventTriggerEvaluator', () => {
     evaluator.destroy();
     await evaluator.init();
 
+    const initialStartCount = capturedStarts.length;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 3, status: 'failure' });
 
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, initialStartCount);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -379,9 +385,10 @@ describe('BusEventTriggerEvaluator', () => {
     evaluator.destroy();
     await evaluator.init();
 
+    const initialStartCount = capturedStarts.length;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 3, status: 'success' });
 
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, initialStartCount);
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -409,13 +416,15 @@ describe('BusEventTriggerEvaluator', () => {
 
     // filter passes but filterExpression fails
     capturedStarts.length = 0;
+    const filterExpressionFailureStartCount = capturedStarts.length;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'main', count: 2, status: 'success' });
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, filterExpressionFailureStartCount);
 
     // filter fails (filterExpression never evaluated)
     capturedStarts.length = 0;
+    const filterFailureStartCount = capturedStarts.length;
     await MakaioBus.emit(TestBuildSubjects.completed, { branch: 'develop', count: 10, status: 'success' });
-    await expectNoCapturedStarts(capturedStarts);
+    await expectNoCapturedStarts(capturedStarts, filterFailureStartCount);
   });
 
   // ─────────────────────────────────────────────────────────────

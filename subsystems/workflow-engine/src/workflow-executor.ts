@@ -270,20 +270,17 @@ export class WorkflowExecutor extends BaseService {
         stepContext,
       });
 
-      let startExecutionTask: () => void = () => {};
-      const executionTask = new Promise<void>((resolve, reject) => {
-        startExecutionTask = () => {
-          void this.runExecution(executionId).then(resolve, reject);
-        };
-      }).finally(() => {
-        this.executionTasks.delete(executionId);
-      });
+      const startedEventTask = this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
+      const executionTask = Promise.resolve()
+        .then(() => this.runExecution(executionId))
+        .finally(() => {
+          this.executionTasks.delete(executionId);
+        });
       this.executionTasks.set(executionId, executionTask);
       launched = true;
       void executionTask;
 
-      await this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
-      startExecutionTask();
+      await startedEventTask;
       return executionId;
     } catch (error) {
       if (!launched) {
