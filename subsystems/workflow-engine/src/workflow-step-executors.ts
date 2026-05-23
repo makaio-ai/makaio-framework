@@ -4,6 +4,7 @@ import {
   SubagentSubjects,
   type AgentWorkflowStep,
   type ShellWorkflowStep,
+  type StepRunResult,
   type StepState,
   type WorkflowExecution,
 } from '@makaio/contracts';
@@ -16,31 +17,41 @@ import { emitBeforeStepStart } from './step-lifecycle.js';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 
-/**
- * Runtime dependencies injected into standalone step executor functions.
- * Groups the executor-owned state references that each step executor needs
- * without coupling the functions back to the WorkflowExecutor class.
- */
+/** Runtime dependencies injected into standalone step executor functions. */
 export interface StepExecutorDeps {
-  /** Message bus for storage requests and event emission. */
   bus: IMakaioBus;
-  /** Live execution map — read and cleared by step executors. */
   activeExecutions: Map<string, ActiveExecution>;
-  /** Per-step AbortControllers for shell process cancellation. */
   shellAbortControllers: Map<string, AbortController>;
-  /** Gate coordinator for human-approval steps. */
   gateCoordinator: WorkflowGateCoordinator;
-  /** Resolved executor configuration. */
   config: ExecutorConfig;
 }
 
 /**
+ * Build a failed StepRunResult with telemetry.
+ * @param error - Error message to include
+ * @param startedAt - Start timestamp for duration calculation
+ * @returns Failed step run result
+ */
+function failResult(error: string, startedAt: number): StepRunResult {
+  return { status: 'failed', error, telemetry: { duration: Date.now() - startedAt } };
+}
+
+/**
+ * Build a completed StepRunResult with telemetry.
+ * @param startedAt - Start timestamp for duration calculation
+ * @param output - Optional step output string
+ * @returns Completed step run result
+ */
+function okResult(startedAt: number, output?: string): StepRunResult {
+  return { status: 'completed', output, telemetry: { duration: Date.now() - startedAt } };
+}
+
+/**
  * Build the expression context from all started steps and trigger payload.
- * Includes all non-pending steps so that `if` conditions can reference
- * the status of preceding steps (e.g., `steps.validate.status == 'completed'`).
+ * Includes all non-pending steps so that `if` conditions can reference preceding step status.
  * Merges optional for-each item/index context when the step is inside a for-each.
- * @param execution - The current execution state
- * @param activeExecutions - Active execution map used to look up per-step context
+ * @param execution - Current workflow execution state
+ * @param activeExecutions - Active execution map for for-each context lookup
  * @param stepId - Optional step ID to resolve for-each item/index context
  * @returns Expression context for jexl evaluation and template interpolation
  */
@@ -147,17 +158,21 @@ async function awaitAndSettleSubagent(
  * @param deps - Executor dependencies (bus, maps, config)
  * @param executionId - The execution ID
  * @param stepId - The step ID to execute
+ * @returns Step run result with status, output, and telemetry
  */
-export async function executeAgentStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+export async function executeAgentStep(
+  deps: StepExecutorDeps,
+  executionId: string,
+  stepId: string,
+): Promise<StepRunResult> {
+  const startedAt = Date.now();
   const { bus, activeExecutions, config } = deps;
   const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return;
+  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   const { execution, workflow, stepMap } = active;
   const step = stepMap.get(stepId);
-  if (!step || step.type !== 'agent') {
-    throw new Error(`Agent step not found: ${stepId}`);
-  }
+  if (!step || step.type !== 'agent') return failResult(`Agent step not found: ${stepId}`, startedAt);
 
   const stepState = execution.steps[stepId];
 
@@ -175,7 +190,9 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
     const resolvedPrompt = resolveTemplate(step.prompt, buildExpressionContext(execution, activeExecutions, stepId));
 
     const currentActive = activeExecutions.get(executionId);
-    if (!currentActive || currentActive.execution.status !== 'running') return;
+    if (!currentActive || currentActive.execution.status !== 'running') {
+      return failResult('Execution cancelled', startedAt);
+    }
 
     const spawnResult = await bus.requestOptional(SubagentSubjects.spawn, {
       parentSessionId: execution.coordinatorSessionId!,
@@ -191,7 +208,7 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
     });
     if (!spawnResult.handled) {
       await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, 'Subagent system not available');
-      return;
+      return failResult('Subagent system not available', startedAt);
     }
     subagentId = spawnResult.data.subagentId;
 
@@ -202,7 +219,7 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
     // Now that subagentId is recorded, we can kill the just-spawned subagent.
     if (execution.status !== 'running') {
       await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
-      return;
+      return failResult('Execution cancelled', startedAt);
     }
 
     await bus.emit(WorkflowSubjects.step.started, {
@@ -216,13 +233,20 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
     await awaitAndSettleSubagent(bus, execution, executionId, stepId, stepState, step, subagentId, config);
   } catch (error) {
     // On cancellation the caller handles cleanup; avoid double-failing.
-    if (execution.status !== 'running') return;
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
     if (subagentId !== undefined) {
       await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Step execution error' }).catch(() => {});
     }
     const message = error instanceof Error ? error.message : String(error);
     await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
+    return failResult(message, startedAt);
   }
+
+  // Re-read via indexer to break control-flow narrowing from the `stepState.status = 'running'`
+  // assignment above: awaitAndSettleSubagent mutates the status but TypeScript can't track that.
+  const settledState = execution.steps[stepId];
+  if (settledState?.status === 'completed') return okResult(startedAt, settledState.result ?? '');
+  return failResult(settledState?.error ?? `Step failed: ${stepId}`, startedAt);
 }
 
 /**
@@ -230,17 +254,21 @@ export async function executeAgentStep(deps: StepExecutorDeps, executionId: stri
  * @param deps - Executor dependencies (bus, maps, config)
  * @param executionId - The execution ID
  * @param stepId - The step ID to execute
+ * @returns Step run result with status, output, and telemetry
  */
-export async function executeShellStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+export async function executeShellStep(
+  deps: StepExecutorDeps,
+  executionId: string,
+  stepId: string,
+): Promise<StepRunResult> {
+  const startedAt = Date.now();
   const { bus, activeExecutions, shellAbortControllers } = deps;
   const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return;
+  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   const { execution, stepMap } = active;
   const step = stepMap.get(stepId);
-  if (!step || step.type !== 'shell') {
-    throw new Error(`Shell step not found: ${stepId}`);
-  }
+  if (!step || step.type !== 'shell') return failResult(`Shell step not found: ${stepId}`, startedAt);
 
   const stepState = execution.steps[stepId];
 
@@ -284,19 +312,19 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
       signal: controller.signal,
     });
   } catch (error) {
-    if (execution.status !== 'running') return;
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
     const message = error instanceof Error ? error.message : String(error);
     await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
-    return;
+    return failResult(message, startedAt);
   } finally {
     shellAbortControllers.delete(stepKey);
   }
 
-  if (execution.status !== 'running') return;
+  if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   if (outcome.status === 'failed') {
     await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, outcome.error);
-    return;
+    return failResult(outcome.error, startedAt);
   }
 
   stepState.status = 'completed';
@@ -311,6 +339,7 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
     result: outcome.stdout,
     duration,
   });
+  return okResult(startedAt, outcome.stdout);
 }
 
 /**
@@ -319,17 +348,21 @@ export async function executeShellStep(deps: StepExecutorDeps, executionId: stri
  * @param deps - Executor dependencies (bus, maps, config)
  * @param executionId - The execution ID
  * @param stepId - The step ID to execute
+ * @returns Step run result with status, output, and telemetry
  */
-export async function executeGateStep(deps: StepExecutorDeps, executionId: string, stepId: string): Promise<void> {
+export async function executeGateStep(
+  deps: StepExecutorDeps,
+  executionId: string,
+  stepId: string,
+): Promise<StepRunResult> {
+  const startedAt = Date.now();
   const { bus, activeExecutions, gateCoordinator } = deps;
   const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return;
+  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   const { execution, workflow, stepMap } = active;
   const step = stepMap.get(stepId);
-  if (!step || step.type !== 'gate') {
-    throw new Error(`Gate step not found: ${stepId}`);
-  }
+  if (!step || step.type !== 'gate') return failResult(`Gate step not found: ${stepId}`, startedAt);
 
   const stepState = execution.steps[stepId];
 
@@ -363,7 +396,7 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
   const { action, source } = await resolutionPromise;
 
   // Check if execution was cancelled while waiting
-  if (execution.status !== 'running') return;
+  if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   await bus.emit(WorkflowSubjects.gate.resolved, {
     executionId,
@@ -386,8 +419,10 @@ export async function executeGateStep(deps: StepExecutorDeps, executionId: strin
       result: stepState.result,
       duration,
     });
-  } else {
-    const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
+    return okResult(startedAt, stepState.result);
   }
+
+  const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
+  await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
+  return failResult(reason, startedAt);
 }

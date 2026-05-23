@@ -1,5 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type IWorkflowTriggerTypeRegistry, type WorkflowExecution } from '@makaio/contracts';
+import {
+  SessionSubjects,
+  type IStepRunner,
+  type IWorkflowTriggerTypeRegistry,
+  type WorkflowExecution,
+} from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { evaluateSync } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
@@ -20,12 +25,8 @@ import {
   cancelExecution,
 } from './workflow-execution-finalizer.js';
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
-import {
-  buildExpressionContext,
-  executeAgentStep,
-  executeShellStep,
-  executeGateStep,
-} from './workflow-step-executors.js';
+import { buildExpressionContext } from './workflow-step-executors.js';
+import { InProcessStepRunner } from './in-process-step-runner.js';
 
 /**
  * Core workflow executor service.
@@ -47,17 +48,28 @@ export class WorkflowExecutor extends BaseService {
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
   private readonly gateCoordinator: WorkflowGateCoordinator;
+  private readonly stepRunner: IStepRunner;
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
   /**
    * Create a new workflow executor.
    * @param bus - The message bus for communication
    * @param config - Optional partial configuration (merged with defaults)
+   * @param stepRunner - Optional step runner override (defaults to InProcessStepRunner)
    */
-  public constructor(bus: IMakaioBus, config?: Partial<ExecutorConfig>) {
+  public constructor(bus: IMakaioBus, config?: Partial<ExecutorConfig>, stepRunner?: IStepRunner) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
     this.gateCoordinator = new WorkflowGateCoordinator(bus);
+    this.stepRunner =
+      stepRunner ??
+      new InProcessStepRunner({
+        bus,
+        activeExecutions: this.activeExecutions,
+        shellAbortControllers: this.shellAbortControllers,
+        gateCoordinator: this.gateCoordinator,
+        config: this.config,
+      });
   }
 
   /**
@@ -286,23 +298,23 @@ export class WorkflowExecutor extends BaseService {
       }
     }
 
-    const deps = {
-      bus: this.bus,
-      activeExecutions: this.activeExecutions,
-      shellAbortControllers: this.shellAbortControllers,
-      gateCoordinator: this.gateCoordinator,
-      config: this.config,
-    };
+    if (step.type === 'for-each') {
+      throw new Error(`for-each step '${stepId}' should have been expanded before execution`);
+    }
 
-    switch (step.type) {
-      case 'agent':
-        return executeAgentStep(deps, executionId, stepId);
-      case 'shell':
-        return executeShellStep(deps, executionId, stepId);
-      case 'gate':
-        return executeGateStep(deps, executionId, stepId);
-      case 'for-each':
-        throw new Error(`for-each step '${stepId}' should have been expanded before execution`);
+    const expressionCtx = buildExpressionContext(active.execution, this.activeExecutions, stepId);
+    const resolvedInputs: Record<string, unknown> = { ...expressionCtx };
+    const result = await this.stepRunner.run({
+      executionId,
+      workflowId: active.workflow.id,
+      stepId,
+      stepType: step.type,
+      stepDefinition: step,
+      resolvedInputs,
+    });
+
+    if (result.status === 'failed') {
+      throw new Error(result.error ?? `Step failed: ${stepId}`);
     }
   }
 }
