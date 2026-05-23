@@ -18,7 +18,6 @@ import { ModelRegistryPublicNamespace } from '@makaio/contracts/model-registry';
 import { PreferencesNamespace } from './preferences/storage-namespace.js';
 import { ProviderRuntimeNamespace } from './provider-runtime/namespace.js';
 import { SessionEditorNamespace } from './session-editor/namespace.js';
-import { AdapterSessionStorageNamespace } from './session/adapter-sessions/namespace.js';
 import { MessageRoutingNamespace } from './session/message-routing/namespace.js';
 import { AgentStorageNamespace } from './session/storage/agent-namespace.js';
 import { ExtensionConfigStorageNamespace } from './settings/storage/extension-configs/namespace.js';
@@ -38,7 +37,6 @@ export const FrameworkServicesCoreNamespaces = [
   AdapterSubsystemNamespace,
   AgentRuntimeNamespace,
   AgentStorageNamespace,
-  AdapterSessionStorageNamespace,
   CLIDetectionNamespace,
   ClientStorageNamespace,
   CodebaseNamespace,

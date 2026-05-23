@@ -35,10 +35,23 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       target_working_directory TEXT,
       execution_target_id TEXT,
       approval_policy_override TEXT,
-      spawning_tool_call_id TEXT
+      spawning_tool_call_id TEXT,
+      -- Import provenance fields
+      source TEXT,
+      parent_external_session_id TEXT,
+      log_file_path TEXT,
+      discovered_at INTEGER,
+      import_status TEXT CHECK (
+        import_status IS NULL
+        OR import_status IN ('discovered', 'imported', 'tracking')
+      )
     )
   `,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_source_adapter_session_id ON sessions(source, adapter_session_id)`,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_log_file_path ON sessions(log_file_path)`,
   sql`CREATE INDEX IF NOT EXISTS sessions_adapter_session_id_idx ON sessions(adapter_session_id)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source)`,
+  sql`CREATE INDEX IF NOT EXISTS idx_sessions_import_status ON sessions(import_status)`,
   sql`CREATE INDEX IF NOT EXISTS sessions_execution_target_id_idx ON sessions(execution_target_id)`,
   sql`
     CREATE TABLE IF NOT EXISTS agents (

@@ -227,5 +227,77 @@ export function describeSessionStorageBehavior(): void {
       });
       expect(result.session).toBeNull();
     });
+
+    it('should return null for source-less ambiguous adapter session ID lookups', async () => {
+      const claudeSession = createSession({
+        sessionId: 'adapter-lookup-claude',
+        adapterSessionId: 'external-shared-123',
+        adapterName: 'claude-code',
+        source: 'claude-code',
+      });
+      const codexSession = createSession({
+        sessionId: 'adapter-lookup-codex',
+        adapterSessionId: 'external-shared-123',
+        adapterName: 'codex',
+        source: 'codex',
+      });
+
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: claudeSession.sessionId,
+        session: claudeSession,
+      });
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: codexSession.sessionId,
+        session: codexSession,
+      });
+
+      const ambiguousResult = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId: 'external-shared-123',
+      });
+      const claudeResult = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId: 'external-shared-123',
+        source: 'claude-code',
+      });
+      const codexResult = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId: 'external-shared-123',
+        source: 'codex',
+      });
+
+      expect(ambiguousResult.session).toBeNull();
+      expect(claudeResult.session?.sessionId).toBe('adapter-lookup-claude');
+      expect(codexResult.session?.sessionId).toBe('adapter-lookup-codex');
+    });
+  });
+
+  describe('spawningToolCallId updates', () => {
+    it('should fill missing spawn provenance without overwriting existing provenance', async () => {
+      const session = createSession({
+        sessionId: 'spawn-provenance-write-once',
+        branchKind: 'subagent',
+      });
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: session.sessionId,
+        session,
+      });
+
+      const firstUpdate = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        spawningToolCallId: 'tool-call-first',
+      });
+      const secondUpdate = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        spawningToolCallId: 'tool-call-second',
+        title: 'renamed while preserving provenance',
+      });
+
+      const result = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: session.sessionId,
+      });
+
+      expect(firstUpdate.success).toBe(true);
+      expect(secondUpdate.success).toBe(true);
+      expect(result.session?.spawningToolCallId).toBe('tool-call-first');
+      expect(result.session?.title).toBe('renamed while preserving provenance');
+    });
   });
 }

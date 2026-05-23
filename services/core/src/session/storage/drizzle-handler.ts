@@ -1,4 +1,4 @@
-import { eq, desc, count, inArray, and, type SQL } from 'drizzle-orm';
+import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
@@ -21,17 +21,21 @@ import {
   emitSessionClientAccountChangedIfNeeded,
 } from './client-account-change-events.js';
 import { buildNextSessionClientAccountState, touchesClientAccountState } from './client-account-update-state.js';
+import { registerGetByAdapterSessionIdHandler } from './drizzle-get-by-adapter-session-id-handler.js';
+import { registerDrizzleSessionImportHandlers } from './drizzle-import-handlers.js';
 
 /**
  * Handler dependencies for session storage handlers.
  */
-interface SessionHandlerDeps {
+export interface SessionHandlerDeps {
   bus: IMakaioBus;
   db: MakaioDatabase;
 }
 
 type SessionInsertValues = typeof sessions.$inferInsert;
-type SessionUpdateFields = Partial<SessionInsertValues>;
+type SessionUpdateFields = Partial<Omit<SessionInsertValues, 'spawningToolCallId'>> & {
+  spawningToolCallId?: SessionInsertValues['spawningToolCallId'] | SQL;
+};
 type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
 type SessionUpdatePayload = z.infer<typeof SessionStorageUpdateSchema.request>;
 
@@ -83,6 +87,12 @@ function toDbValues(session: IMakaioSession) {
     executionTargetId: toNullableDbValue(session.executionTargetId),
     approvalPolicyOverride: toNullableDbValue(session.approvalPolicyOverride),
     spawningToolCallId: toNullableDbValue(session.spawningToolCallId),
+    // Import provenance fields (null for live sessions)
+    source: toNullableDbValue(session.source),
+    parentExternalSessionId: toNullableDbValue(session.parentExternalSessionId),
+    logFilePath: toNullableDbValue(session.logFilePath),
+    discoveredAt: toNullableDbValue(session.discoveredAt),
+    importStatus: toNullableDbValue(session.importStatus),
   };
 }
 
@@ -151,7 +161,11 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload): SessionUpdateF
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);
-  assignNullableField(updateFields, 'spawningToolCallId', payload.spawningToolCallId);
+  if (payload.spawningToolCallId === null) {
+    updateFields.spawningToolCallId = null;
+  } else if (payload.spawningToolCallId !== undefined) {
+    updateFields.spawningToolCallId = sql`coalesce(${sessions.spawningToolCallId}, ${payload.spawningToolCallId})`;
+  }
   if (payload.lastClientIdentityObservation !== undefined) {
     updateFields.lastClientIdentityObservation = serializeClientIdentityObservation(
       payload.lastClientIdentityObservation,
@@ -465,34 +479,6 @@ function registerGetChildrenHandler(deps: SessionHandlerDeps): () => void {
 }
 
 /**
- * Register handler for storage:session.getByAdapterSessionId.
- * @param deps - Handler dependencies (bus and db)
- * @returns Cleanup function to unsubscribe the handler
- */
-function registerGetByAdapterSessionIdHandler(deps: SessionHandlerDeps): () => void {
-  const { bus, db } = deps;
-
-  return bus.on(SessionStorageSubjects.getByAdapterSessionId, async (ctx) => {
-    const { adapterSessionId } = ctx.payload;
-
-    const [sessionRow] = await db
-      .select()
-      .from(sessions)
-      .where(eq(sessions.adapterSessionId, adapterSessionId))
-      .limit(1);
-
-    if (!sessionRow) {
-      ctx.setResult({ session: null });
-      return;
-    }
-
-    const agentRows = await db.select().from(agents).where(eq(agents.sessionId, sessionRow.sessionId));
-
-    ctx.setResult({ session: mapToSession(sessionRow, agentRows) });
-  });
-}
-
-/**
  * Register handler for storage:session.getStatusCounts.
  *
  * Efficiently counts sessions by status using GROUP BY.
@@ -583,6 +569,8 @@ export function registerDrizzleSessionStorage(bus: IMakaioBus, db: MakaioDatabas
     registerGetChildrenHandler(deps),
     registerGetByAdapterSessionIdHandler(deps),
     registerGetStatusCountsHandler(deps),
+    // Import-specific handlers live in drizzle-import-handlers.ts
+    ...registerDrizzleSessionImportHandlers(bus, db),
   ];
 
   // Search handler is registered separately via registerFtsSearchHandler()

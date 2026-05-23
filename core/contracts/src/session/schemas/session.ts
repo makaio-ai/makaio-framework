@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BranchKindSchema } from './primitives.js';
+import { BranchKindSchema, ImportStatusSchema } from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionAgentSchema } from './agent.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
@@ -108,6 +108,30 @@ export const MakaioSessionSchema = z.object({
    *  Null means "use the cascade" (default behavior).
    */
   approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+
+  // ─── Import provenance ────────────────────────────────────────────
+
+  /**
+   * Identifies the external tool that produced the imported logs.
+   * Null for live sessions. Examples: 'claude-code', 'codex', 'opencode'.
+   */
+  source: z.string().optional(),
+  /**
+   * Parent session's external ID (soft reference for import lineage).
+   * May reference a session not yet imported.
+   */
+  parentExternalSessionId: z.string().optional(),
+  /** Absolute path to the source log file on disk. Only for imported sessions. */
+  logFilePath: z.string().optional(),
+  /** Monotonic timestamp (ms) when this session was first discovered during import. */
+  discoveredAt: z.number().optional(),
+  /**
+   * Import-specific lifecycle status.
+   * - 'discovered': Found in logs, not fully imported yet
+   * - 'imported': All messages imported successfully
+   * - 'tracking': Imported but source file is still actively being written to
+   */
+  importStatus: ImportStatusSchema.optional(),
 });
 
 export type MakaioSession = z.infer<typeof MakaioSessionSchema>;

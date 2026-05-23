@@ -89,6 +89,9 @@ export { SessionUpdatedEventSchema, type SessionUpdatedEvent } from './schemas/l
 // Session client-account changed event
 export { SessionClientAccountChangedSchema, type SessionClientAccountChanged } from './schemas/events.js';
 
+// Import status changed event
+export { SessionImportStatusChangedSchema, type SessionImportStatusChanged } from './schemas/events.js';
+
 // Normalized Message Model (stored session messages)
 export {
   SessionMessageOriginSchema,
@@ -159,4 +162,7 @@ export {
   SessionStorageSetSessionSchema,
   SessionStorageSubjects,
   SessionStorageUpdateSchema,
+  type ImportUpsertRequest,
+  ImportStatusSchema,
+  type ImportStatus,
 } from './session-storage-namespace.js';

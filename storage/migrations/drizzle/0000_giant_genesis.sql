@@ -15,6 +15,20 @@ CREATE TABLE `client_binary_versions` (
 --> statement-breakpoint
 CREATE INDEX `idx_client_binary_versions_client_id` ON `client_binary_versions` (`client_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_client_binary_versions_client_version` ON `client_binary_versions` (`client_id`,`version`);--> statement-breakpoint
+CREATE TABLE `client_profiles` (
+	`id` text PRIMARY KEY NOT NULL,
+	`client_id` text NOT NULL,
+	`name` text NOT NULL,
+	`description` text,
+	`config_dir` text NOT NULL,
+	`is_default` integer DEFAULT false NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_client_profiles_client_name` ON `client_profiles` (`client_id`,`name`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_client_profiles_default` ON `client_profiles` (`client_id`) WHERE "client_profiles"."is_default" = 1;--> statement-breakpoint
+CREATE INDEX `idx_client_profiles_client_id` ON `client_profiles` (`client_id`);--> statement-breakpoint
 CREATE TABLE `client_runtimes` (
 	`id` text PRIMARY KEY NOT NULL,
 	`client_id` text NOT NULL,
@@ -90,23 +104,6 @@ CREATE TABLE `harness_definitions` (
 	`updated_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE `adapter_sessions` (
-	`adapter_session_id` text PRIMARY KEY NOT NULL,
-	`adapter_name` text NOT NULL,
-	`parent_adapter_session_id` text,
-	`fork_point_message_id` text,
-	`session_id` text,
-	`model` text,
-	`cwd` text,
-	`log_file_path` text,
-	`kind` text DEFAULT 'root' NOT NULL,
-	`discovered_at` integer NOT NULL,
-	`started_at` integer NOT NULL,
-	`status` text DEFAULT 'discovered' NOT NULL,
-	FOREIGN KEY (`session_id`) REFERENCES `sessions`(`session_id`) ON UPDATE no action ON DELETE no action
-);
---> statement-breakpoint
-CREATE UNIQUE INDEX `uniq_adapter_sessions_log_file_path` ON `adapter_sessions` (`log_file_path`);--> statement-breakpoint
 CREATE TABLE `import_cursors` (
 	`file_path` text PRIMARY KEY NOT NULL,
 	`bytes_read` integer NOT NULL,
@@ -219,10 +216,20 @@ CREATE TABLE `sessions` (
 	`target_working_directory` text,
 	`execution_target_id` text,
 	`approval_policy_override` text,
-	`spawning_tool_call_id` text
+	`spawning_tool_call_id` text,
+	`source` text,
+	`parent_external_session_id` text,
+	`log_file_path` text,
+	`discovered_at` integer,
+	`import_status` text,
+	CONSTRAINT "sessions_import_status_check" CHECK(`import_status` IS NULL OR `import_status` IN ('discovered', 'imported', 'tracking'))
 );
 --> statement-breakpoint
+CREATE UNIQUE INDEX `uniq_sessions_source_adapter_session_id` ON `sessions` (`source`,`adapter_session_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uniq_sessions_log_file_path` ON `sessions` (`log_file_path`);--> statement-breakpoint
 CREATE INDEX `sessions_adapter_session_id_idx` ON `sessions` (`adapter_session_id`);--> statement-breakpoint
+CREATE INDEX `idx_sessions_source` ON `sessions` (`source`);--> statement-breakpoint
+CREATE INDEX `idx_sessions_import_status` ON `sessions` (`import_status`);--> statement-breakpoint
 CREATE INDEX `sessions_execution_target_id_idx` ON `sessions` (`execution_target_id`);--> statement-breakpoint
 CREATE TABLE `turns` (
 	`turn_id` text PRIMARY KEY NOT NULL,

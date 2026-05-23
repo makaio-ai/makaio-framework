@@ -1,14 +1,13 @@
 import { build } from 'tsdown';
-import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
+import { defineExtensionConfig } from '@makaio/build-tooling/tsdown-extension-preset';
 import { emitDeclarations } from '@makaio/build-tooling/tsgo-declarations';
 
 await build({
-  ...defineAdapterConfig({
+  ...defineExtensionConfig({
     entry: {
       cli: './src/cli.ts',
     },
   }),
-  dts: false,
 });
 
 emitDeclarations({ packageDir: import.meta.dirname });

@@ -15,11 +15,11 @@
  * ```
  *
  * **linked**
- * The Makaio session has been created and bound to its adapter session ID via
- * `AdapterSessionStorageSubjects.createAndLink`. Messages may not exist yet.
- * Lineage-sensitive consumers that require stored message content (e.g.
- * `compress-lineage-resolver`) must not act on the linked signal alone during
- * an active import; they should wait for the `persisted` phase.
+ * The unified session row has been created by
+ * `SessionStorageSubjects.importUpsert` and stores the adapter session ID.
+ * Messages may not exist yet. Lineage-sensitive consumers that require stored
+ * message content must not act on the linked phase alone during an active
+ * import; they should wait for the `persisted` phase.
  *
  * **persisted**
  * All messages for this segment have been written to storage via
@@ -30,17 +30,17 @@
  *
  * **finalized**
  * The entire subtree (this segment and all descendants) has been persisted.
- * The adapter session status has been moved to `'imported'` and the Makaio
- * session status has been moved to `'active'`. The session is fully visible and
- * queryable. Status finalization is always bottom-up: a parent only reaches
- * `finalized` after every child has reached `finalized`.
+ * The unified session row's `importStatus` has been moved to `'imported'`
+ * and its session `status` has been moved to `'active'`. The session is fully
+ * visible and queryable. Status finalization is always bottom-up: a parent only
+ * reaches `finalized` after every child has reached `finalized`.
  */
 export const ImportPhase = {
   /**
    * Session link created; messages may not exist yet.
    *
-   * Invariant: `AdapterSessionStorageSubjects.createAndLink` has returned
-   * successfully and the Makaio `sessionId` is stable.
+   * Invariant: `SessionStorageSubjects.importUpsert` has returned successfully
+   * and the Makaio `sessionId` is stable.
    */
   linked: 'linked',
 
@@ -57,9 +57,8 @@ export const ImportPhase = {
    * Status moved to `'imported'` / `'active'` after full subtree succeeds.
    *
    * Invariant: this segment and every descendant have reached `persisted`;
-   * `AdapterSessionStorageSubjects.updateStatus` has set the adapter session to
-   * `'imported'` and `SessionStorageSubjects.update` has set the Makaio session
-   * to `'active'`.
+   * `SessionStorageSubjects.updateImportStatus` has set the session `importStatus`
+   * to `'imported'` and promoted the session `status` to `'active'`.
    */
   finalized: 'finalized',
 } as const;

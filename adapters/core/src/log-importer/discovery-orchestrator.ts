@@ -6,15 +6,14 @@
  * processing is deferred until the user triggers lazy-load import.
  *
  * Once a session is imported, this orchestrator also handles incremental
- * message ingestion for active (modified) files, transitioning the adapter
- * session status between `'imported'` and `'tracking'` as files change or
+ * message ingestion for active (modified) files, transitioning the session
+ * import status between `'imported'` and `'tracking'` as files change or
  * become inactive.
  * @packageDocumentation
  */
 
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-import { AdapterSessionStorageSubjects } from '@makaio/services-core/session';
+import { AdapterSubjects, SessionStorageSubjects } from '@makaio/contracts';
 
 import type { LogImporter } from './types.js';
 import { BaseLogOrchestrator } from './base-orchestrator.js';
@@ -45,7 +44,7 @@ const TRACKING_INACTIVE_THRESHOLD = 3;
  */
 export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends BaseLogOrchestrator<TRecord, TState> {
   /**
-   * Paths of files whose adapter sessions are currently in `'tracking'` status.
+   * Paths of files whose sessions are currently in `'tracking'` import status.
    * Maintained locally to avoid per-poll DB lookups.
    */
   protected readonly trackingFilePaths = new Set<string>();
@@ -86,17 +85,17 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
    * @returns `true` when the file can be removed from local tracking state
    */
   protected async persistImportedStatus(filePath: string): Promise<boolean> {
-    const { session } = await MakaioBus.request(AdapterSessionStorageSubjects.getByLogFilePath, {
+    const { session } = await MakaioBus.request(SessionStorageSubjects.getByLogFilePath, {
       logFilePath: filePath,
     });
 
-    if (!session || session.status !== 'tracking') {
+    if (!session || session.importStatus !== 'tracking') {
       return true;
     }
 
-    const statusUpdate = await MakaioBus.request(AdapterSessionStorageSubjects.updateStatus, {
-      adapterSessionId: session.adapterSessionId,
-      status: 'imported',
+    const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
+      sessionId: session.sessionId,
+      importStatus: 'imported',
     });
     if (!statusUpdate.success) {
       console.warn(`${this.logPrefix} Failed to persist imported status for ${filePath}`);
@@ -184,9 +183,9 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
   // ─────────────────────────────────────────────────────────────────────────────
 
   /**
-   * Rehydrate `tracking` file state from persisted adapter-session rows after startup.
+   * Rehydrate `tracking` file state from persisted session rows after startup.
    *
-   * The watcher state is process-local, but adapter-session status is persisted.
+   * The watcher state is process-local, but import status is persisted.
    * Without this rehydration, a restart can strand sessions in `'tracking'` forever
    * because no in-memory file state exists to drive the inactivity timeout.
    */
@@ -196,13 +195,33 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
     this.lastSeenMtimeMs.clear();
 
     try {
-      const { sessions } = await MakaioBus.request(AdapterSessionStorageSubjects.list, {});
+      const { sessions } = await MakaioBus.request(SessionStorageSubjects.listImported, {
+        source: this.config.adapterName,
+        importStatus: 'tracking',
+      });
       for (const session of sessions) {
-        if (session.status !== 'tracking' || !session.logFilePath) {
+        if (session.source !== this.config.adapterName) {
+          continue;
+        }
+        if (!session.logFilePath) {
+          const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
+            sessionId: session.sessionId,
+            importStatus: 'imported',
+          });
+          if (!statusUpdate.success) {
+            console.warn(`${this.logPrefix} Failed to reset tracking status for session ${session.sessionId}`);
+          }
           continue;
         }
         const trackedMtimeMs = this.watcher.getTrackedFileMtimeMs(session.logFilePath);
         if (trackedMtimeMs === undefined) {
+          const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
+            sessionId: session.sessionId,
+            importStatus: 'imported',
+          });
+          if (!statusUpdate.success) {
+            console.warn(`${this.logPrefix} Failed to reset tracking status for ${session.logFilePath}`);
+          }
           continue;
         }
         this.trackingFilePaths.add(session.logFilePath);
@@ -285,7 +304,7 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
    * @param mtime - Current file modification time
    */
   private async handleModifiedImportedFile(filePath: string, event: LogFileChangeEvent, mtime: Date): Promise<void> {
-    const { session } = await MakaioBus.request(AdapterSessionStorageSubjects.getByLogFilePath, {
+    const { session } = await MakaioBus.request(SessionStorageSubjects.getByLogFilePath, {
       logFilePath: filePath,
     });
 
@@ -296,7 +315,11 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
       return;
     }
 
-    if (session.status !== 'imported' && session.status !== 'tracking') {
+    if (session.source !== this.config.adapterName) {
+      return;
+    }
+
+    if (session.importStatus !== 'imported' && session.importStatus !== 'tracking') {
       // Not yet imported, or not an import-tracked session — skip
       return;
     }
@@ -305,10 +328,10 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
     await super.handleFileChange(event);
 
     // Transition to 'tracking' if the session was previously just 'imported'
-    if (session.status === 'imported') {
-      const statusUpdate = await MakaioBus.request(AdapterSessionStorageSubjects.updateStatus, {
-        adapterSessionId: session.adapterSessionId,
-        status: 'tracking',
+    if (session.importStatus === 'imported') {
+      const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
+        sessionId: session.sessionId,
+        importStatus: 'tracking',
       });
       if (!statusUpdate.success) {
         console.warn(`${this.logPrefix} Failed to persist tracking status for ${filePath}`);

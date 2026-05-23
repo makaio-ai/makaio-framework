@@ -21,3 +21,12 @@ export type AgentRole = z.infer<typeof AgentRoleSchema>;
  */
 export const BranchKindSchema = z.enum(['fork', 'branch', 'subagent', 'compress', 'rewrite', 'coordinator', 'aside']);
 export type BranchKind = z.infer<typeof BranchKindSchema>;
+
+/**
+ * Import-specific lifecycle status.
+ * - 'discovered': Found in logs, not fully imported yet
+ * - 'imported': All messages imported successfully
+ * - 'tracking': Imported but source file is still actively being written to
+ */
+export const ImportStatusSchema = z.enum(['discovered', 'imported', 'tracking']);
+export type ImportStatus = z.infer<typeof ImportStatusSchema>;

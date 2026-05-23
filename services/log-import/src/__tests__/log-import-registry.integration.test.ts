@@ -13,11 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { getOpenCodeFixtureDir } from '@makaio/extension-opencode/testing';
 import { LogImportSubjects } from '../namespace.js';
-import {
-  AdapterSessionStorageSubjects,
-  MessageStorageSubjects,
-  SessionStorageSubjects,
-} from '@makaio/services-core/session';
+import { MessageStorageSubjects, SessionStorageSubjects } from '@makaio/services-core/session';
 import { LogImportRegistry } from '../log-import-registry.js';
 import type { LogImporterRegistration } from '../types.js';
 import { createMockImporter } from './test-helpers.js';
@@ -39,19 +35,19 @@ interface CapturedMessageUpsert {
   blocks: unknown[];
 }
 
-/** Payload shape captured from AdapterSessionStorageSubjects.upsert bus calls. */
-type CapturedAdapterSessionUpsert = Record<string, unknown>;
+/** Payload shape captured from SessionStorageSubjects.importUpsert bus calls. */
+type CapturedImportUpsert = Record<string, unknown>;
 
-/** Payload shape captured from AdapterSessionStorageSubjects.updateStatus bus calls. */
-interface CapturedAdapterSessionStatus {
-  adapterSessionId: string;
-  status: string;
+/** Payload shape captured from SessionStorageSubjects.updateImportStatus bus calls. */
+interface CapturedImportStatus {
+  sessionId: string;
+  importStatus: string;
 }
 
-/** Payload shape captured from AdapterSessionStorageSubjects.upsert during scan. */
+/** Payload shape captured from SessionStorageSubjects.importUpsert during scan. */
 interface CapturedScanUpsert {
-  adapterSessionId: string;
-  adapterName: string;
+  externalSessionId: string;
+  source: string;
   startedAt?: number;
 }
 
@@ -65,63 +61,69 @@ interface CapturedScanUpsert {
  *
  * Every handler is pushed into `cleanups` so tests can unsubscribe in afterEach.
  * @param cleanups - Array to push cleanup functions into
- * @param adapterSessionForGet - Pre-seeded adapter session returned by .get (null = not found)
+ * @param sessionForGetByAdapterSessionId - Pre-seeded session returned by getByAdapterSessionId (null = not found)
  */
 function registerStorageInterceptors(
   cleanups: Array<() => void>,
-  adapterSessionForGet: {
+  sessionForGetByAdapterSessionId: {
+    sessionId: string;
     adapterSessionId: string;
-    adapterName: string;
-    parentAdapterSessionId: string | null;
-    forkPointMessageId: string | null;
-    sessionId: string | null;
-    model: string | null;
-    cwd: string | null;
-    logFilePath: string | null;
-    discoveredAt: number;
-    startedAt: number;
-    status: 'discovered' | 'imported' | 'live' | 'tracking';
-    kind: 'root' | 'fork' | 'subagent';
+    source: string;
+    logFilePath: string | undefined;
+    importStatus: 'discovered' | 'imported' | 'tracking' | undefined;
   } | null = null,
 ): {
-  adapterSessionUpserts: CapturedAdapterSessionUpsert[];
+  importUpserts: CapturedImportUpsert[];
   messageUpserts: CapturedMessageUpsert[];
-  adapterSessionStatuses: CapturedAdapterSessionStatus[];
-  createAndLinkCalls: Array<{ sessionId: string }>;
+  importStatusUpdates: CapturedImportStatus[];
+  importUpsertSessionIds: Array<{ sessionId: string }>;
 } {
-  const adapterSessionUpserts: CapturedAdapterSessionUpsert[] = [];
+  const importUpserts: CapturedImportUpsert[] = [];
   const messageUpserts: CapturedMessageUpsert[] = [];
-  const adapterSessionStatuses: CapturedAdapterSessionStatus[] = [];
-  const createAndLinkCalls: Array<{ sessionId: string }> = [];
+  const importStatusUpdates: CapturedImportStatus[] = [];
+  const importUpsertSessionIds: Array<{ sessionId: string }> = [];
+  const sessionIdsByImportKey = new Map<string, string>();
 
-  // AdapterSession.get — return the seeded session (or null)
+  // Session.getByAdapterSessionId — return the seeded session (or null)
   cleanups.push(
-    MakaioBus.on(AdapterSessionStorageSubjects.get, (ctx) => {
-      if (adapterSessionForGet && ctx.payload.adapterSessionId === adapterSessionForGet.adapterSessionId) {
-        ctx.setResult({ session: adapterSessionForGet });
+    MakaioBus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+      if (
+        sessionForGetByAdapterSessionId &&
+        ctx.payload.adapterSessionId === sessionForGetByAdapterSessionId.adapterSessionId &&
+        ctx.payload.source === sessionForGetByAdapterSessionId.source
+      ) {
+        ctx.setResult({
+          session: {
+            sessionId: sessionForGetByAdapterSessionId.sessionId,
+            adapterSessionId: sessionForGetByAdapterSessionId.adapterSessionId,
+            source: sessionForGetByAdapterSessionId.source,
+            logFilePath: sessionForGetByAdapterSessionId.logFilePath ?? undefined,
+            importStatus: sessionForGetByAdapterSessionId.importStatus ?? undefined,
+            createdAt: Date.now(),
+            lastActivityAt: Date.now(),
+            status: 'discovered',
+            agents: [],
+          },
+        });
       } else {
         ctx.setResult({ session: null });
       }
     }),
   );
 
-  // AdapterSession.upsert — capture the payload and return created=true
+  // Session.importUpsert — create or enrich an imported session record
   cleanups.push(
-    MakaioBus.on(AdapterSessionStorageSubjects.upsert, (ctx) => {
-      adapterSessionUpserts.push({ ...ctx.payload });
-      ctx.setResult({
-        adapterSessionId: ctx.payload.adapterSessionId,
-        sessionId: null,
-        created: true,
-      });
-    }),
-  );
-
-  // AdapterSession.createAndLink — create and link a Makaio session, capture sessionId
-  cleanups.push(
-    MakaioBus.on(AdapterSessionStorageSubjects.createAndLink, (ctx) => {
+    MakaioBus.on(SessionStorageSubjects.importUpsert, (ctx) => {
+      importUpserts.push({ ...ctx.payload });
+      const importKey = `${ctx.payload.source}\0${ctx.payload.externalSessionId}`;
+      const existingSessionId = sessionIdsByImportKey.get(importKey);
+      if (existingSessionId) {
+        ctx.setResult({ sessionId: existingSessionId, created: false });
+        return;
+      }
       const sessionId = crypto.randomUUID();
-      createAndLinkCalls.push({ sessionId });
+      sessionIdsByImportKey.set(importKey, sessionId);
+      importUpsertSessionIds.push({ sessionId });
       ctx.setResult({ sessionId, created: true });
     }),
   );
@@ -147,18 +149,18 @@ function registerStorageInterceptors(
     }),
   );
 
-  // AdapterSession.updateStatus — capture status transitions
+  // Session.updateImportStatus — capture status transitions
   cleanups.push(
-    MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
-      adapterSessionStatuses.push({
-        adapterSessionId: ctx.payload.adapterSessionId,
-        status: ctx.payload.status,
+    MakaioBus.on(SessionStorageSubjects.updateImportStatus, (ctx) => {
+      importStatusUpdates.push({
+        sessionId: ctx.payload.sessionId,
+        importStatus: ctx.payload.importStatus,
       });
       ctx.setResult({ success: true });
     }),
   );
 
-  return { adapterSessionUpserts, messageUpserts, adapterSessionStatuses, createAndLinkCalls };
+  return { importUpserts, messageUpserts, importStatusUpdates, importUpsertSessionIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +213,7 @@ describe('log-import registry (integration)', () => {
 
       await registry.register(registration);
 
-      const { messageUpserts, adapterSessionUpserts, adapterSessionStatuses } = registerStorageInterceptors(cleanups);
+      const { messageUpserts, importUpserts, importStatusUpdates } = registerStorageInterceptors(cleanups);
 
       const contentBase64 = Buffer.from(fixture.sessionContent).toString('base64');
 
@@ -243,16 +245,16 @@ describe('log-import registry (integration)', () => {
       const uniqueSessionIds = new Set(messageUpserts.map((m) => m.sessionId));
       expect(uniqueSessionIds.size).toBe(1);
 
-      // Adapter session upserted with correct metadata
-      expect(adapterSessionUpserts).toHaveLength(1);
-      expect(adapterSessionUpserts[0].adapterSessionId).toBe(fixture.adapterSessionId);
-      expect(adapterSessionUpserts[0].adapterName).toBe(ADAPTER_NAME);
-      expect(adapterSessionUpserts[0].logFilePath).toBeUndefined();
+      // Session upserted with correct metadata
+      expect(importUpserts).toHaveLength(1);
+      expect(importUpserts[0].externalSessionId).toBe(fixture.adapterSessionId);
+      expect(importUpserts[0].source).toBe(ADAPTER_NAME);
+      // Upload path does not pass logFilePath (no persistent file path)
+      expect(importUpserts[0].logFilePath).toBeUndefined();
 
       // Status transitioned to imported
-      expect(adapterSessionStatuses).toHaveLength(1);
-      expect(adapterSessionStatuses[0].adapterSessionId).toBe(fixture.adapterSessionId);
-      expect(adapterSessionStatuses[0].status).toBe('imported');
+      expect(importStatusUpdates).toHaveLength(1);
+      expect(importStatusUpdates[0].importStatus).toBe('imported');
     });
 
     it('reports an error when no importer is registered for the adapter', async () => {
@@ -304,6 +306,80 @@ describe('log-import registry (integration)', () => {
       expect(result.errors[0].filename).toBe('bad.json');
       expect(result.errors[0].error).toBe('No valid records found');
     });
+
+    it('keeps uploaded sessions distinct when different sources share an external ID', async () => {
+      const createSharedIdImporter = (adapterName: string) =>
+        createMockImporter({
+          parseRecord: () => ({ ok: true }),
+          processLogFile: () => ({
+            adapterSessionId: 'shared-upload-external-id',
+            sessionEvent: {
+              subject: {} as never,
+              payload: {
+                adapterSessionId: 'shared-upload-external-id',
+                kind: 'root',
+                parentAdapterSessionId: null,
+                forkPointMessageId: null,
+                model: null,
+                cwd: '/repo',
+              },
+            },
+            messageEvents: [],
+            messagePayloads: [],
+            lineage: {
+              kind: 'root' as const,
+              parentAdapterSessionId: null,
+              forkPointMessageId: null,
+            },
+          }),
+          extractSessionContext: () => ({
+            adapterSessionId: 'shared-upload-external-id',
+            model: null,
+            cwd: '/repo',
+            sessionEvent: { subject: {} as never, payload: {} },
+            startedEvent: { subject: {} as never, payload: {} },
+            state: { adapterName },
+          }),
+        });
+
+      await registry.register({
+        id: 'shared-upload-a',
+        adapterName: 'shared-upload-source-a',
+        displayName: 'Shared Upload A',
+        source: 'adapter',
+        importer: createSharedIdImporter('shared-upload-source-a'),
+        logFilePattern: '*.json',
+      });
+      await registry.register({
+        id: 'shared-upload-b',
+        adapterName: 'shared-upload-source-b',
+        displayName: 'Shared Upload B',
+        source: 'adapter',
+        importer: createSharedIdImporter('shared-upload-source-b'),
+        logFilePattern: '*.json',
+      });
+
+      const { importUpserts, importUpsertSessionIds } = registerStorageInterceptors(cleanups);
+      const contentBase64 = Buffer.from('{"ok":true}').toString('base64');
+
+      const first = await MakaioBus.request(LogImportSubjects.uploadFiles, {
+        adapterName: 'shared-upload-source-a',
+        files: [{ filename: 'shared-a.json', contentBase64 }],
+      });
+      const second = await MakaioBus.request(LogImportSubjects.uploadFiles, {
+        adapterName: 'shared-upload-source-b',
+        files: [{ filename: 'shared-b.json', contentBase64 }],
+      });
+
+      expect(first.sessionsImported).toBe(1);
+      expect(second.sessionsImported).toBe(1);
+      expect(importUpserts).toMatchObject([
+        { externalSessionId: 'shared-upload-external-id', source: 'shared-upload-source-a' },
+        { externalSessionId: 'shared-upload-external-id', source: 'shared-upload-source-b' },
+      ]);
+      expect(importUpsertSessionIds).toHaveLength(2);
+      expect(importUpsertSessionIds[0].sessionId).not.toBe(importUpsertSessionIds[1].sessionId);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -328,26 +404,18 @@ describe('log-import registry (integration)', () => {
         logFilePattern: '*.json',
       });
 
-      // Seed the adapter session with logFilePath so the handler can read the file
-      const seededAdapterSessionNow = Date.now();
-      const seededAdapterSession = {
+      // Seed the session with logFilePath so the handler can read the file
+      const seededSession = {
+        sessionId: crypto.randomUUID(),
         adapterSessionId: fixture.adapterSessionId,
-        adapterName: ADAPTER_NAME,
-        parentAdapterSessionId: null,
-        forkPointMessageId: null,
-        sessionId: null,
-        model: null,
-        cwd: '/home/user/source-workspace/terminal',
+        source: ADAPTER_NAME,
         logFilePath: fixture.sessionFilePath,
-        kind: 'root' as const,
-        discoveredAt: seededAdapterSessionNow,
-        startedAt: seededAdapterSessionNow,
-        status: 'discovered' as const,
+        importStatus: 'discovered' as const,
       };
 
-      const { messageUpserts, adapterSessionStatuses, createAndLinkCalls } = registerStorageInterceptors(
+      const { messageUpserts, importStatusUpdates, importUpsertSessionIds } = registerStorageInterceptors(
         cleanups,
-        seededAdapterSession,
+        seededSession,
       );
 
       const result = await MakaioBus.request(LogImportSubjects.importSession, {
@@ -366,16 +434,16 @@ describe('log-import registry (integration)', () => {
       expect(messageUpserts[0].contentText).toBe('Install the opencode-antigravity-auth plugin');
       expect(messageUpserts[1].contentText).toContain("I'll help you install");
 
-      // Makaio session was created and linked with a UUID session ID
-      expect(createAndLinkCalls).toHaveLength(1);
-      expect(createAndLinkCalls[0].sessionId).toBeTruthy();
-      expect(createAndLinkCalls[0].sessionId).not.toBe(fixture.adapterSessionId);
+      // Makaio session was created via importUpsert
+      expect(importUpsertSessionIds).toHaveLength(1);
+      expect(importUpsertSessionIds[0].sessionId).toBeTruthy();
+      expect(importUpsertSessionIds[0].sessionId).not.toBe(fixture.adapterSessionId);
 
-      // Adapter session status transitioned to 'imported'
-      expect(adapterSessionStatuses.some((s) => s.status === 'imported')).toBe(true);
+      // Import status transitioned to 'imported'
+      expect(importStatusUpdates.some((s) => s.importStatus === 'imported')).toBe(true);
     });
 
-    it('throws when adapter session is not found', async () => {
+    it('throws when session is not found by external ID', async () => {
       const fixture = await createOpenCodeFixtureSession({
         fixtureDir: OPENCODE_FIXTURE_DIR,
         adapterId: 'import-adapter-2',
@@ -391,9 +459,9 @@ describe('log-import registry (integration)', () => {
         logFilePattern: '*.json',
       });
 
-      // Register get handler that always returns null
+      // Register getByAdapterSessionId handler that always returns null
       cleanups.push(
-        MakaioBus.on(AdapterSessionStorageSubjects.get, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
           ctx.setResult({ session: null });
         }),
       );
@@ -406,7 +474,7 @@ describe('log-import registry (integration)', () => {
       ).rejects.toThrow();
     });
 
-    it('throws when the adapter session has no logFilePath', async () => {
+    it('throws when the session has no logFilePath', async () => {
       const adapterSessionId = 'no-path-session';
 
       const fixture = await createOpenCodeFixtureSession({
@@ -424,27 +492,30 @@ describe('log-import registry (integration)', () => {
         logFilePattern: '*.json',
       });
 
-      // Seed with logFilePath: null
-      const now = Date.now();
+      // Seed with logFilePath absent (session has no log file path)
       const seededSession = {
+        sessionId: crypto.randomUUID(),
         adapterSessionId,
-        adapterName: ADAPTER_NAME,
-        parentAdapterSessionId: null,
-        forkPointMessageId: null,
-        sessionId: null,
-        model: null,
-        cwd: null,
-        logFilePath: null,
-        kind: 'root' as const,
-        discoveredAt: now,
-        startedAt: now,
-        status: 'discovered' as const,
+        source: ADAPTER_NAME,
+        logFilePath: undefined,
+        importStatus: 'discovered' as const,
       };
 
       cleanups.push(
-        MakaioBus.on(AdapterSessionStorageSubjects.get, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
           if (ctx.payload.adapterSessionId === adapterSessionId) {
-            ctx.setResult({ session: seededSession });
+            ctx.setResult({
+              session: {
+                sessionId: seededSession.sessionId,
+                adapterSessionId,
+                source: ADAPTER_NAME,
+                importStatus: 'discovered',
+                createdAt: Date.now(),
+                lastActivityAt: Date.now(),
+                status: 'discovered',
+                agents: [],
+              },
+            });
           } else {
             ctx.setResult({ session: null });
           }
@@ -457,6 +528,54 @@ describe('log-import registry (integration)', () => {
           adapterName: ADAPTER_NAME,
         }),
       ).rejects.toThrow();
+    });
+
+    it('throws when the session belongs to another adapter source', async () => {
+      const adapterSessionId = 'wrong-source-session';
+
+      const fixture = await createOpenCodeFixtureSession({
+        fixtureDir: OPENCODE_FIXTURE_DIR,
+        adapterId: 'wrong-source-adapter',
+        adapterName: ADAPTER_NAME,
+      });
+      fixtureCleanups.push(fixture.cleanup);
+      await registry.register({
+        id: 'wrong-source-adapter',
+        adapterName: ADAPTER_NAME,
+        displayName: 'OpenCode',
+        source: 'adapter',
+        importer: fixture.importer,
+        logFilePattern: '*.json',
+      });
+
+      cleanups.push(
+        MakaioBus.on(SessionStorageSubjects.getByAdapterSessionId, (ctx) => {
+          if (ctx.payload.adapterSessionId === adapterSessionId) {
+            ctx.setResult({
+              session: {
+                sessionId: crypto.randomUUID(),
+                adapterSessionId,
+                source: 'other-adapter',
+                logFilePath: fixture.sessionFilePath,
+                importStatus: 'discovered',
+                createdAt: Date.now(),
+                lastActivityAt: Date.now(),
+                status: 'discovered',
+                agents: [],
+              },
+            });
+            return;
+          }
+          ctx.setResult({ session: null });
+        }),
+      );
+
+      await expect(
+        MakaioBus.request(LogImportSubjects.importSession, {
+          adapterSessionId,
+          adapterName: ADAPTER_NAME,
+        }),
+      ).rejects.toThrow(`belongs to adapter 'other-adapter', not '${ADAPTER_NAME}'`);
     });
   });
 
@@ -504,19 +623,15 @@ describe('log-import registry (integration)', () => {
       const scanUpserts: CapturedScanUpsert[] = [];
       const messageUpserts: CapturedMessageUpsert[] = [];
 
-      // Only wire AdapterSession.upsert for scan (no message upsert handler)
+      // Only wire Session.importUpsert for scan (no message upsert handler)
       cleanups.push(
-        MakaioBus.on(AdapterSessionStorageSubjects.upsert, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.importUpsert, (ctx) => {
           scanUpserts.push({
-            adapterSessionId: ctx.payload.adapterSessionId,
-            adapterName: ctx.payload.adapterName,
-            startedAt: 'startedAt' in ctx.payload ? ctx.payload.startedAt : undefined,
+            externalSessionId: ctx.payload.externalSessionId,
+            source: ctx.payload.source,
+            startedAt: 'startedAt' in ctx.payload ? (ctx.payload.startedAt as number | undefined) : undefined,
           });
-          ctx.setResult({
-            adapterSessionId: ctx.payload.adapterSessionId,
-            sessionId: null,
-            created: true,
-          });
+          ctx.setResult({ sessionId: crypto.randomUUID(), created: true });
         }),
       );
 
@@ -543,10 +658,10 @@ describe('log-import registry (integration)', () => {
       expect(result.sessionsFound).toBe(1);
       expect(result.newSessions).toBe(1);
 
-      // Adapter session upserted with correct adapter name
+      // Session upserted with correct adapter name
       expect(scanUpserts).toHaveLength(1);
-      expect(scanUpserts[0].adapterSessionId).toBe(fixture.adapterSessionId);
-      expect(scanUpserts[0].adapterName).toBe(ADAPTER_NAME);
+      expect(scanUpserts[0].externalSessionId).toBe(fixture.adapterSessionId);
+      expect(scanUpserts[0].source).toBe(ADAPTER_NAME);
       expect(scanUpserts[0].startedAt).toBe(1768498516323);
 
       // No messages were persisted during scan

@@ -1,17 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { createBusNamespace } from '@makaio/core';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type SessionMessage } from '@makaio/contracts';
+import { SessionSubjects, type SessionMessage } from '@makaio/contracts';
 import { MessageStorageSubjects } from '../../messages/namespace.js';
 import { SessionStorageSubjects } from '../../storage/namespace.js';
 import { registerSpawningToolCallResolver } from '../spawning-tool-call-resolver.js';
-import { useAdapterSessionTestLifecycle } from './shared.js';
+import { useImportResolverTestLifecycle } from './shared.js';
+
+const LegacyAdapterSessionLinkedSubjects = createBusNamespace('adapter', {
+  'session.linked': z.object({
+    adapterName: z.string(),
+    adapterId: z.string(),
+    adapterSessionId: z.string(),
+    sessionId: z.string(),
+  }),
+}).subjects;
 
 /**
  * Creates a minimal Makaio session for resolver tests.
  * @param sessionId - Session ID to create
+ * @param adapterSessionId - External adapter session ID to store on the session
+ * @param source - Import source stored on the session
  */
-async function createMakaioSession(sessionId: string): Promise<void> {
+async function createMakaioSession(
+  sessionId: string,
+  adapterSessionId = sessionId,
+  source = 'claude-code',
+): Promise<void> {
   const now = Date.now();
   await MakaioBus.request(SessionStorageSubjects.set, {
     sessionId,
@@ -21,6 +38,8 @@ async function createMakaioSession(sessionId: string): Promise<void> {
       lastActivityAt: now,
       status: 'active',
       agents: [],
+      adapterSessionId,
+      source,
     },
   });
 }
@@ -48,17 +67,49 @@ function createAssistantMessage(
   };
 }
 
+/**
+ * Emits the unified import completion event that drives post-import resolvers.
+ * @param sessionId - Imported Makaio session ID
+ */
+async function emitImportCompleted(sessionId = 'parent-session'): Promise<void> {
+  await MakaioBus.emit(SessionSubjects.import.completed, {
+    adapterSessionId: 'adapter-parent',
+    sessionId,
+    source: 'claude-code',
+  });
+}
+
+/**
+ * Emits the retired adapter-session linkage event shape.
+ */
+async function emitLegacyAdapterSessionLinked(): Promise<void> {
+  await MakaioBus.emit(LegacyAdapterSessionLinkedSubjects.session.linked, {
+    adapterName: 'claude-code',
+    adapterId: 'adapter-1',
+    adapterSessionId: 'adapter-parent',
+    sessionId: 'parent-session',
+  });
+}
+
 describe('registerSpawningToolCallResolver', () => {
   let parentMessages: SessionMessage[] = [];
+  let assignChildDuringMessageFetch = false;
 
-  const testContext = useAdapterSessionTestLifecycle(
+  const testContext = useImportResolverTestLifecycle(
     { beforeEach, afterEach },
     {
       additionalHandlers: () => {
-        const cleanupGetBySession = MakaioBus.on(MessageStorageSubjects.getBySession, (ctx) => {
+        const cleanupGetBySession = MakaioBus.on(MessageStorageSubjects.getBySession, async (ctx) => {
           if (ctx.payload.sessionId !== 'parent-session') {
             ctx.setResult({ messages: [], nextCursor: null });
             return;
+          }
+
+          if (assignChildDuringMessageFetch) {
+            await MakaioBus.request(SessionStorageSubjects.update, {
+              sessionId: 'child-session-a',
+              spawningToolCallId: 'tool-call-newer',
+            });
           }
 
           ctx.setResult({ messages: parentMessages, nextCursor: null });
@@ -74,6 +125,7 @@ describe('registerSpawningToolCallResolver', () => {
 
   afterEach(() => {
     parentMessages = [];
+    assignChildDuringMessageFetch = false;
   });
 
   beforeEach(async () => {
@@ -104,9 +156,9 @@ describe('registerSpawningToolCallResolver', () => {
         origin TEXT CHECK (origin IS NULL OR origin IN ('voice', 'text'))
       )
     `);
-    await createMakaioSession('parent-session');
-    await createMakaioSession('child-session-a');
-    await createMakaioSession('child-session-b');
+    await createMakaioSession('parent-session', 'adapter-parent');
+    await createMakaioSession('child-session-a', 'external-child-a');
+    await createMakaioSession('child-session-b', 'external-child-b');
 
     await MakaioBus.request(SessionStorageSubjects.update, {
       sessionId: 'child-session-a',
@@ -118,6 +170,32 @@ describe('registerSpawningToolCallResolver', () => {
       parentSessionId: 'parent-session',
       branchKind: 'subagent',
     });
+  });
+
+  it('ignores legacy adapter.session.linked emissions', async () => {
+    parentMessages = [
+      createAssistantMessage('parent-session', 'parent-message', [
+        {
+          type: 'tool_call',
+          toolCallId: 'tool-call-a',
+          name: 'Agent',
+          args: { task: 'delegate A' },
+        },
+        {
+          type: 'tool_output',
+          toolCallId: 'tool-call-a',
+          output: 'child session id: external-child-a',
+          isError: false,
+        },
+      ]),
+    ];
+
+    await emitLegacyAdapterSessionLinked();
+
+    const childA = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: 'child-session-a',
+    });
+    expect(childA.session?.spawningToolCallId).toBeUndefined();
   });
 
   it('backfills spawningToolCallId only when a tool_output proves the match', async () => {
@@ -132,7 +210,7 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-a',
-          output: 'child session id: child-session-a',
+          output: 'child session id: external-child-a',
           isError: false,
         },
         {
@@ -144,12 +222,7 @@ describe('registerSpawningToolCallResolver', () => {
       ]),
     ];
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     await vi.waitFor(async () => {
       const childA = await MakaioBus.request(SessionStorageSubjects.get, {
@@ -162,6 +235,43 @@ describe('registerSpawningToolCallResolver', () => {
       sessionId: 'child-session-b',
     });
     expect(childB.session?.spawningToolCallId).toBeUndefined();
+  });
+
+  it('resolves source-matched child when another source reuses the adapter session ID', async () => {
+    await createMakaioSession('child-session-duplicate', 'external-child-a', 'codex');
+    await MakaioBus.request(SessionStorageSubjects.update, {
+      sessionId: 'child-session-duplicate',
+      parentSessionId: 'parent-session',
+      branchKind: 'subagent',
+    });
+
+    parentMessages = [
+      createAssistantMessage('parent-session', 'parent-message', [
+        {
+          type: 'tool_call',
+          toolCallId: 'tool-call-a',
+          name: 'Agent',
+          args: { task: 'delegate ambiguous child' },
+        },
+        {
+          type: 'tool_output',
+          toolCallId: 'tool-call-a',
+          output: 'child session id: external-child-a',
+          isError: false,
+        },
+      ]),
+    ];
+
+    await emitImportCompleted();
+
+    const childA = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: 'child-session-a',
+    });
+    const duplicate = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: 'child-session-duplicate',
+    });
+    expect(childA.session?.spawningToolCallId).toBe('tool-call-a');
+    expect(duplicate.session?.spawningToolCallId).toBeUndefined();
   });
 
   it('does not guess by position when no tool_output references a child session', async () => {
@@ -182,12 +292,7 @@ describe('registerSpawningToolCallResolver', () => {
       ]),
     ];
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     await vi.waitFor(async () => {
       const { children } = await MakaioBus.request(SessionStorageSubjects.getChildren, {
@@ -219,18 +324,13 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-a',
-          output: 'created session child-session-a-extra for nested task',
+          output: 'created session external-child-a-extra for nested task',
           isError: false,
         },
       ]),
     ];
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     const childA = await MakaioBus.request(SessionStorageSubjects.get, {
       sessionId: 'child-session-a',
@@ -251,18 +351,13 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-a',
-          output: 'spawned child-session-a and child-session-b during orchestration',
+          output: 'spawned external-child-a and external-child-b during orchestration',
           isError: false,
         },
       ]),
     ];
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     const childA = await MakaioBus.request(SessionStorageSubjects.get, {
       sessionId: 'child-session-a',
@@ -287,7 +382,7 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-a',
-          output: 'child session id: child-session-a',
+          output: 'child session id: external-child-a',
           isError: false,
         },
         {
@@ -299,18 +394,13 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-b',
-          output: 'child session id: child-session-a',
+          output: 'child session id: external-child-a',
           isError: false,
         },
       ]),
     ];
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     const childA = await MakaioBus.request(SessionStorageSubjects.get, {
       sessionId: 'child-session-a',
@@ -331,7 +421,7 @@ describe('registerSpawningToolCallResolver', () => {
         {
           type: 'tool_output',
           toolCallId: 'tool-call-a',
-          output: 'child session id: child-session-a',
+          output: 'child session id: external-child-a',
           isError: false,
         },
       ]),
@@ -343,18 +433,42 @@ describe('registerSpawningToolCallResolver', () => {
       WHERE session_id = 'child-session-a'
     `);
 
-    await MakaioBus.emit(AdapterSubjects.session.linked, {
-      adapterName: 'claude-code',
-      adapterId: 'adapter-1',
-      adapterSessionId: 'adapter-parent',
-      sessionId: 'parent-session',
-    });
+    await emitImportCompleted();
 
     await vi.waitFor(async () => {
       const childA = await MakaioBus.request(SessionStorageSubjects.get, {
         sessionId: 'child-session-a',
       });
       expect(childA.session?.spawningToolCallId).toBe('tool-call-a');
+    });
+  });
+
+  it('does not overwrite a spawningToolCallId assigned after the child snapshot', async () => {
+    parentMessages = [
+      createAssistantMessage('parent-session', 'parent-message', [
+        {
+          type: 'tool_call',
+          toolCallId: 'tool-call-a',
+          name: 'Agent',
+          args: { task: 'delegate A' },
+        },
+        {
+          type: 'tool_output',
+          toolCallId: 'tool-call-a',
+          output: 'child session id: external-child-a',
+          isError: false,
+        },
+      ]),
+    ];
+    assignChildDuringMessageFetch = true;
+
+    await emitImportCompleted();
+
+    await vi.waitFor(async () => {
+      const childA = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: 'child-session-a',
+      });
+      expect(childA.session?.spawningToolCallId).toBe('tool-call-newer');
     });
   });
 });

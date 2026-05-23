@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { LogImportSubjects } from '../namespace.js';
-import { AdapterSessionStorageSubjects } from '@makaio/services-core/session';
+import { SessionStorageSubjects, registerMemorySessionStorage } from '@makaio/services-core/session';
 import type { LogImporterRegistration } from '../types.js';
 import { registerGenericScanHandler } from '../generic-import-handlers.js';
 import { createMockImporter } from './test-helpers.js';
@@ -63,17 +63,7 @@ describe('generic-import-handlers', () => {
       logFilePattern: '*.jsonl',
     };
 
-    let storedAdapterName: string | null = null;
-    cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.upsert, (ctx) => {
-        storedAdapterName = ctx.payload.adapterName;
-        ctx.setResult({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          sessionId: null,
-          created: true,
-        });
-      }),
-    );
+    cleanups.push(registerMemorySessionStorage(MakaioBus));
 
     cleanups.push(
       registerGenericScanHandler(MakaioBus, (adapterName) =>
@@ -85,6 +75,13 @@ describe('generic-import-handlers', () => {
     expect(result.adapterName).toBe(testAdapterName);
     expect(result.sessionsFound).toBe(1);
     expect(result.newSessions).toBe(1);
-    expect(storedAdapterName).toBe(testAdapterName);
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'session-1',
+      source: testAdapterName,
+    });
+    expect(stored.session?.adapterSessionId).toBe('session-1');
+    expect(stored.session?.source).toBe(testAdapterName);
+    expect(stored.session?.importStatus).toBe('discovered');
   });
 });

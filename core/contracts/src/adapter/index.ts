@@ -1,5 +1,4 @@
 export { AdapterSubjects, AdapterNamespace } from './namespace.js';
-export { AdapterSessionStatusSchema, type AdapterSessionStatus } from './schemas/adapter-session-status.js';
 export {
   SESSION_LINEAGE_KINDS,
   ROOT_SESSION_LINEAGE_KIND,
@@ -24,7 +23,6 @@ export {
   type RehydrateAgentResponse,
 } from './schemas/rehydrate-agent.js';
 export { SessionUsageSchema, type SessionUsage } from './schemas/session-usage.js';
-export { SessionLinkedSchema, type SessionLinked } from './schemas/session-linked.js';
 export { SessionDiscoveredSchema, type SessionDiscovered } from './schemas/session-discovered.js';
 export {
   AgentSelectionBaseSchema,

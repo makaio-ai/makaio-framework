@@ -2,10 +2,16 @@ import { z } from 'zod';
 import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
-import { BranchKindSchema } from './schemas/primitives.js';
+import { BranchKindSchema, ImportStatusSchema } from './schemas/primitives.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
 import { SessionPreviewDataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
+import {
+  RootSessionLineageSchema,
+  ForkSessionLineageSchema,
+  SubagentSessionLineageSchema,
+  CompressSessionLineageSchema,
+} from '../adapter/schemas/session-lineage.js';
 
 /**
  * Session preview for search results (always includes preview).
@@ -82,6 +88,10 @@ const SessionStorageUpdateRequestPayloadSchema = z.object({
   targetWorkingDirectory: z.string().optional(),
   createdAt: z.number().finite().optional(),
   lastActivityAt: z.number().finite().optional(),
+  /**
+   * Write-once spawn provenance. Non-null updates fill missing values without
+   * overwriting an existing tool-call assignment; null explicitly clears it.
+   */
   spawningToolCallId: z.string().nullable().optional(),
 });
 // Intentionally no `validateClientAccountObservationRequirement(...)` here:
@@ -98,6 +108,38 @@ export const SessionStorageUpdateSchema = {
     clientAccountChanged: z.boolean().optional(),
   }),
 };
+
+// ─── Import upsert schemas ──────────────────────────────────────────────────
+
+const ImportUpsertBaseSchema = z.object({
+  /** External tool's session identifier (becomes adapterSessionId on the sessions row). */
+  externalSessionId: z.string(),
+  /** Source tool identity (e.g., 'claude-code', 'codex', 'opencode'). */
+  source: z.string(),
+  /** Optional link to a known client. */
+  clientId: z.string().optional(),
+  /** Adapter instance ID for resume resolution. */
+  adapterId: z.string().optional(),
+  /** Working directory. */
+  cwd: z.string().nullable(),
+  /** Absolute path to the source log file on disk. */
+  logFilePath: z.string().nullable().optional(),
+  /** Unix ms timestamp of when the session started in the external tool. */
+  startedAt: z.number().finite().optional(),
+  /** Session title if known from logs. */
+  title: z.string().nullable().optional(),
+});
+
+const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [
+  ImportUpsertBaseSchema.merge(RootSessionLineageSchema),
+  ImportUpsertBaseSchema.merge(ForkSessionLineageSchema),
+  ImportUpsertBaseSchema.merge(SubagentSessionLineageSchema),
+  ImportUpsertBaseSchema.merge(CompressSessionLineageSchema),
+]);
+
+export type ImportUpsertRequest = z.infer<typeof ImportUpsertRequestSchema>;
+
+export { ImportStatusSchema, type ImportStatus } from './schemas/primitives.js';
 
 /**
  * Session storage namespace.
@@ -234,6 +276,14 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
     getByAdapterSessionId: {
       request: z.object({
         adapterSessionId: z.string(),
+        /**
+         * Optional source adapter identity.
+         *
+         * When omitted, storage returns a session only if the external ID is
+         * unique across all sources; ambiguous cross-source matches resolve to
+         * `null` instead of picking an arbitrary row.
+         */
+        source: z.string().optional(),
       }),
       response: z.object({
         session: MakaioSessionSchema.nullable(),
@@ -257,6 +307,95 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
         closed: z.number(),
         archived: z.number(),
         discovered: z.number(),
+      }),
+    },
+
+    // ─── Import-related subjects ────────────────────────────────────────
+
+    /**
+     * Creates or updates an imported session record. On first discovery, creates a new
+     * session with `status='discovered'`. On subsequent calls, enriches existing records
+     * with COALESCE semantics so later scans can supply previously-unknown values without
+     * overwriting already-populated ones.
+     *
+     * Subject: `storage:session.importUpsert`
+     * Type: Request (RPC)
+     */
+    importUpsert: {
+      request: ImportUpsertRequestSchema,
+      response: z.object({
+        /** Makaio session ID (newly created or existing). */
+        sessionId: z.string(),
+        /** Whether a new session record was created during this call. */
+        created: z.boolean(),
+      }),
+    },
+
+    /**
+     * Get a session by its source log file path.
+     * Used by the discovery orchestrator for cursor resumption.
+     *
+     * Subject: `storage:session.getByLogFilePath`
+     * Type: Request (RPC)
+     */
+    getByLogFilePath: {
+      request: z.object({
+        logFilePath: z.string(),
+      }),
+      response: z.object({
+        session: MakaioSessionSchema.nullable(),
+      }),
+    },
+
+    /**
+     * List imported sessions with optional source filter.
+     *
+     * Subject: `storage:session.listImported`
+     * Type: Request (RPC)
+     */
+    listImported: {
+      request: z.object({
+        source: z.string().optional(),
+        importStatus: ImportStatusSchema.optional(),
+      }),
+      response: z.object({
+        sessions: z.array(MakaioSessionSchema),
+      }),
+    },
+
+    /**
+     * Count imported sessions grouped by importStatus for a given source.
+     * Used by the UI dashboard to display import progress.
+     *
+     * Subject: `storage:session.countBySource`
+     * Type: Request (RPC)
+     */
+    countBySource: {
+      request: z.object({
+        source: z.string(),
+      }),
+      response: z.object({
+        total: z.number(),
+        imported: z.number(),
+        discovered: z.number(),
+        tracking: z.number(),
+      }),
+    },
+
+    /**
+     * Update the import-specific status of a session.
+     * Emits a lifecycle event on successful transition for entity cache reactivity.
+     *
+     * Subject: `storage:session.updateImportStatus`
+     * Type: Request (RPC)
+     */
+    updateImportStatus: {
+      request: z.object({
+        sessionId: z.string(),
+        importStatus: ImportStatusSchema,
+      }),
+      response: z.object({
+        success: z.boolean(),
       }),
     },
   },

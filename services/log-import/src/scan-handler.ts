@@ -2,18 +2,18 @@
  * File utilities and generic scan handler for LogImportRegistry.
  *
  * Handles scan requests for any registered importer by walking the log
- * directory, parsing files, and upserting discovered adapter sessions.
+ * directory, parsing files, and upserting discovered imported sessions.
  * @packageDocumentation
  */
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { LogImporter } from '@makaio/ai-adapters-core';
-import { AdapterSessionStorageSubjects } from '@makaio/services-core/session';
+import { SessionStorageSubjects } from '@makaio/services-core/session';
 import { LogImportSubjects } from './namespace.js';
 import type { LogImporterRegistration } from './types.js';
 import { matchesPattern } from './pattern-matching.js';
-import { extractSessionMetadata, toAdapterSessionUpsertPayload } from './lineage-metadata.js';
+import { extractSessionMetadata, toImportUpsertPayload } from './lineage-metadata.js';
 
 /**
  * Recursively find all files matching a pattern in a directory.
@@ -168,17 +168,10 @@ export function registerGenericScanHandler(
 
         sessionsFound++;
 
-        // Upsert to adapter_sessions (discover-only, no message import)
+        // Upsert to sessions (discover-only, no message import)
         const { created } = await bus.request(
-          AdapterSessionStorageSubjects.upsert,
-          toAdapterSessionUpsertPayload(
-            metadata,
-            canonicalAdapterName,
-            metadata.model,
-            metadata.cwd,
-            filePath,
-            metadata.startedAt,
-          ),
+          SessionStorageSubjects.importUpsert,
+          toImportUpsertPayload(metadata, canonicalAdapterName, metadata.cwd, filePath, metadata.startedAt),
         );
 
         if (created) {

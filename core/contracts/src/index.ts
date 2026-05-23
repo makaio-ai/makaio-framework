@@ -30,7 +30,6 @@ export { TimeoutConfigSchema } from './timeout/index.js';
 export type { RequiredTimeoutConfig, TimeoutCategory, TimeoutConfig } from './timeout/index.js';
 export {
   AdapterNamespace,
-  AdapterSessionStatusSchema,
   AdapterSubjects,
   AgentSelectionBaseSchema,
   AgentSelectionSchema,
@@ -50,7 +49,6 @@ export {
 export type {
   AdapterRuntimeOptions,
   AdapterSelection,
-  AdapterSessionStatus,
   AgentSelection,
   AgentSelectionBase,
   AgentSelectionKindMap,
@@ -58,7 +56,6 @@ export type {
   SessionDiscovered,
   SessionLineage,
   SessionLineageKind,
-  SessionLinked,
   StartAgentRequest,
   StartAgentResponse,
 } from './adapter/index.js';
@@ -348,6 +345,8 @@ export type {
   ForkOptions,
   ForkTransforms,
   IMakaioSession,
+  ImportStatus,
+  ImportUpsertRequest,
   MakaioSessionAgent,
   MakaioSessionEvent,
   MessagePageCursor,
