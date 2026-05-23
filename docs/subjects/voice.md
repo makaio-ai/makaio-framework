@@ -16,18 +16,18 @@ next: false
 | Schema record | `VoiceSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capabilities/voice/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/namespace.ts) |
+| Defined in | [`core/contracts/src/capabilities/voice/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `session.start` | [`voice.session.start`](#voice.session.start) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
-| `session.stop` | [`voice.session.stop`](#voice.session.stop) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
-| `status` | [`voice.status`](#voice.status) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
-| `synthesis.end` | [`voice.synthesis.end`](#voice.synthesis.end) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
-| `synthesis.start` | [`voice.synthesis.start`](#voice.synthesis.start) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
-| `transcription` | [`voice.transcription`](#voice.transcription) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/voice/schemas.ts) |
+| `session.start` | [`voice.session.start`](#voice.session.start) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
+| `session.stop` | [`voice.session.stop`](#voice.session.stop) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
+| `status` | [`voice.status`](#voice.status) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
+| `synthesis.end` | [`voice.synthesis.end`](#voice.synthesis.end) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
+| `synthesis.start` | [`voice.synthesis.start`](#voice.synthesis.start) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
+| `transcription` | [`voice.transcription`](#voice.transcription) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/voice/schemas.ts) |
 
 ## Subject Details
 

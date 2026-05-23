@@ -16,21 +16,22 @@ next: false
 | Schema record | `HostSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/host/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/namespace.ts) |
+| Defined in | [`core/contracts/src/host/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `app.focus` | [`host.app.focus`](#host.app.focus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `tray.activate` | [`host.tray.activate`](#host.tray.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.closed` | [`host.window.closed`](#host.window.closed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.create` | [`host.window.create`](#host.window.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.focus` | [`host.window.focus`](#host.window.focus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.labelChanged` | [`host.window.labelChanged`](#host.window.labelChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.list` | [`host.window.list`](#host.window.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.openDashboard` | [`host.window.openDashboard`](#host.window.openDashboard) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
-| `window.opened` | [`host.window.opened`](#host.window.opened) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/host/schemas.ts) |
+| `app.focus` | [`host.app.focus`](#host.app.focus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `app.shutdown` | [`host.app.shutdown`](#host.app.shutdown) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `tray.activate` | [`host.tray.activate`](#host.tray.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.closed` | [`host.window.closed`](#host.window.closed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.create` | [`host.window.create`](#host.window.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.focus` | [`host.window.focus`](#host.window.focus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.labelChanged` | [`host.window.labelChanged`](#host.window.labelChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.list` | [`host.window.list`](#host.window.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.openDashboard` | [`host.window.openDashboard`](#host.window.openDashboard) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
+| `window.opened` | [`host.window.opened`](#host.window.opened) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/host/schemas.ts) |
 
 ## Subject Details
 
@@ -55,6 +56,24 @@ _Empty object._
 |-------|------|----------|
 | `focused` | `boolean` | yes |
 | `windowId` | `number \| null` | yes |
+
+### <a id="host.app.shutdown"></a>`host.app.shutdown` (rpc)
+
+Request graceful application shutdown.
+
+Saves the window session, closes all windows, tears down the runtime,
+bus handlers, tray, and dev server, then exits the process.
+
+Subject: `host.app.shutdown`
+Type: Request (RPC)
+
+**Request:**
+
+_Empty object._
+
+**Response:**
+
+_Empty object._
 
 ### <a id="host.tray.activate"></a>`host.tray.activate` (rpc)
 

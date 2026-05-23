@@ -307,17 +307,18 @@ function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
 
   const unsubListExecutionLinks = bus.on(WorkflowStorageSubjects.listExecutionLinks, async (ctx) => {
     const { sourceExecutionId, targetExecutionId } = ctx.payload;
+    if (sourceExecutionId === undefined && targetExecutionId === undefined) {
+      throw new Error('Either sourceExecutionId or targetExecutionId is required to list execution links.');
+    }
+
     const predicates = [
-      ...(sourceExecutionId ? [eq(workflowExecutionLinks.sourceExecutionId, sourceExecutionId)] : []),
-      ...(targetExecutionId ? [eq(workflowExecutionLinks.targetExecutionId, targetExecutionId)] : []),
+      ...(sourceExecutionId !== undefined ? [eq(workflowExecutionLinks.sourceExecutionId, sourceExecutionId)] : []),
+      ...(targetExecutionId !== undefined ? [eq(workflowExecutionLinks.targetExecutionId, targetExecutionId)] : []),
     ];
-    const query =
-      predicates.length > 0
-        ? db
-            .select()
-            .from(workflowExecutionLinks)
-            .where(and(...predicates))
-        : db.select().from(workflowExecutionLinks);
+    const query = db
+      .select()
+      .from(workflowExecutionLinks)
+      .where(and(...predicates));
     ctx.setResult({ links: (await query).map(mapExecutionLink) });
   });
 

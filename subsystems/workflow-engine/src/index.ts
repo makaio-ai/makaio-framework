@@ -12,6 +12,7 @@
 
 export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowExecutor } from './workflow-executor.js';
+export { WorkflowEngineService } from './workflow-engine-service.js';
 export { WorkflowEngineToken, workflowEnginePackage } from './package.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';

@@ -6,6 +6,7 @@ import {
   type ShellWorkflowStep,
   type StepRunResult,
   type StepState,
+  type WorkflowStep,
   type WorkflowExecution,
 } from '@makaio/contracts';
 import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
@@ -16,6 +17,59 @@ import { markStepFailed } from './workflow-execution-finalizer.js';
 import { emitBeforeStepStart } from './step-lifecycle.js';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
+
+type GateStep = Extract<WorkflowStep, { type: 'gate' }>;
+type RunnableWorkflowStep = AgentWorkflowStep | ShellWorkflowStep | GateStep;
+
+type StepPreamble<TStep extends RunnableWorkflowStep> = {
+  active: ActiveExecution;
+  execution: WorkflowExecution;
+  workflow: ActiveExecution['workflow'];
+  stepMap: ActiveExecution['stepMap'];
+  step: TStep;
+  stepState: StepState;
+};
+
+/**
+ * Load and validate the shared execution state needed before running a step.
+ * @param deps - Step executor dependencies.
+ * @param executionId - Execution identifier.
+ * @param stepId - Step identifier.
+ * @param stepType - Expected executable step type.
+ * @param startedAt - Timestamp used for early failure telemetry.
+ * @returns Step preamble for the requested type, or a failed run result.
+ */
+function getStepPreamble<TType extends RunnableWorkflowStep['type']>(
+  deps: StepExecutorDeps,
+  executionId: string,
+  stepId: string,
+  stepType: TType,
+  startedAt: number,
+): StepPreamble<Extract<RunnableWorkflowStep, { type: TType }>> | StepRunResult {
+  const active = deps.activeExecutions.get(executionId);
+  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+
+  const step = active.stepMap.get(stepId);
+  if (!step || step.type !== stepType) return failResult(`${stepType} step not found: ${stepId}`, startedAt);
+
+  return {
+    active,
+    execution: active.execution,
+    workflow: active.workflow,
+    stepMap: active.stepMap,
+    step: step as Extract<WorkflowStep, { type: TType }> & Extract<RunnableWorkflowStep, { type: TType }>,
+    stepState: active.execution.steps[stepId],
+  };
+}
+
+/**
+ * Check whether a preamble lookup returned a runner result instead of state.
+ * @param value - Candidate preamble or failed step result.
+ * @returns True when the value is a StepRunResult.
+ */
+function isStepRunResult(value: StepRunResult | StepPreamble<RunnableWorkflowStep>): value is StepRunResult {
+  return 'status' in value;
+}
 
 /** Runtime dependencies injected into standalone step executor functions. */
 export interface StepExecutorDeps {
@@ -114,28 +168,28 @@ async function awaitAndSettleSubagent(
   }
 
   if (result.status === 'failed') {
-    await markStepFailed(
+    await markStepFailed({
       bus,
       execution,
       executionId,
       stepId,
-      step.type,
+      stepType: step.type,
       stepState,
-      result.error ?? 'Subagent execution failed',
-    );
+      error: result.error ?? 'Subagent execution failed',
+    });
     return;
   }
 
   if (result.status !== 'completed') {
-    await markStepFailed(
+    await markStepFailed({
       bus,
       execution,
       executionId,
       stepId,
-      step.type,
+      stepType: step.type,
       stepState,
-      `Subagent ended with unexpected status: ${result.status}`,
-    );
+      error: `Subagent ended with unexpected status: ${result.status}`,
+    });
     return;
   }
 
@@ -167,14 +221,10 @@ export async function executeAgentStep(
 ): Promise<StepRunResult> {
   const startedAt = Date.now();
   const { bus, activeExecutions, config } = deps;
-  const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+  const preamble = getStepPreamble(deps, executionId, stepId, 'agent', startedAt);
+  if (isStepRunResult(preamble)) return preamble;
 
-  const { execution, workflow, stepMap } = active;
-  const step = stepMap.get(stepId);
-  if (!step || step.type !== 'agent') return failResult(`Agent step not found: ${stepId}`, startedAt);
-
-  const stepState = execution.steps[stepId];
+  const { execution, workflow, step, stepState } = preamble;
 
   // Track outside the try so the catch block can kill an already-spawned subagent.
   let subagentId: string | undefined;
@@ -182,6 +232,8 @@ export async function executeAgentStep(
   try {
     // Emit beforeStart before any state mutation so interceptors can reject the step.
     await emitBeforeStepStart(bus, executionId, step);
+
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
     stepState.status = 'running';
     stepState.startedAt = Date.now();
@@ -207,7 +259,15 @@ export async function executeAgentStep(
       depth: 0,
     });
     if (!spawnResult.handled) {
-      await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, 'Subagent system not available');
+      await markStepFailed({
+        bus,
+        execution,
+        executionId,
+        stepId,
+        stepType: step.type,
+        stepState,
+        error: 'Subagent system not available',
+      });
       return failResult('Subagent system not available', startedAt);
     }
     subagentId = spawnResult.data.subagentId;
@@ -238,7 +298,7 @@ export async function executeAgentStep(
       await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Step execution error' }).catch(() => {});
     }
     const message = error instanceof Error ? error.message : String(error);
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
+    await markStepFailed({ bus, execution, executionId, stepId, stepType: step.type, stepState, error: message });
     return failResult(message, startedAt);
   }
 
@@ -263,14 +323,10 @@ export async function executeShellStep(
 ): Promise<StepRunResult> {
   const startedAt = Date.now();
   const { bus, activeExecutions, shellAbortControllers } = deps;
-  const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+  const preamble = getStepPreamble(deps, executionId, stepId, 'shell', startedAt);
+  if (isStepRunResult(preamble)) return preamble;
 
-  const { execution, stepMap } = active;
-  const step = stepMap.get(stepId);
-  if (!step || step.type !== 'shell') return failResult(`Shell step not found: ${stepId}`, startedAt);
-
-  const stepState = execution.steps[stepId];
+  const { execution, step, stepState } = preamble;
 
   // Register the AbortController before state mutation so any cancellation that
   // arrives after setExecution resolves can abort the shell process.
@@ -282,6 +338,8 @@ export async function executeShellStep(
   try {
     // Emit beforeStart before any state mutation so interceptors can reject the step.
     await emitBeforeStepStart(bus, executionId, step);
+
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
     stepState.status = 'running';
     stepState.startedAt = Date.now();
@@ -314,7 +372,7 @@ export async function executeShellStep(
   } catch (error) {
     if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
     const message = error instanceof Error ? error.message : String(error);
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
+    await markStepFailed({ bus, execution, executionId, stepId, stepType: step.type, stepState, error: message });
     return failResult(message, startedAt);
   } finally {
     shellAbortControllers.delete(stepKey);
@@ -323,7 +381,15 @@ export async function executeShellStep(
   if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
   if (outcome.status === 'failed') {
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, outcome.error);
+    await markStepFailed({
+      bus,
+      execution,
+      executionId,
+      stepId,
+      stepType: step.type,
+      stepState,
+      error: outcome.error,
+    });
     return failResult(outcome.error, startedAt);
   }
 
@@ -357,17 +423,15 @@ export async function executeGateStep(
 ): Promise<StepRunResult> {
   const startedAt = Date.now();
   const { bus, activeExecutions, gateCoordinator } = deps;
-  const active = activeExecutions.get(executionId);
-  if (!active || active.execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+  const preamble = getStepPreamble(deps, executionId, stepId, 'gate', startedAt);
+  if (isStepRunResult(preamble)) return preamble;
 
-  const { execution, workflow, stepMap } = active;
-  const step = stepMap.get(stepId);
-  if (!step || step.type !== 'gate') return failResult(`Gate step not found: ${stepId}`, startedAt);
-
-  const stepState = execution.steps[stepId];
+  const { execution, workflow, step, stepState } = preamble;
 
   try {
     await emitBeforeStepStart(bus, executionId, step);
+
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
 
     stepState.status = 'waiting';
     stepState.startedAt = Date.now();
@@ -422,11 +486,13 @@ export async function executeGateStep(
     }
 
     const reason = source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, reason);
+    await markStepFailed({ bus, execution, executionId, stepId, stepType: step.type, stepState, error: reason });
     return failResult(reason, startedAt);
   } catch (error) {
+    gateCoordinator.resolveForCancellation(executionId, stepId);
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
     const message = error instanceof Error ? error.message : String(error);
-    await markStepFailed(bus, execution, executionId, stepId, step.type, stepState, message);
+    await markStepFailed({ bus, execution, executionId, stepId, stepType: step.type, stepState, error: message });
     return failResult(message, startedAt);
   }
 }

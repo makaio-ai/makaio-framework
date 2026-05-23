@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects } from '@makaio/contracts';
+import { SessionSubjects, type IStepRunner, type StepRunConfig, type StepRunResult } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
@@ -61,6 +61,12 @@ describe('WorkflowExecutor', () => {
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
     expect(completedSteps).toEqual(['one', 'two', 'three']);
+    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId });
+    expect(spans.map((span) => [span.stepId, span.status])).toEqual([
+      ['one', 'completed'],
+      ['two', 'completed'],
+      ['three', 'completed'],
+    ]);
 
     const coordinatorSessionId = execution?.coordinatorSessionId;
     expect(coordinatorSessionId).toEqual(expect.any(String));
@@ -291,6 +297,65 @@ describe('WorkflowExecutor', () => {
     );
   });
 
+  it('persists output and telemetry from an injected step runner', async () => {
+    await setup.workflowExecutor.destroy();
+
+    const seenConfigs: StepRunConfig[] = [];
+    const runner: IStepRunner = {
+      async run(config): Promise<StepRunResult> {
+        seenConfigs.push(config);
+        return {
+          status: 'completed',
+          output: { answer: 42 },
+          telemetry: {
+            duration: 123,
+            tokenUsage: { input: 10, output: 4 },
+            estimatedCost: 0.01,
+            toolCalls: 2,
+          },
+        };
+      },
+    };
+    setup.workflowExecutor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 }, runner);
+    await setup.workflowExecutor.init();
+
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-custom-runner',
+      inputs: [{ name: 'title', type: 'string', required: true }],
+      steps: [{ id: 'custom', type: 'agent', prompt: 'unused' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      inputs: { title: 'Runner input' },
+    });
+
+    await vi.waitFor(async () => {
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('completed');
+    });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.steps.custom).toMatchObject({
+      status: 'completed',
+      result: '{"answer":42}',
+    });
+    expect(seenConfigs[0]?.resolvedInputs.inputs).toEqual({ title: 'Runner input' });
+
+    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId });
+    expect(spans[0]).toMatchObject({
+      stepId: 'custom',
+      status: 'completed',
+      durationMs: 123,
+      inputTokens: 10,
+      outputTokens: 4,
+      estimatedCost: 0.01,
+      toolCallCount: 2,
+      output: '{"answer":42}',
+    });
+  });
+
   it('emits dotted lifecycle events around step execution', async () => {
     const workflow = createWorkflowDefinition({
       id: 'workflow-lifecycle-events',
@@ -378,18 +443,52 @@ describe('WorkflowExecutor', () => {
       }),
     );
 
-    const failedExecutions: string[] = [];
+    const failedExecutions: Array<{ executionId: string; failedStepId?: string }> = [];
     setup.cleanupFns.push(
       MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
-        failedExecutions.push(ctx.payload.executionId);
+        failedExecutions.push({
+          executionId: ctx.payload.executionId,
+          failedStepId: ctx.payload.failedStepId,
+        });
       }),
     );
 
     const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
-    await vi.waitFor(() => expect(failedExecutions).toEqual([executionId]));
+    await vi.waitFor(() => expect(failedExecutions).toEqual([{ executionId, failedStepId: 'one' }]));
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.steps.one?.status).toBe('failed');
     expect(execution?.steps.one?.error).toBe('battery rejected step');
+    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId });
+    expect(spans[0]).toMatchObject({ stepId: 'one', status: 'failed' });
+  });
+
+  it('fails fast when one parallel step fails while a sibling gate waits indefinitely', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-parallel-failure-with-gate',
+      steps: [
+        { id: 'fail', type: 'shell', command: ['sh', '-c', 'exit 7'] },
+        { id: 'approval', type: 'gate', prompt: 'Approve?', autoAction: 'reject', timeoutMs: null },
+      ],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const failedExecutions: Array<{ executionId: string; failedStepId?: string }> = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        failedExecutions.push({
+          executionId: ctx.payload.executionId,
+          failedStepId: ctx.payload.failedStepId,
+        });
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+    await vi.waitFor(() => expect(failedExecutions).toEqual([{ executionId, failedStepId: 'fail' }]), {
+      timeout: 2_000,
+    });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.status).toBe('failed');
   });
 });

@@ -16,7 +16,7 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capabilities/vcs/events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/vcs/events.ts) |
+| Defined in | [`core/contracts/src/capabilities/vcs/events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/vcs/events.ts) |
 
 ## Subjects
 

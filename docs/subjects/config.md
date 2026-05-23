@@ -16,14 +16,14 @@ next: false
 | Schema record | `ConfigSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/config/config-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/config/config-namespace.ts) |
+| Defined in | [`core/contracts/src/config/config-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/config/config-namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `get` | [`config.get`](#config.get) | rpc | [`config-subjects.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/config/config-subjects.ts) |
-| `update` | [`config.update`](#config.update) | rpc | [`config-subjects.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/config/config-subjects.ts) |
+| `get` | [`config.get`](#config.get) | rpc | [`config-subjects.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/config/config-subjects.ts) |
+| `update` | [`config.update`](#config.update) | rpc | [`config-subjects.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/config/config-subjects.ts) |
 
 ## Subject Details
 

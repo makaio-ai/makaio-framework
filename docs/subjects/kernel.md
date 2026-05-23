@@ -30,6 +30,7 @@ next: false
 | `phase.coreReady` | [`kernel.phase.coreReady`](#kernel.phase.coreReady) | event | [`kernel-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/kernel/src/namespace/kernel-schemas.ts) |
 | `phase.servicesReady` | [`kernel.phase.servicesReady`](#kernel.phase.servicesReady) | event | [`kernel-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/kernel/src/namespace/kernel-schemas.ts) |
 | `ready` | [`kernel.ready`](#kernel.ready) | event | [`kernel-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/kernel/src/namespace/kernel-schemas.ts) |
+| `restart` | [`kernel.restart`](#kernel.restart) | rpc | [`kernel-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/kernel/src/namespace/kernel-schemas.ts) |
 
 ## Subject Details
 
@@ -165,6 +166,28 @@ Purpose: SharedWorker waits for this before considering the backend ready.
 | Field | Type | Required |
 |-------|------|----------|
 | `machineId` | `string` | yes |
+
+### <a id="kernel.restart"></a>`kernel.restart` (rpc)
+
+Request a host restart.
+
+Subject: `kernel.restart`
+Type: Request (RPC)
+Purpose: Allows remote callers (e.g., a setup wizard) to request that the
+         host process shut down and restart. The host decides whether to
+         accept; a declined restart returns `{ accepted: false }`.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `reason` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `accepted` | `boolean` | yes |
 
 ---
 

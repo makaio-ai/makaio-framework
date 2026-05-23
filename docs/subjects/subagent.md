@@ -16,7 +16,7 @@ next: false
 | Schema record | `SubagentSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/subagent/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/subagent/namespace.ts) |
+| Defined in | [`core/contracts/src/subagent/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/subagent/namespace.ts) |
 
 ## Subjects
 
@@ -27,7 +27,7 @@ next: false
 | `completed` | [`subagent.completed`](#subagent.completed) | event | — |
 | `completeTask` | [`subagent.completeTask`](#subagent.completeTask) | rpc | — |
 | `execute` | [`subagent.execute`](#subagent.execute) | rpc | — |
-| `executionFailed` | [`subagent.executionFailed`](#subagent.executionFailed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/subagent/schemas.ts) |
+| `executionFailed` | [`subagent.executionFailed`](#subagent.executionFailed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/subagent/schemas.ts) |
 | `getStatus` | [`subagent.getStatus`](#subagent.getStatus) | rpc | — |
 | `kill` | [`subagent.kill`](#subagent.kill) | rpc | — |
 | `listBySession` | [`subagent.listBySession`](#subagent.listBySession) | rpc | — |

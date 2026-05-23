@@ -1,4 +1,5 @@
-import { posix as pathPosix, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join, posix as pathPosix, relative } from 'node:path';
 
 /**
  * Normalizes analyzer inventory paths to POSIX separators for stable JSON and
@@ -23,10 +24,18 @@ export function relativeInventoryPath(root: string, filePath: string): string {
 /**
  * Checks whether an analysis root is the framework distribution root.
  * @param root - Absolute analysis root path.
- * @returns `true` when the root directory is named `framework`.
+ * @returns `true` when the root is the framework distribution or workspace checkout.
  */
 export function isFrameworkDistributionRoot(root: string): boolean {
-  return normalizeInventoryPath(root).replace(/\/+$/, '').split('/').at(-1) === 'framework';
+  const rootName = normalizeInventoryPath(root).replace(/\/+$/, '').split('/').at(-1);
+  if (rootName === 'framework') return true;
+
+  try {
+    const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name?: unknown };
+    return packageJson.name === '@makaio/framework-workspace';
+  } catch {
+    return false;
+  }
 }
 
 /**

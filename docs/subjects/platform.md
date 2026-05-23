@@ -16,15 +16,15 @@ next: false
 | Schema record | `PlatformSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/platform/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/platform/namespace.ts) |
+| Defined in | [`core/contracts/src/platform/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/platform/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `autoLaunch.disable` | [`platform.autoLaunch.disable`](#platform.autoLaunch.disable) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/platform/schemas.ts) |
-| `autoLaunch.enable` | [`platform.autoLaunch.enable`](#platform.autoLaunch.enable) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/platform/schemas.ts) |
-| `autoLaunch.getStatus` | [`platform.autoLaunch.getStatus`](#platform.autoLaunch.getStatus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/platform/schemas.ts) |
+| `autoLaunch.disable` | [`platform.autoLaunch.disable`](#platform.autoLaunch.disable) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/platform/schemas.ts) |
+| `autoLaunch.enable` | [`platform.autoLaunch.enable`](#platform.autoLaunch.enable) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/platform/schemas.ts) |
+| `autoLaunch.getStatus` | [`platform.autoLaunch.getStatus`](#platform.autoLaunch.getStatus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/platform/schemas.ts) |
 
 ## Subject Details
 

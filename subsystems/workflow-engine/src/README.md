@@ -1,4 +1,4 @@
-# @makaio/services/workflow
+# @makaio/subsystem-workflow-engine
 
 Workflow definition storage, DAG-based execution, and trigger evaluation.
 
@@ -44,12 +44,14 @@ execute concurrently.
 ### Storage
 `src/storage/`
 
-Drizzle-backed storage for `WorkflowDefinition` and `WorkflowExecution` entities.
+Drizzle-backed storage for workflow definitions, executions, spans, and execution links.
 
 | Table | Purpose |
 |-------|---------|
 | `workflowDefinitions` | Workflow templates |
 | `workflowExecutions` | Execution history and state |
+| `workflowStepSpans` | Step-level telemetry spans |
+| `workflowExecutionLinks` | Cross-execution trace links |
 
 **Subjects:** `storage:workflow.*` (get/set/delete/list for each table)
 
@@ -64,16 +66,19 @@ Drizzle-backed storage for `WorkflowDefinition` and `WorkflowExecution` entities
 ## Usage
 
 ```typescript
-import { WorkflowExecutor, WorkflowStorageSubjects } from '@makaio/services/workflow';
+import { WorkflowSubjects, workflowEnginePackage } from '@makaio/subsystem-workflow-engine';
 
-const executor = new WorkflowExecutor(bus, config);
-
-// Storage is registered via Drizzle handler
-registerDrizzleWorkflowStorage(db);
-
-// Execute a workflow
-await executor.execute(workflowDefinition, inputs);
+// Register workflowEnginePackage with the node package runtime.
+const { executionId } = await bus.request(WorkflowSubjects.start, {
+  workflowId: 'workflow-123',
+  inputs: {},
+});
 ```
+
+The main package export also exposes `WorkflowExecutor`, workflow and storage
+namespace definitions, `WorkflowStorageSubjects`, and `registerDrizzleWorkflowStorage`
+for runtime composition and tests. The package manifest is available from the
+`@makaio/subsystem-workflow-engine/package` subpath.
 
 ## Dependencies
 

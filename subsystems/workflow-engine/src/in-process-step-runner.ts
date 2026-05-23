@@ -3,6 +3,8 @@ import type { StepExecutorDeps } from './workflow-step-executors.js';
 import { executeAgentStep, executeGateStep, executeShellStep, failResult } from './workflow-step-executors.js';
 
 export class InProcessStepRunner implements IStepRunner {
+  public readonly managesWorkflowLifecycle = true;
+
   public constructor(private readonly deps: StepExecutorDeps) {}
 
   public async run(config: StepRunConfig): Promise<StepRunResult> {

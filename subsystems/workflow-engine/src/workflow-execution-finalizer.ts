@@ -5,6 +5,24 @@ import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 
+/** Parameters for marking a workflow step failed. */
+export interface MarkStepFailedParams {
+  /** Bus instance used for storage writes and event emission. */
+  bus: IMakaioBus;
+  /** Mutable execution state. */
+  execution: WorkflowExecution;
+  /** Execution identifier. */
+  executionId: string;
+  /** Failed step identifier. */
+  stepId: string;
+  /** Step type for lifecycle event payload. */
+  stepType: 'agent' | 'shell' | 'gate';
+  /** Mutable step state. */
+  stepState: StepState;
+  /** Human-readable step failure reason. */
+  error: string;
+}
+
 /**
  * Finalize an execution as completed.
  * @param bus - Bus instance used for storage writes and event emission.
@@ -23,8 +41,11 @@ export async function completeExecutionWithSuccess(
   execution.status = 'completed';
   execution.completedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.execution.completed, { executionId, totalDuration: Date.now() - startTime });
-  activeExecutions.delete(executionId);
+  try {
+    await bus.emit(WorkflowSubjects.execution.completed, { executionId, totalDuration: Date.now() - startTime });
+  } finally {
+    activeExecutions.delete(executionId);
+  }
 }
 
 /**
@@ -48,29 +69,19 @@ export async function completeExecutionWithFailure(
   execution.error = error;
   execution.completedAt = Date.now();
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  await bus.emit(WorkflowSubjects.execution.failed, { executionId, error, failedStepId });
-  activeExecutions.delete(executionId);
+  try {
+    await bus.emit(WorkflowSubjects.execution.failed, { executionId, error, failedStepId });
+  } finally {
+    activeExecutions.delete(executionId);
+  }
 }
 
 /**
  * Mark one step as failed and persist updated execution state.
- * @param bus - Bus instance used for storage writes and event emission.
- * @param execution - Mutable execution state.
- * @param executionId - Execution identifier.
- * @param stepId - Failed step identifier.
- * @param stepType - Step type ('agent' | 'shell' | 'gate') for lifecycle event payload.
- * @param stepState - Mutable step state.
- * @param error - Human-readable step failure reason.
+ * @param params - Failure update parameters.
  */
-export async function markStepFailed(
-  bus: IMakaioBus,
-  execution: WorkflowExecution,
-  executionId: string,
-  stepId: string,
-  stepType: 'agent' | 'shell' | 'gate',
-  stepState: StepState,
-  error: string,
-): Promise<void> {
+export async function markStepFailed(params: MarkStepFailedParams): Promise<void> {
+  const { bus, execution, executionId, stepId, stepType, stepState, error } = params;
   stepState.status = 'failed';
   stepState.error = error;
   stepState.completedAt = Date.now();
@@ -144,16 +155,18 @@ export async function cancelExecution(
   }
 
   await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-  for (const stepId of cancelledStepIds) {
-    const stepType = active.stepMap.get(stepId)?.type ?? 'agent';
-    const resolvedStepType = stepType === 'for-each' ? 'agent' : stepType;
-    await bus.emit(WorkflowSubjects.step.failed, {
-      executionId,
-      stepId,
-      stepType: resolvedStepType as 'agent' | 'shell' | 'gate',
-      error: 'Workflow cancelled',
-    });
-  }
+  await Promise.all(
+    cancelledStepIds.map((stepId) => {
+      const stepType = active.stepMap.get(stepId)?.type ?? 'agent';
+      const resolvedStepType = stepType === 'for-each' ? 'agent' : stepType;
+      return bus.emit(WorkflowSubjects.step.failed, {
+        executionId,
+        stepId,
+        stepType: resolvedStepType as 'agent' | 'shell' | 'gate',
+        error: 'Workflow cancelled',
+      });
+    }),
+  );
   await bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
 
   activeExecutions.delete(executionId);

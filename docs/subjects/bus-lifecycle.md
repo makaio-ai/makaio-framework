@@ -16,14 +16,14 @@ next: false
 | Schema record | `LifecycleSchemas` |
 | Tier | framework |
 | Package | `@makaio/bus-core` |
-| Defined in | [`packages/bus-core/src/lifecycle.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/bus-core/src/lifecycle.ts) |
+| Defined in | [`core/bus-core/src/lifecycle.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/bus-core/src/lifecycle.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `connected` | [`bus:lifecycle.connected`](#bus:lifecycle.connected) | event | [`lifecycle-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/bus-core/src/lifecycle-schemas.ts) |
-| `disconnected` | [`bus:lifecycle.disconnected`](#bus:lifecycle.disconnected) | event | [`lifecycle-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/bus-core/src/lifecycle-schemas.ts) |
+| `connected` | [`bus:lifecycle.connected`](#bus:lifecycle.connected) | event | [`lifecycle-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/bus-core/src/lifecycle-schemas.ts) |
+| `disconnected` | [`bus:lifecycle.disconnected`](#bus:lifecycle.disconnected) | event | [`lifecycle-schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/bus-core/src/lifecycle-schemas.ts) |
 
 ## Subject Details
 

@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
+  SubagentSubjects,
   type IStepRunner,
   type IWorkflowTriggerTypeRegistry,
   type WorkflowDefinition,
@@ -28,6 +29,14 @@ import {
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { buildExpressionContext } from './workflow-step-executors.js';
 import { InProcessStepRunner } from './in-process-step-runner.js';
+import {
+  applyStepRunResult,
+  persistStepSpan,
+  prepareRunnerManagedStep,
+  runnerManagesWorkflowLifecycle,
+  type FailedStepExecutionOutcome,
+  type StepExecutionOutcome,
+} from './workflow-step-result.js';
 
 /**
  * Merge provided inputs with workflow input definitions, applying defaults and
@@ -83,6 +92,7 @@ export class WorkflowExecutor extends BaseService {
 
   private readonly config: ExecutorConfig;
   private readonly activeExecutions = new Map<string, ActiveExecution>();
+  private readonly executionTasks = new Map<string, Promise<void>>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
   private readonly gateCoordinator: WorkflowGateCoordinator;
   private readonly stepRunner: IStepRunner;
@@ -147,13 +157,27 @@ export class WorkflowExecutor extends BaseService {
    * Release in-flight executions and abort shell processes.
    * Called by `destroy()` before handler unsubscription.
    */
-  protected onDestroy(): void {
+  protected async onDestroy(): Promise<void> {
+    await Promise.allSettled(
+      [...this.activeExecutions.keys()].map((executionId) =>
+        cancelExecution(
+          this.bus,
+          this.activeExecutions,
+          this.shellAbortControllers,
+          this.gateCoordinator,
+          executionId,
+          'Workflow engine shutdown',
+        ),
+      ),
+    );
     this.gateCoordinator.dispose();
-    this.activeExecutions.clear();
     for (const controller of this.shellAbortControllers.values()) {
       controller.abort();
     }
     this.shellAbortControllers.clear();
+    await Promise.allSettled(this.executionTasks.values());
+    await this.stepRunner.dispose?.();
+    this.activeExecutions.clear();
   }
 
   /** Register execution control handlers (start, cancel). */
@@ -244,7 +268,11 @@ export class WorkflowExecutor extends BaseService {
       stepContext,
     });
     await this.bus.emit(WorkflowSubjects.execution.started, { executionId, workflowId, coordinatorSessionId });
-    void this.runExecution(executionId);
+    const executionTask = this.runExecution(executionId).finally(() => {
+      this.executionTasks.delete(executionId);
+    });
+    this.executionTasks.set(executionId, executionTask);
+    void executionTask;
     return executionId;
   }
 
@@ -267,27 +295,22 @@ export class WorkflowExecutor extends BaseService {
       for (const level of levels) {
         if (execution.status !== 'running') return;
 
-        const stepResults = await Promise.allSettled(level.map((stepId) => this.executeStep(executionId, stepId)));
-
+        const failedOutcome = await this.runTopoLevel(executionId, level);
         if (execution.status !== 'running') return;
 
-        const rejectedResult = stepResults.find((result) => result.status === 'rejected');
-        if (rejectedResult?.status === 'rejected') {
-          const message =
-            rejectedResult.reason instanceof Error ? rejectedResult.reason.message : String(rejectedResult.reason);
-          await completeExecutionWithFailure(this.bus, this.activeExecutions, execution, executionId, message);
-          return;
-        }
-
-        const failedStepId = level.find((id) => execution.steps[id]?.status === 'failed');
-        if (failedStepId) {
+        if (failedOutcome) {
           await completeExecutionWithFailure(
             this.bus,
             this.activeExecutions,
             execution,
             executionId,
-            execution.steps[failedStepId]?.error ?? 'Step failed',
-            failedStepId,
+            failedOutcome.error,
+            failedOutcome.failedStepId,
+          );
+          await this.releaseLevelResources(
+            executionId,
+            execution,
+            level.filter((stepId) => stepId !== failedOutcome.stepId),
           );
           return;
         }
@@ -306,14 +329,58 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
-   * Execute a single workflow step, dispatching to the appropriate handler by step type.
-   * @param executionId - The execution ID
-   * @param stepId - The step ID to execute
-   * @returns Resolves when the step has completed or failed
+   * Run one topological level concurrently, returning as soon as any step fails.
+   * @param executionId - The execution ID.
+   * @param level - Step IDs in the current topological level.
+   * @returns First failed step outcome, or undefined when all steps complete or skip.
    */
-  private async executeStep(executionId: string, stepId: string): Promise<void> {
+  private async runTopoLevel(executionId: string, level: string[]): Promise<FailedStepExecutionOutcome | undefined> {
+    const pending = new Map<string, Promise<StepExecutionOutcome & { stepId: string }>>();
+
+    for (const stepId of level) {
+      pending.set(
+        stepId,
+        this.executeStep(executionId, stepId)
+          .then((outcome) => ({ ...outcome, stepId }))
+          .catch((error: unknown) => ({
+            stepId,
+            status: 'failed' as const,
+            error: error instanceof Error ? error.message : String(error),
+            failedStepId: stepId,
+          })),
+      );
+    }
+
+    while (pending.size > 0) {
+      const outcome = await Promise.race(pending.values());
+      pending.delete(outcome.stepId);
+      if (outcome.status === 'failed') return outcome;
+    }
+
+    return undefined;
+  }
+
+  private async releaseLevelResources(
+    executionId: string,
+    execution: WorkflowExecution,
+    stepIds: string[],
+  ): Promise<void> {
+    execution.status = 'failed';
+    await Promise.all(
+      stepIds.map(async (stepId) => {
+        this.gateCoordinator.resolveForCancellation(executionId, stepId);
+        this.shellAbortControllers.get(`${executionId}:${stepId}`)?.abort();
+        const subagentId = execution.steps[stepId]?.subagentId;
+        if (subagentId) {
+          await this.bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow step failed' }).catch(() => {});
+        }
+      }),
+    );
+  }
+
+  private async executeStep(executionId: string, stepId: string): Promise<StepExecutionOutcome> {
     const active = this.activeExecutions.get(executionId);
-    if (!active) return;
+    if (!active) return { status: 'failed', error: 'Execution no longer active', failedStepId: stepId };
 
     const step = active.stepMap.get(stepId);
     if (!step) throw new Error(`Step not found: ${stepId}`);
@@ -326,18 +393,30 @@ export class WorkflowExecutor extends BaseService {
         stepState.status = 'skipped';
         stepState.completedAt = Date.now();
         await this.bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
+        await persistStepSpan(this.bus, active, stepId, 'skipped');
         await this.bus.emit(WorkflowSubjects.step.skipped, {
           executionId,
           stepId,
           stepType: step.type as 'agent' | 'shell' | 'gate',
           condition: step.if,
         });
-        return;
+        return { status: 'skipped' };
       }
     }
 
     if (step.type === 'for-each') {
       throw new Error(`for-each step '${stepId}' should have been expanded before execution`);
+    }
+
+    const resolvedInputs: Record<string, unknown> = {
+      ...buildExpressionContext(active.execution, this.activeExecutions, stepId),
+    };
+    const stepRunnerManagesLifecycle = runnerManagesWorkflowLifecycle(this.stepRunner);
+    if (!stepRunnerManagesLifecycle) {
+      await prepareRunnerManagedStep(this.bus, active, stepId);
+      if (active.execution.status !== 'running') {
+        return { status: 'failed', error: 'Execution cancelled', failedStepId: stepId };
+      }
     }
 
     const result = await this.stepRunner.run({
@@ -346,11 +425,9 @@ export class WorkflowExecutor extends BaseService {
       stepId,
       stepType: step.type,
       stepDefinition: step,
-      resolvedInputs: {},
+      resolvedInputs,
     });
 
-    if (result.status === 'failed') {
-      throw new Error(result.error ?? `Step failed: ${stepId}`);
-    }
+    return applyStepRunResult(this.bus, active, stepId, result, resolvedInputs);
   }
 }

@@ -48,7 +48,19 @@ interface FactorySpec {
  * already supply the full domain string (e.g. `'adapter:gemini'`).
  */
 const FACTORY_REGISTRY: Record<string, FactorySpec> = {
+  createBusNamespace: {
+    prefixTemplate: '{name}',
+    schemasArgIndex: 1,
+    schemasInConfig: false,
+    kind: 'bus',
+  },
   createStorageNamespace: {
+    prefixTemplate: 'storage:{name}',
+    schemasArgIndex: 1,
+    schemasInConfig: true,
+    kind: 'storage',
+  },
+  createStorageNamespaceDefinition: {
     prefixTemplate: 'storage:{name}',
     schemasArgIndex: 1,
     schemasInConfig: true,

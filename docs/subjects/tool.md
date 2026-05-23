@@ -16,19 +16,19 @@ next: false
 | Schema record | `ToolSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/tool/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/namespace.ts) |
+| Defined in | [`core/contracts/src/tool/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `completed` | [`tool.completed`](#tool.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `error` | [`tool.error`](#tool.error) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `execute` | [`tool.execute`](#tool.execute) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `list` | [`tool.list`](#tool.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `registered` | [`tool.registered`](#tool.registered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `registryChanged` | [`tool.registryChanged`](#tool.registryChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
-| `started` | [`tool.started`](#tool.started) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/tool/schemas.ts) |
+| `completed` | [`tool.completed`](#tool.completed) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `error` | [`tool.error`](#tool.error) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `execute` | [`tool.execute`](#tool.execute) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `list` | [`tool.list`](#tool.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `registered` | [`tool.registered`](#tool.registered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `registryChanged` | [`tool.registryChanged`](#tool.registryChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
+| `started` | [`tool.started`](#tool.started) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/tool/schemas.ts) |
 
 ## Subject Details
 

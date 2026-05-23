@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 
 describe('workflow storage handlers', () => {
@@ -169,6 +169,13 @@ describe('workflow storage handlers', () => {
         metadata: { subject: 'github.issue.labeled' },
       },
     });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
+      link: {
+        sourceExecutionId: 'execution-previous',
+        targetExecutionId: execution.id,
+        linkType: 'triggered-by',
+      },
+    });
 
     const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId: execution.id });
     expect(spans).toHaveLength(1);
@@ -186,6 +193,40 @@ describe('workflow storage handlers', () => {
         metadata: { subject: 'github.issue.labeled' },
       },
     ]);
+
+    const { links: targetLinks } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {
+      targetExecutionId: execution.id,
+    });
+    expect(targetLinks).toEqual([
+      {
+        sourceExecutionId: 'execution-previous',
+        targetExecutionId: execution.id,
+        linkType: 'triggered-by',
+      },
+    ]);
+  });
+
+  it('requires a source or target filter when listing execution links', async () => {
+    const requestSchema = WorkflowStorageNamespace.schemas.listExecutionLinks.request;
+
+    expect(requestSchema.safeParse({}).success).toBe(false);
+    await expect(MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {})).rejects.toThrow(
+      'Either sourceExecutionId or targetExecutionId is required',
+    );
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      await expect(MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {})).rejects.toThrow(
+        'required to list execution links',
+      );
+    } finally {
+      if (originalNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = originalNodeEnv;
+      }
+    }
   });
 
   describe('Lifecycle events', () => {

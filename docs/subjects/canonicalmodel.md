@@ -16,13 +16,13 @@ next: false
 | Schema record | `CanonicalModelSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/canonical-model/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/canonical-model/namespace.ts) |
+| Defined in | [`core/contracts/src/canonical-model/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/canonical-model/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `resolve` | [`canonicalModel.resolve`](#canonicalModel.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/canonical-model/schemas.ts) |
+| `resolve` | [`canonicalModel.resolve`](#canonicalModel.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/canonical-model/schemas.ts) |
 
 ## Subject Details
 
@@ -48,7 +48,9 @@ Type: Request (RPC)
 | `allowedTools` | `string[] \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `disallowedTools` | `string[] \| undefined` | no |
+| `env` | `Record<string, string> \| undefined` | no |
 | `kind` | `"adapter"` | yes |
+| `mcpSessionContext` | `{ sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; } \| undefined` | no |
 | `model` | `string` | yes |
 | `providerConfigId` | `string` | yes |
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |

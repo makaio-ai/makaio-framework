@@ -3,20 +3,20 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowNamespace, dep, extensionToken, type MakaioNodeExtension } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { SessionToken } from '@makaio/services-core';
-import { WorkflowExecutor } from './workflow-executor.js';
+import { WorkflowEngineService } from './workflow-engine-service.js';
 import { WorkflowStorageNamespace } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('.', import.meta.url));
 
-/** Typed package token for retrieving the workflow executor service. */
-export const WorkflowEngineToken = extensionToken<WorkflowExecutor>('makaio.workflow-engine');
+/** Typed package token for retrieving the workflow engine package service. */
+export const WorkflowEngineToken = extensionToken<WorkflowEngineService>('makaio.workflow-engine');
 
 /**
  * MakaioExtension manifest for the workflow engine subsystem.
  *
  * Registers:
- * - The `WorkflowExecutor` as the package service (lifecycle owner).
+ * - The `WorkflowEngineService` as the package service (lifecycle owner).
  * - The `WorkflowNamespace` and `WorkflowStorageNamespace` for bus routing.
  * - Drizzle-backed storage handlers for workflow definition and execution
  *   persistence.
@@ -38,9 +38,9 @@ export const workflowEnginePackage: MakaioNodeExtension<IMakaioBus> = {
     registerHandlers: registerDrizzleHandlers(registerDrizzleWorkflowStorage),
   },
   /**
-   * Creates the workflow executor bound to the runtime bus.
+   * Creates the workflow engine service bound to the runtime bus.
    * @param ctx - Runtime package context.
-   * @returns Uninitialized workflow executor instance.
+   * @returns Uninitialized workflow engine service instance.
    */
-  create: (ctx) => new WorkflowExecutor(ctx.bus),
+  create: (ctx) => new WorkflowEngineService(ctx.bus),
 };

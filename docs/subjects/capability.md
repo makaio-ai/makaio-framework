@@ -16,16 +16,16 @@ next: false
 | Schema record | `CapabilitySchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capability/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capability/namespace.ts) |
+| Defined in | [`core/contracts/src/capability/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capability/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `listProviders` | [`capability.listProviders`](#capability.listProviders) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capability/schemas.ts) |
-| `register` | [`capability.register`](#capability.register) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capability/schemas.ts) |
-| `unregister` | [`capability.unregister`](#capability.unregister) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capability/schemas.ts) |
-| `validate` | [`capability.validate`](#capability.validate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capability/schemas.ts) |
+| `listProviders` | [`capability.listProviders`](#capability.listProviders) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capability/schemas.ts) |
+| `register` | [`capability.register`](#capability.register) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capability/schemas.ts) |
+| `unregister` | [`capability.unregister`](#capability.unregister) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capability/schemas.ts) |
+| `validate` | [`capability.validate`](#capability.validate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capability/schemas.ts) |
 
 ## Subject Details
 

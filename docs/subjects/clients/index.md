@@ -7,14 +7,12 @@ next: false
 
 # clients
 
-4 namespaces, 30 subjects (1 event, 29 RPCs).
+2 namespaces, 24 subjects (1 event, 23 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
-| [`client-binary:storage`](./client-binary-storage.md) | bus | 12 | 0E / 12R |
-| [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |
-| [`client:claude-code`](./client-claude-code.md) | client | 10 | 1E / 9R |
-| [`client:codex`](./client-codex.md) | client | 6 | 0E / 6R |
+| [`client:claude-code`](./client-claude-code.md) | client | 16 | 1E / 15R |
+| [`client:codex`](./client-codex.md) | client | 8 | 0E / 8R |
 
 ---
 

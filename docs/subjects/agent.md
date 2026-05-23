@@ -16,42 +16,44 @@ next: false
 | Schema record | `AgentSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/agent/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/namespace.ts) |
+| Defined in | [`core/contracts/src/agent/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `complete` | [`agent.complete`](#agent.complete) | event | [`complete.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/complete.ts) |
-| `contextWindow.updated` | [`agent.contextWindow.updated`](#agent.contextWindow.updated) | event | [`context-window.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/context-window.ts) |
-| `credential.change` | [`agent.credential.change`](#agent.credential.change) | rpc | [`credential-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/credential-change.ts) |
-| `cwd.change` | [`agent.cwd.change`](#agent.cwd.change) | rpc | [`cwd-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/cwd-change.ts) |
-| `cwd.changed` | [`agent.cwd.changed`](#agent.cwd.changed) | event | [`cwd-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/cwd-change.ts) |
-| `getCapabilities` | [`agent.getCapabilities`](#agent.getCapabilities) | rpc | [`get-capabilities.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/get-capabilities.ts) |
-| `idle` | [`agent.idle`](#agent.idle) | event | [`idle.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/idle.ts) |
-| `message` | [`agent.message`](#agent.message) | event | [`message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/message.ts) |
-| `message_delta` | [`agent.message_delta`](#agent.message_delta) | event | [`message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/message.ts) |
-| `model.change` | [`agent.model.change`](#agent.model.change) | rpc | [`model-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/model-change.ts) |
-| `model.changed` | [`agent.model.changed`](#agent.model.changed) | event | [`model-changed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/model-changed.ts) |
-| `reasoning` | [`agent.reasoning`](#agent.reasoning) | event | [`reasoning.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/reasoning.ts) |
-| `reasoning_delta` | [`agent.reasoning_delta`](#agent.reasoning_delta) | event | [`reasoning.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/reasoning.ts) |
-| `sendMessage` | [`agent.sendMessage`](#agent.sendMessage) | rpc | [`send-message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/send-message.ts) |
-| `session.closed` | [`agent.session.closed`](#agent.session.closed) | event | [`session-closed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/session-closed.ts) |
-| `started` | [`agent.started`](#agent.started) | event | [`started.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/started.ts) |
-| `step.finished` | [`agent.step.finished`](#agent.step.finished) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/step.ts) |
-| `step.started` | [`agent.step.started`](#agent.step.started) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/step.ts) |
-| `tool.completed` | [`agent.tool.completed`](#agent.tool.completed) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/tool.ts) |
-| `tool.output` | [`agent.tool.output`](#agent.tool.output) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/tool.ts) |
-| `tool.started` | [`agent.tool.started`](#agent.tool.started) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/tool.ts) |
-| `tool.use` | [`agent.tool.use`](#agent.tool.use) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/tool.ts) |
-| `toolApprove` | [`agent.toolApprove`](#agent.toolApprove) | rpc | [`tool-approve.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/tool-approve.ts) |
-| `turn.completed` | [`agent.turn.completed`](#agent.turn.completed) | event | [`turn.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/turn.ts) |
-| `turn.started` | [`agent.turn.started`](#agent.turn.started) | event | [`turn.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/turn.ts) |
-| `usage` | [`agent.usage`](#agent.usage) | event | [`usage.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/usage.ts) |
-| `user_message.acknowledged` | [`agent.user_message.acknowledged`](#agent.user_message.acknowledged) | event | [`user-message-acknowledged.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/user-message-acknowledged.ts) |
-| `user_message.completed` | [`agent.user_message.completed`](#agent.user_message.completed) | event | [`user-message-completed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/user-message-completed.ts) |
-| `user_message.sent` | [`agent.user_message.sent`](#agent.user_message.sent) | event | [`user-message-sent.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/user-message-sent.ts) |
-| `validateModelChange` | [`agent.validateModelChange`](#agent.validateModelChange) | rpc | [`validate-model-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/agent/schemas/validate-model-change.ts) |
+| `complete` | [`agent.complete`](#agent.complete) | event | [`complete.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/complete.ts) |
+| `contextWindow.updated` | [`agent.contextWindow.updated`](#agent.contextWindow.updated) | event | [`context-window.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/context-window.ts) |
+| `credential.change` | [`agent.credential.change`](#agent.credential.change) | rpc | [`credential-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/credential-change.ts) |
+| `cwd.change` | [`agent.cwd.change`](#agent.cwd.change) | rpc | [`cwd-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/cwd-change.ts) |
+| `cwd.changed` | [`agent.cwd.changed`](#agent.cwd.changed) | event | [`cwd-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/cwd-change.ts) |
+| `getCapabilities` | [`agent.getCapabilities`](#agent.getCapabilities) | rpc | [`get-capabilities.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/get-capabilities.ts) |
+| `idle` | [`agent.idle`](#agent.idle) | event | [`idle.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/idle.ts) |
+| `interrupt` | [`agent.interrupt`](#agent.interrupt) | rpc | [`interrupt.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/interrupt.ts) |
+| `mcp.servers.set` | [`agent.mcp.servers.set`](#agent.mcp.servers.set) | rpc | [`mcp-servers-set.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/mcp-servers-set.ts) |
+| `message` | [`agent.message`](#agent.message) | event | [`message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/message.ts) |
+| `message_delta` | [`agent.message_delta`](#agent.message_delta) | event | [`message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/message.ts) |
+| `model.change` | [`agent.model.change`](#agent.model.change) | rpc | [`model-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/model-change.ts) |
+| `model.changed` | [`agent.model.changed`](#agent.model.changed) | event | [`model-changed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/model-changed.ts) |
+| `reasoning` | [`agent.reasoning`](#agent.reasoning) | event | [`reasoning.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/reasoning.ts) |
+| `reasoning_delta` | [`agent.reasoning_delta`](#agent.reasoning_delta) | event | [`reasoning.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/reasoning.ts) |
+| `sendMessage` | [`agent.sendMessage`](#agent.sendMessage) | rpc | [`send-message.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/send-message.ts) |
+| `session.closed` | [`agent.session.closed`](#agent.session.closed) | event | [`session-closed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/session-closed.ts) |
+| `started` | [`agent.started`](#agent.started) | event | [`started.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/started.ts) |
+| `step.finished` | [`agent.step.finished`](#agent.step.finished) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/step.ts) |
+| `step.started` | [`agent.step.started`](#agent.step.started) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/step.ts) |
+| `tool.completed` | [`agent.tool.completed`](#agent.tool.completed) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
+| `tool.output` | [`agent.tool.output`](#agent.tool.output) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
+| `tool.started` | [`agent.tool.started`](#agent.tool.started) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
+| `tool.use` | [`agent.tool.use`](#agent.tool.use) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
+| `toolApprove` | [`agent.toolApprove`](#agent.toolApprove) | rpc | [`tool-approve.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool-approve.ts) |
+| `turn.completed` | [`agent.turn.completed`](#agent.turn.completed) | event | [`turn.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/turn.ts) |
+| `turn.started` | [`agent.turn.started`](#agent.turn.started) | event | [`turn.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/turn.ts) |
+| `usage` | [`agent.usage`](#agent.usage) | event | [`usage.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/usage.ts) |
+| `user_message.acknowledged` | [`agent.user_message.acknowledged`](#agent.user_message.acknowledged) | event | [`user-message-acknowledged.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/user-message-acknowledged.ts) |
+| `user_message.completed` | [`agent.user_message.completed`](#agent.user_message.completed) | event | [`user-message-completed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/user-message-completed.ts) |
+| `user_message.sent` | [`agent.user_message.sent`](#agent.user_message.sent) | event | [`user-message-sent.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/user-message-sent.ts) |
+| `validateModelChange` | [`agent.validateModelChange`](#agent.validateModelChange) | rpc | [`validate-model-change.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/validate-model-change.ts) |
 
 ## Subject Details
 
@@ -252,6 +254,72 @@ can listen to this event to know when the agent is safe to mutate.
 | `sessionId` | `string \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
+### <a id="agent.interrupt"></a>`agent.interrupt` (rpc)
+
+Request to interrupt the active agent turn.
+
+Subject: `agent.interrupt`
+Type: Request/Response
+Sent when: Caller wants the connector to stop current processing and return control.
+Handler: AIAgent delegates to the active connector's `interrupt()` implementation.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `adapterSessionId` | `string` | yes |
+| `agentId` | `string` | yes |
+| `clientId` | `string \| undefined` | no |
+| `messageId` | `string \| undefined` | no |
+| `occurredAt` | `number \| undefined` | no |
+| `providerConfigId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `turnId` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
+
+### <a id="agent.mcp.servers.set"></a>`agent.mcp.servers.set` (rpc)
+
+Request to replace the agent's runtime MCP server context.
+
+Subject: `agent.mcp.servers.set`
+Type: Request/Response
+Sent when: Caller wants to replace dynamic SDK MCP servers mid-session
+Handler: AIAgent swaps the connector immediately when idle, or stages the
+latest request for the next turn boundary when requested by the caller.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string` | yes |
+| `adapterName` | `string` | yes |
+| `adapterSessionId` | `string` | yes |
+| `agentId` | `string` | yes |
+| `clientId` | `string \| undefined` | no |
+| `mcpSessionContext` | `{ sessionId: string; servers: { name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]; directTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; discoverableTools: { fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]; }` | yes |
+| `messageId` | `string \| undefined` | no |
+| `occurredAt` | `number \| undefined` | no |
+| `providerConfigId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `turnActiveBehavior` | `"reject" \| "stageForNextTurn" \| undefined` | no |
+| `turnId` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `reason` | `string \| undefined` | no |
+| `staged` | `boolean \| undefined` | no |
+| `success` | `boolean` | yes |
+| `swapped` | `boolean \| undefined` | no |
+
 ### <a id="agent.message"></a>`agent.message` (event)
 
 Complete AI message received.
@@ -322,6 +390,7 @@ Handler: AIAgent attempts native in-place change, falls back to connector swap
 | `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `skipWarning` | `boolean \| undefined` | no |
+| `turnActiveBehavior` | `"reject" \| "stageForNextTurn" \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
 **Response:**
@@ -331,6 +400,7 @@ Handler: AIAgent attempts native in-place change, falls back to connector swap
 | `appliedReasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `reason` | `string \| undefined` | no |
+| `staged` | `boolean \| undefined` | no |
 | `success` | `boolean` | yes |
 | `supportedReasoningLevels` | `{ none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined` | no |
 | `swapped` | `boolean \| undefined` | no |

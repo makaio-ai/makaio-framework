@@ -11,6 +11,15 @@ import {
 } from '@makaio/contracts';
 import { workflowDefinitions, workflowExecutions, workflowExecutionLinks, workflowStepSpans } from './schema.js';
 
+const ExecutionLinkListQuerySchema = z
+  .object({
+    sourceExecutionId: z.string().min(1).optional(),
+    targetExecutionId: z.string().min(1).optional(),
+  })
+  .refine((query) => query.sourceExecutionId !== undefined || query.targetExecutionId !== undefined, {
+    message: 'Either sourceExecutionId or targetExecutionId is required.',
+  });
+
 /**
  * Storage namespace for workflow persistence.
  *
@@ -97,10 +106,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     },
 
     listExecutionLinks: {
-      request: z.object({
-        sourceExecutionId: z.string().optional(),
-        targetExecutionId: z.string().optional(),
-      }),
+      request: ExecutionLinkListQuerySchema,
       response: z.object({ links: z.array(ExecutionLinkSchema) }),
     },
   },
@@ -120,3 +126,4 @@ export type { WorkflowDefinition, WorkflowDefinitionInput } from '@makaio/contra
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
 export type WorkflowListQuery = z.infer<typeof WorkflowListQuerySchema>;
 export type ExecutionListQuery = z.infer<typeof ExecutionListQuerySchema>;
+export type ExecutionLinkListQuery = z.infer<typeof ExecutionLinkListQuerySchema>;

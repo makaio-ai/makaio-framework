@@ -3,5 +3,6 @@ import { frameworkPreset } from '@makaio/build-tooling/tsdown-framework-preset';
 
 export default defineConfig({
   ...frameworkPreset,
-  entry: ['./src/index.ts'],
+  dts: { eager: true },
+  entry: ['./src/index.ts', './src/package.ts'],
 });

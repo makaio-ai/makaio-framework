@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
@@ -10,31 +13,58 @@ import {
 } from './workflow-executor.test-setup.js';
 
 describe('workflow engine smoke', () => {
-  let setup: WorkflowExecutorTestSetup;
+  let setup: WorkflowExecutorTestSetup | undefined;
+  let tempDir: string | undefined;
 
   beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'makaio-smoke-'));
     setup = await setupWorkflowExecutorTest();
   });
 
   afterEach(async () => {
-    await teardownWorkflowExecutorTest(setup);
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
   });
 
   it('runs shell workflow from bus start through checkpoints and lifecycle events', async () => {
+    if (!setup || !tempDir) {
+      throw new Error('Smoke test setup did not initialize.');
+    }
+
+    const outputPath = join(tempDir, 'output.txt');
     const workflow = createWorkflowDefinition({
       id: 'smoke-test',
       name: 'Smoke Test',
       inputs: [{ name: 'greeting', type: 'string', default: 'Hello from Makaio' }],
       steps: [
-        { id: 'create-workspace', type: 'shell', command: ['mkdir', '-p', '/tmp/makaio-smoke'] },
         {
           id: 'write-file',
           type: 'shell',
-          command: ['sh', '-c', 'echo "{{ inputs.greeting }}" > /tmp/makaio-smoke/output.txt'],
-          needs: ['create-workspace'],
+          command: [
+            'node',
+            '-e',
+            'const fs = require("node:fs"); fs.writeFileSync(process.argv[1], process.argv[2]);',
+            outputPath,
+            '{{ inputs.greeting }}',
+          ],
         },
-        { id: 'verify', type: 'shell', command: ['cat', '/tmp/makaio-smoke/output.txt'], needs: ['write-file'] },
-        { id: 'cleanup', type: 'shell', command: ['rm', '-rf', '/tmp/makaio-smoke'], needs: ['verify'] },
+        {
+          id: 'verify',
+          type: 'shell',
+          command: [
+            'node',
+            '-e',
+            'const fs = require("node:fs"); process.stdout.write(fs.readFileSync(process.argv[1], "utf8"));',
+            outputPath,
+          ],
+          needs: ['write-file'],
+        },
       ],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
@@ -61,6 +91,6 @@ describe('workflow engine smoke', () => {
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
     expect(execution?.steps.verify?.result?.trim()).toBe('Hello from Makaio');
-    expect(events).toEqual(['create-workspace', 'write-file', 'verify', 'cleanup', 'execution.completed']);
+    expect(events).toEqual(['write-file', 'verify', 'execution.completed']);
   });
 });

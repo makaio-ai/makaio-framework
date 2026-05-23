@@ -16,23 +16,23 @@ next: false
 | Schema record | `ReviewSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/capabilities/review/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/namespace.ts) |
+| Defined in | [`core/contracts/src/capabilities/review/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `finding.statusChanged` | [`review.finding.statusChanged`](#review.finding.statusChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `finding.updateStatus` | [`review.finding.updateStatus`](#review.finding.updateStatus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `findings.arrived` | [`review.findings.arrived`](#review.findings.arrived) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `findings.fetch` | [`review.findings.fetch`](#review.findings.fetch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `findings.list` | [`review.findings.list`](#review.findings.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `findings.submit` | [`review.findings.submit`](#review.findings.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `source.list` | [`review.source.list`](#review.source.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `source.rateLimitChanged` | [`review.source.rateLimitChanged`](#review.source.rateLimitChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `source.registered` | [`review.source.registered`](#review.source.registered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `start` | [`review.start`](#review.start) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
-| `started` | [`review.started`](#review.started) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/capabilities/review/schemas.ts) |
+| `finding.statusChanged` | [`review.finding.statusChanged`](#review.finding.statusChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `finding.updateStatus` | [`review.finding.updateStatus`](#review.finding.updateStatus) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `findings.arrived` | [`review.findings.arrived`](#review.findings.arrived) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `findings.fetch` | [`review.findings.fetch`](#review.findings.fetch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `findings.list` | [`review.findings.list`](#review.findings.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `findings.submit` | [`review.findings.submit`](#review.findings.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `source.list` | [`review.source.list`](#review.source.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `source.rateLimitChanged` | [`review.source.rateLimitChanged`](#review.source.rateLimitChanged) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `source.registered` | [`review.source.registered`](#review.source.registered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `start` | [`review.start`](#review.start) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
+| `started` | [`review.started`](#review.started) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/capabilities/review/schemas.ts) |
 
 ## Subject Details
 
@@ -144,7 +144,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ file: string \| null; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; message: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; id: string; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; sourceId: string; threadId: string \| null; reviewer: string; severity: "critical" \| "major" \| "minor" \| "nitpick"; startLine: number \| null; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
+| `finding` | `{ message: string; file: string \| null; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; id: string; sourceId: string; threadId: string \| null; reviewer: string; severity: "critical" \| "major" \| "minor" \| "nitpick"; startLine: number \| null; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
 
 **Response:**
 

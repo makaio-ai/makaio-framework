@@ -16,21 +16,21 @@ next: false
 | Schema record | `McpSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/mcp/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/namespace.ts) |
+| Defined in | [`core/contracts/src/mcp/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `server.connected` | [`mcp.server.connected`](#mcp.server.connected) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `server.disconnected` | [`mcp.server.disconnected`](#mcp.server.disconnected) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `server.error` | [`mcp.server.error`](#mcp.server.error) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `server.reconnecting` | [`mcp.server.reconnecting`](#mcp.server.reconnecting) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `session.register` | [`mcp.session.register`](#mcp.session.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `session.resolve` | [`mcp.session.resolve`](#mcp.session.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `session.unregister` | [`mcp.session.unregister`](#mcp.session.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `tools.enabled` | [`mcp.tools.enabled`](#mcp.tools.enabled) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
-| `tools.updated` | [`mcp.tools.updated`](#mcp.tools.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/mcp/schemas.ts) |
+| `server.connected` | [`mcp.server.connected`](#mcp.server.connected) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `server.disconnected` | [`mcp.server.disconnected`](#mcp.server.disconnected) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `server.error` | [`mcp.server.error`](#mcp.server.error) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `server.reconnecting` | [`mcp.server.reconnecting`](#mcp.server.reconnecting) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `session.register` | [`mcp.session.register`](#mcp.session.register) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `session.resolve` | [`mcp.session.resolve`](#mcp.session.resolve) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `session.unregister` | [`mcp.session.unregister`](#mcp.session.unregister) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `tools.enabled` | [`mcp.tools.enabled`](#mcp.tools.enabled) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
+| `tools.updated` | [`mcp.tools.updated`](#mcp.tools.updated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/mcp/schemas.ts) |
 
 ## Subject Details
 
@@ -101,6 +101,7 @@ port the singleton HTTP MCP server is listening on.
 | `adapterSessionId` | `string` | yes |
 | `agentId` | `string` | yes |
 | `contextOverrides` | `{ cwd?: string \| undefined; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; agentId?: string \| undefined; adapterId?: string \| undefined; adapterName?: string \| undefined; turnId?: string \| undefined; turnContext?: Record<string, unknown> \| undefined; reasoning?: string \| undefined; toolCallId?: string \| undefined; constraints?: Record<string, unknown> \| undefined; }` | yes |
+| `pinned` | `boolean \| undefined` | no |
 | `sessionId` | `string` | yes |
 
 **Response:**
@@ -135,7 +136,7 @@ discoverable tools for the given session, project, and profile identifiers.
 | `discoverableTools` | `{ fullName: string; originalName: string; serverName: string; inputSchema: Record<string, unknown>; exposureMode: "direct" \| "discovery" \| "hidden"; enabled: boolean; exposed: boolean; description?: string \| undefined; enabledBy?: "discovery" \| "toolset" \| undefined; enabledAt?: number \| undefined; }[]` | yes |
 | `profileId` | `string \| null` | yes |
 | `projectId` | `string \| null` | yes |
-| `servers` | `{ name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; }; exposureMode: "direct" \| "discovery"; }[]` | yes |
+| `servers` | `{ name: string; transport: { type: "stdio"; command: string; args?: string[] \| undefined; env?: Record<string, string> \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "sse"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; } \| { url: string; type: "http"; headers?: Record<string, string> \| undefined; tools?: { name: string; permission_policy: "always_allow" \| "always_ask" \| "always_deny"; }[] \| undefined; alwaysLoad?: boolean \| undefined; }; exposureMode: "direct" \| "discovery"; }[]` | yes |
 | `sessionId` | `string` | yes |
 
 ### <a id="mcp.session.unregister"></a>`mcp.session.unregister` (rpc)

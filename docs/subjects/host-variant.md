@@ -16,15 +16,15 @@ next: false
 | Schema record | `VariantSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/variant/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/variant/namespace.ts) |
+| Defined in | [`core/contracts/src/variant/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/variant/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `getInfo` | [`host:variant.getInfo`](#host:variant.getInfo) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/variant/schemas.ts) |
-| `requestUpgrade` | [`host:variant.requestUpgrade`](#host:variant.requestUpgrade) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/variant/schemas.ts) |
-| `upgradeProgress` | [`host:variant.upgradeProgress`](#host:variant.upgradeProgress) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/variant/schemas.ts) |
+| `getInfo` | [`host:variant.getInfo`](#host:variant.getInfo) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/variant/schemas.ts) |
+| `requestUpgrade` | [`host:variant.requestUpgrade`](#host:variant.requestUpgrade) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/variant/schemas.ts) |
+| `upgradeProgress` | [`host:variant.upgradeProgress`](#host:variant.upgradeProgress) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/variant/schemas.ts) |
 
 ## Subject Details
 

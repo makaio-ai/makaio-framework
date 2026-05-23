@@ -16,18 +16,18 @@ next: false
 | Schema record | `SkillSchemas` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/skill/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/namespace.ts) |
+| Defined in | [`core/contracts/src/skill/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `activate` | [`skill.activate`](#skill.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
-| `activated` | [`skill.activated`](#skill.activated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
-| `catalog.built` | [`skill.catalog.built`](#skill.catalog.built) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
-| `deactivated` | [`skill.deactivated`](#skill.deactivated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
-| `getActiveSkills` | [`skill.getActiveSkills`](#skill.getActiveSkills) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
-| `getCatalog` | [`skill.getCatalog`](#skill.getCatalog) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/schemas.ts) |
+| `activate` | [`skill.activate`](#skill.activate) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
+| `activated` | [`skill.activated`](#skill.activated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
+| `catalog.built` | [`skill.catalog.built`](#skill.catalog.built) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
+| `deactivated` | [`skill.deactivated`](#skill.deactivated) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
+| `getActiveSkills` | [`skill.getActiveSkills`](#skill.getActiveSkills) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
+| `getCatalog` | [`skill.getCatalog`](#skill.getCatalog) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/schemas.ts) |
 
 ## Subject Details
 
