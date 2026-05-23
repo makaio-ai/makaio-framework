@@ -27,17 +27,17 @@ export interface StepExecutorDeps {
 }
 
 /**
- * Build a failed StepRunResult with telemetry.
- * @param error - Error message to include
+ * Build a failed {@link StepRunResult} with duration telemetry.
+ * @param error - Error message
  * @param startedAt - Start timestamp for duration calculation
  * @returns Failed step run result
  */
-function failResult(error: string, startedAt: number): StepRunResult {
+export function failResult(error: string, startedAt: number): StepRunResult {
   return { status: 'failed', error, telemetry: { duration: Date.now() - startedAt } };
 }
 
 /**
- * Build a completed StepRunResult with telemetry.
+ * Build a completed {@link StepRunResult} with duration telemetry.
  * @param startedAt - Start timestamp for duration calculation
  * @param output - Optional step output string
  * @returns Completed step run result

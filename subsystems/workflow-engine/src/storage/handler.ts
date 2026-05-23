@@ -161,16 +161,6 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
 }
 
 /**
- * Build execution insert payload from the canonical DB mapping.
- * Keeps insert + conflict-update shapes derived from one source of truth.
- * @param execution - Workflow execution from API
- * @returns Insert payload for workflow_executions table
- */
-function toExecutionInsertValues(execution: WorkflowExecution): InsertWorkflowExecution {
-  return toExecutionDbValues(execution);
-}
-
-/**
  * Registers execution CRUD handlers.
  *
  * Custom implementation for executions since they need different upsert logic
@@ -190,10 +180,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
   const unsubSetExecution = bus.on(WorkflowStorageSubjects.setExecution, async (ctx) => {
     const { execution } = ctx.payload;
     const dbValues = toExecutionDbValues(execution);
-    const insertValues = toExecutionInsertValues(execution);
-
-    // Upsert: insert or update on conflict
-    await db.insert(workflowExecutions).values(insertValues).onConflictDoUpdate({
+    await db.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
       target: workflowExecutions.id,
       set: dbValues,
     });
@@ -235,10 +222,9 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Maps database row to SpanRecord API type.
- * Converts nullable DB columns to optional undefined values.
- * @param row - Database row from workflow_step_spans table
- * @returns Mapped SpanRecord with optional fields as undefined
+ * Map nullable DB columns to optional API fields.
+ * @param row - Database row
+ * @returns Mapped span record
  */
 function mapSpan(row: DbSpanRow): SpanRecord {
   return {
@@ -259,10 +245,9 @@ function mapSpan(row: DbSpanRow): SpanRecord {
 }
 
 /**
- * Maps database row to ExecutionLink API type.
- * Converts nullable metadata to optional undefined.
- * @param row - Database row from workflow_execution_links table
- * @returns Mapped ExecutionLink with optional fields as undefined
+ * Map nullable DB columns to optional API fields.
+ * @param row - Database row
+ * @returns Mapped execution link
  */
 function mapExecutionLink(row: DbExecutionLinkRow): ExecutionLink {
   return {

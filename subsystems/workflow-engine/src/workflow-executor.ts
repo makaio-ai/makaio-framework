@@ -340,15 +340,13 @@ export class WorkflowExecutor extends BaseService {
       throw new Error(`for-each step '${stepId}' should have been expanded before execution`);
     }
 
-    const expressionCtx = buildExpressionContext(active.execution, this.activeExecutions, stepId);
-    const resolvedInputs: Record<string, unknown> = { ...expressionCtx };
     const result = await this.stepRunner.run({
       executionId,
       workflowId: active.workflow.id,
       stepId,
       stepType: step.type,
       stepDefinition: step,
-      resolvedInputs,
+      resolvedInputs: {},
     });
 
     if (result.status === 'failed') {

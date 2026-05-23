@@ -132,13 +132,6 @@ export class CronTriggerEvaluator {
     this.initialized = false;
   }
 
-  /**
-   * Returns the number of currently active cron jobs.
-   *
-   * Useful for testing lifecycle correctness — jobs should be non-zero after
-   * init with cron-triggered workflows and zero after destroy.
-   * @returns Count of active cron job entries
-   */
   public activeJobCount(): number {
     return this.jobs.size;
   }
