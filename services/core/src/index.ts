@@ -213,6 +213,7 @@ export {
   sessionStoragePackage,
   SessionStorageToken,
   SessionToken,
+  SubagentServiceToken,
   toolApprovalPackage,
   ToolApprovalToken,
   toolRegistryPackage,
@@ -222,6 +223,17 @@ export {
   workflowBlockRegistryPackage,
   WorkflowBlockRegistryToken,
 } from './framework-packages.js';
+export {
+  SubagentManager,
+  SubagentService,
+  subagentServicePackage,
+  type AwaitResult,
+  type InputResolver,
+  type InternalPendingRequest,
+  type SpawnOptions,
+  type TrackedSubagent,
+  type TrackOptions,
+} from './subagent/index.js';
 export { FrameworkServicesCoreNamespaces } from './namespace-catalog.js';
 export {
   AdapterIdentityRegistry,

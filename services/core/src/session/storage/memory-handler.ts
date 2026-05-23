@@ -101,6 +101,7 @@ function applyListFilters(sessions: IMakaioSession[], filters: SessionListFilter
 function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayload): void {
   assignDefinedSessionField(session, 'status', update.status);
   assignDefinedSessionField(session, 'parentSessionId', update.parentSessionId);
+  assignDefinedSessionField(session, 'contextInheritance', update.contextInheritance);
   assignDefinedSessionField(session, 'rootSessionId', update.rootSessionId);
   assignDefinedSessionField(session, 'forkPointMessageId', update.forkPointMessageId);
   assignDefinedSessionField(session, 'branchKind', update.branchKind);

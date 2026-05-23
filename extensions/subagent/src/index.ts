@@ -25,12 +25,4 @@ export const subagentPackage: MakaioNodeExtension<IMakaioBus> = {
 export default subagentPackage;
 
 export { createParentSubagentToolset, createChildSubagentToolset } from './toolset.js';
-export { SubagentManager, type TrackOptions } from './manager/index.js';
-export type {
-  InputResolver,
-  InternalPendingRequest,
-  TrackedSubagent,
-  InputResponse,
-  SpawnOptions,
-  AwaitResult,
-} from './types.js';
+export type { InputResponse } from './types.js';

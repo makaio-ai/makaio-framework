@@ -57,7 +57,7 @@ export async function resolveModelCapabilities(
 
 /**
  * Resolves the effective execution target for a session.
- * Priority: explicit executionTargetId → workstream default → system default (local).
+ * Priority: explicit executionTargetId → system default (local).
  * @param bus - Makaio bus instance
  * @param params - Resolution parameters from session context
  * @returns Resolved execution target
@@ -66,8 +66,6 @@ export async function resolveExecutionTarget(
   bus: IMakaioBus,
   params: {
     executionTargetId?: string;
-    workstreamId?: string;
-    projectId?: string;
   },
 ): Promise<ExecutionTarget> {
   const { executionTarget } = await bus.request(ExecutionTargetSubjects.resolve, params);

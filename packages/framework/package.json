@@ -187,6 +187,10 @@
       "types": "./dist/services/session/storage/namespace.d.mts",
       "default": "./dist/services/session/storage/namespace.mjs"
     },
+    "./services/subagent": {
+      "types": "./dist/services/subagent/index.d.mts",
+      "default": "./dist/services/subagent/index.mjs"
+    },
     "./services/tool-approval": {
       "types": "./dist/services/tool-approval/index.d.mts",
       "default": "./dist/services/tool-approval/index.mjs"

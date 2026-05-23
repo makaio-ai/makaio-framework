@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { BranchKindSchema, ImportStatusSchema } from './primitives.js';
+import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionAgentSchema } from './agent.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
@@ -33,6 +33,13 @@ export const MakaioSessionSchema = z.object({
   leadAgentId: z.string().optional(),
   /** Parent session ID (for forked sessions). Undefined for root sessions. */
   parentSessionId: z.string().optional(),
+  /**
+   * Explicit context inheritance policy for child sessions.
+   *
+   * This is intentionally separate from `parentSessionId`: lineage records the
+   * session graph, while this field controls prompt-history inheritance.
+   */
+  contextInheritance: SessionContextInheritanceSchema.optional(),
   /**
    * Root session ID for fork chains.
    * Denormalized for efficient "find all sessions in family" queries.

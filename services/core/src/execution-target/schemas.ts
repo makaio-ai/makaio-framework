@@ -103,8 +103,6 @@ export type ExecutionTargetListQuery = z.infer<typeof ExecutionTargetListQuerySc
 /** Resolution request for finding the effective execution target. */
 export const ExecutionTargetResolveRequestSchema = z.object({
   executionTargetId: z.string().optional(),
-  workstreamId: z.string().optional(),
-  projectId: z.string().optional(),
 });
 export type ExecutionTargetResolveRequest = z.infer<typeof ExecutionTargetResolveRequestSchema>;
 
