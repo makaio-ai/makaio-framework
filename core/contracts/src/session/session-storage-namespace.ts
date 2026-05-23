@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createContractStorageNamespace } from '../storage-namespace-definition.js';
 import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
-import { BranchKindSchema, ImportStatusSchema } from './schemas/primitives.js';
+import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './schemas/primitives.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
 import { SessionPreviewDataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
@@ -75,6 +75,7 @@ const SessionStorageUpdateRequestPayloadSchema = z.object({
   sessionId: z.string(),
   status: z.enum(['active', 'closed', 'archived', 'discovered']).optional(),
   parentSessionId: z.string().optional(),
+  contextInheritance: SessionContextInheritanceSchema.optional(),
   rootSessionId: z.string().optional(),
   forkPointMessageId: z.string().optional(),
   branchKind: BranchKindSchema.optional(),

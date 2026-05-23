@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
 import { SubagentErrorCode, SubagentSubjects, type SpawnSubagentRpcRequest } from '@makaio/contracts';
-import { spawnSubagentTool, SpawnSubagentInputSchema } from '../tools/parent/index.js';
+import { spawnSubagentTool } from '../tools/parent/index.js';
 import { spawnInput, createMockBus, createParentContext } from './test-helpers.js';
 
 describe('spawn_subagent tool', () => {
@@ -154,26 +154,5 @@ describe('spawn_subagent tool', () => {
       expect(result.error.code).toBe(SubagentErrorCode.INVALID_STATE);
       expect(result.error.message).toContain('Bus not available');
     }
-  });
-});
-
-describe('SpawnSubagentInputSchema - workstreamId field', () => {
-  it('accepts workstreamId when provided', () => {
-    const parsed = SpawnSubagentInputSchema.parse({
-      task: 'Test task',
-      workstreamId: 'ws-123',
-    });
-
-    expect(parsed.workstreamId).toBe('ws-123');
-  });
-
-  it('sets workstreamId to undefined when not provided', () => {
-    const parsed = SpawnSubagentInputSchema.parse({ task: 'Test task' });
-
-    expect(parsed.workstreamId).toBeUndefined();
-  });
-
-  it('rejects empty workstreamId', () => {
-    expect(() => SpawnSubagentInputSchema.parse({ task: 'Test task', workstreamId: '' })).toThrow();
   });
 });

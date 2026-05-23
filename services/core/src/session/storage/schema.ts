@@ -53,6 +53,14 @@ export const sessions = sqliteTable(
     parentSessionId: text('parent_session_id'),
 
     /**
+     * Controls whether a child session inherits parent conversation history.
+     * Null preserves legacy behavior for existing sessions.
+     */
+    contextInheritance: text('context_inheritance', {
+      enum: ['parent-history', 'none'],
+    }),
+
+    /**
      * Root session ID for fork chains.
      * Denormalized for efficient "find all sessions in family" queries.
      * Null for root sessions (they ARE the root).
@@ -229,6 +237,10 @@ export const sessions = sqliteTable(
     check(
       'sessions_import_status_check',
       sql`${table.importStatus} IS NULL OR ${table.importStatus} IN ('discovered', 'imported', 'tracking')`,
+    ),
+    check(
+      'sessions_context_inheritance_check',
+      sql`${table.contextInheritance} IS NULL OR ${table.contextInheritance} IN ('parent-history', 'none')`,
     ),
   ],
 );

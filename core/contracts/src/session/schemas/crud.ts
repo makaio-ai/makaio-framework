@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { BranchKindSchema } from './primitives.js';
+import { BranchKindSchema, SessionContextInheritanceSchema } from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionSchema, SessionWithPreviewSchema } from './session.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
@@ -134,6 +134,8 @@ export const CrudSchemas = {
         sessionId: z.string().optional(),
         /** Parent session ID (for forked sessions) */
         parentSessionId: z.string().optional(),
+        /** Explicit parent-history inheritance policy for child sessions. */
+        contextInheritance: SessionContextInheritanceSchema.optional(),
         /** Message ID where this fork diverges from parent */
         forkPointMessageId: z.string().optional(),
         /** Type of branch this session represents */

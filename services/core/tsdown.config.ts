@@ -24,6 +24,7 @@ export default defineConfig({
     './src/session/storage/schema.ts',
     './src/session/testing/index.ts',
     './src/session/testing/orchestrator-shared.ts',
+    './src/subagent/index.ts',
     './src/settings/index.ts',
     './src/settings/namespace.ts',
     './src/settings/storage/index.ts',

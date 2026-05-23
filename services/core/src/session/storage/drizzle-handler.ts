@@ -68,6 +68,7 @@ function toDbValues(session: IMakaioSession) {
     status: session.status,
     leadAgentId: toNullableDbValue(session.leadAgentId),
     parentSessionId: toNullableDbValue(session.parentSessionId),
+    contextInheritance: toNullableDbValue(session.contextInheritance),
     rootSessionId: toNullableDbValue(session.rootSessionId),
     forkPointMessageId: toNullableDbValue(session.forkPointMessageId),
     branchKind: toNullableDbValue(session.branchKind),
@@ -148,6 +149,7 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload): SessionUpdateF
 
   assignDefinedField(updateFields, 'status', payload.status);
   assignDefinedField(updateFields, 'parentSessionId', payload.parentSessionId);
+  assignDefinedField(updateFields, 'contextInheritance', payload.contextInheritance);
   assignDefinedField(updateFields, 'rootSessionId', payload.rootSessionId);
   assignDefinedField(updateFields, 'forkPointMessageId', payload.forkPointMessageId);
   assignDefinedField(updateFields, 'branchKind', payload.branchKind);

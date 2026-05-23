@@ -23,6 +23,15 @@ export const BranchKindSchema = z.enum(['fork', 'branch', 'subagent', 'compress'
 export type BranchKind = z.infer<typeof BranchKindSchema>;
 
 /**
+ * Controls whether a child session receives parent conversation history on its first turn.
+ *
+ * - `parent-history`: assemble projected parent history through the fork context path.
+ * - `none`: keep the child context clean while preserving parent-child lineage.
+ */
+export const SessionContextInheritanceSchema = z.enum(['parent-history', 'none']);
+export type SessionContextInheritance = z.infer<typeof SessionContextInheritanceSchema>;
+
+/**
  * Import-specific lifecycle status.
  * - 'discovered': Found in logs, not fully imported yet
  * - 'imported': All messages imported successfully

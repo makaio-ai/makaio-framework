@@ -1,7 +1,7 @@
 import type { SubagentConstraints, SubagentStatus, SubagentConfig } from '@makaio/contracts';
 import { SubagentError, SubagentErrorCode } from '@makaio/contracts';
 import { RingBuffer } from '../utils/ring-buffer.js';
-import type { TrackedSubagent, InternalPendingRequest, AwaitResult } from '../types.js';
+import type { TrackedSubagent, InternalPendingRequest, AwaitResult } from './types.js';
 
 /** Terminal states where subagent is no longer active */
 const TERMINAL_STATES: SubagentStatus[] = ['completed', 'failed', 'cancelled'];

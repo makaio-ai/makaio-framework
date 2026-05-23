@@ -14,6 +14,10 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       status TEXT NOT NULL CHECK (status IN ('active', 'closed', 'archived', 'discovered')),
       lead_agent_id TEXT,
       parent_session_id TEXT,
+      context_inheritance TEXT CHECK (
+        context_inheritance IS NULL
+        OR context_inheritance IN ('parent-history', 'none')
+      ),
       root_session_id TEXT,
       fork_point_message_id TEXT,
       branch_kind TEXT CHECK (

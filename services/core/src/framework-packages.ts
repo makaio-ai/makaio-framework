@@ -31,6 +31,7 @@ import {
 import { sessionClientAccountLinkingPackage } from './session/client-account-linking/package.js';
 import { frameworkShellWindowPackage } from './framework-shell-window-package.js';
 import { harnessPackage } from './harness/package.js';
+import { subagentServicePackage, SubagentServiceToken } from './subagent/package.js';
 
 /** Token for the session storage package. */
 export const SessionStorageToken = extensionToken<never>('session-storage');
@@ -52,6 +53,8 @@ export const CapabilityToken = extensionToken<CapabilityService>('capability');
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
 /** Token for the workflow block registry service. */
 export const WorkflowBlockRegistryToken = extensionToken<WorkflowBlockRegistry>('workflow-block-registry');
+/** Token for the framework subagent orchestration service. */
+export { SubagentServiceToken };
 
 /** Package that registers framework session storage handlers. */
 export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
@@ -201,6 +204,7 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   sessionClientAccountLinkingPackage,
   sessionPackage,
   sessionOrchestratorPackage,
+  subagentServicePackage,
   toolRegistryPackage,
   toolApprovalPackage,
   trayMenuPackage,

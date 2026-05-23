@@ -29,8 +29,13 @@ export async function assembleForkContext(
   originalContext?: SessionContext,
   isNewTurn?: boolean,
 ): Promise<SessionContext | undefined> {
-  // Skip if not a fork session or context already has messageHistory
-  if (!session.parentSessionId || originalContext?.messageHistory) {
+  const shouldInheritParentHistory =
+    session.parentSessionId !== undefined &&
+    (session.contextInheritance === 'parent-history' ||
+      (session.contextInheritance === undefined && session.branchKind !== 'subagent'));
+
+  // Skip if this child does not inherit parent history or context already has messageHistory.
+  if (!shouldInheritParentHistory || originalContext?.messageHistory) {
     return originalContext;
   }
 

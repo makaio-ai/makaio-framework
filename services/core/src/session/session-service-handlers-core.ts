@@ -49,12 +49,9 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
 /**
  * Handle session creation requests.
  *
- * Creates a new session with a unique ID and stores it. Accepts only
- * framework-level fields: `sessionId`, `title`, `originWindowId`.
- * Host fields (`parentSessionId`, `forkPointMessageId`, `branchKind`,
- * `forkTransforms`, `targetWorkingDirectory`, `spawningToolCallId`) are handled
- * by a host-side priority-100 interceptor that enriches the payload before
- * this handler runs.
+ * Creates a new session with a unique ID and stores framework-level session
+ * graph fields. Host-specific scope fields are handled by host-side subject
+ * extensions or interceptors before this handler runs.
  *
  * The `ifAbsent` flag on storage set makes creation idempotent when a
  * `sessionId` is provided — if the session already exists the handler
@@ -66,7 +63,19 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
   const { bus } = deps;
 
   return bus.on(SessionSubjects.create, async (ctx) => {
-    const { sessionId: providedSessionId, title, originWindowId } = ctx.payload;
+    const {
+      sessionId: providedSessionId,
+      parentSessionId,
+      contextInheritance,
+      forkPointMessageId,
+      branchKind,
+      forkTransforms,
+      title,
+      targetWorkingDirectory,
+      executionTargetId,
+      spawningToolCallId,
+      originWindowId,
+    } = ctx.payload;
     const sessionId = providedSessionId ?? crypto.randomUUID();
     const createdAt = Date.now();
     const session: IMakaioSession = {
@@ -76,6 +85,14 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       agents: [],
       status: 'active',
       title,
+      parentSessionId,
+      contextInheritance,
+      forkPointMessageId,
+      branchKind,
+      forkTransforms,
+      targetWorkingDirectory,
+      executionTargetId,
+      spawningToolCallId,
     };
 
     if (providedSessionId) {
@@ -101,8 +118,8 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
     await bus.emit(SessionSubjects.created, {
       sessionId,
       createdAt: session.createdAt,
-      parentSessionId: null,
-      branchKind: null,
+      parentSessionId: parentSessionId ?? null,
+      branchKind: branchKind ?? null,
       originWindowId: originWindowId ?? 'server',
     });
 

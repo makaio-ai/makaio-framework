@@ -62,8 +62,6 @@ export const SubagentConfigSchema = z.object({
   responseSchema: z.record(z.string(), z.unknown()).optional(),
   /** Execution target override. Resolved via ExecutionTargetSubjects.resolve if omitted. */
   executionTargetId: z.string().optional(),
-  /** Workstream to assign the child session to. Enables team-specific guide injection. */
-  workstreamId: z.string().min(1).optional(),
 });
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
 
@@ -304,8 +302,6 @@ export const SubagentSummarySchema = z.object({
   task: z.string(),
   /** Current status */
   status: SubagentStatusSchema,
-  /** Workstream the subagent is assigned to, if any */
-  workstreamId: z.string().optional(),
 });
 export type SubagentSummary = z.infer<typeof SubagentSummarySchema>;
 

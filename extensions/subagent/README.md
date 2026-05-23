@@ -69,7 +69,6 @@ Spawns a new subagent to perform a delegated task.
   maxDepth?: number;                         // Max nesting depth
   responseSchema?: Record<string, unknown>;  // JSON Schema for structured output
   executionTargetId?: string;                // Execution target override
-  workstreamId?: string;                     // Host-defined workstream assignment
 }
 
 // Output
@@ -238,9 +237,6 @@ Default constraints from `@makaio/contracts`:
 
 `hung` is non-terminal. `check_subagent` reports it so the coordinator can decide whether to kill, retry, or abort;
 `await_subagent` does not resolve just because a subagent is marked hung.
-
-`workstreamId` is an opaque host-defined field. The tool schema validates that it is a non-empty
-string when supplied, but ownership of workstream semantics belongs to the host RPC handlers.
 
 ## File Index
 

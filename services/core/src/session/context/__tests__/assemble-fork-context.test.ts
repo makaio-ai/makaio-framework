@@ -42,6 +42,23 @@ describe('assembleForkContext', () => {
       expect(result).toBe(originalContext); // Same reference, unchanged
     });
 
+    it('should return original context when parent-history has no parent session', async () => {
+      const session: IMakaioSession = {
+        sessionId: 'session-1',
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        status: 'active',
+        agents: [],
+        contextInheritance: 'parent-history',
+      };
+
+      const originalContext: SessionContext = {};
+
+      const result = await assembleForkContext(MakaioBus, session, 'session-1', originalContext, true);
+
+      expect(result).toBe(originalContext);
+    });
+
     it('should return original context if messageHistory already exists', async () => {
       const session: IMakaioSession = {
         sessionId: 'session-1',
@@ -138,6 +155,36 @@ describe('assembleForkContext', () => {
       const result = await assembleForkContext(MakaioBus, forkSession, 'fork', originalContext);
 
       expect(result).toBe(originalContext);
+    });
+
+    it('does not assemble parent history when contextInheritance is none', async () => {
+      const forkSession = setupFirstTurnFork({
+        sessionId: 'child',
+        branchKind: 'subagent',
+        contextInheritance: 'none',
+      });
+
+      const result = await assembleForkContext(MakaioBus, forkSession, 'child', undefined, true);
+
+      expect(result).toBeUndefined();
+    });
+
+    it('assembles parent history when contextInheritance is parent-history', async () => {
+      const forkSession = setupFirstTurnFork({
+        sessionId: 'child',
+        branchKind: 'subagent',
+        contextInheritance: 'parent-history',
+      });
+
+      const result = await assembleForkContext(MakaioBus, forkSession, 'child', undefined, true);
+
+      expect(result?.messageHistory).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: 'user',
+          }),
+        ]),
+      );
     });
   });
 
