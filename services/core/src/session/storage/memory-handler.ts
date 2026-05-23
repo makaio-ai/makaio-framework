@@ -12,6 +12,7 @@ import {
   assertSessionClientAccountStateIsConsistent,
   emitSessionClientAccountChangedIfNeeded,
 } from './client-account-change-events.js';
+import { registerMemorySessionImportHandlers } from './memory-import-handlers.js';
 
 // NOTE: do NOT change without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 145 }] */
@@ -114,7 +115,11 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);
-  assignNullableSessionField(session, 'spawningToolCallId', update.spawningToolCallId);
+  if (update.spawningToolCallId === null) {
+    session.spawningToolCallId = undefined;
+  } else if (update.spawningToolCallId !== undefined && session.spawningToolCallId === undefined) {
+    session.spawningToolCallId = update.spawningToolCallId;
+  }
 }
 
 /**
@@ -286,6 +291,7 @@ export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
 
   // storage:session.getByAdapterSessionId
   unsubs.push(registerGetByAdapterSessionIdHandler(bus, store));
+  unsubs.push(...registerMemorySessionImportHandlers({ bus, store, populateAgents, cloneSession }));
 
   return () => unsubs.forEach((fn) => fn());
 }
@@ -298,12 +304,16 @@ export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
  */
 function registerGetByAdapterSessionIdHandler(bus: IMakaioBus, store: Map<string, IMakaioSession>): () => void {
   return bus.on(SessionStorageSubjects.getByAdapterSessionId, async (ctx) => {
-    const { adapterSessionId } = ctx.payload;
-    const session = Array.from(store.values()).find(
-      (s) => s.adapterSessionId !== undefined && s.adapterSessionId === adapterSessionId,
+    const { adapterSessionId, source } = ctx.payload;
+    const matches = Array.from(store.values()).filter(
+      (session) =>
+        session.adapterSessionId !== undefined &&
+        session.adapterSessionId === adapterSessionId &&
+        (source === undefined || session.source === source),
     );
 
-    if (!session) {
+    const session = matches[0];
+    if (matches.length !== 1 || session === undefined) {
       ctx.setResult({ session: null });
       return;
     }

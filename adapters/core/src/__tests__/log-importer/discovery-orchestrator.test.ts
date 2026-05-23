@@ -1,15 +1,17 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
-import type { AdapterSessionRecord } from '@makaio/services-core/session';
-import { AdapterSessionStorageSubjects } from '@makaio/services-core/session';
+import { AdapterSubjects, AgentSubjects, SessionStorageSubjects, MakaioSessionSchema } from '@makaio/contracts';
 import type { LogImporter, DiscoveryMetadata } from '../../log-importer/types.js';
 import { DiscoveryOrchestrator } from '../../log-importer/discovery-orchestrator.js';
 import { ImportCursorStorageSubjects } from '../../log-importer/cursor-storage.js';
 import type { LogOrchestratorConfig, ParseFileResult } from '../../log-importer/base-orchestrator.js';
+
+/** Data shape for a session record used in bus subject payloads. */
+type SessionRecord = z.infer<typeof MakaioSessionSchema>;
 
 interface TestRecord {
   id: string;
@@ -58,9 +60,9 @@ function registerCursorSetSuccessHandler(): void {
   );
 }
 
-function registerAdapterSessionLookup(session: AdapterSessionRecord, filePath?: string): void {
+function registerSessionLookupByLogFilePath(session: SessionRecord, filePath?: string): void {
   registerCleanup(
-    MakaioBus.on(AdapterSessionStorageSubjects.getByLogFilePath, (ctx) => {
+    MakaioBus.on(SessionStorageSubjects.getByLogFilePath, (ctx) => {
       if (filePath !== undefined) {
         expect(ctx.payload.logFilePath).toBe(filePath);
       }
@@ -70,12 +72,12 @@ function registerAdapterSessionLookup(session: AdapterSessionRecord, filePath?: 
   );
 }
 
-function registerUpdateStatusHandler(
-  statusUpdates: Array<{ adapterSessionId: string; status: AdapterSessionRecord['status'] }>,
+function registerUpdateImportStatusHandler(
+  statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }>,
   success = true,
 ): void {
   registerCleanup(
-    MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
+    MakaioBus.on(SessionStorageSubjects.updateImportStatus, (ctx) => {
       statusUpdates.push(ctx.payload);
       ctx.setResult({ success });
     }),
@@ -91,23 +93,25 @@ async function withTempDir(prefix: string, run: (tempDir: string) => Promise<voi
   }
 }
 
-function createAdapterSession(
-  overrides: Partial<AdapterSessionRecord> & Pick<AdapterSessionRecord, 'adapterSessionId' | 'status'>,
-): AdapterSessionRecord {
+function createImportedSession(overrides: {
+  adapterSessionId: string;
+  importStatus: NonNullable<SessionRecord['importStatus']>;
+  sessionId?: string;
+  logFilePath?: string | null;
+  source?: string;
+}): SessionRecord {
   const now = Date.now();
   return {
-    adapterSessionId: overrides.adapterSessionId,
-    adapterName: overrides.adapterName ?? 'claude-code',
-    parentAdapterSessionId: overrides.parentAdapterSessionId ?? null,
-    forkPointMessageId: overrides.forkPointMessageId ?? null,
     sessionId: overrides.sessionId ?? 'session-1',
-    model: overrides.model ?? null,
-    cwd: overrides.cwd ?? null,
-    logFilePath: overrides.logFilePath ?? null,
-    discoveredAt: overrides.discoveredAt ?? now,
-    startedAt: overrides.startedAt ?? now,
-    status: overrides.status,
-    kind: overrides.kind ?? 'root',
+    adapterSessionId: overrides.adapterSessionId,
+    createdAt: now,
+    lastActivityAt: now,
+    agents: [],
+    status: 'discovered',
+    isImported: true,
+    importStatus: overrides.importStatus,
+    logFilePath: overrides.logFilePath ?? undefined,
+    source: overrides.source ?? 'claude-code',
   };
 }
 
@@ -277,7 +281,7 @@ describe('DiscoveryOrchestrator', () => {
 
     const filePath = '/tmp/imported-session.jsonl';
     const lastModified = new Date('2026-03-05T10:00:00.000Z');
-    const statusUpdates: Array<{ adapterSessionId: string; status: AdapterSessionRecord['status'] }> = [];
+    const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
 
     registerCursorGetHandler({
       filePath,
@@ -286,15 +290,15 @@ describe('DiscoveryOrchestrator', () => {
       sessionContext: createSessionContext(),
     });
     registerCursorSetSuccessHandler();
-    registerAdapterSessionLookup(
-      createAdapterSession({
+    registerSessionLookupByLogFilePath(
+      createImportedSession({
         adapterSessionId: 'adapter-session-1',
-        status: 'imported',
+        importStatus: 'imported',
         logFilePath: filePath,
       }),
       filePath,
     );
-    registerUpdateStatusHandler(statusUpdates);
+    registerUpdateImportStatusHandler(statusUpdates);
 
     await orchestrator.handleChange({
       filePath,
@@ -304,7 +308,7 @@ describe('DiscoveryOrchestrator', () => {
     await orchestrator.idle();
 
     expect(processRecords).toHaveBeenCalledTimes(1);
-    expect(statusUpdates).toEqual([{ adapterSessionId: 'adapter-session-1', status: 'tracking' }]);
+    expect(statusUpdates).toEqual([{ sessionId: 'session-1', importStatus: 'tracking' }]);
   });
 
   it('preserves the base skip-file guard for discovery overrides', async () => {
@@ -352,7 +356,7 @@ describe('DiscoveryOrchestrator', () => {
       registerCleanup(() => orchestrator.dispose());
 
       registerCleanup(
-        MakaioBus.on(AdapterSessionStorageSubjects.list, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
           listCalls += 1;
           ctx.setResult({ sessions: [] });
         }),
@@ -528,7 +532,7 @@ describe('DiscoveryOrchestrator', () => {
       }),
     );
     registerCleanup(
-      MakaioBus.on(AdapterSessionStorageSubjects.getByLogFilePath, (ctx) => {
+      MakaioBus.on(SessionStorageSubjects.getByLogFilePath, (ctx) => {
         ctx.setResult({ session: null });
       }),
     );
@@ -571,12 +575,13 @@ describe('DiscoveryOrchestrator', () => {
       const filePath = path.join(tempDir, 'tracked.jsonl');
       fs.writeFileSync(filePath, '{"id":"seed","content":"hello"}\n', 'utf8');
 
-      const trackingSession = createAdapterSession({
+      const trackingSession = createImportedSession({
         adapterSessionId: 'adapter-session-2',
-        status: 'tracking',
+        importStatus: 'tracking',
         logFilePath: filePath,
+        sessionId: 'session-2',
       });
-      const statusUpdates: Array<{ adapterSessionId: string; status: AdapterSessionRecord['status'] }> = [];
+      const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
 
       const orchestrator = new TestDiscoveryOrchestrator(
         {
@@ -600,12 +605,12 @@ describe('DiscoveryOrchestrator', () => {
         }),
       );
       registerCleanup(
-        MakaioBus.on(AdapterSessionStorageSubjects.list, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
           ctx.setResult({ sessions: [trackingSession] });
         }),
       );
-      registerAdapterSessionLookup(trackingSession);
-      registerUpdateStatusHandler(statusUpdates);
+      registerSessionLookupByLogFilePath(trackingSession);
+      registerUpdateImportStatusHandler(statusUpdates);
 
       orchestrator.seedFromCursors([
         {
@@ -621,10 +626,126 @@ describe('DiscoveryOrchestrator', () => {
       await orchestrator.runPollCycle(new Set([filePath]));
 
       expect(statusUpdates).toContainEqual({
-        adapterSessionId: 'adapter-session-2',
-        status: 'imported',
+        sessionId: 'session-2',
+        importStatus: 'imported',
       });
     });
+  });
+
+  it('resets persisted tracking sessions when watcher state cannot be restored', async () => {
+    const trackingSession = createImportedSession({
+      adapterSessionId: 'adapter-session-missing-watch-state',
+      importStatus: 'tracking',
+      logFilePath: '/tmp/not-seeded.jsonl',
+      sessionId: 'session-missing-watch-state',
+    });
+    const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
+    const orchestrator = new TestDiscoveryOrchestrator(
+      {
+        enabled: true,
+        adapterId: 'adapter-1',
+        adapterName: 'claude-code',
+      },
+      createMockImporter(),
+    );
+    registerCleanup(() => orchestrator.dispose());
+
+    registerCleanup(
+      MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
+        expect(ctx.payload).toEqual({ source: 'claude-code', importStatus: 'tracking' });
+        ctx.setResult({ sessions: [trackingSession] });
+      }),
+    );
+    registerUpdateImportStatusHandler(statusUpdates);
+
+    await orchestrator.restoreTrackingState();
+
+    expect(statusUpdates).toEqual([
+      {
+        sessionId: 'session-missing-watch-state',
+        importStatus: 'imported',
+      },
+    ]);
+    expect(orchestrator.isTrackingFile('/tmp/not-seeded.jsonl')).toBe(false);
+  });
+
+  it('resets persisted tracking sessions that no longer have a log file path', async () => {
+    const trackingSession = createImportedSession({
+      adapterSessionId: 'adapter-session-no-log-path',
+      importStatus: 'tracking',
+      logFilePath: null,
+      sessionId: 'session-no-log-path',
+    });
+    const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
+    const orchestrator = new TestDiscoveryOrchestrator(
+      {
+        enabled: true,
+        adapterId: 'adapter-1',
+        adapterName: 'claude-code',
+      },
+      createMockImporter(),
+    );
+    registerCleanup(() => orchestrator.dispose());
+
+    registerCleanup(
+      MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
+        expect(ctx.payload).toEqual({ source: 'claude-code', importStatus: 'tracking' });
+        ctx.setResult({ sessions: [trackingSession] });
+      }),
+    );
+    registerUpdateImportStatusHandler(statusUpdates);
+
+    await orchestrator.restoreTrackingState();
+
+    expect(statusUpdates).toEqual([
+      {
+        sessionId: 'session-no-log-path',
+        importStatus: 'imported',
+      },
+    ]);
+  });
+
+  it('ignores modified imported files that belong to another source', async () => {
+    const processRecords = vi.fn(() => []);
+    const orchestrator = new TestDiscoveryOrchestrator(
+      {
+        enabled: true,
+        adapterId: 'adapter-1',
+        adapterName: 'claude-code',
+      },
+      createMockImporter({ processRecords }),
+    );
+    registerCleanup(() => orchestrator.dispose());
+
+    const filePath = '/tmp/other-source-session.jsonl';
+    const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
+
+    registerCursorGetHandler({
+      bytesRead: 10,
+      lastModified: new Date('2026-03-05T10:00:00.000Z').toISOString(),
+      sessionContext: createSessionContext({ adapterSessionId: 'adapter-session-other-source' }),
+    });
+    registerSessionLookupByLogFilePath(
+      createImportedSession({
+        adapterSessionId: 'adapter-session-other-source',
+        importStatus: 'imported',
+        logFilePath: filePath,
+        source: 'codex',
+      }),
+      filePath,
+    );
+    registerUpdateImportStatusHandler(statusUpdates);
+
+    await orchestrator.handleChange({
+      filePath,
+      changeType: 'modified',
+      stat: { size: 128, mtime: new Date('2026-03-05T10:00:05.000Z') },
+    });
+    await orchestrator.idle();
+
+    expect(processRecords).not.toHaveBeenCalled();
+    expect(statusUpdates).toEqual([]);
+    expect(orchestrator.isTrackingFile(filePath)).toBe(false);
   });
 
   it('does not mark a file as tracking when incremental import fails', async () => {
@@ -639,22 +760,22 @@ describe('DiscoveryOrchestrator', () => {
     registerCleanup(() => orchestrator.dispose());
 
     const filePath = '/tmp/failing-imported-session.jsonl';
-    const statusUpdates: Array<{ adapterSessionId: string; status: AdapterSessionRecord['status'] }> = [];
+    const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
 
     registerCursorGetHandler({
       bytesRead: 10,
       lastModified: new Date('2026-03-05T10:00:00.000Z').toISOString(),
       sessionContext: createSessionContext(),
     });
-    registerAdapterSessionLookup(
-      createAdapterSession({
+    registerSessionLookupByLogFilePath(
+      createImportedSession({
         adapterSessionId: 'adapter-session-1',
-        status: 'imported',
+        importStatus: 'imported',
         logFilePath: filePath,
       }),
       filePath,
     );
-    registerUpdateStatusHandler(statusUpdates);
+    registerUpdateImportStatusHandler(statusUpdates);
 
     try {
       await expect(
@@ -692,16 +813,16 @@ describe('DiscoveryOrchestrator', () => {
       sessionContext: createSessionContext({ adapterSessionId: 'adapter-session-3' }),
     });
     registerCursorSetSuccessHandler();
-    registerAdapterSessionLookup(
-      createAdapterSession({
+    registerSessionLookupByLogFilePath(
+      createImportedSession({
         adapterSessionId: 'adapter-session-3',
-        status: 'imported',
+        importStatus: 'imported',
         logFilePath: filePath,
       }),
       filePath,
     );
     registerCleanup(
-      MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
+      MakaioBus.on(SessionStorageSubjects.updateImportStatus, (ctx) => {
         ctx.setResult({ success: false });
       }),
     );
@@ -726,10 +847,11 @@ describe('DiscoveryOrchestrator', () => {
       const filePath = path.join(tempDir, 'tracked-still-live.jsonl');
       fs.writeFileSync(filePath, '{"id":"seed","content":"hello"}\n', 'utf8');
 
-      const trackingSession = createAdapterSession({
+      const trackingSession = createImportedSession({
         adapterSessionId: 'adapter-session-4',
-        status: 'tracking',
+        importStatus: 'tracking',
         logFilePath: filePath,
+        sessionId: 'session-4',
       });
       const orchestrator = new TestDiscoveryOrchestrator(
         {
@@ -743,13 +865,13 @@ describe('DiscoveryOrchestrator', () => {
       registerCleanup(() => orchestrator.dispose());
 
       registerCleanup(
-        MakaioBus.on(AdapterSessionStorageSubjects.list, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
           ctx.setResult({ sessions: [trackingSession] });
         }),
       );
-      registerAdapterSessionLookup(trackingSession);
+      registerSessionLookupByLogFilePath(trackingSession);
       registerCleanup(
-        MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.updateImportStatus, (ctx) => {
           ctx.setResult({ success: false });
         }),
       );
@@ -776,12 +898,13 @@ describe('DiscoveryOrchestrator', () => {
       const filePath = path.join(tempDir, 'tracked-disappears.jsonl');
       fs.writeFileSync(filePath, '{"id":"seed","content":"hello"}\n', 'utf8');
 
-      const trackingSession = createAdapterSession({
+      const trackingSession = createImportedSession({
         adapterSessionId: 'adapter-session-5',
-        status: 'tracking',
+        importStatus: 'tracking',
         logFilePath: filePath,
+        sessionId: 'session-5',
       });
-      const statusUpdates: Array<{ adapterSessionId: string; status: AdapterSessionRecord['status'] }> = [];
+      const statusUpdates: Array<{ sessionId: string; importStatus: NonNullable<SessionRecord['importStatus']> }> = [];
 
       const orchestrator = new TestDiscoveryOrchestrator(
         {
@@ -795,12 +918,12 @@ describe('DiscoveryOrchestrator', () => {
       registerCleanup(() => orchestrator.dispose());
 
       registerCleanup(
-        MakaioBus.on(AdapterSessionStorageSubjects.list, (ctx) => {
+        MakaioBus.on(SessionStorageSubjects.listImported, (ctx) => {
           ctx.setResult({ sessions: [trackingSession] });
         }),
       );
-      registerAdapterSessionLookup(trackingSession, filePath);
-      registerUpdateStatusHandler(statusUpdates);
+      registerSessionLookupByLogFilePath(trackingSession, filePath);
+      registerUpdateImportStatusHandler(statusUpdates);
 
       orchestrator.seedFromCursors([
         {
@@ -817,8 +940,8 @@ describe('DiscoveryOrchestrator', () => {
       await orchestrator.runPollCycle(new Set());
 
       expect(statusUpdates).toContainEqual({
-        adapterSessionId: 'adapter-session-5',
-        status: 'imported',
+        sessionId: 'session-5',
+        importStatus: 'imported',
       });
       expect(orchestrator.isTrackingFile(filePath)).toBe(false);
     });

@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { sqliteTable, text, integer, index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
 
 /**
  * Sessions table schema.
@@ -179,18 +180,56 @@ export const sessions = sqliteTable(
      * Only set for subagent sessions. Null for root/fork sessions.
      */
     spawningToolCallId: text('spawning_tool_call_id'),
+
+    // ─── Import provenance fields ───────────────────────────────────────
+
+    /**
+     * Identifies the external tool that produced the imported logs.
+     * For live sessions this is null; for imports it identifies the source
+     * (e.g., 'claude-code', 'codex', 'opencode').
+     */
+    source: text('source'),
+
+    /**
+     * Parent session's external ID (soft reference for import lineage).
+     * May reference a session not yet imported — resolves when parent is imported.
+     * Null for root sessions or live sessions.
+     */
+    parentExternalSessionId: text('parent_external_session_id'),
+
+    /**
+     * Absolute path to the source log file on disk.
+     * Only set for imported sessions. Used for cursor resumption and deduplication.
+     */
+    logFilePath: text('log_file_path'),
+
+    /**
+     * Monotonic timestamp (ms) when this session was first discovered during import.
+     * Used for created-detection in upsert logic. Null for live sessions.
+     */
+    discoveredAt: integer('discovered_at'),
+
+    /**
+     * Import-specific lifecycle status. Null for live sessions.
+     * - 'discovered': Found in logs, not fully imported yet
+     * - 'imported': All messages imported successfully
+     * - 'tracking': Imported but source file is still actively being written to
+     */
+    importStatus: text('import_status', {
+      enum: ['discovered', 'imported', 'tracking'],
+    }),
   },
   (table) => [
-    /**
-     * Index for efficient adapter session ID lookups.
-     * Used when resolving native imports by external session ID.
-     */
+    uniqueIndex('uniq_sessions_source_adapter_session_id').on(table.source, table.adapterSessionId),
+    uniqueIndex('uniq_sessions_log_file_path').on(table.logFilePath),
     index('sessions_adapter_session_id_idx').on(table.adapterSessionId),
-    /**
-     * Index for efficient execution-target-based queries.
-     * Used when listing sessions filtered by execution target.
-     */
+    index('idx_sessions_source').on(table.source),
+    index('idx_sessions_import_status').on(table.importStatus),
     index('sessions_execution_target_id_idx').on(table.executionTargetId),
+    check(
+      'sessions_import_status_check',
+      sql`${table.importStatus} IS NULL OR ${table.importStatus} IN ('discovered', 'imported', 'tracking')`,
+    ),
   ],
 );
 

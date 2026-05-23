@@ -31,10 +31,10 @@ function registerAdapterStartHandler(): () => void {
 }
 
 /**
- * Minimal subagent service stub for standalone testing.
+ * Minimal subagent service stub for focused workflow executor tests.
  *
- * The monorepo's SubagentService is not available here. This stub provides
- * the minimum bus handler surface needed for the workflow executor tests:
+ * The full subagent runtime is not registered in this test setup. This stub
+ * provides the minimum bus handler surface needed for the workflow executor tests:
  * spawn → emit spawned, await → waits for completeTask, completeTask → resolves.
  * @param bus - The bus instance to register handlers on.
  */

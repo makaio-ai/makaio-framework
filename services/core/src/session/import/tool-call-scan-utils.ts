@@ -37,6 +37,14 @@ export interface ChildSessionPattern {
   pattern: RegExp;
 }
 
+/** Child session resolved to an external adapter session ID. */
+export interface ChildAdapterSession {
+  /** Makaio session ID for the child row. */
+  sessionId: string;
+  /** External adapter session ID stored on the child row. */
+  adapterSessionId: string;
+}
+
 /**
  * Escape special regex characters in a literal string.
  * @param value - Unescaped string
@@ -144,4 +152,34 @@ export function buildToolOutputIndex(
   }
 
   return index;
+}
+
+/**
+ * Build a child lookup that excludes ambiguous external adapter IDs.
+ *
+ * Imported sessions are identified by `(source, adapterSessionId)`, but tool
+ * output text only gives us the bare adapter session ID. When two candidate
+ * children share that bare ID, there is no sound 1:1 correlation to persist.
+ * @param children - Child rows paired with adapter session IDs
+ * @returns Map from unambiguous adapter session ID to Makaio session ID
+ */
+export function buildUnambiguousAdapterSessionIdMap(
+  children: readonly (ChildAdapterSession | null)[],
+): Map<string, string> {
+  const adapterToSessionId = new Map<string, string>();
+  const ambiguousAdapterSessionIds = new Set<string>();
+
+  for (const child of children) {
+    if (child === null || ambiguousAdapterSessionIds.has(child.adapterSessionId)) continue;
+
+    if (adapterToSessionId.has(child.adapterSessionId)) {
+      adapterToSessionId.delete(child.adapterSessionId);
+      ambiguousAdapterSessionIds.add(child.adapterSessionId);
+      continue;
+    }
+
+    adapterToSessionId.set(child.adapterSessionId, child.sessionId);
+  }
+
+  return adapterToSessionId;
 }

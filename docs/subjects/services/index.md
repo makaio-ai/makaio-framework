@@ -7,7 +7,7 @@ next: false
 
 # services
 
-32 namespaces, 184 subjects (29 events, 155 RPCs).
+31 namespaces, 176 subjects (29 events, 147 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
@@ -33,7 +33,6 @@ next: false
 | [`session-editor`](./session-editor.md) | bus | 1 | 0E / 1R |
 | [`settings`](./settings.md) | bus | 10 | 0E / 10R |
 | [`settings:worker`](./settings-worker.md) | bus | 5 | 0E / 5R |
-| [`storage:adapterSession`](./storage-adaptersession.md) | storage | 8 | 0E / 8R |
 | [`storage:agent`](./storage-agent.md) | storage | 8 | 0E / 8R |
 | [`storage:client`](./storage-client.md) | storage | 3 | 0E / 3R |
 | [`storage:contextRules`](./storage-contextrules.md) | storage | 4 | 0E / 4R |

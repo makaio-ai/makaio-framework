@@ -25,4 +25,3 @@ export { messageRouting } from './message-routing/schema.js';
 
 // Utility tables
 export { importCursors } from './import-cursors/schema.js';
-export { adapterSessions, type InsertAdapterSession, type SelectAdapterSession } from './adapter-sessions/index.js';

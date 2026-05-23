@@ -90,7 +90,6 @@
       "./src/session/messages/schema.ts",
       "./src/session/message-routing/schema.ts",
       "./src/session/import-cursors/schema.ts",
-      "./src/session/adapter-sessions/schema.ts",
       "./src/harness/storage/schema.ts"
     ]
   },

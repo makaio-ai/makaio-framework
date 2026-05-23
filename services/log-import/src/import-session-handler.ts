@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises';
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { LogImportSubjects } from './namespace.js';
-import { AdapterSessionStorageSubjects } from '@makaio/services-core/session';
+import { SessionStorageSubjects } from '@makaio/services-core/session';
 
 import { importFromFileContent } from './generic-import-handlers.js';
 import type { LogImporterRegistration } from './types.js';
@@ -20,7 +20,7 @@ import type { LogImporterRegistration } from './types.js';
  * Register the importSession handler.
  *
  * Responds to `log-import.importSession` by:
- * 1. Looking up the adapter session record to get `logFilePath`
+ * 1. Looking up the unified session row by adapter session ID to get `logFilePath`
  * 2. Reading the log file from disk
  * 3. Running the full import pipeline (parse → create session → store messages → activate)
  * 4. Returning `{ sessionId, messageCount }`
@@ -35,16 +35,23 @@ export function registerImportSessionHandler(
   return bus.on(LogImportSubjects.importSession, async (ctx) => {
     const { adapterSessionId, adapterName } = ctx.payload;
 
-    // Step 1: Look up the adapter session record to get logFilePath
-    const { session: adapterSession } = await bus.request(AdapterSessionStorageSubjects.get, { adapterSessionId });
+    // Step 1: Look up the source-scoped session row by its adapter session ID to get logFilePath
+    const { session } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId,
+      source: adapterName,
+    });
 
-    if (!adapterSession) {
-      throw new Error(`Adapter session not found: ${adapterSessionId}`);
+    if (!session) {
+      throw new Error(`Session not found for external ID: ${adapterSessionId}`);
     }
 
-    if (!adapterSession.logFilePath) {
+    if (session.source !== adapterName) {
+      throw new Error(`Session '${adapterSessionId}' belongs to adapter '${session.source}', not '${adapterName}'`);
+    }
+
+    if (!session.logFilePath) {
       throw new Error(
-        `No log file path recorded for adapter session '${adapterSessionId}'. ` +
+        `No log file path recorded for session with external ID '${adapterSessionId}'. ` +
           `Re-run a discovery scan to populate the file path.`,
       );
     }
@@ -59,7 +66,7 @@ export function registerImportSessionHandler(
     const isJsonl = logFilePattern.endsWith('.jsonl');
 
     // Step 3: Read the log file from disk
-    const content = await fs.readFile(adapterSession.logFilePath, 'utf8');
+    const content = await fs.readFile(session.logFilePath, 'utf8');
 
     // Step 4: Run the full import pipeline
     const { sessionId, messageCount } = await importFromFileContent({
@@ -69,8 +76,8 @@ export function registerImportSessionHandler(
       isJsonl,
       adapterName: registeredAdapterName,
       adapterId,
-      sourceFilePath: adapterSession.logFilePath,
-      persistedLogFilePath: adapterSession.logFilePath,
+      sourceFilePath: session.logFilePath,
+      persistedLogFilePath: session.logFilePath,
     });
 
     ctx.setResult({ sessionId, messageCount });

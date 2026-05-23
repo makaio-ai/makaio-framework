@@ -4,7 +4,7 @@
  * Verifies the production import path end-to-end:
  * - importer.processLogFile is called and its results are persisted
  * - MessageStorageSubjects.upsertByAdapterMessageId is called for each message payload
- * - AdapterSessionStorageSubjects.upsert receives the correct session metadata
+ * - SessionStorageSubjects.importUpsert receives the correct session metadata
  * - Zero message upserts occur when messagePayloads is empty
  * - Import cursor is written with sessionContext after a successful full import
  * - importSegmentTree derives startedAt from the first message timestamp (Path B)
@@ -18,9 +18,8 @@ import {
   type StorageMessagePayload,
 } from '@makaio/ai-adapters-core';
 import { getOpenCodeFixtureDir } from '@makaio/extension-opencode/testing';
-import { AdapterSubjects, type MakaioSessionEvent } from '@makaio/contracts';
+import { type MakaioSessionEvent } from '@makaio/contracts';
 import {
-  AdapterSessionStorageSubjects,
   MessageStorageSubjects,
   SessionEventStorageSubjects,
   SessionStorageSubjects,
@@ -32,13 +31,6 @@ import { createMockImporter } from './test-helpers.js';
 const OPENCODE_FIXTURE_DIR = getOpenCodeFixtureDir();
 
 const ADAPTER_NAME = 'plugin:opencode';
-
-/** Minimal adapter session upsert response shape. */
-interface AdapterSessionUpsertResponse {
-  adapterSessionId: string;
-  sessionId: string | null;
-  created: boolean;
-}
 
 /** Captured payload from a upsertByAdapterMessageId bus call. */
 interface CapturedMessageUpsert {
@@ -64,6 +56,15 @@ interface CapturedCursorSet {
   } | null;
 }
 
+/** Captured payload from SessionStorageSubjects.importUpsert bus calls. */
+type CapturedImportUpsert = Record<string, unknown>;
+
+/** Captured payload from SessionStorageSubjects.updateImportStatus bus calls. */
+interface CapturedImportStatus {
+  sessionId: string;
+  importStatus: string;
+}
+
 interface CapturedSessionUpdate {
   sessionId: string;
   status?: string;
@@ -73,7 +74,7 @@ describe('importFromFileContent (integration)', () => {
   const cleanups: Array<() => void> = [];
   const fixtureCleanups: Array<() => Promise<void>> = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     while (cleanups.length > 0) {
       cleanups.pop()?.();
     }
@@ -90,47 +91,32 @@ describe('importFromFileContent (integration)', () => {
    * to complete without errors. Returns the captured upsert payloads.
    */
   function registerStorageHandlers(): {
-    adapterSessionUpserts: Array<Record<string, unknown>>;
+    importUpserts: CapturedImportUpsert[];
     messageUpserts: CapturedMessageUpsert[];
-    adapterSessionStatuses: Array<{ adapterSessionId: string; status: string }>;
+    importStatusUpdates: CapturedImportStatus[];
     cursorSets: CapturedCursorSet[];
     sessionUpdates: CapturedSessionUpdate[];
     sessionEvents: MakaioSessionEvent[];
-    linkedEvents: Array<{ adapterSessionId: string; sessionId: string; replay?: boolean }>;
   } {
-    const adapterSessionUpserts: Array<Record<string, unknown>> = [];
+    const importUpserts: CapturedImportUpsert[] = [];
     const messageUpserts: CapturedMessageUpsert[] = [];
-    const adapterSessionStatuses: Array<{ adapterSessionId: string; status: string }> = [];
+    const importStatusUpdates: CapturedImportStatus[] = [];
     const cursorSets: CapturedCursorSet[] = [];
     const sessionUpdates: CapturedSessionUpdate[] = [];
     const sessionEvents: MakaioSessionEvent[] = [];
-    const linkedEvents: Array<{ adapterSessionId: string; sessionId: string; replay?: boolean }> = [];
-    const sessionIdsByAdapterSession = new Map<string, string>();
+    const sessionIdsByExternalSession = new Map<string, string>();
 
-    // AdapterSession.upsert — capture the payload and return created=true
+    // SessionStorageSubjects.importUpsert — create or enrich an imported session record
     cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.upsert, (ctx) => {
-        adapterSessionUpserts.push({ ...ctx.payload });
-        const response: AdapterSessionUpsertResponse = {
-          adapterSessionId: ctx.payload.adapterSessionId,
-          sessionId: null,
-          created: true,
-        };
-        ctx.setResult(response);
-      }),
-    );
-
-    // AdapterSession.createAndLink — create and link a Makaio session
-    cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.createAndLink, (ctx) => {
-        const existingSessionId = sessionIdsByAdapterSession.get(ctx.payload.adapterSessionId);
+      MakaioBus.on(SessionStorageSubjects.importUpsert, (ctx) => {
+        importUpserts.push({ ...ctx.payload });
+        const existingSessionId = sessionIdsByExternalSession.get(ctx.payload.externalSessionId);
         if (existingSessionId) {
           ctx.setResult({ sessionId: existingSessionId, created: false });
           return;
         }
-
         const sessionId = crypto.randomUUID();
-        sessionIdsByAdapterSession.set(ctx.payload.adapterSessionId, sessionId);
+        sessionIdsByExternalSession.set(ctx.payload.externalSessionId, sessionId);
         ctx.setResult({ sessionId, created: true });
       }),
     );
@@ -159,12 +145,12 @@ describe('importFromFileContent (integration)', () => {
       }),
     );
 
-    // AdapterSession.updateStatus — capture status transitions
+    // SessionStorageSubjects.updateImportStatus — capture status transitions
     cleanups.push(
-      MakaioBus.on(AdapterSessionStorageSubjects.updateStatus, (ctx) => {
-        adapterSessionStatuses.push({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          status: ctx.payload.status,
+      MakaioBus.on(SessionStorageSubjects.updateImportStatus, (ctx) => {
+        importStatusUpdates.push({
+          sessionId: ctx.payload.sessionId,
+          importStatus: ctx.payload.importStatus,
         });
         ctx.setResult({ success: true });
       }),
@@ -200,24 +186,13 @@ describe('importFromFileContent (integration)', () => {
       }),
     );
 
-    cleanups.push(
-      MakaioBus.on(AdapterSubjects.session.linked, (ctx) => {
-        linkedEvents.push({
-          adapterSessionId: ctx.payload.adapterSessionId,
-          sessionId: ctx.payload.sessionId,
-          replay: ctx.payload.replay,
-        });
-      }),
-    );
-
     return {
-      adapterSessionUpserts,
+      importUpserts,
       messageUpserts,
-      adapterSessionStatuses,
+      importStatusUpdates,
       cursorSets,
       sessionUpdates,
       sessionEvents,
-      linkedEvents,
     };
   }
 
@@ -228,8 +203,7 @@ describe('importFromFileContent (integration)', () => {
       adapterName: ADAPTER_NAME,
     });
     fixtureCleanups.push(fixture.cleanup);
-    const { adapterSessionUpserts, messageUpserts, adapterSessionStatuses, sessionUpdates, linkedEvents } =
-      registerStorageHandlers();
+    const { importUpserts, messageUpserts, importStatusUpdates, sessionUpdates } = registerStorageHandlers();
 
     const result = await importFromFileContent({
       bus: MakaioBus,
@@ -267,19 +241,19 @@ describe('importFromFileContent (integration)', () => {
     expect(result.sessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
     expect(result.sessionId).not.toBe(fixture.adapterSessionId);
 
-    // Adapter session was upserted with correct metadata
-    expect(adapterSessionUpserts).toHaveLength(1);
-    expect(adapterSessionUpserts[0].adapterSessionId).toBe(fixture.adapterSessionId);
-    expect(adapterSessionUpserts[0].adapterName).toBe(ADAPTER_NAME);
-    expect(adapterSessionUpserts[0].model).toBeNull();
-    expect(adapterSessionUpserts[0].cwd).toBeNull();
-    expect(adapterSessionUpserts[0].logFilePath).toBe(fixture.sessionFilePath);
+    // Session was upserted with correct metadata
+    expect(importUpserts).toHaveLength(1);
+    expect(importUpserts[0].externalSessionId).toBe(fixture.adapterSessionId);
+    expect(importUpserts[0].source).toBe(ADAPTER_NAME);
+    expect(importUpserts[0].logFilePath).toBe(fixture.sessionFilePath);
 
     // Status updated to 'imported' at the end
-    expect(adapterSessionStatuses).toHaveLength(1);
-    expect(adapterSessionStatuses[0].status).toBe('imported');
-    expect(sessionUpdates).toContainEqual({ sessionId: result.sessionId, status: 'active' });
-    expect(linkedEvents).toEqual([]);
+    expect(importStatusUpdates).toHaveLength(1);
+    expect(importStatusUpdates[0].importStatus).toBe('imported');
+    // The updateImportStatus handler (when mocked) does not set status='active'
+    // — the real drizzle handler does. The session update capture verifies the
+    // mock's response, which is success=true only.
+    expect(sessionUpdates).toEqual([]);
   });
 
   it('performs zero message upserts when messagePayloads is empty', async () => {
@@ -290,7 +264,7 @@ describe('importFromFileContent (integration)', () => {
       includeMessages: false,
     });
     fixtureCleanups.push(fixture.cleanup);
-    const { messageUpserts, adapterSessionStatuses } = registerStorageHandlers();
+    const { messageUpserts, importStatusUpdates } = registerStorageHandlers();
 
     const result = await importFromFileContent({
       bus: MakaioBus,
@@ -307,18 +281,18 @@ describe('importFromFileContent (integration)', () => {
     expect(messageUpserts).toHaveLength(0);
 
     // Status still updated to 'imported' even with no messages
-    expect(adapterSessionStatuses).toHaveLength(1);
-    expect(adapterSessionStatuses[0].status).toBe('imported');
+    expect(importStatusUpdates).toHaveLength(1);
+    expect(importStatusUpdates[0].importStatus).toBe('imported');
   });
 
-  it('upserts adapter session with correct metadata from sessionEvent', async () => {
+  it('upserts session with correct metadata from sessionEvent', async () => {
     const fixture = await createOpenCodeFixtureSession({
       fixtureDir: OPENCODE_FIXTURE_DIR,
       adapterId: 'opencode-instance-1',
       adapterName: ADAPTER_NAME,
     });
     fixtureCleanups.push(fixture.cleanup);
-    const { adapterSessionUpserts } = registerStorageHandlers();
+    const { importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
       bus: MakaioBus,
@@ -331,14 +305,12 @@ describe('importFromFileContent (integration)', () => {
       persistedLogFilePath: fixture.sessionFilePath,
     });
 
-    expect(adapterSessionUpserts).toHaveLength(1);
-    const upserted = adapterSessionUpserts[0];
-    expect(upserted.adapterSessionId).toBe(fixture.adapterSessionId);
-    expect(upserted.adapterName).toBe(ADAPTER_NAME);
+    expect(importUpserts).toHaveLength(1);
+    const upserted = importUpserts[0];
+    expect(upserted.externalSessionId).toBe(fixture.adapterSessionId);
+    expect(upserted.source).toBe(ADAPTER_NAME);
     expect(upserted.parentAdapterSessionId).toBeNull();
     expect(upserted.forkPointMessageId).toBeNull();
-    expect(upserted.model).toBeNull();
-    expect(upserted.cwd).toBeNull();
     expect(upserted.logFilePath).toBe(fixture.sessionFilePath);
   });
 
@@ -382,7 +354,7 @@ describe('importFromFileContent (integration)', () => {
       adapterName: ADAPTER_NAME,
     });
     fixtureCleanups.push(fixture.cleanup);
-    const { cursorSets, adapterSessionUpserts } = registerStorageHandlers();
+    const { cursorSets, importUpserts } = registerStorageHandlers();
     const relativeLogPath = basename(fixture.sessionFilePath);
 
     await importFromFileContent({
@@ -396,8 +368,8 @@ describe('importFromFileContent (integration)', () => {
       persistedLogFilePath: relativeLogPath,
     });
 
-    expect(adapterSessionUpserts).toHaveLength(1);
-    expect(adapterSessionUpserts[0].logFilePath).toBe(fixture.sessionFilePath);
+    expect(importUpserts).toHaveLength(1);
+    expect(importUpserts[0].logFilePath).toBe(fixture.sessionFilePath);
     expect(cursorSets).toHaveLength(1);
     expect(cursorSets[0].filePath).toBe(fixture.sessionFilePath);
   });
@@ -409,7 +381,7 @@ describe('importFromFileContent (integration)', () => {
       adapterName: ADAPTER_NAME,
     });
     fixtureCleanups.push(fixture.cleanup);
-    const { cursorSets, adapterSessionUpserts } = registerStorageHandlers();
+    const { cursorSets, importUpserts } = registerStorageHandlers();
 
     await importFromFileContent({
       bus: MakaioBus,
@@ -422,8 +394,9 @@ describe('importFromFileContent (integration)', () => {
     });
 
     expect(cursorSets).toHaveLength(0);
-    expect(adapterSessionUpserts).toHaveLength(1);
-    expect(adapterSessionUpserts[0].logFilePath).toBeUndefined();
+    expect(importUpserts).toHaveLength(1);
+    // No logFilePath when persistedLogFilePath is omitted
+    expect(importUpserts[0].logFilePath).toBeUndefined();
   });
 
   it('persists nested compaction events idempotently across repeated imports', async () => {
@@ -593,9 +566,9 @@ describe('importFromFileContent (integration)', () => {
   // payload shape sent to the storage handler. End-to-end persistence through
   // the real drizzle handler is covered by drizzle-handler.upsert.test.ts
   // (explicit insert, write-once, backfill, and default-to-now scenarios).
-  it('sets startedAt on the adapter session upsert from the first message timestamp (Path B)', async () => {
+  it('sets startedAt on the session importUpsert from the first message timestamp (Path B)', async () => {
     const STARTED_AT_MS = 1741449601000; // 2025-03-08T18:00:01.000Z
-    const { adapterSessionUpserts } = registerStorageHandlers();
+    const { importUpserts } = registerStorageHandlers();
 
     const segment = {
       adapterSessionId: 'session-startedat-path-b',
@@ -633,7 +606,7 @@ describe('importFromFileContent (integration)', () => {
       cwd: null,
     });
 
-    expect(adapterSessionUpserts).toHaveLength(1);
-    expect(adapterSessionUpserts[0].startedAt).toBe(STARTED_AT_MS);
+    expect(importUpserts).toHaveLength(1);
+    expect(importUpserts[0].startedAt).toBe(STARTED_AT_MS);
   });
 });

@@ -23,13 +23,11 @@ import { registerDrizzleMessageRoutingStorage } from './session/message-routing/
 import { registerDrizzleTurnStorage } from './session/turns/drizzle-handler.js';
 import { registerDrizzleImportCursorStorage } from './session/import-cursors/drizzle-handler.js';
 import {
-  registerDrizzleAdapterSessionStorage,
   registerParentResolver,
   registerCompressLineageResolver,
   registerSpawningToolCallResolver,
   registerSessionDiscoveredHandler,
-  registerCreateAndLinkHandler,
-} from './session/adapter-sessions/index.js';
+} from './session/import/index.js';
 import { sessionClientAccountLinkingPackage } from './session/client-account-linking/package.js';
 import { frameworkShellWindowPackage } from './framework-shell-window-package.js';
 import { harnessPackage } from './harness/package.js';
@@ -89,12 +87,10 @@ export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
         cleanups.push(registerDrizzleAgentStorage(bus, db, _ctx));
         cleanups.push(registerDrizzleImportCursorStorage(bus, db, _ctx));
         cleanups.push(registerFtsSearchHandler(bus, db));
-        cleanups.push(registerDrizzleAdapterSessionStorage(bus, db, _ctx));
         cleanups.push(registerParentResolver(bus, db));
         cleanups.push(registerCompressLineageResolver(bus));
         cleanups.push(registerSpawningToolCallResolver(bus));
         cleanups.push(registerSessionDiscoveredHandler(bus));
-        cleanups.push(registerCreateAndLinkHandler(bus));
       } catch (error) {
         runCleanups('rollback');
         throw error;

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { AgentRoleSchema } from './primitives.js';
+import { AgentRoleSchema, ImportStatusSchema } from './primitives.js';
 import { MakaioSessionEventSchema } from './event.js';
 import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
 
@@ -18,6 +18,23 @@ export const SessionClientAccountChangedSchema = z.object({
 });
 
 export type SessionClientAccountChanged = z.infer<typeof SessionClientAccountChangedSchema>;
+
+/**
+ * Import status of a session changed.
+ *
+ * Emitted when an imported session's `importStatus` column transitions
+ * (e.g., discovered → imported, discovered → tracking).
+ *
+ * Subject: `session.importStatusChanged`
+ */
+export const SessionImportStatusChangedSchema = z.object({
+  /** Makaio session ID whose import status changed. */
+  sessionId: z.string(),
+  /** New import status value. */
+  importStatus: ImportStatusSchema,
+});
+
+export type SessionImportStatusChanged = z.infer<typeof SessionImportStatusChangedSchema>;
 
 /**
  * Session event schemas.
@@ -233,6 +250,44 @@ export const EventSchemas = {
         .nullable(),
     }),
   },
+
+  /**
+   * Import status of a session changed.
+   *
+   * Subject: `session.importStatusChanged`
+   * Type: Event (fire-and-forget)
+   * Emitted when: An imported session's `importStatus` column transitions
+   * (e.g., discovered → imported, discovered → tracking).
+   *
+   * Used by the entity cache to keep imported-session state reactive in the UI.
+   * Emitted by the storage layer as the canonical import-status event.
+   */
+  importStatusChanged: SessionImportStatusChangedSchema,
+
+  /**
+   * Imported session completed event.
+   *
+   * Subject: `session.import.completed`
+   * Type: Event (fire-and-forget)
+   * Emitted when: An imported session finishes its import cycle and its
+   * Makaio session record is fully populated (importStatus transitions
+   * to 'imported'). Used by resolvers that need to perform post-import
+   * lineage resolution (parent, compress-lineage).
+   * @example
+   * ```typescript
+   * bus.on(SessionSubjects['import.completed'], (ctx) => {
+   *   const { sessionId, adapterSessionId, source } = ctx.payload;
+   * });
+   * ```
+   */
+  'import.completed': z.object({
+    /** Makaio session ID that was just fully imported. */
+    sessionId: z.string(),
+    /** External tool's session identifier (adapterSessionId on the sessions row). */
+    adapterSessionId: z.string(),
+    /** Source tool identity (e.g., 'claude-code', 'codex', 'opencode'). */
+    source: z.string(),
+  }),
 
   /**
    * Catch-all session event for observability and persistence.

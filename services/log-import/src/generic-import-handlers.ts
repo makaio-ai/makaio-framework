@@ -10,17 +10,11 @@ import type {
   ProcessLogFileResult,
 } from '@makaio/ai-adapters-core';
 import { ImportCursorStorageSubjects, toImportSegment } from '@makaio/ai-adapters-core';
-import {
-  AdapterSessionStorageSubjects,
-  SessionStorageSubjects,
-  MessageStorageSubjects,
-} from '@makaio/services-core/session';
+import { SessionStorageSubjects, MessageStorageSubjects } from '@makaio/services-core/session';
 import {
   extractSessionMetadata,
   toSessionMetadataFromImportSegment,
-  toCreateAndLinkMetadata,
-  toAdapterSessionUpsertPayload,
-  type SessionMetadataFromEvent,
+  toImportUpsertPayload,
 } from './lineage-metadata.js';
 import { appendSessionCompactedEvent } from './compaction-events.js';
 import { parseFileContent, normalizePersistedLogFilePath } from './scan-handler.js';
@@ -43,51 +37,6 @@ import type {
 export { registerGenericScanHandler } from './scan-handler.js';
 // Export for testing
 export { matchesPattern } from './pattern-matching.js';
-
-/**
- * Ensure a Makaio session exists for an adapter session.
- *
- * Routes through the bus via `AdapterSessionStorageSubjects.createAndLink` to
- * avoid a direct cross-package dependency on `@makaio/services-core/session` internals.
- * The handler handles idempotency, parent resolution, scope resolution, and cleanup.
- * @param bus - Bus instance
- * @param adapterSessionId - The adapter session ID (linked but not used as Makaio session ID)
- * @param adapterId - The adapter instance ID
- * @param adapterName - The adapter name
- * @param metadata - Session metadata extracted from the log file
- * @returns The Makaio session ID
- */
-async function ensureMakaioSession(
-  bus: IMakaioBus,
-  adapterSessionId: string,
-  adapterId: string,
-  adapterName: string,
-  metadata: SessionMetadataFromEvent,
-): Promise<string> {
-  // createAndLink is the concurrency boundary: it only returns after the
-  // adapter-session link is confirmed, and it falls back to the winning linked
-  // sessionId when another importer wins the race for this adapter session.
-  const { sessionId } = await bus.request(AdapterSessionStorageSubjects.createAndLink, {
-    adapterSessionId,
-    adapterName,
-    adapterId,
-    metadata: toCreateAndLinkMetadata(metadata),
-  });
-  return sessionId;
-}
-
-/**
- * Transition an imported Makaio session from `'discovered'` to `'active'`.
- *
- * Must be called by every code path that completes a full message import so the
- * session becomes visible as a fully-populated, queryable session. The storage
- * handler is idempotent: if the session is already active the update is a no-op.
- * @param bus - Bus instance for storage requests
- * @param sessionId - Makaio session ID to activate
- */
-export async function activateImportedSession(bus: IMakaioBus, sessionId: string): Promise<void> {
-  await bus.request(SessionStorageSubjects.update, { sessionId, status: 'active' });
-}
 
 /**
  * Write an import cursor after a full (non-incremental) file import.
@@ -254,16 +203,14 @@ export async function importSegmentTree(
       ? segment.messages.reduce((min, message) => Math.min(min, message.timestamp), Infinity)
       : undefined;
 
-  // Upsert adapter session record.
+  // Phase: ImportPhase.linked — importUpsert atomically creates or enriches the session;
+  // sessionId is stable and messages are not yet in storage.
   // ctx.logFilePath: undefined = omit (no-op for log path), null = explicitly NULL (children),
   // string = parent's absolute file path.
-  await bus.request(
-    AdapterSessionStorageSubjects.upsert,
-    toAdapterSessionUpsertPayload(metadata, ctx.adapterName, ctx.model, ctx.cwd, ctx.logFilePath, startedAt),
+  const { sessionId } = await bus.request(
+    SessionStorageSubjects.importUpsert,
+    toImportUpsertPayload(metadata, ctx.adapterName, ctx.cwd, ctx.logFilePath, startedAt, ctx.adapterId),
   );
-
-  // Phase: ImportPhase.linked — session link established; sessionId is stable, messages not yet in storage.
-  const sessionId = await ensureMakaioSession(bus, segment.adapterSessionId, ctx.adapterId, ctx.adapterName, metadata);
 
   // Phase: ImportPhase.persisted — store messages; parent compaction event fires before children's.
   await storeMessages(bus, sessionId, segment.messages);
@@ -289,12 +236,12 @@ export async function importSegmentTree(
     totalMessageCount += childResult.messageCount;
   }
 
-  // Phase: ImportPhase.finalized — all descendants persisted; promote statuses bottom-up (idempotent).
-  await bus.request(AdapterSessionStorageSubjects.updateStatus, {
-    adapterSessionId: segment.adapterSessionId,
-    status: 'imported',
+  // Phase: ImportPhase.finalized — all descendants persisted; promote import status bottom-up (idempotent).
+  // updateImportStatus with 'imported' also transitions session status to 'active' in the handler.
+  await bus.request(SessionStorageSubjects.updateImportStatus, {
+    sessionId,
+    importStatus: 'imported',
   });
-  await activateImportedSession(bus, sessionId);
 
   return { sessionId, messageCount: totalMessageCount };
 }
@@ -330,7 +277,7 @@ export async function persistImportResultTree(
  * Parse, extract, and store all messages from log file content.
  *
  * Core reusable import logic shared by the upload and lazy-load handlers.
- * This function marks the adapter session status as `'imported'` after subtree persistence succeeds.
+ * This function marks the session import status as `'imported'` after subtree persistence succeeds.
  *
  * When the importer produces `compressChildren` (from compaction boundary
  * detection), each child is processed in order after the parent. Children

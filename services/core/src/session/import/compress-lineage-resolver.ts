@@ -1,9 +1,9 @@
 /**
  * Compress lineage resolver for post-compaction subagent re-parenting.
  *
- * When a compress child session is linked (adapter.session.linked with
+ * When a compress child session import completes (session.import.completed with
  * branchKind === 'compress'), Claude Code's post-compaction subagents have
- * already been linked to the parent Makaio session by the parent-resolver.
+ * already been parented to the parent Makaio session by the parent-resolver.
  * However, their spawning Agent tool_call lives in the compress child's
  * messages — not in the parent's messages — because it was issued after
  * compaction.
@@ -16,16 +16,16 @@
  *    backfilling spawningToolCallId in the same pass.
  *
  * Must be registered BEFORE registerSpawningToolCallResolver so it runs
- * first on adapter.session.linked (bus handlers fire in registration order).
+ * first on `session.import.completed` (bus handlers fire in registration order).
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects } from '@makaio/contracts';
-import { AdapterSessionStorageSubjects } from './namespace.js';
+import { SessionSubjects } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import {
   type ChildSessionPattern,
   SESSION_ID_DELIMITER,
+  buildUnambiguousAdapterSessionIdMap,
   buildToolOutputIndex,
   collectAgentToolCalls,
   escapeRegExp,
@@ -121,24 +121,25 @@ async function tryReparentSubagentToCompressChild(
 /**
  * Re-parent existing subagent children from a parent session to a newly linked compress child.
  * @param bus - The bus instance for storage requests
- * @param compressChildAdapterSessionId - Adapter session ID of the compress child
- * @param compressChildSessionId - Makaio session ID of the compress child
+ * @param compressChild - The compress child session (already fetched by caller)
+ * @param importSource - Source identity from the import completion event
  */
 async function tryReparentParentSubagentsToCompressChild(
   bus: IMakaioBus,
-  compressChildAdapterSessionId: string,
-  compressChildSessionId: string,
+  compressChild: { sessionId: string; parentExternalSessionId?: string; source?: string },
+  importSource?: string,
 ): Promise<void> {
-  const { session: compressAdapterSession } = await bus.request(AdapterSessionStorageSubjects.get, {
-    adapterSessionId: compressChildAdapterSessionId,
-  });
-  const parentAdapterSessionId = compressAdapterSession?.parentAdapterSessionId;
-  if (!parentAdapterSessionId) return;
+  const parentExternalSessionId = compressChild.parentExternalSessionId;
+  const source = compressChild.source ?? importSource;
+  if (!parentExternalSessionId || !source) return;
 
-  const { session: parentAdapterSession } = await bus.request(AdapterSessionStorageSubjects.get, {
-    adapterSessionId: parentAdapterSessionId,
+  const compressChildSessionId = compressChild.sessionId;
+
+  const { session: parentSession } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+    adapterSessionId: parentExternalSessionId,
+    source,
   });
-  const parentMakaioSessionId = parentAdapterSession?.sessionId;
+  const parentMakaioSessionId = parentSession?.sessionId;
   if (!parentMakaioSessionId) return;
 
   const { children } = await bus.request(SessionStorageSubjects.getChildren, {
@@ -182,9 +183,6 @@ async function tryReparentParentSubagentsToCompressChild(
 
   const updates = [...assignments].map(async ([childSessionId, toolCallId]) => {
     try {
-      const { session } = await bus.request(SessionStorageSubjects.get, { sessionId: childSessionId });
-      if (!session) return;
-
       await bus.request(SessionStorageSubjects.update, {
         sessionId: childSessionId,
         parentSessionId: compressChildSessionId,
@@ -225,30 +223,26 @@ async function buildSubagentAdapterToSessionIdMap(
       }),
   );
 
-  return new Map(
-    subagentChildren
-      .filter((child): child is { sessionId: string; adapterSessionId: string } => child !== null)
-      .map((child) => [child.adapterSessionId, child.sessionId]),
-  );
+  return buildUnambiguousAdapterSessionIdMap(subagentChildren);
 }
 
 /**
  * Re-parents post-compaction subagents from the parent session to the compress child.
  *
- * Handles two scenarios triggered by `adapter.session.linked`:
+ * Handles two scenarios triggered by `session.import.completed`:
  *
- * **Path A — compress child linked first (batch import)**:
- * When a compress child is linked, subagents spawned after compaction are
+ * **Path A — compress child imported first (batch import)**:
+ * When a compress child import completes, subagents spawned after compaction are
  * already parented to the parent Makaio session (by the parent-resolver).
  * This path scans the compress child's messages and re-parents matching subagents.
  *
- * **Path B — subagent linked after compress child (incremental / separate files)**:
- * When a subagent is linked and its parent has compress children, the compress
+ * **Path B — subagent imported after compress child (incremental / separate files)**:
+ * When a subagent import completes and its parent has compress children, the compress
  * children and their messages already exist. This path scans those compress
  * children for the subagent's spawning tool_call and re-parents when found.
  *
  * Must be registered BEFORE registerSpawningToolCallResolver so it runs
- * first on `adapter.session.linked` (bus handlers fire in registration order).
+ * first on `session.import.completed` (bus handlers fire in registration order).
  * @param bus - The bus instance to register handlers on
  * @returns Cleanup function to unsubscribe the handler
  * @example
@@ -262,9 +256,9 @@ async function buildSubagentAdapterToSessionIdMap(
  * ```
  */
 export function registerCompressLineageResolver(bus: IMakaioBus): () => void {
-  return bus.on(AdapterSubjects.session.linked, async (ctx) => {
+  return bus.on(SessionSubjects.import.completed, async (ctx) => {
     try {
-      const { adapterSessionId, sessionId: linkedSessionId } = ctx.payload;
+      const { sessionId: linkedSessionId, source } = ctx.payload;
 
       const { session: linkedMakaioSession } = await bus.request(SessionStorageSubjects.get, {
         sessionId: linkedSessionId,
@@ -279,7 +273,7 @@ export function registerCompressLineageResolver(bus: IMakaioBus): () => void {
 
       // --- Path A: compress child linked → re-parent existing subagents of parent ---
       if (linkedMakaioSession.branchKind !== 'compress') return;
-      await tryReparentParentSubagentsToCompressChild(bus, adapterSessionId, linkedSessionId);
+      await tryReparentParentSubagentsToCompressChild(bus, linkedMakaioSession, source);
     } catch (error) {
       console.error('[CompressLineageResolver] Failed to resolve compress lineage', {
         payload: ctx.payload,

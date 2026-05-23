@@ -119,6 +119,11 @@ export function mapToSession(sessionRow: SessionRow, agentRows: AgentRow[]): IMa
     agents: agentRows.map(mapAgent),
     approvalPolicyOverride: toOptionalValue(sessionRow.approvalPolicyOverride),
     spawningToolCallId: toOptionalValue(sessionRow.spawningToolCallId),
+    source: toOptionalValue(sessionRow.source),
+    parentExternalSessionId: toOptionalValue(sessionRow.parentExternalSessionId),
+    logFilePath: toOptionalValue(sessionRow.logFilePath),
+    discoveredAt: toOptionalValue(sessionRow.discoveredAt),
+    importStatus: toOptionalValue(sessionRow.importStatus),
   };
 }
 

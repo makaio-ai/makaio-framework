@@ -50,8 +50,6 @@ export { QuotaSchema } from './quota.js';
 export type { Quota } from './quota.js';
 export { SessionDiscoveredSchema } from './session-discovered.js';
 export type { SessionDiscovered } from './session-discovered.js';
-export { SessionLinkedSchema } from './session-linked.js';
-export type { SessionLinked } from './session-linked.js';
 export {
   COMPRESS_SESSION_LINEAGE_KIND,
   CompressSessionLineageSchema,
@@ -66,5 +64,3 @@ export {
   SubagentSessionLineageSchema,
 } from './session-lineage.js';
 export type { SessionLineage, SessionLineageKind } from './session-lineage.js';
-export { SessionStatusChangedSchema } from './session-status-changed.js';
-export type { SessionStatusChanged } from './session-status-changed.js';

@@ -4,8 +4,8 @@ import {
   FORK_SESSION_LINEAGE_KIND,
   ROOT_SESSION_LINEAGE_KIND,
   SUBAGENT_SESSION_LINEAGE_KIND,
-  type SessionLineage,
 } from '@makaio/contracts';
+import { toSessionLineage } from '@makaio/services-core/session';
 import type { ImportSegment, NormalizedEvent } from '@makaio/ai-adapters-core';
 
 const MetadataFromPayload = z.discriminatedUnion('kind', [
@@ -47,40 +47,6 @@ const MetadataFromPayload = z.discriminatedUnion('kind', [
   }),
 ]);
 
-type CreateAndLinkMetadataPayload =
-  | {
-      model: string | null;
-      cwd: string | null;
-      title: null;
-      parentAdapterSessionId: string;
-      forkPointMessageId: string;
-      kind: 'fork';
-    }
-  | {
-      model: string | null;
-      cwd: string | null;
-      title: null;
-      parentAdapterSessionId: string;
-      forkPointMessageId: null;
-      kind: 'subagent';
-    }
-  | {
-      model: string | null;
-      cwd: string | null;
-      title: null;
-      parentAdapterSessionId: null;
-      forkPointMessageId: null;
-      kind: null;
-    }
-  | {
-      model: string | null;
-      cwd: string | null;
-      title: null;
-      parentAdapterSessionId: string;
-      forkPointMessageId: null;
-      kind: 'compress';
-    };
-
 /** Session metadata extracted from a discovery event payload. */
 export type SessionMetadataFromEvent = z.infer<typeof MetadataFromPayload>;
 
@@ -94,118 +60,39 @@ export function extractSessionMetadata(sessionEvent: NormalizedEvent): SessionMe
 }
 
 /**
- * Build an adapter-session upsert payload with lineage invariants.
+ * Build an import-upsert payload for `storage:session.importUpsert`.
  * @param metadata - Parsed session metadata from discovery/import.
- * @param adapterName - Adapter name used for storage ownership.
- * @param model - Model metadata (nullable).
+ * @param source - Source tool identity (e.g., 'claude-code', 'codex').
  * @param cwd - Working directory metadata (nullable).
- * @param logFilePath - Source log path. Pass `undefined` to omit (no-op upsert),
+ * @param logFilePath - Source log path. Pass `undefined` to omit (no-op for log path),
  *   `null` to explicitly store as NULL (compress children that share the parent file),
  *   or a string for the parent session's absolute file path.
  * @param startedAt - Unix ms timestamp of when the session started in the external tool.
  *   Pass `undefined` to omit; the storage handler defaults to `Date.now()`.
- * @returns Strictly typed request payload for `storage:adapterSession.upsert`.
+ * @param adapterId - Optional adapter instance ID for cursor resume resolution.
+ * @param clientId - Optional client identity link.
+ * @returns Strictly typed request payload for `storage:session.importUpsert`.
  */
-export function toAdapterSessionUpsertPayload(
+export function toImportUpsertPayload(
   metadata: SessionMetadataFromEvent,
-  adapterName: string,
-  model: string | null,
+  source: string,
   cwd: string | null,
   logFilePath?: string | null,
   startedAt?: number,
+  adapterId?: string,
+  clientId?: string,
 ) {
-  const lineage = toEnsureSessionLineage(metadata);
+  const lineage = toSessionLineage(metadata);
   return {
-    adapterSessionId: metadata.adapterSessionId,
-    adapterName,
-    model,
+    externalSessionId: metadata.adapterSessionId,
+    source,
     cwd,
     ...(logFilePath !== undefined ? { logFilePath } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(adapterId !== undefined ? { adapterId } : {}),
+    ...(clientId !== undefined ? { clientId } : {}),
     ...lineage,
   };
-}
-
-/**
- * Build the canonical create-and-link metadata payload from extracted session metadata.
- * @param metadata - Session metadata extracted from discovery/import records.
- * @returns Normalized payload for `AdapterSessionStorageSubjects.createAndLink`.
- */
-export function toCreateAndLinkMetadata(metadata: SessionMetadataFromEvent): CreateAndLinkMetadataPayload {
-  const base = {
-    model: metadata.model,
-    cwd: metadata.cwd,
-    title: null,
-  };
-
-  switch (metadata.kind) {
-    case 'fork':
-      return {
-        ...base,
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: metadata.forkPointMessageId,
-        kind: metadata.kind,
-      };
-    case 'subagent':
-      return {
-        ...base,
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: null,
-        kind: metadata.kind,
-      };
-    case 'root':
-      return {
-        ...base,
-        parentAdapterSessionId: null,
-        forkPointMessageId: null,
-        kind: null,
-      };
-    case 'compress':
-      return {
-        ...base,
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: null,
-        kind: metadata.kind,
-      };
-    default: {
-      const _exhaustive: never = metadata;
-      return _exhaustive;
-    }
-  }
-}
-
-/**
- * Convert metadata to canonical session lineage.
- * @param metadata - Parsed metadata to convert.
- * @returns Canonical lineage object matching session contracts.
- */
-export function toEnsureSessionLineage(metadata: SessionMetadataFromEvent): SessionLineage {
-  switch (metadata.kind) {
-    case 'root':
-      return { kind: 'root', parentAdapterSessionId: null, forkPointMessageId: null };
-    case 'fork':
-      return {
-        kind: 'fork',
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: metadata.forkPointMessageId,
-      };
-    case 'subagent':
-      return {
-        kind: 'subagent',
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: null,
-      };
-    case 'compress':
-      return {
-        kind: 'compress',
-        parentAdapterSessionId: metadata.parentAdapterSessionId,
-        forkPointMessageId: null,
-      };
-    default: {
-      const _exhaustive: never = metadata;
-      return _exhaustive;
-    }
-  }
 }
 
 /**

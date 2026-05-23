@@ -96,7 +96,7 @@ export function resolveShardForFile(filePath: string, shards: Record<string, str
  * Directories are relative to the framework root.
  */
 export const frameworkShards: Record<string, string[]> = {
-  Core: ['core', 'storage'],
+  Core: ['core', 'services', 'storage'],
   Packages: ['packages'],
   Platform: ['platforms', 'runtimes', 'transports', 'clients', 'providers', 'scripts', 'build-tooling', 'subsystems'],
   Adapters: ['adapters'],

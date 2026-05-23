@@ -167,26 +167,15 @@ export type {
   TurnStateChange,
 } from './entities/index.js';
 
-// Adapter session storage (for log import tracking)
+// Post-import lineage resolvers and session-discovery handler
 export {
-  adapterSessions,
-  type InsertAdapterSession,
-  type SelectAdapterSession,
-  AdapterSessionStorageNamespace,
-  AdapterSessionStorageSubjects,
-  type AdapterSessionRecord,
-  type AdapterSessionStatus,
-  registerDrizzleAdapterSessionStorage,
-  registerSessionDiscoveredHandler,
-  registerCreateAndLinkHandler,
-  createAndLinkImportedSession,
-  type CreateAndLinkParams,
-  type CreateAndLinkResult,
   registerParentResolver,
   registerCompressLineageResolver,
   registerSpawningToolCallResolver,
+  registerSessionDiscoveredHandler,
   kindToBranchKind,
-} from './adapter-sessions/index.js';
+  toSessionLineage,
+} from './import/index.js';
 
 // Context assembly (projection-based conversation reconstruction)
 export { buildSessionContext, getFullConversation } from './context/index.js';
