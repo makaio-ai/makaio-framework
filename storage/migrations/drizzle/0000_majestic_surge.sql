@@ -160,7 +160,6 @@ CREATE TABLE `sessions` (
 CREATE UNIQUE INDEX `uniq_sessions_source_adapter_session_id` ON `sessions` (`source`,`adapter_session_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uniq_sessions_log_file_path` ON `sessions` (`log_file_path`);--> statement-breakpoint
 CREATE INDEX `sessions_adapter_session_id_idx` ON `sessions` (`adapter_session_id`);--> statement-breakpoint
-CREATE INDEX `idx_sessions_source` ON `sessions` (`source`);--> statement-breakpoint
 CREATE INDEX `idx_sessions_import_status` ON `sessions` (`import_status`);--> statement-breakpoint
 CREATE INDEX `sessions_execution_target_id_idx` ON `sessions` (`execution_target_id`);--> statement-breakpoint
 CREATE TABLE `turns` (
@@ -199,7 +198,6 @@ CREATE TABLE `client_binary_versions` (
 	`created_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_client_binary_versions_client_id` ON `client_binary_versions` (`client_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_client_binary_versions_client_version` ON `client_binary_versions` (`client_id`,`version`);--> statement-breakpoint
 CREATE TABLE `client_profiles` (
 	`id` text PRIMARY KEY NOT NULL,
@@ -214,7 +212,6 @@ CREATE TABLE `client_profiles` (
 --> statement-breakpoint
 CREATE UNIQUE INDEX `uq_client_profiles_client_name` ON `client_profiles` (`client_id`,`name`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uq_client_profiles_default` ON `client_profiles` (`client_id`) WHERE "client_profiles"."is_default" = 1;--> statement-breakpoint
-CREATE INDEX `idx_client_profiles_client_id` ON `client_profiles` (`client_id`);--> statement-breakpoint
 CREATE TABLE `client_runtimes` (
 	`id` text PRIMARY KEY NOT NULL,
 	`client_id` text NOT NULL,
@@ -282,7 +279,6 @@ CREATE TABLE `workflow_execution_links` (
 	FOREIGN KEY (`target_execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `idx_workflow_execution_links_source` ON `workflow_execution_links` (`source_execution_id`);--> statement-breakpoint
 CREATE INDEX `idx_workflow_execution_links_target` ON `workflow_execution_links` (`target_execution_id`);--> statement-breakpoint
 CREATE TABLE `workflow_execution_steps` (
 	`execution_id` text NOT NULL,
@@ -292,7 +288,6 @@ CREATE TABLE `workflow_execution_steps` (
 	FOREIGN KEY (`execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `idx_workflow_execution_steps_execution_id` ON `workflow_execution_steps` (`execution_id`);--> statement-breakpoint
 CREATE TABLE `workflow_executions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`workflow_id` text NOT NULL,
@@ -332,5 +327,4 @@ CREATE TABLE `workflow_step_spans` (
 	FOREIGN KEY (`execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX `idx_workflow_step_spans_execution_id` ON `workflow_step_spans` (`execution_id`);--> statement-breakpoint
 CREATE INDEX `idx_workflow_step_spans_status` ON `workflow_step_spans` (`status`);

@@ -80,7 +80,6 @@ export const CLIENT_PROFILES_DDL = [
       UNIQUE (client_id, name)
     )
   `,
-  sql`CREATE INDEX IF NOT EXISTS idx_client_profiles_client_id ON client_profiles (client_id)`,
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_client_profiles_default ON client_profiles (client_id) WHERE is_default = 1`,
 ];
 

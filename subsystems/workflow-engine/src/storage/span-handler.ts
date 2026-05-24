@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExecutionLink, SpanRecord } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
@@ -72,7 +72,8 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
     const rows = await db
       .select()
       .from(workflowStepSpans)
-      .where(eq(workflowStepSpans.executionId, ctx.payload.executionId));
+      .where(eq(workflowStepSpans.executionId, ctx.payload.executionId))
+      .orderBy(asc(workflowStepSpans.startedAt), asc(workflowStepSpans.stepId));
     ctx.setResult({ spans: rows.map(mapSpan) });
   });
 

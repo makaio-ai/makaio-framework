@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "43141d75-e0d2-42ec-8f96-cbdb6b35329c",
+  "id": "c149e314-78ca-4751-ac37-09d2d3664aa6",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "preferences": {
@@ -1025,11 +1025,6 @@
           "columns": ["adapter_session_id"],
           "isUnique": false
         },
-        "idx_sessions_source": {
-          "name": "idx_sessions_source",
-          "columns": ["source"],
-          "isUnique": false
-        },
         "idx_sessions_import_status": {
           "name": "idx_sessions_import_status",
           "columns": ["import_status"],
@@ -1259,11 +1254,6 @@
         }
       },
       "indexes": {
-        "idx_client_binary_versions_client_id": {
-          "name": "idx_client_binary_versions_client_id",
-          "columns": ["client_id"],
-          "isUnique": false
-        },
         "uq_client_binary_versions_client_version": {
           "name": "uq_client_binary_versions_client_version",
           "columns": ["client_id", "version"],
@@ -1347,11 +1337,6 @@
           "columns": ["client_id"],
           "isUnique": true,
           "where": "\"client_profiles\".\"is_default\" = 1"
-        },
-        "idx_client_profiles_client_id": {
-          "name": "idx_client_profiles_client_id",
-          "columns": ["client_id"],
-          "isUnique": false
         }
       },
       "foreignKeys": {},
@@ -1747,11 +1732,6 @@
         }
       },
       "indexes": {
-        "idx_workflow_execution_links_source": {
-          "name": "idx_workflow_execution_links_source",
-          "columns": ["source_execution_id"],
-          "isUnique": false
-        },
         "idx_workflow_execution_links_target": {
           "name": "idx_workflow_execution_links_target",
           "columns": ["target_execution_id"],
@@ -1812,13 +1792,7 @@
           "autoincrement": false
         }
       },
-      "indexes": {
-        "idx_workflow_execution_steps_execution_id": {
-          "name": "idx_workflow_execution_steps_execution_id",
-          "columns": ["execution_id"],
-          "isUnique": false
-        }
-      },
+      "indexes": {},
       "foreignKeys": {
         "workflow_execution_steps_execution_id_workflow_executions_id_fk": {
           "name": "workflow_execution_steps_execution_id_workflow_executions_id_fk",
@@ -2071,11 +2045,6 @@
         }
       },
       "indexes": {
-        "idx_workflow_step_spans_execution_id": {
-          "name": "idx_workflow_step_spans_execution_id",
-          "columns": ["execution_id"],
-          "isUnique": false
-        },
         "idx_workflow_step_spans_status": {
           "name": "idx_workflow_step_spans_status",
           "columns": ["status"],

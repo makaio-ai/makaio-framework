@@ -7,7 +7,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 /**
  * Persistent store for named client configuration profiles.
@@ -54,7 +54,6 @@ export const clientProfiles = sqliteTable(
   (table) => [
     uniqueIndex('uq_client_profiles_client_name').on(table.clientId, table.name),
     uniqueIndex('uq_client_profiles_default').on(table.clientId).where(sql`${table.isDefault} = 1`),
-    index('idx_client_profiles_client_id').on(table.clientId),
   ],
 );
 

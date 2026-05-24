@@ -1,6 +1,7 @@
 import { eq, and, desc, lt, or, inArray, sql, type Column } from 'drizzle-orm';
 import { executeTransaction, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
 import type { ExecutableStepState, ExtensionContext, StepState, WorkflowExecutionScope } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createDrizzleCrudHandlers, createDrizzleListHandler } from '@makaio/storage-handlers';
@@ -472,11 +473,17 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     }
 
     const predicates = buildExecutionListPredicates(workflowId, scope, status, cursor);
-    // Default/max are declared in ExecutionListQuerySchema, but production bus dispatch
+    // Limits are declared with ExecutionListQuerySchema, but production bus dispatch
     // does not parse schemas, so enforce the bounded-list invariant here as well.
-    const resolvedLimit = limit ?? 50;
-    if (!Number.isInteger(resolvedLimit) || resolvedLimit < 1 || resolvedLimit > 500) {
-      throw new Error('Execution list limit must be an integer between 1 and 500.');
+    const resolvedLimit = limit ?? EXECUTION_LIST_DEFAULT_LIMIT;
+    if (
+      !Number.isInteger(resolvedLimit) ||
+      resolvedLimit < EXECUTION_LIST_MIN_LIMIT ||
+      resolvedLimit > EXECUTION_LIST_MAX_LIMIT
+    ) {
+      throw new Error(
+        `Execution list limit must be an integer between ${EXECUTION_LIST_MIN_LIMIT} and ${EXECUTION_LIST_MAX_LIMIT}.`,
+      );
     }
 
     const rows = await db

@@ -4,7 +4,13 @@ import { eq, sql } from 'drizzle-orm';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { workflowExecutions, workflowExecutionSteps } from '../storage/schema.js';
-import { WorkflowExecutionScopeSchema, ExecutionListQuerySchema } from '@makaio/contracts';
+import {
+  EXECUTION_LIST_DEFAULT_LIMIT,
+  EXECUTION_LIST_MAX_LIMIT,
+  EXECUTION_LIST_MIN_LIMIT,
+  WorkflowExecutionScopeSchema,
+  ExecutionListQuerySchema,
+} from '@makaio/contracts';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 
 describe('WorkflowExecutionScopeSchema', () => {
@@ -45,7 +51,7 @@ describe('ExecutionListQuerySchema', () => {
   });
 
   it('defaults limit to 50', () => {
-    expect(ExecutionListQuerySchema.parse({ workflowId: 'wf-1' }).limit).toBe(50);
+    expect(ExecutionListQuerySchema.parse({ workflowId: 'wf-1' }).limit).toBe(EXECUTION_LIST_DEFAULT_LIMIT);
   });
 
   it('rejects an empty workflowId filter', () => {
@@ -53,7 +59,9 @@ describe('ExecutionListQuerySchema', () => {
   });
 
   it('accepts explicit limit', () => {
-    expect(ExecutionListQuerySchema.parse({ scope: { type: 'global' }, limit: 1 }).limit).toBe(1);
+    expect(ExecutionListQuerySchema.parse({ scope: { type: 'global' }, limit: EXECUTION_LIST_MIN_LIMIT }).limit).toBe(
+      EXECUTION_LIST_MIN_LIMIT,
+    );
   });
 
   it('accepts a cursor', () => {
@@ -65,7 +73,7 @@ describe('ExecutionListQuerySchema', () => {
   });
 
   it('rejects limit above 500', () => {
-    expect(() => ExecutionListQuerySchema.parse({ workflowId: 'wf-1', limit: 501 })).toThrow();
+    expect(() => ExecutionListQuerySchema.parse({ workflowId: 'wf-1', limit: EXECUTION_LIST_MAX_LIMIT + 1 })).toThrow();
   });
 });
 
@@ -393,6 +401,36 @@ describe('workflow storage handlers', () => {
     expect(page2.map((e) => e.id)).toEqual(['exec-cursor-1', 'exec-cursor-0']);
   });
 
+  it('paginates executions with the same startedAt by descending id', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-cursor-same-started-at' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const startedAt = Date.now();
+    for (const id of ['exec-same-timestamp-a', 'exec-same-timestamp-b', 'exec-same-timestamp-c']) {
+      await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+        execution: createWorkflowExecution({
+          id,
+          workflowId: workflow.id,
+          startedAt,
+        }),
+      });
+    }
+
+    const { executions: page1 } = await MakaioBus.request(WorkflowStorageSubjects.listExecutions, {
+      workflowId: workflow.id,
+      limit: 2,
+    });
+    expect(page1.map((e) => e.id)).toEqual(['exec-same-timestamp-c', 'exec-same-timestamp-b']);
+
+    const last = page1[1];
+    const { executions: page2 } = await MakaioBus.request(WorkflowStorageSubjects.listExecutions, {
+      workflowId: workflow.id,
+      limit: 2,
+      cursor: { startedAt: last!.startedAt, id: last!.id },
+    });
+    expect(page2.map((e) => e.id)).toEqual(['exec-same-timestamp-a']);
+  });
+
   it('rejects listExecutions when neither workflowId nor scope is provided', async () => {
     await expect(MakaioBus.request(WorkflowStorageSubjects.listExecutions, {})).rejects.toThrow(
       'Either workflowId or scope is required',
@@ -409,9 +447,11 @@ describe('workflow storage handlers', () => {
       await expect(
         MakaioBus.request(WorkflowStorageSubjects.listExecutions, {
           workflowId: workflow.id,
-          limit: 501,
+          limit: EXECUTION_LIST_MAX_LIMIT + 1,
         }),
-      ).rejects.toThrow('Execution list limit must be an integer between 1 and 500.');
+      ).rejects.toThrow(
+        `Execution list limit must be an integer between ${EXECUTION_LIST_MIN_LIMIT} and ${EXECUTION_LIST_MAX_LIMIT}.`,
+      );
     } finally {
       if (originalNodeEnv === undefined) {
         delete process.env.NODE_ENV;
@@ -487,6 +527,24 @@ describe('workflow storage handlers', () => {
         output: '{"verdict":"ok"}',
       },
     });
+    await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
+      span: {
+        executionId: execution.id,
+        stepId: 'review',
+        stepType: 'agent',
+        status: 'completed',
+        startedAt: 30,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
+      span: {
+        executionId: execution.id,
+        stepId: 'implement',
+        stepType: 'shell',
+        status: 'completed',
+        startedAt: 20,
+      },
+    });
 
     await MakaioBus.request(WorkflowStorageSubjects.setExecutionLink, {
       link: {
@@ -505,7 +563,7 @@ describe('workflow storage handlers', () => {
     });
 
     const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId: execution.id });
-    expect(spans).toHaveLength(1);
+    expect(spans.map((span) => span.stepId)).toEqual(['plan', 'implement', 'review']);
     expect(spans[0]?.stepId).toBe('plan');
     expect(spans[0]?.estimatedCost).toBe(0.01);
 

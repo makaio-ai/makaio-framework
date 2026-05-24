@@ -141,24 +141,26 @@ describe('applyMigrations', () => {
     }
   });
 
-  it('adopts an existing CREATE target without executing later statements from that migration', async () => {
+  it('rejects multi-statement adoption when the first CREATE target already exists', async () => {
     const { db, close } = await createDatabaseClient({ url: ':memory:' });
 
     try {
       await db.run(sql`CREATE TABLE adopted_test (id INTEGER PRIMARY KEY)`);
 
-      await applyMigrations(db, [
-        {
-          tag: '0001_adopt_existing_schema',
-          folderMillis: 2500,
-          hash: 'hash-adopt-existing',
-          bps: false,
-          sql: [
-            'CREATE TABLE adopted_test (id INTEGER PRIMARY KEY)',
-            'ALTER TABLE adopted_test ADD COLUMN unsafe_after_adoption TEXT',
-          ],
-        },
-      ]);
+      await expect(
+        applyMigrations(db, [
+          {
+            tag: '0001_adopt_existing_schema',
+            folderMillis: 2500,
+            hash: 'hash-adopt-existing',
+            bps: false,
+            sql: [
+              'CREATE TABLE adopted_test (id INTEGER PRIMARY KEY)',
+              'ALTER TABLE adopted_test ADD COLUMN unsafe_after_adoption TEXT',
+            ],
+          },
+        ]),
+      ).rejects.toThrow("Cannot adopt multi-statement migration '0001_adopt_existing_schema'");
 
       const columns = await db.all<{ name: string }>(sql`PRAGMA table_info(adopted_test)`);
       expect(columns.map((column) => column.name)).toEqual(['id']);
@@ -166,7 +168,32 @@ describe('applyMigrations', () => {
       const migrationRows = await db.all<{ hash: string; created_at: number }>(
         sql`SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC`,
       );
-      expect(migrationRows).toEqual([{ hash: 'hash-adopt-existing', created_at: 2500 }]);
+      expect(migrationRows).toEqual([]);
+    } finally {
+      close();
+    }
+  });
+
+  it('adopts a single-statement existing CREATE target', async () => {
+    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+
+    try {
+      await db.run(sql`CREATE TABLE adopted_single_test (id INTEGER PRIMARY KEY)`);
+
+      await applyMigrations(db, [
+        {
+          tag: '0001_adopt_existing_single_schema',
+          folderMillis: 2600,
+          hash: 'hash-adopt-existing-single',
+          bps: false,
+          sql: ['CREATE TABLE adopted_single_test (id INTEGER PRIMARY KEY)'],
+        },
+      ]);
+
+      const migrationRows = await db.all<{ hash: string; created_at: number }>(
+        sql`SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC`,
+      );
+      expect(migrationRows).toEqual([{ hash: 'hash-adopt-existing-single', created_at: 2600 }]);
     } finally {
       close();
     }

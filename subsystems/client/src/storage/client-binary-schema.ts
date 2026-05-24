@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { index, integer, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { integer, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
 
 /**
  * Persistent store for individual installed version records.
@@ -38,10 +38,7 @@ export const clientBinaryVersions = sqliteTable(
     /** Unix epoch timestamp in milliseconds when this row was created. */
     createdAt: integer('created_at').notNull(),
   },
-  (table) => [
-    index('idx_client_binary_versions_client_id').on(table.clientId),
-    unique('uq_client_binary_versions_client_version').on(table.clientId, table.version),
-  ],
+  (table) => [unique('uq_client_binary_versions_client_version').on(table.clientId, table.version)],
 );
 
 /** Inferred insert type for the `client_binary_versions` table. */

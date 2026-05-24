@@ -131,10 +131,7 @@ export const workflowExecutionSteps = sqliteTable(
     /** Current persisted step state. */
     state: text('state', { mode: 'json' }).$type<StepState>().notNull(),
   },
-  (table) => [
-    primaryKey({ columns: [table.executionId, table.stepId] }),
-    index('idx_workflow_execution_steps_execution_id').on(table.executionId),
-  ],
+  (table) => [primaryKey({ columns: [table.executionId, table.stepId] })],
 );
 
 export type InsertWorkflowExecutionStep = typeof workflowExecutionSteps.$inferInsert;
@@ -178,7 +175,6 @@ export const workflowStepSpans = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.executionId, table.stepId] }),
-    index('idx_workflow_step_spans_execution_id').on(table.executionId),
     index('idx_workflow_step_spans_status').on(table.status),
   ],
 );
@@ -205,7 +201,6 @@ export const workflowExecutionLinks = sqliteTable(
   },
   (table) => [
     primaryKey({ columns: [table.sourceExecutionId, table.targetExecutionId] }),
-    index('idx_workflow_execution_links_source').on(table.sourceExecutionId),
     index('idx_workflow_execution_links_target').on(table.targetExecutionId),
   ],
 );

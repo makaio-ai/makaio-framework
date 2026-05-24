@@ -650,6 +650,15 @@ export const ExecutionListCursorSchema = z.object({
 
 export type ExecutionListCursor = z.infer<typeof ExecutionListCursorSchema>;
 
+/** Minimum accepted execution list page size. */
+export const EXECUTION_LIST_MIN_LIMIT = 1;
+
+/** Maximum accepted execution list page size. */
+export const EXECUTION_LIST_MAX_LIMIT = 500;
+
+/** Default execution list page size when callers omit `limit`. */
+export const EXECUTION_LIST_DEFAULT_LIMIT = 50;
+
 /**
  * Query parameters for listing workflow executions.
  *
@@ -665,7 +674,12 @@ export const ExecutionListQuerySchema = z
     /** Filter by execution status. */
     status: ExecutionStatusSchema.optional(),
     /** Maximum number of executions to return. Defaults to 50, max 500. */
-    limit: z.number().int().min(1).max(500).default(50),
+    limit: z
+      .number()
+      .int()
+      .min(EXECUTION_LIST_MIN_LIMIT)
+      .max(EXECUTION_LIST_MAX_LIMIT)
+      .default(EXECUTION_LIST_DEFAULT_LIMIT),
     /** Keyset pagination cursor from the previous page. */
     cursor: ExecutionListCursorSchema.optional(),
   })

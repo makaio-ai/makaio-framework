@@ -231,7 +231,6 @@ export const sessions = sqliteTable(
     uniqueIndex('uniq_sessions_source_adapter_session_id').on(table.source, table.adapterSessionId),
     uniqueIndex('uniq_sessions_log_file_path').on(table.logFilePath),
     index('sessions_adapter_session_id_idx').on(table.adapterSessionId),
-    index('idx_sessions_source').on(table.source),
     index('idx_sessions_import_status').on(table.importStatus),
     index('sessions_execution_target_id_idx').on(table.executionTargetId),
     check(

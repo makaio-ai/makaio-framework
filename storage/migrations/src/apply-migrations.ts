@@ -89,15 +89,20 @@ export async function applyMigrations(
             await db.run(sql.raw(stmt));
           } catch (error) {
             if (statementIndex === 0 && /^\s*CREATE\s/i.test(stmt) && isAlreadyExistsError(error)) {
+              if (migration.sql.length > 1) {
+                throw new Error(
+                  `Cannot adopt multi-statement migration '${migration.tag}' because its first schema object already exists. Reset the database or provide an incremental migration.`,
+                  { cause: error },
+                );
+              }
               console.warn('[storage-migrations] Schema object already exists, adopting into ledger', {
                 hash: migration.hash,
                 folderMillis: migration.folderMillis,
                 statementIndex,
               });
-              // Adoption means this migration's schema changes are already present
-              // outside the ledger. Stop this migration's SQL body here so later
-              // non-idempotent statements cannot mutate an already-adopted schema,
-              // then record this same migration hash below.
+              // Adoption means this single-statement migration's schema change is
+              // already present outside the ledger, so record this same migration
+              // hash below without re-running the CREATE.
               break;
             }
             console.error('[storage-migrations] Failed to apply migration statement', {

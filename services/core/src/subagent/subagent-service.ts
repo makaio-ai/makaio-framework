@@ -107,13 +107,13 @@ export class SubagentService extends BaseService {
     });
 
     // Clean up on completion
-    this.registerHandler(SubagentSubjects.completed, (ctx) => {
-      this.handleCompleted(ctx.payload.subagentId);
+    this.registerHandler(SubagentSubjects.completed, async (ctx) => {
+      await this.handleCompleted(ctx.payload.subagentId);
     });
 
     // Clean up on cancellation
-    this.registerHandler(SubagentSubjects.cancelled, (ctx) => {
-      this.handleCancelled(ctx.payload.subagentId);
+    this.registerHandler(SubagentSubjects.cancelled, async (ctx) => {
+      await this.handleCancelled(ctx.payload.subagentId);
     });
 
     // Detect dead child adapter processes
@@ -504,14 +504,39 @@ export class SubagentService extends BaseService {
     }
   }
 
-  private handleCompleted(_subagentId: string): void {
-    // Manager already updated by complete_task tool
-    // No additional cleanup needed for now
+  /**
+   * Handle terminal successful subagent completion.
+   * @param subagentId - Completed subagent identifier.
+   */
+  private async handleCompleted(subagentId: string): Promise<void> {
+    await this.closeChildSession(subagentId);
   }
 
-  private handleCancelled(_subagentId: string): void {
-    // Manager already updated by kill_subagent tool
-    // Could signal child session to terminate here
+  /**
+   * Handle terminal subagent cancellation.
+   * @param subagentId - Cancelled subagent identifier.
+   */
+  private async handleCancelled(subagentId: string): Promise<void> {
+    await this.closeChildSession(subagentId);
+  }
+
+  /**
+   * Close a subagent child session once the subagent reaches a terminal state.
+   *
+   * The close operation is best-effort because subagent state has already
+   * transitioned terminal; a session-close failure should not undo completion
+   * or cancellation.
+   * @param subagentId - Subagent whose child session should be closed.
+   */
+  private async closeChildSession(subagentId: string): Promise<void> {
+    const tracked = this.manager.get(subagentId);
+    if (!tracked?.childSessionId) return;
+
+    try {
+      await this.bus.request(SessionSubjects.close, { sessionId: tracked.childSessionId });
+    } catch (err) {
+      console.error(`[SubagentService] Failed to close child session for subagent ${subagentId}:`, err);
+    }
   }
 
   /**
