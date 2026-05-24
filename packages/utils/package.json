@@ -10,6 +10,7 @@
     "./health-probe": "./src/health-probe.ts",
     "./keychain": "./src/keychain.ts",
     "./package-root": "./src/resolve-package-root.ts",
+    "./scope-paths": "./src/scope-paths.ts",
     "./workspace-packages": "./src/workspace-packages.ts",
     "./workspace-root": "./src/workspace-root.ts",
     "./package.json": "./package.json"
@@ -33,6 +34,7 @@
       "./health-probe": "./dist/health-probe.mjs",
       "./keychain": "./dist/keychain.mjs",
       "./package-root": "./dist/resolve-package-root.mjs",
+      "./scope-paths": "./dist/scope-paths.mjs",
       "./workspace-packages": "./dist/workspace-packages.mjs",
       "./workspace-root": "./dist/workspace-root.mjs",
       "./package.json": "./package.json"

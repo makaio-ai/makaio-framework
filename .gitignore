@@ -16,6 +16,7 @@ __screenshots__/
 
 .env
 .env.*.local
+.makaio/personal/
 
 # SDK local outputs
 sdks/python/.venv/
