@@ -5,6 +5,7 @@ import {
   ExecutableStepStateSchema,
   ForEachExpansionSnapshotSchema,
   StepStateSchema,
+  WorkflowResolvedRoleSchema,
 } from '../schemas.js';
 import { WorkflowSubjects } from '../namespace.js';
 
@@ -55,6 +56,85 @@ describe('AgentWorkflowStepSchema', () => {
         contextMode: 'invalid-mode',
       }),
     ).toThrow();
+  });
+
+  it('accepts and preserves the optional role field', () => {
+    const step = AgentWorkflowStepSchema.parse({
+      id: 'review',
+      type: 'agent',
+      prompt: 'Review the spec',
+      role: 'spec-reviewer',
+    });
+
+    expect(step.role).toBe('spec-reviewer');
+  });
+
+  it('accepts a step without role (optional)', () => {
+    const step = AgentWorkflowStepSchema.parse({
+      id: 'simple',
+      type: 'agent',
+      prompt: 'Do something',
+    });
+
+    expect(step.role).toBeUndefined();
+  });
+
+  it('rejects an empty role string', () => {
+    expect(() =>
+      AgentWorkflowStepSchema.parse({
+        id: 'bad',
+        type: 'agent',
+        prompt: 'Do something',
+        role: '',
+      }),
+    ).toThrow();
+  });
+});
+
+describe('WorkflowSubjects.resolveRole', () => {
+  it('exposes the resolveRole subject', () => {
+    expect(WorkflowSubjects.resolveRole.subject).toBe('resolveRole');
+  });
+});
+
+describe('WorkflowResolvedRoleSchema', () => {
+  it('parses a minimal resolved role (adapterName only)', () => {
+    const role = WorkflowResolvedRoleSchema.parse({ adapterName: 'claudeCode' });
+    expect(role.adapterName).toBe('claudeCode');
+    expect(role.model).toBeUndefined();
+    expect(role.harnessId).toBeUndefined();
+    expect(role.systemPrompt).toBeUndefined();
+    expect(role.contextMode).toBeUndefined();
+    expect(role.providerContext).toBeUndefined();
+  });
+
+  it('parses a fully populated resolved role', () => {
+    const role = WorkflowResolvedRoleSchema.parse({
+      adapterName: 'openai',
+      model: 'gpt-4',
+      harnessId: 'harness-reviewer',
+      systemPrompt: 'You are a code reviewer',
+      contextMode: 'fresh',
+      providerContext: {
+        providerConfigId: 'pc-1',
+        definitionId: 'openai',
+        credentialRefs: { apiKey: 'env:OPENAI_API_KEY' },
+      },
+    });
+    expect(role.adapterName).toBe('openai');
+    expect(role.model).toBe('gpt-4');
+    expect(role.harnessId).toBe('harness-reviewer');
+    expect(role.systemPrompt).toBe('You are a code reviewer');
+    expect(role.contextMode).toBe('fresh');
+    expect(role.providerContext?.providerConfigId).toBe('pc-1');
+  });
+
+  it('rejects a resolved role without adapterName', () => {
+    expect(() => WorkflowResolvedRoleSchema.parse({ model: 'gpt-4' })).toThrow();
+  });
+
+  it('rejects a resolved role with empty adapterName', () => {
+    expect(() => WorkflowResolvedRoleSchema.parse({ adapterName: '' })).toThrow();
   });
 });
 

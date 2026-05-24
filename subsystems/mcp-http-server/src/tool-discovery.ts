@@ -36,6 +36,19 @@ export interface McpResolvedTools {
 }
 
 /**
+ * Adapter identity fields for tool discovery policy filtering.
+ *
+ * When present, these fields are forwarded to `ToolSubjects.list` so the
+ * tool registry can apply per-adapter policy (e.g., allowedAdapters checks).
+ */
+export interface McpToolDiscoveryIdentity {
+  /** Adapter identifier for policy filtering. */
+  readonly adapterId?: string;
+  /** Human-readable adapter name for policy filtering. */
+  readonly adapterName?: string;
+}
+
+/**
  * Options for MCP tool discovery.
  */
 export interface McpToolDiscoveryOptions {
@@ -96,14 +109,23 @@ function tentativeMcpName(tool: ToolInfo, pluginToolsets: PluginToolsetMap): str
  * 5. Return `McpResolvedTools` with the final tool list and a `byMcpName` lookup map.
  * @param bus - Bus instance used to query the live tool registry
  * @param options - Discovery options (plugin map, filter hook, static fallback)
+ * @param identity - Optional adapter identity for per-adapter policy filtering
  * @returns Resolved MCP tools with bidirectional name mapping
  */
-export async function resolveMcpTools(bus: IMakaioBus, options?: McpToolDiscoveryOptions): Promise<McpResolvedTools> {
+export async function resolveMcpTools(
+  bus: IMakaioBus,
+  options?: McpToolDiscoveryOptions,
+  identity?: McpToolDiscoveryIdentity,
+): Promise<McpResolvedTools> {
   const pluginToolsets = options?.pluginToolsets ?? {};
   const staticFallback = options?.staticFallback ?? [];
 
-  // Query live registry; fall back to static list if no handler is registered
-  const listResult = await bus.requestOptional(ToolSubjects.list, {});
+  // Query live registry; fall back to static list if no handler is registered.
+  // Pass adapter identity so the registry can apply per-adapter policy filtering.
+  const listResult = await bus.requestOptional(ToolSubjects.list, {
+    adapterId: identity?.adapterId,
+    adapterName: identity?.adapterName,
+  });
   const rawTools: ToolInfo[] = listResult.handled ? listResult.data.tools : staticFallback;
 
   // Apply the official filtering seam

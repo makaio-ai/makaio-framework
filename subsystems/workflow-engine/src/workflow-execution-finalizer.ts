@@ -4,17 +4,18 @@ import {
   SubagentSubjects,
   type CompositeStepState,
   type ExecutableStepState,
+  type IStepRunner,
   type WorkflowExecution,
   type WorkflowStepType,
 } from '@makaio/contracts';
-import type { ActiveExecution } from './types.js';
+import type { ActiveExecution, ActiveRunnerStep } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { persistExecutionUpdate, persistStepState, persistStepStates } from './workflow-execution-persistence.js';
 
 /**
  * Stable dependencies shared by all finalizer functions.
  *
- * Bundles the four invariant params that every finalizer function needs,
+ * Bundles the invariant params that every finalizer function needs,
  * avoiding parameter sprawl at each call site.
  */
 export interface FinalizerDeps {
@@ -24,6 +25,12 @@ export interface FinalizerDeps {
   activeExecutions: Map<string, ActiveExecution>;
   /** Shell step abort controllers keyed by `{executionId}:{stepId}`. */
   shellAbortControllers: Map<string, AbortController>;
+  /** Active runner step entries keyed by `{executionId}:{stepId}` for cancellation tracking. */
+  activeRunnerSteps?: Map<string, ActiveRunnerStep>;
+  /** Step runner instance (used for forceKill on hard cancel). */
+  stepRunner?: IStepRunner;
+  /** Grace period in ms before forceKill is issued after cooperative abort. */
+  cancelTimeoutMs?: number;
   /** Gate coordinator used to release waiting gate steps. */
   gateCoordinator: WorkflowGateCoordinator;
 }
@@ -230,6 +237,27 @@ export async function emitTerminatedStepEvents(
 }
 
 /**
+ * Cancel all active runner steps for a given execution.
+ *
+ * Aborts each tracked step's AbortController, which triggers the cooperative
+ * cancellation signal. The hard kill timer is scheduled by the abort event
+ * listener registered in the scheduler's `runExecutableNode` — this function
+ * only needs to fire the signal.
+ * @param deps - Finalizer dependencies (requires activeRunnerSteps).
+ * @param executionId - Execution identifier whose runner steps should be cancelled.
+ */
+export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string): void {
+  const { activeRunnerSteps } = deps;
+  if (!activeRunnerSteps) return;
+
+  const prefix = `${executionId}:`;
+  for (const [key, entry] of activeRunnerSteps) {
+    if (!key.startsWith(prefix)) continue;
+    entry.controller.abort();
+  }
+}
+
+/**
  * Cancel a running workflow execution and release all active step resources.
  *
  * Terminates all steps that are not already in a terminal state:
@@ -237,6 +265,7 @@ export async function emitTerminatedStepEvents(
  * - Composite steps become `cancelled`; executable steps become `failed`
  * - Subagents for running/waiting executable steps are killed
  * - Shell abort controllers are fired
+ * - Active runner steps are aborted with a hard kill timer
  * - Gate steps are resolved for cancellation
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution identifier to cancel.
@@ -285,6 +314,9 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
         deps.shellAbortControllers.delete(key);
       }
     }
+
+    // Cancel active runner steps (cooperative abort + hard kill timer).
+    cancelActiveRunnerSteps(deps, executionId);
 
     // Persist once after all step and metadata mutations.
     await persistStepStates(deps.bus, execution, terminatedIds.stepIds, {

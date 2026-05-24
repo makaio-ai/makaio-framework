@@ -27,10 +27,16 @@ import {
   type ToolApproveRequestPayload,
   type ToolApproveResponse,
 } from './approve-tool.js';
-import { resolveMcpTools, type McpToolDiscoveryOptions, type McpToolEntry } from './tool-discovery.js';
+import {
+  resolveMcpTools,
+  type McpToolDiscoveryIdentity,
+  type McpToolDiscoveryOptions,
+  type McpToolEntry,
+} from './tool-discovery.js';
 
 export { handleApproveToolCall };
 export type {
+  McpToolDiscoveryIdentity,
   McpToolEntry,
   McpToolDiscoveryOptions,
   RequestToolApproval,
@@ -150,6 +156,34 @@ function toCallToolResult(result: ToolResult<unknown>): CallToolResult {
 }
 
 /**
+ * Extract the adapter session ID from MCP request headers.
+ * @param extra - MCP request handler extra containing optional `requestInfo.headers`
+ * @returns The adapter session ID string, or `undefined` when absent.
+ */
+function extractAdapterSessionId(extra: {
+  requestInfo?: { headers: Record<string, string | string[] | undefined> };
+}): string | undefined {
+  const rawHeader = extra.requestInfo?.headers['x-adapter-session-id'];
+  return Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+}
+
+/**
+ * Resolve adapter identity from the context registry for a given adapter session.
+ * @param adapterSessionId - Adapter session ID extracted from request headers
+ * @param contextRegistry - Optional context registry holding per-session agent context
+ * @returns Adapter identity for policy enforcement, or `undefined` when unavailable
+ */
+function resolveAdapterIdentity(
+  adapterSessionId: string | undefined,
+  contextRegistry: IMcpContextRegistry | undefined,
+): McpToolDiscoveryIdentity | undefined {
+  if (!adapterSessionId || !contextRegistry) return undefined;
+  const agentContext = contextRegistry.get(adapterSessionId);
+  if (!agentContext) return undefined;
+  return { adapterId: agentContext.adapterId, adapterName: agentContext.adapterName };
+}
+
+/**
  * Forward runtime tool registry changes to MCP clients and bind listener cleanup
  * to both direct server closure and connected transport closure.
  * @param server - MCP server instance to notify and close-wrap.
@@ -208,16 +242,18 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
   const server = new Server({ name: 'makaio', version: '1.0.0' }, { capabilities: { tools: { listChanged: true } } });
   const requestToolApproval: RequestToolApproval = (payload) => bus.request(AgentSubjects.toolApprove, payload);
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const resolved = await resolveMcpTools(bus, toolDiscovery);
+  server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
+    const listSessionId = extractAdapterSessionId(extra);
+    const identity = resolveAdapterIdentity(listSessionId, contextRegistry);
+
+    const resolved = await resolveMcpTools(bus, toolDiscovery, identity);
     return {
       tools: [...resolved.tools, ...(contextRegistry ? [buildApproveToolDefinition()] : [])],
     };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const rawHeader = extra.requestInfo?.headers['x-adapter-session-id'];
-    const adapterSessionId = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+    const adapterSessionId = extractAdapterSessionId(extra);
 
     if (request.params.name === APPROVE_TOOL_NAME) {
       if (!contextRegistry) {
@@ -237,7 +273,9 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
       return handleApproveToolCall(request.params.arguments, contextRegistry, adapterSessionId, requestToolApproval);
     }
 
-    const resolved = await resolveMcpTools(bus, toolDiscovery);
+    const callIdentity = resolveAdapterIdentity(adapterSessionId, contextRegistry);
+
+    const resolved = await resolveMcpTools(bus, toolDiscovery, callIdentity);
     const requestedTool = resolved.byMcpName.get(request.params.name);
     if (!requestedTool) {
       throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
@@ -265,9 +303,13 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
 
     // Payload shape matches ToolSchemas.execute.request: { toolName, input, contextOverrides }.
     // sessionId lives inside contextOverrides, not at the top level.
+    // adapterId / adapterName are placed at the top level (canonical location per
+    // the coherent adapter-identity contract in adapter-identity.ts).
     const execution = await bus.requestOptional(ToolSubjects.execute, {
       toolName: requestedTool.sourceToolName,
       input: request.params.arguments ?? {},
+      adapterId: callIdentity?.adapterId,
+      adapterName: callIdentity?.adapterName,
       contextOverrides,
     });
     if (!execution.handled) {

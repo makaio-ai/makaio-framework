@@ -17,6 +17,7 @@ export {
   type StdioMcpServerHandle,
   type HttpMcpServerOptions,
   type ResolveContextOverrides,
+  type McpToolDiscoveryIdentity,
   type McpToolEntry,
   type McpToolDiscoveryOptions,
   type RequestToolApproval,

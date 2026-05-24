@@ -11,7 +11,7 @@ import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
-import { DEFAULT_EXECUTOR_CONFIG, type ExecutorConfig, type ActiveExecution } from './types.js';
+import { DEFAULT_EXECUTOR_CONFIG, type ActiveRunnerStep, type ExecutorConfig, type ActiveExecution } from './types.js';
 import { generateId } from './executor-helpers.js';
 import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import {
@@ -80,6 +80,7 @@ export class WorkflowExecutor extends BaseService {
   private readonly activeExecutions = new Map<string, ActiveExecution>();
   private readonly executionTasks = new Map<string, Promise<void>>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
+  private readonly activeRunnerSteps = new Map<string, ActiveRunnerStep>();
   private readonly gateCoordinator: WorkflowGateCoordinator;
   private readonly stepRunner: IStepRunner;
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
@@ -148,19 +149,29 @@ export class WorkflowExecutor extends BaseService {
       bus: this.bus,
       activeExecutions: this.activeExecutions,
       shellAbortControllers: this.shellAbortControllers,
+      activeRunnerSteps: this.activeRunnerSteps,
+      stepRunner: this.stepRunner,
+      cancelTimeoutMs: this.config.cancelTimeoutMs,
       gateCoordinator: this.gateCoordinator,
     };
+    // 1. Cancel all active executions (aborts controllers, schedules hard-kill timers).
     await Promise.allSettled(
       [...this.activeExecutions.keys()].map((executionId) =>
         cancelExecution(finalizerDeps, executionId, 'Workflow engine shutdown'),
       ),
     );
     this.gateCoordinator.dispose();
+    // 2. Await all execution tasks to settle (runners terminate via abort or forceKill).
+    await Promise.allSettled(this.executionTasks.values());
+    // 3. Clean up remaining timers and maps after all tasks have settled.
     for (const controller of this.shellAbortControllers.values()) {
       controller.abort();
     }
     this.shellAbortControllers.clear();
-    await Promise.allSettled(this.executionTasks.values());
+    for (const entry of this.activeRunnerSteps.values()) {
+      if (entry.hardKillTimer) clearTimeout(entry.hardKillTimer);
+    }
+    this.activeRunnerSteps.clear();
     await this.stepRunner.dispose?.();
     this.activeExecutions.clear();
   }
@@ -189,6 +200,9 @@ export class WorkflowExecutor extends BaseService {
         bus: this.bus,
         activeExecutions: this.activeExecutions,
         shellAbortControllers: this.shellAbortControllers,
+        activeRunnerSteps: this.activeRunnerSteps,
+        stepRunner: this.stepRunner,
+        cancelTimeoutMs: this.config.cancelTimeoutMs,
         gateCoordinator: this.gateCoordinator,
       };
       const cancelled = await cancelExecution(finalizerDeps, executionId, reason);
@@ -333,6 +347,7 @@ export class WorkflowExecutor extends BaseService {
         bus: this.bus,
         activeExecutions: this.activeExecutions,
         shellAbortControllers: this.shellAbortControllers,
+        activeRunnerSteps: this.activeRunnerSteps,
         gateCoordinator: this.gateCoordinator,
         stepRunner: this.stepRunner,
         config: this.config,

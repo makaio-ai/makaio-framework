@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContextModeSchema } from '../subagent/schemas.js';
+import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -158,6 +159,30 @@ export const WorkflowStepBaseSchema = z.object({
 export type WorkflowStepBase = z.infer<typeof WorkflowStepBaseSchema>;
 
 /**
+ * Resolved role configuration returned by the `workflow.resolveRole` RPC.
+ *
+ * When a workflow step specifies `role` instead of explicit adapter/model fields,
+ * the executor resolves the role via the bus before spawning the subagent.
+ * The resolved payload provides the full adapter configuration for execution.
+ */
+export const WorkflowResolvedRoleSchema = z.object({
+  /** Adapter name to use for execution (e.g., 'claudeCode', 'openai'). */
+  adapterName: z.string().min(1),
+  /** Model override for the resolved role. */
+  model: z.string().optional(),
+  /** Harness ID for per-role tool governance. */
+  harnessId: z.string().optional(),
+  /** System prompt to prepend for this role. */
+  systemPrompt: z.string().optional(),
+  /** Context mode for the subagent session. */
+  contextMode: ContextModeSchema.optional(),
+  /** Provider context for credential and endpoint resolution. */
+  providerContext: ProviderContextSchema.optional(),
+});
+
+export type WorkflowResolvedRole = z.infer<typeof WorkflowResolvedRoleSchema>;
+
+/**
  * Agent step variant — spawns a subagent to fulfil the prompt.
  * This is the default step type.
  */
@@ -166,6 +191,12 @@ export const AgentWorkflowStepSchema = WorkflowStepBaseSchema.extend({
   type: z.literal('agent'),
   /** Task prompt for the agent. Supports `{{ }}` template interpolation. */
   prompt: z.string(),
+  /**
+   * Named role reference. Resolved via `workflow.resolveRole` before execution.
+   * When set, the executor calls the bus RPC to obtain adapter, model, and
+   * other configuration instead of using inline fields.
+   */
+  role: z.string().min(1).optional(),
   /** Adapter override for this step (e.g., 'claudeCode', 'openai'). */
   adapter: z.string().optional(),
   /** Model override for this step (e.g., 'sonnet', 'gpt-4'). */

@@ -7,6 +7,7 @@ import {
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
   WorkflowListQuerySchema,
+  WorkflowResolvedRoleSchema,
 } from './schemas.js';
 
 const StepLifecycleBaseSchema = z.object({
@@ -81,6 +82,15 @@ export const WorkflowSchemas = {
         }),
       ),
     }),
+  },
+
+  /**
+   * Resolve a named role to its full adapter configuration.
+   * Called by the workflow executor when an agent step specifies `role`.
+   */
+  resolveRole: {
+    request: z.object({ roleId: z.string().min(1) }),
+    response: WorkflowResolvedRoleSchema,
   },
 
   'execution.started': z.object({

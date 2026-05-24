@@ -24,6 +24,7 @@ export {
   WorkflowExecutionScopeSchema,
   WorkflowInputSchema,
   WorkflowListQuerySchema,
+  WorkflowResolvedRoleSchema,
   WorkflowStepBaseSchema,
   WorkflowStepSchema,
   WorkflowTriggerSchema,
@@ -49,6 +50,7 @@ export type {
   WorkflowExecutionScope,
   WorkflowInput,
   WorkflowListQuery,
+  WorkflowResolvedRole,
   WorkflowStep,
   WorkflowStepBase,
   WorkflowTrigger,
@@ -56,6 +58,9 @@ export type {
 export type { IWorkflowTriggerTypeRegistry, WorkflowTriggerTypeRecord } from './trigger-type-registry.js';
 export {
   WorkflowStepTypeSchema,
+  WorkflowRunnerStepTypeSchema,
+  StepRunnerBusAuthSchema,
+  StepRunnerPlatformDefaultsSchema,
   TokenUsageSchema,
   StepTelemetrySchema,
   StepRunConfigSchema,
@@ -63,6 +68,9 @@ export {
 } from './step-runner.js';
 export type {
   WorkflowStepType,
+  WorkflowRunnerStepType,
+  StepRunnerBusAuth,
+  StepRunnerPlatformDefaults,
   TokenUsage,
   StepTelemetry,
   StepRunConfig,

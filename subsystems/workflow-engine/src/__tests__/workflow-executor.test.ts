@@ -368,6 +368,7 @@ describe('WorkflowExecutor', () => {
 
     const seenConfigs: StepRunConfig[] = [];
     const runner: IStepRunner = {
+      managesWorkflowLifecycle: true,
       async run(config): Promise<StepRunResult> {
         seenConfigs.push(config);
         return {
