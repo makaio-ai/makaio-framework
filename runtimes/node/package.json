@@ -11,7 +11,9 @@
     "./extension-validation": "./src/extension-validation.ts",
     "./makaio-config": "./src/makaio-config.ts",
     "./runtime/schemas": "./src/bus/runtime/schemas.ts",
-    "./runtime/namespace": "./src/bus/runtime/namespace.ts"
+    "./runtime/namespace": "./src/bus/runtime/namespace.ts",
+    "./workflow-step-runner": "./src/workflow-step-runner/index.ts",
+    "./workflow-step-runner/worker-entry": "./src/workflow-step-runner/worker-entry.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",
@@ -37,11 +39,13 @@
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/subsystem-mcp-http-server": "workspace:*",
     "@makaio/subsystem-workflow-engine": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.2",
     "glob": "13.0.6",
     "hono": "^4.12.18",
     "minimatch": "^10.0.3",
+    "piscina": "^5.1.4",
     "ws": "^8.20.1",
     "yaml": "^2.9.0",
     "zod": "^4.1.13"

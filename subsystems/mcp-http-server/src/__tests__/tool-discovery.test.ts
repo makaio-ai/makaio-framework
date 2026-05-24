@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
+import { ToolSubjects } from '@makaio/contracts';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import { defineToolset, defineTool, toolSuccess } from '@makaio/tools-core';
 import type { ToolInfo } from '@makaio/tools-core';
@@ -391,6 +392,80 @@ describe('resolveMcpTools', () => {
       expect(result.tools).toHaveLength(1);
       expect(result.tools[0].name).toBe('allowedTool');
       expect(result.byMcpName.has('blockedTool')).toBe(false);
+    });
+  });
+
+  describe('adapter-identity-propagation', () => {
+    it('passes adapterId and adapterName to ToolSubjects.list when identity is provided', async () => {
+      const bus = createBusInstance();
+      const captured: Array<{ adapterId?: string; adapterName?: string }> = [];
+
+      const unsubscribe = bus.on(ToolSubjects.list, (ctx) => {
+        captured.push({
+          adapterId: ctx.payload.adapterId,
+          adapterName: ctx.payload.adapterName,
+        });
+        ctx.setResult({ tools: [], toolsets: [] });
+      });
+
+      try {
+        await resolveMcpTools(bus, undefined, {
+          adapterId: 'test-adapter-id',
+          adapterName: 'test-adapter',
+        });
+
+        expect(captured).toHaveLength(1);
+        expect(captured[0].adapterId).toBe('test-adapter-id');
+        expect(captured[0].adapterName).toBe('test-adapter');
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('omits adapterId and adapterName from ToolSubjects.list when no identity is provided', async () => {
+      const bus = createBusInstance();
+      const captured: Array<{ adapterId?: string; adapterName?: string }> = [];
+
+      const unsubscribe = bus.on(ToolSubjects.list, (ctx) => {
+        captured.push({
+          adapterId: ctx.payload.adapterId,
+          adapterName: ctx.payload.adapterName,
+        });
+        ctx.setResult({ tools: [], toolsets: [] });
+      });
+
+      try {
+        await resolveMcpTools(bus);
+
+        expect(captured).toHaveLength(1);
+        expect(captured[0].adapterId).toBeUndefined();
+        expect(captured[0].adapterName).toBeUndefined();
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('identity does not affect collision resolution or tool naming', async () => {
+      const { bus, registry, dispose } = createTestHarness();
+      cleanup = dispose;
+
+      await registry.register(
+        defineToolset({
+          name: 'identity-toolset',
+          description: 'Identity test toolset',
+          version: '1.0.0',
+          tools: [makeTestTool('identityTool')],
+        }),
+      );
+
+      const withIdentity = await resolveMcpTools(bus, undefined, {
+        adapterId: 'adapter-1',
+        adapterName: 'my-adapter',
+      });
+
+      const withoutIdentity = await resolveMcpTools(bus);
+
+      expect(withIdentity.tools.map((t) => t.name)).toEqual(withoutIdentity.tools.map((t) => t.name));
     });
   });
 });

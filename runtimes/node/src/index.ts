@@ -78,3 +78,5 @@ export {
 } from './framework-module-resolver.js';
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
+export { createNodeStepRunner } from './workflow-step-runner/index.js';
+export type { NodeStepRunnerFactoryOptions } from './workflow-step-runner/index.js';

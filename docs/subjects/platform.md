@@ -60,7 +60,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `hidden` | `boolean` | yes |
+| `hidden` | `boolean \| undefined` | no |
 
 **Response:**
 

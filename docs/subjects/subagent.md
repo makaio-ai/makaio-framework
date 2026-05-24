@@ -123,7 +123,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `subagentId` | `string` | yes |
@@ -295,7 +295,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |
@@ -319,7 +319,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |

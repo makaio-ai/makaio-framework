@@ -109,7 +109,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `machineId` | `string` | yes |
-| `options` | `{ includeHidden: boolean; excludeNames?: string[] \| undefined; } \| undefined` | no |
+| `options` | `{ includeHidden?: boolean \| undefined; excludeNames?: string[] \| undefined; } \| undefined` | no |
 | `path` | `string \| undefined` | no |
 
 **Response:**
@@ -148,7 +148,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `encoding` | `string` | yes |
+| `encoding` | `string \| undefined` | no |
 | `machineId` | `string \| undefined` | no |
 | `path` | `string` | yes |
 
@@ -206,7 +206,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `content` | `string` | yes |
-| `encoding` | `string` | yes |
+| `encoding` | `string \| undefined` | no |
 | `machineId` | `string \| undefined` | no |
 | `path` | `string` | yes |
 

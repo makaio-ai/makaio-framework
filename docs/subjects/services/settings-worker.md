@@ -42,9 +42,9 @@ Type: Request (RPC)
 | `adapterName` | `string` | yes |
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `allowedTools` | `string[] \| undefined` | no |
-| `contextMode` | `"fork" \| "fresh"` | yes |
+| `contextMode` | `"fork" \| "fresh" \| undefined` | no |
 | `disallowedTools` | `string[] \| undefined` | no |
-| `enabled` | `boolean` | yes |
+| `enabled` | `boolean \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `name` | `string` | yes |
 | `providerConfigId` | `string \| undefined` | no |

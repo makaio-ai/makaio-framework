@@ -99,6 +99,12 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ success: z.boolean() }),
     },
 
+    /**
+     * List workflow executions by workflow ID or scope.
+     *
+     * At least one of `workflowId` or `scope` is required. `limit` is optional
+     * for callers and defaults to 50 during request parsing.
+     */
     listExecutions: {
       request: ExecutionListQuerySchema,
       response: z.object({ executions: z.array(WorkflowExecutionSchema) }),

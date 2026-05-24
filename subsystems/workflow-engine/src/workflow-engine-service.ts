@@ -1,9 +1,23 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
+import type { IStepRunner, IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { BusEventTriggerEvaluator } from './bus-event-trigger-evaluator.js';
 import { CronTriggerEvaluator } from './cron-trigger-evaluator.js';
+import type { ExecutorConfig } from './types.js';
 import { WorkflowExecutor } from './workflow-executor.js';
+
+/**
+ * Options for constructing a {@link WorkflowEngineService}.
+ *
+ * Both fields are optional — when omitted the service falls back to the
+ * default in-process step runner and default executor config.
+ */
+export interface WorkflowEngineServiceOptions {
+  /** Custom step runner injected by the runtime composition root. */
+  stepRunner?: IStepRunner;
+  /** Partial executor configuration merged with defaults. */
+  executorConfig?: Partial<ExecutorConfig>;
+}
 
 /**
  * Workflow engine package service.
@@ -18,10 +32,11 @@ export class WorkflowEngineService extends BaseService {
 
   /**
    * @param bus - Shared runtime bus.
+   * @param options - Optional step runner and executor config overrides.
    */
-  public constructor(bus: IMakaioBus) {
+  public constructor(bus: IMakaioBus, options?: WorkflowEngineServiceOptions) {
     super(bus);
-    this.workflowExecutor = new WorkflowExecutor(bus);
+    this.workflowExecutor = new WorkflowExecutor(bus, options?.executorConfig, options?.stepRunner);
     this.busEventTriggerEvaluator = new BusEventTriggerEvaluator(bus);
     this.cronTriggerEvaluator = new CronTriggerEvaluator(bus);
   }

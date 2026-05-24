@@ -1,5 +1,11 @@
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, DEFAULT_CONSTRAINTS, SubagentSubjects, type WorkflowStep } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  DEFAULT_CONSTRAINTS,
+  SubagentConfigSchema,
+  SubagentSubjects,
+  type WorkflowStep,
+} from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { ExecutionTargetSubjects } from '@makaio/services-core';
@@ -49,7 +55,7 @@ function registerSubagentStubHandlers(bus: typeof MakaioBus): Array<() => void> 
       subagentId,
       parentSessionId: ctx.payload.parentSessionId,
       task: ctx.payload.config.task,
-      config: { ...ctx.payload.config, contextMode: ctx.payload.config.contextMode ?? 'fork' },
+      config: SubagentConfigSchema.parse(ctx.payload.config),
       depth: ctx.payload.depth,
     });
     ctx.setResult({ subagentId, status: 'spawning' });

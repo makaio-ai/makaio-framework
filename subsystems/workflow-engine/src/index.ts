@@ -13,10 +13,13 @@
 export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowExecutor } from './workflow-executor.js';
 export { WorkflowEngineService } from './workflow-engine-service.js';
-export { WorkflowEngineToken, workflowEnginePackage } from './package.js';
+export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage } from './package.js';
+export type { WorkflowEngineServiceOptions } from './workflow-engine-service.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
-export type { ActiveExecution, ExecutorConfig } from './types.js';
+export { runShellStep, spawnProcess } from './executor-helpers.js';
+export type { RunShellStepOptions, SpawnProcessOptions, ShellStepOutcome } from './executor-helpers.js';
+export type { ActiveExecution, ActiveRunnerStep, ExecutorConfig } from './types.js';
 export type {
   ContextBundle,
   ContextPublishTarget,

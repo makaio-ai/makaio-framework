@@ -74,9 +74,9 @@ Purpose: Plugins or built-in widgets emit this to register themselves.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `activate` | `{ pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: Function \| undefined; } \| undefined` | no |
+| `activate` | `{ pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: unknown; } \| undefined` | no |
 | `allowMultiple` | `boolean \| undefined` | no |
-| `component` | `{} \| null` | yes |
+| `component` | `unknown` | yes |
 | `defaultConfig` | `unknown` | no |
 | `defaultSize` | `"medium" \| "small" \| "large" \| "full-width"` | yes |
 | `description` | `string \| undefined` | no |

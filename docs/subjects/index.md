@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 91 |
-| Subjects | 749 (333 events, 416 RPCs) |
-| framework | 88 |
+| Namespaces | 88 |
+| Subjects | 742 (327 events, 415 RPCs) |
+| framework | 85 |
 | extension | 3 |
-| kind: bus | 67 |
+| kind: bus | 64 |
 | kind: adapter | 8 |
 | kind: client | 2 |
 | kind: extension | 1 |
@@ -67,25 +67,22 @@ next: false
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
-| [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
 | [`session`](./session.md) | bus | 55 | 29E / 26R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 11 | 0E / 11R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 12 | 0E / 12R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
 | [`tool`](./tool.md) | bus | 7 | 5E / 2R |
-| [`ui`](./ui.md) | bus | 4 | 2E / 2R |
 | [`vcs`](./vcs.md) | bus | 11 | 0E / 11R |
 | [`vcs:events`](./vcs-events.md) | bus | 2 | 2E / 0R |
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`widget`](./widget.md) | bus | 4 | 4E / 0R |
-| [`workflow`](./workflow.md) | bus | 24 | 14E / 10R |
+| [`workflow`](./workflow.md) | bus | 25 | 14E / 11R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

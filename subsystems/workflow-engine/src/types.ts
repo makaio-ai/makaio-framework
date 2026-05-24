@@ -1,7 +1,27 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IStepRunner, WorkflowDefinition, WorkflowExecution, WorkflowStep } from '@makaio/contracts';
+import type {
+  IStepRunner,
+  StepRunnerBusAuth,
+  StepRunnerPlatformDefaults,
+  WorkflowDefinition,
+  WorkflowExecution,
+  WorkflowStep,
+} from '@makaio/contracts';
 import type { ForEachStepContext } from './for-each-expander.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
+
+/**
+ * Tracks an active runner-managed step for cooperative/hard cancellation.
+ * Stored in the `activeRunnerSteps` map keyed by `{executionId}:{stepId}`.
+ */
+export interface ActiveRunnerStep {
+  /** AbortController whose signal is passed to the runner for cooperative cancellation. */
+  controller: AbortController;
+  /** Per-step bus subject emitted so remote workers can observe cancellation. */
+  cancelSubject: string;
+  /** Timer that fires forceKill after the cancel grace period expires. */
+  hardKillTimer?: ReturnType<typeof setTimeout>;
+}
 
 /**
  * A single node in the scheduler DAG.
@@ -39,9 +59,11 @@ export interface WorkflowSchedulerDeps {
   activeExecutions: Map<string, ActiveExecution>;
   /** Shell process abort controllers keyed by `{executionId}:{stepId}`. */
   shellAbortControllers: Map<string, AbortController>;
+  /** Active runner step entries keyed by `{executionId}:{stepId}` for cancellation tracking. */
+  activeRunnerSteps: Map<string, ActiveRunnerStep>;
   /** Gate coordinator for approval/reject flows. */
   gateCoordinator: WorkflowGateCoordinator;
-  /** Step runner for agent/shell/gate execution. */
+  /** Step runner for agent/shell execution. */
   stepRunner: IStepRunner;
   /** Executor config (timeouts, cooldowns). */
   config: ExecutorConfig;
@@ -55,6 +77,14 @@ export interface ExecutorConfig {
   stepTimeoutMs: number;
   /** Cooldown between steps in ms. */
   stepCooldownMs: number;
+  /** Bus server WebSocket URL for runner worker connections. */
+  busUrl?: string;
+  /** Bus authentication strategy for runner worker connections. */
+  busAuth: StepRunnerBusAuth;
+  /** Platform-level defaults (cwd, env) for runner process creation. */
+  platformDefaults: StepRunnerPlatformDefaults;
+  /** Grace period in ms before forceKill is issued after cooperative abort. */
+  cancelTimeoutMs: number;
 }
 
 /**
@@ -63,6 +93,9 @@ export interface ExecutorConfig {
 export const DEFAULT_EXECUTOR_CONFIG: ExecutorConfig = {
   stepTimeoutMs: 5 * 60 * 1000, // 5 minutes
   stepCooldownMs: 500,
+  busAuth: { kind: 'none' },
+  platformDefaults: { cwd: process.cwd() },
+  cancelTimeoutMs: 10_000,
 };
 
 /**

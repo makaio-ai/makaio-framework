@@ -70,7 +70,7 @@ Type: Request (RPC)
 | `env` | `Record<string, string> \| undefined` | no |
 | `image` | `string \| undefined` | no |
 | `mode` | `"container-local" \| "container-isolated"` | yes |
-| `runtime` | `"full" \| "simple"` | yes |
+| `runtime` | `"full" \| "simple" \| undefined` | no |
 | `sessionId` | `string` | yes |
 
 **Response:**
@@ -123,7 +123,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `containerId` | `string` | yes |
-| `deleteBranch` | `boolean` | yes |
+| `deleteBranch` | `boolean \| undefined` | no |
 
 **Response:**
 

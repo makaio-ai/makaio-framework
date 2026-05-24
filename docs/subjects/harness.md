@@ -45,17 +45,17 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string \| undefined` | no |
-| `approvalPolicy` | `"reject" \| "always-ask" \| "full-access"` | yes |
+| `approvalPolicy` | `"reject" \| "always-ask" \| "full-access" \| undefined` | no |
 | `capabilityOverrides` | `Record<string, "reject" \| "always-ask" \| "full-access"> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `credentials` | `Record<string, string> \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `description` | `string \| undefined` | no |
-| `enabled` | `boolean` | yes |
+| `enabled` | `boolean \| undefined` | no |
 | `env` | `Record<string, string> \| undefined` | no |
 | `id` | `string` | yes |
-| `isDefault` | `boolean` | yes |
+| `isDefault` | `boolean \| undefined` | no |
 | `name` | `string` | yes |
 | `nativeTools` | `{ enabled: string[]; disabled: string[]; }` | yes |
 | `registryTools` | `{ enabled: string[]; disabled: string[]; }` | yes |
@@ -280,17 +280,17 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string \| undefined` | no |
-| `approvalPolicy` | `"reject" \| "always-ask" \| "full-access"` | yes |
+| `approvalPolicy` | `"reject" \| "always-ask" \| "full-access" \| undefined` | no |
 | `capabilityOverrides` | `Record<string, "reject" \| "always-ask" \| "full-access"> \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
 | `createdAt` | `number` | yes |
 | `credentials` | `Record<string, string> \| undefined` | no |
 | `cwd` | `string \| undefined` | no |
 | `description` | `string \| undefined` | no |
-| `enabled` | `boolean` | yes |
+| `enabled` | `boolean \| undefined` | no |
 | `env` | `Record<string, string> \| undefined` | no |
 | `id` | `string` | yes |
-| `isDefault` | `boolean` | yes |
+| `isDefault` | `boolean \| undefined` | no |
 | `name` | `string` | yes |
 | `nativeTools` | `{ enabled: string[]; disabled: string[]; }` | yes |
 | `registryTools` | `{ enabled: string[]; disabled: string[]; }` | yes |

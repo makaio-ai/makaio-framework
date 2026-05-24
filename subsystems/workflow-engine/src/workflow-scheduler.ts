@@ -4,15 +4,18 @@ import {
   type ForEachWorkflowStep,
   type WorkflowExecution,
   type WorkflowStep,
+  type WorkflowRunnerStepType,
   type WorkflowStepType,
 } from '@makaio/contracts';
 import { evaluateSync, type ExpressionContext } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
-import type { ActiveExecution, SchedulerNode, WorkflowSchedulerDeps } from './types.js';
+import type { ActiveExecution, ActiveRunnerStep, SchedulerNode, WorkflowSchedulerDeps } from './types.js';
 import { sleep } from './executor-helpers.js';
+import { executeGateStep } from './workflow-step-executors.js';
 import { expandForEachAtRuntime, buildStepContextFromSnapshot, buildChildStepMap } from './runtime-for-each.js';
 import { persistStepState, persistStepStates } from './workflow-execution-persistence.js';
 import {
+  cancelActiveRunnerSteps,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
   emitTerminatedStepEvents,
@@ -74,13 +77,16 @@ export class WorkflowScheduler {
 
   /**
    * Stable finalizer dependency bundle derived from this scheduler's deps.
-   * @returns FinalizerDeps bundling bus, activeExecutions, shellAbortControllers, gateCoordinator.
+   * @returns FinalizerDeps bundling bus, activeExecutions, shellAbortControllers, activeRunnerSteps, and gateCoordinator.
    */
   private get finalizerDeps(): FinalizerDeps {
     return {
       bus: this.deps.bus,
       activeExecutions: this.deps.activeExecutions,
       shellAbortControllers: this.deps.shellAbortControllers,
+      activeRunnerSteps: this.deps.activeRunnerSteps,
+      stepRunner: this.deps.stepRunner,
+      cancelTimeoutMs: this.deps.config.cancelTimeoutMs,
       gateCoordinator: this.deps.gateCoordinator,
     };
   }
@@ -372,7 +378,8 @@ export class WorkflowScheduler {
 
   /**
    * Run a single executable (agent / shell / gate) node.
-   * Evaluates the `if` condition first, then delegates to the step runner.
+   * Evaluates the `if` condition first, then delegates to the step runner
+   * (agent/shell) or handles gate steps directly via the gate coordinator.
    * @param nodeId - Executable step ID.
    * @param active - Active execution state.
    * @returns Step execution outcome.
@@ -408,6 +415,13 @@ export class WorkflowScheduler {
 
     const resolvedInputs: Record<string, unknown> = { ...context };
 
+    // Gate steps are coordination steps handled by the orchestrator directly,
+    // not dispatched to the step runner (which only handles agent/shell).
+    if (step.type === 'gate') {
+      const gateResult = await executeGateStep(this.deps, this.executionId, nodeId);
+      return applyStepRunResult(this.deps.bus, active, nodeId, gateResult, resolvedInputs);
+    }
+
     const stepRunnerManagesLifecycle = runnerManagesWorkflowLifecycle(this.deps.stepRunner);
     if (!stepRunnerManagesLifecycle) {
       await prepareRunnerManagedStep(this.deps.bus, active, nodeId);
@@ -416,16 +430,68 @@ export class WorkflowScheduler {
       }
     }
 
-    const result = await this.deps.stepRunner.run({
-      executionId: this.executionId,
-      workflowId: active.workflow.id,
-      stepId: nodeId,
-      stepType: step.type as WorkflowStepType,
-      stepDefinition: step,
-      resolvedInputs,
-    });
+    const controller = new AbortController();
+    const key = `${this.executionId}:${nodeId}`;
+    this.deps.shellAbortControllers.set(key, controller);
+
+    // Register in activeRunnerSteps for cancellation tracking.
+    const cancelSubject = `workflow.${this.executionId}.step.${nodeId}.cancel`;
+    const runnerEntry: ActiveRunnerStep = { controller, cancelSubject };
+    this.deps.activeRunnerSteps.set(key, runnerEntry);
+
+    this.scheduleRunnerHardKill(controller, runnerEntry, key, nodeId);
+
+    let result;
+    try {
+      result = await this.deps.stepRunner.run(
+        {
+          executionId: this.executionId,
+          workflowId: active.workflow.id,
+          stepId: nodeId,
+          coordinatorSessionId: execution.coordinatorSessionId ?? this.executionId,
+          stepType: step.type as WorkflowRunnerStepType,
+          stepDefinition: step,
+          resolvedInputs,
+          busUrl: this.deps.config.busUrl,
+          busAuth: this.deps.config.busAuth,
+          platformDefaults: this.deps.config.platformDefaults,
+          cancelSubject,
+        },
+        controller.signal,
+      );
+    } finally {
+      if (runnerEntry.hardKillTimer) clearTimeout(runnerEntry.hardKillTimer);
+      this.deps.activeRunnerSteps.delete(key);
+      this.deps.shellAbortControllers.delete(key);
+    }
 
     return applyStepRunResult(this.deps.bus, active, nodeId, result, resolvedInputs);
+  }
+
+  /**
+   * Arm a hard-kill timer when runner cooperative cancellation starts.
+   * @param controller - Step abort controller passed to the runner.
+   * @param runnerEntry - Active runner tracking entry to receive the timer.
+   * @param key - Active-runner map key for diagnostics.
+   * @param nodeId - Step ID for runner forceKill calls.
+   */
+  private scheduleRunnerHardKill(
+    controller: AbortController,
+    runnerEntry: ActiveRunnerStep,
+    key: string,
+    nodeId: string,
+  ): void {
+    controller.signal.addEventListener('abort', () => {
+      const { cancelTimeoutMs } = this.deps.config;
+      if (!this.deps.stepRunner.forceKill || cancelTimeoutMs <= 0) return;
+      const timer = setTimeout(() => {
+        void Promise.resolve(this.deps.stepRunner.forceKill?.(this.executionId, nodeId)).catch((err) => {
+          console.error(`[WorkflowScheduler] forceKill failed for ${key}:`, err);
+        });
+      }, cancelTimeoutMs);
+      timer.unref?.();
+      runnerEntry.hardKillTimer = timer;
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -436,6 +502,7 @@ export class WorkflowScheduler {
    * Abort all in-flight nodes when a step fails (fail-fast semantics).
    *
    * - Shells are aborted via `shellAbortControllers`.
+   * - Active runner steps are cancelled with hard kill timers via `cancelActiveRunnerSteps`.
    * - Gates are resolved for cancellation via `WorkflowGateCoordinator`.
    * - Subagents are killed via `SubagentSubjects.kill`.
    * @param reason - Human-readable abort reason.
@@ -447,8 +514,11 @@ export class WorkflowScheduler {
     const { execution } = active;
     const abortPromises: Promise<unknown>[] = [];
 
+    // Cancel active runner steps (cooperative abort + hard kill timer).
+    cancelActiveRunnerSteps(this.finalizerDeps, this.executionId, reason);
+
     for (const nodeId of this.inFlight.keys()) {
-      // Abort shell process
+      // Abort shell process (for steps not tracked by activeRunnerSteps)
       const shellKey = `${this.executionId}:${nodeId}`;
       this.deps.shellAbortControllers.get(shellKey)?.abort();
 

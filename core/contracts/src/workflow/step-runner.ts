@@ -1,17 +1,31 @@
 import { z } from 'zod';
-import { WorkflowStepSchema } from './schemas.js';
+import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
+import { AgentWorkflowStepSchema, ShellWorkflowStepSchema } from './schemas.js';
 
 // ─────────────────────────────────────────────────────────────
-// Step Type
+// Step Type (lifecycle — includes gate for spans/events)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Discriminant for workflow step execution types.
+ * Discriminant for all workflow step execution types, including gate.
+ * Used by lifecycle events and span records where gate steps participate.
  * Matches the `type` discriminant on {@link WorkflowStepSchema} variants.
  */
 export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Runner Step Type (excludes gate — runner-executable only)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Step types that are executable by a {@link IStepRunner}.
+ * Gates are coordination steps handled by the orchestrator, not dispatched to runners.
+ */
+export const WorkflowRunnerStepTypeSchema = z.enum(['agent', 'shell']);
+
+export type WorkflowRunnerStepType = z.infer<typeof WorkflowRunnerStepTypeSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Step Telemetry
@@ -49,36 +63,136 @@ export const StepTelemetrySchema = z.object({
 export type StepTelemetry = z.infer<typeof StepTelemetrySchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Bus Auth (typed discriminated union)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Bus authentication strategy for the worker connection.
+ * Discriminated on `kind`:
+ * - `none`: no authentication (local/trusted environments)
+ * - `hmac`: shared-secret HMAC signing
+ */
+export const StepRunnerBusAuthSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }).strict(),
+  z.object({ kind: z.literal('hmac'), secret: z.string().min(1) }).strict(),
+]);
+
+export type StepRunnerBusAuth = z.infer<typeof StepRunnerBusAuthSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Platform Defaults
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Platform-level defaults inherited from the coordinator session.
+ * Provides the working directory and optional base environment
+ * for runner process creation.
+ */
+export const StepRunnerPlatformDefaultsSchema = z.object({
+  /** Working directory for the step process. */
+  cwd: z.string().min(1),
+  /** Optional base environment variables merged into the step process. */
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+export type StepRunnerPlatformDefaults = z.infer<typeof StepRunnerPlatformDefaultsSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Step Cancellation Event
+// ─────────────────────────────────────────────────────────────
+
+/** Payload emitted on a step runner's cancellation subject. */
+export const StepCancelPayloadSchema = z.object({
+  /** Execution ID owning the cancelled step. */
+  executionId: z.string().min(1),
+  /** Step ID being cancelled. */
+  stepId: z.string().min(1),
+  /** Optional human-readable cancellation reason. */
+  reason: z.string().optional(),
+});
+
+export type StepCancelPayload = z.infer<typeof StepCancelPayloadSchema>;
+
+export type StepCancelSubject = SubjectDefinition<Record<string, StepCancelPayload>, string, string>;
+
+/**
+ * Build an ad-hoc event subject definition for a runner cancellation channel.
+ *
+ * Cancellation subjects are per step (`workflow.{execution}.step.{step}.cancel`)
+ * and therefore cannot be statically enumerated in the workflow namespace.
+ * They intentionally follow the same ad-hoc subject pattern used by direct
+ * channels: no registered Zod schema, but a typed in-process definition for
+ * bus routing across transports.
+ * @param fullSubject - Fully qualified subject in `namespace.subject` form.
+ * @returns Event subject definition for bus emit/on calls.
+ */
+export function createStepCancelSubject(fullSubject: string): StepCancelSubject {
+  const separator = fullSubject.indexOf('.');
+  if (separator <= 0 || separator === fullSubject.length - 1) {
+    throw new Error(`Invalid step cancel subject: ${fullSubject}`);
+  }
+
+  return {
+    subject: fullSubject.slice(separator + 1),
+    $meta: {
+      namespace: fullSubject.slice(0, separator),
+      isRequest: false,
+      payload: {} as EventMessagePayload<StepCancelPayload>,
+      local: false,
+      channel: false,
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Step Run Config (input to a StepRunner)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Configuration passed to a {@link StepRunner} to execute a single step.
+ * Configuration passed to a {@link IStepRunner} to execute a single step.
  *
- * Internal API — only the Executor/Bridge creates these from a resolved
- * WorkflowStep. No cross-field refinement between stepType and
- * stepDefinition.type: the Executor/Bridge owns pairing these fields from a
- * runner-executable step. Runtime `for-each` scheduler nodes are coordination
- * steps, not runner targets, so the enum domains intentionally differ.
+ * Internal API — only the Executor/Bridge creates these from a resolved,
+ * runner-executable WorkflowStep. Runtime `gate` and `for-each` scheduler
+ * nodes are coordination steps, not runner targets.
+ *
+ * Uses {@link WorkflowRunnerStepTypeSchema} (agent | shell) — gate steps are
+ * coordination steps handled by the orchestrator, never dispatched to runners.
  */
-export const StepRunConfigSchema = z.object({
-  /** Step identifier within the workflow definition. */
-  stepId: z.string().min(1),
-  /** Execution ID of the running workflow. */
-  executionId: z.string().min(1),
-  /** Workflow definition ID. */
-  workflowId: z.string().min(1),
-  /** Step type discriminant. */
-  stepType: WorkflowStepTypeSchema,
-  /** Resolved step definition from the workflow DAG. */
-  stepDefinition: WorkflowStepSchema,
-  /** Expression context values resolved from previous step outputs and workflow inputs. */
-  resolvedInputs: z.record(z.string(), z.unknown()),
-  /** Bus server WebSocket URL for the worker to connect to. */
-  busUrl: z.string().optional(),
-  /** Bus authentication credentials for the worker connection. */
-  busAuth: z.record(z.string(), z.unknown()).optional(),
-});
+const WorkflowRunnerStepSchema = z.discriminatedUnion('type', [AgentWorkflowStepSchema, ShellWorkflowStepSchema]);
+
+export const StepRunConfigSchema = z
+  .object({
+    /** Step identifier within the workflow definition. */
+    stepId: z.string().min(1),
+    /** Execution ID of the running workflow. */
+    executionId: z.string().min(1),
+    /** Workflow definition ID. */
+    workflowId: z.string().min(1),
+    /** Coordinator session ID owning this execution. */
+    coordinatorSessionId: z.string().min(1),
+    /** Step type discriminant (runner-executable types only). */
+    stepType: WorkflowRunnerStepTypeSchema,
+    /** Resolved runner-executable step definition from the workflow DAG. */
+    stepDefinition: WorkflowRunnerStepSchema,
+    /** Expression context values resolved from previous step outputs and workflow inputs. */
+    resolvedInputs: z.record(z.string(), z.unknown()),
+    /** Bus server WebSocket URL for the worker to connect to. */
+    busUrl: z.string().optional(),
+    /** Bus authentication strategy. Defaults to `{ kind: 'none' }` when omitted. */
+    busAuth: StepRunnerBusAuthSchema.default({ kind: 'none' }),
+    /** Platform-level defaults inherited from the coordinator session. */
+    platformDefaults: StepRunnerPlatformDefaultsSchema,
+    /** Bus subject the worker subscribes to for cancellation signals. */
+    cancelSubject: z.string().min(1),
+  })
+  .superRefine((config, ctx) => {
+    if (config.stepType === config.stepDefinition.type) return;
+    ctx.addIssue({
+      code: 'custom',
+      path: ['stepDefinition', 'type'],
+      message: `stepDefinition.type must match stepType (${config.stepType})`,
+    });
+  });
 
 export type StepRunConfig = z.infer<typeof StepRunConfigSchema>;
 
@@ -122,11 +236,31 @@ export type StepRunResult = z.infer<typeof StepRunResultSchema>;
  */
 export interface IStepRunner {
   /**
+   * Whether this runner manages the full workflow lifecycle (bus subscriptions,
+   * session creation, etc.) or delegates that to the orchestrator.
+   *
+   * - `true`: Runner creates its own bus connection, manages session lifecycle
+   *   (e.g., Docker/Lambda runners that are fully self-contained).
+   * - `false`: Orchestrator manages the bus connection and session; runner
+   *   only executes the step process (e.g., Piscina thread pool runner).
+   */
+  readonly managesWorkflowLifecycle: boolean;
+
+  /**
    * Execute a workflow step in an isolated environment.
    * @param config - Step configuration including definition, inputs, and bus connection info
+   * @param signal - AbortSignal for cooperative cancellation; abort triggers graceful shutdown
    * @returns Step result with functional output and operational telemetry
    */
-  run(config: StepRunConfig): Promise<StepRunResult>;
+  run(config: StepRunConfig, signal: AbortSignal): Promise<StepRunResult>;
+
+  /**
+   * Force-kill a running step immediately (SIGKILL / container stop).
+   * Called after the AbortSignal grace period expires without the step completing.
+   * @param executionId - Execution ID owning the step
+   * @param stepId - Identifier of the step to kill
+   */
+  forceKill?(executionId: string, stepId: string): void | Promise<void>;
 
   /**
    * Release resources held by this runner (thread pools, connections).

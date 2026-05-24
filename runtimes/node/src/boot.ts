@@ -55,7 +55,7 @@ import {
   FrameworkServicesCoreNamespaces,
 } from '@makaio/services-core';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
-import { workflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
+import { createWorkflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { registerAdapterRuntimeIdentityHandlers } from '@makaio/services-core/adapter-runtime';
@@ -88,6 +88,7 @@ import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
+import { createNodeWorkflowStepRunnerPackageOptions } from './workflow-step-runner/index.js';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -109,6 +110,7 @@ export type {
   MakaioRuntime,
   ServerTransportProvider,
   TransportReadyInfo,
+  WorkflowStepRunnerBootOptions,
 } from './boot-types.js';
 
 /**
@@ -336,6 +338,8 @@ export async function bootMakaioRuntimeCore(
       runtimeEnvironment,
     });
 
+    const busUrl = buildLocalBusUrl(boundHost, boundPort);
+
     const coordinator = new ExtensionCoordinator(bus, {
       surface: options.surface ?? 'headless',
       db,
@@ -345,7 +349,7 @@ export async function bootMakaioRuntimeCore(
         makaioHome,
         username: bootUsername,
         machineId: machineIdentity.machineId,
-        busUrl: buildLocalBusUrl(boundHost, boundPort),
+        busUrl,
         tryImport,
       },
       runtimeEnvironment,
@@ -387,14 +391,18 @@ export async function bootMakaioRuntimeCore(
       );
     }
 
+    const platformDefaults = { cwd: os.tmpdir() };
+    const workflowStepRunnerPackageOptions = createNodeWorkflowStepRunnerPackageOptions({
+      busUrl,
+      runtimeModuleDir: srcDir,
+      platformDefaults,
+      runner: options.workflowStepRunner,
+    });
+
     frameworkPackages.push(
-      createAdapterSubsystemPackage({
-        configRepository: adapterConfigRepository,
-        coordinator,
-        platformDefaults: { cwd: os.tmpdir() },
-      }),
+      createAdapterSubsystemPackage({ configRepository: adapterConfigRepository, coordinator, platformDefaults }),
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
-      workflowEnginePackage,
+      createWorkflowEnginePackage(workflowStepRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
     );

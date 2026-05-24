@@ -125,6 +125,11 @@ Type: Request (RPC)
 
 ### <a id="storage:workflow.listExecutions"></a>`storage:workflow.listExecutions` (rpc)
 
+List workflow executions by workflow ID or scope.
+
+At least one of `workflowId` or `scope` is required. `limit` is optional
+for callers and defaults to 50 during request parsing.
+
 Subject: `storage:workflow.listExecutions`
 Type: Request (RPC)
 
@@ -137,8 +142,6 @@ Type: Request (RPC)
 | `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
 | `status` | `"completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused" \| undefined` | no |
 | `workflowId` | `string \| undefined` | no |
-
-At least one of `workflowId` or `scope` is required.
 
 **Response:**
 
@@ -189,35 +192,13 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `execution` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { kind: "executable"; status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| { kind: "composite"; status: "completed" \| "cancelled" \| "skipped" \| "pending" \| "failed" \| "expanding"; startedAt?: number \| undefined; completedAt?: number \| undefined; error?: string \| undefined; expansion?: { parentStepId: string; childSteps: WorkflowStep[]; stepContext: Record<string, { item: unknown; index: number; }>; leafStepIds: string[]; } \| undefined; }>; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; }` | yes |
+| `execution` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { kind: "executable"; status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| { kind: "composite"; status: "completed" \| "cancelled" \| "skipped" \| "pending" \| "failed" \| "expanding"; startedAt?: number \| undefined; completedAt?: number \| undefined; error?: string \| undefined; expansion?: { parentStepId: string; childSteps: unknown[]; stepContext: Record<string, { item: unknown; index: number; }>; leafStepIds: string[]; } \| undefined; }>; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
 | `id` | `string` | yes |
-
-### <a id="storage:workflow.updateExecution"></a>`storage:workflow.updateExecution` (rpc)
-
-Subject: `storage:workflow.updateExecution`
-Type: Request (RPC)
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `completedAt` | `number \| null \| undefined` | no |
-| `currentStepId` | `string \| null \| undefined` | no |
-| `error` | `string \| null \| undefined` | no |
-| `executionId` | `string` | yes |
-| `status` | `"completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused" \| undefined` | no |
-| `stepUpdates` | `Record<string, StepState> \| undefined` | no |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `success` | `boolean` | yes |
 
 ### <a id="storage:workflow.setExecutionLink"></a>`storage:workflow.setExecutionLink` (rpc)
 
@@ -252,6 +233,28 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `id` | `string` | yes |
+
+### <a id="storage:workflow.updateExecution"></a>`storage:workflow.updateExecution` (rpc)
+
+Subject: `storage:workflow.updateExecution`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completedAt` | `number \| null \| undefined` | no |
+| `currentStepId` | `string \| null \| undefined` | no |
+| `error` | `string \| null \| undefined` | no |
+| `executionId` | `string` | yes |
+| `status` | `"completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused" \| undefined` | no |
+| `stepUpdates` | `Record<string, { kind: "executable"; status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| { kind: "composite"; status: "completed" \| "cancelled" \| "skipped" \| "pending" \| "failed" \| "expanding"; startedAt?: number \| undefined; completedAt?: number \| undefined; error?: string \| undefined; expansion?: { parentStepId: string; childSteps: unknown[]; stepContext: Record<string, { item: unknown; index: number; }>; leafStepIds: string[]; } \| undefined; }> \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `success` | `boolean` | yes |
 
 ---
 

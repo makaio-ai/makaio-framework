@@ -15,14 +15,21 @@ describe('InProcessStepRunner', () => {
       config: { ...DEFAULT_EXECUTOR_CONFIG, stepCooldownMs: 0 },
     });
 
-    const result = await runner.run({
-      executionId: 'missing',
-      workflowId: 'workflow',
-      stepId: 'one',
-      stepType: 'shell',
-      stepDefinition: { id: 'one', type: 'shell', command: ['echo', 'ok'] },
-      resolvedInputs: {},
-    });
+    const result = await runner.run(
+      {
+        executionId: 'missing',
+        workflowId: 'workflow',
+        stepId: 'one',
+        coordinatorSessionId: 'sess-1',
+        stepType: 'shell',
+        stepDefinition: { id: 'one', type: 'shell', command: ['echo', 'ok'] },
+        resolvedInputs: {},
+        busAuth: { kind: 'none' },
+        platformDefaults: { cwd: '/tmp' },
+        cancelSubject: 'workflow.missing.step.one.cancel',
+      },
+      AbortSignal.abort(),
+    );
 
     expect(result.status).toBe('failed');
     expect(result.error).toBe('Active execution not found: missing');

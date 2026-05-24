@@ -39,6 +39,7 @@ next: false
 | `listDefinitions` | [`workflow.listDefinitions`](#workflow.listDefinitions) | rpc | — |
 | `listExecutions` | [`workflow.listExecutions`](#workflow.listExecutions) | rpc | — |
 | `listTriggerTypes` | [`workflow.listTriggerTypes`](#workflow.listTriggerTypes) | rpc | — |
+| `resolveRole` | [`workflow.resolveRole`](#workflow.resolveRole) | rpc | — |
 | `setDefinition` | [`workflow.setDefinition`](#workflow.setDefinition) | rpc | — |
 | `start` | [`workflow.start`](#workflow.start) | rpc | — |
 | `step.beforeStart` | [`workflow.step.beforeStart`](#workflow.step.beforeStart) | event | — |
@@ -283,6 +284,11 @@ Type: Request (RPC)
 
 ### <a id="workflow.listExecutions"></a>`workflow.listExecutions` (rpc)
 
+List workflow executions by workflow ID or scope.
+
+At least one of `workflowId` or `scope` is required. `limit` is optional
+for callers and defaults to 50 during request parsing.
+
 Subject: `workflow.listExecutions`
 Type: Request (RPC)
 
@@ -295,8 +301,6 @@ Type: Request (RPC)
 | `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
 | `status` | `"completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused" \| undefined` | no |
 | `workflowId` | `string \| undefined` | no |
-
-At least one of `workflowId` or `scope` is required.
 
 **Response:**
 
@@ -318,6 +322,31 @@ _Empty object._
 | Field | Type | Required |
 |-------|------|----------|
 | `triggerTypes` | `{ type: string; displayName: string; icon: string; category: string; configJsonSchema: Record<string, unknown>; outputJsonSchema: Record<string, unknown>; source: string; description?: string \| undefined; }[]` | yes |
+
+### <a id="workflow.resolveRole"></a>`workflow.resolveRole` (rpc)
+
+Resolve a named role to its full adapter configuration.
+Called by the workflow executor when an agent step specifies `role`.
+
+Subject: `workflow.resolveRole`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `roleId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string` | yes |
+| `contextMode` | `"fork" \| "fresh" \| undefined` | no |
+| `harnessId` | `string \| undefined` | no |
+| `model` | `string \| undefined` | no |
+| `providerContext` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined` | no |
+| `systemPrompt` | `string \| undefined` | no |
 
 ### <a id="workflow.setDefinition"></a>`workflow.setDefinition` (rpc)
 

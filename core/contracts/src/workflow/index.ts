@@ -24,6 +24,7 @@ export {
   WorkflowExecutionScopeSchema,
   WorkflowInputSchema,
   WorkflowListQuerySchema,
+  WorkflowResolvedRoleSchema,
   WorkflowStepBaseSchema,
   WorkflowStepSchema,
   WorkflowTriggerSchema,
@@ -49,6 +50,7 @@ export type {
   WorkflowExecutionScope,
   WorkflowInput,
   WorkflowListQuery,
+  WorkflowResolvedRole,
   WorkflowStep,
   WorkflowStepBase,
   WorkflowTrigger,
@@ -56,6 +58,11 @@ export type {
 export type { IWorkflowTriggerTypeRegistry, WorkflowTriggerTypeRecord } from './trigger-type-registry.js';
 export {
   WorkflowStepTypeSchema,
+  WorkflowRunnerStepTypeSchema,
+  StepRunnerBusAuthSchema,
+  StepRunnerPlatformDefaultsSchema,
+  StepCancelPayloadSchema,
+  createStepCancelSubject,
   TokenUsageSchema,
   StepTelemetrySchema,
   StepRunConfigSchema,
@@ -63,18 +70,18 @@ export {
 } from './step-runner.js';
 export type {
   WorkflowStepType,
+  WorkflowRunnerStepType,
+  StepRunnerBusAuth,
+  StepRunnerPlatformDefaults,
+  StepCancelPayload,
+  StepCancelSubject,
   TokenUsage,
   StepTelemetry,
   StepRunConfig,
   StepRunResult,
   IStepRunner,
 } from './step-runner.js';
-export {
-  SpanStatusSchema,
-  SpanRecordSchema,
-  ExecutionLinkTypeSchema,
-  ExecutionLinkSchema,
-} from './span.js';
+export { SpanStatusSchema, SpanRecordSchema, ExecutionLinkTypeSchema, ExecutionLinkSchema } from './span.js';
 export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink } from './span.js';
 export {
   ArtifactQuerySourceSchema,
@@ -86,12 +93,7 @@ export {
   ResolvedContextEntrySchema,
   ContextBundleSchema,
 } from './context.js';
-export type {
-  ContextSource,
-  ContextPublishTarget,
-  ResolvedContextEntry,
-  ContextBundle,
-} from './context.js';
+export type { ContextSource, ContextPublishTarget, ResolvedContextEntry, ContextBundle } from './context.js';
 export type {
   RegisteredStepBlock,
   RegisteredTriggerBlock,

@@ -63,6 +63,7 @@ describe('cancelExecution', () => {
       bus: MakaioBus,
       activeExecutions,
       shellAbortControllers: new Map(),
+      activeRunnerSteps: new Map(),
       gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
     };
 
@@ -161,6 +162,7 @@ describe('cancelExecution', () => {
       bus: MakaioBus,
       activeExecutions,
       shellAbortControllers: new Map(),
+      activeRunnerSteps: new Map(),
       gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
     };
 
@@ -260,6 +262,7 @@ describe('execution completion finalizers', () => {
       bus: MakaioBus,
       activeExecutions,
       shellAbortControllers: new Map(),
+      activeRunnerSteps: new Map(),
       gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
     };
 
@@ -292,6 +295,7 @@ describe('execution completion finalizers', () => {
       bus: MakaioBus,
       activeExecutions,
       shellAbortControllers: new Map(),
+      activeRunnerSteps: new Map(),
       gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
     };
 
