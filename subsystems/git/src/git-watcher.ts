@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import path from 'path';
 import { promisify } from 'util';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { GitHookSubjects, type GitHookCoveredOperation } from '@makaio/contracts';
 import { GitSubjects } from './namespace.js';
 import type {
   GitCommitEvent,
@@ -296,6 +297,53 @@ export class GitWatcher {
   }
 
   /**
+   * Narrow an `InterpretResult` type to the subset that can be covered by a native git hook.
+   *
+   * Only `commit` and `checkout` are suppressible — `merge`, `rebase`, `staging`, and
+   * worktree events are always emitted from filesystem inference regardless of hook coverage.
+   * @param type - The operation type from a non-null {@link InterpretResult}.
+   * @returns `true` when `type` is `'commit'` or `'checkout'`, the two suppressible operations.
+   */
+  private isSuppressibleOperation(type: NonNullable<InterpretResult>['type']): type is 'commit' | 'checkout' {
+    return type === 'commit' || type === 'checkout';
+  }
+
+  /**
+   * Query the git-hook coverage service to determine whether a native hook already
+   * covers the given operation for the repo associated with `watcher`.
+   *
+   * Uses {@link IMakaioBus.requestOptional} so missing coverage providers preserve
+   * filesystem-event emission behaviour. Other coverage failures are also treated
+   * as uncovered because native hook coverage is an optimization over the fallback path.
+   * @param watcher - The per-repo watcher state providing the repo root path.
+   * @param operation - The git operation GitWatcher is about to emit.
+   * @param worktree - Worktree name when the change is worktree-scoped, otherwise `undefined`.
+   * @returns `true` only when a coverage handler confirms the hook is installed and verified.
+   */
+  private async isCoveredByNativeHook(
+    watcher: RepoWatcher,
+    operation: GitHookCoveredOperation,
+    worktree: string | undefined,
+  ): Promise<boolean> {
+    try {
+      const result = await this.bus.requestOptional(GitHookSubjects.coverage, {
+        repoPath: watcher.repoRoot,
+        operation,
+        ...(worktree !== undefined && { worktree }),
+      });
+      return result.handled && result.data.covered;
+    } catch (error) {
+      console.debug('[GitWatcher] Git hook coverage check failed; preserving fs fallback emission.', {
+        repoPath: watcher.repoRoot,
+        operation,
+        worktree,
+        error,
+      });
+      return false;
+    }
+  }
+
+  /**
    * Handle change for a specific repo.
    * @param watcher - The repo watcher state.
    * @param change - The file change event.
@@ -304,6 +352,13 @@ export class GitWatcher {
   private async handleRepoChange(watcher: RepoWatcher, change: FsChanged): Promise<boolean> {
     const result = interpretChangeForRepo(watcher.gitDir, change);
     if (!result) return false;
+
+    if (this.isSuppressibleOperation(result.type)) {
+      const covered = await this.isCoveredByNativeHook(watcher, result.type, result.worktree);
+      if (covered) {
+        return true;
+      }
+    }
 
     try {
       const emitters: Record<string, (wt: string | undefined) => Promise<void>> = {

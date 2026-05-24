@@ -1,16 +1,21 @@
 {
-  "name": "@makaio/extension-client-hooks",
+  "name": "@makaio/extension-git-hooks",
   "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/makaio-ai/makaio-framework.git",
-    "directory": "extensions/client-hooks"
+    "directory": "extensions/git-hooks"
   },
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./server": "./src/server.ts",
     "./cli": "./src/cli/index.ts",
+    "./receiver": "./src/bin/git-hook-receiver.ts",
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "makaio-git-hook-receiver": "./dist/bin/git-hook-receiver.mjs"
   },
   "scripts": {
     "build": "bun build.ts",
@@ -21,15 +26,18 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
     "@makaio/inbound-hooks": "workspace:*",
     "@makaio/kernel": "workspace:*",
-    "@makaio/subsystem-client": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "@makaio/services-core": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@makaio/contracts": "workspace:*",
     "@types/node": "^24.3.0",
+    "execa": "^9.5.2",
     "tsdown": "^0.22.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.5"
@@ -49,9 +57,17 @@
         "types": "./dist/index.d.ts",
         "default": "./dist/index.mjs"
       },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      },
       "./cli": {
         "types": "./dist/cli/index.d.ts",
         "default": "./dist/cli/index.mjs"
+      },
+      "./receiver": {
+        "types": "./dist/bin/git-hook-receiver.d.ts",
+        "default": "./dist/bin/git-hook-receiver.mjs"
       },
       "./package.json": "./package.json"
     }

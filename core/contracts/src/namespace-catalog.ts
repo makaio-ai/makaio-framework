@@ -13,6 +13,7 @@ import { HostNamespace } from './host/namespace.js';
 import { McpNamespace } from './mcp/namespace.js';
 import { NativeSessionSupervisorNamespace } from './native-session-supervisor/namespace.js';
 import { PlatformNamespace } from './platform/namespace.js';
+import { GitHookNamespace } from './capabilities/git-hooks/namespace.js';
 import { ReviewNamespace } from './capabilities/review/namespace.js';
 import { SessionNamespace } from './session/namespace.js';
 import { SkillNamespace } from './skill/namespace.js';
@@ -59,6 +60,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   ClientNamespace,
   ConfigNamespace,
   CredentialNamespace,
+  GitHookNamespace,
   HarnessNamespace,
   HostNamespace,
   McpNamespace,

@@ -4708,6 +4708,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/inbound-hooks": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/subsystem-client": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -4752,6 +4753,31 @@ __metadata:
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/extension-git-hooks@workspace:extensions/git-hooks":
+  version: 0.0.0-use.local
+  resolution: "@makaio/extension-git-hooks@workspace:extensions/git-hooks"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/inbound-hooks": "workspace:*"
+    "@makaio/kernel": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/services-core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    execa: "npm:^9.5.2"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.5"
+    zod: "npm:^4.1.13"
+  peerDependencies:
+    "@makaio/framework": ^1.0.0
+  bin:
+    makaio-git-hook-receiver: ./dist/bin/git-hook-receiver.mjs
   languageName: unknown
   linkType: soft
 
@@ -5014,6 +5040,21 @@ __metadata:
     "@makaio/utils": "workspace:*"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/inbound-hooks@workspace:*, @makaio/inbound-hooks@workspace:packages/inbound-hooks":
+  version: 0.0.0-use.local
+  resolution: "@makaio/inbound-hooks@workspace:packages/inbound-hooks"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/bus-transport-websocket": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.5"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
