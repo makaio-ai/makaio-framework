@@ -29,6 +29,7 @@ import {
   resolvePackageExportSourceTarget,
   type PackageExportsField,
 } from '@makaio/build-tooling/package-exports';
+import { writeFrameworkDistBuildStamp } from './build-fingerprint.js';
 
 /** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
 const PACKAGE_DIR = import.meta.dirname;
@@ -187,6 +188,8 @@ cpSync(DIST, LIB, {
   recursive: true,
   filter: (src) => !src.endsWith('.d.mts'),
 });
+
+writeFrameworkDistBuildStamp();
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
 console.info(`\n[build] Framework distribution built in ${totalElapsed}s`);

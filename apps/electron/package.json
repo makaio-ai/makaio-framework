@@ -12,8 +12,8 @@
     "dev:renderer": "NODE_OPTIONS='--import tsx/esm' vite --config vite.renderer.config.ts",
     "build:renderer": "vite build --config vite.renderer.config.ts --configLoader runner",
     "build:all": "yarn build && yarn build:renderer",
-    "package:dir": "tsx ../host-shared/src/build/prepare-framework-dist.ts && yarn build:all && electron-builder --dir",
-    "package": "tsx ../host-shared/src/build/prepare-framework-dist.ts && yarn build:all && electron-builder",
+    "package:dir": "yarn run -T build:framework && yarn build:all && electron-builder --dir",
+    "package": "yarn run -T build:framework && yarn build:all && electron-builder",
     "test": "vitest run"
   },
   "dependencies": {

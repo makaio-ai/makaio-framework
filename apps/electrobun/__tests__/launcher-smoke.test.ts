@@ -8,14 +8,10 @@
  * - Returns help text that names the program and the built-in `serve` command
  *   for `--help`.
  *
- * These tests invoke the real build before checking the launcher so they do
- * not depend on test file execution order or on stale local artifacts.
- *
- * Execution tests (--version, --help) require runtime-consumable
- * `@makaio/framework` output (`yarn build:framework`). When required framework
- * exports are absent from the assembled output, these tests are skipped — the
- * bundle contains externalized framework imports that Bun cannot resolve without
- * a current assembled package.
+ * These tests invoke the real Electrobun build before checking the launcher.
+ * They also ensure the assembled `@makaio/framework` runtime output is fresh,
+ * because the launcher bundle externalizes framework imports to package
+ * subpaths consumed from `packages/framework/dist`.
  *
  * The test uses `execFileSync` (not `execSync`) to avoid shell interpretation
  * of the bundle path and to keep argument handling explicit.
@@ -24,19 +20,17 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { isFrameworkDistFresh } from '../../../packages/framework/build-fingerprint.js';
 import { acquireElectrobunBuildLock } from './build-test-lock.js';
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
+const WORKSPACE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..');
 const CLI_BUNDLE = path.join(PACKAGE_ROOT, 'dist', 'cli.mjs');
 const FRAMEWORK_PACKAGE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..', 'packages', 'framework');
 const FRAMEWORK_DIST = path.join(FRAMEWORK_PACKAGE_ROOT, 'dist');
 const FRAMEWORK_PACKAGE_LINK = path.join(PACKAGE_ROOT, 'node_modules', '@makaio', 'framework');
 const REQUIRED_FRAMEWORK_EXPORT = 'FrameworkContractNamespaces';
-const REQUIRED_FRAMEWORK_FILES = ['utils/workspace-packages.mjs'];
-const hasFrameworkRuntimeOutput =
-  frameworkOutputExports(FRAMEWORK_DIST, REQUIRED_FRAMEWORK_EXPORT) &&
-  REQUIRED_FRAMEWORK_FILES.every((filePath) => existsSync(path.join(FRAMEWORK_DIST, filePath)));
-const itRequiresFramework = hasFrameworkRuntimeOutput ? it : it.skip;
+const REQUIRED_FRAMEWORK_FILES = ['contracts/index.mjs', 'utils/workspace-packages.mjs'];
 let releaseBuildLock: (() => void) | undefined;
 let createdFrameworkPackageLink = false;
 
@@ -56,14 +50,14 @@ describe('CLI launcher smoke test', () => {
   beforeAll(() => {
     releaseBuildLock = acquireElectrobunBuildLock();
     try {
+      ensureFreshFrameworkDist();
       execFileSync('bun', ['run', 'build.ts'], {
         cwd: PACKAGE_ROOT,
         stdio: 'inherit',
         timeout: 120_000,
       });
-      if (hasFrameworkRuntimeOutput) {
-        ensureLocalFrameworkPackageLink();
-      }
+      assertFrameworkRuntimeOutput();
+      ensureLocalFrameworkPackageLink();
     } catch (error) {
       removeLocalFrameworkPackageLink();
       releaseBuildLockNow();
@@ -80,7 +74,7 @@ describe('CLI launcher smoke test', () => {
     expect(existsSync(CLI_BUNDLE)).toBe(true);
   });
 
-  itRequiresFramework('bun can execute --version', () => {
+  it('bun can execute --version', () => {
     const result = execFileSync('bun', [CLI_BUNDLE, '--version'], {
       encoding: 'utf-8',
       timeout: 10_000,
@@ -89,7 +83,7 @@ describe('CLI launcher smoke test', () => {
     expect(result).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  itRequiresFramework('bun can execute --help', () => {
+  it('bun can execute --help', () => {
     const result = execFileSync('bun', [CLI_BUNDLE, '--help'], {
       encoding: 'utf-8',
       timeout: 10_000,
@@ -99,6 +93,42 @@ describe('CLI launcher smoke test', () => {
     expect(result).toContain('serve');
   });
 });
+
+/**
+ * Build framework dist only when the current output is missing or stale.
+ */
+function ensureFreshFrameworkDist(): void {
+  if (
+    isFrameworkDistFresh({
+      workspaceRoot: WORKSPACE_ROOT,
+      distDir: FRAMEWORK_DIST,
+      requiredFiles: REQUIRED_FRAMEWORK_FILES,
+    })
+  ) {
+    return;
+  }
+
+  execFileSync('yarn', ['run', '-T', 'build:framework'], {
+    cwd: WORKSPACE_ROOT,
+    stdio: 'inherit',
+    timeout: 180_000,
+  });
+}
+
+/**
+ * Verify that assembled framework output contains the runtime surface needed by
+ * the launcher bundle.
+ */
+function assertFrameworkRuntimeOutput(): void {
+  if (!frameworkOutputExports(FRAMEWORK_DIST, REQUIRED_FRAMEWORK_EXPORT)) {
+    throw new Error(`Framework dist does not export ${REQUIRED_FRAMEWORK_EXPORT}.`);
+  }
+  for (const filePath of REQUIRED_FRAMEWORK_FILES) {
+    if (!existsSync(path.join(FRAMEWORK_DIST, filePath))) {
+      throw new Error(`Framework dist is missing required runtime file: ${filePath}`);
+    }
+  }
+}
 
 /**
  * Release the shared build lock if this test file owns it.
