@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  StepCancelPayloadSchema,
   StepRunConfigSchema,
   StepRunResultSchema,
   StepTelemetrySchema,
@@ -7,6 +8,7 @@ import {
   WorkflowRunnerStepTypeSchema,
   StepRunnerBusAuthSchema,
   StepRunnerPlatformDefaultsSchema,
+  createStepCancelSubject,
 } from '../step-runner.js';
 import type { IStepRunner, StepRunConfig, StepRunResult } from '../step-runner.js';
 
@@ -337,6 +339,38 @@ describe('StepRunnerPlatformDefaultsSchema', () => {
   it('rejects missing cwd', () => {
     expect(() => StepRunnerPlatformDefaultsSchema.parse({})).toThrow();
     expect(() => StepRunnerPlatformDefaultsSchema.parse({ env: { A: 'B' } })).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Step cancellation contract
+// ─────────────────────────────────────────────────────────────
+
+describe('StepCancelPayloadSchema / createStepCancelSubject', () => {
+  it('accepts valid cancellation payloads', () => {
+    const result = StepCancelPayloadSchema.parse({
+      executionId: 'wfx-abc123',
+      stepId: 'checkout-branch',
+      reason: 'user_cancelled',
+    });
+
+    expect(result).toEqual({
+      executionId: 'wfx-abc123',
+      stepId: 'checkout-branch',
+      reason: 'user_cancelled',
+    });
+  });
+
+  it('builds a workflow subject definition from a fully qualified subject', () => {
+    const subject = createStepCancelSubject('workflow.wfx-abc123.step.checkout-branch.cancel');
+
+    expect(subject.$meta.namespace).toBe('workflow');
+    expect(subject.subject).toBe('wfx-abc123.step.checkout-branch.cancel');
+  });
+
+  it('rejects malformed fully qualified subjects', () => {
+    expect(() => createStepCancelSubject('workflow')).toThrow();
+    expect(() => createStepCancelSubject('.invalid')).toThrow();
   });
 });
 

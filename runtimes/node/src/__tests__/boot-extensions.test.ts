@@ -281,7 +281,7 @@ describe('workflow step runner boot composition', () => {
       cwd: '/workspace',
       platformDefaults: { cwd: '/workspace', env: { NODE_ENV: 'test' } },
       manifest,
-      workerEntry: '/opt/makaio/runtimes/node/dist/workflow-step-runner/worker-entry.mjs',
+      workerEntry: path.join('/opt/makaio/runtimes/node', 'dist', 'workflow-step-runner', 'worker-entry.mjs'),
     });
   });
 

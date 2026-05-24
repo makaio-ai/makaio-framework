@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, realpathSync, readFileSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdtempSync, realpathSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { StepRunConfig } from '@makaio/contracts';
@@ -126,6 +126,18 @@ const WORKER_AGENT_EXTENSION_MODULE = toDataUrl(`
   };
 `);
 
+const tempDirs: string[] = [];
+
+/**
+ * Create and track a temp directory for cleanup after each test.
+ * @returns Realpath-resolved temporary directory.
+ */
+function createTempDir(): string {
+  const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+  tempDirs.push(tempDir);
+  return tempDir;
+}
+
 /**
  * Create WorkerRunStepParams for an agent step.
  * @param cwd - Working directory for the worker runtime.
@@ -171,8 +183,14 @@ function makeAgentParams(cwd: string): WorkerRunStepParams {
  * without requiring an external bus server.
  */
 describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
+  afterEach(() => {
+    for (const tempDir of tempDirs.splice(0)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs shell step through full worker entrypoint orchestration', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.stdout.write("harness-ok")'], tempDir);
 
     const result = await runStepInWorker(params);
@@ -183,7 +201,7 @@ describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
   });
 
   it('collects telemetry with zero token usage for shell steps', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.stdout.write("telemetry-test")'], tempDir);
 
     const result = await runStepInWorker(params);
@@ -196,7 +214,7 @@ describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
   });
 
   it('boots bus, executes step, and closes bus cleanly on failure', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.exit(1)'], tempDir);
 
     const result = await runStepInWorker(params);
@@ -206,7 +224,7 @@ describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
   });
 
   it('executes a manifest-contributed agent and toolset inside the worker', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+    const tempDir = createTempDir();
     const params = makeAgentParams(tempDir);
 
     const result = await runStepInWorker(params);

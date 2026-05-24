@@ -1,9 +1,21 @@
-import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { ShellWorkflowStep, StepRunConfig } from '@makaio/contracts';
 import { runWorkerShellStep } from '../worker-shell-executor.js';
+
+const tempDirs: string[] = [];
+
+/**
+ * Create and track a temp directory for cleanup after each test.
+ * @returns Realpath-resolved temporary directory.
+ */
+function createTempDir(): string {
+  const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+  tempDirs.push(tempDir);
+  return tempDir;
+}
 
 /**
  * Create a minimal StepRunConfig for a shell step targeting the given cwd.
@@ -40,8 +52,14 @@ function makeShellConfig(
 }
 
 describe('runWorkerShellStep', () => {
+  afterEach(() => {
+    for (const tempDir of tempDirs.splice(0)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('runs a command in the platform default cwd and returns stdout', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const config = makeShellConfig(['node', '-e', 'process.stdout.write(process.cwd())'], tempDir);
     const controller = new AbortController();
 
@@ -53,7 +71,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('resolves command templates from resolved inputs', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const config = makeShellConfig(['node', '-e', 'process.stdout.write("hello {{ inputs.name }}")'], tempDir, {
       resolvedInputs: { inputs: { name: 'Ada' } },
     });
@@ -66,7 +84,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('honors step cwd relative to platform defaults', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const nestedDir = join(tempDir, 'packages', 'worker');
     mkdirSync(nestedDir, { recursive: true });
     const config = makeShellConfig(['node', '-e', 'process.stdout.write(process.cwd())'], tempDir, {
@@ -82,7 +100,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('rejects step cwd values that escape platform defaults', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const config = makeShellConfig(['node', '-e', 'process.stdout.write("should not run")'], tempDir, {
       step: { cwd: '..' },
     });
@@ -95,7 +113,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('resolves env templates from resolved inputs', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const config = makeShellConfig(['node', '-e', 'process.stdout.write(process.env.WORKER_GREETING ?? "")'], tempDir, {
       resolvedInputs: { inputs: { greeting: 'hello from env' } },
       step: { env: { WORKER_GREETING: '{{ inputs.greeting }}' } },
@@ -109,7 +127,8 @@ describe('runWorkerShellStep', () => {
   });
 
   it('returns failed result for non-shell step type', async () => {
-    const config = makeShellConfig(['echo', 'hi'], '/tmp');
+    const tempDir = createTempDir();
+    const config = makeShellConfig(['echo', 'hi'], tempDir);
     // Override stepType to simulate misconfiguration
     const agentConfig = { ...config, stepType: 'agent' as const };
     const controller = new AbortController();
@@ -122,7 +141,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('returns failed result when command exits with non-zero code', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     const config = makeShellConfig(['node', '-e', 'process.exit(1)'], tempDir);
     const controller = new AbortController();
 
@@ -133,7 +152,7 @@ describe('runWorkerShellStep', () => {
   });
 
   it('respects abort signal for cancellation', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-shell-')));
+    const tempDir = createTempDir();
     // Long-running command that will be cancelled
     const config = makeShellConfig(['node', '-e', 'setTimeout(() => {}, 60000)'], tempDir);
     const controller = new AbortController();

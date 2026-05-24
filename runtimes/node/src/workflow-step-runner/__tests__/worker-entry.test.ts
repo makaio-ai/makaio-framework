@@ -1,9 +1,21 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { StepRunConfig } from '@makaio/contracts';
 import { runStepInWorker, type WorkerRunStepParams } from '../worker-entry.js';
+
+const tempDirs: string[] = [];
+
+/**
+ * Create and track a temp directory for cleanup after each test.
+ * @returns Realpath-resolved temporary directory.
+ */
+function createTempDir(): string {
+  const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+  tempDirs.push(tempDir);
+  return tempDir;
+}
 
 /**
  * Create a minimal WorkerRunStepParams for a shell step.
@@ -36,8 +48,14 @@ function makeShellParams(command: string[], cwd: string): WorkerRunStepParams {
 }
 
 describe('runStepInWorker', () => {
+  afterEach(() => {
+    for (const tempDir of tempDirs.splice(0)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('executes a shell step and returns completed result', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.stdout.write("hello from worker")'], tempDir);
 
     const result = await runStepInWorker(params);
@@ -48,7 +66,7 @@ describe('runStepInWorker', () => {
   });
 
   it('returns failed result when shell command exits non-zero', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.exit(42)'], tempDir);
 
     const result = await runStepInWorker(params);
@@ -58,7 +76,7 @@ describe('runStepInWorker', () => {
   });
 
   it('respects abort signal for cancellation', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'setTimeout(() => {}, 60000)'], tempDir);
     const controller = new AbortController();
 
@@ -71,7 +89,7 @@ describe('runStepInWorker', () => {
   });
 
   it('closes bus even when step execution fails', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.exit(1)'], tempDir);
 
     // Should not throw - bus cleanup occurs in finally block
@@ -82,7 +100,7 @@ describe('runStepInWorker', () => {
   });
 
   it('uses cwd from platform defaults for shell step execution', async () => {
-    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'worker-entry-')));
+    const tempDir = createTempDir();
     const params = makeShellParams(['node', '-e', 'process.stdout.write(process.cwd())'], tempDir);
 
     const result = await runStepInWorker(params);

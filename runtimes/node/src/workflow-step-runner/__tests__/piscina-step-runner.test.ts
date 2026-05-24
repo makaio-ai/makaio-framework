@@ -5,6 +5,7 @@ import type { PiscinaStepRunnerOptions } from '../types.js';
 // Mock Piscina before importing the class under test
 const mockRun = vi.fn();
 const mockDestroy = vi.fn();
+const mockConstructorOptions: Array<{ filename: string; maxThreads: number; idleTimeout: number }> = [];
 
 vi.mock('piscina', () => ({
   default: class MockPiscina {
@@ -13,6 +14,7 @@ vi.mock('piscina', () => ({
     public readonly idleTimeout: number;
 
     public constructor(opts: { filename: string; maxThreads: number; idleTimeout: number }) {
+      mockConstructorOptions.push(opts);
       this.filename = opts.filename;
       this.maxThreads = opts.maxThreads;
       this.idleTimeout = opts.idleTimeout;
@@ -62,6 +64,7 @@ function makeOptions(): PiscinaStepRunnerOptions {
 describe('PiscinaStepRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockConstructorOptions.length = 0;
   });
 
   it('reports managesWorkflowLifecycle as false', () => {
@@ -102,11 +105,11 @@ describe('PiscinaStepRunner', () => {
   });
 
   it('uses default maxConcurrency of 4 when not specified', () => {
-    const runner = new PiscinaStepRunner(makeOptions());
-    // Access the Piscina mock via the runner's internal pool
-    // The mock constructor captures the options, verify via the mock instance
-    // We verified the constructor args are correct via the mock class properties
-    expect(runner).toBeDefined();
+    new PiscinaStepRunner(makeOptions());
+
+    expect(mockConstructorOptions).toEqual([
+      { filename: '/path/to/worker-entry.mjs', maxThreads: 4, idleTimeout: 30_000 },
+    ]);
   });
 
   it('uses custom maxConcurrency when specified', () => {
@@ -114,9 +117,11 @@ describe('PiscinaStepRunner', () => {
       ...makeOptions(),
       maxConcurrency: 8,
     };
-    const runner = new PiscinaStepRunner(options);
+    new PiscinaStepRunner(options);
 
-    expect(runner).toBeDefined();
+    expect(mockConstructorOptions).toEqual([
+      { filename: '/path/to/worker-entry.mjs', maxThreads: 8, idleTimeout: 30_000 },
+    ]);
   });
 
   it('dispose() calls pool.destroy()', async () => {

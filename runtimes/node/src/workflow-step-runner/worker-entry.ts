@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import { createStepCancelSubject, type StepRunConfig, type StepRunResult } from '@makaio/contracts';
 import { bootWorkerBus, type WorkerBusHandle } from './worker-boot.js';
 import { StepTelemetryCollector } from './step-telemetry-collector.js';
@@ -181,7 +182,7 @@ function isMainModule(): boolean {
 
   // Check if the running script matches this file (handles both .ts and .mjs extensions)
   const thisFile = import.meta.url;
-  const scriptUrl = scriptPath.startsWith('file://') ? scriptPath : `file://${scriptPath}`;
+  const scriptUrl = scriptPath.startsWith('file://') ? new URL(scriptPath).href : pathToFileURL(scriptPath).href;
   return thisFile === scriptUrl;
 }
 
