@@ -32,6 +32,8 @@ import { sessionClientAccountLinkingPackage } from './session/client-account-lin
 import { frameworkShellWindowPackage } from './framework-shell-window-package.js';
 import { harnessPackage } from './harness/package.js';
 import { subagentServicePackage, SubagentServiceToken } from './subagent/package.js';
+import { GitService } from '@makaio/subsystem-git';
+import { FileSystemService } from './filesystem/filesystem-service.js';
 
 /** Token for the session storage package. */
 export const SessionStorageToken = extensionToken<never>('session-storage');
@@ -53,6 +55,10 @@ export const CapabilityToken = extensionToken<CapabilityService>('capability');
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
 /** Token for the workflow block registry service. */
 export const WorkflowBlockRegistryToken = extensionToken<WorkflowBlockRegistry>('workflow-block-registry');
+/** Token for the product filesystem service. */
+export const FileSystemToken = extensionToken<FileSystemService>('filesystem');
+/** Token for the product git service. */
+export const GitToken = extensionToken<GitService>('git');
 /** Token for the framework subagent orchestration service. */
 export { SubagentServiceToken };
 
@@ -182,6 +188,25 @@ export const workflowBlockRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   create: (ctx) => new WorkflowBlockRegistry(ctx.bus),
 };
 
+/** Filesystem service package. */
+export const fileSystemPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: FileSystemToken.name,
+  displayName: 'Filesystem',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new FileSystemService(ctx.bus, ctx.machineId),
+};
+
+/** Git service package. */
+export const gitPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: GitToken.name,
+  displayName: 'Git',
+  version: '0.1.0',
+  dependencies: [dep(FileSystemToken.name)],
+  critical: true,
+  create: (ctx) => new GitService(ctx.bus),
+};
+
 /**
  * Create the model-registry package with a host-provided fetcher chain.
  * @param fetcher - Registry fetcher chain for this host.
@@ -213,4 +238,6 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   canonicalModelPackage,
   frameworkShellWindowPackage,
   workflowBlockRegistryPackage,
+  gitPackage,
+  fileSystemPackage,
 ];

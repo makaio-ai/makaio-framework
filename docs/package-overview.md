@@ -165,6 +165,7 @@ subsystems together, check whether it belongs in `services/` instead.
 | -------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
 | `subsystems/adapter`                   | `@makaio/subsystem-adapter`                   | Adapter contribution loading, config lifecycle, and runtime registry.           |
 | `subsystems/client`                    | `@makaio/subsystem-client`                    | Managed client runtime/binary services, session config, and profile management. |
+| `subsystems/git`                       | `@makaio/subsystem-git`                       | Git service, repository queries, working-tree cache, and filesystem watching.   |
 | `subsystems/workflow-engine`           | `@makaio/subsystem-workflow-engine`           | DAG workflow executor with checkpoint recovery, step runners, and OTel tracing. |
 | `subsystems/mcp-http-server`           | `@makaio/subsystem-mcp-http-server`           | MCP HTTP/stdio bridge routing tool calls from subprocess adapters to the bus.   |
 | `subsystems/native-session-supervisor` | `@makaio/subsystem-native-session-supervisor` | PTY process spawning, tracking, and lifecycle management for native sessions.   |

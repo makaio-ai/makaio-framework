@@ -139,6 +139,10 @@
       "types": "./dist/clients/index.d.mts",
       "default": "./dist/clients/index.mjs"
     },
+    "./git": {
+      "types": "./dist/git/index.d.mts",
+      "default": "./dist/git/index.mjs"
+    },
     "./services": {
       "types": "./dist/services/index.d.mts",
       "default": "./dist/services/index.mjs"
@@ -198,6 +202,26 @@
     "./services/cli-detection/namespace": {
       "types": "./dist/services/cli-detection/namespace.d.mts",
       "default": "./dist/services/cli-detection/namespace.mjs"
+    },
+    "./services/filesystem": {
+      "types": "./dist/services/filesystem/index.d.mts",
+      "default": "./dist/services/filesystem/index.mjs"
+    },
+    "./services/filesystem/namespace": {
+      "types": "./dist/services/filesystem/namespace.d.mts",
+      "default": "./dist/services/filesystem/namespace.mjs"
+    },
+    "./services/filesystem/schemas": {
+      "types": "./dist/services/filesystem/schemas.d.mts",
+      "default": "./dist/services/filesystem/schemas.mjs"
+    },
+    "./services/git/namespace": {
+      "types": "./dist/services/git/namespace.d.mts",
+      "default": "./dist/services/git/namespace.mjs"
+    },
+    "./services/git/schemas": {
+      "types": "./dist/services/git/schemas.d.mts",
+      "default": "./dist/services/git/schemas.mjs"
     },
     "./services/log-import": {
       "types": "./dist/services/log-import/index.d.mts",

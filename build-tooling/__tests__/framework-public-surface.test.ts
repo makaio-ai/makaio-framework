@@ -37,6 +37,13 @@ describe('FRAMEWORK_DIST_SUBPATHS', () => {
     expect(entry?.packageName).toBe('@makaio/subsystem-client');
     expect(entry?.sourceDist).toBe('subsystems/client/dist');
   });
+
+  it('includes the git subpath that maps to subsystem-git', () => {
+    const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'git');
+    expect(entry).toBeDefined();
+    expect(entry?.packageName).toBe('@makaio/subsystem-git');
+    expect(entry?.sourceDist).toBe('subsystems/git/dist');
+  });
 });
 
 describe('FRAMEWORK_BUILD_PACKAGE_NAMES', () => {
@@ -136,5 +143,11 @@ describe('getFrameworkPublicPackageByName', () => {
     const entry = getFrameworkPublicPackageByName('@makaio/subsystem-client');
     expect(entry?.frameworkSubpath).toBe('clients');
     expect(entry?.packageRoot).toBe('subsystems/client');
+  });
+
+  it('resolves subsystem-git correctly', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/subsystem-git');
+    expect(entry?.frameworkSubpath).toBe('git');
+    expect(entry?.packageRoot).toBe('subsystems/git');
   });
 });
