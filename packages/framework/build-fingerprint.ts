@@ -3,7 +3,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash, type Hash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const PACKAGE_DIR = import.meta.dirname;
@@ -35,6 +35,20 @@ const FRAMEWORK_BUILD_INPUT_PATHS = [
   'yarn.lock',
 ] as const;
 
+const FILESYSTEM_FINGERPRINT_EXCLUDED_DIRS = new Set([
+  '.cache',
+  '.git',
+  '.turbo',
+  '.vite',
+  '.vitest-attachments',
+  '__screenshots__',
+  'coverage',
+  'dist',
+  'lib',
+  'node_modules',
+  'test-results',
+]);
+
 /** Stamp schema written after framework dist assembly. */
 export interface FrameworkDistBuildStamp {
   /** Schema version for the stamp file. */
@@ -64,10 +78,14 @@ export function computeFrameworkDistFingerprint(workspaceRoot = WORKSPACE_ROOT):
   const hash = createHash('sha256');
   hash.update(`framework-dist-fingerprint-v${STAMP_VERSION}\0`);
 
-  appendGitOutput(hash, workspaceRoot, ['ls-files', '-s', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
-  appendGitOutput(hash, workspaceRoot, ['diff', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
-  appendGitOutput(hash, workspaceRoot, ['diff', '--cached', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
-  appendUntrackedInputFiles(hash, workspaceRoot);
+  if (hasGitMetadata(workspaceRoot)) {
+    appendGitOutput(hash, workspaceRoot, ['ls-files', '-s', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
+    appendGitOutput(hash, workspaceRoot, ['diff', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
+    appendGitOutput(hash, workspaceRoot, ['diff', '--cached', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
+    appendUntrackedInputFiles(hash, workspaceRoot);
+  } else {
+    appendFilesystemInputFiles(hash, workspaceRoot);
+  }
 
   return hash.digest('hex');
 }
@@ -167,6 +185,79 @@ function appendUntrackedInputFiles(hash: Hash, workspaceRoot: string): void {
     hash.update(`untracked:${relativePath}\0`);
     hash.update(readFileSync(join(workspaceRoot, relativePath)));
     hash.update('\0');
+  }
+}
+
+/**
+ * Check whether the workspace can provide Git metadata for fingerprinting.
+ * @param workspaceRoot - Candidate Git repository root.
+ * @returns True when Git commands can inspect the workspace.
+ */
+function hasGitMetadata(workspaceRoot: string): boolean {
+  try {
+    const output = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: workspaceRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return output.trim() === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Add source-tree file contents when Git metadata is unavailable.
+ * @param hash - Hash being populated.
+ * @param workspaceRoot - Source workspace root.
+ */
+function appendFilesystemInputFiles(hash: Hash, workspaceRoot: string): void {
+  hash.update('filesystem-inputs\0');
+
+  for (const inputPath of FRAMEWORK_BUILD_INPUT_PATHS) {
+    appendFilesystemInputPath(hash, workspaceRoot, inputPath);
+  }
+}
+
+/**
+ * Add an input path's file contents recursively to the fingerprint hash.
+ * @param hash - Hash being populated.
+ * @param workspaceRoot - Source workspace root.
+ * @param relativePath - Workspace-relative input path.
+ */
+function appendFilesystemInputPath(hash: Hash, workspaceRoot: string, relativePath: string): void {
+  const absolutePath = join(workspaceRoot, relativePath);
+  if (!existsSync(absolutePath)) {
+    return;
+  }
+
+  const stats = statSync(absolutePath);
+  if (stats.isFile()) {
+    hash.update(`file:${relativePath}\0`);
+    hash.update(readFileSync(absolutePath));
+    hash.update('\0');
+    return;
+  }
+
+  if (!stats.isDirectory()) {
+    return;
+  }
+
+  const entries = readdirSync(absolutePath, { withFileTypes: true });
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    const entryPath = `${relativePath}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!FILESYSTEM_FINGERPRINT_EXCLUDED_DIRS.has(entry.name)) {
+        appendFilesystemInputPath(hash, workspaceRoot, entryPath);
+      }
+      continue;
+    }
+
+    if (entry.isFile()) {
+      hash.update(`file:${entryPath}\0`);
+      hash.update(readFileSync(join(workspaceRoot, entryPath)));
+      hash.update('\0');
+    }
   }
 }
 

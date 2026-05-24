@@ -49,6 +49,43 @@ describe('framework dist freshness', () => {
       ).toBe(false);
     });
   });
+
+  it('accepts stamped dist output without git metadata', () => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      mkdirSync(join(distDir, 'contracts'), { recursive: true });
+      writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
+
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
+
+      expect(
+        isFrameworkDistFresh({
+          workspaceRoot,
+          distDir,
+          requiredFiles: ['contracts/index.mjs'],
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it('rejects stamped dist output without git metadata after source input changes', () => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      mkdirSync(join(distDir, 'contracts'), { recursive: true });
+      writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
+
+      writeFileSync(join(workspaceRoot, 'package.json'), '{"name":"changed"}\n');
+
+      expect(
+        isFrameworkDistFresh({
+          workspaceRoot,
+          distDir,
+          requiredFiles: ['contracts/index.mjs'],
+        }),
+      ).toBe(false);
+    });
+  });
 });
 
 /**
@@ -63,5 +100,19 @@ function withTempDist(run: (distDir: string) => void): void {
     run(distDir);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Create and clean up a temporary source workspace without git metadata.
+ * @param run - Callback that receives the temporary workspace root.
+ */
+function withTempWorkspace(run: (workspaceRoot: string) => void): void {
+  const workspaceRoot = mkdtempSync(join(tmpdir(), 'makaio-framework-workspace-'));
+  try {
+    writeFileSync(join(workspaceRoot, 'package.json'), '{"name":"fixture"}\n');
+    run(workspaceRoot);
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
   }
 }
