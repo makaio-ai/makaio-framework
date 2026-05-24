@@ -19,5 +19,4 @@ Extension points and future enhancement opportunities across the codebase.
 | Same-agent resume | `contextMode: 'fresh' | 'fork'` controls child-session context inheritance. | Contract for continuing a previous agent/session across workflow steps. |
 | Composite observation | Composite `for-each` state is persisted inside execution snapshots; public executable lifecycle remains `agent | shell | gate`. | Optional dedicated composite lifecycle subjects and UI visualization. |
 | Host/product scoping | `WorkflowExecutionScope` supports `global | workspace | session | external`. | Product maps `projectId` to external scope or extends subjects at the host boundary. |
-| Subagent execution target routing | SubagentService resolves execution targets but only local targets execute. | Remote/container execution targets for workflow agent steps. |
-| Subagent child-session cleanup | Manager state is updated on completion/cancellation. | Explicit child-session close/termination policy tied to subagent lifecycle. |
+| Subagent execution target routing | Workflow agent steps execute through SubagentService for local targets; isolated workflow runners are covered by the StepRunner seam. | Decide whether non-local interactive subagent targets belong in SubagentService or only in workflow StepRunner implementations. |
