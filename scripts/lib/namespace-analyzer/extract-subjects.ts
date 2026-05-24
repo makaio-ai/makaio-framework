@@ -186,25 +186,27 @@ function unwrapSubjectSchema(type: ts.Type, checker: ts.TypeChecker): ts.Type {
 }
 
 /**
- * Extracts typed fields from a Zod schema type via its `_output` property.
+ * Extracts typed fields from a Zod schema type via its `_input` or `_output` property.
  *
- * The `_output` property on a ZodObject type resolves to the TypeScript type
- * the schema validates to, giving us the exact field names, types, and
- * optionality without executing the schema at runtime.
+ * Request/event payload docs use `_input`, so Zod defaults remain optional for
+ * callers. Response docs use `_output`, so returned defaults are represented as
+ * present after parsing.
  * @param checker - The TypeScript type checker for property and type resolution.
  * @param zodType - The Zod schema type to introspect.
  * @param options - Field rendering options for the active docs surface.
+ * @param direction - Whether to document caller input or parsed output fields.
  * @returns Sorted array of field descriptors, an empty array for an empty object schema, or `undefined` when extraction does not apply.
  */
 function extractFieldsFromZodType(
   checker: ts.TypeChecker,
   zodType: ts.Type,
   options: SubjectExtractionOptions,
+  direction: 'input' | 'output',
 ): SubjectField[] | undefined {
-  const outputProp = zodType.getProperty('_output');
-  if (!outputProp) return undefined;
+  const typeProp = zodType.getProperty(direction === 'input' ? '_input' : '_output');
+  if (!typeProp) return undefined;
 
-  const outputType = checker.getTypeOfSymbol(outputProp);
+  const outputType = checker.getTypeOfSymbol(typeProp);
   const fields: SubjectField[] = [];
 
   for (const field of outputType.getProperties()) {
@@ -420,8 +422,8 @@ function buildSubjectEntry(
       type: 'rpc',
       schemaFile,
       description,
-      request: extractFieldsFromZodType(checker, requestType, options),
-      response: extractFieldsFromZodType(checker, responseType, options),
+      request: extractFieldsFromZodType(checker, requestType, options, 'input'),
+      response: extractFieldsFromZodType(checker, responseType, options, 'output'),
     };
   }
 
@@ -431,7 +433,7 @@ function buildSubjectEntry(
     type: 'event',
     schemaFile,
     description,
-    payload: extractFieldsFromZodType(checker, baseType, options),
+    payload: extractFieldsFromZodType(checker, baseType, options, 'input'),
   };
 }
 

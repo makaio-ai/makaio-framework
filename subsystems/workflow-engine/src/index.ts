@@ -17,8 +17,8 @@ export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage
 export type { WorkflowEngineServiceOptions } from './workflow-engine-service.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
-export { spawnProcess } from './executor-helpers.js';
-export type { SpawnProcessOptions, ShellStepOutcome } from './executor-helpers.js';
+export { runShellStep, spawnProcess } from './executor-helpers.js';
+export type { RunShellStepOptions, SpawnProcessOptions, ShellStepOutcome } from './executor-helpers.js';
 export type { ActiveExecution, ActiveRunnerStep, ExecutorConfig } from './types.js';
 export type {
   ContextBundle,

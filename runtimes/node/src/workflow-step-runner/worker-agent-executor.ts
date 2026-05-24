@@ -8,7 +8,8 @@ import {
   type StepRunConfig,
   type StepRunResult,
 } from '@makaio/contracts';
-import type { WorkerBusHandle } from './worker-boot.js';
+import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { bootWorkerRuntime, type WorkerBusHandle, type WorkerRuntimeHandle } from './worker-boot.js';
 import type { WorkerContributions } from './worker-contributions.js';
 
 /**
@@ -95,6 +96,64 @@ async function awaitAgentCompletion(
 }
 
 /**
+ * Close worker-local runtime resources without changing the step result shape.
+ * @param runtime - Worker runtime handle to close.
+ */
+async function closeWorkerRuntime(runtime: WorkerRuntimeHandle | undefined): Promise<void> {
+  if (!runtime) return;
+
+  await runtime.close();
+}
+
+/**
+ * Check whether a value is a plain record for expression context fields.
+ * @param value - Candidate value.
+ * @returns True when the value can be indexed safely.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Check whether a value matches the step map shape used by expression templates.
+ * @param value - Candidate `steps` field from StepRunConfig.resolvedInputs.
+ * @returns True when every entry exposes a string `status`.
+ */
+function isExpressionSteps(value: unknown): value is ExpressionContext['steps'] {
+  if (!isRecord(value)) return false;
+
+  for (const stepState of Object.values(value)) {
+    if (!isRecord(stepState) || typeof stepState['status'] !== 'string') return false;
+    if ('result' in stepState && stepState['result'] !== undefined && typeof stepState['result'] !== 'string') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Rehydrate the scheduler-built expression context from the serializable runner config.
+ * @param resolvedInputs - StepRunConfig context payload.
+ * @returns Expression context for prompt interpolation.
+ */
+function buildWorkerExpressionContext(resolvedInputs: StepRunConfig['resolvedInputs']): ExpressionContext {
+  const context: ExpressionContext = {
+    trigger: isRecord(resolvedInputs['trigger']) ? resolvedInputs['trigger'] : {},
+    steps: isExpressionSteps(resolvedInputs['steps']) ? resolvedInputs['steps'] : {},
+    inputs: isRecord(resolvedInputs['inputs']) ? resolvedInputs['inputs'] : {},
+  };
+
+  if ('item' in resolvedInputs) {
+    context.item = resolvedInputs['item'];
+  }
+  if (typeof resolvedInputs['index'] === 'number') {
+    context.index = resolvedInputs['index'];
+  }
+
+  return context;
+}
+
+/**
  * Execute an agent workflow step inside the worker process.
  *
  * Resolves the step's adapter configuration (via role or inline fields),
@@ -116,8 +175,8 @@ export async function runWorkerAgentStep(
   signal: AbortSignal,
   contributions?: WorkerContributions,
 ): Promise<StepRunResult> {
-  void contributions;
   const startTime = performance.now();
+  let runtime: WorkerRuntimeHandle | undefined;
 
   if (config.stepType !== 'agent') {
     return {
@@ -139,7 +198,12 @@ export async function runWorkerAgentStep(
   const { bus } = handle;
 
   try {
+    if (contributions) {
+      runtime = await bootWorkerRuntime(handle, contributions, config.platformDefaults);
+    }
+
     const agentConfig = await resolveAgentConfig(bus, step);
+    const resolvedPrompt = resolveTemplate(step.prompt, buildWorkerExpressionContext(config.resolvedInputs));
 
     const startResult = await bus.request(AdapterSubjects.startAgent, {
       adapterId: agentConfig.adapterName,
@@ -147,7 +211,7 @@ export async function runWorkerAgentStep(
       model: agentConfig.model,
       harnessId: agentConfig.harnessId,
       providerContext: agentConfig.providerContext,
-      initialMessage: step.prompt,
+      initialMessage: resolvedPrompt,
       env: config.platformDefaults.env,
     });
 
@@ -187,5 +251,7 @@ export async function runWorkerAgentStep(
       error: errorMessage,
       telemetry: { duration },
     };
+  } finally {
+    await closeWorkerRuntime(runtime);
   }
 }

@@ -3,14 +3,15 @@ import { createJsonlTransport, type IJsonlTransport } from '@makaio/subprocess';
 import { StepRunResultSchema, type IStepRunner, type StepRunConfig, type StepRunResult } from '@makaio/contracts';
 import type { ChildProcessStepRunnerOptions, WorkerContributionManifest } from './types.js';
 import { isReadyMessage } from './worker-protocol.js';
+import { buildNodeWorkerEntryArgs } from './worker-entry-resolver.js';
 
 /**
  * Step runner that spawns isolated Node.js child processes for each step.
  *
  * Communication protocol:
- * 1. Parent spawns `node --import tsx/esm <workerEntry>`
+ * 1. Parent spawns `node <workerEntry>` with `tsx` only for TypeScript source entries
  * 2. Parent writes `{ config, manifest }` as a JSON line to stdin
- * 3. Child writes `{ jsonrpc: '2.0', method: 'ready' }` when initialized
+ * 3. Child writes a JSON-RPC-shaped ready notification when initialized
  * 4. Child writes the {@link StepRunResult} as a JSON line to stdout
  * 5. Parent parses the result and cleans up the process
  *
@@ -44,7 +45,7 @@ export class ChildProcessStepRunner implements IStepRunner {
 
     const transport = createJsonlTransport({
       command: 'node',
-      args: ['--import', 'tsx/esm', this.workerEntry],
+      args: buildNodeWorkerEntryArgs(this.workerEntry),
       cwd: this.cwd,
       processName: `step-worker:${key}`,
     });
@@ -89,6 +90,7 @@ export class ChildProcessStepRunner implements IStepRunner {
     return new Promise<StepRunResult>((resolve, reject) => {
       let receivedReady = false;
       let settled = false;
+      let aborted = false;
 
       const settle = (action: () => void): void => {
         if (settled) return;
@@ -96,14 +98,13 @@ export class ChildProcessStepRunner implements IStepRunner {
         unsubMessage();
         unsubError();
         signal.removeEventListener('abort', onAbort);
+        transport.process.off('exit', onExit);
         action();
       };
 
       const onAbort = (): void => {
-        settle(() => {
-          transport.process.kill('SIGTERM');
-          reject(new Error(`Step ${key} aborted`));
-        });
+        aborted = true;
+        transport.process.kill('SIGTERM');
       };
 
       if (signal.aborted) {
@@ -136,8 +137,19 @@ export class ChildProcessStepRunner implements IStepRunner {
       });
 
       const unsubError = transport.onError((error: Error) => {
-        settle(() => reject(error));
+        settle(() => reject(aborted ? new Error(`Step ${key} aborted`) : error));
       });
+
+      const onExit = (code: number | null): void => {
+        settle(() => {
+          reject(
+            aborted
+              ? new Error(`Step ${key} aborted`)
+              : new Error(`Child process for step ${key} exited with code ${String(code)} before producing a result`),
+          );
+        });
+      };
+      transport.process.once('exit', onExit);
 
       // Send the work payload to stdin
       transport.send({ config, manifest: this.manifest });

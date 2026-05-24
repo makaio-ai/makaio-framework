@@ -5302,6 +5302,7 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/subsystem-mcp-http-server": "workspace:*"
     "@makaio/subsystem-workflow-engine": "workspace:*"
+    "@makaio/tools-core": "workspace:*"
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"

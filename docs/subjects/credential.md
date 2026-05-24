@@ -50,7 +50,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string & $brand<"CredentialRef">>` | yes |
+| `credentialRefs` | `Record<string, string>` | yes |
 | `definitionId` | `string` | yes |
 | `providerConfigId` | `string` | yes |
 
@@ -73,7 +73,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `changeSequence` | `number` | yes |
-| `credentialRefs` | `Record<string, string & $brand<"CredentialRef">>` | yes |
+| `credentialRefs` | `Record<string, string>` | yes |
 | `definitionId` | `string` | yes |
 | `providerConfigId` | `string` | yes |
 | `sessionId` | `string` | yes |
@@ -174,7 +174,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `ref` | `string & $brand<"CredentialRef">` | yes |
+| `ref` | `string` | yes |
 
 **Response:**
 

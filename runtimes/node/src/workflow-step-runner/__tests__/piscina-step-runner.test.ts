@@ -54,6 +54,7 @@ function makeOptions(): PiscinaStepRunnerOptions {
     mode: 'piscina',
     workerEntry: '/path/to/worker-entry.mjs',
     cwd: '/tmp',
+    platformDefaults: { cwd: '/tmp' },
     manifest: { packages: [] },
   };
 }

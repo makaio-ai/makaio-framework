@@ -435,22 +435,11 @@ export class WorkflowScheduler {
     this.deps.shellAbortControllers.set(key, controller);
 
     // Register in activeRunnerSteps for cancellation tracking.
-    const runnerEntry: ActiveRunnerStep = { controller };
+    const cancelSubject = `workflow.${this.executionId}.step.${nodeId}.cancel`;
+    const runnerEntry: ActiveRunnerStep = { controller, cancelSubject };
     this.deps.activeRunnerSteps.set(key, runnerEntry);
 
-    // Schedule hard kill when the signal is aborted (cooperative cancellation).
-    controller.signal.addEventListener('abort', () => {
-      const { cancelTimeoutMs } = this.deps.config;
-      if (this.deps.stepRunner.forceKill && cancelTimeoutMs > 0) {
-        const timer = setTimeout(() => {
-          void Promise.resolve(this.deps.stepRunner.forceKill?.(this.executionId, nodeId)).catch((err) => {
-            console.error(`[WorkflowScheduler] forceKill failed for ${key}:`, err);
-          });
-        }, cancelTimeoutMs);
-        timer.unref?.();
-        runnerEntry.hardKillTimer = timer;
-      }
-    });
+    this.scheduleRunnerHardKill(controller, runnerEntry, key, nodeId);
 
     let result;
     try {
@@ -466,7 +455,7 @@ export class WorkflowScheduler {
           busUrl: this.deps.config.busUrl,
           busAuth: this.deps.config.busAuth,
           platformDefaults: this.deps.config.platformDefaults,
-          cancelSubject: `workflow.${this.executionId}.step.${nodeId}.cancel`,
+          cancelSubject,
         },
         controller.signal,
       );
@@ -477,6 +466,32 @@ export class WorkflowScheduler {
     }
 
     return applyStepRunResult(this.deps.bus, active, nodeId, result, resolvedInputs);
+  }
+
+  /**
+   * Arm a hard-kill timer when runner cooperative cancellation starts.
+   * @param controller - Step abort controller passed to the runner.
+   * @param runnerEntry - Active runner tracking entry to receive the timer.
+   * @param key - Active-runner map key for diagnostics.
+   * @param nodeId - Step ID for runner forceKill calls.
+   */
+  private scheduleRunnerHardKill(
+    controller: AbortController,
+    runnerEntry: ActiveRunnerStep,
+    key: string,
+    nodeId: string,
+  ): void {
+    controller.signal.addEventListener('abort', () => {
+      const { cancelTimeoutMs } = this.deps.config;
+      if (!this.deps.stepRunner.forceKill || cancelTimeoutMs <= 0) return;
+      const timer = setTimeout(() => {
+        void Promise.resolve(this.deps.stepRunner.forceKill?.(this.executionId, nodeId)).catch((err) => {
+          console.error(`[WorkflowScheduler] forceKill failed for ${key}:`, err);
+        });
+      }, cancelTimeoutMs);
+      timer.unref?.();
+      runnerEntry.hardKillTimer = timer;
+    });
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -500,7 +515,7 @@ export class WorkflowScheduler {
     const abortPromises: Promise<unknown>[] = [];
 
     // Cancel active runner steps (cooperative abort + hard kill timer).
-    cancelActiveRunnerSteps(this.finalizerDeps, this.executionId);
+    cancelActiveRunnerSteps(this.finalizerDeps, this.executionId, reason);
 
     for (const nodeId of this.inFlight.keys()) {
       // Abort shell process (for steps not tracked by activeRunnerSteps)

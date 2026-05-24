@@ -88,7 +88,7 @@ import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
-import { createNodeStepRunner } from './workflow-step-runner/index.js';
+import { createNodeWorkflowStepRunnerPackageOptions } from './workflow-step-runner/index.js';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -110,6 +110,7 @@ export type {
   MakaioRuntime,
   ServerTransportProvider,
   TransportReadyInfo,
+  WorkflowStepRunnerBootOptions,
 } from './boot-types.js';
 
 /**
@@ -391,14 +392,17 @@ export async function bootMakaioRuntimeCore(
     }
 
     const platformDefaults = { cwd: os.tmpdir() };
+    const workflowStepRunnerPackageOptions = createNodeWorkflowStepRunnerPackageOptions({
+      busUrl,
+      runtimeModuleDir: srcDir,
+      platformDefaults,
+      runner: options.workflowStepRunner,
+    });
 
     frameworkPackages.push(
       createAdapterSubsystemPackage({ configRepository: adapterConfigRepository, coordinator, platformDefaults }),
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
-      createWorkflowEnginePackage({
-        stepRunner: createNodeStepRunner({ mode: 'in-process', busUrl, cwd: platformDefaults.cwd }),
-        executorConfig: { busUrl, platformDefaults },
-      }),
+      createWorkflowEnginePackage(workflowStepRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
     );

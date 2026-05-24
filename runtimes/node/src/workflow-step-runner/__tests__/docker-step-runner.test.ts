@@ -73,6 +73,7 @@ function makeOptions(): DockerStepRunnerOptions {
     imageName: 'makaio/worker:latest',
     workerEntry: '/app/worker-entry.mjs',
     cwd: '/host/workspace',
+    platformDefaults: { cwd: '/host/workspace' },
     manifest: { packages: [] },
   };
 }
@@ -164,8 +165,6 @@ describe('DockerStepRunner', () => {
         '-i',
         options.imageName,
         'node',
-        '--import',
-        'tsx/esm',
         options.workerEntry,
       ]),
       expect.any(Function),
@@ -184,6 +183,70 @@ describe('DockerStepRunner', () => {
 
     const actual = await resultPromise;
     expect(actual).toEqual(result);
+  });
+
+  it('launches source TypeScript worker entries with the tsx loader', async () => {
+    const containerId = 'source-entry';
+    const options: DockerStepRunnerOptions = {
+      ...makeOptions(),
+      workerEntry: '/app/worker-entry.ts',
+    };
+
+    mockExecFile.mockImplementation(
+      (_cmd: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        if (args[0] === 'create') {
+          cb(null, `${containerId}\n`, '');
+        } else if (args[0] === 'rm') {
+          cb(null, '', '');
+        }
+      },
+    );
+
+    const proc = createMockSpawnProcess();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const runner = new DockerStepRunner(options);
+    const resultPromise = runner.run(makeConfig(), new AbortController().signal);
+    await flushMicrotasks();
+
+    const createCall = mockExecFile.mock.calls.find((call) => (call as [string, string[]])[1][0] === 'create');
+    const createArgs = (createCall as [string, string[]])[1];
+    const nodeIndex = createArgs.indexOf('node');
+    expect(createArgs.slice(nodeIndex)).toEqual(['node', '--import', 'tsx/esm', '/app/worker-entry.ts']);
+
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'ready' }) + '\n'));
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({ status: 'completed', telemetry: { duration: 1 } }) + '\n'));
+    await resultPromise;
+  });
+
+  it('launches dist ESM worker entries as plain node scripts', async () => {
+    const containerId = 'dist-entry';
+
+    mockExecFile.mockImplementation(
+      (_cmd: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+        if (args[0] === 'create') {
+          cb(null, `${containerId}\n`, '');
+        } else if (args[0] === 'rm') {
+          cb(null, '', '');
+        }
+      },
+    );
+
+    const proc = createMockSpawnProcess();
+    mockSpawn.mockReturnValueOnce(proc);
+
+    const runner = new DockerStepRunner(makeOptions());
+    const resultPromise = runner.run(makeConfig(), new AbortController().signal);
+    await flushMicrotasks();
+
+    const createCall = mockExecFile.mock.calls.find((call) => (call as [string, string[]])[1][0] === 'create');
+    const createArgs = (createCall as [string, string[]])[1];
+    const nodeIndex = createArgs.indexOf('node');
+    expect(createArgs.slice(nodeIndex)).toEqual(['node', '/app/worker-entry.mjs']);
+
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'ready' }) + '\n'));
+    proc.stdout.emit('data', Buffer.from(JSON.stringify({ status: 'completed', telemetry: { duration: 1 } }) + '\n'));
+    await resultPromise;
   });
 
   it('sends config via stdin (secrets stay in stdin, not CLI args)', async () => {
@@ -257,7 +320,7 @@ describe('DockerStepRunner', () => {
     expect((rmCall as [string, string[]])[1]).toEqual(['rm', '-f', containerId]);
   });
 
-  it('rejects and kills container when signal is aborted', async () => {
+  it('starts graceful termination on abort and settles after docker exits', async () => {
     const containerId = 'abort-test';
 
     mockExecFile.mockImplementation(
@@ -281,8 +344,10 @@ describe('DockerStepRunner', () => {
 
     controller.abort();
 
-    await expect(resultPromise).rejects.toThrow('aborted');
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    proc.emit('exit', 143);
+
+    await expect(resultPromise).rejects.toThrow('aborted');
   });
 
   it('rejects when container exits before producing result', async () => {

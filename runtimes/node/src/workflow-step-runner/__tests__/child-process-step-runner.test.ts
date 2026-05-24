@@ -1,21 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import type { StepRunConfig, StepRunResult } from '@makaio/contracts';
 import type { ChildProcessStepRunnerOptions } from '../types.js';
-import type { IJsonlTransport } from '@makaio/subprocess';
 
 // ---------------------------------------------------------------------------
 // Mock @makaio/subprocess
 // ---------------------------------------------------------------------------
 
 /** Minimal mock process surface needed by tests. */
-interface MockProcess {
+interface MockProcess extends EventEmitter {
   kill: ReturnType<typeof vi.fn>;
 }
 
 interface MockTransport {
+  process: MockProcess;
   send: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
-  process: MockProcess;
   messageListeners: Set<(msg: unknown) => void>;
   errorListeners: Set<(err: Error) => void>;
   onMessage: (listener: (msg: unknown) => void) => () => void;
@@ -23,12 +23,14 @@ interface MockTransport {
 }
 
 let mockTransport: MockTransport;
+let mockTransportOptions: unknown;
 
 vi.mock('@makaio/subprocess', () => ({
-  createJsonlTransport: (_opts: unknown): IJsonlTransport => {
+  createJsonlTransport: (opts: unknown) => {
+    mockTransportOptions = opts;
     const messageListeners = new Set<(msg: unknown) => void>();
     const errorListeners = new Set<(err: Error) => void>();
-    const mockProcess: MockProcess = { kill: vi.fn() };
+    const mockProcess: MockProcess = Object.assign(new EventEmitter(), { kill: vi.fn() });
 
     mockTransport = {
       send: vi.fn(),
@@ -46,7 +48,7 @@ vi.mock('@makaio/subprocess', () => ({
       },
     };
 
-    return mockTransport as unknown as IJsonlTransport;
+    return mockTransport;
   },
 }));
 
@@ -81,6 +83,7 @@ function makeOptions(): ChildProcessStepRunnerOptions {
     mode: 'child-process',
     workerEntry: '/path/to/worker-entry.ts',
     cwd: '/workspace',
+    platformDefaults: { cwd: '/workspace' },
     manifest: { packages: [{ name: 'test-ext', importPath: '@test/ext' }] },
   };
 }
@@ -103,6 +106,7 @@ function emitReadyThenResult(result: StepRunResult): void {
 describe('ChildProcessStepRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockTransportOptions = undefined;
   });
 
   it('reports managesWorkflowLifecycle as false', () => {
@@ -138,6 +142,44 @@ describe('ChildProcessStepRunner', () => {
 
     const result = await resultPromise;
     expect(result).toEqual(expectedResult);
+  });
+
+  it('launches source TypeScript worker entries with the tsx loader', async () => {
+    const runner = new ChildProcessStepRunner({
+      ...makeOptions(),
+      workerEntry: '/path/to/worker-entry.ts',
+    });
+    const signal = new AbortController().signal;
+
+    const resultPromise = runner.run(makeConfig(), signal);
+    await Promise.resolve();
+
+    expect(mockTransportOptions).toMatchObject({
+      command: 'node',
+      args: ['--import', 'tsx/esm', '/path/to/worker-entry.ts'],
+    });
+
+    emitReadyThenResult({ status: 'completed', telemetry: { duration: 1 } });
+    await resultPromise;
+  });
+
+  it('launches dist ESM worker entries as plain node scripts', async () => {
+    const runner = new ChildProcessStepRunner({
+      ...makeOptions(),
+      workerEntry: '/path/to/worker-entry.mjs',
+    });
+    const signal = new AbortController().signal;
+
+    const resultPromise = runner.run(makeConfig(), signal);
+    await Promise.resolve();
+
+    expect(mockTransportOptions).toMatchObject({
+      command: 'node',
+      args: ['/path/to/worker-entry.mjs'],
+    });
+
+    emitReadyThenResult({ status: 'completed', telemetry: { duration: 1 } });
+    await resultPromise;
   });
 
   it('skips ready message and resolves with result message', async () => {
@@ -188,7 +230,7 @@ describe('ChildProcessStepRunner', () => {
     await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
   });
 
-  it('rejects and kills process when signal is aborted during execution', async () => {
+  it('starts graceful termination on abort and settles after the process exits', async () => {
     const runner = new ChildProcessStepRunner(makeOptions());
     const controller = new AbortController();
 
@@ -197,8 +239,10 @@ describe('ChildProcessStepRunner', () => {
 
     controller.abort();
 
-    await expect(resultPromise).rejects.toThrow('aborted');
     expect(mockTransport.process.kill).toHaveBeenCalledWith('SIGTERM');
+    mockTransport.process.emit('exit', 143);
+
+    await expect(resultPromise).rejects.toThrow('aborted');
   });
 
   it('rejects when transport emits an error', async () => {

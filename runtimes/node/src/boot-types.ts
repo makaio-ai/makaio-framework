@@ -3,7 +3,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
-import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
+import type { ExtensionConfigProvider, StepRunnerBusAuth, TrayManifest } from '@makaio/contracts';
 import type { AdapterSubsystemService } from '@makaio/subsystem-adapter';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type { DevPortalMap } from '@makaio/services-package-manager';
@@ -18,6 +18,61 @@ import type { ShutdownStep } from './boot-phase.js';
 import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
+import type { WorkerContributionManifest } from './workflow-step-runner/types.js';
+import type { WorkerEntryMode } from './workflow-step-runner/worker-entry-resolver.js';
+
+/** Runtime boot configuration for workflow step runner composition. */
+export type WorkflowStepRunnerBootOptions =
+  | {
+      /** Use the workflow engine's in-process runner. */
+      readonly mode?: 'in-process';
+      /** Bus authentication forwarded to runner configs. */
+      readonly busAuth?: StepRunnerBusAuth;
+    }
+  | {
+      /** Use a Piscina worker-thread pool for runner-executable workflow steps. */
+      readonly mode: 'piscina';
+      /** Contribution manifest loaded inside isolated workers. */
+      readonly manifest?: WorkerContributionManifest;
+      /** Explicit worker entry path. Overrides workerEntryMode resolution. */
+      readonly workerEntry?: string;
+      /** Source/dist worker entry mode used when workerEntry is omitted. */
+      readonly workerEntryMode?: WorkerEntryMode;
+      /** Bus authentication forwarded to runner configs. */
+      readonly busAuth?: StepRunnerBusAuth;
+      /** Maximum concurrent worker threads. */
+      readonly maxConcurrency?: number;
+      /** Idle timeout before worker threads are reaped. */
+      readonly idleTimeoutMs?: number;
+    }
+  | {
+      /** Use a Node child process per runner-executable workflow step. */
+      readonly mode: 'child-process';
+      /** Contribution manifest loaded inside isolated workers. */
+      readonly manifest?: WorkerContributionManifest;
+      /** Explicit worker entry path. Overrides workerEntryMode resolution. */
+      readonly workerEntry?: string;
+      /** Source/dist worker entry mode used when workerEntry is omitted. */
+      readonly workerEntryMode?: WorkerEntryMode;
+      /** Bus authentication forwarded to runner configs. */
+      readonly busAuth?: StepRunnerBusAuth;
+    }
+  | {
+      /** Use a Docker container per runner-executable workflow step. */
+      readonly mode: 'docker';
+      /** Docker image containing the worker runtime. */
+      readonly imageName: string;
+      /** Docker network mode. Defaults to the runner's `host` network. */
+      readonly networkMode?: string;
+      /** Contribution manifest loaded inside isolated workers. */
+      readonly manifest?: WorkerContributionManifest;
+      /** Explicit worker entry path. Overrides workerEntryMode resolution. */
+      readonly workerEntry?: string;
+      /** Source/dist worker entry mode used when workerEntry is omitted. */
+      readonly workerEntryMode?: WorkerEntryMode;
+      /** Bus authentication forwarded to runner configs. */
+      readonly busAuth?: StepRunnerBusAuth;
+    };
 
 /**
  * Bound address info passed to {@link BootMakaioRuntimeOptions.onTransportReady}.
@@ -210,6 +265,15 @@ export interface CoreBootOptions {
    * of host-specific post-install logic.
    */
   readonly clientBinaryPostInstallHandlers?: ReadonlyMap<string, PostInstallHandler>;
+
+  /**
+   * Workflow step runner composition for runner-executable steps.
+   *
+   * Defaults to `in-process`, preserving the current single-process behavior.
+   * Isolated modes receive the runtime bus URL, optional typed bus auth,
+   * platform defaults, worker entry, and contribution manifest.
+   */
+  readonly workflowStepRunner?: WorkflowStepRunnerBootOptions;
 
   /**
    * Runtime data home for config, database, machine identity, and installed

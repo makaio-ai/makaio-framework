@@ -163,7 +163,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string & $brand<"CredentialRef">> \| undefined` | no |
+| `credentialRefs` | `Record<string, string> \| undefined` | no |
 | `definitionId` | `string` | yes |
 | `endpointOverrides` | `{ anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined` | no |
 | `isSentinel` | `boolean \| undefined` | no |
@@ -607,7 +607,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `credentialRefs` | `Record<string, string & $brand<"CredentialRef">>` | yes |
+| `credentialRefs` | `Record<string, string>` | yes |
 | `id` | `string` | yes |
 
 **Response:**

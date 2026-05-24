@@ -394,10 +394,10 @@ Type: Event
 |-------|------|----------|
 | `agentId` | `string` | yes |
 | `completionTokens` | `number` | yes |
-| `inputCachedTokens` | `number` | yes |
+| `inputCachedTokens` | `number \| undefined` | no |
 | `modelContextWindow` | `number \| undefined` | no |
 | `promptTokens` | `number` | yes |
-| `reasoningTokens` | `number` | yes |
+| `reasoningTokens` | `number \| undefined` | no |
 | `threadId` | `string` | yes |
 | `timestamp` | `number` | yes |
 | `totalTokens` | `number` | yes |

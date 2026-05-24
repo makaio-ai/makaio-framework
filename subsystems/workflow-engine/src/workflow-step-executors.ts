@@ -5,6 +5,7 @@ import {
   SubagentSubjects,
   type AgentWorkflowStep,
   type ExecutableStepState,
+  type ProviderContext,
   type ShellWorkflowStep,
   type StepRunResult,
   type WorkflowStep,
@@ -24,13 +25,17 @@ type GateStep = Extract<WorkflowStep, { type: 'gate' }>;
 type RunnableWorkflowStep = AgentWorkflowStep | ShellWorkflowStep | GateStep;
 
 type StepPreamble<TStep extends RunnableWorkflowStep> = {
-  active: ActiveExecution;
   execution: WorkflowExecution;
   workflow: ActiveExecution['workflow'];
-  stepMap: ActiveExecution['stepMap'];
   step: TStep;
   /** Always `ExecutableStepState` — verified by `getStepPreamble` which rejects for-each steps. */
   stepState: ExecutableStepState;
+};
+
+type AgentSpawnConfig = Pick<AgentWorkflowStep, 'model' | 'harnessId' | 'contextMode'> & {
+  adapterName?: string;
+  systemPrompt?: string;
+  providerContext?: ProviderContext;
 };
 
 /**
@@ -62,10 +67,8 @@ function getStepPreamble<TType extends RunnableWorkflowStep['type']>(
   }
 
   return {
-    active,
     execution: active.execution,
     workflow: active.workflow,
-    stepMap: active.stepMap,
     step: step as Extract<WorkflowStep, { type: TType }> & Extract<RunnableWorkflowStep, { type: TType }>,
     stepState: rawState,
   };
@@ -107,6 +110,33 @@ export function failResult(error: string, startedAt: number): StepRunResult {
  */
 function okResult(startedAt: number, output?: string): StepRunResult {
   return { status: 'completed', output, telemetry: { duration: Date.now() - startedAt } };
+}
+
+/**
+ * Resolve the adapter configuration for an agent step.
+ * @param bus - Message bus used for role resolution.
+ * @param step - Agent workflow step to resolve.
+ * @returns Spawn configuration fields for the subagent request.
+ */
+async function resolveAgentSpawnConfig(bus: IMakaioBus, step: AgentWorkflowStep): Promise<AgentSpawnConfig> {
+  if (!step.role) {
+    return {
+      adapterName: step.adapter,
+      model: step.model,
+      harnessId: step.harnessId,
+      contextMode: step.contextMode ?? ContextModeSchema.enum.fresh,
+    };
+  }
+
+  const role = await bus.request(WorkflowSubjects.resolveRole, { roleId: step.role });
+  return {
+    adapterName: role.adapterName,
+    model: role.model,
+    harnessId: role.harnessId,
+    contextMode: role.contextMode ?? ContextModeSchema.enum.fresh,
+    systemPrompt: role.systemPrompt,
+    providerContext: role.providerContext,
+  };
 }
 
 /**
@@ -263,14 +293,19 @@ export async function executeAgentStep(
       return failResult('Execution cancelled', startedAt);
     }
 
+    const agentConfig = await resolveAgentSpawnConfig(bus, step);
+    if (execution.status !== 'running') return failResult('Execution cancelled', startedAt);
+
     const spawnResult = await bus.requestOptional(SubagentSubjects.spawn, {
       parentSessionId: execution.coordinatorSessionId!,
       config: {
         task: resolvedPrompt,
-        contextMode: step.contextMode ?? ContextModeSchema.enum.fresh,
-        adapterName: step.adapter,
-        model: step.model,
-        harnessId: step.harnessId,
+        contextMode: agentConfig.contextMode,
+        adapterName: agentConfig.adapterName,
+        model: agentConfig.model,
+        harnessId: agentConfig.harnessId,
+        systemPrompt: agentConfig.systemPrompt,
+        providerContext: agentConfig.providerContext,
         executionTargetId: step.executionTargetId ?? workflow.defaultExecutionTargetId,
         responseSchema: step.outputSchema,
       },
@@ -321,9 +356,6 @@ export async function executeAgentStep(
     return failResult(message, startedAt);
   }
 
-  // Re-read via indexer to break control-flow narrowing from the `stepState.status = 'running'`
-  // assignment above: awaitAndSettleSubagent mutates the status but TypeScript can't track that.
-  // The state must be ExecutableStepState here since the step type was validated above.
   const settledState = execution.steps[stepId] as ExecutableStepState | undefined;
   if (settledState?.status === 'completed') return okResult(startedAt, settledState.result ?? '');
   return failResult(settledState?.error ?? `Step failed: ${stepId}`, startedAt);
@@ -364,9 +396,6 @@ export async function executeShellStep(
     stepState.status = 'running';
     stepState.startedAt = Date.now();
 
-    // The controller remains registered for the entire launch window so
-    // cancellation can abort a process as soon as one exists, and failures in
-    // that same window still release the cancellation handle.
     await persistStepState(bus, execution, stepId);
 
     const { session } = await bus.request(SessionSubjects.get, {

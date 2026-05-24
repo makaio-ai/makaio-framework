@@ -1,5 +1,8 @@
 import { join } from 'node:path';
 
+/** Worker entry build mode. */
+export type WorkerEntryMode = 'source' | 'dist';
+
 /**
  * Options for resolving the worker entrypoint file path.
  */
@@ -7,7 +10,7 @@ export interface WorkerEntryResolverOptions {
   /** Absolute path to the package root directory. */
   readonly packageRoot: string;
   /** Whether to resolve the source TypeScript entry or the built distribution entry. */
-  readonly mode: 'source' | 'dist';
+  readonly mode: WorkerEntryMode;
 }
 
 /**
@@ -25,4 +28,19 @@ export function resolveWorkerEntry(options: WorkerEntryResolverOptions): string 
   }
 
   return join(options.packageRoot, 'dist', 'workflow-step-runner', 'worker-entry.mjs');
+}
+
+/**
+ * Build Node argv for a worker entry.
+ *
+ * TypeScript source entries require the `tsx` ESM loader in development.
+ * Compiled `.mjs` entries are already executable by Node and must not load
+ * `tsx`, which is not part of production dist runtime assumptions.
+ * @param workerEntry - Absolute path to the worker entrypoint.
+ * @returns argv tail to pass after the `node` executable.
+ */
+export function buildNodeWorkerEntryArgs(workerEntry: string): string[] {
+  return workerEntry.endsWith('.ts') || workerEntry.endsWith('.tsx')
+    ? ['--import', 'tsx/esm', workerEntry]
+    : [workerEntry];
 }

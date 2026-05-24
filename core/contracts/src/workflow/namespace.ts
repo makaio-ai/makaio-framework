@@ -62,6 +62,12 @@ export const WorkflowSchemas = {
     request: z.object({ executionId: z.string() }),
     response: z.object({ execution: WorkflowExecutionSchema.nullable() }),
   },
+  /**
+   * List workflow executions by workflow ID or scope.
+   *
+   * At least one of `workflowId` or `scope` is required. `limit` is optional
+   * for callers and defaults to 50 during request parsing.
+   */
   listExecutions: {
     request: ExecutionListQuerySchema,
     response: z.object({ executions: z.array(WorkflowExecutionSchema) }),

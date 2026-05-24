@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { AdapterContribution } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
 import type { WorkerContributionManifest, WorkerContributionPackageRef } from './types.js';
@@ -28,6 +29,14 @@ interface ExtensionModuleShape {
     readonly createToolsets: (ctx: unknown) => Toolset[];
   };
   readonly adapters?: readonly AdapterContribution[];
+}
+
+/** Runtime context available while extracting worker-local contributions. */
+export interface WorkerContributionLoadOptions {
+  /** Worker-local bus instance. */
+  readonly bus?: IMakaioBus;
+  /** Cancellation signal for worker-local contribution setup. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -80,26 +89,30 @@ function resolveExtensionExport(
 /**
  * Minimal context passed to `tools.createToolsets()` in the worker environment.
  *
- * Workers do not have access to the full extension lifecycle (bus, services,
- * signal, etc.). This stub satisfies the `NodeExtensionContext` parameter
- * signature at the type level while providing safe no-op values. Extensions
- * whose toolset factories depend on runtime services should not be listed in
- * the worker contribution manifest.
+ * Workers expose their local bus and cancellation signal, but not the host
+ * lifecycle/service registry. Extensions whose toolset factories depend on
+ * host-only services should not be listed in the worker contribution manifest.
+ * @param options - Worker-local runtime surfaces exposed during extraction.
+ * @returns Context object passed to extension toolset factories.
  */
-const WORKER_TOOLSET_CONTEXT: Readonly<Record<string, unknown>> = Object.freeze({
-  bus: undefined,
-  identity: Object.freeze({ extensionName: '__worker__' }),
-  dataDir: '',
-  machineId: '',
-  platform: process.platform,
-  homedir: '',
-  makaioHome: '',
-  username: '',
-  signal: new AbortController().signal,
-  tryImport: async () => null,
-  getService: () => undefined,
-  hasExtension: () => false,
-});
+function createWorkerToolsetContext(options?: WorkerContributionLoadOptions): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    bus: options?.bus,
+    identity: Object.freeze({ extensionName: '__worker__' }),
+    dataDir: '',
+    machineId: '',
+    platform: process.platform,
+    homedir: '',
+    makaioHome: '',
+    username: '',
+    signal: options?.signal ?? new AbortController().signal,
+    tryImport: async () => null,
+    getService: () => {
+      throw new Error('Worker-local contribution context does not expose host services.');
+    },
+    hasExtension: () => false,
+  });
+}
 
 /**
  * Load worker-local contributions from the packages declared in a manifest.
@@ -114,10 +127,14 @@ const WORKER_TOOLSET_CONTEXT: Readonly<Record<string, unknown>> = Object.freeze(
  * diagnostic warning and are skipped -- the loader does not throw for
  * individual package failures.
  * @param manifest - Serializable manifest declaring which packages to load.
+ * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Combined toolsets and adapter contributions from all loaded packages.
  */
-export async function loadWorkerContributions(manifest: WorkerContributionManifest): Promise<WorkerContributions> {
-  const results = await Promise.all(manifest.packages.map(loadSinglePackage));
+export async function loadWorkerContributions(
+  manifest: WorkerContributionManifest,
+  options?: WorkerContributionLoadOptions,
+): Promise<WorkerContributions> {
+  const results = await Promise.all(manifest.packages.map((pkgRef) => loadSinglePackage(pkgRef, options)));
 
   const toolsets: Toolset[] = [];
   const adapters: AdapterContribution[] = [];
@@ -135,10 +152,12 @@ export async function loadWorkerContributions(manifest: WorkerContributionManife
 /**
  * Load and extract contributions from a single package reference.
  * @param pkgRef - Package reference with name and import path.
+ * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Extracted contributions, or `undefined` when the package cannot be loaded.
  */
 async function loadSinglePackage(
   pkgRef: WorkerContributionPackageRef,
+  options?: WorkerContributionLoadOptions,
 ): Promise<{ toolsets: Toolset[]; adapters: AdapterContribution[] } | undefined> {
   let mod: Record<string, unknown>;
   try {
@@ -161,7 +180,7 @@ async function loadSinglePackage(
   // Extract toolsets
   if (ext.tools?.createToolsets) {
     try {
-      const created = ext.tools.createToolsets(WORKER_TOOLSET_CONTEXT);
+      const created = ext.tools.createToolsets(createWorkerToolsetContext(options));
       packageToolsets.push(...created);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);

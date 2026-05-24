@@ -57,7 +57,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ $schema: "makaio/config/v1"; mode: "local" \| "remote" \| "hybrid"; role: "server" \| "main-dev-machine"; bus?: { remote?: { url?: string \| undefined; secret?: string \| undefined; } \| undefined; } \| undefined; relay?: { autoReconnect: boolean; maxReconnectAttempts: number; heartbeatInterval: number; url?: string \| undefined; token?: string \| undefined; } \| undefined; features?: { voiceBridge: boolean; } \| undefined; fileWatcher?: { backend: "auto" \| "watchman" \| "parcel" \| "chokidar"; } \| undefined; }` | yes |
+| `config` | `{ $schema?: "makaio/config/v1" \| undefined; mode?: "local" \| "remote" \| "hybrid" \| undefined; role?: "server" \| "main-dev-machine" \| undefined; bus?: { remote?: { url?: string \| undefined; secret?: string \| undefined; } \| undefined; } \| undefined; relay?: { url?: string \| undefined; token?: string \| undefined; autoReconnect?: boolean \| undefined; maxReconnectAttempts?: number \| undefined; heartbeatInterval?: number \| undefined; } \| undefined; features?: { voiceBridge?: boolean \| undefined; } \| undefined; fileWatcher?: { backend?: "auto" \| "watchman" \| "parcel" \| "chokidar" \| undefined; } \| undefined; }` | yes |
 
 **Response:**
 

@@ -48,7 +48,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `group` | `{ packageName: string; groupId: string; entries: { enabled: boolean; priority: number; label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; }[]; section: "tools" \| "utilities" \| "views"; priority: number; }` | yes |
+| `group` | `{ packageName: string; groupId: string; entries: { label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; enabled?: boolean \| undefined; priority?: number \| undefined; }[]; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; }` | yes |
 
 **Response:**
 
@@ -112,7 +112,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `entry` | `{ packageName: string; entryId: string; label: string; section: "tools" \| "utilities" \| "views"; priority: number; enabled: boolean; metadata?: Record<string, unknown> \| undefined; }` | yes |
+| `entry` | `{ packageName: string; entryId: string; label: string; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; enabled?: boolean \| undefined; metadata?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 

@@ -1,4 +1,4 @@
-import type { StepRunnerBusAuth } from '@makaio/contracts';
+import type { StepRunnerBusAuth, StepRunnerPlatformDefaults } from '@makaio/contracts';
 
 // ---------------------------------------------------------------------------
 // Shared base fields for all runner modes
@@ -10,6 +10,8 @@ interface NodeStepRunnerBaseOptions {
   readonly busUrl?: string;
   /** Bus authentication strategy for runner worker connections. */
   readonly busAuth?: StepRunnerBusAuth;
+  /** Platform defaults forwarded from the runtime composition root. */
+  readonly platformDefaults: StepRunnerPlatformDefaults;
   /** Working directory for step process spawning. */
   readonly cwd: string;
 }

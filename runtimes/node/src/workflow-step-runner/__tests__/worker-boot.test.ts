@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { AgentSubjects } from '@makaio/contracts';
-import { bootWorkerBus } from '../worker-boot.js';
+import { AgentSubjects, McpSubjects } from '@makaio/contracts';
+import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
 import { StepTelemetryCollector } from '../step-telemetry-collector.js';
 
 describe('bootWorkerBus', () => {
@@ -65,5 +65,26 @@ describe('bootWorkerBus', () => {
 
     collector.dispose();
     await handle.close();
+  });
+
+  it('boots the worker-local MCP bridge as part of worker runtime', async () => {
+    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
+    const runtime = await bootWorkerRuntime(handle, { toolsets: [], adapters: [] }, { cwd: process.cwd() });
+
+    try {
+      const registration = await handle.bus.request(McpSubjects.session.register, {
+        adapterSessionId: 'worker-mcp-session',
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+        contextOverrides: {},
+      });
+
+      expect(registration.port).toBeGreaterThan(0);
+    } finally {
+      await runtime.close();
+      await handle.close();
+    }
   });
 });

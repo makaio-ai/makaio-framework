@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 
 // ============================================================================
 // Configuration Schemas
@@ -41,6 +42,14 @@ export const SubagentConfigSchema = z.object({
   adapterName: z.string().optional(),
   /** Provider configuration identifier */
   providerConfigId: z.string().optional(),
+  /**
+   * Resolved provider context for callers that already performed provider selection.
+   *
+   * Prefer `providerConfigId` for persisted/user-authored subagent configs. Workflow
+   * role resolution may supply a fully resolved context so isolated and in-process
+   * workflow steps route credentials through the same adapter contract.
+   */
+  providerContext: ProviderContextSchema.optional(),
   /** Harness ID for tool/runtime configuration. Inherits from parent if omitted. */
   harnessId: z.string().optional(),
   /** Model identifier (default: inherit from parent) */

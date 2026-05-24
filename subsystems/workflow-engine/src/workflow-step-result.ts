@@ -15,17 +15,13 @@ export type StepExecutionOutcome =
 /** Failed step outcome with the originating step id attached. */
 export type FailedStepExecutionOutcome = Extract<StepExecutionOutcome, { status: 'failed' }> & { stepId: string };
 
-type LifecycleManagedStepRunner = IStepRunner & {
-  readonly managesWorkflowLifecycle?: boolean;
-};
-
 /**
  * Check whether the runner still owns workflow state mutation internally.
  * @param runner - Step runner to inspect.
  * @returns True when the runner owns step lifecycle side effects.
  */
 export function runnerManagesWorkflowLifecycle(runner: IStepRunner): boolean {
-  return (runner as LifecycleManagedStepRunner).managesWorkflowLifecycle === true;
+  return runner.managesWorkflowLifecycle;
 }
 
 /**

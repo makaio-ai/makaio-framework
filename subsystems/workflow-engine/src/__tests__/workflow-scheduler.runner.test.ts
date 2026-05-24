@@ -277,6 +277,7 @@ describe('WorkflowScheduler runner cancellation', () => {
       expect(activeRunnerSteps.has(key)).toBe(true);
       const entry = activeRunnerSteps.get(key)!;
       expect(entry.controller).toBeInstanceOf(AbortController);
+      expect(entry.cancelSubject).toBe('workflow.exec-register.step.tracked.cancel');
 
       // Complete the step
       runner.complete('tracked');

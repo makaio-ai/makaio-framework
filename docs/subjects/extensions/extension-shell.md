@@ -41,7 +41,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `context` | `{ cwd: string; platform: "windows" \| "posix"; constraints?: unknown; }` | yes |
-| `input` | `{ command: string; colors: boolean; cwd?: string \| undefined; env?: Record<string, string> \| undefined; timeout?: number \| undefined; }` | yes |
+| `input` | `{ command: string; cwd?: string \| undefined; env?: Record<string, string> \| undefined; colors?: boolean \| undefined; timeout?: number \| undefined; }` | yes |
 
 **Response:**
 
@@ -60,12 +60,12 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `context` | `number` | yes |
-| `maxMatches` | `number` | yes |
-| `offset` | `number` | yes |
+| `context` | `number \| undefined` | no |
+| `maxMatches` | `number \| undefined` | no |
+| `offset` | `number \| undefined` | no |
 | `pattern` | `string` | yes |
 | `shellId` | `string` | yes |
-| `stream` | `"both" \| "stdout" \| "stderr"` | yes |
+| `stream` | `"both" \| "stdout" \| "stderr" \| undefined` | no |
 
 **Response:**
 
@@ -85,7 +85,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `shellId` | `string` | yes |
-| `signal` | `"SIGTERM" \| "SIGKILL" \| "SIGINT"` | yes |
+| `signal` | `"SIGTERM" \| "SIGKILL" \| "SIGINT" \| undefined` | no |
 
 **Response:**
 
@@ -103,10 +103,10 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `limit` | `number` | yes |
-| `offset` | `number` | yes |
+| `limit` | `number \| undefined` | no |
+| `offset` | `number \| undefined` | no |
 | `shellId` | `string` | yes |
-| `stream` | `"both" \| "stdout" \| "stderr"` | yes |
+| `stream` | `"both" \| "stdout" \| "stderr" \| undefined` | no |
 
 **Response:**
 

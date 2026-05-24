@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from './namespace.js';
 import {
+  createStepCancelSubject,
   SubagentSubjects,
   type CompositeStepState,
   type ExecutableStepState,
@@ -26,7 +27,7 @@ export interface FinalizerDeps {
   /** Shell step abort controllers keyed by `{executionId}:{stepId}`. */
   shellAbortControllers: Map<string, AbortController>;
   /** Active runner step entries keyed by `{executionId}:{stepId}` for cancellation tracking. */
-  activeRunnerSteps?: Map<string, ActiveRunnerStep>;
+  activeRunnerSteps: Map<string, ActiveRunnerStep>;
   /** Step runner instance (used for forceKill on hard cancel). */
   stepRunner?: IStepRunner;
   /** Grace period in ms before forceKill is issued after cooperative abort. */
@@ -240,20 +241,27 @@ export async function emitTerminatedStepEvents(
  * Cancel all active runner steps for a given execution.
  *
  * Aborts each tracked step's AbortController, which triggers the cooperative
- * cancellation signal. The hard kill timer is scheduled by the abort event
- * listener registered in the scheduler's `runExecutableNode` — this function
- * only needs to fire the signal.
+ * cancellation signal. It also emits the per-step cancellation bus subject so
+ * remote workers can observe cancellation through their own bus connection.
+ * The hard kill timer is scheduled by the abort event listener registered in
+ * the scheduler's `runExecutableNode`.
  * @param deps - Finalizer dependencies (requires activeRunnerSteps).
  * @param executionId - Execution identifier whose runner steps should be cancelled.
+ * @param reason - Optional cancellation reason to forward to remote workers.
  */
-export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string): void {
-  const { activeRunnerSteps } = deps;
-  if (!activeRunnerSteps) return;
+export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string, reason?: string): void {
+  const { activeRunnerSteps, bus } = deps;
 
   const prefix = `${executionId}:`;
   for (const [key, entry] of activeRunnerSteps) {
     if (!key.startsWith(prefix)) continue;
+    const stepId = key.slice(prefix.length);
     entry.controller.abort();
+    void bus
+      .emit(createStepCancelSubject(entry.cancelSubject), { executionId, stepId, reason })
+      .catch((error: unknown) => {
+        console.error(`[WorkflowFinalizer] Failed to emit cancellation for ${key}:`, error);
+      });
   }
 }
 
@@ -316,7 +324,7 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
     }
 
     // Cancel active runner steps (cooperative abort + hard kill timer).
-    cancelActiveRunnerSteps(deps, executionId);
+    cancelActiveRunnerSteps(deps, executionId, reason);
 
     // Persist once after all step and metadata mutations.
     await persistStepStates(deps.bus, execution, terminatedIds.stepIds, {

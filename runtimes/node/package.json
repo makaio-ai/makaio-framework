@@ -39,6 +39,7 @@
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/subsystem-mcp-http-server": "workspace:*",
     "@makaio/subsystem-workflow-engine": "workspace:*",
+    "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.2",
     "glob": "13.0.6",

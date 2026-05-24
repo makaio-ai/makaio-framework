@@ -29,6 +29,7 @@ import {
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
 } from '../boot.js';
+import { resolveWorkflowStepRunnerFactoryOptions } from '../workflow-step-runner/index.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
 import { filesystemPackage } from '@makaio/extension-filesystem';
@@ -236,6 +237,80 @@ describe('buildLocalBusUrl', () => {
 
   it('brackets explicit IPv6 hosts', () => {
     expect(buildLocalBusUrl('::1', 3010)).toBe('ws://[::1]:3010/bus');
+  });
+});
+
+describe('workflow step runner boot composition', () => {
+  it('preserves the in-process runner default when no runner option is supplied', () => {
+    const result = resolveWorkflowStepRunnerFactoryOptions({
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      packageRoot: '/opt/makaio/runtimes/node',
+      platformDefaults: { cwd: '/workspace' },
+      defaultWorkerEntryMode: 'source',
+    });
+
+    expect(result).toStrictEqual({
+      mode: 'in-process',
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      busAuth: { kind: 'none' },
+      cwd: '/workspace',
+      platformDefaults: { cwd: '/workspace' },
+    });
+  });
+
+  it('resolves child-process runner options with bus auth, platform defaults, manifest, and dist worker entry', () => {
+    const manifest = { packages: [{ name: 'review-tools', importPath: 'file:///ext/review-tools/server.mjs' }] };
+
+    const result = resolveWorkflowStepRunnerFactoryOptions({
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      packageRoot: '/opt/makaio/runtimes/node',
+      platformDefaults: { cwd: '/workspace', env: { NODE_ENV: 'test' } },
+      defaultWorkerEntryMode: 'source',
+      runner: {
+        mode: 'child-process',
+        busAuth: { kind: 'hmac', secret: 'runner-secret' },
+        manifest,
+        workerEntryMode: 'dist',
+      },
+    });
+
+    expect(result).toStrictEqual({
+      mode: 'child-process',
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      busAuth: { kind: 'hmac', secret: 'runner-secret' },
+      cwd: '/workspace',
+      platformDefaults: { cwd: '/workspace', env: { NODE_ENV: 'test' } },
+      manifest,
+      workerEntry: '/opt/makaio/runtimes/node/dist/workflow-step-runner/worker-entry.mjs',
+    });
+  });
+
+  it('resolves docker runner image, network, and explicit worker entry', () => {
+    const result = resolveWorkflowStepRunnerFactoryOptions({
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      packageRoot: '/opt/makaio/runtimes/node',
+      platformDefaults: { cwd: '/workspace' },
+      defaultWorkerEntryMode: 'dist',
+      runner: {
+        mode: 'docker',
+        imageName: 'makaio/step-worker:test',
+        networkMode: 'bridge',
+        manifest: { packages: [] },
+        workerEntry: '/app/runtime/worker-entry.mjs',
+      },
+    });
+
+    expect(result).toStrictEqual({
+      mode: 'docker',
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      busAuth: { kind: 'none' },
+      cwd: '/workspace',
+      platformDefaults: { cwd: '/workspace' },
+      manifest: { packages: [] },
+      imageName: 'makaio/step-worker:test',
+      networkMode: 'bridge',
+      workerEntry: '/app/runtime/worker-entry.mjs',
+    });
   });
 });
 

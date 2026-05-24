@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createBusInstance } from '@makaio/bus-core';
 import { loadWorkerContributions } from '../worker-contributions.js';
 import type { WorkerContributionManifest } from '../types.js';
 
@@ -118,6 +119,25 @@ const FAILING_TOOLSETS_MODULE = toDataUrl(`
   };
 `);
 
+/** Module that records whether worker-local context surfaces are present. */
+const CONTEXT_MODULE = toDataUrl(`
+  export default {
+    name: 'context-pkg',
+    displayName: 'Context Package',
+    version: '0.1.0',
+    tools: {
+      createToolsets: (ctx) => [{
+        metadata: {
+          name: ctx.bus && ctx.signal ? 'context-has-runtime' : 'context-missing-runtime',
+          description: 'context',
+          version: '1.0.0',
+        },
+        tools: {},
+      }],
+    },
+  };
+`);
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -230,6 +250,18 @@ describe('loadWorkerContributions', () => {
 
     expect(result.toolsets).toHaveLength(0);
     expect(result.adapters).toHaveLength(0);
+  });
+
+  it('passes worker-local bus and signal into toolset factories', async () => {
+    const manifest: WorkerContributionManifest = {
+      packages: [{ name: 'context-pkg', importPath: CONTEXT_MODULE }],
+    };
+    const bus = createBusInstance();
+    const signal = new AbortController().signal;
+
+    const result = await loadWorkerContributions(manifest, { bus, signal });
+
+    expect(result.toolsets[0]?.metadata.name).toBe('context-has-runtime');
   });
 
   it('handles a nonexistent import path gracefully', async () => {

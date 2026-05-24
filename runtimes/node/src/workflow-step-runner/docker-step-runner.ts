@@ -3,6 +3,7 @@ import { StepRunResultSchema, type IStepRunner, type StepRunConfig, type StepRun
 import type { DockerStepRunnerOptions, WorkerContributionManifest } from './types.js';
 import { decodeJsonlChunk } from '@makaio/subprocess';
 import { isReadyMessage } from './worker-protocol.js';
+import { buildNodeWorkerEntryArgs } from './worker-entry-resolver.js';
 
 /**
  * Step runner that executes workflow steps inside Docker containers.
@@ -11,7 +12,7 @@ import { isReadyMessage } from './worker-protocol.js';
  * 1. `docker create` with volume mounts and the worker entrypoint command
  * 2. `docker start --attach --interactive` to connect stdin/stdout
  * 3. Parent writes `{ config, manifest }` as a JSON line to the container's stdin
- * 4. Container writes `{ jsonrpc: '2.0', method: 'ready' }` followed by the result
+ * 4. Container writes a JSON-RPC-shaped ready notification followed by the result
  * 5. `docker rm -f` always removes the container in cleanup
  *
  * SECURITY: Secrets (busAuth) are NEVER passed via env vars or command args.
@@ -94,9 +95,7 @@ export class DockerStepRunner implements IStepRunner {
       '-i', // Keep stdin open for communication
       this.imageName,
       'node',
-      '--import',
-      'tsx/esm',
-      this.workerEntry,
+      ...buildNodeWorkerEntryArgs(this.workerEntry),
     ];
 
     const { stdout } = await this.docker(args);
@@ -125,6 +124,7 @@ export class DockerStepRunner implements IStepRunner {
       let settled = false;
       let receivedReady = false;
       let stdoutBuffer = '';
+      let aborted = false;
 
       const settle = (action: () => void): void => {
         if (settled) return;
@@ -134,10 +134,8 @@ export class DockerStepRunner implements IStepRunner {
       };
 
       const onAbort = (): void => {
-        settle(() => {
-          proc.kill('SIGTERM');
-          reject(new Error(`Step ${key} aborted`));
-        });
+        aborted = true;
+        proc.kill('SIGTERM');
       };
 
       if (signal.aborted) {
@@ -173,13 +171,17 @@ export class DockerStepRunner implements IStepRunner {
       });
 
       proc.on('error', (err: Error) => {
-        settle(() => reject(err));
+        settle(() => reject(aborted ? new Error(`Step ${key} aborted`) : err));
       });
 
       proc.on('exit', (code: number | null) => {
         settle(() => {
           reject(
-            new Error(`Docker container for step ${key} exited with code ${String(code)} before producing a result`),
+            aborted
+              ? new Error(`Step ${key} aborted`)
+              : new Error(
+                  `Docker container for step ${key} exited with code ${String(code)} before producing a result`,
+                ),
           );
         });
       });

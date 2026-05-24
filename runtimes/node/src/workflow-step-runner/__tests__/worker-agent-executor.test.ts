@@ -1,14 +1,31 @@
-import { describe, it, expect } from 'vitest';
-import { AgentSubjects, AdapterSubjects, WorkflowSubjects, type StepRunConfig } from '@makaio/contracts';
+import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
+import {
+  AgentSubjects,
+  AdapterSubjects,
+  ToolSubjects,
+  WorkflowSubjects,
+  type AdapterContribution,
+  type StepRunConfig,
+} from '@makaio/contracts';
+import type { Toolset } from '@makaio/tools-core';
 import { bootWorkerBus } from '../worker-boot.js';
 import { runWorkerAgentStep } from '../worker-agent-executor.js';
+import type { WorkerContributions } from '../worker-contributions.js';
 
 /**
  * Create a minimal StepRunConfig for an agent step.
  * @param overrides - Fields to override on the agent step definition.
  * @returns A valid StepRunConfig for testing.
  */
-function makeAgentConfig(overrides: { adapter?: string; role?: string; prompt?: string } = {}): StepRunConfig {
+function makeAgentConfig(
+  overrides: {
+    adapter?: string;
+    role?: string;
+    prompt?: string;
+    resolvedInputs?: StepRunConfig['resolvedInputs'];
+  } = {},
+): StepRunConfig {
   return {
     stepId: 'test-agent-step',
     executionId: 'test-exec',
@@ -22,7 +39,7 @@ function makeAgentConfig(overrides: { adapter?: string; role?: string; prompt?: 
       adapter: overrides.adapter ?? 'test-adapter',
       role: overrides.role,
     },
-    resolvedInputs: {},
+    resolvedInputs: overrides.resolvedInputs ?? {},
     busAuth: { kind: 'none' },
     platformDefaults: { cwd: '/tmp' },
     cancelSubject: 'workflow.cancel.test',
@@ -46,11 +63,16 @@ describe('runWorkerAgentStep', () => {
 
   it('starts adapter agent and returns completed result on success', async () => {
     const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
-    const config = makeAgentConfig({ adapter: 'test-adapter', prompt: 'Hello agent' });
+    const config = makeAgentConfig({
+      adapter: 'test-adapter',
+      prompt: 'Hello {{ inputs.name }}',
+      resolvedInputs: { inputs: { name: 'agent' }, steps: {}, trigger: {} },
+    });
     const controller = new AbortController();
 
     // Register a mock handler for adapter.startAgent
     handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
+      expect(ctx.payload.initialMessage).toBe('Hello agent');
       ctx.setResult({
         success: true,
         agentId: 'agent-42',
@@ -150,6 +172,11 @@ describe('runWorkerAgentStep', () => {
         adapterName: 'resolved-adapter',
         model: 'opus',
         harnessId: 'reviewer-harness',
+        providerContext: {
+          providerConfigId: 'provider-1',
+          definitionId: 'anthropic-default',
+          credentialRefs: {},
+        },
       });
     });
 
@@ -158,6 +185,7 @@ describe('runWorkerAgentStep', () => {
       expect(ctx.payload.adapterId).toBe('resolved-adapter');
       expect(ctx.payload.model).toBe('opus');
       expect(ctx.payload.harnessId).toBe('reviewer-harness');
+      expect(ctx.payload.providerContext?.providerConfigId).toBe('provider-1');
 
       ctx.setResult({
         success: true,
@@ -242,6 +270,111 @@ describe('runWorkerAgentStep', () => {
 
     expect(result.status).toBe('failed');
     expect(result.telemetry.duration).toBeGreaterThan(0);
+
+    await handle.close();
+  });
+
+  it('boots contribution adapters and executes tools through the worker-local registry', async () => {
+    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
+    const config = makeAgentConfig({ adapter: 'worker-fake-adapter', prompt: 'Call worker tool' });
+    const controller = new AbortController();
+    const closeAdapter = vi.fn();
+    const executeTool = vi.fn(async (input: { value: string }) => ({
+      success: true as const,
+      data: { source: 'worker-local', value: input.value },
+    }));
+
+    const toolset: Toolset = {
+      metadata: { name: 'worker-tools', description: 'Worker tools', version: '1.0.0' },
+      tools: {
+        workerEcho: {
+          metadata: { name: 'worker.echo', description: 'Echo from the worker registry' },
+          inputSchema: z.object({ value: z.string() }),
+          outputSchema: z.object({ source: z.string(), value: z.string() }),
+          execute: executeTool,
+        },
+      },
+    };
+
+    const adapterContribution: AdapterContribution = {
+      manifest: { name: 'worker-fake-adapter', displayName: 'Worker Fake Adapter', protocols: ['openai'] },
+      definition: {
+        name: 'worker-fake-adapter',
+        displayName: 'Worker Fake Adapter',
+        providers: [],
+        defaultTimeouts: {
+          initialization: 1000,
+          acknowledgement: 1000,
+          completion: 1000,
+          toolApproval: 1000,
+          eventWait: 1000,
+        },
+        createAdapter: async (options?: { globalBus?: typeof handle.bus }) => {
+          const bus = options?.globalBus;
+          if (!bus) throw new Error('worker adapter did not receive local bus');
+          return {
+            adapterId: 'worker-fake-adapter',
+            name: 'worker-fake-adapter',
+            async init() {
+              bus.on(AdapterSubjects.startAgent, async (ctx) => {
+                const toolResult = await bus.request(ToolSubjects.execute, {
+                  toolName: 'worker.echo',
+                  input: { value: 'from-agent' },
+                  adapterId: 'worker-fake-adapter',
+                  adapterName: 'worker-fake-adapter',
+                });
+                const output =
+                  toolResult.success && typeof toolResult.data === 'object' && toolResult.data !== null
+                    ? JSON.stringify(toolResult.data)
+                    : 'tool failed';
+
+                ctx.setResult({
+                  success: true,
+                  agentId: 'worker-agent-1',
+                  adapterId: 'worker-fake-adapter',
+                  adapterSessionId: 'worker-session-1',
+                  sessionId: 'worker-makaio-session-1',
+                });
+
+                setTimeout(() => {
+                  void bus.emit(AgentSubjects.complete, {
+                    agentId: 'worker-agent-1',
+                    adapterId: 'worker-fake-adapter',
+                    adapterName: 'worker-fake-adapter',
+                    adapterSessionId: 'worker-session-1',
+                    messageId: 'worker-message-1',
+                    message: output,
+                    outcome: 'completed',
+                  });
+                }, 0);
+              });
+            },
+            async closeAsync() {
+              closeAdapter();
+            },
+          };
+        },
+      },
+    };
+
+    const result = await runWorkerAgentStep(handle, config, controller.signal, {
+      toolsets: [toolset],
+      adapters: [adapterContribution],
+    } satisfies WorkerContributions);
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('{"source":"worker-local","value":"from-agent"}');
+    expect(executeTool).toHaveBeenCalledOnce();
+    expect(closeAdapter).toHaveBeenCalledOnce();
+
+    await expect(
+      handle.bus.request(ToolSubjects.execute, {
+        toolName: 'worker.echo',
+        input: { value: 'after-close' },
+        adapterId: 'worker-fake-adapter',
+        adapterName: 'worker-fake-adapter',
+      }),
+    ).rejects.toThrow();
 
     await handle.close();
   });

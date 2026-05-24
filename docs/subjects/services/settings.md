@@ -71,7 +71,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string` | yes |
-| `defaults` | `{ model?: string \| undefined; timeouts?: Partial<RequiredTimeoutConfig> \| undefined; cwd?: string \| undefined; env?: Record<string, string> \| undefined; credentials?: Record<string, string & $brand<"CredentialRef">> \| undefined; providerSettings?: Record<string, unknown> \| undefined; }` | yes |
+| `defaults` | `{ model?: string \| undefined; timeouts?: unknown; cwd?: string \| undefined; env?: Record<string, string> \| undefined; credentials?: Record<string, string> \| undefined; providerSettings?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 
@@ -224,10 +224,10 @@ Type: Request (RPC)
 |-------|------|----------|
 | `$schema` | `"makaio/config/v1" \| undefined` | no |
 | `bus` | `{ remote?: { url?: string \| undefined; secret?: string \| undefined; } \| undefined; } \| undefined` | no |
-| `features` | `{ voiceBridge: boolean; } \| undefined` | no |
-| `fileWatcher` | `{ backend: "auto" \| "watchman" \| "parcel" \| "chokidar"; } \| undefined` | no |
+| `features` | `{ voiceBridge?: boolean \| undefined; } \| undefined` | no |
+| `fileWatcher` | `{ backend?: "auto" \| "watchman" \| "parcel" \| "chokidar" \| undefined; } \| undefined` | no |
 | `mode` | `"local" \| "remote" \| "hybrid" \| undefined` | no |
-| `relay` | `{ autoReconnect: boolean; maxReconnectAttempts: number; heartbeatInterval: number; url?: string \| undefined; token?: string \| undefined; } \| undefined` | no |
+| `relay` | `{ url?: string \| undefined; token?: string \| undefined; autoReconnect?: boolean \| undefined; maxReconnectAttempts?: number \| undefined; heartbeatInterval?: number \| undefined; } \| undefined` | no |
 | `role` | `"server" \| "main-dev-machine" \| undefined` | no |
 
 **Response:**

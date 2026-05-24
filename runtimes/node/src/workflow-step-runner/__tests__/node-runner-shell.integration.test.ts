@@ -34,6 +34,7 @@ describe('ChildProcessStepRunner (integration)', { timeout: 30_000 }, () => {
       mode: 'child-process',
       workerEntry,
       cwd: packageRoot,
+      platformDefaults: { cwd: packageRoot },
       manifest: { packages: [] },
     });
 

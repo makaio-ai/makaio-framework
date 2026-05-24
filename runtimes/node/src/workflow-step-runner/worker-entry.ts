@@ -1,4 +1,4 @@
-import type { StepRunConfig, StepRunResult } from '@makaio/contracts';
+import { createStepCancelSubject, type StepRunConfig, type StepRunResult } from '@makaio/contracts';
 import { bootWorkerBus, type WorkerBusHandle } from './worker-boot.js';
 import { StepTelemetryCollector } from './step-telemetry-collector.js';
 import { runWorkerShellStep } from './worker-shell-executor.js';
@@ -33,23 +33,36 @@ export interface WorkerRunStepParams {
  */
 export async function runStepInWorker(params: WorkerRunStepParams): Promise<StepRunResult> {
   const { config, manifest, signal } = params;
-  const abortSignal = signal ?? new AbortController().signal;
+  const abortController = new AbortController();
+  const abortFromParent = (): void => abortController.abort();
+  if (signal?.aborted) {
+    abortController.abort();
+  } else {
+    signal?.addEventListener('abort', abortFromParent, { once: true });
+  }
 
   let handle: WorkerBusHandle | undefined;
   let collector: StepTelemetryCollector | undefined;
+  let unsubscribeCancel: (() => void) | undefined;
 
   try {
     handle = await bootWorkerBus(config);
+    unsubscribeCancel = handle.bus.on(createStepCancelSubject(config.cancelSubject), () => {
+      abortController.abort();
+    });
     collector = new StepTelemetryCollector(handle.bus);
 
-    const contributions = await loadWorkerContributions(manifest);
+    const contributions = await loadWorkerContributions(manifest, {
+      bus: handle.bus,
+      signal: abortController.signal,
+    });
 
     let result: StepRunResult;
 
     if (config.stepType === 'shell') {
-      result = await runWorkerShellStep(config, abortSignal);
+      result = await runWorkerShellStep(config, abortController.signal);
     } else {
-      result = await runWorkerAgentStep(handle, config, abortSignal, contributions);
+      result = await runWorkerAgentStep(handle, config, abortController.signal, contributions);
     }
 
     // Merge telemetry from the collector into the step result
@@ -66,6 +79,8 @@ export async function runStepInWorker(params: WorkerRunStepParams): Promise<Step
       },
     };
   } finally {
+    signal?.removeEventListener('abort', abortFromParent);
+    unsubscribeCancel?.();
     collector?.dispose();
     if (handle) {
       await handle.close();

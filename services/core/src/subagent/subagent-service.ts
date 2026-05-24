@@ -362,9 +362,9 @@ export class SubagentService extends BaseService {
       adapterName,
       ...(this.machineId !== undefined && { machineId: this.machineId }),
     });
-    const providerContext = config.providerConfigId
-      ? await buildProviderContext(this.bus, config.providerConfigId)
-      : undefined;
+    const providerContext =
+      config.providerContext ??
+      (config.providerConfigId ? await buildProviderContext(this.bus, config.providerConfigId) : undefined);
     if (providerContext !== undefined) {
       await activateProviderContext(this.bus, providerContext);
     }

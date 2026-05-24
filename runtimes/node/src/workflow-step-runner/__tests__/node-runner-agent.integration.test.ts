@@ -36,6 +36,129 @@ function makeShellParams(command: string[], cwd: string): WorkerRunStepParams {
 }
 
 /**
+ * Encode a JavaScript source string as an importable `data:` URL.
+ * @param source - ESM source code.
+ * @returns A `data:` URL suitable for dynamic import.
+ */
+function toDataUrl(source: string): string {
+  const encoded = Buffer.from(source).toString('base64');
+  return `data:text/javascript;base64,${encoded}`;
+}
+
+/** Extension module that contributes a worker-local adapter and toolset. */
+const WORKER_AGENT_EXTENSION_MODULE = toDataUrl(`
+  const toolset = {
+    metadata: { name: 'worker-agent-tools', description: 'worker tools', version: '1.0.0' },
+    tools: {
+      echo: {
+        metadata: { name: 'worker.agent.echo', description: 'echo' },
+        inputSchema: {
+          safeParse: (value) => ({ success: true, data: value }),
+        },
+        outputSchema: {
+          safeParse: (value) => ({ success: true, data: value }),
+        },
+        execute: async (input) => ({ success: true, data: { source: 'worker-local', value: input.value } }),
+      },
+    },
+  };
+
+  export default {
+    name: 'worker-agent-extension',
+    displayName: 'Worker Agent Extension',
+    version: '0.1.0',
+    tools: {
+      createToolsets: () => [toolset],
+    },
+    adapters: [
+      {
+        manifest: { name: 'worker-agent-adapter', displayName: 'Worker Agent Adapter', protocols: ['openai'] },
+        definition: {
+          name: 'worker-agent-adapter',
+          displayName: 'Worker Agent Adapter',
+          providers: [],
+          defaultTimeouts: {
+            initialization: 1000,
+            acknowledgement: 1000,
+            completion: 1000,
+            toolApproval: 1000,
+            eventWait: 1000,
+          },
+          createAdapter: async (options) => {
+            const bus = options?.globalBus;
+            if (!bus) throw new Error('missing worker bus');
+            return {
+              adapterId: 'worker-agent-adapter',
+              name: 'worker-agent-adapter',
+              async init() {
+                bus.on(options.adapterSubjects.startAgent, async (ctx) => {
+                  const toolResult = await bus.request(options.toolSubjects.execute, {
+                    toolName: 'worker.agent.echo',
+                    input: { value: ctx.payload.initialMessage },
+                    adapterId: 'worker-agent-adapter',
+                    adapterName: 'worker-agent-adapter',
+                  });
+                  ctx.setResult({
+                    success: true,
+                    agentId: 'worker-agent-integration',
+                    adapterId: 'worker-agent-adapter',
+                    adapterSessionId: 'worker-agent-session',
+                    sessionId: 'worker-makaio-session',
+                  });
+                  setTimeout(() => {
+                    void bus.emit(options.agentSubjects.complete, {
+                      agentId: 'worker-agent-integration',
+                      adapterId: 'worker-agent-adapter',
+                      adapterName: 'worker-agent-adapter',
+                      adapterSessionId: 'worker-agent-session',
+                      messageId: 'worker-agent-message',
+                      message: toolResult.success ? JSON.stringify(toolResult.data) : 'tool failed',
+                      outcome: 'completed',
+                    });
+                  }, 0);
+                });
+              },
+            };
+          },
+        },
+      },
+    ],
+  };
+`);
+
+/**
+ * Create WorkerRunStepParams for an agent step.
+ * @param cwd - Working directory for the worker runtime.
+ * @returns Valid WorkerRunStepParams for testing.
+ */
+function makeAgentParams(cwd: string): WorkerRunStepParams {
+  const config: StepRunConfig = {
+    stepId: 'worker-agent-step',
+    executionId: 'worker-agent-exec',
+    workflowId: 'worker-agent-wf',
+    coordinatorSessionId: 'worker-agent-session',
+    stepType: 'agent',
+    stepDefinition: {
+      id: 'worker-agent-step',
+      type: 'agent',
+      adapter: 'worker-agent-adapter',
+      prompt: 'hello from worker',
+    },
+    resolvedInputs: {},
+    busAuth: { kind: 'none' },
+    platformDefaults: { cwd },
+    cancelSubject: 'workflow.cancel.worker-agent-test',
+  };
+
+  return {
+    config,
+    manifest: {
+      packages: [{ name: 'worker-agent-extension', importPath: WORKER_AGENT_EXTENSION_MODULE }],
+    },
+  };
+}
+
+/**
  * Integration test for the worker entrypoint orchestration.
  *
  * Verifies the full flow:
@@ -44,7 +167,8 @@ function makeShellParams(command: string[], cwd: string): WorkerRunStepParams {
  * 3. Collect telemetry
  * 4. Return merged result
  *
- * Uses shell steps to prove the orchestration without requiring a real adapter/bus server.
+ * Covers shell orchestration and a manifest-contributed local adapter/toolset
+ * without requiring an external bus server.
  */
 describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
   it('runs shell step through full worker entrypoint orchestration', async () => {
@@ -79,6 +203,16 @@ describe('Worker Agent Harness (integration)', { timeout: 30_000 }, () => {
 
     expect(result.status).toBe('failed');
     expect(result.telemetry.duration).toBeGreaterThan(0);
+  });
+
+  it('executes a manifest-contributed agent and toolset inside the worker', async () => {
+    const tempDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-harness-')));
+    const params = makeAgentParams(tempDir);
+
+    const result = await runStepInWorker(params);
+
+    expect(result.status).toBe('completed');
+    expect(result.output).toBe('{"source":"worker-local","value":"hello from worker"}');
   });
 
   it('does not import or reference SubagentSubjects in the worker entry', () => {

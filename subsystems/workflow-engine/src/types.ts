@@ -17,6 +17,8 @@ import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 export interface ActiveRunnerStep {
   /** AbortController whose signal is passed to the runner for cooperative cancellation. */
   controller: AbortController;
+  /** Per-step bus subject emitted so remote workers can observe cancellation. */
+  cancelSubject: string;
   /** Timer that fires forceKill after the cancel grace period expires. */
   hardKillTimer?: ReturnType<typeof setTimeout>;
 }

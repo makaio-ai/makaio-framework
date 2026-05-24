@@ -144,6 +144,51 @@ describe('StepRunConfigSchema', () => {
   it('rejects invalid stepType', () => {
     expect(() => StepRunConfigSchema.parse({ ...minimalConfig, stepType: 'invalid' })).toThrow();
   });
+
+  it('rejects mismatched stepType and stepDefinition type', () => {
+    expect(() =>
+      StepRunConfigSchema.parse({
+        ...minimalConfig,
+        stepType: 'agent',
+        stepDefinition: {
+          id: 'checkout-branch',
+          type: 'shell',
+          command: ['git', 'status'],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects gate definitions even when stepType is runner-executable', () => {
+    expect(() =>
+      StepRunConfigSchema.parse({
+        ...minimalConfig,
+        stepType: 'agent',
+        stepDefinition: {
+          id: 'approval',
+          type: 'gate',
+          prompt: 'Approve?',
+          autoAction: 'reject',
+          timeoutMs: null,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects for-each definitions even when stepType is runner-executable', () => {
+    expect(() =>
+      StepRunConfigSchema.parse({
+        ...minimalConfig,
+        stepType: 'shell',
+        stepDefinition: {
+          id: 'process-items',
+          type: 'for-each',
+          collection: 'inputs.items',
+          steps: [{ id: 'child', type: 'shell', command: ['echo', '{{ item }}'] }],
+        },
+      }),
+    ).toThrow();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
