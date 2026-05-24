@@ -50,6 +50,21 @@ describe('framework dist freshness', () => {
     });
   });
 
+  it('rejects stamped dist output when a required runtime file is a directory', () => {
+    withTempDist((distDir) => {
+      mkdirSync(join(distDir, 'contracts/index.mjs'), { recursive: true });
+      writeFrameworkDistBuildStamp({ workspaceRoot: WORKSPACE_ROOT, distDir });
+
+      expect(
+        isFrameworkDistFresh({
+          workspaceRoot: WORKSPACE_ROOT,
+          distDir,
+          requiredFiles: ['contracts/index.mjs'],
+        }),
+      ).toBe(false);
+    });
+  });
+
   it('accepts stamped dist output without git metadata', () => {
     withTempWorkspace((workspaceRoot) => {
       const distDir = join(workspaceRoot, 'packages/framework/dist');

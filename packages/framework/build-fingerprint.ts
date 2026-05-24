@@ -3,7 +3,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash, type Hash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const PACKAGE_DIR = import.meta.dirname;
@@ -118,7 +118,14 @@ export function isFrameworkDistFresh(options: FrameworkDistFreshnessOptions = {}
   const distDir = options.distDir ?? DIST_DIR;
 
   for (const file of options.requiredFiles ?? []) {
-    if (!existsSync(join(distDir, file))) {
+    try {
+      if (!lstatSync(join(distDir, file)).isFile()) {
+        return false;
+      }
+    } catch (error) {
+      if (!isNodeNotFoundError(error)) {
+        throw error;
+      }
       return false;
     }
   }
