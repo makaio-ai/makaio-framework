@@ -69,11 +69,11 @@ export async function completeExecutionWithSuccess(
 ): Promise<void> {
   execution.status = 'completed';
   execution.completedAt = Date.now();
-  await persistExecutionUpdate(deps.bus, execution, {
-    status: execution.status,
-    completedAt: execution.completedAt,
-  });
   try {
+    await persistExecutionUpdate(deps.bus, execution, {
+      status: execution.status,
+      completedAt: execution.completedAt,
+    });
     await deps.bus.emit(WorkflowSubjects.execution.completed, {
       executionId,
       totalDuration: Date.now() - startTime,
@@ -106,12 +106,12 @@ export async function completeExecutionWithFailure(
   execution.status = 'failed';
   execution.error = error;
   execution.completedAt = Date.now();
-  await persistStepStates(deps.bus, execution, changedStepIds, {
-    status: execution.status,
-    error: execution.error,
-    completedAt: execution.completedAt,
-  });
   try {
+    await persistStepStates(deps.bus, execution, changedStepIds, {
+      status: execution.status,
+      error: execution.error,
+      completedAt: execution.completedAt,
+    });
     try {
       await beforeExecutionFailed?.();
     } catch (hookError) {

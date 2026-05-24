@@ -9,6 +9,7 @@ import {
   DEFAULT_CONSTRAINTS,
   type SubagentConstraints,
   type SubagentConfig,
+  type SubagentStatus,
   SpawnSubagentRpcRequestSchema,
   type ExecuteSubagentResponse,
   type SubagentExecutionFailed,
@@ -67,6 +68,7 @@ type ChildSessionCreatePayload = ExtractSubjectPayload<typeof SessionSubjects.cr
 export class SubagentService extends BaseService {
   /** Manager is now private - tools use RPCs to interact with state */
   private readonly manager: SubagentManager;
+  private readonly pendingChildSessionClose = new Set<string>();
 
   /**
    * Creates a new SubagentService instance.
@@ -213,6 +215,11 @@ export class SubagentService extends BaseService {
     });
   }
 
+  /** Clear deferred close state when the service lifecycle shuts down. */
+  protected onDestroy(): void {
+    this.pendingChildSessionClose.clear();
+  }
+
   /**
    * Handle spawned event - create session and start agent.
    * @param payload - Spawned event payload
@@ -291,6 +298,11 @@ export class SubagentService extends BaseService {
       return this.failSpawn(subagentId, parentSessionId, 'session_create', err);
     }
 
+    const tracked = this.manager.get(subagentId);
+    if (tracked && this.isTerminalSubagentStatus(tracked.status)) {
+      return undefined;
+    }
+
     try {
       await this.startAdapterForSubagent(adapterName, config, sessionId, task);
     } catch (err) {
@@ -323,6 +335,9 @@ export class SubagentService extends BaseService {
       this.buildChildSessionCreatePayload(parentSessionId, config, executionTargetId, spawningToolCallId),
     );
     this.manager.setChildSessionId(subagentId, sessionId);
+    if (this.pendingChildSessionClose.has(subagentId)) {
+      await this.closeChildSession(subagentId);
+    }
     return sessionId;
   }
 
@@ -530,13 +545,27 @@ export class SubagentService extends BaseService {
    */
   private async closeChildSession(subagentId: string): Promise<void> {
     const tracked = this.manager.get(subagentId);
-    if (!tracked?.childSessionId) return;
+    if (!tracked) return;
+    if (!tracked.childSessionId) {
+      this.pendingChildSessionClose.add(subagentId);
+      return;
+    }
+    this.pendingChildSessionClose.delete(subagentId);
 
     try {
       await this.bus.request(SessionSubjects.close, { sessionId: tracked.childSessionId });
     } catch (err) {
       console.error(`[SubagentService] Failed to close child session for subagent ${subagentId}:`, err);
     }
+  }
+
+  /**
+   * Check whether a subagent has reached a terminal status.
+   * @param status - Subagent status to inspect.
+   * @returns True when the subagent should no longer start or route child work.
+   */
+  private isTerminalSubagentStatus(status: SubagentStatus): boolean {
+    return status === 'completed' || status === 'failed' || status === 'cancelled';
   }
 
   /**

@@ -3,7 +3,12 @@ import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { WorkflowGateCoordinator } from '../workflow-gate-coordinator.js';
-import { cancelExecution, type FinalizerDeps } from '../workflow-execution-finalizer.js';
+import {
+  cancelExecution,
+  completeExecutionWithFailure,
+  completeExecutionWithSuccess,
+  type FinalizerDeps,
+} from '../workflow-execution-finalizer.js';
 import type { ActiveExecution } from '../types.js';
 import type { WorkflowDefinition } from '@makaio/contracts';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
@@ -223,5 +228,74 @@ describe('cancelExecution', () => {
     } finally {
       cleanupFns.forEach((cleanup) => cleanup());
     }
+  });
+});
+
+describe('execution completion finalizers', () => {
+  afterEach(() => {
+    MakaioBus.__resetHandlers?.();
+    vi.restoreAllMocks();
+  });
+
+  it('removes the active execution when successful completion persistence fails', async () => {
+    MakaioBus.__resetHandlers?.();
+    const workflow = createWorkflowDefinition();
+    const execution = createWorkflowExecution({ workflowId: workflow.id });
+    const activeExecutions = new Map<string, ActiveExecution>([
+      [
+        execution.id,
+        {
+          execution,
+          workflow: { ...workflow, createdAt: 0, updatedAt: 0 },
+          stepMap: new Map(workflow.steps.map((step) => [step.id, step])),
+          stepContext: new Map(),
+        },
+      ],
+    ]);
+    MakaioBus.on(WorkflowStorageSubjects.updateExecution, () => {
+      throw new Error('persist failed');
+    });
+
+    const deps: FinalizerDeps = {
+      bus: MakaioBus,
+      activeExecutions,
+      shellAbortControllers: new Map(),
+      gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
+    };
+
+    await expect(completeExecutionWithSuccess(deps, execution, execution.id, Date.now())).rejects.toThrow(
+      'persist failed',
+    );
+    expect(activeExecutions.has(execution.id)).toBe(false);
+  });
+
+  it('removes the active execution when failure persistence fails', async () => {
+    MakaioBus.__resetHandlers?.();
+    const workflow = createWorkflowDefinition();
+    const execution = createWorkflowExecution({ workflowId: workflow.id });
+    const activeExecutions = new Map<string, ActiveExecution>([
+      [
+        execution.id,
+        {
+          execution,
+          workflow: { ...workflow, createdAt: 0, updatedAt: 0 },
+          stepMap: new Map(workflow.steps.map((step) => [step.id, step])),
+          stepContext: new Map(),
+        },
+      ],
+    ]);
+    MakaioBus.on(WorkflowStorageSubjects.updateExecution, () => {
+      throw new Error('persist failed');
+    });
+
+    const deps: FinalizerDeps = {
+      bus: MakaioBus,
+      activeExecutions,
+      shellAbortControllers: new Map(),
+      gateCoordinator: new WorkflowGateCoordinator(MakaioBus),
+    };
+
+    await expect(completeExecutionWithFailure(deps, execution, execution.id, 'boom')).rejects.toThrow('persist failed');
+    expect(activeExecutions.has(execution.id)).toBe(false);
   });
 });

@@ -288,15 +288,15 @@ export class WorkflowScheduler {
 
     const context = this.getExpressionContext(execution, nodeId);
 
-    if (step.if) {
-      const condResult = evaluateSync(step.if, context);
-      if (!condResult) {
-        return this.skipCompositeNode(nodeId, rawState, execution);
-      }
-    }
-
     let snapshot;
     try {
+      if (step.if) {
+        const condResult = evaluateSync(step.if, context);
+        if (!condResult) {
+          return this.skipCompositeNode(nodeId, rawState, execution);
+        }
+      }
+
       snapshot = expandForEachAtRuntime(step, context);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

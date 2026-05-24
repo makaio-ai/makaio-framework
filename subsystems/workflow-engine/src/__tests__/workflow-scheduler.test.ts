@@ -379,7 +379,7 @@ describe('WorkflowScheduler', () => {
       workflowId: workflow.id,
       inputs: {
         outerItems: [
-          { childrenByOuterIndex: [['outer-0-child'], ['wrong-index']] },
+          { childrenByOuterIndex: [['outer-0-child-a', 'outer-0-child-b'], ['wrong-index']] },
           { childrenByOuterIndex: [['wrong-index'], ['outer-1-child-a', 'outer-1-child-b']] },
         ],
       },
@@ -391,6 +391,12 @@ describe('WorkflowScheduler', () => {
     expect(execution?.status).toBe('completed');
     expect(execution?.steps['outer.0.inner.0.test']?.status).toBe('completed');
     expect(execution?.steps['outer.1.inner.0.test']?.status).toBe('completed');
+    const outerZeroInnerOneState = execution?.steps['outer.0.inner.1.test'];
+    expect(outerZeroInnerOneState?.status).toBe('completed');
+    if (outerZeroInnerOneState?.kind === 'executable') {
+      expect(outerZeroInnerOneState.result).toContain('child=outer-0-child-b');
+      expect(outerZeroInnerOneState.result).toContain('inner=1');
+    }
     const nestedState = execution?.steps['outer.1.inner.1.test'];
     expect(nestedState?.status).toBe('completed');
     if (nestedState?.kind === 'executable') {
