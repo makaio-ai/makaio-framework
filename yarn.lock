@@ -5521,6 +5521,22 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/subsystem-git@workspace:subsystems/git":
+  version: 0.0.0-use.local
+  resolution: "@makaio/subsystem-git@workspace:subsystems/git"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@makaio/tools-core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    "@types/picomatch": "npm:^3.0.2"
+    picomatch: "npm:^4.0.3"
+    tsx: "npm:^4.20.5"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/subsystem-mcp-http-server@workspace:*, @makaio/subsystem-mcp-http-server@workspace:subsystems/mcp-http-server":
   version: 0.0.0-use.local
   resolution: "@makaio/subsystem-mcp-http-server@workspace:subsystems/mcp-http-server"
@@ -10045,6 +10061,13 @@ __metadata:
   version: 2.4.4
   resolution: "@types/normalize-package-data@npm:2.4.4"
   checksum: 10c0/aef7bb9b015883d6f4119c423dd28c4bdc17b0e8a0ccf112c78b4fe0e91fbc4af7c6204b04bba0e199a57d2f3fbbd5b4a14bf8739bf9d2a39b2a0aad545e0f86
+  languageName: node
+  linkType: hard
+
+"@types/picomatch@npm:^3.0.2":
+  version: 3.0.2
+  resolution: "@types/picomatch@npm:3.0.2"
+  checksum: 10c0/f35d16fe10a6e13ead6499dd7d7d317e4fd78e48260398104e837e5ca83d393024bdc6f432cb644c0a69b0726a071fcc6eb09befbbcfafb3c3c5f71dbbfde487
   languageName: node
   linkType: hard
 

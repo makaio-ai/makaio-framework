@@ -53,6 +53,7 @@ export const FRAMEWORK_DIST_SUBPATHS = [
   { subpath: 'kernel', sourceDist: 'packages/kernel/dist', packageName: '@makaio/kernel' },
   { subpath: 'services', sourceDist: 'services/core/dist', packageName: '@makaio/services-core' },
   { subpath: 'clients', sourceDist: 'subsystems/client/dist', packageName: '@makaio/subsystem-client' },
+  { subpath: 'git', sourceDist: 'subsystems/git/dist', packageName: '@makaio/subsystem-git' },
   {
     subpath: 'services/log-import',
     sourceDist: 'services/log-import/dist',
@@ -117,6 +118,7 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/kernel',
   '@makaio/services-core',
   '@makaio/subsystem-client',
+  '@makaio/subsystem-git',
   '@makaio/file-watcher',
   '@makaio/services-log-import',
   '@makaio/providers',
@@ -158,6 +160,7 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
   { packageName: '@makaio/kernel', frameworkSubpath: 'kernel', packageRoot: 'packages/kernel' },
   { packageName: '@makaio/services-core', frameworkSubpath: 'services', packageRoot: 'services/core' },
   { packageName: '@makaio/subsystem-client', frameworkSubpath: 'clients', packageRoot: 'subsystems/client' },
+  { packageName: '@makaio/subsystem-git', frameworkSubpath: 'git', packageRoot: 'subsystems/git' },
   {
     packageName: '@makaio/services-log-import',
     frameworkSubpath: 'services/log-import',
