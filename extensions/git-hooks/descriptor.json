@@ -1,0 +1,27 @@
+{
+  "name": "git-hooks",
+  "displayName": "Git Hooks",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "surface": "headless",
+  "entrypoints": {
+    "server": "server",
+    "cli": "cli/index"
+  },
+  "cli": {
+    "name": "git-hooks",
+    "description": "Install and inspect native Git hook integration",
+    "subcommands": [
+      { "name": "install", "description": "Install native Git hooks for a repository" },
+      { "name": "uninstall", "description": "Remove native Git hooks from a repository" },
+      { "name": "status", "description": "Show native Git hook status for a repository" },
+      { "name": "received", "description": "Manually ingest a raw Git hook event" }
+    ]
+  },
+  "execution": "embedded",
+  "contributions": {
+    "create": true
+  }
+}

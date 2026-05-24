@@ -403,4 +403,32 @@ describe('runClientHookCommand — optional metadata', () => {
 
     expect(received[0]).not.toHaveProperty('metadata');
   });
+
+  it('keeps emitting on the client-scoped subject after sharing parsing helpers', async () => {
+    const bus = createBusInstance();
+    const subjects = registerTestClientNamespace(bus, 'shared-helper-check');
+    const received: unknown[] = [];
+    const cleanup = bus.on(subjects.hook.received, ({ payload }) => {
+      received.push(payload);
+    });
+
+    await runClientHookCommand(
+      {
+        args: {
+          client: 'shared-helper-check',
+          eventName: 'Stop',
+          metadataJson: JSON.stringify({ pid: 123 }),
+        },
+        bus,
+      },
+      { readStdinText: async () => JSON.stringify({ session_id: 's1' }) },
+    );
+
+    cleanup();
+    expect(received[0]).toMatchObject({
+      eventName: 'Stop',
+      payload: { session_id: 's1' },
+      metadata: { pid: 123 },
+    });
+  });
 });

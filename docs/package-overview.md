@@ -143,6 +143,7 @@ shared service lifecycle behavior, inspect `packages/service-base` before adding
 | `packages/expression`       | `@makaio/expression`       | Jexl-based expression evaluation and template interpolation for workflows.          |
 | `packages/rules`            | `@makaio/rules`            | Condition schemas and rule evaluator using expressions.                             |
 | `packages/hooks`            | `@makaio/hooks`            | Typed interceptors for MakaioBus message lifecycle (PreTurn, PostTurn, PreToolUse). |
+| `packages/inbound-hooks`    | `@makaio/inbound-hooks`    | Fail-open ingress helpers for native hook events.                                   |
 | `packages/service-base`     | `@makaio/service-base`     | Abstract base class for Makaio bus services (init/start/stop lifecycle).            |
 | `packages/kernel`           | `@makaio/kernel`           | Runtime extension orchestration: ExtensionCoordinator, boot sequencing, providers.  |
 | `packages/providers`        | `@makaio/providers`        | Platform-specific ConfigProvider and WebhookProvider implementations.               |
@@ -305,6 +306,7 @@ Read [`.agents/policies/extensions.md`](../.agents/policies/extensions.md),
 | `extensions/client-hooks`           | `@makaio/extension-client-hooks`           | Client lifecycle hooks.                         |
 | `extensions/coderabbit`             | `@makaio/extension-coderabbit`             | CodeRabbit code review integration.             |
 | `extensions/filesystem`             | `@makaio/extension-filesystem`             | Filesystem tool extension with path validation. |
+| `extensions/git-hooks`              | `@makaio/extension-git-hooks`              | Native Git hook integration.                    |
 | `extensions/opencode`               | `@makaio/extension-opencode`               | OpenCode extension.                             |
 | `extensions/pin-message`            | `@makaio/extension-pin-message`            | Pin message extension.                          |
 | `extensions/pr-entity`              | `@makaio/extension-pr-entity`              | Pull request entity extension.                  |

@@ -140,3 +140,28 @@ export type {
   ReviewerState,
   ReviewsSummary,
 } from './vcs-pr/index.js';
+export {
+  GIT_HOOK_EVENTS_CAPABILITY_ID,
+  GitHookCoveredOperationSchema,
+  GitHookCoverageReasonSchema,
+  GitHookCoverageRequestSchema,
+  GitHookCoverageResponseSchema,
+  GitHookNativeMergeEventSchema,
+  GitHookNamespace,
+  GitHookRewriteEventSchema,
+  GitHookRewritePairSchema,
+  GitHookSchemas,
+  GitHookSubjects,
+  registerGitHookEventsProvider,
+  unregisterGitHookEventsProvider,
+} from './git-hooks/index.js';
+export type {
+  GitHookCoveredOperation,
+  GitHookCoverageReason,
+  GitHookCoverageRequest,
+  GitHookCoverageResponse,
+  GitHookNativeMergeEvent,
+  GitHookRewriteEvent,
+  GitHookRewritePair,
+  IGitHookEventsProvider,
+} from './git-hooks/index.js';
