@@ -20,11 +20,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
 import { isFrameworkDistFresh } from '../../../packages/framework/build-fingerprint.js';
 import { acquireElectrobunBuildLock } from './build-test-lock.js';
 
 const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..');
-const WORKSPACE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..');
+const WORKSPACE_ROOT = resolveWorkspaceRoot(PACKAGE_ROOT);
 const CLI_BUNDLE = path.join(PACKAGE_ROOT, 'dist', 'cli.mjs');
 const FRAMEWORK_PACKAGE_ROOT = path.resolve(PACKAGE_ROOT, '..', '..', 'packages', 'framework');
 const FRAMEWORK_DIST = path.join(FRAMEWORK_PACKAGE_ROOT, 'dist');
