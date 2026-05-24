@@ -129,24 +129,53 @@ function isSchemaObject(value: unknown): value is SchemaObject {
 }
 
 /**
- * Builds the discriminator property as a string enum with an optional description
- * pulled from the first variant.
+ * Builds the discriminator property as an enum with metadata pulled from the
+ * first variant.
  * @param variants - All object variants from the union
  * @param field - Discriminator field name
  * @param values - Collected const values for the discriminator
  * @returns Schema object for the discriminator property
  */
-function buildDiscriminatorProperty(variants: SchemaObject[], field: string, values: string[]): SchemaObject {
+function buildDiscriminatorProperty(variants: SchemaObject[], field: string, values: unknown[]): SchemaObject {
   const firstProps = variants[0].properties;
-  const desc =
-    isSchemaObject(firstProps) && isSchemaObject(firstProps[field]) && typeof firstProps[field].description === 'string'
-      ? firstProps[field].description
-      : undefined;
+  const firstProp = isSchemaObject(firstProps) && isSchemaObject(firstProps[field]) ? firstProps[field] : undefined;
+  const desc = typeof firstProp?.description === 'string' ? firstProp.description : undefined;
   return {
-    type: 'string' as const,
+    ...(firstProp?.type !== undefined ? { type: firstProp.type } : {}),
     enum: values,
     ...(desc !== undefined ? { description: desc } : {}),
   };
+}
+
+/**
+ * Selects the field whose const values actually distinguish every variant.
+ * @param variants - All object variants from the union
+ * @returns Discriminator field and values, or undefined when no field qualifies
+ */
+function selectDiscriminator(variants: SchemaObject[]): { field: string; values: unknown[] } | undefined {
+  const constValuesByField = new Map<string, unknown[]>();
+
+  for (const variant of variants) {
+    const props = variant.properties;
+    if (!isSchemaObject(props)) continue;
+
+    for (const [key, rawProp] of Object.entries(props)) {
+      if (isSchemaObject(rawProp) && rawProp.const !== undefined) {
+        const values = constValuesByField.get(key) ?? [];
+        values.push(rawProp.const);
+        constValuesByField.set(key, values);
+      }
+    }
+  }
+
+  for (const [field, values] of constValuesByField) {
+    const uniqueValues = new Set(values.map((value) => JSON.stringify(value)));
+    if (values.length === variants.length && uniqueValues.size === variants.length) {
+      return { field, values };
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -156,7 +185,7 @@ function buildDiscriminatorProperty(variants: SchemaObject[], field: string, val
  * Provider APIs (Anthropic, OpenAI) reject `oneOf`/`anyOf`/`allOf` at the top level
  * of tool input schemas. This function merges all object variants into one schema:
  * - Properties from all variants are merged; per-variant descriptions are preserved
- * - The discriminator field (detected via `const` values) becomes a string enum
+ * - The discriminator field (detected via unique per-variant `const` values) becomes an enum
  * - Only the discriminator is required; all other fields become optional
  * @param schema - Raw JSON Schema, possibly containing top-level oneOf/anyOf
  * @returns Flat `type: "object"` schema, or the original schema if no flattening needed
@@ -170,8 +199,7 @@ function flattenUnionSchema(schema: SchemaObject): SchemaObject {
   }
 
   const mergedProperties: Record<string, SchemaObject> = {};
-  let discriminatorField: string | undefined;
-  const discriminatorValues: string[] = [];
+  const discriminator = selectDiscriminator(variants);
 
   for (const variant of variants) {
     const props = variant.properties;
@@ -180,12 +208,8 @@ function flattenUnionSchema(schema: SchemaObject): SchemaObject {
     for (const [key, rawProp] of Object.entries(props)) {
       if (!isSchemaObject(rawProp)) continue;
 
-      if (rawProp.const !== undefined) {
-        if (!discriminatorField) discriminatorField = key;
-        if (key === discriminatorField) {
-          discriminatorValues.push(String(rawProp.const));
-          continue;
-        }
+      if (key === discriminator?.field) {
+        continue;
       }
 
       if (!mergedProperties[key]) {
@@ -194,18 +218,18 @@ function flattenUnionSchema(schema: SchemaObject): SchemaObject {
     }
   }
 
-  if (discriminatorField && discriminatorValues.length > 0) {
-    mergedProperties[discriminatorField] = buildDiscriminatorProperty(
+  if (discriminator) {
+    mergedProperties[discriminator.field] = buildDiscriminatorProperty(
       variants,
-      discriminatorField,
-      discriminatorValues,
+      discriminator.field,
+      discriminator.values,
     );
   }
 
   return {
     type: 'object' as const,
     properties: mergedProperties,
-    required: discriminatorField ? [discriminatorField] : [],
+    required: discriminator ? [discriminator.field] : [],
   };
 }
 
@@ -221,10 +245,6 @@ function flattenUnionSchema(schema: SchemaObject): SchemaObject {
 export function ensureMcpObjectSchema(schema: JSONSchema | undefined): JSONSchema {
   if (!isSchemaObject(schema)) {
     return { type: 'object' as const };
-  }
-
-  if ('type' in schema && schema.type === 'object') {
-    return schema as JSONSchema;
   }
 
   const flattened = flattenUnionSchema(schema);
