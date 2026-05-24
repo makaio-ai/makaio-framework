@@ -30,9 +30,9 @@ export type TransactionCallback<T> = Parameters<LibSQLTransactionExecutor>[0] ex
 /**
  * Execute a database transaction through a shared transaction seam.
  *
- * This is currently a pass-through to `db.transaction()`. Keeping transaction
- * calls behind this helper gives us one extension point for future write
- * serialization (mutex/queue/pool) without changing handler call sites.
+ * Transaction work is serialized per database instance. SQLite permits only
+ * one active transaction on a connection; without this queue, concurrent bus
+ * handlers can fail at `BEGIN` with SQLITE_BUSY before busy_timeout can help.
  *
  * **Driver compatibility:** `MakaioDatabase` is typed as `LibSQLDatabase`
  * (Node.js async dialect), which runs the transaction asynchronously and
@@ -45,5 +45,23 @@ export type TransactionCallback<T> = Parameters<LibSQLTransactionExecutor>[0] ex
  * @returns Result returned by the callback
  */
 export async function executeTransaction<T>(db: MakaioDatabase, callback: TransactionCallback<T>): Promise<T> {
-  return db.transaction(callback);
+  const previousTail = transactionTails.get(db) ?? Promise.resolve();
+  let releaseCurrent = (): void => {};
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const nextTail = previousTail.catch(() => undefined).then(() => current);
+  transactionTails.set(db, nextTail);
+
+  await previousTail.catch(() => undefined);
+  try {
+    return await db.transaction(callback);
+  } finally {
+    releaseCurrent();
+    if (transactionTails.get(db) === nextTail) {
+      transactionTails.delete(db);
+    }
+  }
 }
+
+const transactionTails = new WeakMap<MakaioDatabase, Promise<void>>();

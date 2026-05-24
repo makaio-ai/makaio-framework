@@ -664,6 +664,61 @@ describe('AIAdapter.handleInfer', () => {
     }
   });
 
+  it('persists harnessId from startAgent onto the agent record', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '' }, capture);
+    await adapter.init();
+
+    let persistedHarnessId: string | undefined;
+    const offSet = MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
+      persistedHarnessId = ctx.payload.agent.harnessId;
+      ctx.setResult({ success: true });
+    });
+
+    try {
+      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        mode: 'create',
+        role: 'lead',
+        initialMessage: 'review this change',
+        harnessId: 'harness-reviewer',
+      });
+
+      expect(result.success).toBe(true);
+      expect(persistedHarnessId).toBe('harness-reviewer');
+    } finally {
+      offSet();
+    }
+  });
+
+  it('forwards harnessId from startAgent into the config factory input', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '' }, capture);
+    await adapter.init();
+
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      mode: 'create',
+      role: 'lead',
+      initialMessage: 'implement this feature',
+      harnessId: 'harness-implementation',
+    });
+
+    expect(result.success).toBe(true);
+    expect(capture.configFactoryInputs[0]).toMatchObject({
+      agentId: expect.any(String),
+      harnessId: 'harness-implementation',
+    });
+  });
+
   it('ephemeral agent: treats silent eviction close failures as best-effort cleanup', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],

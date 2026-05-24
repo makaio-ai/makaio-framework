@@ -1,10 +1,18 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type IStepRunner, type StepRunConfig, type StepRunResult } from '@makaio/contracts';
+import {
+  SessionSubjects,
+  SubagentSubjects,
+  SpawnSubagentRpcRequestSchema,
+  type IStepRunner,
+  type StepRunConfig,
+  type StepRunResult,
+} from '@makaio/contracts';
+import { z } from 'zod';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
-import { createWorkflowDefinition } from './shared.js';
+import { asExecutable, createWorkflowDefinition } from './shared.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -221,7 +229,7 @@ describe('WorkflowExecutor', () => {
     });
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(execution?.steps['silent']?.result).toBe('');
+    expect(asExecutable(execution?.steps['silent'])?.result).toBe('');
   });
 
   it('preserves step result when onComplete is absent', async () => {
@@ -251,18 +259,24 @@ describe('WorkflowExecutor', () => {
     });
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(execution?.steps['loud']?.result).toBe('completed:Produce output');
+    expect(asExecutable(execution?.steps['loud'])?.result).toBe('completed:Produce output');
   });
 
-  it('does not create a coordinator session when for-each expansion fails', async () => {
-    const { total: totalBefore } = await MakaioBus.request(SessionSubjects.list, { status: 'all' });
+  it('fails execution when for-each collection evaluates to a non-array at runtime', async () => {
+    const failedExecutions: Array<{ executionId: string; failedStepId?: string }> = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        failedExecutions.push({ executionId: ctx.payload.executionId, failedStepId: ctx.payload.failedStepId });
+      }),
+    );
 
     const workflow = createWorkflowDefinition({
-      id: 'workflow-expansion-failure-no-session-leak',
+      id: 'workflow-expansion-failure-runtime',
       steps: [
         {
           id: 'loop',
           type: 'for-each' as const,
+          // trigger.items is undefined — evaluates to non-array at runtime
           collection: 'trigger.items',
           steps: [{ id: 'one', type: 'agent' as const, prompt: 'Step one', adapter: 'claude-code' }],
         },
@@ -271,15 +285,16 @@ describe('WorkflowExecutor', () => {
 
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
-    await expect(
-      MakaioBus.request(WorkflowSubjects.start, {
-        workflowId: workflow.id,
-        inputs: {},
-      }),
-    ).rejects.toThrow('Failed to start workflow');
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      inputs: {},
+    });
 
-    const { total: totalAfter } = await MakaioBus.request(SessionSubjects.list, { status: 'all' });
-    expect(totalAfter).toBe(totalBefore);
+    await vi.waitFor(() => expect(failedExecutions).toHaveLength(1));
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.status).toBe('failed');
+    expect(execution?.steps['loop']?.status).toBe('failed');
   });
 
   it('closes the coordinator session when execution persistence fails before launch', async () => {
@@ -544,5 +559,156 @@ describe('WorkflowExecutor', () => {
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('failed');
+  });
+
+  it('persists terminalized sibling state before emitting its failed event', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-terminalized-event-after-persist',
+      steps: [
+        { id: 'fail', type: 'shell', command: ['sh', '-c', 'exit 7'] },
+        { id: 'approval', type: 'gate', prompt: 'Approve?', autoAction: 'reject', timeoutMs: null },
+      ],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const terminalizedSnapshots: Array<{ executionStatus?: string; approvalStatus?: string }> = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(
+        WorkflowSubjects.step.failed,
+        async (ctx) => {
+          const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+            executionId: ctx.payload.executionId,
+          });
+          terminalizedSnapshots.push({
+            executionStatus: execution?.status,
+            approvalStatus: execution?.steps.approval?.status,
+          });
+        },
+        { filter: { stepId: 'approval' } },
+      ),
+    );
+
+    const failedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        failedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+    await vi.waitFor(() => expect(failedExecutions).toEqual([executionId]), { timeout: 2_000 });
+
+    expect(terminalizedSnapshots).toEqual([{ executionStatus: 'failed', approvalStatus: 'failed' }]);
+  });
+
+  it('finalizes failure when a terminalized step failed listener throws', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-terminalized-event-throws',
+      steps: [
+        { id: 'fail', type: 'shell', command: ['sh', '-c', 'exit 7'] },
+        { id: 'approval', type: 'gate', prompt: 'Approve?', autoAction: 'reject', timeoutMs: null },
+      ],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    setup.cleanupFns.push(
+      MakaioBus.on(
+        WorkflowSubjects.step.failed,
+        () => {
+          throw new Error('observer failed');
+        },
+        { filter: { stepId: 'approval' } },
+      ),
+    );
+
+    const failedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        failedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} });
+    await vi.waitFor(() => expect(failedExecutions).toEqual([executionId]), { timeout: 2_000 });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    expect(execution?.status).toBe('failed');
+    expect(execution?.steps.approval?.status).toBe('failed');
+  });
+
+  async function runWorkflowAndCaptureSpawnPayloads(
+    workflowDef: Parameters<typeof createWorkflowDefinition>[0],
+    inputs: Record<string, unknown> = {},
+  ): Promise<z.input<typeof SpawnSubagentRpcRequestSchema>[]> {
+    const spawnPayloads: z.input<typeof SpawnSubagentRpcRequestSchema>[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(
+        SubagentSubjects.spawn,
+        (ctx) => {
+          spawnPayloads.push(ctx.payload);
+        },
+        { priority: 1_000 },
+      ),
+    );
+
+    const workflow = createWorkflowDefinition(workflowDef);
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const completedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        completedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs });
+    await vi.waitFor(() => expect(completedExecutions).toEqual([executionId]));
+
+    return spawnPayloads;
+  }
+
+  it('passes harnessId and contextMode from step to the spawn payload', async () => {
+    const spawnPayloads = await runWorkflowAndCaptureSpawnPayloads(
+      {
+        id: 'workflow-spawn-governance',
+        steps: [
+          {
+            id: 'review',
+            type: 'agent' as const,
+            prompt: 'Review {{ inputs.file }}',
+            adapter: 'claude-code',
+            harnessId: 'harness-reviewer',
+            contextMode: 'fresh' as const,
+          },
+        ],
+      },
+      { file: 'README.md' },
+    );
+
+    expect(spawnPayloads).toHaveLength(1);
+    expect(spawnPayloads[0]?.config).toMatchObject({
+      task: 'Review README.md',
+      adapterName: 'claude-code',
+      harnessId: 'harness-reviewer',
+      contextMode: 'fresh',
+    });
+  });
+
+  it('defaults contextMode to fresh when not specified on the step', async () => {
+    const spawnPayloads = await runWorkflowAndCaptureSpawnPayloads({
+      id: 'workflow-spawn-default-context',
+      steps: [
+        {
+          id: 'build',
+          type: 'agent' as const,
+          prompt: 'Build the project',
+          adapter: 'claude-code',
+        },
+      ],
+    });
+
+    expect(spawnPayloads).toHaveLength(1);
+    expect(spawnPayloads[0]?.config.contextMode).toBe('fresh');
   });
 });

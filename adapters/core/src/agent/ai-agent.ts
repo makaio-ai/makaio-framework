@@ -715,6 +715,7 @@ export abstract class AIAgent<
       toolLedger: cfg.toolLedger,
       clientId: cfg.clientId,
       clientProfileName: cfg.clientProfileName,
+      harnessId: cfg.harnessId,
       errorHandler: (error: Error, _terminate: boolean) => {
         const errorCategory = extractErrorCategory(error);
         this.emitError({ error: error.message, ...(errorCategory && { errorCategory }) });

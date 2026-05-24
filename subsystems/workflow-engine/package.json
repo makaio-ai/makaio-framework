@@ -41,5 +41,8 @@
       "./package.json": "./package.json"
     }
   },
+  "makaio": {
+    "drizzleSchema": "./src/storage/schema.ts"
+  },
   "license": "MIT"
 }

@@ -4,12 +4,20 @@ import {
   WorkflowDefinitionSchemaTyped,
   WorkflowDefinitionInputSchemaTyped,
   WorkflowExecutionSchema,
+  ExecutionStatusSchema,
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
   ExecutionLinkSchema,
   SpanRecordSchema,
+  StepStateSchema,
 } from '@makaio/contracts';
-import { workflowDefinitions, workflowExecutions, workflowExecutionLinks, workflowStepSpans } from './schema.js';
+import {
+  workflowDefinitions,
+  workflowExecutions,
+  workflowExecutionLinks,
+  workflowExecutionSteps,
+  workflowStepSpans,
+} from './schema.js';
 
 const ExecutionLinkListQuerySchema = z
   .object({
@@ -19,6 +27,15 @@ const ExecutionLinkListQuerySchema = z
   .refine((query) => query.sourceExecutionId !== undefined || query.targetExecutionId !== undefined, {
     message: 'Either sourceExecutionId or targetExecutionId is required.',
   });
+
+const ExecutionUpdateSchema = z.object({
+  executionId: z.string().min(1),
+  status: ExecutionStatusSchema.optional(),
+  currentStepId: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+  completedAt: z.number().nullable().optional(),
+  stepUpdates: z.record(z.string().min(1), StepStateSchema).optional(),
+});
 
 /**
  * Storage namespace for workflow persistence.
@@ -77,6 +94,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ id: z.string() }),
     },
 
+    updateExecution: {
+      request: ExecutionUpdateSchema,
+      response: z.object({ success: z.boolean() }),
+    },
+
     listExecutions: {
       request: ExecutionListQuerySchema,
       response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
@@ -114,6 +136,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     drizzle: {
       workflowDefinitions,
       workflowExecutions,
+      workflowExecutionSteps,
       workflowStepSpans,
       workflowExecutionLinks,
     },
@@ -125,5 +148,5 @@ export const WorkflowStorageSubjects = WorkflowStorageNamespace.subjects;
 export type { WorkflowDefinition, WorkflowDefinitionInput } from '@makaio/contracts';
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
 export type WorkflowListQuery = z.infer<typeof WorkflowListQuerySchema>;
-export type ExecutionListQuery = z.infer<typeof ExecutionListQuerySchema>;
+export type { ExecutionListQuery } from '@makaio/contracts';
 export type ExecutionLinkListQuery = z.infer<typeof ExecutionLinkListQuerySchema>;

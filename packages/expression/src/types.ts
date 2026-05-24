@@ -1,4 +1,7 @@
-import type { StepStatus } from '@makaio/contracts';
+import type { CompositeStepState, StepStatus } from '@makaio/contracts';
+
+/** Step statuses exposed to workflow expressions. */
+export type ExpressionStepStatus = StepStatus | CompositeStepState['status'];
 
 /** Evaluation context for jexl expressions and \{\{ \}\} template interpolation. */
 export interface ExpressionContext {
@@ -9,7 +12,7 @@ export interface ExpressionContext {
    * Pending steps are excluded.
    * `result` is undefined for non-completed steps.
    */
-  steps: Record<string, { result?: string; status: StepStatus }>;
+  steps: Record<string, { result?: string; status: ExpressionStepStatus }>;
   /** Workflow input values. */
   inputs: Record<string, unknown>;
   /** Current item in a for-each iteration. Only present inside for-each scope. */

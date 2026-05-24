@@ -1,4 +1,4 @@
-import type { WorkflowStep, StepState } from '@makaio/contracts';
+import type { WorkflowStep } from '@makaio/contracts';
 
 /**
  * Internal graph representation built from a set of workflow steps.
@@ -88,68 +88,25 @@ export function topologicalSort(steps: WorkflowStep[]): string[] {
 }
 
 /**
- * Group step IDs into topological levels for parallel execution.
- * Steps at the same level have no inter-dependencies and can run concurrently.
- * @param steps - Workflow steps with dependency edges
- * @returns Array of levels, each level is an array of step IDs
- * @throws Error if duplicate IDs, unknown dependency, or cycle detected
+ * Validate authored workflow step IDs and dependency graphs recursively.
+ *
+ * Runtime for-each expansion uses dot-delimited generated IDs, so authored IDs
+ * must not contain dots at any nesting level.
+ * @param steps - Authored steps to validate.
+ * @throws Error when IDs are duplicated, dotted, cyclic, or depend on unknown IDs.
  */
-export function groupByTopoLevel(steps: WorkflowStep[]): string[][] {
-  const { inDegree, dependents } = buildStepGraph(steps);
-
-  const levels: string[][] = [];
-  let currentLevel = steps.filter((s) => inDegree.get(s.id) === 0).map((s) => s.id);
-  let processed = 0;
-
-  while (currentLevel.length > 0) {
-    levels.push(currentLevel);
-    processed += currentLevel.length;
-
-    const nextLevel: string[] = [];
-    for (const id of currentLevel) {
-      for (const dependent of dependents.get(id) ?? []) {
-        const newDegree = (inDegree.get(dependent) ?? 1) - 1;
-        inDegree.set(dependent, newDegree);
-        if (newDegree === 0) {
-          nextLevel.push(dependent);
-        }
-      }
+export function validateAuthoredWorkflowSteps(steps: WorkflowStep[]): void {
+  for (const step of steps) {
+    if (step.id.includes('.')) {
+      throw new Error(`Step ID '${step.id}' cannot contain '.'`);
     }
-    currentLevel = nextLevel;
   }
 
-  if (processed !== steps.length) {
-    throw new Error('Cycle detected in workflow step dependencies');
+  topologicalSort(steps);
+
+  for (const step of steps) {
+    if (step.type === 'for-each') {
+      validateAuthoredWorkflowSteps(step.steps);
+    }
   }
-
-  return levels;
-}
-
-/**
- * Check whether all dependencies of a step are satisfied.
- * Dependencies are satisfied when their status is either 'completed' or 'skipped'.
- * @param stepId - The step ID to check
- * @param steps - All workflow steps
- * @param stepStates - Current state of all steps
- * @returns True when all dependencies are either 'completed' or 'skipped'; otherwise false
- */
-export function areDependenciesMet(
-  stepId: string,
-  steps: WorkflowStep[],
-  stepStates: Record<string, StepState>,
-): boolean {
-  const step = steps.find((s) => s.id === stepId);
-  if (!step) {
-    return false;
-  }
-
-  const dependencies = step.needs ?? [];
-  if (dependencies.length === 0) {
-    return true;
-  }
-
-  return dependencies.every((depId) => {
-    const depState = stepStates[depId];
-    return depState?.status === 'completed' || depState?.status === 'skipped';
-  });
 }

@@ -144,7 +144,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ message: string; file: string \| null; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; id: string; sourceId: string; threadId: string \| null; reviewer: string; severity: "critical" \| "major" \| "minor" \| "nitpick"; startLine: number \| null; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
+| `finding` | `{ message: string; file: string \| null; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; id: string; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; sourceId: string; threadId: string \| null; reviewer: string; severity: "critical" \| "major" \| "minor" \| "nitpick"; startLine: number \| null; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
 
 **Response:**
 

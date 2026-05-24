@@ -42,6 +42,15 @@ function buildJobKey(workflowId: string, triggerIndex: number): string {
   return `${workflowId}:${triggerIndex}`;
 }
 
+/**
+ * Resolve the cron timezone contract.
+ * @param timezone - Optional workflow trigger timezone
+ * @returns Explicit cron timezone
+ */
+export function resolveCronTimezone(timezone: string | undefined): string {
+  return timezone ?? 'UTC';
+}
+
 // ─────────────────────────────────────────────────────────────
 // Evaluator service
 // ─────────────────────────────────────────────────────────────
@@ -152,14 +161,10 @@ export class CronTriggerEvaluator {
 
   /**
    * Schedule all `cron` triggers found in a workflow definition.
-   *
-   * Skips workflows without a `projectId` (global templates cannot be
-   * cron-scheduled — projectId is required for manifest reporting).
    * @param workflow - Workflow definition to schedule
    */
   private scheduleWorkflow(workflow: WorkflowDefinition): void {
-    if (!workflow.projectId) return;
-
+    if (workflow.scope.type === 'global') return;
     const triggers = workflow.triggers ?? [];
     for (let i = 0; i < triggers.length; i++) {
       const trigger = triggers[i];
@@ -169,7 +174,8 @@ export class CronTriggerEvaluator {
       // Stop any existing job for this key before replacing.
       this.stopJob(key);
       try {
-        const job = new Cron(trigger.schedule, { timezone: trigger.timezone }, () => {
+        const timezone = resolveCronTimezone(trigger.timezone);
+        const job = new Cron(trigger.schedule, { timezone }, () => {
           this.fireTrigger(workflow.id, i);
         });
 

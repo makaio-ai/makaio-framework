@@ -522,6 +522,7 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       expect(mockState.sendMessage).toHaveBeenCalledWith('Hello Claude!');
       expect(handle.message.message).toBe('Hello Claude!');
+      await connector.complete();
     });
 
     it('materializes turnContext and messageHistory into the prompt', async () => {
@@ -559,6 +560,7 @@ describe('ClaudeCodeTmuxConnector', () => {
       await connector.sendMessage({ role: 'user', blocks: [], message: 'ping' });
 
       expect(mockSpawn).toHaveBeenCalledOnce();
+      await connector.complete();
     });
 
     it('returns a handle immediately without waiting for turn completion', async () => {
@@ -571,9 +573,10 @@ describe('ClaudeCodeTmuxConnector', () => {
 
       // Resolve quickly by firing stop after we've gotten the handle.
       const handle = await handlePromise;
-      mockState.hooks.onStop?.('claude-session-abc', 'done');
 
       expect(handle).toBeDefined();
+      await mockState.hooks.onStop?.('claude-session-abc', 'done');
+      await connector.complete();
     });
 
     it('interrupts an active turn before sending an immediate replacement', async () => {

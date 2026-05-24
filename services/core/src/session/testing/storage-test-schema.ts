@@ -54,7 +54,6 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_source_adapter_session_id ON sessions(source, adapter_session_id)`,
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_log_file_path ON sessions(log_file_path)`,
   sql`CREATE INDEX IF NOT EXISTS sessions_adapter_session_id_idx ON sessions(adapter_session_id)`,
-  sql`CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source)`,
   sql`CREATE INDEX IF NOT EXISTS idx_sessions_import_status ON sessions(import_status)`,
   sql`CREATE INDEX IF NOT EXISTS sessions_execution_target_id_idx ON sessions(execution_target_id)`,
   sql`

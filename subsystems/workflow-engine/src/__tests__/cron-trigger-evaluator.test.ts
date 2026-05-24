@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { CronTriggerEvaluator } from '../cron-trigger-evaluator.js';
+import { CronTriggerEvaluator, resolveCronTimezone } from '../cron-trigger-evaluator.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createTestDb, createWorkflowDefinition, type TestDbContext } from './shared.js';
 
@@ -19,10 +19,10 @@ describe('CronTriggerEvaluator', () => {
     dbContext.cleanup();
   });
 
-  it('schedules project-scoped cron workflows and stops them on destroy', async () => {
+  it('schedules cron workflows and stops them on destroy', async () => {
     const workflow = createWorkflowDefinition({
       id: 'workflow-cron-schedule',
-      projectId: 'project-1',
+      scope: { type: 'external', kind: 'project', id: 'project-1' },
       triggers: [{ type: 'cron', schedule: '* * * * *' }],
     });
 
@@ -37,10 +37,27 @@ describe('CronTriggerEvaluator', () => {
     expect(evaluator.activeJobCount()).toBe(0);
   });
 
+  it('defaults omitted cron trigger timezones to UTC', () => {
+    expect(resolveCronTimezone(undefined)).toBe('UTC');
+  });
+
+  it('skips global-scope workflows to prevent multi-machine fan-out', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-cron-global',
+      scope: { type: 'global' },
+      triggers: [{ type: 'cron', schedule: '* * * * *' }],
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    await evaluator.init();
+    expect(evaluator.activeJobCount()).toBe(0);
+  });
+
   it('skips invalid cron trigger definitions instead of failing init', async () => {
     const invalidWorkflow = createWorkflowDefinition({
       id: 'workflow-invalid-chrono',
-      projectId: 'project-1',
+      scope: { type: 'external', kind: 'project', id: 'project-1' },
       triggers: [
         {
           type: 'cron',

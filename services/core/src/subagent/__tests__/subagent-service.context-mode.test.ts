@@ -82,4 +82,55 @@ describe('SubagentService - context mode', () => {
       contextInheritance: 'none',
     });
   });
+
+  it('closes child sessions when subagents complete or cancel', async () => {
+    const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
+      title: 'Parent',
+    });
+    const childSessionIds: string[] = [];
+    MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+      const childSessionId = String(ctx.payload.sessionId ?? '');
+      childSessionIds.push(childSessionId);
+      ctx.setResult({
+        success: true,
+        agentId: `mock-agent-${childSessionIds.length}`,
+        adapterId: String(ctx.payload.adapterId),
+        adapterSessionId: `adapter-session-${childSessionIds.length}`,
+        sessionId: childSessionId,
+        messageId: `msg-${childSessionIds.length}`,
+      });
+    });
+
+    const { subagentId: completedSubagentId } = await MakaioBus.request(SubagentSubjects.spawn, {
+      parentSessionId,
+      config: { task: 'Complete task', adapterName: 'claude-code', contextMode: 'fresh' },
+      depth: 1,
+    });
+    const { subagentId: cancelledSubagentId } = await MakaioBus.request(SubagentSubjects.spawn, {
+      parentSessionId,
+      config: { task: 'Cancel task', adapterName: 'claude-code', contextMode: 'fresh' },
+      depth: 1,
+    });
+
+    await vi.waitFor(() => expect(childSessionIds).toHaveLength(2));
+    const [completedChildSessionId, cancelledChildSessionId] = childSessionIds as [string, string];
+
+    await MakaioBus.request(SubagentSubjects.completeTask, {
+      subagentId: completedSubagentId,
+      result: 'done',
+    });
+    await MakaioBus.request(SubagentSubjects.kill, {
+      subagentId: cancelledSubagentId,
+      reason: 'test cancellation',
+    });
+
+    await vi.waitFor(async () => {
+      const [{ session: completedChild }, { session: cancelledChild }] = await Promise.all([
+        MakaioBus.request(SessionSubjects.get, { sessionId: completedChildSessionId }),
+        MakaioBus.request(SessionSubjects.get, { sessionId: cancelledChildSessionId }),
+      ]);
+      expect(completedChild?.status).toBe('closed');
+      expect(cancelledChild?.status).toBe('closed');
+    });
+  });
 });

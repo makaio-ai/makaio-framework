@@ -120,8 +120,6 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `executionTargetId` | `string \| undefined` | no |
-| `projectId` | `string \| undefined` | no |
-| `workstreamId` | `string \| undefined` | no |
 
 **Response:**
 

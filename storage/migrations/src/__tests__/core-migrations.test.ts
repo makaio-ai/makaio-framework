@@ -85,7 +85,7 @@ describe('core migrations — managed binary tables', () => {
     expect(Object.keys(tables)).toContain('client_binary_versions');
     expect(Object.keys(tables)).toContain('client_binary_state');
     expect(Object.keys(tables['client_binary_versions']!.indexes)).toEqual(
-      expect.arrayContaining(['idx_client_binary_versions_client_id', 'uq_client_binary_versions_client_version']),
+      expect.arrayContaining(['uq_client_binary_versions_client_version']),
     );
     expect(Object.keys(tables['client_binary_state']!.columns).sort()).toEqual([
       'active_version',
@@ -131,18 +131,6 @@ describe('core migrations — managed binary tables', () => {
       `);
 
       expect(tables).toHaveLength(1);
-    });
-  });
-
-  it('idx_client_binary_versions_client_id index exists', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      const indexes = await db.all<{ name: string }>(sql`
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'index' AND name = 'idx_client_binary_versions_client_id'
-      `);
-
-      expect(indexes).toHaveLength(1);
     });
   });
 

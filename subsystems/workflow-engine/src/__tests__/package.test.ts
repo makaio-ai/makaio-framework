@@ -48,13 +48,14 @@ describe('workflowEnginePackage', () => {
     MakaioBus.__resetHandlers?.();
   });
 
-  it('declares namespace, storage migrations, and service factory', () => {
+  it('declares namespace, storage handlers, and service factory', () => {
     expect(workflowEnginePackage.name).toBe(WorkflowEngineToken.name);
     expect(workflowEnginePackage.critical).toBe(true);
     expect(workflowEnginePackage.namespaces).toContain(WorkflowNamespace);
     expect(workflowEnginePackage.namespaces).toContain(WorkflowStorageNamespace);
-    expect(workflowEnginePackage.storage?.migrations).toBe('drizzle');
-    expect(workflowEnginePackage.storage?.migrationSourceId).toBe('subsystems/workflow-engine/src/drizzle');
+    // Migrations are now managed by the central storage-migrations tier
+    expect(workflowEnginePackage.storage?.migrations).toBeUndefined();
+    expect(workflowEnginePackage.storage?.registerHandlers).toEqual(expect.any(Function));
     expect(workflowEnginePackage.create).toEqual(expect.any(Function));
   });
 
@@ -114,7 +115,7 @@ describe('workflowEnginePackage', () => {
     dbContext = await createTestDb();
     const workflow = createWorkflowDefinition({
       id: 'workflow-package-cron',
-      projectId: 'project-1',
+      scope: { type: 'external', kind: 'project', id: 'project-1' },
       triggers: [{ type: 'cron', schedule: '* * * * *' }],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });

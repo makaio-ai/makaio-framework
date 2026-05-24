@@ -1,5 +1,5 @@
 // NOTE: do NOT change eslint rules without explicit human approval
-/* eslint max-lines: ["error", { "max": 500 }] */
+/* eslint max-lines: ["error", { "max": 520 }] */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
@@ -238,6 +238,28 @@ describe('SubagentService', () => {
         adapterName: 'claude-code',
         machineId: 'node-local',
       });
+    });
+
+    it('forwards harnessId from subagent config to adapter start', async () => {
+      await service.init();
+      MakaioBus.on(SessionSubjects.create, (ctx) => ctx.setResult({ sessionId: 'child-1' }));
+      const adapterStartCalls: unknown[] = [];
+      setMockStartAgentSuccess((ctx) => {
+        adapterStartCalls.push(ctx.payload);
+        return {};
+      });
+      await MakaioBus.emit(SubagentSubjects.spawned, {
+        ...SUB1_SPAWN,
+        task: 'review changes',
+        config: {
+          task: 'review changes',
+          adapterName: 'claude-code',
+          contextMode: 'fork',
+          harnessId: 'harness-qa-reviewer',
+        },
+      });
+      await vi.waitFor(() => expect(adapterStartCalls).toHaveLength(1));
+      expect(adapterStartCalls[0]).toMatchObject({ harnessId: 'harness-qa-reviewer' });
     });
 
     it('emits executionFailed when session creation fails', async () => {

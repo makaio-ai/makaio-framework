@@ -57,9 +57,9 @@ export type StepTelemetry = z.infer<typeof StepTelemetrySchema>;
  *
  * Internal API — only the Executor/Bridge creates these from a resolved
  * WorkflowStep. No cross-field refinement between stepType and
- * stepDefinition.type: the Executor sets both from the same source, and
- * for-each steps are expanded before reaching the runner, so the enum
- * domains intentionally differ.
+ * stepDefinition.type: the Executor/Bridge owns pairing these fields from a
+ * runner-executable step. Runtime `for-each` scheduler nodes are coordination
+ * steps, not runner targets, so the enum domains intentionally differ.
  */
 export const StepRunConfigSchema = z.object({
   /** Step identifier within the workflow definition. */

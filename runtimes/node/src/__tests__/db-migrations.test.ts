@@ -65,16 +65,12 @@ describe('runMigrations', () => {
         FROM sqlite_master
         WHERE type = 'index'
           AND name IN (
-            'idx_client_binary_versions_client_id',
             'uq_client_binary_versions_client_version'
           )
         ORDER BY name
       `);
 
-      expect(managedBinaryIndexes.map((i) => i.name)).toEqual([
-        'idx_client_binary_versions_client_id',
-        'uq_client_binary_versions_client_version',
-      ]);
+      expect(managedBinaryIndexes.map((i) => i.name)).toEqual(['uq_client_binary_versions_client_version']);
 
       // Verify the active-version state schema remains minimal.
       const stateTableInfo = await db.all<{ name: string; dflt_value: string | null }>(sql`

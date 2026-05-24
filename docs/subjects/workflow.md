@@ -84,8 +84,7 @@ Type: Event
 | `id` | `string` | yes |
 | `inputs` | `{ name: string; type: "string" \| "boolean" \| "choice"; description?: string \| undefined; required?: boolean \| undefined; default?: string \| boolean \| undefined; options?: string[] \| undefined; }[] \| undefined` | no |
 | `name` | `string` | yes |
-| `projectId` | `string \| null` | yes |
-| `scope` | `string` | yes |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }` | yes |
 | `steps` | `WorkflowStep[]` | yes |
 | `triggers` | `({ type: "manual"; } \| { type: "cron"; schedule: string; timezone?: string \| undefined; } \| { type: "webhook"; event: string; branch?: string \| undefined; repo?: string \| undefined; } \| { type: "extension"; extensionType: string; config?: Record<string, unknown> \| undefined; } \| { type: "bus-event"; subject: string; filter?: Record<string, string \| number \| boolean \| { $in: (string \| number \| boolean \| null)[]; } \| { $ne: string \| number \| boolean \| null; } \| { $exists: boolean; } \| { $startsWith: string; } \| { $endsWith: string; } \| null> \| undefined; filterExpression?: string \| undefined; })[] \| undefined` | no |
 | `updatedAt` | `number` | yes |
@@ -116,8 +115,7 @@ Type: Event
 | `id` | `string` | yes |
 | `inputs` | `{ name: string; type: "string" \| "boolean" \| "choice"; description?: string \| undefined; required?: boolean \| undefined; default?: string \| boolean \| undefined; options?: string[] \| undefined; }[] \| undefined` | no |
 | `name` | `string` | yes |
-| `projectId` | `string \| null` | yes |
-| `scope` | `string` | yes |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }` | yes |
 | `steps` | `WorkflowStep[]` | yes |
 | `triggers` | `({ type: "manual"; } \| { type: "cron"; schedule: string; timezone?: string \| undefined; } \| { type: "webhook"; event: string; branch?: string \| undefined; repo?: string \| undefined; } \| { type: "extension"; extensionType: string; config?: Record<string, unknown> \| undefined; } \| { type: "bus-event"; subject: string; filter?: Record<string, string \| number \| boolean \| { $in: (string \| number \| boolean \| null)[]; } \| { $ne: string \| number \| boolean \| null; } \| { $exists: boolean; } \| { $startsWith: string; } \| { $endsWith: string; } \| null> \| undefined; filterExpression?: string \| undefined; })[] \| undefined` | no |
 | `updatedAt` | `number` | yes |
@@ -264,7 +262,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `execution` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }>; startedAt: number; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; } \| null` | yes |
+| `execution` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { kind: "executable"; status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| { kind: "composite"; status: "completed" \| "cancelled" \| "skipped" \| "pending" \| "failed" \| "expanding"; startedAt?: number \| undefined; completedAt?: number \| undefined; error?: string \| undefined; expansion?: { parentStepId: string; childSteps: WorkflowStep[]; stepContext: Record<string, { item: unknown; index: number; }>; leafStepIds: string[]; } \| undefined; }>; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; } \| null` | yes |
 
 ### <a id="workflow.listDefinitions"></a>`workflow.listDefinitions` (rpc)
 
@@ -275,7 +273,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `projectId` | `string \| undefined` | no |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
 
 **Response:**
 
@@ -292,14 +290,19 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `cursor` | `{ startedAt: number; id: string; } \| undefined` | no |
+| `limit` | `number \| undefined` | no |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
 | `status` | `"completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused" \| undefined` | no |
 | `workflowId` | `string \| undefined` | no |
+
+At least one of `workflowId` or `scope` is required.
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `executions` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }>; startedAt: number; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; }[]` | yes |
+| `executions` | `{ id: string; workflowId: string; status: "completed" \| "cancelled" \| "pending" \| "failed" \| "running" \| "paused"; inputs: Record<string, unknown>; steps: Record<string, { kind: "executable"; status: "completed" \| "skipped" \| "pending" \| "failed" \| "running" \| "waiting"; sessionId?: string \| undefined; subagentId?: string \| undefined; result?: string \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| { kind: "composite"; status: "completed" \| "cancelled" \| "skipped" \| "pending" \| "failed" \| "expanding"; startedAt?: number \| undefined; completedAt?: number \| undefined; error?: string \| undefined; expansion?: { parentStepId: string; childSteps: WorkflowStep[]; stepContext: Record<string, { item: unknown; index: number; }>; leafStepIds: string[]; } \| undefined; }>; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; coordinatorSessionId?: string \| undefined; currentStepId?: string \| undefined; completedAt?: number \| undefined; error?: string \| undefined; triggerPayload?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="workflow.listTriggerTypes"></a>`workflow.listTriggerTypes` (rpc)
 
@@ -344,6 +347,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `inputs` | `Record<string, unknown> \| undefined` | no |
 | `parentSessionId` | `string \| undefined` | no |
+| `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
 | `triggerPayload` | `Record<string, unknown> \| undefined` | no |
 | `workflowId` | `string` | yes |
 

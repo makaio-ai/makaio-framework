@@ -1,73 +1,3 @@
-CREATE TABLE `client_binary_state` (
-	`client_id` text PRIMARY KEY NOT NULL,
-	`active_version` text,
-	`updated_at` integer NOT NULL
-);
---> statement-breakpoint
-CREATE TABLE `client_binary_versions` (
-	`id` text PRIMARY KEY NOT NULL,
-	`client_id` text NOT NULL,
-	`version` text NOT NULL,
-	`install_path` text NOT NULL,
-	`installed_at` integer NOT NULL,
-	`created_at` integer NOT NULL
-);
---> statement-breakpoint
-CREATE INDEX `idx_client_binary_versions_client_id` ON `client_binary_versions` (`client_id`);--> statement-breakpoint
-CREATE UNIQUE INDEX `uq_client_binary_versions_client_version` ON `client_binary_versions` (`client_id`,`version`);--> statement-breakpoint
-CREATE TABLE `client_profiles` (
-	`id` text PRIMARY KEY NOT NULL,
-	`client_id` text NOT NULL,
-	`name` text NOT NULL,
-	`description` text,
-	`config_dir` text NOT NULL,
-	`is_default` integer DEFAULT false NOT NULL,
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL
-);
---> statement-breakpoint
-CREATE UNIQUE INDEX `uq_client_profiles_client_name` ON `client_profiles` (`client_id`,`name`);--> statement-breakpoint
-CREATE UNIQUE INDEX `uq_client_profiles_default` ON `client_profiles` (`client_id`) WHERE "client_profiles"."is_default" = 1;--> statement-breakpoint
-CREATE INDEX `idx_client_profiles_client_id` ON `client_profiles` (`client_id`);--> statement-breakpoint
-CREATE TABLE `client_runtimes` (
-	`id` text PRIMARY KEY NOT NULL,
-	`client_id` text NOT NULL,
-	`status` text NOT NULL,
-	`supervisor_session_id` text,
-	`pid` integer,
-	`parent_pid` integer,
-	`adapter_session_id` text,
-	`session_id` text,
-	`cwd` text,
-	`argv` text,
-	`metadata` text,
-	`observed_at` integer NOT NULL,
-	`created_at` integer NOT NULL,
-	`updated_at` integer NOT NULL
-);
---> statement-breakpoint
-CREATE INDEX `idx_client_runtimes_supervisor_session_id` ON `client_runtimes` (`supervisor_session_id`);--> statement-breakpoint
-CREATE INDEX `idx_client_runtimes_pid_client_id` ON `client_runtimes` (`pid`,`client_id`);--> statement-breakpoint
-CREATE INDEX `idx_client_runtimes_adapter_session_id_client_id` ON `client_runtimes` (`adapter_session_id`,`client_id`);--> statement-breakpoint
-CREATE TABLE `supervisor_runtimes` (
-	`supervisor_session_id` text PRIMARY KEY NOT NULL,
-	`client_id` text NOT NULL,
-	`pid` integer,
-	`status` text NOT NULL,
-	`cwd` text NOT NULL,
-	`command` text NOT NULL,
-	`args_json` text NOT NULL,
-	`env_json` text,
-	`session_id` text,
-	`adapter_session_id` text,
-	`started_at` integer NOT NULL,
-	`stopped_at` integer,
-	`metadata_json` text
-);
---> statement-breakpoint
-CREATE INDEX `supervisor_runtimes_session_id_idx` ON `supervisor_runtimes` (`session_id`);--> statement-breakpoint
-CREATE INDEX `supervisor_runtimes_adapter_session_id_idx` ON `supervisor_runtimes` (`adapter_session_id`);--> statement-breakpoint
-CREATE INDEX `supervisor_runtimes_status_idx` ON `supervisor_runtimes` (`status`);--> statement-breakpoint
 CREATE TABLE `preferences` (
 	`scope` text NOT NULL,
 	`surface` text DEFAULT 'any' NOT NULL,
@@ -198,6 +128,7 @@ CREATE TABLE `sessions` (
 	`status` text NOT NULL,
 	`lead_agent_id` text,
 	`parent_session_id` text,
+	`context_inheritance` text,
 	`root_session_id` text,
 	`fork_point_message_id` text,
 	`branch_kind` text,
@@ -222,13 +153,13 @@ CREATE TABLE `sessions` (
 	`log_file_path` text,
 	`discovered_at` integer,
 	`import_status` text,
-	CONSTRAINT "sessions_import_status_check" CHECK(`import_status` IS NULL OR `import_status` IN ('discovered', 'imported', 'tracking'))
+	CONSTRAINT "sessions_import_status_check" CHECK("sessions"."import_status" IS NULL OR "sessions"."import_status" IN ('discovered', 'imported', 'tracking')),
+	CONSTRAINT "sessions_context_inheritance_check" CHECK("sessions"."context_inheritance" IS NULL OR "sessions"."context_inheritance" IN ('parent-history', 'none'))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `uniq_sessions_source_adapter_session_id` ON `sessions` (`source`,`adapter_session_id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `uniq_sessions_log_file_path` ON `sessions` (`log_file_path`);--> statement-breakpoint
 CREATE INDEX `sessions_adapter_session_id_idx` ON `sessions` (`adapter_session_id`);--> statement-breakpoint
-CREATE INDEX `idx_sessions_source` ON `sessions` (`source`);--> statement-breakpoint
 CREATE INDEX `idx_sessions_import_status` ON `sessions` (`import_status`);--> statement-breakpoint
 CREATE INDEX `sessions_execution_target_id_idx` ON `sessions` (`execution_target_id`);--> statement-breakpoint
 CREATE TABLE `turns` (
@@ -251,3 +182,149 @@ CREATE TABLE `log_import_settings` (
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL
 );
+--> statement-breakpoint
+CREATE TABLE `client_binary_state` (
+	`client_id` text PRIMARY KEY NOT NULL,
+	`active_version` text,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `client_binary_versions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`client_id` text NOT NULL,
+	`version` text NOT NULL,
+	`install_path` text NOT NULL,
+	`installed_at` integer NOT NULL,
+	`created_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_client_binary_versions_client_version` ON `client_binary_versions` (`client_id`,`version`);--> statement-breakpoint
+CREATE TABLE `client_profiles` (
+	`id` text PRIMARY KEY NOT NULL,
+	`client_id` text NOT NULL,
+	`name` text NOT NULL,
+	`description` text,
+	`config_dir` text NOT NULL,
+	`is_default` integer DEFAULT false NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_client_profiles_client_name` ON `client_profiles` (`client_id`,`name`);--> statement-breakpoint
+CREATE UNIQUE INDEX `uq_client_profiles_default` ON `client_profiles` (`client_id`) WHERE "client_profiles"."is_default" = 1;--> statement-breakpoint
+CREATE TABLE `client_runtimes` (
+	`id` text PRIMARY KEY NOT NULL,
+	`client_id` text NOT NULL,
+	`status` text NOT NULL,
+	`supervisor_session_id` text,
+	`pid` integer,
+	`parent_pid` integer,
+	`adapter_session_id` text,
+	`session_id` text,
+	`cwd` text,
+	`argv` text,
+	`metadata` text,
+	`observed_at` integer NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_client_runtimes_supervisor_session_id` ON `client_runtimes` (`supervisor_session_id`);--> statement-breakpoint
+CREATE INDEX `idx_client_runtimes_pid_client_id` ON `client_runtimes` (`pid`,`client_id`);--> statement-breakpoint
+CREATE INDEX `idx_client_runtimes_adapter_session_id_client_id` ON `client_runtimes` (`adapter_session_id`,`client_id`);--> statement-breakpoint
+CREATE TABLE `supervisor_runtimes` (
+	`supervisor_session_id` text PRIMARY KEY NOT NULL,
+	`client_id` text NOT NULL,
+	`pid` integer,
+	`status` text NOT NULL,
+	`cwd` text NOT NULL,
+	`command` text NOT NULL,
+	`args_json` text NOT NULL,
+	`env_json` text,
+	`session_id` text,
+	`adapter_session_id` text,
+	`started_at` integer NOT NULL,
+	`stopped_at` integer,
+	`metadata_json` text
+);
+--> statement-breakpoint
+CREATE INDEX `supervisor_runtimes_session_id_idx` ON `supervisor_runtimes` (`session_id`);--> statement-breakpoint
+CREATE INDEX `supervisor_runtimes_adapter_session_id_idx` ON `supervisor_runtimes` (`adapter_session_id`);--> statement-breakpoint
+CREATE INDEX `supervisor_runtimes_status_idx` ON `supervisor_runtimes` (`status`);--> statement-breakpoint
+CREATE TABLE `workflow_definitions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`name` text NOT NULL,
+	`description` text,
+	`inputs` text,
+	`steps` text NOT NULL,
+	`default_execution_target_id` text,
+	`triggers` text,
+	`scope_type` text NOT NULL,
+	`scope_kind` text DEFAULT '' NOT NULL,
+	`scope_id` text DEFAULT '' NOT NULL,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	`canvas_layout` text
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `uniq_workflow_definitions_name_scope` ON `workflow_definitions` (`name`,`scope_type`,`scope_kind`,`scope_id`);--> statement-breakpoint
+CREATE INDEX `idx_workflow_definitions_scope` ON `workflow_definitions` (`scope_type`,`scope_kind`,`scope_id`);--> statement-breakpoint
+CREATE TABLE `workflow_execution_links` (
+	`source_execution_id` text NOT NULL,
+	`target_execution_id` text NOT NULL,
+	`link_type` text NOT NULL,
+	`metadata` text,
+	PRIMARY KEY(`source_execution_id`, `target_execution_id`),
+	FOREIGN KEY (`source_execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`target_execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_workflow_execution_links_target` ON `workflow_execution_links` (`target_execution_id`);--> statement-breakpoint
+CREATE TABLE `workflow_execution_steps` (
+	`execution_id` text NOT NULL,
+	`step_id` text NOT NULL,
+	`state` text NOT NULL,
+	PRIMARY KEY(`execution_id`, `step_id`),
+	FOREIGN KEY (`execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE TABLE `workflow_executions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`workflow_id` text NOT NULL,
+	`coordinator_session_id` text,
+	`status` text NOT NULL,
+	`inputs` text NOT NULL,
+	`steps` text NOT NULL,
+	`current_step_id` text,
+	`error` text,
+	`started_at` integer NOT NULL,
+	`completed_at` integer,
+	`trigger_payload` text,
+	`scope_type` text NOT NULL,
+	`scope_kind` text DEFAULT '' NOT NULL,
+	`scope_id` text DEFAULT '' NOT NULL,
+	FOREIGN KEY (`workflow_id`) REFERENCES `workflow_definitions`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_workflow_executions_status` ON `workflow_executions` (`status`);--> statement-breakpoint
+CREATE INDEX `idx_workflow_executions_scope_started` ON `workflow_executions` (`scope_type`,`scope_kind`,`scope_id`,`started_at`);--> statement-breakpoint
+CREATE INDEX `idx_workflow_executions_workflow_started` ON `workflow_executions` (`workflow_id`,`started_at`);--> statement-breakpoint
+CREATE TABLE `workflow_step_spans` (
+	`execution_id` text NOT NULL,
+	`step_id` text NOT NULL,
+	`step_type` text NOT NULL,
+	`status` text NOT NULL,
+	`started_at` integer,
+	`completed_at` integer,
+	`duration_ms` integer,
+	`input_tokens` integer,
+	`output_tokens` integer,
+	`estimated_cost` real,
+	`tool_call_count` integer,
+	`input` text,
+	`output` text,
+	PRIMARY KEY(`execution_id`, `step_id`),
+	FOREIGN KEY (`execution_id`) REFERENCES `workflow_executions`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `idx_workflow_step_spans_status` ON `workflow_step_spans` (`status`);

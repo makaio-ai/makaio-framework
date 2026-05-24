@@ -64,7 +64,7 @@ function assertNamespacingSafeIds(forEachId: string, innerSteps: WorkflowStep[])
  * @param innerSteps - The inner steps of the for-each
  * @returns Array of step IDs that no other inner step depends on
  */
-function findInnerLeafIds(innerSteps: WorkflowStep[]): string[] {
+export function findInnerLeafIds(innerSteps: WorkflowStep[]): string[] {
   const dependedOnByInner = new Set(innerSteps.flatMap((s) => s.needs ?? []));
   return innerSteps.filter((s) => !dependedOnByInner.has(s.id)).map((s) => s.id);
 }

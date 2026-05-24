@@ -123,7 +123,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; workstreamId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `subagentId` | `string` | yes |
@@ -215,7 +215,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "spawning" \| "running" \| "waiting_input" \| "hung"; workstreamId?: string \| undefined; }[]` | yes |
+| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "spawning" \| "running" \| "waiting_input" \| "hung"; }[]` | yes |
 
 ### <a id="subagent.reportProgress"></a>`subagent.reportProgress` (rpc)
 
@@ -295,7 +295,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; workstreamId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |
@@ -319,7 +319,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; workstreamId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; contextMode: "fork" \| "fresh"; adapterName?: string \| undefined; providerConfigId?: string \| undefined; harnessId?: string \| undefined; model?: string \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { createWorkflowDefinition } from './shared.js';
+import { asExecutable, createWorkflowDefinition } from './shared.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -77,7 +77,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
     expect(execution?.steps['confirm']?.status).toBe('completed');
-    expect(execution?.steps['confirm']?.result).toContain('Approved');
+    expect(asExecutable(execution?.steps['confirm'])?.result).toContain('Approved');
   });
 
   it('accepts immediate gate response in the same event tick', async () => {
@@ -163,7 +163,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
     expect(execution?.steps['confirm']?.status).toBe('completed');
-    expect(execution?.steps['confirm']?.result).toContain('Auto-approved');
+    expect(asExecutable(execution?.steps['confirm'])?.result).toContain('Auto-approved');
   });
 
   it('auto-rejects gate step after timeout with autoAction "reject"', async () => {
@@ -217,7 +217,7 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     expect(gateRequests).toHaveLength(1);
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(execution?.steps['confirm']?.result).toContain('Approved by user');
+    expect(asExecutable(execution?.steps['confirm'])?.result).toContain('Approved by user');
   });
 
   it('returns accepted: false when user responds after timeout (race condition)', async () => {
