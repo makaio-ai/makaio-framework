@@ -91,6 +91,7 @@ export { defineTool, type DefineToolConfig } from './define-tool.js';
 export { defineToolset, type DefineToolsetConfig } from './define-toolset.js';
 
 export {
+  ensureMcpObjectSchema,
   toMcpTool,
   toOpenAIFunction,
   toolsetToMcpTools,
