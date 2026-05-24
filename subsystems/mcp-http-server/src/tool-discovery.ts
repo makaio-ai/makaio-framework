@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ToolInfo, McpToolDefinition } from '@makaio/tools-core';
+import { ensureMcpObjectSchema, type ToolInfo, type McpToolDefinition } from '@makaio/tools-core';
 import { ToolSubjects } from '@makaio/contracts';
 
 /**
@@ -159,7 +159,7 @@ export function toolInfoToMcpTool(tool: ToolInfo, mcpName: string): McpToolDefin
   return {
     name: mcpName,
     description: tool.description,
-    inputSchema: tool.inputSchema ?? {},
+    inputSchema: ensureMcpObjectSchema(tool.inputSchema),
     annotations: tool.annotations,
   };
 }

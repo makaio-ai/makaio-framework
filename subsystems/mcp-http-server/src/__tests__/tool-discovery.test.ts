@@ -4,7 +4,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import { defineToolset, defineTool, toolSuccess } from '@makaio/tools-core';
 import type { ToolInfo } from '@makaio/tools-core';
-import { resolveMcpTools } from '../tool-discovery.js';
+import { resolveMcpTools, toolInfoToMcpTool } from '../tool-discovery.js';
 
 /**
  * Builds a minimal tool definition for testing purposes.
@@ -245,6 +245,128 @@ describe('resolveMcpTools', () => {
 
       expect(result.tools).toHaveLength(0);
       expect(result.byMcpName.size).toBe(0);
+    });
+  });
+
+  describe('inputSchema normalization', () => {
+    it('flattens oneOf discriminated union into single object schema', async () => {
+      const { bus, dispose } = createTestHarness();
+      cleanup = dispose;
+
+      const unionTool: ToolInfo[] = [
+        {
+          name: 'multi_op',
+          description: 'Tool with discriminated union schema',
+          toolsetName: 'test-toolset',
+          inputSchema: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  op: { type: 'string', const: 'create', description: 'Operation' },
+                  name: { type: 'string', description: 'Name to create' },
+                },
+                required: ['op', 'name'],
+              },
+              {
+                type: 'object',
+                properties: {
+                  op: { type: 'string', const: 'delete', description: 'Operation' },
+                  id: { type: 'string', description: 'ID to delete' },
+                },
+                required: ['op', 'id'],
+              },
+            ],
+          },
+        },
+      ];
+
+      const result = await resolveMcpTools(bus, { getExposedTools: () => unionTool });
+      const schema = result.tools[0].inputSchema as Record<string, unknown>;
+
+      expect(result.tools).toHaveLength(1);
+      expect(schema.type).toBe('object');
+      expect(schema).not.toHaveProperty('oneOf');
+      expect(schema).not.toHaveProperty('anyOf');
+
+      const props = schema.properties as Record<string, Record<string, unknown>>;
+      expect(props.op).toEqual({ type: 'string', enum: ['create', 'delete'], description: 'Operation' });
+      expect(props.name).toEqual({ type: 'string', description: 'Name to create' });
+      expect(props.id).toEqual({ type: 'string', description: 'ID to delete' });
+
+      expect(schema.required).toEqual(['op']);
+    });
+
+    it('preserves existing type "object" schema unchanged', async () => {
+      const { bus, dispose } = createTestHarness();
+      cleanup = dispose;
+
+      const objectTool: ToolInfo[] = [
+        {
+          name: 'simple',
+          description: 'Simple object tool',
+          toolsetName: 'test-toolset',
+          inputSchema: {
+            type: 'object',
+            properties: { value: { type: 'string' } },
+            required: ['value'],
+          },
+        },
+      ];
+
+      const result = await resolveMcpTools(bus, { getExposedTools: () => objectTool });
+
+      expect(result.tools[0].inputSchema).toEqual({
+        type: 'object',
+        properties: { value: { type: 'string' } },
+        required: ['value'],
+      });
+    });
+
+    it('produces { type: "object" } when inputSchema is undefined', () => {
+      const tool: ToolInfo = { name: 'no_schema', description: 'No schema', toolsetName: 'test' };
+      const result = toolInfoToMcpTool(tool, 'no_schema');
+
+      expect(result.inputSchema).toEqual({ type: 'object' });
+    });
+
+    it('flattens anyOf schema the same as oneOf', () => {
+      const tool: ToolInfo = {
+        name: 'any_of',
+        description: 'anyOf tool',
+        toolsetName: 'test',
+        inputSchema: {
+          anyOf: [
+            { type: 'object', properties: { mode: { type: 'string', const: 'a' }, x: { type: 'string' } } },
+            { type: 'object', properties: { mode: { type: 'string', const: 'b' }, y: { type: 'number' } } },
+          ],
+        },
+      };
+      const result = toolInfoToMcpTool(tool, 'any_of');
+      const schema = result.inputSchema as Record<string, unknown>;
+
+      expect(schema.type).toBe('object');
+      expect(schema).not.toHaveProperty('anyOf');
+      const props = schema.properties as Record<string, Record<string, unknown>>;
+      expect(props.mode.enum).toEqual(['a', 'b']);
+      expect(props.x).toEqual({ type: 'string' });
+      expect(props.y).toEqual({ type: 'number' });
+    });
+
+    it('preserves non-object oneOf variants while enforcing the MCP object root', () => {
+      const tool: ToolInfo = {
+        name: 'mixed',
+        description: 'Mixed union',
+        toolsetName: 'test',
+        inputSchema: {
+          oneOf: [{ type: 'string' }, { type: 'number' }],
+        },
+      };
+      const result = toolInfoToMcpTool(tool, 'mixed');
+      const schema = result.inputSchema as Record<string, unknown>;
+
+      expect(schema.type).toBe('object');
+      expect(schema).toHaveProperty('oneOf');
     });
   });
 
