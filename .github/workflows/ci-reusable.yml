@@ -207,16 +207,17 @@ jobs:
             eslint-cache-${{ runner.os }}-${{ hashFiles('yarn.lock', 'eslint.config.mjs') }}-
             eslint-cache-${{ runner.os }}-
 
+      - name: Check build surface invariants
+        run: bun ${{ inputs.framework_root }}/scripts/validate-build-surface.ts
+
       - name: Run combined validator
         run: ${{ inputs.validation_command }}
 
       - name: Check package overview drift
-        run: yarn validate:package-overview
-        working-directory: ${{ inputs.framework_root }}
+        run: bun ${{ inputs.framework_root }}/scripts/validate-package-overview.ts
 
       - name: Check SDK codegen drift
-        run: yarn validate:sdk-codegen
-        working-directory: ${{ inputs.framework_root }}
+        run: bun ${{ inputs.framework_root }}/scripts/generate-sdk-bindings.ts --check
 
       - name: Save ESLint cache
         if: always() && steps.eslint-cache.outputs.cache-hit != 'true'

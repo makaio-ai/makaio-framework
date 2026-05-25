@@ -14,8 +14,9 @@ describe('CI workflow validation', () => {
 
   it('runs the package overview drift check in the validation job', () => {
     expect(reusableWorkflowText).toContain('- name: Check package overview drift');
-    expect(reusableWorkflowText).toContain('run: yarn validate:package-overview');
-    expect(reusableWorkflowText).toContain('working-directory: ${{ inputs.framework_root }}');
+    expect(reusableWorkflowText).toContain(
+      'run: bun ${{ inputs.framework_root }}/scripts/validate-package-overview.ts',
+    );
   });
 
   it('does not skip CI for package overview documentation changes', () => {
