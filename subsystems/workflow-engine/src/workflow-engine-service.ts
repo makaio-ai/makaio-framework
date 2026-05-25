@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { IStepRunner, IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
+import type { IWorkflowRunner, IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { BusEventTriggerEvaluator } from './bus-event-trigger-evaluator.js';
 import { CronTriggerEvaluator } from './cron-trigger-evaluator.js';
@@ -9,12 +9,19 @@ import { WorkflowExecutor } from './workflow-executor.js';
 /**
  * Options for constructing a {@link WorkflowEngineService}.
  *
- * Both fields are optional — when omitted the service falls back to the
- * default in-process step runner and default executor config.
+ * All fields are optional — when omitted the service uses the in-process
+ * workflow scheduler and default executor config.
  */
 export interface WorkflowEngineServiceOptions {
-  /** Custom step runner injected by the runtime composition root. */
-  stepRunner?: IStepRunner;
+  /**
+   * Workflow-level runner for dispatching full workflow executions to an
+   * isolated environment (worker thread pool, child process, container).
+   *
+   * When provided the executor delegates each new execution to this runner
+   * instead of running it in-process via the DAG scheduler.
+   * When omitted, execution falls back to the in-process DAG scheduler.
+   */
+  workflowRunner?: IWorkflowRunner;
   /** Partial executor configuration merged with defaults. */
   executorConfig?: Partial<ExecutorConfig>;
 }
@@ -32,11 +39,11 @@ export class WorkflowEngineService extends BaseService {
 
   /**
    * @param bus - Shared runtime bus.
-   * @param options - Optional step runner and executor config overrides.
+   * @param options - Optional workflow runner and executor config overrides.
    */
   public constructor(bus: IMakaioBus, options?: WorkflowEngineServiceOptions) {
     super(bus);
-    this.workflowExecutor = new WorkflowExecutor(bus, options?.executorConfig, options?.stepRunner);
+    this.workflowExecutor = new WorkflowExecutor(bus, options?.executorConfig, options?.workflowRunner);
     this.busEventTriggerEvaluator = new BusEventTriggerEvaluator(bus);
     this.cronTriggerEvaluator = new CronTriggerEvaluator(bus);
   }

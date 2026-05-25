@@ -1,11 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
-  ContextModeSchema,
   SessionSubjects,
   SubagentSubjects,
   type AgentWorkflowStep,
   type ExecutableStepState,
-  type ProviderContext,
+  type JsonValue,
   type ShellWorkflowStep,
   type StepRunResult,
   type WorkflowStep,
@@ -20,6 +19,7 @@ import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { persistStepState } from './workflow-execution-persistence.js';
 import { buildLocalStepAliases } from './workflow-scheduler-state.js';
+import { resolveAgentSpawnConfig } from './agent-spawn-config.js';
 
 type GateStep = Extract<WorkflowStep, { type: 'gate' }>;
 type RunnableWorkflowStep = AgentWorkflowStep | ShellWorkflowStep | GateStep;
@@ -30,12 +30,6 @@ type StepPreamble<TStep extends RunnableWorkflowStep> = {
   step: TStep;
   /** Always `ExecutableStepState` — verified by `getStepPreamble` which rejects for-each steps. */
   stepState: ExecutableStepState;
-};
-
-type AgentSpawnConfig = Pick<AgentWorkflowStep, 'model' | 'harnessId' | 'contextMode'> & {
-  adapterName?: string;
-  systemPrompt?: string;
-  providerContext?: ProviderContext;
 };
 
 /**
@@ -105,38 +99,11 @@ export function failResult(error: string, startedAt: number): StepRunResult {
 /**
  * Build a completed {@link StepRunResult} with duration telemetry.
  * @param startedAt - Start timestamp for duration calculation
- * @param output - Optional step output string
+ * @param output - Optional step output value (JSON-serializable)
  * @returns Completed step run result
  */
-function okResult(startedAt: number, output?: string): StepRunResult {
+function okResult(startedAt: number, output?: JsonValue): StepRunResult {
   return { status: 'completed', output, telemetry: { duration: Date.now() - startedAt } };
-}
-
-/**
- * Resolve the adapter configuration for an agent step.
- * @param bus - Message bus used for role resolution.
- * @param step - Agent workflow step to resolve.
- * @returns Spawn configuration fields for the subagent request.
- */
-async function resolveAgentSpawnConfig(bus: IMakaioBus, step: AgentWorkflowStep): Promise<AgentSpawnConfig> {
-  if (!step.role) {
-    return {
-      adapterName: step.adapter,
-      model: step.model,
-      harnessId: step.harnessId,
-      contextMode: step.contextMode ?? ContextModeSchema.enum.fresh,
-    };
-  }
-
-  const role = await bus.request(WorkflowSubjects.resolveRole, { roleId: step.role });
-  return {
-    adapterName: role.adapterName,
-    model: role.model,
-    harnessId: role.harnessId,
-    contextMode: role.contextMode ?? ContextModeSchema.enum.fresh,
-    systemPrompt: role.systemPrompt,
-    providerContext: role.providerContext,
-  };
 }
 
 /**
@@ -401,7 +368,7 @@ export async function executeShellStep(
     const { session } = await bus.request(SessionSubjects.get, {
       sessionId: execution.coordinatorSessionId!,
     });
-    const workspaceRoot = session?.targetWorkingDirectory ?? process.cwd();
+    const workspaceRoot = session?.targetWorkingDirectory ?? deps.config.platformDefaults.cwd;
 
     await bus.emit(WorkflowSubjects.step.started, {
       executionId,

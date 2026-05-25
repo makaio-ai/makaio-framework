@@ -38,6 +38,16 @@ interface TsgoDiagnostic {
 
 // Matches: /some/path.ts(10,5): error TS2345: message text
 const TSGO_DIAG_RE = /^(.+?)\((\d+),(\d+)\): (error|warning) TS(\d+): (.+)$/;
+const TSGO_HEARTBEAT_INTERVAL_MS = 60_000;
+
+/**
+ * Formats a monotonic elapsed time for verbose validator logging.
+ * @param startMs - Start timestamp from performance.now()
+ * @returns Elapsed seconds with one decimal place
+ */
+function formatElapsedSeconds(startMs: number): string {
+  return ((performance.now() - startMs) / 1000).toFixed(1);
+}
 
 /**
  * Parses flat tsgo CLI output into structured diagnostics.
@@ -72,10 +82,29 @@ function parseTsgoDiagnostics(output: string): TsgoDiagnostic[] {
  * process never started) return null.
  * @param tsgoPath - Absolute path to the tsgo binary
  * @param tsConfigFile - Path to tsconfig.json to check
+ * @param verbose - Whether to emit progress while tsgo runs
  * @returns Parsed diagnostics, or null on spawn failure
  */
-function runTsgoCheck(tsgoPath: string, tsConfigFile: string): Promise<TsgoDiagnostic[] | null> {
+function runTsgoCheck(tsgoPath: string, tsConfigFile: string, verbose = false): Promise<TsgoDiagnostic[] | null> {
   return new Promise((resolve) => {
+    const startedAt = performance.now();
+    const displayConfig = path.relative(process.cwd(), tsConfigFile) || tsConfigFile;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    if (verbose) {
+      console.error(chalk.gray(`[tsgo] Checking ${displayConfig}...`));
+      heartbeat = setInterval(() => {
+        console.error(chalk.gray(`[tsgo] Still checking ${displayConfig} (${formatElapsedSeconds(startedAt)}s)...`));
+      }, TSGO_HEARTBEAT_INTERVAL_MS);
+      heartbeat.unref?.();
+    }
+
+    const clearHeartbeat = () => {
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = undefined;
+      }
+    };
+
     const child = spawn(tsgoPath, ['--noEmit', '--project', tsConfigFile], {
       cwd: process.cwd(),
       shell: process.platform === 'win32',
@@ -88,9 +117,61 @@ function runTsgoCheck(tsgoPath: string, tsConfigFile: string): Promise<TsgoDiagn
     });
 
     child.on('close', () => {
+      clearHeartbeat();
+      if (verbose) {
+        console.error(chalk.gray(`[tsgo] Finished ${displayConfig} in ${formatElapsedSeconds(startedAt)}s`));
+      }
       resolve(parseTsgoDiagnostics(stdout));
     });
-    child.on('error', () => resolve(null));
+    child.on('error', () => {
+      clearHeartbeat();
+      resolve(null);
+    });
+  });
+}
+
+/**
+ * Reads the project file graph from tsgo without loading TypeScript in-process.
+ * @param tsgoPath - Absolute path to the tsgo binary
+ * @param tsConfigFile - Path to tsconfig.json to inspect
+ * @param verbose - Whether to emit progress while tsgo runs
+ * @returns Files included by the project, or null on spawn failure
+ */
+function runTsgoListFiles(tsgoPath: string, tsConfigFile: string, verbose = false): Promise<Set<string> | null> {
+  return new Promise((resolve) => {
+    const startedAt = performance.now();
+    const displayConfig = path.relative(process.cwd(), tsConfigFile) || tsConfigFile;
+    if (verbose) {
+      console.error(chalk.gray(`[tsgo] Listing files for ${displayConfig}...`));
+    }
+
+    const child = spawn(tsgoPath, ['--listFilesOnly', '--project', tsConfigFile], {
+      cwd: process.cwd(),
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+
+    let stdout = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    child.on('close', () => {
+      if (verbose) {
+        console.error(chalk.gray(`[tsgo] Listed files for ${displayConfig} in ${formatElapsedSeconds(startedAt)}s`));
+      }
+      resolve(
+        new Set(
+          stdout
+            .split('\n')
+            .map((line) => path.resolve(line.trim()))
+            .filter(Boolean),
+        ),
+      );
+    });
+    child.on('error', () => {
+      resolve(null);
+    });
   });
 }
 
@@ -126,19 +207,21 @@ function processTsgoDiagnostics(
  * @param filesByConfig - Map of tsconfig path → files to validate
  * @param tsgoPath - Absolute path to the tsgo binary
  * @param ctx - Validator context
+ * @param verbose - Whether to emit progress while tsgo runs
  * @returns All files that were checked, or null on spawn failure
  */
 async function validateWithTsgo(
   filesByConfig: Map<string, string[]>,
   tsgoPath: string,
   ctx: ValidatorContext,
+  verbose = false,
 ): Promise<string[] | null> {
   const allCheckedFiles: string[] = [];
   const diagCache = new Map<string, TsgoDiagnostic[] | null>();
 
   for (const configPath of filesByConfig.keys()) {
     if (!diagCache.has(configPath)) {
-      diagCache.set(configPath, await runTsgoCheck(tsgoPath, configPath));
+      diagCache.set(configPath, await runTsgoCheck(tsgoPath, configPath, verbose));
     }
     const diagnostics = diagCache.get(configPath)!;
     if (diagnostics === null) {
@@ -255,19 +338,19 @@ function groupFilesByNearestConfig(tsFiles: string[]): Map<string, string[]> {
 /**
  * Validates TypeScript files using a specific tsconfig.
  *
- * Runs tsgo --noEmit for the given config and filters diagnostics to only
- * include files in the validation set. Requires tsgo to be installed.
+ * Reads the project graph via tsgo, runs tsgo --noEmit for the given config,
+ * and filters diagnostics to files in the validation set.
  * @param files - All files being validated (absolute paths)
  * @param tsConfigFile - Explicit tsconfig path to use (absolute path)
  * @param ctx - Validator context for storing results
- * @param tsNs - Existing TypeScript namespace (will be loaded if not provided)
+ * @param verbose - Whether to show detailed progress logging
  * @returns Promise resolving to object with filesChecked
  */
 export async function validateTypeScriptWithConfig(
   files: string[],
   tsConfigFile: string,
   ctx: ValidatorContext,
-  tsNs?: typeof import('typescript'),
+  verbose?: boolean,
 ): Promise<{ filesChecked: string[] }> {
   const tsFiles = filterTsFilesByRootConfig(files.filter((f) => f.endsWith('.ts') || f.endsWith('.tsx')));
 
@@ -275,26 +358,26 @@ export async function validateTypeScriptWithConfig(
     return { filesChecked: [] };
   }
 
-  const ts = await loadTypeScript(tsConfigFile, tsNs);
-  const { config } = ts.readConfigFile(tsConfigFile, ts.sys.readFile);
-  const parsed = ts.parseJsonConfigFileContent(config, ts.sys, path.dirname(tsConfigFile));
-
-  const checkedFiles = filterFilesIncludedByConfig(tsFiles, parsed);
-
   const tsgoPath = findTsgoBinary();
   if (!tsgoPath) {
     throw new Error('tsgo binary not found. Install @typescript/native-preview as a devDependency.');
   }
 
-  if (parsed.errors.length === 0 && checkedFiles.length > 0) {
-    const tsgoCheckedFiles = await validateWithTsgo(new Map([[tsConfigFile, checkedFiles]]), tsgoPath, ctx);
-    if (tsgoCheckedFiles === null) {
-      throw new Error(`tsgo --noEmit failed for ${tsConfigFile}`);
-    }
-    return { filesChecked: tsgoCheckedFiles };
+  const projectFiles = await runTsgoListFiles(tsgoPath, tsConfigFile, verbose);
+  if (projectFiles === null) {
+    throw new Error(`tsgo --listFilesOnly failed for ${tsConfigFile}`);
   }
 
-  return { filesChecked: checkedFiles };
+  const filesToValidate = tsFiles.filter((file) => projectFiles.has(path.resolve(file)));
+  if (filesToValidate.length === 0) {
+    return { filesChecked: [] };
+  }
+
+  const tsgoCheckedFiles = await validateWithTsgo(new Map([[tsConfigFile, filesToValidate]]), tsgoPath, ctx, verbose);
+  if (tsgoCheckedFiles === null) {
+    throw new Error(`tsgo --noEmit failed for ${tsConfigFile}`);
+  }
+  return { filesChecked: tsgoCheckedFiles };
 }
 
 /**
@@ -384,7 +467,7 @@ export async function validateTypeScriptByDiscovery(
     filteredFilesByConfig.set(configPath, filesToValidate);
   }
 
-  const checkedFiles = await validateWithTsgo(filteredFilesByConfig, tsgoPath, ctx);
+  const checkedFiles = await validateWithTsgo(filteredFilesByConfig, tsgoPath, ctx, verbose);
   if (checkedFiles === null) {
     throw new Error('tsgo --noEmit failed during discovery-based validation');
   }

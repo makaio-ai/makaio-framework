@@ -1,4 +1,4 @@
-import type { WorkflowStep } from '@makaio/contracts';
+import type { WorkflowExecution, WorkflowStep } from '@makaio/contracts';
 
 /**
  * Internal graph representation built from a set of workflow steps.
@@ -109,4 +109,20 @@ export function validateAuthoredWorkflowSteps(steps: WorkflowStep[]): void {
       validateAuthoredWorkflowSteps(step.steps);
     }
   }
+}
+
+/**
+ * Build initial runtime step states from authored workflow steps.
+ * @param steps - Authored workflow DAG nodes.
+ * @returns Initial execution step-state map.
+ */
+export function buildInitialStepStates(steps: WorkflowStep[]): WorkflowExecution['steps'] {
+  return Object.fromEntries(
+    steps.map((step) => [
+      step.id,
+      step.type === 'for-each'
+        ? { kind: 'composite' as const, status: 'pending' as const }
+        : { kind: 'executable' as const, status: 'pending' as const },
+    ]),
+  );
 }

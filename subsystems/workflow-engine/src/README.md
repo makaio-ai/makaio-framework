@@ -66,7 +66,8 @@ Drizzle-backed storage for workflow definitions, executions, spans, and executio
 ## Usage
 
 ```typescript
-import { WorkflowSubjects, workflowEnginePackage } from '@makaio/subsystem-workflow-engine';
+import { WorkflowSubjects } from '@makaio/contracts';
+import { workflowEnginePackage } from '@makaio/subsystem-workflow-engine';
 
 // Register workflowEnginePackage with the node package runtime.
 const { executionId } = await bus.request(WorkflowSubjects.start, {
@@ -75,9 +76,9 @@ const { executionId } = await bus.request(WorkflowSubjects.start, {
 });
 ```
 
-The main package export also exposes `WorkflowExecutor`, workflow and storage
-namespace definitions, `WorkflowStorageSubjects`, and `registerDrizzleWorkflowStorage`
-for runtime composition and tests. The package manifest is available from the
+The main package export also exposes `WorkflowExecutor`, `WorkflowStorageSubjects`,
+and `registerDrizzleWorkflowStorage` for runtime composition and tests. Workflow
+contracts live in `@makaio/contracts`; the package manifest is available from the
 `@makaio/subsystem-workflow-engine/package` subpath.
 
 ## Dependencies

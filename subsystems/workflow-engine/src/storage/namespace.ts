@@ -2,14 +2,15 @@ import { z } from 'zod';
 import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import {
   WorkflowDefinitionSchemaTyped,
-  WorkflowDefinitionInputSchemaTyped,
+  PersistedWorkflowDefinitionInputSchemaTyped,
   WorkflowExecutionSchema,
+  WorkflowExecutionSchemaTyped,
   ExecutionStatusSchema,
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
   ExecutionLinkSchema,
   SpanRecordSchema,
-  StepStateSchema,
+  StepStateSchemaTyped,
 } from '@makaio/contracts';
 import {
   workflowDefinitions,
@@ -34,7 +35,7 @@ const ExecutionUpdateSchema = z.object({
   currentStepId: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   completedAt: z.number().nullable().optional(),
-  stepUpdates: z.record(z.string().min(1), StepStateSchema).optional(),
+  stepUpdates: z.record(z.string().min(1), StepStateSchemaTyped).optional(),
 });
 
 /**
@@ -66,7 +67,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     },
 
     set: {
-      request: z.object({ workflow: WorkflowDefinitionInputSchemaTyped }),
+      request: z.object({ workflow: PersistedWorkflowDefinitionInputSchemaTyped }),
       response: z.object({ id: z.string() }),
     },
 
@@ -86,11 +87,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     getExecution: {
       request: z.object({ executionId: z.string() }),
-      response: z.object({ execution: WorkflowExecutionSchema.nullable() }),
+      response: z.object({ execution: WorkflowExecutionSchemaTyped.nullable() }),
     },
 
     setExecution: {
-      request: z.object({ execution: WorkflowExecutionSchema }),
+      request: z.object({ execution: WorkflowExecutionSchemaTyped }),
       response: z.object({ id: z.string() }),
     },
 
@@ -107,7 +108,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      */
     listExecutions: {
       request: ExecutionListQuerySchema,
-      response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
+      response: z.object({ executions: z.array(WorkflowExecutionSchemaTyped) }),
     },
 
     // ─────────────────────────────────────────────────────────────

@@ -2,20 +2,41 @@ import { z } from 'zod';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import {
   ExecutionListQuerySchema,
-  WorkflowDefinitionInputSchemaTyped,
+  PersistedWorkflowDefinitionInputSchemaTyped,
   WorkflowDefinitionSchemaTyped,
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
   WorkflowListQuerySchema,
   WorkflowResolvedRoleSchema,
 } from './schemas.js';
+import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
   stepId: z.string(),
   // Composite `for-each` steps are runtime scheduler coordination nodes, not
-  // executor targets, so lifecycle events only expose runner-executable steps.
-  stepType: z.enum(['agent', 'shell', 'gate']),
+  // executor targets — they are excluded. Function steps run in the worker
+  // orchestrator and are included so their lifecycle is observable on the bus.
+  stepType: z.enum(['agent', 'shell', 'gate', 'function']),
+});
+
+const GateLifecycleBaseSchema = StepLifecycleBaseSchema.extend({
+  stepType: z.literal('gate'),
+});
+
+/**
+ * Payload emitted when a gate step requests human approval.
+ * Extracted as a named constant so it can be reused by both the
+ * `gate.requested` event schema and the `gate.awaitApproval` RPC request.
+ */
+const GateRequestedPayloadSchema = GateLifecycleBaseSchema.extend({
+  workflowId: z.string(),
+  workflowName: z.string(),
+  title: z.string(),
+  message: z.string(),
+  autoAction: z.enum(['approve', 'reject']),
+  timeoutMs: z.number().nullable(),
+  openedAt: z.number(),
 });
 
 export const WorkflowSchemas = {
@@ -24,7 +45,7 @@ export const WorkflowSchemas = {
     response: z.object({ workflow: WorkflowDefinitionSchemaTyped.nullable() }),
   },
   setDefinition: {
-    request: z.object({ workflow: WorkflowDefinitionInputSchemaTyped }),
+    request: z.object({ workflow: PersistedWorkflowDefinitionInputSchemaTyped }),
     response: z.object({ id: z.string() }),
   },
   deleteDefinition: {
@@ -42,9 +63,9 @@ export const WorkflowSchemas = {
   start: {
     request: z.object({
       workflowId: z.string(),
-      inputs: z.record(z.string(), z.unknown()).optional(),
+      inputs: JsonObjectContractSchema.optional(),
       parentSessionId: z.string().optional(),
-      triggerPayload: z.record(z.string(), z.unknown()).optional(),
+      triggerPayload: JsonObjectContractSchema.optional(),
       /**
        * Scope override for this execution.
        * When provided, supersedes the scope declared on the workflow definition.
@@ -91,6 +112,38 @@ export const WorkflowSchemas = {
   },
 
   /**
+   * Run a workflow from a TypeScript or JavaScript source file.
+   *
+   * The runtime loads the file, extracts the default-exported workflow
+   * definition, registers it ephemerally (without persisting to storage),
+   * and starts an execution. The response mirrors {@link WorkflowSchemas.start}
+   * so callers can track the execution via the same lifecycle events.
+   *
+   * Intended for developer workflows and CLI-driven one-shot executions.
+   */
+  runFile: {
+    request: z.object({
+      /**
+       * Absolute path to the workflow TypeScript or JavaScript source file.
+       * The runtime resolves and imports this path directly.
+       */
+      filePath: z.string().min(1),
+      /**
+       * Trigger payload forwarded to the workflow execution context.
+       * Use this to pass structured input when the file is triggered from a
+       * CLI flag or stdin rather than a named bus trigger.
+       */
+      triggerPayload: JsonObjectContractSchema.optional(),
+      /**
+       * Scope override for the execution.
+       * Defaults to `{ type: 'global' }` when omitted.
+       */
+      scope: WorkflowExecutionScopeSchema.optional(),
+    }),
+    response: z.object({ executionId: z.string() }),
+  },
+
+  /**
    * Resolve a named role to its full adapter configuration.
    * Called by the workflow executor when an agent step specifies `role`.
    */
@@ -118,7 +171,8 @@ export const WorkflowSchemas = {
     subagentId: z.string().optional(),
   }),
   'step.completed': StepLifecycleBaseSchema.extend({
-    result: z.string().optional(),
+    /** JSON-serializable result produced by the step. */
+    result: JsonValueSchema.optional(),
     duration: z.number(),
   }),
   'step.failed': StepLifecycleBaseSchema.extend({ error: z.string() }),
@@ -127,15 +181,15 @@ export const WorkflowSchemas = {
     condition: z.string().optional(),
   }),
 
-  'gate.requested': StepLifecycleBaseSchema.extend({
-    workflowId: z.string(),
-    workflowName: z.string(),
-    title: z.string(),
-    message: z.string(),
-    autoAction: z.enum(['approve', 'reject']),
-    timeoutMs: z.number().nullable(),
-    openedAt: z.number(),
-  }),
+  'gate.requested': GateRequestedPayloadSchema,
+  'gate.awaitApproval': {
+    request: GateRequestedPayloadSchema,
+    response: z.object({
+      action: z.enum(['approve', 'reject']),
+      source: z.enum(['user', 'timeout']),
+      reason: z.string().optional(),
+    }),
+  },
   'gate.respond': {
     request: z.object({
       executionId: z.string(),
@@ -145,7 +199,7 @@ export const WorkflowSchemas = {
     }),
     response: z.object({ accepted: z.boolean() }),
   },
-  'gate.resolved': StepLifecycleBaseSchema.extend({
+  'gate.resolved': GateLifecycleBaseSchema.extend({
     action: z.enum(['approve', 'reject']),
     source: z.enum(['user', 'timeout']),
   }),

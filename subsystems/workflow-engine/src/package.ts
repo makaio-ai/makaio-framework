@@ -14,9 +14,9 @@ export const WorkflowEngineToken = extensionToken<WorkflowEngineService>('makaio
  *
  * The returned manifest registers the `WorkflowEngineService` as the package
  * service, wires Drizzle storage handlers, and forwards the provided options
- * to the executor so that composition roots can inject a custom step runner
+ * to the executor so that composition roots can inject a workflow-level runner
  * or executor configuration (e.g. busUrl, busAuth, platformDefaults).
- * @param options - Optional step runner and executor config overrides.
+ * @param options - Optional workflow runner and executor config overrides.
  * @returns A `MakaioNodeExtension` manifest for the workflow engine subsystem.
  */
 export function createWorkflowEnginePackage(options?: WorkflowEngineServiceOptions): MakaioNodeExtension<IMakaioBus> {

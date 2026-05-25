@@ -46,7 +46,7 @@ describe('validateTypeScriptWithConfig', () => {
     const excludedFile = path.join(root, 'excluded.ts');
     await writeFile(
       tsgoPath,
-      `#!/bin/sh\necho "${includedFile}(1,14): error TS2322: synthetic tsgo diagnostic"\nexit 0\n`,
+      `#!/bin/sh\nif [ "$1" = "--listFilesOnly" ]; then\n  echo "${includedFile}"\nelse\n  echo "${includedFile}(1,14): error TS2322: synthetic tsgo diagnostic"\nfi\nexit 0\n`,
     );
     await chmod(tsgoPath, 0o755);
 

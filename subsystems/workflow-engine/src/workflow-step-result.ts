@@ -1,5 +1,12 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExecutableStepState, IStepRunner, SpanRecord, StepRunResult, WorkflowStepType } from '@makaio/contracts';
+import {
+  JsonValueSchema,
+  type ExecutableStepState,
+  type JsonValue,
+  type SpanRecord,
+  type StepRunResult,
+  type WorkflowStepType,
+} from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
@@ -14,15 +21,6 @@ export type StepExecutionOutcome =
 
 /** Failed step outcome with the originating step id attached. */
 export type FailedStepExecutionOutcome = Extract<StepExecutionOutcome, { status: 'failed' }> & { stepId: string };
-
-/**
- * Check whether the runner still owns workflow state mutation internally.
- * @param runner - Step runner to inspect.
- * @returns True when the runner owns step lifecycle side effects.
- */
-export function runnerManagesWorkflowLifecycle(runner: IStepRunner): boolean {
-  return runner.managesWorkflowLifecycle;
-}
 
 /**
  * Serialize a step input or output value for state and span storage.
@@ -70,7 +68,12 @@ export async function prepareRunnerManagedStep(
   stepId: string,
 ): Promise<void> {
   const step = active.stepMap.get(stepId);
-  if (!step || step.type === 'for-each') throw new Error(`Executable step not found: ${stepId}`);
+  // `for-each` composite steps are internal scheduling nodes and must not be
+  // dispatched here. Function steps are handled via `runFunctionStep` but still
+  // flow through this lifecycle helper for state initialisation and persistence.
+  if (!step || step.type === 'for-each') {
+    throw new Error(`Executable step not found: ${stepId}`);
+  }
 
   await emitBeforeStepStart(bus, active.execution.id, step);
   if (active.execution.status !== 'running') return;
@@ -105,37 +108,54 @@ export async function applyStepRunResult(
   resolvedInputs: Record<string, unknown>,
 ): Promise<StepExecutionOutcome> {
   const step = active.stepMap.get(stepId);
-  if (!step || step.type === 'for-each') throw new Error(`Executable step not found: ${stepId}`);
+  // `for-each` composite steps are internal scheduling nodes and must not have
+  // results applied here. Function steps run inline but still settle through
+  // this helper to keep persistence and event emission centralised.
+  if (!step || step.type === 'for-each') {
+    throw new Error(`Executable step not found: ${stepId}`);
+  }
 
   const rawState = active.execution.steps[stepId];
   if (!rawState || rawState.kind !== 'executable') {
     throw new Error(`Unexpected state kind for step: ${stepId}`);
   }
   const stepState: ExecutableStepState = rawState;
-  const output = stringifyStepValue(result.output);
+  const parsedOutput = result.output === undefined ? undefined : JsonValueSchema.safeParse(result.output);
+  const normalizedResult =
+    parsedOutput !== undefined && !parsedOutput.success
+      ? {
+          ...result,
+          status: 'failed' as const,
+          output: undefined,
+          error: `Step output for "${stepId}" is not JSON-serializable`,
+        }
+      : result;
+  const stepResult = parsedOutput?.success ? (parsedOutput.data as JsonValue) : undefined;
+  // Stringified form used only for span storage, which requires a string column.
+  const spanOutput = stringifyStepValue(normalizedResult.output);
   if (active.execution.status !== 'running') {
     return { status: 'failed', error: 'Execution no longer running', failedStepId: stepId };
   }
 
-  if (result.status === 'completed') {
+  if (normalizedResult.status === 'completed') {
     if (stepState.status !== 'completed') {
       stepState.status = 'completed';
-      stepState.result = output;
+      stepState.result = stepResult;
       stepState.completedAt = Date.now();
       await persistStepState(bus, active.execution, stepId);
       await bus.emit(WorkflowSubjects.step.completed, {
         executionId: active.execution.id,
         stepId,
         stepType: step.type,
-        result: output,
-        duration: result.telemetry.duration,
+        result: stepResult,
+        duration: normalizedResult.telemetry.duration,
       });
     }
-    await persistStepSpan(bus, active, stepId, 'completed', resolvedInputs, output, result.telemetry);
+    await persistStepSpan(bus, active, stepId, 'completed', resolvedInputs, spanOutput, normalizedResult.telemetry);
     return { status: 'completed' };
   }
 
-  const error = result.error ?? `Step failed: ${stepId}`;
+  const error = normalizedResult.error ?? `Step failed: ${stepId}`;
   if (stepState.status !== 'failed' && active.execution.status === 'running') {
     await markStepFailed({
       bus,
@@ -147,7 +167,7 @@ export async function applyStepRunResult(
       error,
     });
   }
-  await persistStepSpan(bus, active, stepId, 'failed', resolvedInputs, output, result.telemetry);
+  await persistStepSpan(bus, active, stepId, 'failed', resolvedInputs, spanOutput, normalizedResult.telemetry);
   return { status: 'failed', error: stepState.error ?? error, failedStepId: stepId };
 }
 

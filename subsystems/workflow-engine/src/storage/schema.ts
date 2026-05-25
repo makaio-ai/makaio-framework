@@ -8,6 +8,7 @@ import type {
   ExecutionLinkType,
   SpanStatus,
   WorkflowStepType,
+  JsonValue,
 } from '@makaio/contracts';
 
 /**
@@ -53,7 +54,7 @@ export const workflowDefinitions = sqliteTable(
     /** Last update timestamp. */
     updatedAt: integer('updated_at').notNull(),
     /** Canvas layout hints for the visual editor (JSON object). */
-    canvasLayout: text('canvas_layout', { mode: 'json' }).$type<Record<string, unknown>>(),
+    canvasLayout: text('canvas_layout', { mode: 'json' }).$type<Record<string, JsonValue>>(),
   },
   (table) => [
     // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.
@@ -72,10 +73,8 @@ export const workflowExecutions = sqliteTable(
   {
     /** Unique execution identifier. */
     id: text('id').primaryKey(),
-    /** Workflow definition being executed (foreign key). */
-    workflowId: text('workflow_id')
-      .notNull()
-      .references(() => workflowDefinitions.id, { onDelete: 'cascade' }),
+    /** Workflow definition or ephemeral source execution identifier. */
+    workflowId: text('workflow_id').notNull(),
     /** Coordinator session ID for this execution. */
     coordinatorSessionId: text('coordinator_session_id'),
     /** Current execution status. */
@@ -83,7 +82,7 @@ export const workflowExecutions = sqliteTable(
       enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'],
     }).notNull(),
     /** Bound input values (JSON object). */
-    inputs: text('inputs', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    inputs: text('inputs', { mode: 'json' }).$type<Record<string, JsonValue>>().notNull(),
     /** Step execution states keyed by step ID (JSON object). */
     steps: text('steps', { mode: 'json' }).$type<Record<string, StepState>>().notNull(),
     /** Currently executing step ID. */
@@ -95,7 +94,7 @@ export const workflowExecutions = sqliteTable(
     /** Execution completion timestamp. */
     completedAt: integer('completed_at'),
     /** Trigger payload from the firing trigger (JSON object). */
-    triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, unknown>>(),
+    triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, JsonValue>>(),
     ...scopeColumns(),
   },
   (table) => [

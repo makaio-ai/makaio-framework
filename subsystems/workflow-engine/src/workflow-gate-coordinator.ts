@@ -1,4 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createWorkflowCancelSubject } from '@makaio/contracts';
+import type { ExtractSubjectPayload } from '@makaio/core';
 import { WorkflowSubjects } from './namespace.js';
 
 export type GateResolution = {
@@ -10,6 +12,8 @@ type PendingGateResolution = {
   resolve: (value: GateResolution) => void;
   timeout?: ReturnType<typeof setTimeout>;
 };
+
+type GateAwaitApprovalPayload = ExtractSubjectPayload<typeof WorkflowSubjects.gate.awaitApproval>;
 
 /**
  * Coordinates gate-step response lifecycle for WorkflowExecutor.
@@ -92,6 +96,32 @@ export class WorkflowGateCoordinator {
         current.resolve({ action: autoAction, source: 'timeout' });
       }, timeoutMs);
     });
+  }
+
+  /**
+   * Handle the main-process `gate.awaitApproval` RPC lifecycle.
+   *
+   * Registers cancellation before emitting `gate.requested`, preserving the
+   * same tick response ordering while ensuring workflow cancellation releases
+   * the pending gate promise.
+   * @param payload - Gate approval request payload.
+   * @returns Resolved gate action and source.
+   */
+  public async awaitApprovalRequest(payload: GateAwaitApprovalPayload): Promise<GateResolution> {
+    const { executionId, stepId, autoAction, timeoutMs } = payload;
+    const resolutionPromise = this.awaitResolution(executionId, stepId, autoAction, timeoutMs);
+    const cancelCleanup = this.bus.on(createWorkflowCancelSubject(`workflow.${executionId}.cancel`), () => {
+      this.resolveForCancellation(executionId, stepId);
+    });
+    try {
+      await this.bus.emit(WorkflowSubjects.gate.requested, payload);
+      return await resolutionPromise;
+    } catch (error) {
+      this.resolveForCancellation(executionId, stepId);
+      throw error;
+    } finally {
+      cancelCleanup();
+    }
   }
 
   /**

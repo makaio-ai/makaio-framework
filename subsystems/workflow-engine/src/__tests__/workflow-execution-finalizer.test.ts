@@ -86,7 +86,7 @@ describe('cancelExecution', () => {
     const failedStepEvents: Array<{
       executionId: string;
       stepId: string;
-      stepType: 'agent' | 'shell' | 'gate';
+      stepType: 'agent' | 'shell' | 'gate' | 'function';
       error: string;
     }> = [];
 

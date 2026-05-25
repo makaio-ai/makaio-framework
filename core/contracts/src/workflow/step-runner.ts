@@ -1,17 +1,23 @@
 import { z } from 'zod';
 import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
 import { AgentWorkflowStepSchema, ShellWorkflowStepSchema } from './schemas.js';
+import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
 // Step Type (lifecycle — includes gate for spans/events)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Discriminant for all workflow step execution types, including gate.
+ * Discriminant for all workflow step execution types, including gate and function.
  * Used by lifecycle events and span records where gate steps participate.
  * Matches the `type` discriminant on {@link WorkflowStepSchema} variants.
+ *
+ * `function` steps run in the worker orchestrator (not the main-process scheduler)
+ * and emit lifecycle events on the worker-local bus for observability.
+ * Composite `for-each` steps are excluded — they are scheduler coordination nodes,
+ * not executor targets.
  */
-export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate']);
+export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate', 'function']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 
@@ -145,6 +151,51 @@ export function createStepCancelSubject(fullSubject: string): StepCancelSubject 
 }
 
 // ─────────────────────────────────────────────────────────────
+// Workflow Cancellation Event
+// ─────────────────────────────────────────────────────────────
+
+/** Payload emitted on a workflow worker's cancellation subject. */
+export const WorkflowCancelPayloadSchema = z.object({
+  /** Execution ID being cancelled. */
+  executionId: z.string().min(1),
+  /** Optional human-readable cancellation reason. */
+  reason: z.string().optional(),
+});
+
+export type WorkflowCancelPayload = z.infer<typeof WorkflowCancelPayloadSchema>;
+
+export type WorkflowCancelSubject = SubjectDefinition<Record<string, WorkflowCancelPayload>, string, string>;
+
+/**
+ * Build an ad-hoc event subject definition for a workflow worker cancellation channel.
+ *
+ * Cancellation subjects are per execution (`workflow.{executionId}.cancel`) and
+ * therefore cannot be statically enumerated in the workflow namespace. They follow
+ * the same ad-hoc subject pattern as step cancellation: no registered Zod schema,
+ * but a typed in-process definition for bus routing across transports.
+ * @param fullSubject - Fully qualified subject in `namespace.subject` form,
+ *   e.g. `workflow.{executionId}.cancel`.
+ * @returns Event subject definition for bus emit/on calls.
+ */
+export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancelSubject {
+  const separator = fullSubject.indexOf('.');
+  if (separator <= 0 || separator === fullSubject.length - 1) {
+    throw new Error(`Invalid workflow cancel subject: ${fullSubject}`);
+  }
+
+  return {
+    subject: fullSubject.slice(separator + 1),
+    $meta: {
+      namespace: fullSubject.slice(0, separator),
+      isRequest: false,
+      payload: {} as EventMessagePayload<WorkflowCancelPayload>,
+      local: false,
+      channel: false,
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Step Run Config (input to a StepRunner)
 // ─────────────────────────────────────────────────────────────
 
@@ -175,7 +226,7 @@ export const StepRunConfigSchema = z
     /** Resolved runner-executable step definition from the workflow DAG. */
     stepDefinition: WorkflowRunnerStepSchema,
     /** Expression context values resolved from previous step outputs and workflow inputs. */
-    resolvedInputs: z.record(z.string(), z.unknown()),
+    resolvedInputs: JsonObjectContractSchema,
     /** Bus server WebSocket URL for the worker to connect to. */
     busUrl: z.string().optional(),
     /** Bus authentication strategy. Defaults to `{ kind: 'none' }` when omitted. */
@@ -212,7 +263,7 @@ export const StepRunResultSchema = z.object({
   /** Terminal step status. */
   status: z.enum(['completed', 'failed']),
   /** Functional output of the step (JSON-serializable). */
-  output: z.unknown().optional(),
+  output: JsonValueSchema.optional(),
   /** Error message when status is 'failed'. Absent when no diagnostic is available. */
   error: z.string().optional(),
   /** Operational telemetry collected during step execution. */

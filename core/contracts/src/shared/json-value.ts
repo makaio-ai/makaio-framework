@@ -45,9 +45,9 @@ export const JsonObjectSchema: z.ZodType<Record<string, unknown>> = z.record(z.s
 /**
  * Contract-friendly JSON object schema for opaque config bags.
  *
- * Uses the strict runtime validator above but preserves the public inferred
- * type as `Record<string, unknown>` for storage/API boundaries.
+ * Uses the strict runtime validator above and only narrows the public Zod
+ * type. Keeping the underlying schema as `z.record()` is important for
+ * protocol exports: `z.custom()` validates correctly at runtime but cannot be
+ * represented as JSON Schema.
  */
-export const JsonObjectContractSchema = z.custom<Record<string, unknown>>(
-  (value) => JsonObjectSchema.safeParse(value).success,
-);
+export const JsonObjectContractSchema = JsonObjectSchema as z.ZodType<Record<string, unknown>, Record<string, unknown>>;

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "c149e314-78ca-4751-ac37-09d2d3664aa6",
+  "id": "61bd9730-dfa9-4ce1-9f40-a6fb36c18395",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "preferences": {
@@ -1934,17 +1934,7 @@
           "isUnique": false
         }
       },
-      "foreignKeys": {
-        "workflow_executions_workflow_id_workflow_definitions_id_fk": {
-          "name": "workflow_executions_workflow_id_workflow_definitions_id_fk",
-          "tableFrom": "workflow_executions",
-          "tableTo": "workflow_definitions",
-          "columnsFrom": ["workflow_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

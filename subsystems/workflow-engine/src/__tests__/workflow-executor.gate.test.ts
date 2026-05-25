@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createWorkflowCancelSubject } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { asExecutable, createWorkflowDefinition } from './shared.js';
@@ -386,5 +387,91 @@ describe('WorkflowExecutor Gate Steps', () => {
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.steps['confirm']?.status).toBe('completed');
+  });
+
+  it('resolves gate.awaitApproval RPC after gate.respond is sent in same tick', async () => {
+    // Arrange: listen for gate.requested and immediately respond via gate.respond
+    // in the same synchronous handler tick — the pending promise must already be
+    // registered before gate.requested is emitted, so the immediate response lands.
+    let gateRequestedCount = 0;
+
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.gate.requested, async (ctx) => {
+        gateRequestedCount++;
+        // Respond in the same tick — the pending promise must be registered first.
+        await MakaioBus.request(WorkflowSubjects.gate.respond, {
+          executionId: ctx.payload.executionId,
+          stepId: ctx.payload.stepId,
+          action: 'approve',
+        });
+      }),
+    );
+
+    const completedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        completedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    // Exercise the gate.awaitApproval RPC path directly.
+    const approvalPromise = MakaioBus.request(WorkflowSubjects.gate.awaitApproval, {
+      executionId: 'exec-test-await',
+      stepId: 'gate-await-test',
+      workflowId: 'wf-test',
+      workflowName: 'Test Workflow',
+      title: 'Approve?',
+      message: 'Proceed with the action?',
+      autoAction: 'reject',
+      timeoutMs: null,
+      openedAt: Date.now(),
+      stepType: 'gate',
+    });
+
+    const resolution = await approvalPromise;
+
+    expect(resolution.action).toBe('approve');
+    expect(resolution.source).toBe('user');
+    expect(gateRequestedCount).toBe(1);
+  });
+
+  it('resolves gate.awaitApproval RPC when the workflow cancel subject is emitted', async () => {
+    const requested: Array<{ executionId: string; stepId: string }> = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.gate.requested, (ctx) => {
+        requested.push({ executionId: ctx.payload.executionId, stepId: ctx.payload.stepId });
+      }),
+    );
+
+    const approvalPromise = MakaioBus.request(WorkflowSubjects.gate.awaitApproval, {
+      executionId: 'exec-test-cancel',
+      stepId: 'gate-await-cancel',
+      workflowId: 'wf-test',
+      workflowName: 'Test Workflow',
+      title: 'Approve?',
+      message: 'Proceed with the action?',
+      autoAction: 'reject',
+      timeoutMs: null,
+      openedAt: Date.now(),
+      stepType: 'gate',
+    });
+
+    await vi.waitFor(() =>
+      expect(requested).toEqual([{ executionId: 'exec-test-cancel', stepId: 'gate-await-cancel' }]),
+    );
+
+    await MakaioBus.emit(createWorkflowCancelSubject('workflow.exec-test-cancel.cancel'), {
+      executionId: 'exec-test-cancel',
+      reason: 'test cancellation',
+    });
+
+    await expect(approvalPromise).resolves.toEqual({ action: 'reject', source: 'timeout' });
+    await expect(
+      MakaioBus.request(WorkflowSubjects.gate.respond, {
+        executionId: 'exec-test-cancel',
+        stepId: 'gate-await-cancel',
+        action: 'approve',
+      }),
+    ).resolves.toEqual({ accepted: false });
   });
 });

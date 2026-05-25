@@ -5,8 +5,8 @@ import { spawnWorker } from './workers/spawner.js';
 import type { FileValidationResults, ValidateOptions, ValidationSummary, ToolRunStatus } from './types.js';
 import type { WorkerConfig, WorkerInput, WorkerTool } from './workers/types.js';
 
-const FULL_WORKSPACE_TYPESCRIPT_HEAP_MB = 6144;
-const FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS = 1_200_000;
+const FULL_WORKSPACE_TYPESCRIPT_HEAP_MB = 2048;
+const FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS = 1_800_000;
 const DEFAULT_TOOLS: WorkerTool[] = ['biome', 'eslint', 'stylelint', 'typescript'];
 
 /**

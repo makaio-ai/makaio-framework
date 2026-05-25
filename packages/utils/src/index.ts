@@ -1,4 +1,5 @@
 export { DeferredPromise } from './deferred-promise.js';
+export { CLI_EXIT_CODES, classifyCliCommandError, readStdin } from './cli.js';
 export { isRecord } from './is-record.js';
 export { extractJson } from './extract-json.js';
 export { getErrorString } from './getErrorString.js';
@@ -13,6 +14,7 @@ export {
   resolveTimeouts,
   TIMEOUT_CATEGORIES,
 } from './timeout/index.js';
+export type { CliCommandErrorKind } from './cli.js';
 export type {
   RequiredTimeoutConfig,
   TimeoutCategory,

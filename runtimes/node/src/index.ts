@@ -27,6 +27,7 @@ export {
   type MakaioRuntime,
   type TransportReadyInfo,
 } from './boot.js';
+export type { WorkflowRunnerBootOptions } from './boot-types.js';
 export { buildNodeRuntimeOptions, type NodeRuntimeOptions } from './node-runtime-options.js';
 export {
   MAKAIO_CONFIG_FILE_ENV,
@@ -78,5 +79,11 @@ export {
 } from './framework-module-resolver.js';
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
-export { createNodeStepRunner } from './workflow-step-runner/index.js';
-export type { NodeStepRunnerFactoryOptions } from './workflow-step-runner/index.js';
+export { WorkflowPiscinaRunner, resolveWorkflowWorkerEntry } from './workflow-worker/index.js';
+export type {
+  IWorkflowRunner,
+  WorkflowRunResult,
+  WorkflowPiscinaRunnerOptions,
+  WorkflowWorkerEntryMode,
+  WorkflowWorkerEntryResolverOptions,
+} from './workflow-worker/index.js';

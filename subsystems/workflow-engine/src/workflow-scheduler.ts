@@ -1,5 +1,4 @@
 import {
-  SubagentSubjects,
   type CompositeStepState,
   type ForEachWorkflowStep,
   type WorkflowExecution,
@@ -11,7 +10,6 @@ import { evaluateSync, type ExpressionContext } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
 import type { ActiveExecution, ActiveRunnerStep, SchedulerNode, WorkflowSchedulerDeps } from './types.js';
 import { sleep } from './executor-helpers.js';
-import { executeGateStep } from './workflow-step-executors.js';
 import { expandForEachAtRuntime, buildStepContextFromSnapshot, buildChildStepMap } from './runtime-for-each.js';
 import { persistStepState, persistStepStates } from './workflow-execution-persistence.js';
 import {
@@ -33,9 +31,9 @@ import {
   applyStepRunResult,
   persistStepSpan,
   prepareRunnerManagedStep,
-  runnerManagesWorkflowLifecycle,
   type StepExecutionOutcome,
 } from './workflow-step-result.js';
+import { runGateInlineStep, runFunctionInlineStep } from './workflow-scheduler-inline-steps.js';
 import {
   buildInitialSchedulerGraph,
   findReadySchedulerNodes,
@@ -85,7 +83,6 @@ export class WorkflowScheduler {
       activeExecutions: this.deps.activeExecutions,
       shellAbortControllers: this.deps.shellAbortControllers,
       activeRunnerSteps: this.deps.activeRunnerSteps,
-      stepRunner: this.deps.stepRunner,
       cancelTimeoutMs: this.deps.config.cancelTimeoutMs,
       gateCoordinator: this.deps.gateCoordinator,
     };
@@ -144,11 +141,11 @@ export class WorkflowScheduler {
     const active = this.deps.activeExecutions.get(this.executionId);
     if (!active) return;
 
-    buildInitialSchedulerGraph(authoredSteps, this.nodes);
-
     const { execution } = active;
 
     try {
+      buildInitialSchedulerGraph(authoredSteps, this.nodes);
+
       while (execution.status === 'running') {
         const ready = findReadySchedulerNodes(this.nodes, execution, this.inFlight);
 
@@ -387,6 +384,8 @@ export class WorkflowScheduler {
   private async runExecutableNode(nodeId: string, active: ActiveExecution): Promise<StepExecutionOutcome> {
     const { execution } = active;
     const step = active.stepMap.get(nodeId);
+    // `for-each` composite steps are internal scheduling nodes and are never
+    // dispatched here — they are handled by `runCompositeNode`.
     if (!step || step.type === 'for-each') {
       return { status: 'failed', error: `Executable step not found: ${nodeId}`, failedStepId: nodeId };
     }
@@ -415,15 +414,17 @@ export class WorkflowScheduler {
 
     const resolvedInputs: Record<string, unknown> = { ...context };
 
-    // Gate steps are coordination steps handled by the orchestrator directly,
-    // not dispatched to the step runner (which only handles agent/shell).
+    // Gate and function steps have specialised execution paths extracted to
+    // workflow-scheduler-inline-steps.ts for clarity and to keep this method
+    // within the per-function line budget.
     if (step.type === 'gate') {
-      const gateResult = await executeGateStep(this.deps, this.executionId, nodeId);
-      return applyStepRunResult(this.deps.bus, active, nodeId, gateResult, resolvedInputs);
+      return runGateInlineStep(this.deps, this.executionId, active, nodeId, resolvedInputs);
+    }
+    if (step.type === 'function') {
+      return runFunctionInlineStep(this.deps, this.executionId, active, nodeId, resolvedInputs);
     }
 
-    const stepRunnerManagesLifecycle = runnerManagesWorkflowLifecycle(this.deps.stepRunner);
-    if (!stepRunnerManagesLifecycle) {
+    if (!this.deps.runnerManagesLifecycle) {
       await prepareRunnerManagedStep(this.deps.bus, active, nodeId);
       if (execution.status !== 'running') {
         return { status: 'failed', error: 'Execution cancelled', failedStepId: nodeId };
@@ -443,7 +444,7 @@ export class WorkflowScheduler {
 
     let result;
     try {
-      result = await this.deps.stepRunner.run(
+      result = await this.deps.runStep(
         {
           executionId: this.executionId,
           workflowId: active.workflow.id,
@@ -483,9 +484,9 @@ export class WorkflowScheduler {
   ): void {
     controller.signal.addEventListener('abort', () => {
       const { cancelTimeoutMs } = this.deps.config;
-      if (!this.deps.stepRunner.forceKill || cancelTimeoutMs <= 0) return;
+      if (!this.deps.forceKillStep || cancelTimeoutMs <= 0) return;
       const timer = setTimeout(() => {
-        void Promise.resolve(this.deps.stepRunner.forceKill?.(this.executionId, nodeId)).catch((err) => {
+        void Promise.resolve(this.deps.forceKillStep?.(this.executionId, nodeId)).catch((err) => {
           console.error(`[WorkflowScheduler] forceKill failed for ${key}:`, err);
         });
       }, cancelTimeoutMs);
@@ -504,7 +505,7 @@ export class WorkflowScheduler {
    * - Shells are aborted via `shellAbortControllers`.
    * - Active runner steps are cancelled with hard kill timers via `cancelActiveRunnerSteps`.
    * - Gates are resolved for cancellation via `WorkflowGateCoordinator`.
-   * - Subagents are killed via `SubagentSubjects.kill`.
+   * - Subagents are killed via the `onAbortSubagent` callback.
    * @param reason - Human-readable abort reason.
    */
   private async abortInFlightNodes(reason: string): Promise<void> {
@@ -525,11 +526,11 @@ export class WorkflowScheduler {
       // Release gate waiting
       this.deps.gateCoordinator.resolveForCancellation(this.executionId, nodeId);
 
-      // Kill subagent
+      // Kill subagent via the injected callback (avoids coupling to SubagentSubjects).
       const stepState = execution.steps[nodeId];
       const subagentId = stepState?.kind === 'executable' ? stepState.subagentId : undefined;
-      if (subagentId) {
-        abortPromises.push(this.deps.bus.request(SubagentSubjects.kill, { subagentId, reason }).catch(() => {}));
+      if (subagentId && this.deps.onAbortSubagent) {
+        abortPromises.push(this.deps.onAbortSubagent(nodeId, subagentId).catch(() => {}));
       }
     }
 

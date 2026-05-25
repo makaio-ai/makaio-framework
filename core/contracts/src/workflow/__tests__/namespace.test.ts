@@ -7,7 +7,7 @@ import {
   StepStateSchema,
   WorkflowResolvedRoleSchema,
 } from '../schemas.js';
-import { WorkflowSubjects } from '../namespace.js';
+import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
 
 describe('WorkflowNamespace', () => {
   it('exposes dotted lifecycle subjects as nested accessors', () => {
@@ -260,7 +260,7 @@ describe('ForEachExpansionSnapshotSchema', () => {
     expect(snapshot.leafStepIds).toContain('loop.0.test');
   });
 
-  it('accepts any unknown value as item in stepContext', () => {
+  it('accepts JSON values as item in stepContext', () => {
     const snapshot = ForEachExpansionSnapshotSchema.parse({
       parentStepId: 'loop',
       childSteps: [],
@@ -272,6 +272,19 @@ describe('ForEachExpansionSnapshotSchema', () => {
     });
     expect(snapshot.stepContext['loop.0.test']?.item).toBeNull();
     expect(snapshot.stepContext['loop.1.test']?.item).toEqual([1, 2, 3]);
+  });
+
+  it('rejects runtime-only values as item in stepContext', () => {
+    expect(() =>
+      ForEachExpansionSnapshotSchema.parse({
+        parentStepId: 'loop',
+        childSteps: [],
+        stepContext: {
+          'loop.0.test': { item: () => undefined, index: 0 },
+        },
+        leafStepIds: [],
+      }),
+    ).toThrow();
   });
 
   it('validates childSteps as WorkflowStep schemas', () => {
@@ -295,5 +308,55 @@ describe('ForEachExpansionSnapshotSchema', () => {
         leafStepIds: [],
       }),
     ).toThrow();
+  });
+});
+
+describe('step.completed JSON result', () => {
+  it('accepts JSON step completion results', () => {
+    const payload = WorkflowSchemas['step.completed'].parse({
+      executionId: 'wfx-1',
+      stepId: 'collect',
+      stepType: 'shell',
+      result: { copied: ['.env'], count: 1 },
+      duration: 12,
+    });
+    expect(payload.result).toEqual({ copied: ['.env'], count: 1 });
+  });
+});
+
+describe('gate.awaitApproval subject', () => {
+  it('defines gate.awaitApproval as a request subject', () => {
+    expect(WorkflowSubjects.gate.awaitApproval.subject).toBe('gate.awaitApproval');
+    const request = WorkflowSchemas['gate.awaitApproval'].request.parse({
+      executionId: 'wfx-1',
+      stepId: 'approve',
+      stepType: 'gate',
+      workflowId: 'wf-1',
+      workflowName: 'Workflow One',
+      title: 'Approve',
+      message: 'Continue?',
+      autoAction: 'reject',
+      timeoutMs: null,
+      openedAt: 1,
+    });
+    expect(request.workflowId).toBe('wf-1');
+  });
+
+  it('rejects non-gate step types for gate approval payloads', () => {
+    const gatePayload = {
+      executionId: 'wfx-1',
+      stepId: 'approve',
+      stepType: 'shell',
+      workflowId: 'wf-1',
+      workflowName: 'Workflow One',
+      title: 'Approve',
+      message: 'Continue?',
+      autoAction: 'reject',
+      timeoutMs: null,
+      openedAt: 1,
+    };
+
+    expect(() => WorkflowSchemas['gate.requested'].parse(gatePayload)).toThrow();
+    expect(() => WorkflowSchemas['gate.awaitApproval'].request.parse(gatePayload)).toThrow();
   });
 });

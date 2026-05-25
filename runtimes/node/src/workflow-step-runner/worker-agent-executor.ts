@@ -1,109 +1,15 @@
-import type { IMakaioBus } from '@makaio/bus-core';
 import {
-  AdapterSubjects,
-  AgentSubjects,
+  ContextModeSchema,
+  JsonValueSchema,
+  SubagentSubjects,
   WorkflowSubjects,
   type AgentWorkflowStep,
-  type ProviderContext,
   type StepRunConfig,
   type StepRunResult,
 } from '@makaio/contracts';
 import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
-import { bootWorkerRuntime, type WorkerBusHandle, type WorkerRuntimeHandle } from './worker-boot.js';
+import type { WorkerBusHandle } from './worker-boot.js';
 import type { WorkerContributions } from './worker-contributions.js';
-
-/**
- * Configuration resolved from either a named role or inline step fields.
- *
- * Contains the adapter name, optional model, and other overrides needed
- * to construct an `adapter.startAgent` request.
- */
-interface ResolvedAgentConfig {
-  /** Adapter name for routing the startAgent RPC. */
-  adapterName: string;
-  /** Model identifier override. */
-  model?: string;
-  /** Harness ID for per-role tool governance. */
-  harnessId?: string;
-  /** System prompt to prepend for this role. */
-  systemPrompt?: string;
-  /** Provider context for credential resolution. */
-  providerContext?: ProviderContext;
-}
-
-/**
- * Resolve the agent configuration for a workflow step.
- *
- * When the step specifies a `role`, issues an RPC to `workflow.resolveRole`
- * to obtain the full adapter configuration. Otherwise extracts the adapter
- * name and model directly from the step definition fields.
- * @param bus - Bus instance for RPC calls.
- * @param step - Agent workflow step definition.
- * @returns Resolved adapter configuration.
- * @throws When `role` resolution fails or neither `role` nor `adapter` is specified.
- */
-async function resolveAgentConfig(bus: IMakaioBus, step: AgentWorkflowStep): Promise<ResolvedAgentConfig> {
-  if (step.role) {
-    const resolved = await bus.request(WorkflowSubjects.resolveRole, { roleId: step.role });
-    return {
-      adapterName: resolved.adapterName,
-      model: resolved.model,
-      harnessId: resolved.harnessId,
-      systemPrompt: resolved.systemPrompt,
-      providerContext: resolved.providerContext,
-    };
-  }
-
-  if (!step.adapter) {
-    throw new Error('Agent step must specify either "role" or "adapter"');
-  }
-
-  return {
-    adapterName: step.adapter,
-    model: step.model,
-    harnessId: step.harnessId,
-  };
-}
-
-/**
- * Wait for an agent to emit its completion event on the bus.
- *
- * Subscribes to `agent.complete` filtered by the agent ID and waits for
- * the first completion event. Respects the provided abort signal for
- * cooperative cancellation.
- * @param bus - Bus instance to listen on.
- * @param agentId - Agent ID to filter for.
- * @param signal - Abort signal for cancellation.
- * @returns The agent's output message, or an empty string if none.
- * @throws When the signal is aborted before agent completion.
- */
-async function awaitAgentCompletion(
-  bus: IMakaioBus,
-  agentId: string,
-  signal: AbortSignal,
-): Promise<{ output: string; error?: string }> {
-  const ctx = await bus.once(AgentSubjects.complete, {
-    filter: { agentId },
-    signal,
-  });
-
-  const outcome = ctx.payload.outcome ?? 'completed';
-  if (outcome === 'error') {
-    return { output: '', error: ctx.payload.error ?? 'Agent completed with error' };
-  }
-
-  return { output: ctx.payload.message ?? '' };
-}
-
-/**
- * Close worker-local runtime resources without changing the step result shape.
- * @param runtime - Worker runtime handle to close.
- */
-async function closeWorkerRuntime(runtime: WorkerRuntimeHandle | undefined): Promise<void> {
-  if (!runtime) return;
-
-  await runtime.close();
-}
 
 /**
  * Check whether a value is a plain record for expression context fields.
@@ -124,11 +30,123 @@ function isExpressionSteps(value: unknown): value is ExpressionContext['steps'] 
 
   for (const stepState of Object.values(value)) {
     if (!isRecord(stepState) || typeof stepState['status'] !== 'string') return false;
-    if ('result' in stepState && stepState['result'] !== undefined && typeof stepState['result'] !== 'string') {
+    if (
+      'result' in stepState &&
+      stepState['result'] !== undefined &&
+      !JsonValueSchema.safeParse(stepState['result']).success
+    ) {
       return false;
     }
   }
   return true;
+}
+
+/**
+ * Build a failed legacy worker agent result with duration telemetry.
+ * @param error - Failure message to expose on the step result.
+ * @param startedAt - Step start timestamp from performance.now().
+ * @returns Failed step run result.
+ */
+function failedWorkerAgentResult(error: string, startedAt: number): StepRunResult {
+  return { status: 'failed', error, telemetry: { duration: performance.now() - startedAt } };
+}
+
+/**
+ * Spawn a subagent for a legacy worker agent step.
+ * @param handle - Worker bus handle used for role resolution and subagent spawning.
+ * @param config - Step runner config with coordinator session and resolved inputs.
+ * @param step - Agent step definition to execute.
+ * @param startedAt - Step start timestamp for failure telemetry.
+ * @returns Spawn result or a terminal failed step result.
+ */
+async function spawnWorkerSubagent(
+  handle: WorkerBusHandle,
+  config: StepRunConfig,
+  step: AgentWorkflowStep,
+  startedAt: number,
+): Promise<{ status: 'spawned'; subagentId: string } | { status: 'failed'; result: StepRunResult }> {
+  const agentConfig = step.role
+    ? await handle.bus.request(WorkflowSubjects.resolveRole, { roleId: step.role })
+    : {
+        adapterName: step.adapter,
+        model: step.model,
+        harnessId: step.harnessId,
+        contextMode: step.contextMode ?? ContextModeSchema.enum.fresh,
+      };
+
+  const spawn = await handle.bus.requestOptional(SubagentSubjects.spawn, {
+    parentSessionId: config.coordinatorSessionId,
+    config: {
+      task: resolveTemplate(step.prompt, buildWorkerExpressionContext(config.resolvedInputs)),
+      contextMode: agentConfig.contextMode ?? ContextModeSchema.enum.fresh,
+      adapterName: agentConfig.adapterName,
+      model: agentConfig.model,
+      harnessId: agentConfig.harnessId,
+      systemPrompt: 'systemPrompt' in agentConfig ? agentConfig.systemPrompt : undefined,
+      providerContext: 'providerContext' in agentConfig ? agentConfig.providerContext : undefined,
+      executionTargetId: step.executionTargetId,
+      responseSchema: step.outputSchema,
+    },
+    depth: 0,
+  });
+
+  if (!spawn.handled) {
+    return { status: 'failed', result: failedWorkerAgentResult('Subagent system not available', startedAt) };
+  }
+
+  return { status: 'spawned', subagentId: spawn.data.subagentId };
+}
+
+/**
+ * Await a spawned subagent and translate its terminal status into a step result.
+ * @param handle - Worker bus handle.
+ * @param step - Agent step definition controlling output extraction.
+ * @param signal - Abort signal for cooperative cancellation.
+ * @param subagentId - Spawned subagent identifier.
+ * @param startedAt - Step start timestamp for duration telemetry.
+ * @returns Terminal step result.
+ */
+async function awaitWorkerSubagent(
+  handle: WorkerBusHandle,
+  step: AgentWorkflowStep,
+  signal: AbortSignal,
+  subagentId: string,
+  startedAt: number,
+): Promise<StepRunResult> {
+  let abortedWhileWaiting = false;
+  const onAbort = (): void => {
+    abortedWhileWaiting = true;
+    void handle.bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+  };
+
+  try {
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return failedWorkerAgentResult('Workflow cancelled', startedAt);
+    }
+
+    const awaitResult = await handle.bus.request(SubagentSubjects.await, { subagentId });
+    const duration = performance.now() - startedAt;
+    if (abortedWhileWaiting || signal.aborted) {
+      return { status: 'failed', error: 'Workflow cancelled', telemetry: { duration } };
+    }
+    if (awaitResult.status !== 'completed') {
+      await handle.bus.request(SubagentSubjects.kill, { subagentId }).catch(() => {});
+      return {
+        status: 'failed',
+        error: awaitResult.error ?? `Subagent ended with status: ${awaitResult.status}`,
+        telemetry: { duration },
+      };
+    }
+    return {
+      status: 'completed',
+      output: step.onComplete?.extract === 'none' ? '' : (awaitResult.result ?? ''),
+      telemetry: { duration },
+    };
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /**
@@ -156,28 +174,21 @@ function buildWorkerExpressionContext(resolvedInputs: StepRunConfig['resolvedInp
 /**
  * Execute an agent workflow step inside the worker process.
  *
- * Resolves the step's adapter configuration (via role or inline fields),
- * starts the agent locally via the `adapter.startAgent` bus RPC, waits
- * for the agent to complete, and returns a {@link StepRunResult}.
- *
- * This function runs the adapter directly in-process rather than delegating
- * to the subagent orchestration layer. The adapter must be available on the
- * worker's local bus (loaded via worker contributions).
+ * Legacy step-level workers now delegate agent execution through the same
+ * subagent protocol as workflow-level workers, preserving role resolution,
+ * context mode, system prompt, provider context, and cancellation semantics.
  * @param handle - Worker bus handle with an active bus instance.
  * @param config - Step run configuration describing the agent step.
  * @param signal - Abort signal for cooperative cancellation.
- * @param contributions - Optional worker contributions providing adapter and toolset definitions.
+ * @param _contributions - Deprecated worker-local contributions, retained for call-site compatibility.
  * @returns Step run result with the agent's output and telemetry.
  */
 export async function runWorkerAgentStep(
   handle: WorkerBusHandle,
   config: StepRunConfig,
   signal: AbortSignal,
-  contributions?: WorkerContributions,
+  _contributions?: WorkerContributions,
 ): Promise<StepRunResult> {
-  const startTime = performance.now();
-  let runtime: WorkerRuntimeHandle | undefined;
-
   if (config.stepType !== 'agent') {
     return {
       status: 'failed',
@@ -195,63 +206,17 @@ export async function runWorkerAgentStep(
   }
 
   const step = config.stepDefinition as AgentWorkflowStep;
-  const { bus } = handle;
+  const startedAt = performance.now();
+
+  if (signal.aborted) {
+    return failedWorkerAgentResult('Workflow cancelled', startedAt);
+  }
 
   try {
-    if (contributions) {
-      runtime = await bootWorkerRuntime(handle, contributions, config.platformDefaults);
-    }
-
-    const agentConfig = await resolveAgentConfig(bus, step);
-    const resolvedPrompt = resolveTemplate(step.prompt, buildWorkerExpressionContext(config.resolvedInputs));
-
-    const startResult = await bus.request(AdapterSubjects.startAgent, {
-      adapterId: agentConfig.adapterName,
-      role: 'member',
-      model: agentConfig.model,
-      harnessId: agentConfig.harnessId,
-      providerContext: agentConfig.providerContext,
-      initialMessage: resolvedPrompt,
-      env: config.platformDefaults.env,
-    });
-
-    if (!startResult.success) {
-      const duration = performance.now() - startTime;
-      return {
-        status: 'failed',
-        error: startResult.message,
-        telemetry: { duration },
-      };
-    }
-
-    const { agentId } = startResult;
-
-    const completion = await awaitAgentCompletion(bus, agentId, signal);
-    const duration = performance.now() - startTime;
-
-    if (completion.error) {
-      return {
-        status: 'failed',
-        error: completion.error,
-        telemetry: { duration },
-      };
-    }
-
-    return {
-      status: 'completed',
-      output: completion.output,
-      telemetry: { duration },
-    };
-  } catch (error: unknown) {
-    const duration = performance.now() - startTime;
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    return {
-      status: 'failed',
-      error: errorMessage,
-      telemetry: { duration },
-    };
-  } finally {
-    await closeWorkerRuntime(runtime);
+    const spawn = await spawnWorkerSubagent(handle, config, step, startedAt);
+    if (spawn.status === 'failed') return spawn.result;
+    return awaitWorkerSubagent(handle, step, signal, spawn.subagentId, startedAt);
+  } catch (error) {
+    return failedWorkerAgentResult(error instanceof Error ? error.message : String(error), startedAt);
   }
 }
