@@ -204,6 +204,7 @@ Read [`.agents/policies/apps.md`](../.agents/policies/apps.md) before changing E
 | `apps/electrobun`  | `@makaio/electrobun`     | Electrobun desktop host (Bun-native, experimental). |
 | `apps/host-shared` | `@makaio/host-shared`    | Shared desktop host boot/rendering logic.           |
 | `apps/mcp-server`  | `@makaio/app-mcp-server` | MCP stdio bridge to a running Makaio server.        |
+| `apps/public-api`  | `@makaio/public-api`     | Public HTTP API for release metadata and artifacts. |
 | `apps/website`     | `@makaio/website`        | Framework documentation and marketing website.      |
 
 ### `runtimes/`
