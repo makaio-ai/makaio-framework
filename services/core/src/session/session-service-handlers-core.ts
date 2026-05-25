@@ -53,9 +53,11 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
  * graph fields. Host-specific scope fields are handled by host-side subject
  * extensions or interceptors before this handler runs.
  *
- * The `ifAbsent` flag on storage set makes creation idempotent when a
- * `sessionId` is provided — if the session already exists the handler
- * returns the existing session ID without overwriting.
+ * The `ifAbsent` flag on storage set makes creation idempotent — if the
+ * session already exists (caller-provided or freshly generated ID) the handler
+ * returns the existing session ID without overwriting. This avoids routing new
+ * sessions through the optimistic concurrency retry loop, which is designed
+ * for updates to existing rows.
  * @param deps - Core handler dependencies
  * @returns Cleanup function
  */
@@ -95,24 +97,15 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       spawningToolCallId,
     };
 
-    if (providedSessionId) {
-      const setResult = await bus.requestOptional(SessionStorageSubjects.set, {
-        sessionId,
-        session,
-        ifAbsent: true,
-      });
-      // In ephemeral mode (unhandled), treat as success — no persistent store to conflict with.
-      if (setResult.handled && !setResult.data.success) {
-        const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
-        const existing = getResult.handled ? getResult.data.session : null;
-        if (!existing) {
-          throw new Error(`Session already exists but could not be loaded: ${sessionId}`);
-        }
-        ctx.setResult({ sessionId });
-        return;
-      }
-    } else {
-      await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
+    const setResult = await bus.requestOptional(SessionStorageSubjects.set, {
+      sessionId,
+      session,
+      ifAbsent: true,
+    });
+    // In ephemeral mode (unhandled), treat as success — no persistent store to conflict with.
+    if (setResult.handled && !setResult.data.success) {
+      ctx.setResult({ sessionId });
+      return;
     }
 
     await bus.emit(SessionSubjects.created, {
