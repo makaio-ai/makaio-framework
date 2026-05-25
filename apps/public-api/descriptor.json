@@ -1,0 +1,11 @@
+{
+  "name": "public-api",
+  "displayName": "Makaio Public API",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  }
+}
