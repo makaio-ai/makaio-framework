@@ -14,6 +14,7 @@ import type { SetupState, SetupController } from '@makaio/setup';
 import { createSetupRestartAndReconnect } from '../setup-reconnect.js';
 import { ConsentStep } from './consent-step.js';
 import { DetectStep } from './detect-step.js';
+import { ManifestStep } from './manifest-step.js';
 
 /**
  * Configuration for running the setup TUI.
@@ -23,6 +24,11 @@ export interface SetupTuiConfig {
   readonly bus: IMakaioBus;
   /** Absolute path to the makaio home directory. */
   readonly makaioHome: string;
+  /**
+   * Absolute path to the project repository root used for manifest discovery.
+   * When provided, the setup flow may present a manifest step listing project extensions.
+   */
+  readonly repoPath?: string;
 }
 
 /**
@@ -97,7 +103,17 @@ function renderStep(state: SetupState, controller: SetupController): React.JSX.E
           state={state}
           onSelectionChange={(clientId, selected) => controller.actions.setClientSelected(clientId, selected)}
           onInstall={() => {
-            void controller.actions.installSelectedClients();
+            void controller.advance();
+          }}
+        />
+      );
+    case 'manifest':
+      return (
+        <ManifestStep
+          state={state}
+          onSelectionChange={(spec, selected) => controller.actions.setManifestExtensionSelected(spec, selected)}
+          onInstall={() => {
+            void controller.advance();
           }}
         />
       );
@@ -189,6 +205,7 @@ export async function runSetupTui(config: SetupTuiConfig): Promise<void> {
   const controller = await createSetupController({
     bus: config.bus,
     makaioHome: config.makaioHome,
+    repoPath: config.repoPath,
     restartAndReconnect: createSetupRestartAndReconnect(),
   });
 

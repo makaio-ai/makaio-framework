@@ -2,15 +2,24 @@
  * Tests for the extension install/uninstall/list/update subcommands.
  *
  * The command registration assertions stay lightweight. Install behavior uses
- * package-manager seams so rollback invariants can be covered without invoking
- * the real filesystem, Yarn Berry, or the user makaio home directory.
+ * package-manager seams backed by temporary package files so rollback and
+ * manifest-sync invariants can be covered without invoking Yarn Berry or the
+ * user makaio home directory.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync } from 'node:fs';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { Command } from 'commander';
 import { registerExtensionCommands } from '../extension-commands.js';
+import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { PackageInfo } from '@makaio/services-package-manager/namespace';
+import { makeTestRepo, writeTestManifest } from './manifest-test-helpers.js';
 
 const packageManagerMockState = vi.hoisted(() => ({
+  makaioHome: '',
+  fakeRegistryRoot: '',
   packages: [] as PackageInfo[],
   latestVersions: new Map<string, string>(),
   manifestDependencies: new Set<string>(),
@@ -30,17 +39,85 @@ vi.mock('@makaio/runtime-node', async (importOriginal) => {
   return {
     ...actual,
     readFrameworkVersion: async () => '0.1.0',
-    resolveMakaioHome: () => '/tmp/makaio-test-home',
+    resolveMakaioHome: () => packageManagerMockState.makaioHome,
   };
 });
 
 vi.mock('@makaio/services-package-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@makaio/services-package-manager')>();
+  const fs = await import('node:fs/promises');
+  const nodePath = await import('node:path');
+  const { safeParseExtensionDescriptor } = await import('@makaio/contracts');
+
+  type PackageJson = {
+    readonly name?: string;
+    readonly version?: string;
+    readonly dependencies?: Record<string, string>;
+  };
+
+  const emptyManifest: PackageJson = {
+    name: 'makaio-test-packages',
+    version: '1.0.0',
+    dependencies: {},
+  };
+
+  function packagePath(root: string, npmName: string): string {
+    return nodePath.join(root, ...npmName.split('/'));
+  }
+
+  function extractNpmName(packageSpec: string): string {
+    if (packageSpec.startsWith('@')) {
+      const slashIndex = packageSpec.indexOf('/');
+      if (slashIndex === -1) return packageSpec;
+      const rangeMarker = packageSpec.indexOf('@', slashIndex + 1);
+      return rangeMarker === -1 ? packageSpec : packageSpec.slice(0, rangeMarker);
+    }
+
+    const rangeMarker = packageSpec.indexOf('@');
+    return rangeMarker === -1 ? packageSpec : packageSpec.slice(0, rangeMarker);
+  }
+
+  async function readJsonFile<T>(filePath: string): Promise<T | null> {
+    try {
+      return JSON.parse(await fs.readFile(filePath, 'utf-8')) as T;
+    } catch (error) {
+      if (
+        error instanceof SyntaxError ||
+        (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')
+      ) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async function readHomeManifest(makaioHome: string): Promise<PackageJson> {
+    return (await readJsonFile<PackageJson>(nodePath.join(makaioHome, 'package.json'))) ?? emptyManifest;
+  }
+
+  async function writeHomeManifest(makaioHome: string, manifest: PackageJson): Promise<void> {
+    await fs.mkdir(makaioHome, { recursive: true });
+    await fs.writeFile(nodePath.join(makaioHome, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+    packageManagerMockState.manifestDependencies = new Set(Object.keys(manifest.dependencies ?? {}));
+  }
+
+  async function updateHomeDependency(makaioHome: string, npmName: string, versionRange: string): Promise<void> {
+    const manifest = await readHomeManifest(makaioHome);
+    await writeHomeManifest(makaioHome, {
+      ...manifest,
+      dependencies: { ...(manifest.dependencies ?? {}), [npmName]: versionRange },
+    });
+  }
 
   class MockYarnPackageManager {
-    public constructor(_makaioHome: string) {}
+    public constructor(private readonly makaioHome: string) {}
 
-    public async initialize(): Promise<void> {}
+    public async initialize(): Promise<void> {
+      await fs.mkdir(nodePath.join(this.makaioHome, 'node_modules'), { recursive: true });
+      if ((await readJsonFile<PackageJson>(nodePath.join(this.makaioHome, 'package.json'))) === null) {
+        await writeHomeManifest(this.makaioHome, emptyManifest);
+      }
+    }
 
     public async listPackages(): Promise<PackageInfo[]> {
       return packageManagerMockState.packages;
@@ -51,50 +128,95 @@ vi.mock('@makaio/services-package-manager', async (importOriginal) => {
     }
 
     public async installPackage(packageName: string): Promise<string> {
+      if (packageManagerMockState.resolverFailure) {
+        throw packageManagerMockState.resolverFailure;
+      }
+
+      const npmName = extractNpmName(packageName);
       packageManagerMockState.installedPackages.push(packageName);
-      return packageManagerMockState.latestVersions.get(packageName) ?? 'unknown';
+      const registryPackagePath = packagePath(packageManagerMockState.fakeRegistryRoot, npmName);
+      const installedPackagePath = packagePath(nodePath.join(this.makaioHome, 'node_modules'), npmName);
+      const registryPackageJson = await readJsonFile<PackageJson>(nodePath.join(registryPackagePath, 'package.json'));
+      const version = packageManagerMockState.latestVersions.get(npmName) ?? registryPackageJson?.version ?? 'unknown';
+
+      await updateHomeDependency(this.makaioHome, npmName, version);
+      await fs.mkdir(installedPackagePath, { recursive: true });
+      await fs.writeFile(
+        nodePath.join(installedPackagePath, 'package.json'),
+        `${JSON.stringify({ name: npmName, version }, null, 2)}\n`,
+        'utf-8',
+      );
+
+      const descriptor = await readJsonFile<unknown>(nodePath.join(registryPackagePath, 'descriptor.json'));
+      if (descriptor !== null) {
+        await fs.writeFile(
+          nodePath.join(installedPackagePath, 'descriptor.json'),
+          `${JSON.stringify(descriptor, null, 2)}\n`,
+          'utf-8',
+        );
+      }
+
+      return version;
     }
 
     public async ensureFrameworkDependency(dependency: { readonly versionRange: string }): Promise<void> {
       packageManagerMockState.ensuredFrameworkRanges.push(dependency.versionRange);
-      packageManagerMockState.manifestDependencies.add('@makaio/framework');
+      await updateHomeDependency(this.makaioHome, '@makaio/framework', dependency.versionRange);
     }
 
     public async readManifestSnapshot(): Promise<unknown> {
-      return { dependencies: [...packageManagerMockState.manifestDependencies] };
+      return readHomeManifest(this.makaioHome);
     }
 
     public async writeManifestAndReinstall(snapshot: unknown): Promise<void> {
-      const dependencies = (snapshot as { dependencies?: unknown }).dependencies;
-      packageManagerMockState.manifestDependencies = new Set(
-        Array.isArray(dependencies)
-          ? dependencies.filter((dependency): dependency is string => typeof dependency === 'string')
-          : [],
-      );
+      await writeHomeManifest(this.makaioHome, snapshot as PackageJson);
       packageManagerMockState.manifestRestores += 1;
     }
-  }
 
-  class MockDependencyResolver {
-    public async resolve(roots: readonly string[], options: { force?: boolean } = {}) {
-      packageManagerMockState.resolverCalls.push({ roots, force: options.force });
-      if (packageManagerMockState.resolverFailure) {
-        throw packageManagerMockState.resolverFailure;
+    public async readInstalledExtensionDescriptor(npmName: string) {
+      const descriptor = await readJsonFile<unknown>(
+        nodePath.join(this.makaioHome, 'node_modules', ...npmName.split('/'), 'descriptor.json'),
+      );
+      if (descriptor === null) {
+        return null;
       }
-      for (const root of roots) {
-        packageManagerMockState.manifestDependencies.add(root);
-      }
-      return {
-        installed: roots.map((npmName) => ({ npmName, version: '1.0.0', source: 'new' as const })),
-        skipped: [],
-        warnings: [],
-      };
+      const result = safeParseExtensionDescriptor(descriptor);
+      return result.success ? result.data : null;
+    }
+
+    public async listInstalledExtensionDescriptors() {
+      const manifest = await readHomeManifest(this.makaioHome);
+      const entries = await Promise.all(
+        Object.keys(manifest.dependencies ?? {}).map(async (npmName) => {
+          const descriptor = await this.readInstalledExtensionDescriptor(npmName);
+          if (descriptor === null) return null;
+
+          const packageJson = await readJsonFile<PackageJson>(
+            nodePath.join(this.makaioHome, 'node_modules', ...npmName.split('/'), 'package.json'),
+          );
+          return { npmName, version: packageJson?.version ?? 'unknown', descriptor };
+        }),
+      );
+      return entries.filter((entry): entry is NonNullable<(typeof entries)[number]> => entry !== null);
     }
   }
 
-  class MockDescriptorNameResolver {
-    public async resolveNpmPackageName(descriptorName: string): Promise<string> {
-      return descriptorName;
+  class RecordingDependencyResolver extends actual.DependencyResolver {
+    public override async resolve(
+      roots: readonly string[],
+      options: Parameters<InstanceType<typeof actual.DependencyResolver>['resolve']>[1] = {},
+    ) {
+      packageManagerMockState.resolverCalls.push({ roots, force: options.force });
+      return super.resolve(roots, options);
+    }
+  }
+
+  class MockDescriptorNameResolver extends actual.DescriptorNameResolver {
+    public override async resolveNpmPackageName(descriptorName: string): Promise<string> {
+      if (descriptorName.startsWith('@')) {
+        return descriptorName;
+      }
+      return super.resolveNpmPackageName(descriptorName);
     }
   }
 
@@ -138,16 +260,48 @@ vi.mock('@makaio/services-package-manager', async (importOriginal) => {
     ...actual,
     YarnPackageManager: MockYarnPackageManager,
     LocalPathInstaller: MockLocalPathInstaller,
-    DependencyResolver: MockDependencyResolver,
+    DependencyResolver: RecordingDependencyResolver,
     DescriptorNameResolver: MockDescriptorNameResolver,
     RegistryService: MockRegistryService,
   };
 });
 
+function descriptor(
+  name: string,
+  version: string,
+  dependencies: ExtensionDescriptor['dependencies'] = [],
+): ExtensionDescriptor {
+  return {
+    name,
+    displayName: name,
+    version,
+    makaio: { framework: '>=0.1.0' },
+    entrypoints: { server: true },
+    ...(dependencies.length > 0 ? { dependencies } : {}),
+  };
+}
+
+async function writePublishedPackage(packageName: string, packageDescriptor: ExtensionDescriptor): Promise<void> {
+  const packageRoot = path.join(packageManagerMockState.fakeRegistryRoot, ...packageName.split('/'));
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(
+    path.join(packageRoot, 'package.json'),
+    `${JSON.stringify({ name: packageName, version: packageDescriptor.version }, null, 2)}\n`,
+    'utf-8',
+  );
+  await writeFile(
+    path.join(packageRoot, 'descriptor.json'),
+    `${JSON.stringify(packageDescriptor, null, 2)}\n`,
+    'utf-8',
+  );
+}
+
 describe('extension install CLI commands', () => {
   let program: InstanceType<typeof Command>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    packageManagerMockState.makaioHome = mkdtempSync(path.join(tmpdir(), 'makaio-cli-home-'));
+    packageManagerMockState.fakeRegistryRoot = mkdtempSync(path.join(tmpdir(), 'makaio-cli-registry-'));
     packageManagerMockState.packages = [];
     packageManagerMockState.latestVersions.clear();
     packageManagerMockState.manifestDependencies = new Set<string>();
@@ -160,14 +314,30 @@ describe('extension install CLI commands', () => {
     packageManagerMockState.localUninstallFailures = new Set<string>();
     packageManagerMockState.resolverFailure = null;
     packageManagerMockState.resolverCalls = [];
+    await writePublishedPackage(
+      '@makaio/adapter-claude-code-tmux',
+      descriptor('@makaio/adapter-claude-code-tmux', '1.0.0'),
+    );
+    await writePublishedPackage('@makaio/extension-prompt', descriptor('@makaio/extension-prompt', '1.0.0'));
+    await writePublishedPackage(
+      '@makaio/extension-parent',
+      descriptor('@makaio/extension-parent', '1.0.0', [
+        { type: 'extension', name: '@makaio/extension-child', version: '>=2.0.0' },
+      ]),
+    );
+    await writePublishedPackage('@makaio/extension-child', descriptor('@makaio/extension-child', '2.0.0'));
     process.exitCode = undefined;
     program = new Command();
     program.exitOverride();
     registerExtensionCommands(program);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all([
+      rm(packageManagerMockState.makaioHome, { recursive: true, force: true }),
+      rm(packageManagerMockState.fakeRegistryRoot, { recursive: true, force: true }),
+    ]);
   });
 
   it('should register extension install subcommand', () => {
@@ -269,6 +439,47 @@ describe('extension install CLI commands', () => {
     );
   });
 
+  it('prints direct root installs without writing transitive dependencies to the manifest sync result', async () => {
+    const repo = await makeTestRepo('makaio-extension-parent-sync-');
+    const manifestPath = await writeTestManifest(repo, { extensions: [] });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    await program.parseAsync(['node', 'test', 'extension', 'install', '@makaio/extension-parent']);
+
+    expect(packageManagerMockState.resolverCalls).toEqual([{ roots: ['@makaio/extension-parent'], force: undefined }]);
+    expect(infoSpy).toHaveBeenCalledWith('Installed @makaio/extension-parent@1.0.0');
+    expect(infoSpy).toHaveBeenCalledWith('Installed @makaio/extension-child@2.0.0');
+    expect(infoSpy).toHaveBeenCalledWith('Restart makaio to activate.');
+    expect(JSON.parse(await readFile(manifestPath, 'utf-8')).extensions).toEqual(['@makaio/extension-parent@1.0.0']);
+    cwdSpy.mockRestore();
+  });
+
+  it('returns only direct root specs in directNpm, excluding transitive dependencies', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const { installExtensionSources } = await import('../extension-install-transaction.js');
+    const result = await installExtensionSources(['@makaio/extension-parent']);
+
+    expect(result.directNpm).toEqual([
+      { packageName: '@makaio/extension-parent', version: '1.0.0', spec: '@makaio/extension-parent@1.0.0' },
+    ]);
+    expect(result.directNpm.map((r) => r.packageName)).not.toContain('@makaio/extension-child');
+    expect(result.changed).toBe(true);
+  });
+
+  it('syncs bare npm installs into the project manifest as resolved exact pins', async () => {
+    const repo = await makeTestRepo('makaio-extension-install-sync-');
+    const manifestPath = await writeTestManifest(repo, { extensions: [] });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    await program.parseAsync(['node', 'test', 'extension', 'install', '@makaio/extension-prompt']);
+
+    expect(JSON.parse(await readFile(manifestPath, 'utf-8')).extensions).toEqual(['@makaio/extension-prompt@1.0.0']);
+    cwdSpy.mockRestore();
+  });
+
   it('should register extension uninstall subcommand', () => {
     const ext = program.commands.find((c) => c.name() === 'extension');
     const uninstall = ext?.commands.find((c) => c.name() === 'uninstall');
@@ -311,5 +522,26 @@ describe('extension install CLI commands', () => {
 
     expect(infoSpy).toHaveBeenCalledWith('@acme/weather-tools@1.0.0 is up to date.');
     expect(packageManagerMockState.installedPackages).toEqual([]);
+  });
+
+  it('syncs existing project manifest pins after extension update', async () => {
+    const repo = await makeTestRepo('makaio-extension-update-sync-');
+    const manifestPath = await writeTestManifest(repo, {
+      extensions: ['@acme/weather-tools@1.0.0'],
+    });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    packageManagerMockState.packages = [
+      { name: '@acme/weather-tools', version: '1.0.0', hasDescriptor: true },
+      { name: '@acme/local-only', version: '1.0.0', hasDescriptor: true },
+    ];
+    packageManagerMockState.latestVersions.set('@acme/weather-tools', '1.1.0');
+    packageManagerMockState.latestVersions.set('@acme/local-only', '2.0.0');
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    await program.parseAsync(['node', 'test', 'extension', 'update']);
+
+    expect(JSON.parse(await readFile(manifestPath, 'utf-8')).extensions).toEqual(['@acme/weather-tools@1.1.0']);
+    expect(packageManagerMockState.installedPackages).toEqual(['@acme/weather-tools', '@acme/local-only']);
+    cwdSpy.mockRestore();
   });
 });

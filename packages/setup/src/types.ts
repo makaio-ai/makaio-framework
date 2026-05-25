@@ -1,7 +1,8 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { MismatchedProjectManifestExtension } from '@makaio/utils/project-manifest';
 
 /** Identifies a discrete step in the setup flow. */
-export type SetupStepId = 'consent' | 'detect' | 'install' | 'managed' | 'complete';
+export type SetupStepId = 'consent' | 'detect' | 'manifest' | 'install' | 'managed' | 'complete';
 
 /** Setup execution mode. V1 only exposes interactive. */
 export type SetupMode = 'interactive';
@@ -14,6 +15,11 @@ export interface SetupConfig {
   readonly makaioHome: string;
   /** Host-provided restart/reconnect capability used after extension installs. */
   readonly restartAndReconnect: SetupRestartAndReconnect;
+  /**
+   * Absolute path to the project repository root used for manifest discovery.
+   * When provided, the setup flow may show a manifest step listing project extensions.
+   */
+  readonly repoPath?: string;
 }
 
 /**
@@ -126,6 +132,15 @@ export interface SetupState {
   readonly restartRequested: boolean;
   /** Managed binary states (populated after restart). */
   readonly managedBinaryStates: readonly ManagedBinaryState[];
+  /** Extension specs declared in the project manifest (e.g. `@scope/pkg@1.0.0`). */
+  readonly manifestExtensionSpecs: readonly string[];
+  /** Manifest specs that conflict with the currently installed singleton version. */
+  readonly manifestExtensionMismatches: readonly MismatchedProjectManifestExtension[];
+  /**
+   * Subset of {@link manifestExtensionSpecs} the user has opted in to install.
+   * All specs are selected by default when the manifest step is entered.
+   */
+  readonly selectedManifestExtensionSpecs: readonly string[];
   /** Final setup result. */
   readonly result: SetupResult | null;
   /** Error state. */
@@ -144,6 +159,18 @@ export interface SetupActions {
   setClientSelected(clientId: string, selected: boolean): void;
   /** Install selected clients, restart kernel, and activate managed binaries. */
   installSelectedClients(): Promise<void>;
+  /**
+   * Set selection state for a project-manifest extension spec.
+   * @param spec - The extension spec string (e.g. `@scope/pkg@1.0.0`).
+   * @param selected - Whether the spec should be selected for installation.
+   */
+  setManifestExtensionSelected(spec: string, selected: boolean): void;
+  /**
+   * Install both the selected manifest extension specs and any selected
+   * client packages in a single pass, then restart the kernel and activate
+   * managed binaries.
+   */
+  installSelectedManifestAndClients(): Promise<void>;
 }
 
 /** Setup controller interface. */

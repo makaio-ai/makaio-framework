@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createMockBus, type MockBusResult } from '@makaio/test-utils';
@@ -85,6 +85,9 @@ async function createSetupController(
  */
 function setupFullInstallResponses(mockBus: MockBusResult, packageName: string): void {
   mockBus.request.mockImplementation((subject: unknown) => {
+    if (subject === PackageSubjects.list) {
+      return Promise.resolve({ packages: [] });
+    }
     if (subject === PackageSubjects.install) {
       return Promise.resolve({
         success: true,
@@ -159,6 +162,8 @@ describe('createSetupController — initial state', () => {
       acceptConsent: expect.any(Function),
       setClientSelected: expect.any(Function),
       installSelectedClients: expect.any(Function),
+      setManifestExtensionSelected: expect.any(Function),
+      installSelectedManifestAndClients: expect.any(Function),
     });
   });
 });
@@ -863,5 +868,338 @@ describe('onChange()', () => {
     });
 
     await controller.advance();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Manifest step
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates a temporary directory structure suitable for manifest discovery:
+ * a `.git` directory (so the walker stops) and a `.makaio/manifest.json`
+ * containing the given extension specs.
+ * @param repoRoot - Root of the temporary repository.
+ * @param extensions - Extension spec strings to write into the manifest.
+ */
+async function makeRepoWithManifest(repoRoot: string, extensions: string[]): Promise<void> {
+  await mkdir(join(repoRoot, '.git'), { recursive: true });
+  await mkdir(join(repoRoot, '.makaio'), { recursive: true });
+  await writeFile(
+    join(repoRoot, '.makaio', 'manifest.json'),
+    JSON.stringify({ $schema: 'makaio/project-manifest/v1', extensions }),
+    'utf-8',
+  );
+}
+
+/**
+ * Creates a temporary repository with a malformed project manifest.
+ * @param repoRoot - Root of the temporary repository.
+ */
+async function makeRepoWithMalformedManifest(repoRoot: string): Promise<void> {
+  await mkdir(join(repoRoot, '.git'), { recursive: true });
+  await mkdir(join(repoRoot, '.makaio'), { recursive: true });
+  await writeFile(join(repoRoot, '.makaio', 'manifest.json'), '{ malformed json', 'utf-8');
+}
+
+describe('manifest step', () => {
+  let mockBus: MockBusResult;
+  let dir: string;
+  let repoDir: string;
+
+  beforeEach(async () => {
+    mockBus = createMockBus();
+    mockBus.request.mockImplementation((subject: unknown) => {
+      if (subject === PackageSubjects.list) {
+        return Promise.resolve({ packages: [] });
+      }
+      return Promise.resolve({});
+    });
+    dir = await makeTempDir();
+    // repoDir is a separate temp directory acting as the project repo root.
+    repoDir = await mkdtemp(join(tmpdir(), 'makaio-setup-repo-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(repoDir, { recursive: true, force: true });
+  });
+
+  it('transitions to manifest step after consent when manifest has extensions', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    await controller.actions.acceptConsent();
+
+    expect(controller.state.step).toBe('detect');
+    expect(controller.state.manifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+    expect(controller.state.selectedManifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+  });
+
+  it('advance() from detect routes to manifest when extensions are present', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    expect(controller.state.step).toBe('detect');
+    await controller.advance();
+
+    expect(controller.state.step).toBe('manifest');
+  });
+
+  it('advance() from detect skips manifest when no extensions are present', async () => {
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+    });
+
+    expect(controller.state.step).toBe('detect');
+    setupFullInstallResponses(mockBus, '@makaio/client-claude-code');
+    await controller.advance();
+
+    expect(controller.state.step).not.toBe('manifest');
+  });
+
+  it('starts at detect with manifest specs pre-loaded when consent already accepted', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    expect(controller.state.step).toBe('detect');
+    expect(controller.state.manifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+    expect(controller.state.selectedManifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+  });
+
+  it('starts setup with an empty manifest state when the project manifest is malformed', async () => {
+    await makeRepoWithMalformedManifest(repoDir);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const controller = await createSetupController({
+        bus: mockBus.bus,
+        makaioHome: dir,
+        repoPath: repoDir,
+      });
+
+      expect(controller.state.step).toBe('detect');
+      expect(controller.state.manifestExtensionSpecs).toEqual([]);
+      expect(controller.state.selectedManifestExtensionSpecs).toEqual([]);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Project manifest ignored:'), expect.any(String));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not enter manifest step when all manifest extensions are already installed', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+    mockBus.request.mockImplementation((subject: unknown) => {
+      if (subject === PackageSubjects.list) {
+        return Promise.resolve({
+          packages: [{ name: '@makaio/extension-workflow', version: '0.1.0', hasDescriptor: true }],
+        });
+      }
+      if (subject === PackageSubjects.install) {
+        return Promise.resolve({ success: true, packageName: 'test-package', restartRequired: false });
+      }
+      if (subject === ClientSubjects.scan || subject === ClientSubjects.list) {
+        return Promise.resolve(subject === ClientSubjects.list ? { clients: [] } : { results: [] });
+      }
+      return Promise.resolve({});
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    expect(controller.state.manifestExtensionSpecs).toEqual([]);
+    await controller.advance();
+    expect(controller.state.step).toBe('complete');
+  });
+
+  it('records manifest version mismatches for the TUI', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+    mockBus.request.mockImplementation((subject: unknown) => {
+      if (subject === PackageSubjects.list) {
+        return Promise.resolve({
+          packages: [{ name: '@makaio/extension-workflow', version: '0.2.0', hasDescriptor: true }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    expect(controller.state.manifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+    expect(controller.state.manifestExtensionMismatches).toEqual([
+      {
+        manifest: {
+          packageName: '@makaio/extension-workflow',
+          version: '0.1.0',
+          spec: '@makaio/extension-workflow@0.1.0',
+        },
+        installedVersion: '0.2.0',
+      },
+    ]);
+  });
+
+  it('setManifestExtensionSelected toggles a spec out of selectedManifestExtensionSpecs', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    // Transition to manifest step
+    await controller.advance();
+    expect(controller.state.step).toBe('manifest');
+
+    controller.actions.setManifestExtensionSelected('@makaio/extension-workflow@0.1.0', false);
+    expect(controller.state.selectedManifestExtensionSpecs).toHaveLength(0);
+
+    controller.actions.setManifestExtensionSelected('@makaio/extension-workflow@0.1.0', true);
+    expect(controller.state.selectedManifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+  });
+
+  it('setManifestExtensionSelected is a no-op outside the manifest step', async () => {
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+    });
+
+    expect(controller.state.step).toBe('consent');
+    const stateBefore = controller.state;
+    controller.actions.setManifestExtensionSelected('@makaio/extension-workflow@0.1.0', false);
+
+    expect(controller.state).toBe(stateBefore);
+  });
+
+  it('setManifestExtensionSelected rejects specs outside the manifest list', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/extension-workflow@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    await controller.advance();
+    expect(controller.state.step).toBe('manifest');
+    const stateBefore = controller.state;
+
+    controller.actions.setManifestExtensionSelected('@makaio/extension-unknown@9.9.9', true);
+
+    expect(controller.state).toBe(stateBefore);
+    expect(controller.state.selectedManifestExtensionSpecs).toEqual(['@makaio/extension-workflow@0.1.0']);
+  });
+
+  it('installs selected manifest pins and lets manifest pins override duplicate client packages', async () => {
+    await makeRepoWithManifest(repoDir, ['@makaio/client-codex@0.1.0']);
+    const hash = await getRealTermsHash();
+    await writeConsentRecord(dir, {
+      acceptedAt: new Date().toISOString(),
+      documentHash: hash,
+      documentVersion: '2026-05-17',
+    });
+    const installedPackages: string[] = [];
+    mockBus.request.mockImplementation((subject: unknown, payload?: unknown) => {
+      if (subject === PackageSubjects.list) {
+        return Promise.resolve({ packages: [] });
+      }
+      if (subject === PackageSubjects.install) {
+        const names = (payload as { packageNames?: string[] }).packageNames ?? [];
+        installedPackages.push(...names);
+        return Promise.resolve({
+          success: true,
+          packageName: names[0] ?? '',
+          restartRequired: false,
+        });
+      }
+      if (subject === ClientSubjects.scan || subject === ClientSubjects.list) {
+        return Promise.resolve(subject === ClientSubjects.list ? { clients: [] } : { results: [] });
+      }
+      return Promise.resolve({});
+    });
+
+    const controller = await createSetupController({
+      bus: mockBus.bus,
+      makaioHome: dir,
+      repoPath: repoDir,
+    });
+
+    controller.actions.setClientSelected('codex', true);
+    await controller.advance();
+    await controller.advance();
+
+    expect(installedPackages).toContain('@makaio/client-codex@0.1.0');
+    expect(installedPackages).not.toContain('@makaio/client-codex');
   });
 });

@@ -18,6 +18,7 @@ import React from 'react';
 import { render, cleanup } from 'ink-testing-library';
 import { ConsentStep } from './consent-step.js';
 import { DetectStep } from './detect-step.js';
+import { ManifestStep } from './manifest-step.js';
 // Importing test-helpers also installs the EventEmitter ref/unref shim for
 // ink v6 / ink-testing-library v3 compatibility.
 import { makeState, makeClient } from './test-helpers.js';
@@ -190,6 +191,104 @@ describe('DetectStep', () => {
     );
     const output = lastFrame() ?? '';
     expect(output).toContain('1 client(s) selected');
+  });
+});
+
+describe('ManifestStep', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('renders the heading and navigation help', () => {
+    const state = makeState({
+      step: 'manifest',
+      manifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+      selectedManifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+    });
+
+    const { lastFrame } = render(
+      React.createElement(ManifestStep, {
+        state,
+        onSelectionChange: () => undefined,
+        onInstall: () => undefined,
+      }),
+    );
+
+    const output = lastFrame() ?? '';
+    expect(output).toContain('Project Extensions');
+    expect(output).toContain('Press number to toggle');
+    expect(output).toContain('Enter to install');
+  });
+
+  it('renders multiple specs and marks selected versus unselected entries', () => {
+    const state = makeState({
+      step: 'manifest',
+      manifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0', '@makaio/extension-tasks@0.2.0'],
+      selectedManifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+    });
+
+    const { lastFrame } = render(
+      React.createElement(ManifestStep, {
+        state,
+        onSelectionChange: () => undefined,
+        onInstall: () => undefined,
+      }),
+    );
+
+    const output = lastFrame() ?? '';
+    expect(output).toContain('x 1. @makaio/extension-workflow@0.1.0');
+    expect(output).toContain('  2. @makaio/extension-tasks@0.2.0');
+  });
+
+  it('does not render mismatch text when manifest specs have no mismatches', () => {
+    const state = makeState({
+      step: 'manifest',
+      manifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+      selectedManifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+      manifestExtensionMismatches: [],
+    });
+
+    const { lastFrame } = render(
+      React.createElement(ManifestStep, {
+        state,
+        onSelectionChange: () => undefined,
+        onInstall: () => undefined,
+      }),
+    );
+
+    const output = lastFrame() ?? '';
+    expect(output).not.toContain('installed');
+    expect(output).not.toContain('project requires');
+  });
+
+  it('renders manifest version mismatches', () => {
+    const state = makeState({
+      step: 'manifest',
+      manifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+      selectedManifestExtensionSpecs: ['@makaio/extension-workflow@0.1.0'],
+      manifestExtensionMismatches: [
+        {
+          manifest: {
+            packageName: '@makaio/extension-workflow',
+            version: '0.1.0',
+            spec: '@makaio/extension-workflow@0.1.0',
+          },
+          installedVersion: '0.2.0',
+        },
+      ],
+    });
+
+    const { lastFrame } = render(
+      React.createElement(ManifestStep, {
+        state,
+        onSelectionChange: () => undefined,
+        onInstall: () => undefined,
+      }),
+    );
+
+    const output = lastFrame() ?? '';
+    expect(output).toContain('@makaio/extension-workflow@0.1.0');
+    expect(output).toContain('installed 0.2.0, project requires 0.1.0');
   });
 });
 

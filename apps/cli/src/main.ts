@@ -37,6 +37,7 @@ import { resolveCliRuntimeConfig } from './runtime-config.js';
 import { registerOpenCommand } from './open-command.js';
 import { registerAutoLaunchCommand } from './auto-launch-command.js';
 import { registerSetupCommand } from './setup-command.js';
+import { registerInstallCommand } from './install-command.js';
 import { handleParseError, applyFallbackOverrides, type FallbackReason } from './parse-error.js';
 
 export { extractRootConfigArg } from './runtime-config.js';
@@ -101,6 +102,7 @@ export function isDiscoveryFreeBuiltin(argv: readonly string[]): boolean {
     subcommand === 'extension' ||
     subcommand === 'open' ||
     subcommand === 'auto-launch' ||
+    subcommand === 'install' ||
     argv.includes('--version') ||
     argv.includes('-V')
   );
@@ -136,6 +138,7 @@ export function createProgram(serveConfig?: ServeConfig): CommandInstance {
 
   registerOpenCommand(program);
   registerAutoLaunchCommand(program);
+  registerInstallCommand(program, { makaioHome: resolveMakaioHome() });
 
   // Built-in: serve command (starts the headless server)
   program
