@@ -10,6 +10,14 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { PackageSubjects } from '@makaio/services-package-manager';
 import type { InstallProgress } from '../types.js';
 
+/** Installed extension version as returned by the package manager service. */
+export interface InstalledExtensionPackage {
+  /** npm or local extension package name. */
+  readonly name: string;
+  /** Installed extension version. */
+  readonly version: string;
+}
+
 /**
  * Installs extension packages sequentially via the package manager bus subject.
  *
@@ -50,4 +58,14 @@ export async function installExtensionPackages(
   }
 
   return results;
+}
+
+/**
+ * Lists installed extensions through the package-manager service.
+ * @param bus - The bus instance.
+ * @returns Installed package names and versions.
+ */
+export async function listInstalledExtensionPackages(bus: IMakaioBus): Promise<readonly InstalledExtensionPackage[]> {
+  const response = await bus.request(PackageSubjects.list, {});
+  return response.packages.map((pkg) => ({ name: pkg.name, version: pkg.version }));
 }

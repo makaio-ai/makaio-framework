@@ -375,6 +375,10 @@
       "types": "./dist/utils/health-probe.d.mts",
       "default": "./dist/utils/health-probe.mjs"
     },
+    "./utils/project-manifest": {
+      "types": "./dist/utils/project-manifest.d.mts",
+      "default": "./dist/utils/project-manifest.mjs"
+    },
     "./utils/workspace-packages": {
       "types": "./dist/utils/workspace-packages.d.mts",
       "default": "./dist/utils/workspace-packages.mjs"

@@ -53,6 +53,6 @@ export function registerSetupCommand(program: CommandInstance, ctx: SetupCommand
 
       // Lazy-load TUI to keep Ink/React out of CLI startup
       const { runSetupTui } = await import('./setup-tui/app.js');
-      await runSetupTui({ bus: ctx.bus, makaioHome: ctx.makaioHome });
+      await runSetupTui({ bus: ctx.bus, makaioHome: ctx.makaioHome, repoPath: process.cwd() });
     });
 }

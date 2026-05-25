@@ -126,6 +126,10 @@ describe('isDiscoveryFreeBuiltin', () => {
     expect(isDiscoveryFreeBuiltin(['node', 'makaio', 'auto-launch', 'status'])).toBe(true);
   });
 
+  it('skips discovery for the install command', () => {
+    expect(isDiscoveryFreeBuiltin(['node', 'makaio', 'install'])).toBe(true);
+  });
+
   it('does not skip discovery for global help', () => {
     expect(isDiscoveryFreeBuiltin(['node', 'makaio', '--help'])).toBe(false);
     expect(isDiscoveryFreeBuiltin(['node', 'makaio', '-h'])).toBe(false);
