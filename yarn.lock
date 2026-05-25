@@ -5301,6 +5301,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/public-api@workspace:apps/public-api":
+  version: 0.0.0-use.local
+  resolution: "@makaio/public-api@workspace:apps/public-api"
+  dependencies:
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    hono: "npm:^4.12.18"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/reviewer-copilot@workspace:extensions/reviewer-copilot":
   version: 0.0.0-use.local
   resolution: "@makaio/reviewer-copilot@workspace:extensions/reviewer-copilot"

@@ -1,0 +1,16 @@
+{
+  "name": "@makaio/public-api",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "main": "src/app.ts",
+  "exports": {
+    ".": "./src/app.ts",
+    "./extension": "./src/extension.ts"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "hono": "^4.12.18"
+  }
+}
