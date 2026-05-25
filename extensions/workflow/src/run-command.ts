@@ -9,9 +9,9 @@
  * 2. In dry-run mode: validate local CLI inputs and exit without dispatching.
  * 3. Optionally subscribe to workflow lifecycle events when `--verbose` is set.
  * 4. Dispatch `workflow.runFile` to start the execution.
- * 5. When not in await-trigger mode: wait for `execution.completed` or
- *    `execution.failed` and report the outcome.
- * 6. Clean up subscriptions in the `finally` block.
+ * 5. Wait for `execution.completed` or `execution.failed` and report the outcome.
+ * 6. In `--watch` mode with await-trigger: loop back to step 4.
+ * 7. Clean up subscriptions in the `finally` block.
  */
 import { z } from 'zod';
 import type { WildcardContext } from '@makaio/core';
@@ -50,6 +50,9 @@ export const WorkflowRunArgsSchema = z.object({
   }),
   verbose: z.boolean().optional().meta({
     description: 'Stream lifecycle events to stderr',
+  }),
+  watch: z.boolean().optional().meta({
+    description: 'Keep running after completion, re-await triggers',
   }),
 });
 
@@ -373,28 +376,68 @@ export async function handleWorkflowRun(ctx: CommandContext<WorkflowRunArgs>): P
 
   const bus = requireBus(ctx);
 
-  // Register the completion listener BEFORE any async work so it is guaranteed
-  // to be in place if the bus handler emits execution.completed synchronously.
-  // The listener is cancelled below if we end up in await-trigger mode.
+  // Register the completion listener BEFORE any async work (resolvePayload)
+  // so it is guaranteed to be in place if the bus handler emits
+  // execution.completed synchronously during the runFile request.
   const waiter = createCompletionWaiter(bus, signal, args.timeout);
+
+  let resolvedPayload: ResolvedPayload;
+  try {
+    resolvedPayload = await resolvePayload(args.payload);
+  } catch (err) {
+    waiter.cleanup();
+    writeInvalidPayloadError(ctx, err);
+    return;
+  }
+
+  const isAwaitTrigger = resolvedPayload.mode === 'await-trigger';
+  const isWatch = args.watch === true && isAwaitTrigger;
+
+  if (isAwaitTrigger) {
+    ctx.output.write(`Awaiting trigger for workflow: ${args.file}\n`);
+    if (isWatch) {
+      ctx.output.write('(Watch mode — re-awaits after each execution. Press Ctrl-C to stop)\n');
+    } else {
+      ctx.output.write('(Press Ctrl-C to cancel)\n');
+    }
+  }
+
+  if (args.watch === true && !isAwaitTrigger) {
+    ctx.output.error('Warning: --watch is ignored when a payload is provided.\n');
+  }
+
+  // First iteration uses the pre-registered waiter; watch iterations create fresh ones.
+  let currentWaiter = waiter;
+  do {
+    const failed = await runOnce(ctx, bus, resolvedPayload, isAwaitTrigger, currentWaiter);
+    if (failed) return;
+    if (isWatch && !signal.aborted) {
+      currentWaiter = createCompletionWaiter(bus, signal, args.timeout);
+    }
+  } while (isWatch && !signal.aborted);
+}
+
+/**
+ * Execute one workflow run cycle: dispatch, wait for completion, report.
+ * @param ctx - CLI command context.
+ * @param bus - Connected bus instance.
+ * @param resolvedPayload - Resolved trigger payload and mode.
+ * @param isAwaitTrigger - Whether the execution awaits a bus trigger.
+ * @param waiter - Pre-registered completion waiter.
+ * @returns `true` when the run failed and the caller should stop.
+ */
+async function runOnce(
+  ctx: CommandContext<WorkflowRunArgs>,
+  bus: ReturnType<typeof requireBus>,
+  resolvedPayload: ResolvedPayload,
+  isAwaitTrigger: boolean,
+  waiter: CompletionWaiter,
+): Promise<boolean> {
+  const { args } = ctx;
+
   const cleanups: Array<() => void> = [waiter.cleanup];
 
   try {
-    let resolvedPayload: ResolvedPayload;
-    try {
-      resolvedPayload = await resolvePayload(args.payload);
-    } catch (err) {
-      writeInvalidPayloadError(ctx, err);
-      return;
-    }
-
-    const isAwaitTrigger = resolvedPayload.mode === 'await-trigger';
-
-    if (isAwaitTrigger) {
-      ctx.output.write(`Awaiting trigger for workflow: ${args.file}\n`);
-      ctx.output.write('(Press Ctrl-C to cancel)\n');
-    }
-
     const { executionId } = await bus.request(WorkflowSubjects.runFile, {
       filePath: args.file,
       ...(resolvedPayload.triggerPayload !== undefined && { triggerPayload: resolvedPayload.triggerPayload }),
@@ -410,19 +453,19 @@ export async function handleWorkflowRun(ctx: CommandContext<WorkflowRunArgs>): P
       ctx.output.write(`Running workflow: ${args.file} (executionId: ${executionId})\n`);
     }
 
-    // Activate the pre-registered completion waiter with the known executionId.
     waiter.setExecutionId(executionId);
     const completion = await waiter.promise;
 
     ctx.output.write(`Workflow completed in ${completion.totalDuration}ms (executionId: ${completion.executionId})\n`);
+    return false;
   } catch (err) {
-    // Check if the execution failed event arrived before completion.
     if (isWorkflowFailedError(err)) {
       ctx.output.error(`Error: workflow execution failed — ${(err as WorkflowExecutionFailedError).failureReason}\n`);
       ctx.setExitCode(EXIT_FAILURE);
-      return;
+      return true;
     }
     handleCommandError(err, args.timeout, ctx);
+    return true;
   } finally {
     for (const cleanup of cleanups) {
       cleanup();
