@@ -16,7 +16,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "@types/picomatch": "^3.0.2",
-    "tsx": "^4.20.5"
+    "tsx": "^4.22.3"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
