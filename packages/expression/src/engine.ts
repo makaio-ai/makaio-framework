@@ -4,9 +4,8 @@ import type { ExpressionContext } from './types.js';
 /**
  * Result of compiling a jexl expression for repeated evaluation.
  *
- * Context is `object` rather than `ExpressionContext` because
- * compiled expressions are used in both workflow execution (ExpressionContext)
- * and trigger filter evaluation (payload-only context) — different shapes.
+ * Context is an {@link ExpressionContext} because compiled expressions are used
+ * by multiple domains with different variable maps.
  */
 export interface CompiledExpression {
   /**
@@ -14,13 +13,13 @@ export interface CompiledExpression {
    * @param context - variable map passed to the expression
    * @returns evaluated result
    */
-  evalSync(context: object): unknown;
+  evalSync(context: ExpressionContext): unknown;
   /**
    * Evaluate the compiled expression asynchronously.
    * @param context - variable map passed to the expression
    * @returns evaluated result
    */
-  eval(context: object): Promise<unknown>;
+  eval(context: ExpressionContext): Promise<unknown>;
 }
 
 /**
@@ -53,7 +52,7 @@ export function evaluate(expr: string, context: ExpressionContext): Promise<unkn
 export function compile(expr: string): CompiledExpression {
   const compiled = jexl.compile(expr);
   return {
-    evalSync: (context: object) => compiled.evalSync(context),
-    eval: (context: object) => compiled.eval(context),
+    evalSync: (context: ExpressionContext) => compiled.evalSync(context),
+    eval: (context: ExpressionContext) => compiled.eval(context),
   };
 }

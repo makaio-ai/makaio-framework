@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { expandForEachSteps } from '../for-each-expander.js';
 import type { WorkflowStep, ForEachWorkflowStep } from '@makaio/contracts';
-import type { ExpressionContext } from '@makaio/expression';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 
 /** Minimal expression context for tests that don't need step results. */
-const baseContext: ExpressionContext = {
+const baseContext: WorkflowExpressionContext = {
   trigger: {},
   steps: {},
   inputs: {},
@@ -15,7 +15,7 @@ const baseContext: ExpressionContext = {
  * @param name - The trigger field name
  * @param value - The value to assign to that field
  */
-function contextWithVar(name: string, value: unknown): ExpressionContext {
+function contextWithVar(name: string, value: unknown): WorkflowExpressionContext {
   return { ...baseContext, trigger: { [name]: value } };
 }
 

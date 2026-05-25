@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { WorkflowExecution, WorkflowStep } from '@makaio/contracts';
-import type { ExpressionContext } from '@makaio/expression';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 import type { ActiveExecution, SchedulerNode } from './types.js';
 import { persistStepStates } from './workflow-execution-persistence.js';
 
@@ -19,13 +19,16 @@ export function isTerminalSatisfied(status: string): boolean {
  * @param steps - Base expression step map keyed by runtime step ID.
  * @returns Aliases keyed by authored sibling step ID.
  */
-export function buildLocalStepAliases(nodeId: string, steps: ExpressionContext['steps']): ExpressionContext['steps'] {
+export function buildLocalStepAliases(
+  nodeId: string,
+  steps: WorkflowExpressionContext['steps'],
+): WorkflowExpressionContext['steps'] {
   const lastDot = nodeId.lastIndexOf('.');
   if (lastDot === -1) return {};
 
   const namespace = nodeId.slice(0, lastDot);
   const prefix = `${namespace}.`;
-  const aliases: ExpressionContext['steps'] = {};
+  const aliases: WorkflowExpressionContext['steps'] = {};
 
   for (const [stepId, stepValue] of Object.entries(steps)) {
     if (!stepId.startsWith(prefix)) continue;

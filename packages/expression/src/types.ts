@@ -1,10 +1,13 @@
 import type { CompositeStepState, JsonValue, StepStatus } from '@makaio/contracts';
 
+/** Generic variable map exposed to jexl expression evaluation and template interpolation. */
+export type ExpressionContext = Record<string, unknown>;
+
 /** Step statuses exposed to workflow expressions. */
 export type ExpressionStepStatus = StepStatus | CompositeStepState['status'];
 
-/** Evaluation context for jexl expressions and \{\{ \}\} template interpolation. */
-export interface ExpressionContext {
+/** Workflow evaluation context for jexl expressions and \{\{ \}\} template interpolation. */
+export interface WorkflowExpressionContext extends ExpressionContext {
   /** Trigger payload that started the workflow. */
   trigger: Record<string, unknown>;
   /**

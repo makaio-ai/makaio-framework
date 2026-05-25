@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve as resolvePath, isAbsolute, relative as relativePath } from 'node:path';
-import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { resolveTemplate, type WorkflowExpressionContext } from '@makaio/expression';
 
 /**
  * Generate a unique ID with a given prefix.
@@ -33,7 +33,7 @@ export function sleep(ms: number): Promise<void> {
 export function resolveShellCwd(
   cwdTemplate: string | undefined,
   workspaceRoot: string,
-  expressionContext: ExpressionContext,
+  expressionContext: WorkflowExpressionContext,
 ): string | null {
   const rawCwd = cwdTemplate ? resolveTemplate(cwdTemplate, expressionContext) : workspaceRoot;
   const resolvedRootPath = resolvePath(workspaceRoot);
@@ -186,7 +186,7 @@ export interface RunShellStepOptions {
   /** Absolute workspace root used as the shell containment boundary. */
   workspaceRoot: string;
   /** Context for template interpolation. */
-  expressionContext: ExpressionContext;
+  expressionContext: WorkflowExpressionContext;
   /**
    * Optional abort signal. Forwarded to the spawned process to support
    * workflow-level cancellation.

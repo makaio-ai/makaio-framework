@@ -315,6 +315,7 @@ Read [`.agents/policies/extensions.md`](../.agents/policies/extensions.md),
 | `extensions/reviewer-copilot`       | `@makaio/reviewer-copilot`                 | Copilot reviewer extension.                     |
 | `extensions/shell`                  | `@makaio/extension-shell`                  | Shell execution tool extension.                 |
 | `extensions/subagent`               | `@makaio/extension-subagent`               | Subagent communication tool and state manager.  |
+| `extensions/workflow`               | `@makaio/extension-workflow`               | Workflow CLI extension.                         |
 
 ### `ui/`
 

@@ -1,3 +1,4 @@
+import type { WorkflowExpressionContext } from '@makaio/expression';
 import type { ActiveExecution, WorkflowSchedulerDeps } from './types.js';
 import { executeGateStep } from './workflow-step-executors.js';
 import { applyStepRunResult, prepareRunnerManagedStep, type StepExecutionOutcome } from './workflow-step-result.js';
@@ -44,7 +45,7 @@ export async function runGateInlineStep(
   executionId: string,
   active: ActiveExecution,
   nodeId: string,
-  resolvedInputs: Record<string, unknown>,
+  resolvedInputs: WorkflowExpressionContext,
 ): Promise<StepExecutionOutcome> {
   if (deps.runGateStep) {
     const runGateStep = deps.runGateStep;
@@ -85,7 +86,7 @@ export async function runFunctionInlineStep(
   executionId: string,
   active: ActiveExecution,
   nodeId: string,
-  resolvedInputs: Record<string, unknown>,
+  resolvedInputs: WorkflowExpressionContext,
 ): Promise<StepExecutionOutcome> {
   if (!deps.runFunctionStep) {
     return {

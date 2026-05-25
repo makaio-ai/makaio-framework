@@ -16,3 +16,4 @@ export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
 export { runShellStep } from './executor-helpers.js';
+export { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-expression-context.js';
