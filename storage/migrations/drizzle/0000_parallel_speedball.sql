@@ -302,8 +302,7 @@ CREATE TABLE `workflow_executions` (
 	`trigger_payload` text,
 	`scope_type` text NOT NULL,
 	`scope_kind` text DEFAULT '' NOT NULL,
-	`scope_id` text DEFAULT '' NOT NULL,
-	FOREIGN KEY (`workflow_id`) REFERENCES `workflow_definitions`(`id`) ON UPDATE no action ON DELETE cascade
+	`scope_id` text DEFAULT '' NOT NULL
 );
 --> statement-breakpoint
 CREATE INDEX `idx_workflow_executions_status` ON `workflow_executions` (`status`);--> statement-breakpoint

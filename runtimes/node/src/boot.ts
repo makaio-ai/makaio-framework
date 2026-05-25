@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- composition root that aggregates all framework services */
 /**
  * Makaio runtime boot sequence.
  *
@@ -88,7 +89,7 @@ import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
-import { createNodeWorkflowStepRunnerPackageOptions } from './workflow-step-runner/index.js';
+import { createNodeWorkflowRunnerPackageOptions } from './workflow-step-runner/index.js';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -110,7 +111,7 @@ export type {
   MakaioRuntime,
   ServerTransportProvider,
   TransportReadyInfo,
-  WorkflowStepRunnerBootOptions,
+  WorkflowRunnerBootOptions,
 } from './boot-types.js';
 
 /**
@@ -391,18 +392,19 @@ export async function bootMakaioRuntimeCore(
       );
     }
 
-    const platformDefaults = { cwd: os.tmpdir() };
-    const workflowStepRunnerPackageOptions = createNodeWorkflowStepRunnerPackageOptions({
+    const platformDefaults = { cwd: process.cwd() };
+    const workflowRunnerPackageOptions = createNodeWorkflowRunnerPackageOptions({
       busUrl,
       runtimeModuleDir: srcDir,
       platformDefaults,
-      runner: options.workflowStepRunner,
+      workflowRunner: options.workflowRunner,
+      makaioHome,
     });
 
     frameworkPackages.push(
       createAdapterSubsystemPackage({ configRepository: adapterConfigRepository, coordinator, platformDefaults }),
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
-      createWorkflowEnginePackage(workflowStepRunnerPackageOptions),
+      createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
     );

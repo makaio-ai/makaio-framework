@@ -1,4 +1,4 @@
-import type { CompositeStepState, StepStatus } from '@makaio/contracts';
+import type { CompositeStepState, JsonValue, StepStatus } from '@makaio/contracts';
 
 /** Step statuses exposed to workflow expressions. */
 export type ExpressionStepStatus = StepStatus | CompositeStepState['status'];
@@ -10,9 +10,10 @@ export interface ExpressionContext {
   /**
    * All steps that have started (running/completed/failed/skipped).
    * Pending steps are excluded.
-   * `result` is undefined for non-completed steps.
+   * `result` is undefined for non-completed steps. For completed steps,
+   * it holds the JSON-serializable value produced by the step.
    */
-  steps: Record<string, { result?: string; status: ExpressionStepStatus }>;
+  steps: Record<string, { result?: JsonValue; status: ExpressionStepStatus }>;
   /** Workflow input values. */
   inputs: Record<string, unknown>;
   /** Current item in a for-each iteration. Only present inside for-each scope. */

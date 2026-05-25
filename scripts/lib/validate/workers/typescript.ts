@@ -2,8 +2,8 @@
 /**
  * TypeScript validation worker process.
  *
- * Runs in isolated process with its own V8 heap (6 GB default).
- * This is the most memory-intensive validator due to loading the full type graph.
+ * Runs in an isolated Node process that parses tsconfig metadata and delegates
+ * semantic graph checking to the native tsgo subprocess.
  * Receives input via stdin, outputs results via stdout.
  * @packageDocumentation
  */
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
     let result: { filesChecked: string[] };
 
     if (tsConfig.overrideTsConfig) {
-      result = await validateTypeScriptWithConfig(input.files, tsConfig.overrideTsConfig, ctx);
+      result = await validateTypeScriptWithConfig(input.files, tsConfig.overrideTsConfig, ctx, input.options.verbose);
     } else {
       result = await validateTypeScriptByDiscovery(input.files, ctx, undefined, input.options.verbose);
     }

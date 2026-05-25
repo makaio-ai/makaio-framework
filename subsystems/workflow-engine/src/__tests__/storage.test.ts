@@ -267,6 +267,38 @@ describe('workflow storage handlers', () => {
     expect(fetched?.steps.implement?.status).toBe('pending');
   });
 
+  it('persists and retrieves an object step result without stringification', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-object-result' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({
+      id: 'execution-object-result',
+      workflowId: workflow.id,
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, {
+      executionId: execution.id,
+      stepUpdates: {
+        plan: {
+          kind: 'executable',
+          status: 'completed',
+          result: { copied: ['.env', '.gitignore'], count: 2 },
+          startedAt: 100,
+          completedAt: 200,
+        },
+      },
+    });
+
+    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: execution.id,
+    });
+    expect(fetched?.steps.plan).toMatchObject({
+      kind: 'executable',
+      status: 'completed',
+      result: { copied: ['.env', '.gitignore'], count: 2 },
+    });
+  });
+
   it('normalizes legacy persisted executable step states without a kind discriminant', async () => {
     const workflow = createWorkflowDefinition({ id: 'workflow-legacy-step-kind' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });

@@ -1,13 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import {
-  SessionSubjects,
-  SubagentSubjects,
-  SpawnSubagentRpcRequestSchema,
-  type IStepRunner,
-  type StepRunConfig,
-  type StepRunResult,
-} from '@makaio/contracts';
+import { SessionSubjects, SubagentSubjects, SpawnSubagentRpcRequestSchema } from '@makaio/contracts';
 import { z } from 'zod';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -361,69 +354,6 @@ describe('WorkflowExecutor', () => {
     await expect(MakaioBus.request(WorkflowSubjects.listTriggerTypes, {})).rejects.toThrow(
       'No handler registered for request subject "workflow.listTriggerTypes"',
     );
-  });
-
-  it('persists output and telemetry from an injected step runner', async () => {
-    await setup.workflowExecutor.destroy();
-
-    const seenConfigs: StepRunConfig[] = [];
-    const runner: IStepRunner = {
-      managesWorkflowLifecycle: true,
-      async run(config): Promise<StepRunResult> {
-        seenConfigs.push(config);
-        return {
-          status: 'completed',
-          output: { answer: 42 },
-          telemetry: {
-            duration: 123,
-            tokenUsage: { input: 10, output: 4 },
-            estimatedCost: 0.01,
-            toolCalls: 2,
-          },
-        };
-      },
-    };
-    setup.workflowExecutor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 }, runner);
-    await setup.workflowExecutor.init();
-
-    const workflow = createWorkflowDefinition({
-      id: 'workflow-custom-runner',
-      inputs: [{ name: 'title', type: 'string', required: true }],
-      steps: [{ id: 'custom', type: 'agent', prompt: 'unused' }],
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
-      workflowId: workflow.id,
-      inputs: { title: 'Runner input' },
-      triggerPayload: { source: 'not-span-input' },
-    });
-
-    await vi.waitFor(async () => {
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-      expect(execution?.status).toBe('completed');
-    });
-
-    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(execution?.steps.custom).toMatchObject({
-      status: 'completed',
-      result: '{"answer":42}',
-    });
-    expect(seenConfigs[0]?.resolvedInputs.inputs).toEqual({ title: 'Runner input' });
-    expect(seenConfigs[0]?.resolvedInputs.trigger).toEqual({ source: 'not-span-input' });
-
-    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId });
-    expect(spans[0]).toMatchObject({
-      stepId: 'custom',
-      status: 'completed',
-      durationMs: 123,
-      inputTokens: 10,
-      outputTokens: 4,
-      estimatedCost: 0.01,
-      toolCallCount: 2,
-      input: JSON.stringify({ inputs: { title: 'Runner input' } }),
-      output: '{"answer":42}',
-    });
   });
 
   it('emits dotted lifecycle events around step execution', async () => {

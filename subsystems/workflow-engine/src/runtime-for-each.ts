@@ -1,4 +1,9 @@
-import type { ForEachExpansionSnapshot, ForEachWorkflowStep, WorkflowStep } from '@makaio/contracts';
+import {
+  JsonValueSchema,
+  type ForEachExpansionSnapshot,
+  type ForEachWorkflowStep,
+  type WorkflowStep,
+} from '@makaio/contracts';
 import { evaluateSync, type ExpressionContext } from '@makaio/expression';
 import { findInnerLeafIds, type ForEachStepContext } from './for-each-expander.js';
 import { validateAuthoredWorkflowSteps } from './dag-utils.js';
@@ -126,13 +131,13 @@ export function buildForEachExpansionSnapshot(params: BuildForEachExpansionSnaps
   );
   const innerLeafIds = findInnerLeafIds(parent.steps);
   const childSteps: WorkflowStep[] = [];
-  const stepContextRecord: Record<string, { item: unknown; index: number }> = {};
+  const stepContextRecord: ForEachExpansionSnapshot['stepContext'] = {};
   const leafStepIds: string[] = [];
   let previousBatchLeafIds: string[] = [];
   let currentBatchLeafIds: string[] = [];
 
   for (let index = 0; index < collection.length; index++) {
-    const item = collection[index];
+    const item = JsonValueSchema.parse(collection[index]);
     const namespacedLeafIds = innerLeafIds.map((leafId) => namespacedId(parent.id, index, leafId));
     const extraConcurrencyNeeds = concurrencyNeeds(index, batchSize, previousBatchLeafIds);
 

@@ -1,17 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
-import { z } from 'zod';
-import {
-  AgentSubjects,
-  AdapterSubjects,
-  ToolSubjects,
-  WorkflowSubjects,
-  type AdapterContribution,
-  type StepRunConfig,
-} from '@makaio/contracts';
-import type { Toolset } from '@makaio/tools-core';
+import { describe, it, expect } from 'vitest';
+import { SubagentSubjects, WorkflowSubjects, type StepRunConfig } from '@makaio/contracts';
 import { bootWorkerBus } from '../worker-boot.js';
 import { runWorkerAgentStep } from '../worker-agent-executor.js';
-import type { WorkerContributions } from '../worker-contributions.js';
 
 /**
  * Create a minimal StepRunConfig for an agent step.
@@ -61,7 +51,7 @@ describe('runWorkerAgentStep', () => {
     await handle.close();
   });
 
-  it('starts adapter agent and returns completed result on success', async () => {
+  it('spawns subagent and returns completed result on success', async () => {
     const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
     const config = makeAgentConfig({
       adapter: 'test-adapter',
@@ -70,29 +60,18 @@ describe('runWorkerAgentStep', () => {
     });
     const controller = new AbortController();
 
-    // Register a mock handler for adapter.startAgent
-    handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
-      expect(ctx.payload.initialMessage).toBe('Hello agent');
+    handle.bus.on(SubagentSubjects.spawn, (ctx) => {
+      expect(ctx.payload.parentSessionId).toBe('test-session');
+      expect(ctx.payload.config.task).toBe('Hello agent');
+      expect(ctx.payload.config.adapterName).toBe('test-adapter');
       ctx.setResult({
-        success: true,
-        agentId: 'agent-42',
-        adapterId: 'test-adapter',
-        adapterSessionId: 'session-1',
-        sessionId: 'makaio-session-1',
+        subagentId: 'subagent-42',
+        status: 'spawning',
       });
-
-      // Simulate agent completion after a short delay
-      setTimeout(() => {
-        void handle.bus.emit(AgentSubjects.complete, {
-          agentId: 'agent-42',
-          adapterId: 'test-adapter',
-          adapterName: 'test-adapter',
-          adapterSessionId: 'session-1',
-          messageId: 'msg-1',
-          message: 'Task completed successfully',
-          outcome: 'completed',
-        });
-      }, 10);
+    });
+    handle.bus.on(SubagentSubjects.await, (ctx) => {
+      expect(ctx.payload.subagentId).toBe('subagent-42');
+      ctx.setResult({ status: 'completed', result: 'Task completed successfully' });
     });
 
     const result = await runWorkerAgentStep(handle, config, controller.signal);
@@ -104,52 +83,59 @@ describe('runWorkerAgentStep', () => {
     await handle.close();
   });
 
-  it('returns failed result when adapter startAgent returns failure', async () => {
+  it('preserves JSON object step results in prompt expression context', async () => {
     const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
-    const config = makeAgentConfig({ adapter: 'broken-adapter' });
+    const config = makeAgentConfig({
+      adapter: 'test-adapter',
+      prompt: 'Use {{ steps.fetch.result.id }}',
+      resolvedInputs: {
+        inputs: {},
+        trigger: {},
+        steps: {
+          fetch: { status: 'completed', result: { id: 'json-id' } },
+        },
+      },
+    });
     const controller = new AbortController();
 
-    handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
-      ctx.setResult({
-        success: false,
-        message: 'Adapter initialization failed',
-      });
+    handle.bus.on(SubagentSubjects.spawn, (ctx) => {
+      expect(ctx.payload.config.task).toBe('Use json-id');
+      ctx.setResult({ subagentId: 'subagent-json', status: 'spawning' });
+    });
+    handle.bus.on(SubagentSubjects.await, (ctx) => {
+      ctx.setResult({ status: 'completed', result: 'Done' });
     });
 
     const result = await runWorkerAgentStep(handle, config, controller.signal);
 
+    expect(result.status).toBe('completed');
+    await handle.close();
+  });
+
+  it('returns failed result when subagent system is unavailable', async () => {
+    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
+    const config = makeAgentConfig({ adapter: 'broken-adapter' });
+    const controller = new AbortController();
+
+    const result = await runWorkerAgentStep(handle, config, controller.signal);
+
     expect(result.status).toBe('failed');
-    expect(result.error).toBe('Adapter initialization failed');
+    expect(result.error).toBe('Subagent system not available');
     expect(result.telemetry.duration).toBeGreaterThan(0);
 
     await handle.close();
   });
 
-  it('returns failed result when agent completes with error outcome', async () => {
+  it('returns failed result when subagent await returns an error status', async () => {
     const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
     const config = makeAgentConfig({ adapter: 'test-adapter' });
     const controller = new AbortController();
 
-    handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
-      ctx.setResult({
-        success: true,
-        agentId: 'agent-err',
-        adapterId: 'test-adapter',
-        adapterSessionId: 'session-err',
-        sessionId: 'makaio-session-err',
-      });
-
-      setTimeout(() => {
-        void handle.bus.emit(AgentSubjects.complete, {
-          agentId: 'agent-err',
-          adapterId: 'test-adapter',
-          adapterName: 'test-adapter',
-          adapterSessionId: 'session-err',
-          messageId: 'msg-err',
-          outcome: 'error',
-          error: 'Model rate limited',
-        });
-      }, 10);
+    handle.bus.on(SubagentSubjects.spawn, (ctx) => {
+      ctx.setResult({ subagentId: 'subagent-err', status: 'spawning' });
+    });
+    handle.bus.on(SubagentSubjects.await, (ctx) => {
+      ctx.setResult({ status: 'failed', error: 'Model rate limited' });
     });
 
     const result = await runWorkerAgentStep(handle, config, controller.signal);
@@ -180,32 +166,16 @@ describe('runWorkerAgentStep', () => {
       });
     });
 
-    // Register startAgent handler
-    handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
-      expect(ctx.payload.adapterId).toBe('resolved-adapter');
-      expect(ctx.payload.model).toBe('opus');
-      expect(ctx.payload.harnessId).toBe('reviewer-harness');
-      expect(ctx.payload.providerContext?.providerConfigId).toBe('provider-1');
-
-      ctx.setResult({
-        success: true,
-        agentId: 'agent-resolved',
-        adapterId: 'resolved-adapter',
-        adapterSessionId: 'session-resolved',
-        sessionId: 'makaio-session-resolved',
-      });
-
-      setTimeout(() => {
-        void handle.bus.emit(AgentSubjects.complete, {
-          agentId: 'agent-resolved',
-          adapterId: 'resolved-adapter',
-          adapterName: 'resolved-adapter',
-          adapterSessionId: 'session-resolved',
-          messageId: 'msg-resolved',
-          message: 'Review done',
-          outcome: 'completed',
-        });
-      }, 10);
+    handle.bus.on(SubagentSubjects.spawn, (ctx) => {
+      expect(ctx.payload.config.adapterName).toBe('resolved-adapter');
+      expect(ctx.payload.config.model).toBe('opus');
+      expect(ctx.payload.config.harnessId).toBe('reviewer-harness');
+      expect(ctx.payload.config.providerContext?.providerConfigId).toBe('provider-1');
+      expect(ctx.payload.config.contextMode).toBe('fresh');
+      ctx.setResult({ subagentId: 'subagent-resolved', status: 'spawning' });
+    });
+    handle.bus.on(SubagentSubjects.await, (ctx) => {
+      ctx.setResult({ status: 'completed', result: 'Review done' });
     });
 
     const result = await runWorkerAgentStep(handle, config, controller.signal);
@@ -240,8 +210,7 @@ describe('runWorkerAgentStep', () => {
     const result = await runWorkerAgentStep(handle, config, controller.signal);
 
     expect(result.status).toBe('failed');
-    expect(result.error).toContain('role');
-    expect(result.error).toContain('adapter');
+    expect(result.error).toBe('Subagent system not available');
 
     await handle.close();
   });
@@ -251,15 +220,17 @@ describe('runWorkerAgentStep', () => {
     const config = makeAgentConfig({ adapter: 'slow-adapter' });
     const controller = new AbortController();
 
-    handle.bus.on(AdapterSubjects.startAgent, (ctx) => {
-      ctx.setResult({
-        success: true,
-        agentId: 'agent-slow',
-        adapterId: 'slow-adapter',
-        adapterSessionId: 'session-slow',
-        sessionId: 'makaio-session-slow',
-      });
-      // Agent never completes — will be aborted
+    handle.bus.on(SubagentSubjects.spawn, (ctx) => {
+      ctx.setResult({ subagentId: 'subagent-slow', status: 'spawning' });
+    });
+    handle.bus.on(SubagentSubjects.await, async (ctx) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      ctx.setResult({ status: 'failed', error: 'cancelled' });
+    });
+    let killed = false;
+    handle.bus.on(SubagentSubjects.kill, (ctx) => {
+      killed = true;
+      ctx.setResult({ killed: true });
     });
 
     // Abort shortly after starting
@@ -270,111 +241,7 @@ describe('runWorkerAgentStep', () => {
 
     expect(result.status).toBe('failed');
     expect(result.telemetry.duration).toBeGreaterThan(0);
-
-    await handle.close();
-  });
-
-  it('boots contribution adapters and executes tools through the worker-local registry', async () => {
-    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
-    const config = makeAgentConfig({ adapter: 'worker-fake-adapter', prompt: 'Call worker tool' });
-    const controller = new AbortController();
-    const closeAdapter = vi.fn();
-    const executeTool = vi.fn(async (input: { value: string }) => ({
-      success: true as const,
-      data: { source: 'worker-local', value: input.value },
-    }));
-
-    const toolset: Toolset = {
-      metadata: { name: 'worker-tools', description: 'Worker tools', version: '1.0.0' },
-      tools: {
-        workerEcho: {
-          metadata: { name: 'worker.echo', description: 'Echo from the worker registry' },
-          inputSchema: z.object({ value: z.string() }),
-          outputSchema: z.object({ source: z.string(), value: z.string() }),
-          execute: executeTool,
-        },
-      },
-    };
-
-    const adapterContribution: AdapterContribution = {
-      manifest: { name: 'worker-fake-adapter', displayName: 'Worker Fake Adapter', protocols: ['openai'] },
-      definition: {
-        name: 'worker-fake-adapter',
-        displayName: 'Worker Fake Adapter',
-        providers: [],
-        defaultTimeouts: {
-          initialization: 1000,
-          acknowledgement: 1000,
-          completion: 1000,
-          toolApproval: 1000,
-          eventWait: 1000,
-        },
-        createAdapter: async (options?: { globalBus?: typeof handle.bus }) => {
-          const bus = options?.globalBus;
-          if (!bus) throw new Error('worker adapter did not receive local bus');
-          return {
-            adapterId: 'worker-fake-adapter',
-            name: 'worker-fake-adapter',
-            async init() {
-              bus.on(AdapterSubjects.startAgent, async (ctx) => {
-                const toolResult = await bus.request(ToolSubjects.execute, {
-                  toolName: 'worker.echo',
-                  input: { value: 'from-agent' },
-                  adapterId: 'worker-fake-adapter',
-                  adapterName: 'worker-fake-adapter',
-                });
-                const output =
-                  toolResult.success && typeof toolResult.data === 'object' && toolResult.data !== null
-                    ? JSON.stringify(toolResult.data)
-                    : 'tool failed';
-
-                ctx.setResult({
-                  success: true,
-                  agentId: 'worker-agent-1',
-                  adapterId: 'worker-fake-adapter',
-                  adapterSessionId: 'worker-session-1',
-                  sessionId: 'worker-makaio-session-1',
-                });
-
-                setTimeout(() => {
-                  void bus.emit(AgentSubjects.complete, {
-                    agentId: 'worker-agent-1',
-                    adapterId: 'worker-fake-adapter',
-                    adapterName: 'worker-fake-adapter',
-                    adapterSessionId: 'worker-session-1',
-                    messageId: 'worker-message-1',
-                    message: output,
-                    outcome: 'completed',
-                  });
-                }, 0);
-              });
-            },
-            async closeAsync() {
-              closeAdapter();
-            },
-          };
-        },
-      },
-    };
-
-    const result = await runWorkerAgentStep(handle, config, controller.signal, {
-      toolsets: [toolset],
-      adapters: [adapterContribution],
-    } satisfies WorkerContributions);
-
-    expect(result.status).toBe('completed');
-    expect(result.output).toBe('{"source":"worker-local","value":"from-agent"}');
-    expect(executeTool).toHaveBeenCalledOnce();
-    expect(closeAdapter).toHaveBeenCalledOnce();
-
-    await expect(
-      handle.bus.request(ToolSubjects.execute, {
-        toolName: 'worker.echo',
-        input: { value: 'after-close' },
-        adapterId: 'worker-fake-adapter',
-        adapterName: 'worker-fake-adapter',
-      }),
-    ).rejects.toThrow();
+    expect(killed).toBe(true);
 
     await handle.close();
   });

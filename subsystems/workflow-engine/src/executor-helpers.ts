@@ -183,7 +183,7 @@ export type ShellStepOutcome = { status: 'completed'; stdout: string } | { statu
 export interface RunShellStepOptions {
   /** Shell step definition fields needed for execution. */
   step: { command: string[]; cwd?: string; env?: Record<string, string>; timeoutMs?: number };
-  /** Absolute workspace root (from coordinator session). */
+  /** Absolute workspace root used as the shell containment boundary. */
   workspaceRoot: string;
   /** Context for template interpolation. */
   expressionContext: ExpressionContext;

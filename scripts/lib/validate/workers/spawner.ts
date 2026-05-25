@@ -19,8 +19,8 @@ const DEFAULT_HEAP_MB = 2048;
 /** Default timeout per worker in ms (10 minutes) */
 const DEFAULT_TIMEOUT_MS = 600_000;
 
-/** TypeScript workers get more memory since they load the entire type graph (6 GB old-space). */
-const TYPESCRIPT_HEAP_MB = 6144;
+/** TypeScript workers parse configs in Node and delegate graph checking to tsgo. */
+const TYPESCRIPT_HEAP_MB = 2048;
 
 const NODE_OPTIONS_TOKEN_REGEX = /(?:[^\s"']+|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')+/g;
 

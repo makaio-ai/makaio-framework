@@ -92,12 +92,12 @@ describe('ContextPublishTargetSchema', () => {
     const result = ArtifactPublishTargetSchema.parse({
       type: 'artifact',
       artifactType: 'station-output',
-      scope: 'project',
+      scope: 'workspace',
       metadata: { station: 'requirements-analysis' },
     });
     expect(result.type).toBe('artifact');
     expect(result.artifactType).toBe('station-output');
-    expect(result.scope).toBe('project');
+    expect(result.scope).toBe('workspace');
   });
 
   it('accepts a bus-event publish target', () => {
@@ -122,7 +122,7 @@ describe('ContextPublishTargetSchema', () => {
     expect(() =>
       ContextPublishTargetSchema.parse({
         type: 'artifact',
-        scope: 'project',
+        scope: 'workspace',
       }),
     ).toThrow();
   });

@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import { SessionSubjects } from '@makaio/contracts';
@@ -342,7 +345,7 @@ describe('WorkflowExecutor — shell steps', () => {
     );
 
     // Start execution - coordinator session is created internally without a targetWorkingDirectory.
-    // The executor falls back to process.cwd(), so we test against that.
+    // The default executor platform cwd is process.cwd(), so we test against that.
     const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
       workflowId: workflow.id,
       inputs: {},
@@ -355,8 +358,53 @@ describe('WorkflowExecutor — shell steps', () => {
     });
 
     expect(execution?.steps['cwd-step']?.status).toBe('completed');
-    // The output should be process.cwd() since session has no targetWorkingDirectory.
-    expect(asExecutable(execution?.steps['cwd-step'])?.result?.trim()).toBe(process.cwd());
+    // The output should be the configured default cwd since the session has no targetWorkingDirectory.
+    // Shell step result is always a string (stdout); trim whitespace for comparison.
+    const cwdResult = asExecutable(execution?.steps['cwd-step'])?.result;
+    expect(typeof cwdResult === 'string' ? cwdResult.trim() : cwdResult).toBe(process.cwd());
+  });
+
+  it('uses configured platform cwd when the coordinator session has no working directory', async () => {
+    await workflowExecutor.destroy();
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'workflow-shell-cwd-'));
+    cleanupFns.push(() => rmSync(workspaceRoot, { recursive: true, force: true }));
+    workflowExecutor = new WorkflowExecutor(MakaioBus, {
+      stepCooldownMs: 0,
+      stepTimeoutMs: 30_000,
+      platformDefaults: { cwd: workspaceRoot },
+    });
+    await workflowExecutor.init();
+
+    const workflow = createWorkflowDefinition({
+      steps: [
+        {
+          id: 'configured-cwd-step',
+          type: 'shell' as const,
+          command: ['node', '-e', 'console.log(process.cwd())'],
+        },
+      ],
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const completedExecutions: string[] = [];
+    cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        completedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      inputs: {},
+    });
+
+    await vi.waitFor(() => expect(completedExecutions).toEqual([executionId]), { timeout: 10_000 });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId,
+    });
+    const cwdResult = asExecutable(execution?.steps['configured-cwd-step'])?.result;
+    expect(typeof cwdResult === 'string' ? cwdResult.trim() : cwdResult).toBe(realpathSync(workspaceRoot));
   });
 
   it('merges step env vars into the child process environment', async () => {
@@ -391,7 +439,9 @@ describe('WorkflowExecutor — shell steps', () => {
     });
 
     expect(execution?.steps['env-step']?.status).toBe('completed');
-    expect(asExecutable(execution?.steps['env-step'])?.result?.trim()).toBe('hello-from-env');
+    // Shell step result is always a string (stdout); trim whitespace for comparison.
+    const envResult = asExecutable(execution?.steps['env-step'])?.result;
+    expect(typeof envResult === 'string' ? envResult.trim() : envResult).toBe('hello-from-env');
   });
 
   it('kills process and fails step on timeout', async () => {

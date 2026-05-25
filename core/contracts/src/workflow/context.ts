@@ -51,8 +51,8 @@ export const ArtifactPublishTargetSchema = z.object({
   type: z.literal('artifact'),
   /** Artifact type string (e.g., 'station-output', 'station-feedback'). */
   artifactType: z.string().min(1),
-  /** Artifact scope level. */
-  scope: z.enum(['global', 'project', 'workstream', 'worktree', 'session']),
+  /** Artifact scope level. Product domains use `external` metadata instead of framework-owned names. */
+  scope: z.enum(['global', 'workspace', 'worktree', 'session', 'external']),
   /** Additional metadata to attach to the artifact. */
   metadata: z.record(z.string(), z.unknown()).optional(),
 });

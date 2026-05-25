@@ -2,7 +2,13 @@ import { eq, and, desc, lt, or, inArray, sql, type Column } from 'drizzle-orm';
 import { executeTransaction, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
-import type { ExecutableStepState, ExtensionContext, StepState, WorkflowExecutionScope } from '@makaio/contracts';
+import type {
+  ExecutableStepState,
+  ExtensionContext,
+  JsonValue,
+  StepState,
+  WorkflowExecutionScope,
+} from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createDrizzleCrudHandlers, createDrizzleListHandler } from '@makaio/storage-handlers';
 import {
@@ -154,7 +160,7 @@ function toDefinitionDbValues(workflow: WorkflowDefinitionInput): Partial<Insert
     values.triggers = workflow.triggers ?? null;
   }
   if (Object.prototype.hasOwnProperty.call(workflow, 'canvasLayout')) {
-    values.canvasLayout = workflow.canvasLayout ?? null;
+    values.canvasLayout = (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null;
   }
 
   return values;
@@ -282,7 +288,7 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
     workflowId: execution.workflowId,
     coordinatorSessionId: execution.coordinatorSessionId ?? null,
     status: execution.status,
-    inputs: execution.inputs,
+    inputs: execution.inputs as Record<string, JsonValue>,
     // Cast required: Drizzle's $type<Record<string, StepState>>() creates a
     // nominally distinct type even though the structure is identical to
     // WorkflowExecution['steps'] at runtime.
@@ -291,7 +297,7 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
     error: execution.error ?? null,
     startedAt: execution.startedAt,
     completedAt: execution.completedAt ?? null,
-    triggerPayload: execution.triggerPayload ?? null,
+    triggerPayload: (execution.triggerPayload as Record<string, JsonValue> | undefined) ?? null,
     ...scopeColumns,
   };
 }

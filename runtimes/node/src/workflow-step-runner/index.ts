@@ -1,12 +1,9 @@
 export {
-  createNodeStepRunner,
+  createNodeWorkflowRunner,
+  createNodeWorkflowRunnerPackageOptions,
   createNodeWorkflowStepRunnerPackageOptions,
   resolveWorkflowStepRunnerFactoryOptions,
 } from './node-step-runner-factory.js';
-export { PiscinaStepRunner } from './piscina-step-runner.js';
-export { ChildProcessStepRunner } from './child-process-step-runner.js';
-export { DockerStepRunner } from './docker-step-runner.js';
-export { runStepInWorker } from './worker-entry.js';
 export { buildNodeWorkerEntryArgs, resolveWorkerEntry } from './worker-entry-resolver.js';
 export { bootWorkerBus } from './worker-boot.js';
 export { StepTelemetryCollector } from './step-telemetry-collector.js';

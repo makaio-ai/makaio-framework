@@ -47,7 +47,7 @@ export type FileValidationResults = Record<string, ValidationResult[]>;
  *
  * `standalone` uses the framework workspace sizing. `full-workspace` runs the
  * same validator against a full workspace topology, which has a larger
- * TypeScript graph and needs a different worker memory budget.
+ * TypeScript graph and needs profile-specific semantic worker limits.
  */
 export type ValidateProfile = 'standalone' | 'full-workspace';
 

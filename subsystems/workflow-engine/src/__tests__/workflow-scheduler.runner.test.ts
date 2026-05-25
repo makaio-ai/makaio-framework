@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import type { IStepRunner, StepRunConfig, StepRunResult, WorkflowDefinition } from '@makaio/contracts';
+import type { StepRunConfig, StepRunResult, WorkflowDefinition } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { WorkflowScheduler } from '../workflow-scheduler.js';
@@ -11,9 +11,9 @@ import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
 /**
  * A blocking step runner that records abort signals and allows external control.
- * Used to test cooperative and hard cancellation paths.
+ * Used to test cooperative and hard cancellation paths via the scheduler callbacks.
  */
-class BlockingStepRunner implements IStepRunner {
+class BlockingStepRunner {
   public readonly managesWorkflowLifecycle = true;
   public readonly abortedSteps: string[] = [];
   public readonly forceKilledSteps: string[] = [];
@@ -93,7 +93,8 @@ describe('WorkflowScheduler runner cancellation', () => {
   });
 
   /**
-   * Helper: build scheduler deps from test state.
+   * Helper: build scheduler deps from test state, wiring the blocking runner
+   * into the callback-based scheduler interface.
    */
   function buildDeps(): WorkflowSchedulerDeps {
     return {
@@ -102,7 +103,9 @@ describe('WorkflowScheduler runner cancellation', () => {
       shellAbortControllers,
       activeRunnerSteps,
       gateCoordinator,
-      stepRunner: runner,
+      runStep: (config, signal) => runner.run(config, signal),
+      forceKillStep: (execId, stepId) => runner.forceKill(execId, stepId),
+      runnerManagesLifecycle: runner.managesWorkflowLifecycle,
       config,
     };
   }

@@ -7,15 +7,15 @@ describe('getWorkerConfig', () => {
     expect(getWorkerConfig('typescript', { profile: 'standalone' })).toEqual({ tool: 'typescript' });
   });
 
-  it('uses a larger full-workspace budget for semantic workers', () => {
+  it('uses full-workspace semantic worker limits', () => {
     expect(getWorkerConfig('eslint', { profile: 'full-workspace' })).toMatchObject({
       tool: 'eslint',
-      timeoutMs: 1_200_000,
+      timeoutMs: 1_800_000,
     });
     expect(getWorkerConfig('typescript', { profile: 'full-workspace' })).toMatchObject({
       tool: 'typescript',
-      maxHeapMB: 6144,
-      timeoutMs: 1_200_000,
+      maxHeapMB: 2048,
+      timeoutMs: 1_800_000,
     });
   });
 

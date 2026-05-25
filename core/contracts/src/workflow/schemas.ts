@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ContextModeSchema } from '../subagent/schemas.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
+import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -79,7 +80,7 @@ export const ExtensionWorkflowTriggerSchema = z.object({
    * Runtime trigger configuration as an opaque JSON object.
    * Validated against the extension's configSchema before storage.
    */
-  config: z.record(z.string(), z.unknown()).optional(),
+  config: JsonObjectContractSchema.optional(),
 });
 
 export type ExtensionWorkflowTrigger = z.infer<typeof ExtensionWorkflowTriggerSchema>;
@@ -217,7 +218,7 @@ export const AgentWorkflowStepSchema = WorkflowStepBaseSchema.extend({
    * When set but the adapter lacks the capability, the schema is appended
    * to the prompt as a JSON constraint instruction.
    */
-  outputSchema: z.record(z.string(), z.unknown()).optional(),
+  outputSchema: JsonObjectContractSchema.optional(),
   /** Harness ID for per-role tool governance. */
   harnessId: z.string().optional(),
   /** Subagent context mode. Workflow steps default to fresh at execution time. */
@@ -300,6 +301,23 @@ export const GateWorkflowStepSchema = WorkflowStepBaseSchema.extend({
 export type GateWorkflowStep = z.infer<typeof GateWorkflowStepSchema>;
 
 /**
+ * Function step variant — executes a typed TypeScript function registered
+ * in the workflow builder's runtime step map.
+ *
+ * The `runtime: true` flag signals that the actual handler lives outside
+ * the serialized definition and must be retrieved from the worker executor's
+ * step registry.
+ */
+export const FunctionWorkflowStepSchema = WorkflowStepBaseSchema.extend({
+  /** Step type discriminant. */
+  type: z.literal('function'),
+  /** Marks this step as runtime-only; the function body is not serialized. */
+  runtime: z.literal(true),
+}).strict();
+
+export type FunctionWorkflowStep = z.infer<typeof FunctionWorkflowStepSchema>;
+
+/**
  * For-each step variant type.
  * Declared manually ahead of its schema to break the z.lazy circular reference.
  */
@@ -315,7 +333,12 @@ export interface ForEachWorkflowStep extends WorkflowStepBase {
 }
 
 /** Discriminated union of all workflow step variants. */
-export type WorkflowStep = AgentWorkflowStep | ShellWorkflowStep | GateWorkflowStep | ForEachWorkflowStep;
+export type WorkflowStep =
+  | AgentWorkflowStep
+  | ShellWorkflowStep
+  | GateWorkflowStep
+  | FunctionWorkflowStep
+  | ForEachWorkflowStep;
 
 /**
  * For-each step variant — iterates over a collection, expanding inner steps per item.
@@ -346,7 +369,13 @@ export const ForEachWorkflowStepSchema = WorkflowStepBaseSchema.extend({
  * only the fast-path discriminant routing is absent.
  */
 export const WorkflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
-  z.union([AgentWorkflowStepSchema, ShellWorkflowStepSchema, GateWorkflowStepSchema, ForEachWorkflowStepSchema]),
+  z.union([
+    AgentWorkflowStepSchema,
+    ShellWorkflowStepSchema,
+    GateWorkflowStepSchema,
+    FunctionWorkflowStepSchema,
+    ForEachWorkflowStepSchema,
+  ]),
 );
 
 // ─────────────────────────────────────────────────────────────
@@ -427,7 +456,7 @@ export const WorkflowDefinitionSchema = z.object({
    * Canvas layout hints for the visual editor.
    * Stored as opaque JSON; ignored by the executor.
    */
-  canvasLayout: z.record(z.string(), z.unknown()).optional(),
+  canvasLayout: JsonObjectContractSchema.optional(),
 });
 
 /**
@@ -438,6 +467,57 @@ export const WorkflowDefinitionInputSchema = WorkflowDefinitionSchema.omit({
   createdAt: true,
   updatedAt: true,
 });
+
+/**
+ * Collect persisted-definition validation issues for runtime-only function steps.
+ * @param steps - Workflow steps to scan recursively.
+ * @param path - Zod issue path prefix for the current step array.
+ * @returns Validation issue paths pointing at every function step discriminant.
+ */
+function collectFunctionStepIssues(
+  steps: readonly WorkflowStep[],
+  path: (string | number)[] = ['steps'],
+): { path: (string | number)[] }[] {
+  const issues: { path: (string | number)[] }[] = [];
+
+  for (const [index, step] of steps.entries()) {
+    const stepPath = [...path, index];
+    if (step.type === 'function') {
+      issues.push({ path: [...stepPath, 'type'] });
+      continue;
+    }
+    if (step.type === 'for-each') {
+      issues.push(...collectFunctionStepIssues(step.steps, [...stepPath, 'steps']));
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Definition input accepted by storage and bus registration.
+ *
+ * Function steps require a runtime function map and are therefore valid only
+ * for file/source-authored workflow workers, not persisted JSON definitions.
+ */
+export const PersistedWorkflowDefinitionInputSchema = WorkflowDefinitionInputSchema.superRefine((workflow, ctx) => {
+  for (const issue of collectFunctionStepIssues(workflow.steps)) {
+    ctx.addIssue({
+      code: 'custom',
+      path: issue.path,
+      message: 'Function workflow steps are only valid in file/source-authored workflows',
+    });
+  }
+});
+
+/**
+ * Typed persisted definition schema for bus/storage namespace registration.
+ * @see {@link WorkflowDefinitionInputSchemaTyped} for why this cast is needed.
+ */
+export const PersistedWorkflowDefinitionInputSchemaTyped = PersistedWorkflowDefinitionInputSchema as z.ZodType<
+  WorkflowDefinitionInput,
+  WorkflowDefinitionInput
+>;
 
 /**
  * Workflow definition stored in the database.
@@ -498,8 +578,8 @@ export const ExecutableStepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Subagent ID for this step execution. */
   subagentId: z.string().optional(),
-  /** Step output/result. */
-  result: z.string().optional(),
+  /** Step output/result. JSON-serializable value produced by the step. */
+  result: JsonValueSchema.optional(),
   /** Error message if step failed. */
   error: z.string().optional(),
   /** Step start timestamp. */
@@ -532,7 +612,7 @@ export const ForEachExpansionSnapshotSchema = z.object({
     z.string(),
     z.object({
       /** Collection item for this child step's iteration. */
-      item: z.unknown(),
+      item: JsonValueSchema,
       /** Zero-based iteration index. */
       index: z.number(),
     }),
@@ -588,8 +668,6 @@ export type CompositeStepState = z.infer<typeof CompositeStepStateSchema>;
  *
  * Discriminated union of executable (agent / shell / gate) and composite
  * (for-each) step states. Use the `kind` field to narrow.
- * Storage adapters normalize legacy persisted executable step JSON that
- * predates this discriminant before returning `WorkflowExecution` values.
  * @example
  * ```typescript
  * if (state.kind === 'executable') {
@@ -600,6 +678,17 @@ export type CompositeStepState = z.infer<typeof CompositeStepStateSchema>;
 export const StepStateSchema = z.discriminatedUnion('kind', [ExecutableStepStateSchema, CompositeStepStateSchema]);
 
 export type StepState = ExecutableStepState | CompositeStepState;
+
+/**
+ * Schema typed as `z.ZodType<StepState, StepState>` for bus namespace registration.
+ *
+ * Required because `CompositeStepState.expansion.childSteps` references
+ * `WorkflowStepSchema` which is annotated as `z.ZodType<WorkflowStep>` (Input = unknown)
+ * to support the `z.lazy` circular reference. Without this cast, `z.input` resolves
+ * `childSteps` to `unknown[]`, causing assignability errors at bus handler callsites.
+ * @see {@link WorkflowDefinitionSchemaTyped} for the same pattern applied to definitions.
+ */
+export const StepStateSchemaTyped = StepStateSchema as z.ZodType<StepState, StepState>;
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Execution (runtime state)
@@ -625,7 +714,7 @@ export const WorkflowExecutionSchema = z.object({
   /** Current execution status. */
   status: ExecutionStatusSchema,
   /** Bound input values for this execution. */
-  inputs: z.record(z.string(), z.unknown()),
+  inputs: JsonObjectContractSchema,
   /** Step execution states keyed by step ID. */
   steps: z.record(z.string(), StepStateSchema),
   /** Currently executing step ID. */
@@ -641,7 +730,7 @@ export const WorkflowExecutionSchema = z.object({
    * Present when triggered by cron, webhook, or plugin event.
    * Absent for manual starts.
    */
-  triggerPayload: z.record(z.string(), z.unknown()).optional(),
+  triggerPayload: JsonObjectContractSchema.optional(),
   /**
    * Scope this execution is bound to.
    * Inherited from the workflow definition at start time, or overridden
@@ -651,6 +740,19 @@ export const WorkflowExecutionSchema = z.object({
 });
 
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
+
+/**
+ * Schema typed as `z.ZodType<WorkflowExecution, WorkflowExecution>` for bus
+ * namespace registration.
+ *
+ * Required because `WorkflowExecution.steps` transitively contains
+ * `CompositeStepState.expansion.childSteps` which references `WorkflowStepSchema`
+ * annotated as `z.ZodType<WorkflowStep>` (Input = unknown) to break the `z.lazy`
+ * circular reference. Without this cast, `z.input` resolves `childSteps` to
+ * `unknown[]`, causing assignability errors at bus handler callsites.
+ * @see {@link WorkflowDefinitionSchemaTyped} for the same pattern.
+ */
+export const WorkflowExecutionSchemaTyped = WorkflowExecutionSchema as z.ZodType<WorkflowExecution, WorkflowExecution>;
 
 // ─────────────────────────────────────────────────────────────
 // List Query

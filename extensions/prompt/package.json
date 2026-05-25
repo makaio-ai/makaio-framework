@@ -20,6 +20,7 @@
     "@makaio/framework": "^1.0.0"
   },
   "dependencies": {
+    "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"
   },
   "devDependencies": {

@@ -17,8 +17,7 @@ import type { WildcardContext } from '@makaio/core';
 import { defineCliSubcommand, requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { AgentSubjects, SessionStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import type { CanonicalModelSelection, SystemPrompt } from '@makaio/contracts';
-import { OnceAbortError } from '@makaio/bus-core';
-import { readStdin } from './stdin.js';
+import { CLI_EXIT_CODES, classifyCliCommandError, readStdin } from '@makaio/utils';
 import { TextFormatter } from './formatters/text.js';
 import { JsonFormatter } from './formatters/json.js';
 import { StreamJsonFormatter } from './formatters/stream-json.js';
@@ -112,11 +111,9 @@ export type PromptArgs = z.infer<typeof PromptArgsSchema>;
 // Exit codes
 // ---------------------------------------------------------------------------
 
-const EXIT_FAILURE = 1;
-/** Matches GNU `timeout` convention. */
-const EXIT_TIMEOUT = 124;
-/** Matches shell Ctrl-C convention. */
-const EXIT_ABORT = 130;
+const EXIT_FAILURE = CLI_EXIT_CODES.failure;
+const EXIT_TIMEOUT = CLI_EXIT_CODES.timeout;
+const EXIT_ABORT = CLI_EXIT_CODES.abort;
 
 // ---------------------------------------------------------------------------
 // Formatter factory
@@ -367,18 +364,19 @@ function handleCommandError(
   output: OutputWriter,
   setExitCode: (code: number) => void,
 ): void {
-  if (err instanceof OnceAbortError) {
-    setExitCode(EXIT_ABORT);
-    return;
+  switch (classifyCliCommandError(err)) {
+    case 'abort':
+      setExitCode(EXIT_ABORT);
+      return;
+    case 'timeout':
+      output.error(`Error: prompt timed out after ${timeoutSeconds}s.\n`);
+      setExitCode(EXIT_TIMEOUT);
+      return;
+    case 'failure':
+      output.error(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+      setExitCode(EXIT_FAILURE);
+      return;
   }
-  // Duck-type by name: OnceTimeoutError is not re-exported from @makaio/bus-core.
-  if (err instanceof Error && err.name === 'OnceTimeoutError') {
-    output.error(`Error: prompt timed out after ${timeoutSeconds}s.\n`);
-    setExitCode(EXIT_TIMEOUT);
-    return;
-  }
-  output.error(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-  setExitCode(EXIT_FAILURE);
 }
 
 // ---------------------------------------------------------------------------

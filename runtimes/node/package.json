@@ -12,8 +12,8 @@
     "./makaio-config": "./src/makaio-config.ts",
     "./runtime/schemas": "./src/bus/runtime/schemas.ts",
     "./runtime/namespace": "./src/bus/runtime/namespace.ts",
-    "./workflow-step-runner": "./src/workflow-step-runner/index.ts",
-    "./workflow-step-runner/worker-entry": "./src/workflow-step-runner/worker-entry.ts"
+    "./workflow-worker": "./src/workflow-worker/index.ts",
+    "./workflow-worker/worker-entry": "./src/workflow-worker/worker-entry.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.14.1",

@@ -93,7 +93,9 @@ describe('workflow engine smoke', () => {
 
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('completed');
-    expect(asExecutable(execution?.steps.verify)?.result?.trim()).toBe('Hello from Makaio');
+    // Shell step result is always a string (stdout); trim whitespace for comparison.
+    const verifyResult = asExecutable(execution?.steps.verify)?.result;
+    expect(typeof verifyResult === 'string' ? verifyResult.trim() : verifyResult).toBe('Hello from Makaio');
     expect(events).toEqual(['write-file', 'verify', 'execution.completed']);
   });
 });
