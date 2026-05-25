@@ -27,6 +27,14 @@ export interface ConfiguredDiscoveryRoot {
   readonly source: ConfiguredDiscoverySource;
 }
 
+const WorkflowRunnerConfigSchema = z
+  .object({
+    mode: z.enum(['in-process', 'piscina']).optional(),
+    maxConcurrency: z.number().int().positive().optional(),
+    idleTimeoutMs: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const MakaioConfigSchema = z
   .object({
     extensions: z
@@ -38,12 +46,16 @@ const MakaioConfigSchema = z
       })
       .optional(),
     launcherCommand: z.string().min(1).optional(),
+    workflowRunner: WorkflowRunnerConfigSchema.optional(),
     packageConfigDefaults: z.record(z.string().min(1), z.record(z.string(), z.unknown())).optional(),
   })
   .strict();
 
 /** Runtime extension config authoring shape. */
 export type MakaioConfig = z.input<typeof MakaioConfigSchema>;
+
+/** Workflow runner mode declared in a config file. */
+export type WorkflowRunnerConfig = z.infer<typeof WorkflowRunnerConfigSchema>;
 
 /** Parsed runtime extension config with absolute paths and defaults applied. */
 export interface ParsedMakaioConfig {
@@ -62,6 +74,8 @@ export interface ParsedMakaioConfig {
   };
   /** Launcher command visible to runtime services. */
   readonly launcherCommand: string;
+  /** Workflow runner configuration. */
+  readonly workflowRunner?: WorkflowRunnerConfig;
   /** Package config defaults keyed by extension/package name. */
   readonly packageConfigDefaults: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
 }
@@ -98,6 +112,7 @@ export interface LoadMakaioConfigOptions {
 export interface ConfiguredRuntimeOptions {
   readonly launcherCommand: string;
   readonly discovery: ExtensionDiscovery;
+  readonly workflowRunner?: WorkflowRunnerConfig;
   readonly packageConfigDefaults: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
 }
 
@@ -148,6 +163,7 @@ export function parseMakaioConfig(rawConfig: unknown, options: ParseMakaioConfig
       exclude: extensions.exclude ?? [],
     },
     launcherCommand: parsed.launcherCommand ?? 'makaio',
+    workflowRunner: parsed.workflowRunner,
     packageConfigDefaults: new Map(Object.entries(parsed.packageConfigDefaults ?? {})),
   };
 }
@@ -211,6 +227,24 @@ export async function resolveMakaioConfigPath(options: LoadMakaioConfigOptions):
       return candidate;
     }
   }
+
+  // In dev mode, fall back to searching the working directory so a workspace
+  // makaio.config.{ts,js,json} is discovered automatically without requiring
+  // MAKAIO_CONFIG_FILE or --config.  The guard is a plain NODE_ENV check that
+  // Vite/esbuild replaces with `false` in production builds, eliminating this
+  // branch entirely.
+  if (process.env.NODE_ENV !== 'production') {
+    const cwd = process.cwd();
+    if (cwd !== options.makaioHome) {
+      for (const basename of CONFIG_FILE_BASENAMES) {
+        const candidate = path.join(cwd, basename);
+        if (await fileExists(candidate)) {
+          return candidate;
+        }
+      }
+    }
+  }
+
   return undefined;
 }
 
@@ -256,6 +290,7 @@ export async function buildConfiguredRuntimeOptions(
   return {
     launcherCommand: config.launcherCommand,
     discovery: createMakaioConfigDiscovery(config),
+    workflowRunner: config.workflowRunner,
     packageConfigDefaults: config.packageConfigDefaults,
   };
 }

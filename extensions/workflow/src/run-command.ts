@@ -214,6 +214,17 @@ interface CompletionWaiter {
 }
 
 /**
+ * Detect events that arrive after the command already knows which execution it
+ * owns but belong to another workflow run.
+ * @param targetExecutionId - Execution ID returned by `workflow.runFile`, if known.
+ * @param eventExecutionId - Execution ID carried by the lifecycle event.
+ * @returns `true` when the event should be ignored.
+ */
+function isUnrelatedLifecycleEvent(targetExecutionId: string | undefined, eventExecutionId: string): boolean {
+  return targetExecutionId !== undefined && eventExecutionId !== targetExecutionId;
+}
+
+/**
  * Wait for the workflow execution to complete or fail.
  *
  * Subscribes to `execution.completed` and `execution.failed` BEFORE the
@@ -277,12 +288,14 @@ function createCompletionWaiter(
   // synchronous so bus.emit() callers are not blocked by an awaiting callback.
   const unsubscribeCompleted = bus.on(WorkflowSubjects.execution.completed, (busCtx) => {
     const payload = busCtx.payload as { executionId: string; totalDuration: number };
+    if (isUnrelatedLifecycleEvent(targetExecutionId, payload.executionId)) return;
     buffered.push({ executionId: payload.executionId, totalDuration: payload.totalDuration });
     tryResolve();
   });
 
   const unsubscribeFailed = bus.on(WorkflowSubjects.execution.failed, (busCtx) => {
     const payload = busCtx.payload as { executionId: string; error: string };
+    if (isUnrelatedLifecycleEvent(targetExecutionId, payload.executionId)) return;
     bufferedFailures.push({ executionId: payload.executionId, error: payload.error });
     tryResolve();
   });
@@ -375,8 +388,10 @@ export async function handleWorkflowRun(ctx: CommandContext<WorkflowRunArgs>): P
       return;
     }
 
-    if (resolvedPayload.mode === 'await-trigger') {
-      ctx.output.write(`Workflow registered from ${args.file}. Waiting for a trigger event to fire the execution...\n`);
+    const isAwaitTrigger = resolvedPayload.mode === 'await-trigger';
+
+    if (isAwaitTrigger) {
+      ctx.output.write(`Awaiting trigger for workflow: ${args.file}\n`);
       ctx.output.write('(Press Ctrl-C to cancel)\n');
     }
 
@@ -389,14 +404,11 @@ export async function handleWorkflowRun(ctx: CommandContext<WorkflowRunArgs>): P
       cleanups.push(subscribeLifecycleEvents(ctx, executionId));
     }
 
-    if (resolvedPayload.mode === 'await-trigger') {
-      // In await-trigger mode the caller is informed of the execution ID and
-      // the process stays alive so the bus can fire the trigger later.
-      ctx.output.write(`Execution started: ${executionId}\n`);
-      return;
+    if (isAwaitTrigger) {
+      ctx.output.write(`Execution ${executionId} waiting for trigger...\n`);
+    } else {
+      ctx.output.write(`Running workflow: ${args.file} (executionId: ${executionId})\n`);
     }
-
-    ctx.output.write(`Running workflow: ${args.file} (executionId: ${executionId})\n`);
 
     // Activate the pre-registered completion waiter with the known executionId.
     waiter.setExecutionId(executionId);

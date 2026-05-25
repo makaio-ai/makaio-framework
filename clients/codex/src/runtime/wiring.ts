@@ -91,9 +91,10 @@ export async function buildCodexWiringList(
   const { effective } = await settings.listHooks(projectDir !== undefined ? { projectDir } : {});
 
   const entries: ClientWiringEntry[] = SESSION_EVENTS.map(({ eventName }) => {
-    const sentinel = `${CODEX_HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName);
-    const installed = effective.some((entry) => entry.event === eventName && entry.command.includes(sentinel));
+    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, [
+      '--debounce-failure',
+    ]);
+    const installed = effective.some((entry) => entry.event === eventName && entry.command === command);
     return {
       group: 'session-events',
       name: eventName,
@@ -135,7 +136,9 @@ export async function applyCodexWiring(
 
   for (const { eventName } of SESSION_EVENTS) {
     const sentinel = `${CODEX_HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName);
+    const command = buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, [
+      '--debounce-failure',
+    ]);
 
     const existingEntry = scopeHooks.find((entry) => entry.event === eventName && entry.command.includes(sentinel));
 

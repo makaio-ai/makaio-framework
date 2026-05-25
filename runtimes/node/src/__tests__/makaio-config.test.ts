@@ -39,6 +39,20 @@ async function writeDescriptor(dir: string, descriptor: TestDescriptor): Promise
   await fs.writeFile(path.join(dir, 'descriptor.json'), JSON.stringify(descriptor), 'utf-8');
 }
 
+/**
+ * Restore an environment variable without converting an absent value into the
+ * string "undefined".
+ * @param key - Environment variable name.
+ * @param value - Original value captured before mutation.
+ */
+function restoreOptionalEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 describe('makaio config', () => {
   let tmpDir: string;
   let makaioHome: string;
@@ -396,6 +410,68 @@ describe('makaio config', () => {
           env: { [MAKAIO_CONFIG_FILE_ENV]: missing },
         }),
       ).rejects.toThrow(`Missing runtime config: ${missing}`);
+    });
+
+    it('falls back to CWD config in dev mode when MAKAIO_HOME has none', async () => {
+      const realTmpDir = await fs.realpath(tmpDir);
+      const cwdConfig = path.join(realTmpDir, 'makaio.config.json');
+      await fs.writeFile(cwdConfig, '{}', 'utf-8');
+      const originalCwd = process.cwd();
+      const originalNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.chdir(realTmpDir);
+        delete process.env.NODE_ENV;
+
+        const resolved = await resolveMakaioConfigPath({ makaioHome });
+
+        expect(resolved).toBe(cwdConfig);
+      } finally {
+        process.chdir(originalCwd);
+        restoreOptionalEnv('NODE_ENV', originalNodeEnv);
+      }
+    });
+
+    it('skips CWD fallback when NODE_ENV is production', async () => {
+      const realTmpDir = await fs.realpath(tmpDir);
+      const cwdConfig = path.join(realTmpDir, 'makaio.config.json');
+      await fs.writeFile(cwdConfig, '{}', 'utf-8');
+      const originalCwd = process.cwd();
+      const originalNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.chdir(realTmpDir);
+        process.env.NODE_ENV = 'production';
+
+        const resolved = await resolveMakaioConfigPath({ makaioHome });
+
+        expect(resolved).toBeUndefined();
+      } finally {
+        process.chdir(originalCwd);
+        restoreOptionalEnv('NODE_ENV', originalNodeEnv);
+      }
+    });
+
+    it('prefers MAKAIO_HOME config over CWD fallback', async () => {
+      const realTmpDir = await fs.realpath(tmpDir);
+      const homeConfig = path.join(makaioHome, 'makaio.config.json');
+      await fs.writeFile(homeConfig, '{}', 'utf-8');
+      const cwdConfig = path.join(realTmpDir, 'makaio.config.json');
+      await fs.writeFile(cwdConfig, '{}', 'utf-8');
+      const originalCwd = process.cwd();
+      const originalNodeEnv = process.env.NODE_ENV;
+
+      try {
+        process.chdir(realTmpDir);
+        delete process.env.NODE_ENV;
+
+        const resolved = await resolveMakaioConfigPath({ makaioHome });
+
+        expect(resolved).toBe(homeConfig);
+      } finally {
+        process.chdir(originalCwd);
+        restoreOptionalEnv('NODE_ENV', originalNodeEnv);
+      }
     });
   });
 

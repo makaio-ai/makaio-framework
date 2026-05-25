@@ -305,18 +305,27 @@ describe('handleWorkflowRun in await-trigger mode', () => {
     restoreStdin();
   });
 
-  it('registers the workflow and enters await-trigger mode when stdin is TTY and no --payload', async () => {
+  it('registers the workflow and waits for completion in await-trigger mode when stdin is TTY and no --payload', async () => {
     const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
       ctx.setResult({ executionId: 'exec-await-1' });
     });
 
     const ctx = createContext(bus, makeArgs({ file: './trigger-wf.ts' }));
-    await handleWorkflowRun(ctx);
+    const runPromise = handleWorkflowRun(ctx);
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await bus.emit(WorkflowSubjects.execution.completed, {
+      executionId: 'exec-await-1',
+      totalDuration: 25,
+    });
+
+    await runPromise;
 
     cleanupRunFile();
 
     const stdout = stdoutChunks.join('');
-    expect(stdout).toContain('Waiting for a trigger event');
+    expect(stdout).toContain('Awaiting trigger for workflow');
+    expect(stdout).toContain('Execution exec-await-1 waiting for trigger');
     expect(stdout).toContain('Ctrl-C');
     expect(ctx.setExitCodeSpy).not.toHaveBeenCalled();
   });

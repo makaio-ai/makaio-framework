@@ -89,11 +89,55 @@ describe('buildClaudeCodeWiringList', () => {
 
   it('marks session-events entry as installed when matching hook command exists', async () => {
     const settings = createMockSettings({
-      SessionStart: [{ hooks: [{ type: 'command', command: 'makaio hook received claude-code SessionStart' }] }],
+      SessionStart: [
+        { hooks: [{ type: 'command', command: 'makaio --debounce-failure hook received claude-code SessionStart' }] },
+      ],
     });
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
     const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
     expect(sessionStart?.installed).toBe(true);
+  });
+
+  it('marks stale session-events commands without the debounce root flag as not installed', async () => {
+    const settings = createMockSettings({
+      SessionStart: [{ hooks: [{ type: 'command', command: 'makaio hook received claude-code SessionStart' }] }],
+    });
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
+    expect(sessionStart?.installed).toBe(false);
+  });
+
+  it('marks installed when an exact command follows a stale managed hook for the same event', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-code-wiring-multi-hook-'));
+    try {
+      await fs.writeFile(
+        path.join(configDir, 'settings.json'),
+        JSON.stringify(
+          {
+            hooks: {
+              SessionStart: [
+                {
+                  hooks: [
+                    { type: 'command', command: 'makaio hook received claude-code SessionStart' },
+                    { type: 'command', command: 'makaio --debounce-failure hook received claude-code SessionStart' },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
+      const settings = new ClaudeCodeClientSettings({ configDir });
+
+      const result = await buildClaudeCodeWiringList(settings, 'makaio');
+      const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
+      expect(sessionStart?.installed).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 
   it('marks statusline entry as installed when effective statusline contains the sentinel', async () => {
@@ -126,7 +170,7 @@ describe('buildClaudeCodeWiringList', () => {
     const result = await buildClaudeCodeWiringList(settings, '/path/to/cli-entry.ts', envPairs);
     const hookEntry = result.entries.find((e) => e.name === 'SessionStart');
     expect(hookEntry?.command).toBe(
-      'MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts hook received claude-code SessionStart',
+      'MAKAIO_CONFIG_FILE=/path/to/config.ts MAKAIO_HOME=/path/to/.makaio-dev /path/to/cli-entry.ts --debounce-failure hook received claude-code SessionStart',
     );
     const statuslineEntry = result.entries.find((e) => e.name === 'statusline');
     expect(statuslineEntry?.command).toBe(
@@ -188,6 +232,23 @@ describe('applyClaudeCodeWiring', () => {
       const settingsPath = path.join(configDir, 'settings.json');
       const persisted = JSON.parse(await fs.readFile(settingsPath, 'utf-8')) as Record<string, unknown>;
       expect(persisted['skipDangerousModePermissionPrompt']).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists session-event hook commands with the failure debounce root flag through real settings I/O', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-code-wiring-hooks-'));
+    try {
+      const realSettings = new ClaudeCodeClientSettings({ configDir });
+
+      await applyClaudeCodeWiring(realSettings, 'user', 'makaio');
+
+      const { effective } = await realSettings.listHooks({ eventName: 'SessionStart' });
+      const sessionStartHooks = effective['SessionStart'] ?? [];
+      expect(JSON.stringify(sessionStartHooks)).toContain(
+        'makaio --debounce-failure hook received claude-code SessionStart',
+      );
     } finally {
       await fs.rm(configDir, { recursive: true, force: true });
     }

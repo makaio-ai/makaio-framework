@@ -3,6 +3,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import chalk from 'chalk';
 import { minimatch } from 'minimatch';
+import ts from 'typescript';
 import type { ValidatorContext } from '../util/validator-context.js';
 import { loadTypeScript } from '../util/tool-loader.js';
 
@@ -279,7 +280,10 @@ export function filterTsFilesByRootConfig(tsFiles: string[]): string[] {
   }
 
   try {
-    const rootConfig = JSON.parse(fssync.readFileSync(rootTsConfigPath, 'utf-8'));
+    const rootConfig = ts.parseConfigFileTextToJson(
+      rootTsConfigPath,
+      fssync.readFileSync(rootTsConfigPath, 'utf-8'),
+    ).config;
     const rootExcludePatterns: string[] = rootConfig.exclude || [];
 
     // Pre-compile minimatch matchers outside the filter loop for performance

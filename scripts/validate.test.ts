@@ -39,6 +39,11 @@ describe('parseCliArgs', () => {
     expect(parseCliArgs(['--tools=eslint,typescript']).tools).toEqual(['eslint', 'typescript']);
   });
 
+  it('accepts multiple literal files or one glob pattern', () => {
+    expect(parseCliArgs(['file1.ts', 'file2.ts']).files).toEqual(['file1.ts', 'file2.ts']);
+    expect(parseCliArgs(['src/**/*.ts']).globPattern).toBe('src/**/*.ts');
+  });
+
   it('fails fast for invalid profile values', () => {
     expect(() => parseCliArgs(['--profile', 'invalid'])).toThrow(
       'Invalid value for --profile. Use "standalone" or "full-workspace".',
@@ -54,6 +59,15 @@ describe('parseCliArgs', () => {
     );
     expect(() => parseCliArgs(['--tools=eslint,unknown'])).toThrow(
       'Invalid value for --tool. Use one of: biome, prettier, eslint, stylelint, typescript.',
+    );
+  });
+
+  it('fails fast when literal files and glob patterns are mixed', () => {
+    expect(() => parseCliArgs(['file1.ts', 'src/**/*.ts'])).toThrow(
+      'Cannot mix literal file paths with glob patterns. Use either multiple files or a single glob.',
+    );
+    expect(() => parseCliArgs(['src/**/*.ts', 'framework/**/*.ts'])).toThrow(
+      'Cannot pass multiple glob patterns. Use a single glob pattern or multiple literal files.',
     );
   });
 });

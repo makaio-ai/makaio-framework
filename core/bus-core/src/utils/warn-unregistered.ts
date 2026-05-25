@@ -20,6 +20,7 @@ export function warnIfUnregistered(
   fullKey: string,
 ): void {
   if (process.env.NODE_ENV === 'production') return;
+  if (process.env['MAKAIO_DEBUG'] !== 'true') return;
 
   if (subjectDefinition.subject.includes('*')) return;
   if (subjectDefinition.$meta.namespace.startsWith('channel:')) return;

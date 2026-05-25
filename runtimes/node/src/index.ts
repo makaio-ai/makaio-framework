@@ -46,6 +46,7 @@ export {
   type MakaioConfig,
   type ParseMakaioConfigOptions,
   type ParsedMakaioConfig,
+  type WorkflowRunnerConfig,
 } from './makaio-config.js';
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
 export { readFrameworkVersion } from './read-framework-version.js';

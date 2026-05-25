@@ -30,7 +30,9 @@ export async function runBootExtensionMigrations(
     if (seenSourceIds.has(source.migrationSourceId)) continue;
     seenSourceIds.add(source.migrationSourceId);
     const migrationsTable = buildMigrationsTableName(source.migrationSourceId);
-    console.info(`[boot] Running migrations for package: ${source.name}`);
+    if (process.env['MAKAIO_DEBUG'] === 'true') {
+      console.info(`[boot] Running migrations for package: ${source.name}`);
+    }
     const migrations = readMigrations({
       migrationsDir: source.migrationsPath,
       migrationSourceId: source.migrationSourceId,
