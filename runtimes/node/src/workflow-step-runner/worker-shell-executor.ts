@@ -1,51 +1,5 @@
-import type {
-  CompositeStepState,
-  ShellWorkflowStep,
-  StepRunConfig,
-  StepRunResult,
-  StepStatus,
-} from '@makaio/contracts';
-import { runShellStep } from '@makaio/subsystem-workflow-engine';
-
-type WorkerExpressionStep = { result?: string; status: StepStatus | CompositeStepState['status'] };
-type WorkerExpressionContext = {
-  trigger: Record<string, unknown>;
-  steps: Record<string, WorkerExpressionStep>;
-  inputs: Record<string, unknown>;
-  item?: unknown;
-  index?: number;
-};
-
-/**
- * Check whether a value is a non-array object record.
- * @param value - Value to test.
- * @returns True when the value can be read as an object record.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Build the workflow expression context that shared shell execution expects.
- * @param resolvedInputs - Runner-provided resolved expression context.
- * @returns Expression context with required root maps present.
- */
-function buildExpressionContext(resolvedInputs: StepRunConfig['resolvedInputs']): WorkerExpressionContext {
-  const context: WorkerExpressionContext = {
-    trigger: isRecord(resolvedInputs.trigger) ? resolvedInputs.trigger : {},
-    steps: isRecord(resolvedInputs.steps) ? (resolvedInputs.steps as Record<string, WorkerExpressionStep>) : {},
-    inputs: isRecord(resolvedInputs.inputs) ? resolvedInputs.inputs : {},
-  };
-
-  if ('item' in resolvedInputs) {
-    context.item = resolvedInputs.item;
-  }
-  if (typeof resolvedInputs.index === 'number') {
-    context.index = resolvedInputs.index;
-  }
-
-  return context;
-}
+import type { ShellWorkflowStep, StepRunConfig, StepRunResult } from '@makaio/contracts';
+import { buildWorkflowExpressionContextFromResolvedInputs, runShellStep } from '@makaio/subsystem-workflow-engine';
 
 /**
  * Execute a shell step with the shared workflow shell semantics.
@@ -86,7 +40,7 @@ export async function runWorkerShellStep(config: StepRunConfig, signal: AbortSig
         timeoutMs: stepDef.timeoutMs,
       },
       workspaceRoot: config.platformDefaults.cwd,
-      expressionContext: buildExpressionContext(config.resolvedInputs),
+      expressionContext: buildWorkflowExpressionContextFromResolvedInputs(config.resolvedInputs),
       signal,
     });
 

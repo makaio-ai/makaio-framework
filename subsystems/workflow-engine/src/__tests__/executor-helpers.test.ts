@@ -3,15 +3,15 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveShellCwd, runShellStep } from '../executor-helpers.js';
-import type { ExpressionContext } from '@makaio/expression';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 
 const symlinkTest = process.platform === 'win32' ? it.skip : it;
 
 /**
  * Build a minimal expression context fixture for shell cwd resolution tests.
- * @returns ExpressionContext with empty trigger/steps/inputs maps
+ * @returns WorkflowExpressionContext with empty trigger/steps/inputs maps
  */
-function makeExpressionContext(): ExpressionContext {
+function makeExpressionContext(): WorkflowExpressionContext {
   return {
     trigger: {},
     steps: {},

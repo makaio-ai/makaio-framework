@@ -1,16 +1,16 @@
 # @makaio/expression
 
-Jexl-based expression evaluation and template interpolation for workflow execution.
+Jexl-based expression evaluation and template interpolation.
 
 ## What This Is
 
 Thin wrapper around `jexl-extended` that provides:
 
-- **Expression evaluation** - Synchronous and async evaluation of jexl expressions against a typed context
+- **Expression evaluation** - Synchronous and async evaluation of jexl expressions against a variable context
 - **Expression compilation** - Compile hot-path expressions once, evaluate repeatedly
 - **Template interpolation** - Resolve `{{ expr }}` placeholders in strings using jexl evaluation
 
-Used by the workflow engine to evaluate step conditions, step inputs, and trigger filters.
+Used by framework packages to evaluate workflow expressions, rule predicates, trigger filters, and template strings.
 
 ## Key Exports
 
@@ -23,16 +23,25 @@ Used by the workflow engine to evaluate step conditions, step inputs, and trigge
 - `resolveTemplate(template, context)` - Replace `{{ expr }}` placeholders in a string
 
 **Types:**
-- `ExpressionContext` - Typed evaluation context (`trigger`, `steps`, `inputs`, `item`, `index`)
+- `ExpressionContext` - Generic variable map passed to jexl
+- `WorkflowExpressionContext` - Workflow-specific context (`trigger`, `steps`, `inputs`, `item`, `index`)
 - `CompiledExpression` - Compiled expression with `eval()` and `evalSync()` methods
 
 ## Basic Usage
 
 ```typescript
 import { evaluate, evaluateSync, compile, resolveTemplate } from '@makaio/expression';
-import type { ExpressionContext } from '@makaio/expression';
+import type { ExpressionContext, WorkflowExpressionContext } from '@makaio/expression';
 
-const ctx: ExpressionContext = {
+const genericCtx: ExpressionContext = {
+  branch: 'main',
+  packageName: 'workflow',
+};
+
+const label = resolveTemplate('{{ packageName }} on {{ branch }}', genericCtx);
+// 'workflow on main'
+
+const ctx: WorkflowExpressionContext = {
   trigger: { event: 'push', branch: 'main' },
   steps: { lint: { result: 'success', status: 'completed' } },
   inputs: { threshold: 80 },

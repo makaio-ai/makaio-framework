@@ -4,7 +4,7 @@ import {
   type ForEachWorkflowStep,
   type WorkflowStep,
 } from '@makaio/contracts';
-import { evaluateSync, type ExpressionContext } from '@makaio/expression';
+import { evaluateSync, type WorkflowExpressionContext } from '@makaio/expression';
 import { findInnerLeafIds, type ForEachStepContext } from './for-each-expander.js';
 import { validateAuthoredWorkflowSteps } from './dag-utils.js';
 
@@ -92,7 +92,7 @@ export interface BuildForEachExpansionSnapshotParams {
    * Expression context at the point of expansion.
    * Preserved for API symmetry with {@link expandForEachAtRuntime}.
    */
-  expressionContext: ExpressionContext;
+  expressionContext: WorkflowExpressionContext;
 }
 
 /**
@@ -188,7 +188,7 @@ export function buildForEachExpansionSnapshot(params: BuildForEachExpansionSnaps
  */
 export function expandForEachAtRuntime(
   parent: ForEachWorkflowStep,
-  expressionContext: ExpressionContext,
+  expressionContext: WorkflowExpressionContext,
 ): ForEachExpansionSnapshot {
   const collection = evaluateSync(parent.collection, expressionContext);
   if (!Array.isArray(collection)) {

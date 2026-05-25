@@ -1,45 +1,15 @@
 import {
   ContextModeSchema,
-  JsonValueSchema,
   SubagentSubjects,
   WorkflowSubjects,
   type AgentWorkflowStep,
   type StepRunConfig,
   type StepRunResult,
 } from '@makaio/contracts';
-import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { resolveTemplate } from '@makaio/expression';
+import { buildWorkflowExpressionContextFromResolvedInputs } from '@makaio/subsystem-workflow-engine';
 import type { WorkerBusHandle } from './worker-boot.js';
 import type { WorkerContributions } from './worker-contributions.js';
-
-/**
- * Check whether a value is a plain record for expression context fields.
- * @param value - Candidate value.
- * @returns True when the value can be indexed safely.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Check whether a value matches the step map shape used by expression templates.
- * @param value - Candidate `steps` field from StepRunConfig.resolvedInputs.
- * @returns True when every entry exposes a string `status`.
- */
-function isExpressionSteps(value: unknown): value is ExpressionContext['steps'] {
-  if (!isRecord(value)) return false;
-
-  for (const stepState of Object.values(value)) {
-    if (!isRecord(stepState) || typeof stepState['status'] !== 'string') return false;
-    if (
-      'result' in stepState &&
-      stepState['result'] !== undefined &&
-      !JsonValueSchema.safeParse(stepState['result']).success
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
 
 /**
  * Build a failed legacy worker agent result with duration telemetry.
@@ -77,7 +47,7 @@ async function spawnWorkerSubagent(
   const spawn = await handle.bus.requestOptional(SubagentSubjects.spawn, {
     parentSessionId: config.coordinatorSessionId,
     config: {
-      task: resolveTemplate(step.prompt, buildWorkerExpressionContext(config.resolvedInputs)),
+      task: resolveTemplate(step.prompt, buildWorkflowExpressionContextFromResolvedInputs(config.resolvedInputs)),
       contextMode: agentConfig.contextMode ?? ContextModeSchema.enum.fresh,
       adapterName: agentConfig.adapterName,
       model: agentConfig.model,
@@ -147,28 +117,6 @@ async function awaitWorkerSubagent(
   } finally {
     signal.removeEventListener('abort', onAbort);
   }
-}
-
-/**
- * Rehydrate the scheduler-built expression context from the serializable runner config.
- * @param resolvedInputs - StepRunConfig context payload.
- * @returns Expression context for prompt interpolation.
- */
-function buildWorkerExpressionContext(resolvedInputs: StepRunConfig['resolvedInputs']): ExpressionContext {
-  const context: ExpressionContext = {
-    trigger: isRecord(resolvedInputs['trigger']) ? resolvedInputs['trigger'] : {},
-    steps: isExpressionSteps(resolvedInputs['steps']) ? resolvedInputs['steps'] : {},
-    inputs: isRecord(resolvedInputs['inputs']) ? resolvedInputs['inputs'] : {},
-  };
-
-  if ('item' in resolvedInputs) {
-    context.item = resolvedInputs['item'];
-  }
-  if (typeof resolvedInputs['index'] === 'number') {
-    context.index = resolvedInputs['index'];
-  }
-
-  return context;
 }
 
 /**

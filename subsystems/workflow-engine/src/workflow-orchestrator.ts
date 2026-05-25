@@ -16,7 +16,7 @@ import type {
   WorkflowStepFunction,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { resolveTemplate, type WorkflowExpressionContext } from '@makaio/expression';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution, ActiveRunnerStep } from './types.js';
 import { DEFAULT_EXECUTOR_CONFIG } from './types.js';
@@ -30,6 +30,7 @@ import { WorkflowScheduler } from './workflow-scheduler.js';
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { WorkflowSubjects } from './namespace.js';
 import { cancelExecution } from './workflow-execution-finalizer.js';
+import { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-expression-context.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
@@ -135,17 +136,7 @@ function buildRunStep(
   loaded: LoadedWorkflow,
 ): (runConfig: StepRunConfig, signal: AbortSignal) => Promise<StepRunResult> {
   return async (runConfig: StepRunConfig, signal: AbortSignal): Promise<StepRunResult> => {
-    // The scheduler always sets resolvedInputs = { ...expressionContext } where
-    // expressionContext satisfies ExpressionContext. Reconstruct the typed
-    // form so step executors that require ExpressionContext receive the correct type.
-    const inputs = runConfig.resolvedInputs;
-    const expressionContext: ExpressionContext = {
-      trigger: (inputs['trigger'] as ExpressionContext['trigger']) ?? {},
-      steps: (inputs['steps'] as ExpressionContext['steps']) ?? {},
-      inputs: (inputs['inputs'] as ExpressionContext['inputs']) ?? {},
-      item: inputs['item'],
-      index: inputs['index'] as number | undefined,
-    };
+    const expressionContext = buildWorkflowExpressionContextFromResolvedInputs(runConfig.resolvedInputs);
 
     if (runConfig.stepType === 'shell') {
       return executeShellStepInWorker({
@@ -198,13 +189,13 @@ function buildRunFunctionStep(
 ): (
   executionId: string,
   stepId: string,
-  resolvedInputs: Record<string, unknown>,
+  resolvedInputs: WorkflowExpressionContext,
   signal: AbortSignal,
 ) => Promise<StepRunResult> {
   return async (
     executionId: string,
     stepId: string,
-    _resolvedInputs: Record<string, unknown>,
+    _resolvedInputs: WorkflowExpressionContext,
     signal: AbortSignal,
   ): Promise<StepRunResult> => {
     if (signal.aborted) {
@@ -273,13 +264,13 @@ function buildRunGateStep(
 ): (
   executionId: string,
   stepId: string,
-  resolvedInputs: Record<string, unknown>,
+  resolvedInputs: WorkflowExpressionContext,
   signal: AbortSignal,
 ) => Promise<StepRunResult> {
   return async (
     executionId: string,
     stepId: string,
-    resolvedInputs: Record<string, unknown>,
+    resolvedInputs: WorkflowExpressionContext,
     signal: AbortSignal,
   ): Promise<StepRunResult> => {
     const active = activeExecutions.get(executionId);

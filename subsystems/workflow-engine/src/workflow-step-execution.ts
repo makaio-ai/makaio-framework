@@ -1,4 +1,4 @@
-import type { ExpressionContext } from '@makaio/expression';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SubagentSubjects,
@@ -113,7 +113,7 @@ export interface ExecuteShellStepInWorkerParams {
   /** Absolute workspace root path from `WorkflowWorkerConfig.context.repoPath`. */
   readonly workspaceRoot: string;
   /** Resolved expression context for template interpolation. */
-  readonly expressionContext: ExpressionContext;
+  readonly expressionContext: WorkflowExpressionContext;
   /** Cancellation signal for cooperative abort. */
   readonly signal?: AbortSignal;
 }

@@ -6,7 +6,7 @@ import {
   type WorkflowRunnerStepType,
   type WorkflowStepType,
 } from '@makaio/contracts';
-import { evaluateSync, type ExpressionContext } from '@makaio/expression';
+import { evaluateSync, type WorkflowExpressionContext } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
 import type { ActiveExecution, ActiveRunnerStep, SchedulerNode, WorkflowSchedulerDeps } from './types.js';
 import { sleep } from './executor-helpers.js';
@@ -70,7 +70,7 @@ export class WorkflowScheduler {
    * Rebuilt lazily when `baseContextDirty` is true — i.e., after any step settles.
    * The per-node `item`/`index` overlay is merged on each call to {@link getExpressionContext}.
    */
-  private baseContextCache: Omit<ExpressionContext, 'item' | 'index'> | null = null;
+  private baseContextCache: Pick<WorkflowExpressionContext, 'trigger' | 'steps' | 'inputs'> | null = null;
   private baseContextDirty = true;
 
   /**
@@ -103,7 +103,7 @@ export class WorkflowScheduler {
    * @param nodeId - Node whose for-each context should be overlaid, if any.
    * @returns Expression context for jexl evaluation.
    */
-  private getExpressionContext(execution: WorkflowExecution, nodeId: string): ExpressionContext {
+  private getExpressionContext(execution: WorkflowExecution, nodeId: string): WorkflowExpressionContext {
     if (this.baseContextDirty || !this.baseContextCache) {
       this.baseContextCache = {
         trigger: execution.triggerPayload ?? {},
@@ -412,7 +412,7 @@ export class WorkflowScheduler {
       }
     }
 
-    const resolvedInputs: Record<string, unknown> = { ...context };
+    const resolvedInputs: WorkflowExpressionContext = { ...context };
 
     // Gate and function steps have specialised execution paths extracted to
     // workflow-scheduler-inline-steps.ts for clarity and to keep this method

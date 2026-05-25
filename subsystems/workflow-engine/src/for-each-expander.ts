@@ -1,5 +1,5 @@
 import type { WorkflowStep, ForEachWorkflowStep } from '@makaio/contracts';
-import { evaluateSync, type ExpressionContext } from '@makaio/expression';
+import { evaluateSync, type WorkflowExpressionContext } from '@makaio/expression';
 
 /**
  * Per-step context override for for-each item/index scoping.
@@ -142,7 +142,7 @@ function cloneInnerStep(innerStep: WorkflowStep, expandedId: string, namespacedN
 function expandSingleForEachWithCollection(
   forEachStep: ForEachWorkflowStep,
   collection: unknown[],
-  context: ExpressionContext,
+  context: WorkflowExpressionContext,
   stepContext: Map<string, ForEachStepContext>,
 ): ForEachExpansion {
   const batchSize = forEachStep.concurrency && forEachStep.concurrency > 0 ? forEachStep.concurrency : 0;
@@ -154,7 +154,7 @@ function expandSingleForEachWithCollection(
 
   for (let i = 0; i < collection.length; i++) {
     const item = collection[i];
-    const iterationContext: ExpressionContext = { ...context, item, index: i };
+    const iterationContext: WorkflowExpressionContext = { ...context, item, index: i };
     const { steps: innerSteps, stepContext: innerContext } = expandForEachSteps(forEachStep.steps, iterationContext);
     const innerRootIds = new Set(innerSteps.filter((s) => !s.needs || s.needs.length === 0).map((s) => s.id));
     const innerLeafIds = findInnerLeafIds(innerSteps);
@@ -233,7 +233,7 @@ function rewireNeeds(steps: WorkflowStep[], forEachLeafMap: Map<string, string[]
  * @param context - Expression context for evaluating collection expressions
  * @returns Expanded steps and per-step context map
  */
-export function expandForEachSteps(steps: WorkflowStep[], context: ExpressionContext): ExpansionResult {
+export function expandForEachSteps(steps: WorkflowStep[], context: WorkflowExpressionContext): ExpansionResult {
   const stepContext = new Map<string, ForEachStepContext>();
   const expanded: WorkflowStep[] = [];
   // Track which for-each step IDs map to their expanded leaf IDs (for downstream rewiring)

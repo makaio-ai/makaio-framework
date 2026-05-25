@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { evaluateSync, evaluate, compile, resolveTemplate } from '../index.js';
-import type { ExpressionContext } from '../index.js';
+import type { ExpressionContext, WorkflowExpressionContext } from '../index.js';
 
 /**
  * Build a standard test context, optionally overriding any fields.
  * @param overrides - partial context to merge in
- * @returns fully populated ExpressionContext
+ * @returns fully populated WorkflowExpressionContext
  */
-function createTestContext(overrides?: Partial<ExpressionContext>): ExpressionContext {
+function createTestContext(overrides?: Partial<WorkflowExpressionContext>): WorkflowExpressionContext {
   return {
     trigger: { branch: 'main', count: 10, name: 'test' },
     steps: {
@@ -20,6 +20,11 @@ function createTestContext(overrides?: Partial<ExpressionContext>): ExpressionCo
 }
 
 describe('evaluateSync', () => {
+  it('evaluates against a generic expression context', () => {
+    const context: ExpressionContext = { branch: 'main', count: 10 };
+    expect(evaluateSync('branch == "main" && count > 5', context)).toBe(true);
+  });
+
   it('accesses a nested value via dot-path', () => {
     expect(evaluateSync('trigger.branch', createTestContext())).toBe('main');
   });
@@ -96,6 +101,11 @@ describe('compile', () => {
 });
 
 describe('resolveTemplate', () => {
+  it('resolves placeholders against a generic expression context', () => {
+    const context: ExpressionContext = { branch: 'main', packageName: 'workflow' };
+    expect(resolveTemplate('{{ packageName }} on {{ branch }}', context)).toBe('workflow on main');
+  });
+
   it('resolves a single placeholder', () => {
     expect(resolveTemplate('Hello {{ trigger.name }}', createTestContext())).toBe('Hello test');
   });

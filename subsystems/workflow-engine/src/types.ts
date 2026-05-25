@@ -8,6 +8,7 @@ import type {
   WorkflowExecution,
   WorkflowStep,
 } from '@makaio/contracts';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 import type { ForEachStepContext } from './for-each-expander.js';
 import type { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 
@@ -118,7 +119,7 @@ export interface WorkflowSchedulerDeps {
   runFunctionStep?: (
     executionId: string,
     stepId: string,
-    resolvedInputs: Record<string, unknown>,
+    resolvedInputs: WorkflowExpressionContext,
     signal: AbortSignal,
   ) => Promise<StepRunResult>;
   /**
@@ -144,7 +145,7 @@ export interface WorkflowSchedulerDeps {
   runGateStep?: (
     executionId: string,
     stepId: string,
-    resolvedInputs: Record<string, unknown>,
+    resolvedInputs: WorkflowExpressionContext,
     signal: AbortSignal,
   ) => Promise<StepRunResult>;
   /** Executor config (timeouts, cooldowns). */

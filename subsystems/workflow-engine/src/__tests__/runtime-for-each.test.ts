@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildForEachExpansionSnapshot, expandForEachAtRuntime } from '../runtime-for-each.js';
 import type { ForEachWorkflowStep } from '@makaio/contracts';
-import type { ExpressionContext } from '@makaio/expression';
+import type { WorkflowExpressionContext } from '@makaio/expression';
 
 /** Minimal expression context for tests that don't need step results or triggers. */
-const expressionContext: ExpressionContext = {
+const expressionContext: WorkflowExpressionContext = {
   trigger: {},
   steps: {},
   inputs: {},

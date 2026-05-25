@@ -10,7 +10,7 @@ import {
   type WorkflowStep,
   type WorkflowExecution,
 } from '@makaio/contracts';
-import { resolveTemplate, type ExpressionContext } from '@makaio/expression';
+import { resolveTemplate, type WorkflowExpressionContext } from '@makaio/expression';
 import { WorkflowSubjects } from './namespace.js';
 import { runShellStep } from './executor-helpers.js';
 import { markStepFailed } from './workflow-execution-finalizer.js';
@@ -119,7 +119,7 @@ export function buildExpressionContext(
   execution: WorkflowExecution,
   activeExecutions: Map<string, ActiveExecution>,
   stepId?: string,
-): ExpressionContext {
+): WorkflowExpressionContext {
   const baseSteps = Object.fromEntries(
     Object.entries(execution.steps)
       .filter(([, state]) => state.status !== 'pending')
@@ -132,7 +132,7 @@ export function buildExpressionContext(
       ]),
   );
   const localStepAliases = stepId ? buildLocalStepAliases(stepId, baseSteps) : {};
-  const ctx: ExpressionContext = {
+  const ctx: WorkflowExpressionContext = {
     trigger: execution.triggerPayload ?? {},
     steps: { ...baseSteps, ...localStepAliases },
     inputs: execution.inputs,
