@@ -79,6 +79,8 @@ export function buildClientCommand(
  *   hook command (e.g. `'hook received claude-code'`).
  * @param eventName - Native hook event name (e.g. `'SessionStart'`).
  * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
+ * @param rootFlags - Optional root-level CLI flags inserted between the
+ *   executable and the sentinel (e.g. `['--debounce-failure']`).
  * @returns Full hook command string to write into the client's native config.
  */
 export function buildHookCommand(
@@ -86,8 +88,9 @@ export function buildHookCommand(
   sentinel: string,
   eventName: string,
   envPairs?: readonly string[],
+  rootFlags?: readonly string[],
 ): string {
-  return buildClientCommand(makaioCommand, [...sentinel.split(' '), eventName], envPairs);
+  return buildClientCommand(makaioCommand, [...(rootFlags ?? []), ...sentinel.split(' '), eventName], envPairs);
 }
 
 /**

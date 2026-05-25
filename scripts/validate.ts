@@ -225,9 +225,18 @@ export function parseCliArgs(args: string[]): ParsedCliArgs {
     }
   }
 
-  const hasMultipleFiles = positional.length > 1;
-  const files = hasMultipleFiles ? positional : undefined;
-  const globPattern = !hasMultipleFiles && positional.length === 1 ? positional[0] : undefined;
+  const isLiteralPath = (p: string): boolean => !/[*?{}[\]]/.test(p);
+  const hasLiteralPath = positional.some(isLiteralPath);
+  const hasGlobPattern = positional.some((p) => !isLiteralPath(p));
+  if (hasLiteralPath && hasGlobPattern) {
+    throw new Error('Cannot mix literal file paths with glob patterns. Use either multiple files or a single glob.');
+  }
+  if (hasGlobPattern && positional.length > 1) {
+    throw new Error('Cannot pass multiple glob patterns. Use a single glob pattern or multiple literal files.');
+  }
+
+  const files = positional.length >= 1 && hasLiteralPath ? positional : undefined;
+  const globPattern = hasGlobPattern ? positional[0] : undefined;
 
   return {
     flags: {

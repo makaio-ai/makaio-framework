@@ -17,8 +17,10 @@ const ChannelLikeNamespace = createBusNamespace('channel:test-channel', {
 
 describe('unregistered namespace warning', () => {
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalMakaioDebug = process.env['MAKAIO_DEBUG'];
 
   beforeEach(() => {
+    process.env['MAKAIO_DEBUG'] = 'true';
     MakaioBus.__resetHandlers?.();
     MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
     __resetWarnedSubjects?.();
@@ -26,6 +28,11 @@ describe('unregistered namespace warning', () => {
 
   afterEach(() => {
     process.env.NODE_ENV = originalNodeEnv;
+    if (originalMakaioDebug === undefined) {
+      delete process.env['MAKAIO_DEBUG'];
+    } else {
+      process.env['MAKAIO_DEBUG'] = originalMakaioDebug;
+    }
     vi.restoreAllMocks();
   });
 
@@ -63,6 +70,15 @@ describe('unregistered namespace warning', () => {
     process.env.NODE_ENV = 'production';
 
     await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'prod' });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when MAKAIO_DEBUG is not enabled', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    delete process.env['MAKAIO_DEBUG'];
+
+    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'quiet' });
 
     expect(warn).not.toHaveBeenCalled();
   });

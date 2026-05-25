@@ -1,6 +1,8 @@
+import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
 import {
   WorkflowWorkerConfigSchema,
   createWorkflowCancelSubject,
+  type BusEventTrigger,
   type WorkflowStep,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
@@ -96,6 +98,92 @@ function findFunctionStep(steps: readonly WorkflowStep[]): WorkflowStep | undefi
 }
 
 // ─────────────────────────────────────────────────────────────
+// Await-trigger mode
+// ─────────────────────────────────────────────────────────────
+
+type AdHocEventPayload = EventMessagePayload;
+type AdHocEventSubject = SubjectDefinition<Record<string, AdHocEventPayload>, string, string>;
+
+/**
+ * Build an ad-hoc event subject definition from a fully qualified subject string.
+ *
+ * Same pattern as {@link createWorkflowCancelSubject} — constructs a subject
+ * definition without a registered Zod schema for bus routing.
+ * @param fullSubject - Fully qualified subject in `namespace.subject` form, e.g. `git.checkout`.
+ * @returns Ad-hoc subject definition suitable for {@link IMakaioBus.on}.
+ */
+function createAdHocEventSubject(fullSubject: string): AdHocEventSubject {
+  const separator = fullSubject.indexOf('.');
+  if (separator <= 0 || separator === fullSubject.length - 1) {
+    throw new Error(`Invalid trigger subject: ${fullSubject}`);
+  }
+
+  return {
+    subject: fullSubject.slice(separator + 1),
+    $meta: {
+      namespace: fullSubject.slice(0, separator),
+      isRequest: false,
+      payload: {} as AdHocEventPayload,
+      local: false,
+      channel: false,
+    },
+  };
+}
+
+/**
+ * Subscribe to declared bus-event triggers and wait for the first matching event.
+ *
+ * Returns the event payload of the first trigger that fires. All subscriptions
+ * are cleaned up before returning. Rejects if the abort signal fires first.
+ * @param bus - Worker bus handle for subscriptions.
+ * @param triggers - Bus-event trigger definitions from the loaded workflow.
+ * @param signal - Abort signal for cooperative cancellation.
+ * @returns Matched event payload to use as `triggerPayload` for the orchestrator.
+ */
+function awaitBusEventTrigger(
+  bus: WorkerBusHandle['bus'],
+  triggers: readonly BusEventTrigger[],
+  signal: AbortSignal,
+): Promise<Record<string, unknown>> {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error('Await-trigger aborted'));
+      return;
+    }
+
+    const cleanups: Array<() => void> = [];
+
+    /**
+     *
+     */
+    function cleanup(): void {
+      for (const fn of cleanups) fn();
+      cleanups.length = 0;
+    }
+
+    const onAbort = (): void => {
+      cleanup();
+      reject(signal.reason ?? new Error('Await-trigger aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    cleanups.push(() => signal.removeEventListener('abort', onAbort));
+
+    for (const trigger of triggers) {
+      const subject = createAdHocEventSubject(trigger.subject);
+      const unsubscribe = bus.on(
+        subject,
+        (ctx) => {
+          cleanup();
+          resolve(ctx.payload as Record<string, unknown>);
+        },
+        trigger.filter ? { filter: trigger.filter } : undefined,
+      );
+      cleanups.push(unsubscribe);
+    }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
 // Worker lifecycle
 // ─────────────────────────────────────────────────────────────
 
@@ -166,9 +254,23 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
     // Step 5: Load workflow module from source
     const loaded = await loadWorkflowFromConfig(config);
 
+    // Step 5b: Await-trigger mode — when no trigger payload was provided and
+    // the workflow declares bus-event triggers, subscribe and wait for the
+    // first matching event before running the DAG.
+    let effectiveConfig = config;
+    const busEventTriggers = (loaded.definition.triggers ?? []).filter(
+      (t): t is BusEventTrigger => t.type === 'bus-event',
+    );
+    const hasEmptyTriggerPayload = Object.keys(config.triggerPayload).length === 0;
+
+    if (hasEmptyTriggerPayload && busEventTriggers.length > 0) {
+      const matchedPayload = await awaitBusEventTrigger(handle.bus, busEventTriggers, abortController.signal);
+      effectiveConfig = { ...config, triggerPayload: matchedPayload };
+    }
+
     // Step 6: Run orchestrator
     return await runWorkflowOrchestrator({
-      config,
+      config: effectiveConfig,
       loaded,
       bus: handle.bus,
       signal: abortController.signal,

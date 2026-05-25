@@ -12,9 +12,14 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import type { CodexHookEntry } from '../../schemas/config.js';
 import { buildCodexWiringList, applyCodexWiring, removeCodexWiring } from '../wiring.js';
 import type { CodexWiringSettings } from '../wiring.js';
+import { CodexClientSettings } from '../client-settings.js';
+import { readHooksJson, writeHooksJson } from './hooks-file-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Mock factory
@@ -32,7 +37,7 @@ function createMockSettings(effectiveHooks: CodexHookEntry[] = []): CodexWiringS
   return {
     listHooks: vi.fn().mockResolvedValue({
       effective: effectiveHooks,
-      perScope: [],
+      perScope: [{ scope: 'global', path: '/fake/hooks.json', writable: true, hooks: effectiveHooks }],
     }),
     addHook: vi.fn().mockResolvedValue({ added: true }),
     removeHook: vi.fn().mockResolvedValue({ removed: 1 }),
@@ -60,7 +65,7 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio hook received codex SessionStart',
+        command: 'makaio --debounce-failure hook received codex SessionStart',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
@@ -72,12 +77,43 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio hook received codex SessionStart',
+        command: 'makaio --debounce-failure hook received codex SessionStart',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
     const notInstalled = result.entries.filter((e) => e.name !== 'SessionStart');
     expect(notInstalled.every((e) => !e.installed)).toBe(true);
+  });
+
+  it('marks stale commands without the debounce root flag as not installed', async () => {
+    const settings = createMockSettings([
+      {
+        event: 'SessionStart',
+        command: 'makaio hook received codex SessionStart',
+      },
+    ]);
+    const result = await buildCodexWiringList(settings, 'makaio');
+    const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
+    expect(sessionStart?.installed).toBe(false);
+  });
+
+  it('reads persisted hooks when deciding debounce-aware installation status', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-wiring-list-'));
+    const hooksPath = path.join(configDir, 'hooks.json');
+    try {
+      await writeHooksJson(hooksPath, [
+        { event: 'SessionStart', command: 'makaio hook received codex SessionStart' },
+        { event: 'UserPromptSubmit', command: 'makaio --debounce-failure hook received codex UserPromptSubmit' },
+      ]);
+      const settings = new CodexClientSettings({ globalHooks: hooksPath, projectHooks: null });
+
+      const result = await buildCodexWiringList(settings, 'makaio');
+
+      expect(result.entries.find((e) => e.name === 'SessionStart')?.installed).toBe(false);
+      expect(result.entries.find((e) => e.name === 'UserPromptSubmit')?.installed).toBe(true);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 
   it('generates commands using the provided makaioCommand prefix', async () => {
@@ -133,19 +169,37 @@ describe('applyCodexWiring', () => {
   it('skips already-installed entries and reflects the count', async () => {
     // Seed all hooks as installed so addHook returns added: false for each.
     const allInstalled: CodexHookEntry[] = [
-      { event: 'SessionStart', command: 'makaio hook received codex SessionStart' },
-      { event: 'UserPromptSubmit', command: 'makaio hook received codex UserPromptSubmit' },
-      { event: 'PreToolUse', command: 'makaio hook received codex PreToolUse' },
-      { event: 'PostToolUse', command: 'makaio hook received codex PostToolUse' },
-      { event: 'Stop', command: 'makaio hook received codex Stop' },
+      { event: 'SessionStart', command: 'makaio --debounce-failure hook received codex SessionStart' },
+      { event: 'UserPromptSubmit', command: 'makaio --debounce-failure hook received codex UserPromptSubmit' },
+      { event: 'PreToolUse', command: 'makaio --debounce-failure hook received codex PreToolUse' },
+      { event: 'PostToolUse', command: 'makaio --debounce-failure hook received codex PostToolUse' },
+      { event: 'Stop', command: 'makaio --debounce-failure hook received codex Stop' },
     ];
     const settings = createMockSettings(allInstalled);
-    // Override addHook to return added: false (already installed)
-    vi.mocked(settings.addHook).mockResolvedValue({ added: false });
 
     const result = await applyCodexWiring(settings, 'global', 'makaio');
+    expect(settings.addHook).not.toHaveBeenCalled();
     expect(result.applied).toBe(0);
     expect(result.skipped).toBeGreaterThan(0);
+  });
+
+  it('skips already-installed debounce-aware hooks through real settings I/O', async () => {
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-wiring-apply-'));
+    const hooksPath = path.join(configDir, 'hooks.json');
+    try {
+      const settings = new CodexClientSettings({ globalHooks: hooksPath, projectHooks: null });
+
+      const first = await applyCodexWiring(settings, 'global', 'makaio');
+      const second = await applyCodexWiring(settings, 'global', 'makaio');
+      const persistedHooks = await readHooksJson(hooksPath);
+
+      expect(first.applied).toBeGreaterThan(0);
+      expect(second.applied).toBe(0);
+      expect(second.skipped).toBe(persistedHooks.length);
+      expect(persistedHooks).toHaveLength(first.applied);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 
   it('removes the stale hook before adding the updated one when the binary prefix changes', async () => {

@@ -310,7 +310,7 @@ describe('CodexClientSessionService — config handler round-trips', () => {
       await writeHooksJson(path.join(managedConfigDir, 'hooks.json'), [
         {
           event: 'SessionStart',
-          command: 'makaio hook received codex SessionStart',
+          command: 'makaio --debounce-failure hook received codex SessionStart',
         },
       ]);
       bus.on(ClientSubjects.resolveBinary, (ctx) => {

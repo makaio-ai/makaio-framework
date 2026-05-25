@@ -587,6 +587,7 @@ export type {
   ResolvedContextEntry,
   ShellWorkflowStep,
   SpanRecord,
+  BusEventTrigger,
   SpanStatus,
   ExecutionStatus,
   StepRunConfig,

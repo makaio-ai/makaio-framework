@@ -10,7 +10,7 @@
  * commands not available locally (e.g. future remote-only extensions).
  */
 import { pathToFileURL } from 'node:url';
-import { Command, CommanderError, InvalidOptionArgumentError } from 'commander';
+import { Command, InvalidOptionArgumentError } from 'commander';
 import type { CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
@@ -37,11 +37,9 @@ import { resolveCliRuntimeConfig } from './runtime-config.js';
 import { registerOpenCommand } from './open-command.js';
 import { registerAutoLaunchCommand } from './auto-launch-command.js';
 import { registerSetupCommand } from './setup-command.js';
+import { handleParseError, applyFallbackOverrides, type FallbackReason } from './parse-error.js';
 
 export { extractRootConfigArg } from './runtime-config.js';
-
-/** Why server-side command discovery is unavailable. */
-type FallbackReason = 'none' | 'unreachable' | 'connection-failed' | 'discovery-failed';
 
 /**
  * Native clients supported by this CLI entrypoint.
@@ -236,78 +234,6 @@ function registerRemoteSubcommand(
       process.exitCode = 1;
     }
   });
-}
-
-/**
- * Handle a Commander parse error thrown by `exitOverride`.
- *
- * When the server is down, `writeErr` is suppressed to prevent the generic
- * Commander message from appearing before our custom unknownCommand message.
- * This helper re-surfaces validation errors that would otherwise be silently
- * swallowed, and always propagates the exit code.
- * @param err - The caught error from `parseAsync`.
- * @param argv - Raw process argv, used to extract the attempted command name.
- * @param fallback - Why server-side discovery is unavailable.
- * @param connectionError - Specific connection failure detail when available.
- */
-function handleParseError(err: unknown, argv: string[], fallback: FallbackReason, connectionError?: string): void {
-  const attemptedTopLevel = argv[2];
-  const unknownName = err instanceof CommanderError ? extractUnknownCommandName(err) : undefined;
-  const isTopLevelUnknown =
-    fallback !== 'none' &&
-    err instanceof CommanderError &&
-    err.code === 'commander.unknownCommand' &&
-    unknownName !== undefined &&
-    unknownName === attemptedTopLevel;
-  if (isTopLevelUnknown) {
-    const name = unknownName;
-    const reason =
-      fallback === 'unreachable'
-        ? (connectionError ??
-          'The server is not running — remote extension commands are unavailable.\nStart with: makaio serve')
-        : fallback === 'connection-failed'
-          ? (connectionError ?? 'The CLI could not connect to the running server.')
-          : 'Command discovery failed — remote extension commands are unavailable.';
-    console.error(`Unknown command "${name}". ${reason}`);
-    process.exitCode = 1;
-  } else if (err instanceof CommanderError) {
-    // When discovery failed, writeErr is suppressed to prevent the generic Commander
-    // error from showing before our custom unknownCommand message. Re-surface
-    // non-help errors (e.g. validation failures) that were caught by exitOverride.
-    if (fallback !== 'none' && err.code !== 'commander.helpDisplayed') {
-      process.stderr.write(`${err.message}\n`);
-    }
-    // exitOverride converts exit calls to throws — re-surface the exit code
-    process.exitCode = err.exitCode;
-  } else {
-    throw err;
-  }
-}
-
-/**
- * Extract the actual unknown command token from a Commander parse error.
- * @param error - Commander error raised by `exitOverride`.
- * @returns The unknown command token, when present.
- */
-function extractUnknownCommandName(error: CommanderError): string | undefined {
-  const match = /unknown command '([^']+)'/.exec(error.message);
-  return match?.[1];
-}
-
-/**
- * Apply fallback parse overrides to a command tree.
- *
- * Commander does not retroactively propagate `exitOverride()` or custom output
- * handlers from a parent command to already-registered children, so nested
- * unknown-subcommand failures must be overridden recursively.
- * @param command - Root of the command tree to update.
- */
-function applyFallbackOverrides(command: CommandInstance): void {
-  command.exitOverride();
-  command.configureOutput({ writeErr: () => {} });
-  for (const child of command.commands) {
-    applyFallbackOverrides(child as CommandInstance);
-  }
 }
 
 /**
@@ -572,6 +498,8 @@ export async function main(
     argv: parsedArgv,
     discovery: effectiveDiscovery,
     serveConfig: effectiveServeConfig,
+    debounceFailure,
+    noFailure,
   } = await resolveCliRuntimeConfig(argv, discovery, serveConfig);
 
   // Bare `makaio` (no subcommand, no flags) defaults to `open`.
@@ -657,7 +585,7 @@ export async function main(
   try {
     await program.parseAsync(parsedArgv);
   } catch (err) {
-    handleParseError(err, parsedArgv, fallback, connectionError);
+    handleParseError(err, parsedArgv, fallback, connectionError, { debounceFailure, noFailure });
   } finally {
     if (bus) {
       disconnectBusSafely(bus);

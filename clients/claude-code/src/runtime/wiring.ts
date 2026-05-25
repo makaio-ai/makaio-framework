@@ -135,19 +135,51 @@ function findManagedHookCommand(
 }
 
 /**
- * Check whether the effective hooks map contains a command that starts with
- * the sentinel for a given event name.
+ * Check whether any managed hook command for an event exactly matches the
+ * expected command.
+ * @param effective - Effective hooks map from {@link ClaudeCodeClientSettings.listHooks}.
+ * @param eventName - Claude Code hook event name to search.
+ * @param sentinel - Sentinel substring identifying Makaio-managed commands.
+ * @param command - Exact command string expected for the hook.
+ * @returns `true` when a matching managed hook exists.
+ */
+function hasManagedHookCommand(
+  effective: Record<string, unknown[]>,
+  eventName: string,
+  sentinel: string,
+  command: string,
+): boolean {
+  const groups = effective[eventName];
+  if (!Array.isArray(groups)) return false;
+
+  for (const group of groups) {
+    if (typeof group !== 'object' || group === null) continue;
+    const hooksArr = (group as Record<string, unknown>)['hooks'];
+    if (!Array.isArray(hooksArr)) continue;
+    for (const hook of hooksArr) {
+      if (typeof hook !== 'object' || hook === null) continue;
+      const cmd = (hook as Record<string, unknown>)['command'];
+      if (typeof cmd === 'string' && cmd.includes(sentinel) && cmd === command) return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Check whether the effective hooks map contains the exact command expected
+ * for a given event name.
  *
- * The check intentionally uses `includes` on the full command string so that
- * the installed hook is detected regardless of trailing arguments or options
- * that a future version might append.
+ * Installation status drives rewiring decisions, so sentinel-only matches are
+ * not enough: older commands missing required root flags must report as stale.
  * @param effective - Effective hooks map from {@link ClaudeCodeClientSettings.listHooks}.
  * @param eventName - Claude Code hook event name to check.
- * @param sentinel - Sentinel string that must appear in the command.
- * @returns `true` when at least one hook command matching the sentinel exists.
+ * @param command - Exact command string expected for the hook.
+ * @returns `true` when the exact hook command exists.
  */
-function isHookInstalled(effective: Record<string, unknown[]>, eventName: string, sentinel: string): boolean {
-  return findManagedHookCommand(effective, eventName, sentinel) !== null;
+function isHookInstalled(effective: Record<string, unknown[]>, eventName: string, command: string): boolean {
+  const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
+  return hasManagedHookCommand(effective, eventName, sentinel, command);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,9 +216,8 @@ export async function buildClaudeCodeWiringList(
   ]);
 
   const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName }) => {
-    const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs);
-    const installed = isHookInstalled(effectiveHooks, eventName, sentinel);
+    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs, ['--debounce-failure']);
+    const installed = isHookInstalled(effectiveHooks, eventName, command);
     return { group: 'session-events', name: eventName, installed, command };
   });
 
@@ -254,7 +285,7 @@ export async function applyClaudeCodeWiring(
   // the applied/skipped bookkeeping straightforward.
   for (const { eventName } of SESSION_EVENTS_DESCRIPTORS) {
     const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs);
+    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs, ['--debounce-failure']);
 
     const existingCommand = findManagedHookCommand(scopeEvents, eventName, sentinel);
 

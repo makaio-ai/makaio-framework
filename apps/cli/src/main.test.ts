@@ -46,6 +46,8 @@ describe('extractRootConfigArg', () => {
     expect(result).toEqual({
       argv: ['node', 'makaio', 'serve'],
       configPath: './makaio.config.json',
+      debounceFailure: false,
+      noFailure: false,
     });
   });
 
@@ -54,11 +56,50 @@ describe('extractRootConfigArg', () => {
 
     const result = extractRootConfigArg(argv);
 
-    expect(result).toEqual({ argv });
+    expect(result).toEqual({ argv, debounceFailure: false, noFailure: false });
   });
 
   it('throws when root-level --config has no path', () => {
     expect(() => extractRootConfigArg(['node', 'makaio', '--config'])).toThrow('--config requires a path');
+  });
+
+  it('extracts --debounce-failure before the command name', () => {
+    const result = extractRootConfigArg(['node', 'makaio', '--debounce-failure', 'hook', 'received']);
+
+    expect(result).toEqual({
+      argv: ['node', 'makaio', 'hook', 'received'],
+      debounceFailure: true,
+      noFailure: false,
+    });
+  });
+
+  it('extracts --no-failure before the command name', () => {
+    const result = extractRootConfigArg(['node', 'makaio', '--no-failure', 'hook', 'received']);
+
+    expect(result).toEqual({
+      argv: ['node', 'makaio', 'hook', 'received'],
+      debounceFailure: false,
+      noFailure: true,
+    });
+  });
+
+  it('extracts both --debounce-failure and --config together', () => {
+    const result = extractRootConfigArg(['node', 'makaio', '--debounce-failure', '--config', './my.config.ts', 'hook']);
+
+    expect(result).toEqual({
+      argv: ['node', 'makaio', 'hook'],
+      configPath: './my.config.ts',
+      debounceFailure: true,
+      noFailure: false,
+    });
+  });
+
+  it('does not extract --debounce-failure after a subcommand', () => {
+    const argv = ['node', 'makaio', 'hook', '--debounce-failure'];
+    const result = extractRootConfigArg(argv);
+
+    expect(result.debounceFailure).toBe(false);
+    expect(result.argv).toEqual(argv);
   });
 });
 

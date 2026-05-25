@@ -11,20 +11,35 @@ import { discoverDevWorkspacePackages, type DevWorkspacePackages } from './dev-w
 
 /** Result of root-level runtime config flag extraction. */
 export interface RootConfigParseResult {
-  /** Process argv with a root-level `--config` flag removed. */
+  /** Process argv with root-level flags removed. */
   readonly argv: string[];
   /** Explicit config file path passed before the command name. */
   readonly configPath?: string;
+  /** Whether `--debounce-failure` was specified before the command name. */
+  readonly debounceFailure: boolean;
+  /**
+   * Whether `--no-failure` was specified before the command name.
+   * When set, unknown-command errors exit 0 instead of 1 — useful for
+   * fire-and-forget hooks where a missing server is not an error.
+   */
+  readonly noFailure: boolean;
 }
 
 /** Resolved CLI runtime configuration. */
 export interface CliRuntimeConfig {
-  /** Process argv with a root-level `--config` flag removed. */
+  /** Process argv with root-level flags removed. */
   readonly argv: string[];
   /** Discovery strategy selected by explicit config, injected discovery, or default config. */
   readonly discovery: ExtensionDiscovery;
   /** Serve config with runtime config defaults applied when needed. */
   readonly serveConfig?: ServeConfig;
+  /** Whether `--debounce-failure` was specified before the command name. */
+  readonly debounceFailure: boolean;
+  /**
+   * Whether `--no-failure` was specified before the command name.
+   * When set, unknown-command errors exit 0 instead of 1.
+   */
+  readonly noFailure: boolean;
 }
 
 /**
@@ -37,7 +52,11 @@ export interface CliRuntimeConfig {
  */
 export function extractRootConfigArg(argv: readonly string[]): RootConfigParseResult {
   const result = [...argv];
-  for (let index = 2; index < result.length; index += 1) {
+  let configPath: string | undefined;
+  let debounceFailure = false;
+  let noFailure = false;
+
+  for (let index = 2; index < result.length; ) {
     const arg = result[index];
     if (!arg?.startsWith('-')) break;
 
@@ -47,7 +66,8 @@ export function extractRootConfigArg(argv: readonly string[]): RootConfigParseRe
         throw new InvalidOptionArgumentError('--config requires a path');
       }
       result.splice(index, 2);
-      return { argv: result, configPath: value };
+      configPath = value;
+      continue;
     }
 
     if (arg.startsWith('--config=')) {
@@ -56,11 +76,26 @@ export function extractRootConfigArg(argv: readonly string[]): RootConfigParseRe
         throw new InvalidOptionArgumentError('--config requires a path');
       }
       result.splice(index, 1);
-      return { argv: result, configPath: value };
+      configPath = value;
+      continue;
     }
+
+    if (arg === '--debounce-failure') {
+      result.splice(index, 1);
+      debounceFailure = true;
+      continue;
+    }
+
+    if (arg === '--no-failure') {
+      result.splice(index, 1);
+      noFailure = true;
+      continue;
+    }
+
+    index += 1;
   }
 
-  return { argv: result };
+  return { argv: result, configPath, debounceFailure, noFailure };
 }
 
 /**
@@ -108,6 +143,8 @@ export async function resolveCliRuntimeConfig(
     argv: parsedRoot.argv,
     discovery: useConfig ? createMakaioConfigDiscovery(loadedConfig.config) : discovery,
     serveConfig: effectiveServeConfig,
+    debounceFailure: parsedRoot.debounceFailure,
+    noFailure: parsedRoot.noFailure,
   };
 }
 
@@ -140,6 +177,7 @@ export function applyConfigToServeConfig(
       ...serveConfig?.boot,
       discovery: createMakaioConfigDiscovery(config),
       launcherCommand: config.launcherCommand,
+      workflowRunner: serveConfig?.boot?.workflowRunner ?? config.workflowRunner ?? { mode: 'piscina' },
       packageConfigDefaults: mergePackageConfigDefaults(
         serveConfig?.boot?.packageConfigDefaults,
         config.packageConfigDefaults,
