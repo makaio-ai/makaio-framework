@@ -27,13 +27,22 @@ jobs:
 
       - name: Check for skip labels
         id: skip
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const labels = context.payload.pull_request?.labels ?? [];
-            const skip = labels.some(l => ['skip:changeset', 'skip:ci', 'skip:all'].includes(l.name));
-            core.setOutput('skip', skip ? 'true' : 'false');
-            if (skip) core.info('skip label found — skipping changeset check.');
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          skip=false
+          for label in "skip:changeset" "skip:ci" "skip:all"; do
+            if jq -e --arg label "$label" '.pull_request.labels // [] | any(.name == $label)' "$GITHUB_EVENT_PATH" > /dev/null; then
+              skip=true
+              break
+            fi
+          done
+
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          if [ "$skip" = "true" ]; then
+            echo "skip label found — skipping changeset check."
+          fi
 
       - name: Fetch PR head
         if: steps.skip.outputs.skip != 'true'

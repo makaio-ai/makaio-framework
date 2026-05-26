@@ -43,6 +43,7 @@ jobs:
 
             const labels = new Set((pullRequest.labels ?? []).map((label) => label.name));
             const sourceSha = pullRequest.head.sha;
+            const baseSha = pullRequest.base.sha;
             const headRef = pullRequest.head.ref;
             const skipCi = labels.has('skip:ci') || labels.has('skip:all');
             const skipE2e = skipCi || labels.has('skip:e2e');
@@ -88,6 +89,10 @@ jobs:
               return run.head_sha === sourceSha;
             }
 
+            function isSuccessful(run) {
+              return run.status === 'completed' && run.conclusion === 'success';
+            }
+
             function sleep(milliseconds) {
               return new Promise((resolve) => setTimeout(resolve, milliseconds));
             }
@@ -96,7 +101,7 @@ jobs:
               let runs = await listRuns(workflow);
               for (let attempt = 1; attempt <= 3; attempt += 1) {
                 const activeRuns = runs.filter(isActive);
-                const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+                const activeSkipRun = activeRuns.some((run) => isCurrentHead(run) && isSkipRun(workflow, run));
                 const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
                 if (activeWorkRun || activeSkipRun) return runs;
 
@@ -111,6 +116,7 @@ jobs:
               const inputs = {
                 pr_number: String(prNumber),
                 source_sha: sourceSha,
+                base_sha: baseSha,
               };
               if (skip) inputs[workflow.skipInput] = 'true';
 
@@ -126,22 +132,38 @@ jobs:
             for (const workflow of workflows) {
               const runs = workflow.skip ? await listRunsAfterPendingStartup(workflow) : await listRuns(workflow);
               const activeRuns = runs.filter(isActive);
-              const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+              const activeSkipRun = activeRuns.some((run) => isCurrentHead(run) && isSkipRun(workflow, run));
               const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
               const currentHeadPassed = runs.some((run) =>
                 isCurrentHead(run) &&
                 !isSkipRun(workflow, run) &&
-                run.status === 'completed' &&
-                run.conclusion === 'success'
+                isSuccessful(run)
+              );
+              const currentHeadSkipPassed = runs.some((run) =>
+                isCurrentHead(run) &&
+                isSkipRun(workflow, run) &&
+                isSuccessful(run)
               );
 
               if (workflow.skip) {
-                if (activeWorkRun && !activeSkipRun) {
+                if (activeSkipRun) {
+                  core.info(`${workflow.label}: active skip run already exists for PR #${prNumber}.`);
+                  continue;
+                }
+
+                if (activeWorkRun) {
                   await dispatch(workflow, true);
                   core.info(`${workflow.label}: dispatched skip run to cancel active work for PR #${prNumber}.`);
-                } else {
-                  core.info(`${workflow.label}: skip label active; no active work run needs cancellation.`);
+                  continue;
                 }
+
+                if (currentHeadPassed || currentHeadSkipPassed) {
+                  core.info(`${workflow.label}: current head ${sourceSha} already has a successful required gate.`);
+                  continue;
+                }
+
+                await dispatch(workflow, true);
+                core.info(`${workflow.label}: dispatched skip run for PR #${prNumber} at ${sourceSha}.`);
                 continue;
               }
 

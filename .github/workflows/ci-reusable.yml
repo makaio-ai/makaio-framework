@@ -23,11 +23,31 @@ on:
         type: boolean
         default: true
         description: 'Whether to run SDK tests (TypeScript, Python, Rust).'
+      pr_number:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request number when dispatched through a wrapper workflow.'
+      source_sha:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request head SHA when dispatched through a wrapper workflow.'
+      base_sha:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request base SHA when dispatched through a wrapper workflow.'
       skip_labels:
         required: false
         type: string
         default: '["skip:ci", "skip:all"]'
         description: 'JSON array of PR labels that skip CI.'
+      force_skip_ci:
+        required: false
+        type: boolean
+        default: false
+        description: 'Whether to publish a successful CI gate without running CI jobs.'
     outputs:
       docs_only:
         description: 'Whether the PR only changes documentation files.'
@@ -50,57 +70,102 @@ jobs:
     steps:
       - name: Check skip labels
         id: skip-labels
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
+          FORCE_SKIP_CI: ${{ inputs.force_skip_ci }}
           SKIP_LABELS: ${{ inputs.skip_labels }}
-        with:
-          script: |
-            const configuredLabels = JSON.parse(process.env.SKIP_LABELS || '[]');
-            if (!Array.isArray(configuredLabels) || configuredLabels.some((label) => typeof label !== 'string')) {
-              throw new Error('skip_labels must be a JSON array of strings');
-            }
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            const pullRequestLabels = context.payload.pull_request?.labels?.map((label) => label.name) ?? [];
-            const skipCi = configuredLabels.some((label) => pullRequestLabels.includes(label));
-            core.setOutput('skip_ci', skipCi ? 'true' : 'false');
+          if [ "$FORCE_SKIP_CI" = "true" ]; then
+            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+            echo "force_skip_ci input is true; publishing skipped CI gate."
+            exit 0
+          fi
+
+          skip_ci=false
+          configured_labels="$(jq -r 'if type == "array" and all(.[]; type == "string") then .[] else error("skip_labels must be a JSON array of strings") end' <<< "$SKIP_LABELS")"
+          while IFS= read -r configured_label; do
+            if [ -z "$configured_label" ]; then
+              continue
+            fi
+
+            if jq -e --arg label "$configured_label" '.pull_request.labels // [] | any(.name == $label)' "$GITHUB_EVENT_PATH" > /dev/null; then
+              skip_ci=true
+              break
+            fi
+          done <<< "$configured_labels"
+
+          echo "skip_ci=$skip_ci" >> "$GITHUB_OUTPUT"
+          if [ "$skip_ci" = "true" ]; then
+            echo "skip CI label found; publishing skipped CI gate."
+          fi
 
   cache:
     name: Cache
     needs: precheck
-    if: >-
-      github.event_name != 'pull_request' ||
-      needs.precheck.outputs.skip_ci != 'true'
+    if: needs.precheck.outputs.skip_ci != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name == 'pull_request' || inputs.base_sha != ''
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: true
+
       - name: Classify PR changes
         id: changes
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
+        if: github.event_name == 'pull_request' || (inputs.pr_number != '' && inputs.base_sha != '')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            const requiresValidation = files.some(({ filename: file }) => file === 'docs/package-overview.md');
-            const docsOnly = files.length > 0 && !requiresValidation && files.every(({ filename: file }) =>
-              file.endsWith('.md') ||
-              file.startsWith('docs/') ||
-              (file.startsWith('.changeset/') && file.endsWith('.md'))
-            );
-            core.setOutput('docs_only', docsOnly ? 'true' : 'false');
-            if (docsOnly) core.info('Documentation-only PR; skipping CI.');
+          base="$BASE_SHA"
+          pr_number="$PR_NUMBER"
+          if [ -z "$base" ] || [ -z "$pr_number" ]; then
+            echo "::error::PR change classification requires base SHA and PR number."
+            exit 1
+          fi
+
+          git fetch --no-tags origin "$base"
+          git fetch --no-tags origin "refs/pull/${pr_number}/head"
+
+          mapfile -t files < <(git diff --name-only "$base...FETCH_HEAD")
+          docs_only=false
+          if ((${#files[@]} > 0)); then
+            docs_only=true
+            for file in "${files[@]}"; do
+              if [ "$file" = "docs/package-overview.md" ]; then
+                docs_only=false
+                break
+              fi
+
+              case "$file" in
+                *.md|docs/*|.changeset/*.md) ;;
+                *)
+                  docs_only=false
+                  break
+                  ;;
+              esac
+            done
+          fi
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          if [ "$docs_only" = "true" ]; then
+            echo "Documentation-only PR; skipping CI."
+          fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name != 'pull_request' && inputs.base_sha == '' && steps.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
-        if: steps.changes.outputs.docs_only != 'true'
 
       - name: Restore Yarn cache
         if: steps.changes.outputs.docs_only != 'true'
@@ -338,12 +403,22 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [validation, test, sdk]
+    needs: [precheck, validation, test, sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Check results
         run: |
+          if [[ "${{ needs.precheck.result }}" == "failure" || "${{ needs.precheck.result }}" == "cancelled" ]]; then
+            echo "::error::Precheck failed or was cancelled (${{ needs.precheck.result }})"
+            exit 1
+          fi
+
+          if [[ "${{ needs.precheck.outputs.skip_ci }}" == "true" ]]; then
+            echo "::notice::CI skipped by label policy."
+            exit 0
+          fi
+
           results=( "${{ needs.validation.result }}" "${{ needs.test.result }}" "${{ needs.sdk.result }}" )
           for r in "${results[@]}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
