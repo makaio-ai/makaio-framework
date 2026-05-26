@@ -9,3 +9,7 @@ export type {
   WorkflowWorkerEntryMode,
   WorkflowWorkerEntryResolverOptions,
 } from './worker-entry-resolver.js';
+export { WorkerNodeRunner } from './worker-node-runner.js';
+export type { WorkerNodeRunnerOptions } from './worker-node-runner.js';
+export { PiscinaWorkerNodeProvider } from './piscina-worker-node-provider.js';
+export type { PiscinaWorkerNodeProviderOptions } from './piscina-worker-node-provider.js';

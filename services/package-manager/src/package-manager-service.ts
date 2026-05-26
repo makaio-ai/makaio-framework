@@ -89,7 +89,9 @@ export interface LocalInstallClient {
   /**
    * List all locally installed extensions.
    */
-  list: () => Promise<Array<{ name: string; version: string; sourcePath: string; source: 'local' }>>;
+  list: () => Promise<
+    Array<{ name: string; version: string; sourcePath: string; source: 'local'; serverImportPath?: string }>
+  >;
 }
 
 /**
@@ -322,6 +324,7 @@ export class PackageManagerService extends BaseService {
             name: extension.name,
             version: extension.version,
             hasDescriptor: true,
+            ...(extension.serverImportPath !== undefined && { serverImportPath: extension.serverImportPath }),
           })),
         ];
         ctx.setResult({ packages });

@@ -2,26 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowWorkerConfig } from '@makaio/contracts';
 import type { WorkflowPiscinaRunnerOptions } from '../types.js';
 
-// Mock Piscina before importing the class under test
-const mockRun = vi.fn();
-const mockDestroy = vi.fn();
-const mockConstructorOptions: Array<{ filename: string; maxThreads: number; idleTimeout: number }> = [];
+// Mock PiscinaPoolRunner before importing the class under test.
+const mockPoolRun = vi.fn();
+const mockPoolDispose = vi.fn();
+const mockConstructorOptions: WorkflowPiscinaRunnerOptions[] = [];
 
-vi.mock('piscina', () => ({
-  default: class MockPiscina {
-    public readonly filename: string;
-    public readonly maxThreads: number;
-    public readonly idleTimeout: number;
-
-    public constructor(opts: { filename: string; maxThreads: number; idleTimeout: number }) {
-      mockConstructorOptions.push(opts);
-      this.filename = opts.filename;
-      this.maxThreads = opts.maxThreads;
-      this.idleTimeout = opts.idleTimeout;
+vi.mock('../../workflow-step-runner/piscina-pool-runner.js', () => ({
+  PiscinaPoolRunner: class MockPiscinaPoolRunner {
+    public constructor(options: WorkflowPiscinaRunnerOptions) {
+      mockConstructorOptions.push(options);
     }
 
-    public run = mockRun;
-    public destroy = mockDestroy;
+    public run = mockPoolRun;
+    public dispose = mockPoolDispose;
   },
 }));
 
@@ -70,13 +63,13 @@ describe('WorkflowPiscinaRunner', () => {
     mockConstructorOptions.length = 0;
   });
 
-  it('passes config and manifest to pool.run()', async () => {
+  it('passes config and construction-time manifest to pool.run()', async () => {
     const expectedResult = {
       executionId: 'test-exec',
       workflowId: 'test-workflow',
       status: 'completed',
     };
-    mockRun.mockResolvedValueOnce(expectedResult);
+    mockPoolRun.mockResolvedValueOnce(expectedResult);
 
     const options = makeOptions();
     const runner = new WorkflowPiscinaRunner(options);
@@ -85,54 +78,70 @@ describe('WorkflowPiscinaRunner', () => {
 
     const result = await runner.run(config, signal);
 
-    expect(mockRun).toHaveBeenCalledOnce();
-    expect(mockRun).toHaveBeenCalledWith({ config, manifest: options.manifest }, { signal });
+    expect(mockPoolRun).toHaveBeenCalledOnce();
+    expect(mockPoolRun).toHaveBeenCalledWith({ config, manifest: options.manifest }, signal);
+    expect(result).toEqual(expectedResult);
+  });
+
+  it('passes per-call manifest override to pool.run()', async () => {
+    const expectedResult = {
+      executionId: 'test-exec',
+      workflowId: 'test-workflow',
+      status: 'completed',
+    };
+    mockPoolRun.mockResolvedValueOnce(expectedResult);
+
+    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const config = makeConfig();
+    const signal = new AbortController().signal;
+    const perCallManifest = { packages: [{ name: 'pkg-a', importPath: './pkg-a.js' }] };
+
+    const result = await runner.run(config, signal, perCallManifest);
+
+    expect(mockPoolRun).toHaveBeenCalledOnce();
+    expect(mockPoolRun).toHaveBeenCalledWith({ config, manifest: perCallManifest }, signal);
     expect(result).toEqual(expectedResult);
   });
 
   it('propagates abort signal to pool.run()', async () => {
     const controller = new AbortController();
-    mockRun.mockRejectedValueOnce(new Error('The task was aborted'));
+    mockPoolRun.mockRejectedValueOnce(new Error('The task was aborted'));
 
     const runner = new WorkflowPiscinaRunner(makeOptions());
     controller.abort();
 
     await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
-    expect(mockRun).toHaveBeenCalledWith(expect.anything(), { signal: controller.signal });
+    expect(mockPoolRun).toHaveBeenCalledWith(expect.anything(), controller.signal);
   });
 
-  it('uses default maxConcurrency of 4 when not specified', () => {
+  it('passes options to PiscinaPoolRunner when maxConcurrency is omitted', () => {
     new WorkflowPiscinaRunner(makeOptions());
 
-    expect(mockConstructorOptions).toEqual([
-      { filename: '/path/to/workflow-worker-entry.mjs', maxThreads: 4, idleTimeout: 30_000 },
-    ]);
+    expect(mockConstructorOptions).toEqual([makeOptions()]);
   });
 
-  it('uses custom maxConcurrency when specified', () => {
+  it('passes custom maxConcurrency to PiscinaPoolRunner when specified', () => {
     const options: WorkflowPiscinaRunnerOptions = {
       ...makeOptions(),
       maxConcurrency: 8,
     };
     new WorkflowPiscinaRunner(options);
 
-    expect(mockConstructorOptions).toEqual([
-      { filename: '/path/to/workflow-worker-entry.mjs', maxThreads: 8, idleTimeout: 30_000 },
-    ]);
+    expect(mockConstructorOptions).toEqual([options]);
   });
 
-  it('dispose() calls pool.destroy()', async () => {
-    mockDestroy.mockResolvedValueOnce(undefined);
+  it('dispose() calls pool.dispose()', async () => {
+    mockPoolDispose.mockResolvedValueOnce(undefined);
     const runner = new WorkflowPiscinaRunner(makeOptions());
 
     await runner.dispose();
 
-    expect(mockDestroy).toHaveBeenCalledOnce();
+    expect(mockPoolDispose).toHaveBeenCalledOnce();
   });
 
   it('propagates pool.run() rejection to caller', async () => {
     const error = new Error('Worker thread crashed');
-    mockRun.mockRejectedValueOnce(error);
+    mockPoolRun.mockRejectedValueOnce(error);
 
     const runner = new WorkflowPiscinaRunner(makeOptions());
 

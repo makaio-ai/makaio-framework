@@ -8,6 +8,7 @@ import { DockerStepRunner } from './docker-step-runner.js';
 import { resolveWorkerEntry, type WorkerEntryMode } from './worker-entry-resolver.js';
 import { WorkflowPiscinaRunner } from '../workflow-worker/workflow-piscina-runner.js';
 import { resolveWorkflowWorkerEntry } from '../workflow-worker/worker-entry-resolver.js';
+import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
 
 /** Internal configuration retained for legacy step-runner tests and migration work. */
 type InternalWorkflowStepRunnerOptions =
@@ -87,7 +88,13 @@ export interface NodeWorkflowStepRunnerPackageOptions {
   };
 }
 
-const EMPTY_WORKER_CONTRIBUTION_MANIFEST: WorkerContributionManifest = Object.freeze({ packages: Object.freeze([]) });
+/**
+ * Create the default empty worker contribution manifest.
+ * @returns A fresh manifest instance for isolated runner options.
+ */
+function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
+  return { packages: [] };
+}
 
 /**
  * Resolve typed Node runner factory options from runtime boot options.
@@ -117,7 +124,7 @@ export function resolveWorkflowStepRunnerFactoryOptions(
       return {
         mode: runner.mode,
         ...base,
-        manifest: runner.manifest ?? EMPTY_WORKER_CONTRIBUTION_MANIFEST,
+        manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
         workerEntry: resolveBootWorkerEntry(params, runner),
         maxConcurrency: runner.maxConcurrency,
         idleTimeoutMs: runner.idleTimeoutMs,
@@ -127,7 +134,7 @@ export function resolveWorkflowStepRunnerFactoryOptions(
       return {
         mode: runner.mode,
         ...base,
-        manifest: runner.manifest ?? EMPTY_WORKER_CONTRIBUTION_MANIFEST,
+        manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
         workerEntry: resolveBootWorkerEntry(params, runner),
       };
     }
@@ -135,7 +142,7 @@ export function resolveWorkflowStepRunnerFactoryOptions(
       return {
         mode: runner.mode,
         ...base,
-        manifest: runner.manifest ?? EMPTY_WORKER_CONTRIBUTION_MANIFEST,
+        manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
         workerEntry: resolveBootWorkerEntry(params, runner),
         imageName: runner.imageName,
         networkMode: runner.networkMode,
@@ -269,28 +276,42 @@ interface CreateNodeWorkflowRunnerParams {
  * Returns `undefined` for `in-process` mode (or when no runner is configured),
  * letting the workflow engine fall back to its built-in DAG scheduler.
  * Returns a {@link WorkflowPiscinaRunner} for `piscina` mode.
+ * Returns a {@link WorkerNodeRunner} for `worker-node` mode.
  * @param params - Package root, entry mode, and optional runner configuration.
  * @returns A workflow runner instance, or `undefined` to use the engine default.
  */
 export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams): IWorkflowRunner | undefined {
   const { runner } = params;
-  if (!runner || runner.mode !== 'piscina') {
+  if (!runner) {
     return undefined;
   }
 
-  const workerEntry =
-    runner.workerEntry ??
-    resolveWorkflowWorkerEntry({
-      packageRoot: params.packageRoot,
-      mode: runner.workerEntryMode ?? params.defaultWorkerEntryMode,
-    });
+  switch (runner.mode) {
+    case undefined:
+    case 'in-process':
+      return undefined;
 
-  const manifest: WorkerContributionManifest = runner.manifest ?? EMPTY_WORKER_CONTRIBUTION_MANIFEST;
+    case 'worker-node':
+      return new WorkerNodeRunner({
+        dispatch: runner.dispatch,
+        ...(runner.manifest !== undefined && { manifest: runner.manifest }),
+        ...(runner.requirements !== undefined && { requirements: runner.requirements }),
+      });
 
-  return new WorkflowPiscinaRunner({
-    workerEntry,
-    manifest,
-    maxConcurrency: runner.maxConcurrency,
-    idleTimeoutMs: runner.idleTimeoutMs,
-  });
+    case 'piscina': {
+      const workerEntry =
+        runner.workerEntry ??
+        resolveWorkflowWorkerEntry({
+          packageRoot: params.packageRoot,
+          mode: runner.workerEntryMode ?? params.defaultWorkerEntryMode,
+        });
+
+      return new WorkflowPiscinaRunner({
+        workerEntry,
+        manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
+        maxConcurrency: runner.maxConcurrency,
+        idleTimeoutMs: runner.idleTimeoutMs,
+      });
+    }
+  }
 }

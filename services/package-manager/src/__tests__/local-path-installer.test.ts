@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { LocalPathInstaller } from '../local-path-installer.js';
+import { LocalPathInstaller, resolveExtensionEntrypointImportPath } from '../local-path-installer.js';
 
 /**
  * Minimal valid descriptor.json content for test fixtures.
@@ -136,6 +136,7 @@ describe('LocalPathInstaller', () => {
     expect(entries[0].version).toBe('2.3.4');
     expect(entries[0].sourcePath).toBe(await fs.realpath(sourceDir));
     expect(entries[0].source).toBe('local');
+    expect(entries[0].serverImportPath).toBe(await fs.realpath(path.join(sourceDir, 'src', 'index.ts')));
   });
 
   it('should resolve descriptor.json path to parent directory', async () => {
@@ -185,6 +186,25 @@ describe('LocalPathInstaller', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('has no resolvable candidate');
+  });
+
+  it('resolves server entrypoints using src before dist and rejects escaped stems', async () => {
+    const root = path.join(tempDir, 'entrypoint-root');
+    await fs.mkdir(path.join(root, 'src'), { recursive: true });
+    await fs.mkdir(path.join(root, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(root, 'src', 'server.ts'), 'export {};');
+    await fs.writeFile(path.join(root, 'dist', 'server.mjs'), 'export {};');
+
+    await expect(resolveExtensionEntrypointImportPath(root, 'server', true)).resolves.toBe(
+      await fs.realpath(path.join(root, 'src', 'server.ts')),
+    );
+    await fs.rm(path.join(root, 'src', 'server.ts'));
+    await expect(resolveExtensionEntrypointImportPath(root, 'server', true)).resolves.toBe(
+      await fs.realpath(path.join(root, 'dist', 'server.mjs')),
+    );
+    const outside = path.join(tempDir, 'outside.ts');
+    await fs.writeFile(outside, 'export {};');
+    await expect(resolveExtensionEntrypointImportPath(root, 'server', '../../outside')).resolves.toBeUndefined();
   });
 
   it('should create absolute symlinks for relative source paths', async () => {

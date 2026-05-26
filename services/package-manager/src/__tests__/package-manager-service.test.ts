@@ -164,12 +164,13 @@ class StubRegistryService implements PackageRegistryClient {
  * In-memory local installer stub.
  */
 class StubLocalInstaller implements LocalInstallClient {
-  public readonly installed: Array<{ name: string; version: string; sourcePath: string }> = [];
+  public readonly installed: Array<{ name: string; version: string; sourcePath: string; serverImportPath: string }> =
+    [];
 
   public async install(sourcePath: string): Promise<PackageInstallResult> {
     const name = `local-ext-${this.installed.length}`;
     const version = '0.1.0';
-    this.installed.push({ name, version, sourcePath });
+    this.installed.push({ name, version, sourcePath, serverImportPath: `${sourcePath}/src/server.ts` });
     return { success: true, packageName: name, version, restartRequired: true };
   }
 
@@ -187,7 +188,9 @@ class StubLocalInstaller implements LocalInstallClient {
     };
   }
 
-  public async list(): Promise<Array<{ name: string; version: string; sourcePath: string; source: 'local' }>> {
+  public async list(): Promise<
+    Array<{ name: string; version: string; sourcePath: string; source: 'local'; serverImportPath: string }>
+  > {
     return this.installed.map((e) => ({ ...e, source: 'local' as const }));
   }
 }
@@ -271,7 +274,14 @@ describe('PackageManagerService', () => {
 
       const result = await localBus.request(PackageSubjects.list, {});
 
-      expect(result.packages).toEqual([{ name: 'local-ext-0', version: '0.1.0', hasDescriptor: true }]);
+      expect(result.packages).toEqual([
+        {
+          name: 'local-ext-0',
+          version: '0.1.0',
+          hasDescriptor: true,
+          serverImportPath: '/tmp/my-local-ext/src/server.ts',
+        },
+      ]);
 
       await localService.destroy();
     });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
-import { JsonObjectContractSchema, type JsonValue } from '../shared/json-value.js';
+import { JsonObjectContractSchema, JsonValueSchema, type JsonValue } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -120,6 +120,11 @@ export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
  *
  * Fully serializable so it can be transferred across process / thread
  * boundaries (Piscina worker threads, child processes, Docker containers).
+ *
+ * NOTE: A companion {@link WorkflowRunResultSchema} exists for runtime
+ * validation. The interface predates the schema and is retained because it
+ * is used as a TypeScript type throughout the codebase. Both definitions
+ * must stay in sync.
  */
 export interface WorkflowRunResult {
   /** Unique identifier for this execution run. */
@@ -138,6 +143,53 @@ export interface WorkflowRunResult {
   readonly output?: JsonValue;
 }
 
+/**
+ * Zod schema for the serializable result returned by isolated workflow workers.
+ */
+export const WorkflowRunResultSchema = z.object({
+  /** Unique identifier for this execution run. */
+  executionId: z.string().min(1),
+  /** Workflow definition identifier. */
+  workflowId: z.string().min(1),
+  /** Terminal execution status. */
+  status: z.enum(['completed', 'failed', 'cancelled']),
+  /** Final output produced by the workflow, if any. */
+  output: JsonValueSchema.optional(),
+});
+
+// ─────────────────────────────────────────────────────────────
+// Worker Contribution Manifest
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Reference to an extension package that a workflow worker process should import.
+ *
+ * Fully serializable so it can cross worker-thread, process, container, or
+ * remote node boundaries without carrying runtime objects.
+ */
+export const WorkerContributionPackageRefSchema = z.object({
+  /** Package name used for diagnostics and installed-package matching. */
+  name: z.string().min(1),
+  /** ESM import path resolvable inside the target worker environment. */
+  importPath: z.string().min(1),
+});
+
+export type WorkerContributionPackageRef = z.infer<typeof WorkerContributionPackageRefSchema>;
+
+/**
+ * Serializable manifest declaring worker-local extension packages.
+ *
+ * The manifest contains concrete import paths, not project-level desired
+ * package specs. Product pool dispatch resolves desired project manifests into
+ * this worker manifest before provisioning a WorkerNode.
+ */
+export const WorkerContributionManifestSchema = z.object({
+  /** Explicit packages whose server entrypoints are importable in the worker. */
+  packages: z.array(WorkerContributionPackageRefSchema).default([]),
+});
+
+export type WorkerContributionManifest = z.infer<typeof WorkerContributionManifestSchema>;
+
 // ─────────────────────────────────────────────────────────────
 // Workflow Runner Interface
 // ─────────────────────────────────────────────────────────────
@@ -152,11 +204,21 @@ export interface WorkflowRunResult {
 export interface IWorkflowRunner {
   /**
    * Execute a complete workflow in an isolated worker.
+   *
+   * When `manifest` is supplied it takes precedence over any manifest baked
+   * into the runner at construction time, enabling per-call contribution
+   * sets (e.g. when the WorkerNode pool dispatches with a request-specific
+   * manifest). Callers that do not need per-call control may omit it.
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
+   * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @returns The execution result with terminal status and optional output.
    */
-  run(config: WorkflowWorkerConfig, signal: AbortSignal): Promise<WorkflowRunResult>;
+  run(
+    config: WorkflowWorkerConfig,
+    signal: AbortSignal,
+    manifest?: WorkerContributionManifest,
+  ): Promise<WorkflowRunResult>;
 
   /**
    * Release underlying resources (thread pool, processes, connections).

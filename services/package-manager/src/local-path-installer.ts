@@ -33,6 +33,81 @@ export interface LocalExtensionEntry {
   readonly sourcePath: string;
   /** Always `'local'` for entries managed by this installer. */
   readonly source: 'local';
+  /** Absolute import path for the resolved server entrypoint, when present. */
+  readonly serverImportPath?: string;
+}
+
+/**
+ * Resolve a descriptor entrypoint using the runtime convention.
+ * @param extensionDir - Absolute extension root path.
+ * @param surface - Entrypoint surface.
+ * @param entrypoint - Entrypoint declaration.
+ * @returns Resolved entrypoint import path when valid.
+ */
+export async function resolveExtensionEntrypointImportPath(
+  extensionDir: string,
+  surface: keyof ExtensionEntrypoints,
+  entrypoint: true | string,
+): Promise<string | undefined> {
+  if (!path.isAbsolute(extensionDir)) {
+    return undefined;
+  }
+
+  let realExtensionDir: string;
+  try {
+    realExtensionDir = await fs.realpath(extensionDir);
+  } catch {
+    return undefined;
+  }
+
+  const stem = entrypointStem(surface, entrypoint);
+  const candidates = [
+    path.resolve(realExtensionDir, 'src', `${stem}.ts`),
+    path.resolve(realExtensionDir, 'dist', `${stem}.mjs`),
+  ];
+
+  for (const candidate of candidates) {
+    const realCandidate = await realpathIfExists(candidate);
+    if (realCandidate !== undefined && isWithinDirectory(realCandidate, realExtensionDir)) {
+      return realCandidate;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Convert a descriptor entrypoint declaration into its path stem.
+ * @param surface - Entrypoint surface.
+ * @param entrypoint - Entrypoint declaration.
+ * @returns Entrypoint stem.
+ */
+function entrypointStem(surface: keyof ExtensionEntrypoints, entrypoint: true | string): string {
+  return entrypoint === true ? surface : entrypoint;
+}
+
+/**
+ * Resolve the real path for an existing file.
+ * @param targetPath - Candidate path.
+ * @returns Real path when the target exists.
+ */
+async function realpathIfExists(targetPath: string): Promise<string | undefined> {
+  try {
+    return await fs.realpath(targetPath);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check whether a candidate path stays within an extension root.
+ * @param candidate - Real candidate path.
+ * @param extensionDir - Real extension root.
+ * @returns Whether the candidate is contained by the root.
+ */
+function isWithinDirectory(candidate: string, extensionDir: string): boolean {
+  const relative = path.relative(extensionDir, candidate);
+  return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 /**
@@ -197,7 +272,7 @@ export class LocalPathInstaller {
       }
 
       const rawTarget = await fs.readlink(linkPath);
-      const sourcePath = path.resolve(path.dirname(linkPath), rawTarget);
+      const sourcePath = await fs.realpath(path.resolve(path.dirname(linkPath), rawTarget));
       const descriptorPath = path.join(sourcePath, 'descriptor.json');
       const raw = await fs.readFile(descriptorPath, 'utf-8');
       const parsed = JSON.parse(raw) as unknown;
@@ -206,11 +281,18 @@ export class LocalPathInstaller {
         return null;
       }
 
+      const serverEntrypoint = result.data.entrypoints?.server;
+      const serverImportPath =
+        serverEntrypoint === undefined
+          ? undefined
+          : await resolveExtensionEntrypointImportPath(sourcePath, 'server', serverEntrypoint);
+
       return {
         name: result.data.name,
         version: result.data.version,
         sourcePath,
         source: 'local',
+        ...(serverImportPath !== undefined && { serverImportPath }),
       };
     } catch {
       return null;
@@ -251,9 +333,9 @@ export class LocalPathInstaller {
             return;
           }
 
-          const resolved = await this.resolveConventionEntrypoint(extensionDir, surface, entrypoint);
+          const resolved = await resolveExtensionEntrypointImportPath(extensionDir, surface, entrypoint);
           if (resolved === undefined) {
-            const stem = this.entrypointStem(surface, entrypoint);
+            const stem = entrypointStem(surface, entrypoint);
             throw new Error(
               `${surface} entrypoint "${stem}" has no resolvable candidate: neither src/${stem}.ts nor dist/${stem}.mjs exists within the extension root`,
             );
@@ -261,71 +343,6 @@ export class LocalPathInstaller {
         },
       ),
     );
-  }
-
-  /**
-   * Resolve one descriptor entrypoint using the runtime convention.
-   * @param extensionDir - Absolute real path to the extension root.
-   * @param surface - Entrypoint surface.
-   * @param entrypoint - Entrypoint declaration.
-   * @returns Resolved entrypoint path when valid.
-   */
-  private async resolveConventionEntrypoint(
-    extensionDir: string,
-    surface: keyof ExtensionEntrypoints,
-    entrypoint: true | string,
-  ): Promise<string | undefined> {
-    const stem = this.entrypointStem(surface, entrypoint);
-    const candidates = [
-      path.resolve(extensionDir, 'src', `${stem}.ts`),
-      path.resolve(extensionDir, 'dist', `${stem}.mjs`),
-    ];
-
-    for (const candidate of candidates) {
-      if (await this.pathExists(candidate)) {
-        const realCandidate = await fs.realpath(candidate);
-        if (this.isWithinDirectory(realCandidate, extensionDir)) {
-          return realCandidate;
-        }
-      }
-    }
-
-    return undefined;
-  }
-
-  /**
-   * Convert a descriptor entrypoint declaration into its path stem.
-   * @param surface - Entrypoint surface.
-   * @param entrypoint - Entrypoint declaration.
-   * @returns Entrypoint stem.
-   */
-  private entrypointStem(surface: keyof ExtensionEntrypoints, entrypoint: true | string): string {
-    return entrypoint === true ? surface : entrypoint;
-  }
-
-  /**
-   * Check whether a candidate path stays within an extension root.
-   * @param candidate - Real candidate path.
-   * @param extensionDir - Real extension root.
-   * @returns Whether the candidate is contained by the root.
-   */
-  private isWithinDirectory(candidate: string, extensionDir: string): boolean {
-    const normalizedRoot = extensionDir.endsWith(path.sep) ? extensionDir : `${extensionDir}${path.sep}`;
-    return candidate.startsWith(normalizedRoot);
-  }
-
-  /**
-   * Check whether a filesystem path exists.
-   * @param targetPath - Path to check.
-   * @returns Whether the path exists.
-   */
-  private async pathExists(targetPath: string): Promise<boolean> {
-    try {
-      await fs.access(targetPath);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   /**

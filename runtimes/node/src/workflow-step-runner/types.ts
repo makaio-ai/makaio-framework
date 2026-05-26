@@ -1,4 +1,6 @@
-import type { StepRunnerBusAuth, StepRunnerPlatformDefaults } from '@makaio/contracts';
+import type { StepRunnerBusAuth, StepRunnerPlatformDefaults, WorkerContributionManifest } from '@makaio/contracts';
+
+export type { WorkerContributionManifest, WorkerContributionPackageRef } from '@makaio/contracts';
 
 // ---------------------------------------------------------------------------
 // Shared base fields for all runner modes
@@ -71,32 +73,3 @@ export type NodeStepRunnerFactoryOptions =
   | PiscinaStepRunnerOptions
   | ChildProcessStepRunnerOptions
   | DockerStepRunnerOptions;
-
-// ---------------------------------------------------------------------------
-// Worker Contribution Manifest
-// ---------------------------------------------------------------------------
-
-/**
- * Reference to an extension package that a worker process should import.
- *
- * Fully serializable so it can be sent across process boundaries (e.g.,
- * worker_threads postMessage or child-process IPC).
- */
-export interface WorkerContributionPackageRef {
-  /** Package name for diagnostics. */
-  readonly name: string;
-  /** ESM import path resolvable inside the worker environment. */
-  readonly importPath: string;
-}
-
-/**
- * Serializable manifest that tells an isolated worker process which extension
- * packages to import for tools and adapters.
- *
- * Designed to be JSON-safe so it can be transferred across process boundaries
- * without loss.
- */
-export interface WorkerContributionManifest {
-  /** Explicit packages whose server entrypoints are importable in the worker. */
-  readonly packages: readonly WorkerContributionPackageRef[];
-}

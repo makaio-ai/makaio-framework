@@ -28,6 +28,7 @@ import { VisionNamespace } from './capabilities/vision/namespace.js';
 import { VoiceNamespace } from './capabilities/voice/namespace.js';
 import { WorkflowNamespace } from './workflow/namespace.js';
 import { WorkflowBlocksNamespace } from './workflow-blocks/namespace.js';
+import { WorkerNodeNamespace } from './worker-node/namespace.js';
 
 import { MessageStorageNamespace } from './session/message-storage-namespace.js';
 import { SessionEventStorageNamespace } from './session/session-event-storage-namespace.js';
@@ -80,6 +81,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   VoiceNamespace,
   WorkflowNamespace,
   WorkflowBlocksNamespace,
+  WorkerNodeNamespace,
 ] as RegistrableBusNamespaceDefinition[];
 
 /**

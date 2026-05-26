@@ -235,6 +235,7 @@ async function executeLocalEntry(
     messageId: options.messageId,
     correlationId: options.correlationId,
     transport: options.transport,
+    ...(options.signal !== undefined && { signal: options.signal }),
     setResult: (value) => {
       resultValue = value;
       hasResult = true;

@@ -29,6 +29,7 @@ export interface EventContext<Payload> extends BaseMessageContext {
  * - `next`: Function to call the next handler in the middleware chain
  * - `replacePayload`: Function to transform the payload for subsequent handlers
  * - `identify`: Optional function to identify the handler for broadcast aggregation
+ * - `signal`: Optional AbortSignal from the originating request
  * - Message tracking fields from BaseMessage (messageId, correlationId)
  */
 export interface RequestContext<Payload, Response> extends BaseMessageContext {
@@ -37,6 +38,9 @@ export interface RequestContext<Payload, Response> extends BaseMessageContext {
 
   /** The request payload */
   payload: Payload;
+
+  /** AbortSignal supplied by the originating request, if any. */
+  signal?: AbortSignal;
 
   /** Set the response value (ends the handler chain) */
   setResult: (result: Response) => void;

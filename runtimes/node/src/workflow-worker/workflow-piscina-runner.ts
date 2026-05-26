@@ -1,6 +1,5 @@
-import type { WorkflowWorkerConfig } from '@makaio/contracts';
+import type { WorkflowWorkerConfig, WorkerContributionManifest } from '@makaio/contracts';
 import type { IWorkflowRunner, WorkflowPiscinaRunnerOptions, WorkflowRunResult } from './types.js';
-import type { WorkerContributionManifest } from '../workflow-step-runner/types.js';
 import { PiscinaPoolRunner } from '../workflow-step-runner/piscina-pool-runner.js';
 
 interface WorkflowPiscinaRunnerTask {
@@ -33,12 +32,21 @@ export class WorkflowPiscinaRunner implements IWorkflowRunner {
 
   /**
    * Execute a complete workflow in a pooled worker thread.
+   *
+   * When `manifest` is provided it overrides the runner's construction-time
+   * default, so per-request contribution sets from the WorkerNode pool are
+   * applied correctly without requiring a new runner instance.
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
+   * @param manifest - Optional per-call manifest override.
    * @returns Execution result with terminal status and optional output.
    */
-  public async run(config: WorkflowWorkerConfig, signal: AbortSignal): Promise<WorkflowRunResult> {
-    return this.pool.run({ config, manifest: this.manifest }, signal);
+  public async run(
+    config: WorkflowWorkerConfig,
+    signal: AbortSignal,
+    manifest?: WorkerContributionManifest,
+  ): Promise<WorkflowRunResult> {
+    return this.pool.run({ config, manifest: manifest ?? this.manifest }, signal);
   }
 
   /**

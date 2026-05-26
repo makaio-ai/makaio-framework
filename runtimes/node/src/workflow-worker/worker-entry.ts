@@ -3,6 +3,7 @@ import {
   WorkflowWorkerConfigSchema,
   createWorkflowCancelSubject,
   type BusEventTrigger,
+  type WorkerContributionManifest,
   type WorkflowStep,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
@@ -16,7 +17,6 @@ import {
   type WorkerRuntimeHandle,
 } from '../workflow-step-runner/worker-boot.js';
 import { loadWorkerContributions } from '../workflow-step-runner/worker-contributions.js';
-import type { WorkerContributionManifest } from '../workflow-step-runner/types.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
