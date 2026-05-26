@@ -97,6 +97,7 @@ export class WorkflowBlockRegistry extends BaseService {
           configSchema: stripMetaSchema(step.configSchema),
           inputSchema: stripMetaSchema(step.inputSchema),
           outputSchema: stripMetaSchema(step.outputSchema),
+          runs: structuredClone(step.runs),
         });
       }
     }
@@ -235,6 +236,7 @@ function cloneStepBlock(block: RegisteredStepBlock): RegisteredStepBlock {
     configSchema: structuredClone(block.configSchema),
     inputSchema: structuredClone(block.inputSchema),
     outputSchema: structuredClone(block.outputSchema),
+    runs: structuredClone(block.runs),
   };
 }
 

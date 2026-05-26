@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { createBusInstance, getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
 import {
   CapabilitySubjects,
   parseExtensionDescriptor,
   type ProviderRegistration,
   REVIEWER_PROCESSOR_CAPABILITY_ID,
   REVIEW_SOURCE_CAPABILITY_ID,
+  ReviewSubjects,
   type ProviderUnregistration,
   WorkflowBlocksSubjects,
 } from '@makaio/contracts';
@@ -181,11 +182,18 @@ describe('coderabbitPackage', () => {
       extensionName: 'coderabbit',
       categories: ['review'],
     });
+    expect(listed.steps[0]?.runs).toEqual({
+      type: 'bus-request',
+      subject: getFullSubjectForSubjectDefinition(ReviewSubjects.findings.list),
+      payload: {
+        target: '{{ input.target }}',
+        status: '{{ config.status }}',
+      },
+    });
     expect(listed.steps[0]?.configSchema).toMatchObject({
       properties: {
-        includeResolved: {
-          default: false,
-          type: 'boolean',
+        status: {
+          enum: ['open', 'addressed', 'verified', 'dismissed', 'deferred'],
         },
       },
     });

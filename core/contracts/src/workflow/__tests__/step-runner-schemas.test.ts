@@ -23,6 +23,10 @@ describe('WorkflowStepTypeSchema', () => {
     expect(WorkflowStepTypeSchema.parse('gate')).toBe('gate');
   });
 
+  it('accepts bus-request as a workflow lifecycle step type', () => {
+    expect(WorkflowStepTypeSchema.parse('bus-request')).toBe('bus-request');
+  });
+
   it('rejects unknown step types', () => {
     expect(() => WorkflowStepTypeSchema.parse('lambda')).toThrow();
     expect(() => WorkflowStepTypeSchema.parse('')).toThrow();
@@ -281,6 +285,10 @@ describe('WorkflowRunnerStepTypeSchema', () => {
 
   it('rejects gate (gates are not runner-executable)', () => {
     expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow();
+  });
+
+  it('rejects bus-request as a runner-executable step type', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('bus-request')).toThrow();
   });
 
   it('rejects unknown types', () => {

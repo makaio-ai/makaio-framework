@@ -33,7 +33,11 @@ import {
   prepareRunnerManagedStep,
   type StepExecutionOutcome,
 } from './workflow-step-result.js';
-import { runGateInlineStep, runFunctionInlineStep } from './workflow-scheduler-inline-steps.js';
+import {
+  runBusRequestInlineStep,
+  runFunctionInlineStep,
+  runGateInlineStep,
+} from './workflow-scheduler-inline-steps.js';
 import {
   buildInitialSchedulerGraph,
   findReadySchedulerNodes,
@@ -54,7 +58,7 @@ import {
  * 1. Find all nodes whose `needs` are fully satisfied (terminal state).
  * 2. For composite nodes (`for-each`): expand collection at runtime, insert
  *    children into the graph, rewire downstream dependencies.
- * 3. For executable nodes (`agent | shell | gate`): evaluate `if`, then run.
+ * 3. For executable nodes (`agent | shell | gate | function | bus-request`): evaluate `if`, then run.
  * 4. When any node fails: abort in-flight nodes and fail the execution.
  * 5. Repeat until no ready nodes remain and no in-flight work is pending.
  */
@@ -374,9 +378,9 @@ export class WorkflowScheduler {
   // ─────────────────────────────────────────────────────────────
 
   /**
-   * Run a single executable (agent / shell / gate) node.
+   * Run a single executable (agent / shell / gate / function / bus-request) node.
    * Evaluates the `if` condition first, then delegates to the step runner
-   * (agent/shell) or handles gate steps directly via the gate coordinator.
+   * (agent/shell) or handles inline steps (gate, function, bus-request) directly.
    * @param nodeId - Executable step ID.
    * @param active - Active execution state.
    * @returns Step execution outcome.
@@ -414,14 +418,17 @@ export class WorkflowScheduler {
 
     const resolvedInputs: WorkflowExpressionContext = { ...context };
 
-    // Gate and function steps have specialised execution paths extracted to
-    // workflow-scheduler-inline-steps.ts for clarity and to keep this method
-    // within the per-function line budget.
+    // Gate, function, and bus-request steps have specialised execution paths
+    // extracted to workflow-scheduler-inline-steps.ts for clarity and to keep
+    // this method within the per-function line budget.
     if (step.type === 'gate') {
       return runGateInlineStep(this.deps, this.executionId, active, nodeId, resolvedInputs);
     }
     if (step.type === 'function') {
       return runFunctionInlineStep(this.deps, this.executionId, active, nodeId, resolvedInputs);
+    }
+    if (step.type === 'bus-request') {
+      return runBusRequestInlineStep(this.deps, this.executionId, active, nodeId, resolvedInputs);
     }
 
     if (!this.deps.runnerManagesLifecycle) {

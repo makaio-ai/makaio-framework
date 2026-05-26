@@ -1,4 +1,30 @@
 /* eslint-disable max-lines */
+export {
+  ArtifactChangesSchema,
+  ArtifactCreateBodySchema,
+  ArtifactFilterSchema,
+  ArtifactNamespace,
+  ArtifactSchema,
+  ArtifactSchemas,
+  ArtifactScopeSchema,
+  ArtifactSubjects,
+  ArtifactTypeSchema,
+} from './artifact/index.js';
+export type {
+  Artifact,
+  ArtifactChanges,
+  ArtifactCreateBody,
+  ArtifactCreatedPayload,
+  ArtifactCreateRequest,
+  ArtifactCreateResponse,
+  ArtifactDeletedPayload,
+  ArtifactFilter,
+  ArtifactListRequest,
+  ArtifactListResponse,
+  ArtifactScope,
+  ArtifactType,
+  ArtifactUpdatedPayload,
+} from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {
   AIModel,
@@ -514,6 +540,7 @@ export type {
 export {
   AgentWorkflowStepSchema,
   BusEventTriggerSchema,
+  BusRequestWorkflowStepSchema,
   CompositeStepStateSchema,
   ExecutableStepStateSchema,
   EXECUTION_LIST_DEFAULT_LIMIT,
@@ -570,6 +597,7 @@ export {
 } from './workflow/index.js';
 export type {
   AgentWorkflowStep,
+  BusRequestWorkflowStep,
   CompositeStepState,
   ContextBundle,
   ContextPublishTarget,
@@ -639,6 +667,8 @@ export type {
 } from './workflow/index.js';
 export {
   BusEventWorkflowTrigger,
+  BusRequestStep,
+  BusRequestStepFromBlock,
   CronWorkflowTrigger,
   defineWorkflow,
   ExtensionWorkflowTrigger,
@@ -646,6 +676,7 @@ export {
   WebhookWorkflowTrigger,
 } from './workflow/index.js';
 export type {
+  BusRequestStepPayload,
   CronTriggerPayload,
   DefineWorkflowOptions,
   ExtractTriggerPayload,
@@ -653,11 +684,13 @@ export type {
   PreviousStepsFromRefs,
   StepContext,
   StepRef,
+  TypedBusRequestWorkflowStep,
   WebhookTriggerPayload,
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,
   WorkflowFunctionStepOptions,
+  WorkflowSchemaStepOptions,
   WorkflowStepFunction,
   WorkflowTriggerDef,
 } from './workflow/index.js';

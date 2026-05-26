@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateSync, evaluate, compile, resolveTemplate } from '../index.js';
+import { evaluateSync, evaluate, compile, resolveTemplate, resolveTemplatesInObject } from '../index.js';
 import type { ExpressionContext, WorkflowExpressionContext } from '../index.js';
 
 /**
@@ -146,5 +146,82 @@ describe('resolveTemplate', () => {
 
   it('resolves step result placeholder', () => {
     expect(resolveTemplate('Output: {{ steps.validate.result }}', createTestContext())).toBe('Output: ok');
+  });
+});
+
+describe('resolveTemplatesInObject', () => {
+  it('resolves nested string leaves and preserves non-string values', () => {
+    const result = resolveTemplatesInObject(
+      {
+        owner: '{{ inputs.owner }}',
+        repo: 'makaio',
+        title: 'Plan: {{ trigger.name }}',
+        metadata: { count: '{{ trigger.count }}', enabled: true },
+        labels: ['artifact:plan', '{{ inputs.env }}'],
+      },
+      createTestContext({ inputs: { owner: 'makaio-ai', env: 'production' } }),
+    );
+
+    expect(result).toEqual({
+      owner: 'makaio-ai',
+      repo: 'makaio',
+      title: 'Plan: test',
+      metadata: { count: 10, enabled: true },
+      labels: ['artifact:plan', 'production'],
+    });
+  });
+
+  it('returns native values for single-expression templates', () => {
+    const result = resolveTemplatesInObject(
+      {
+        count: '{{ trigger.count }}',
+        object: '{{ trigger }}',
+        missing: '{{ trigger.missing }}',
+      },
+      createTestContext(),
+    );
+
+    expect(result.count).toBe(10);
+    expect(result.object).toEqual({ branch: 'main', count: 10, name: 'test' });
+    expect(result.missing).toBeNull();
+  });
+
+  it('can omit object properties whose whole-value templates resolve to undefined', () => {
+    const result = resolveTemplatesInObject(
+      {
+        title: '{{ trigger.name }}',
+        body: '{{ trigger.missing }}',
+        labels: ['{{ trigger.missing }}'],
+      },
+      createTestContext(),
+      { omitUndefinedProperties: true },
+    );
+
+    expect(result).toEqual({
+      title: 'test',
+      labels: [null],
+    });
+  });
+
+  it('resolves slash-separated multiple placeholders as a string', () => {
+    const result = resolveTemplatesInObject(
+      {
+        slug: '{{ inputs.owner }}/{{ inputs.repo }}',
+      },
+      createTestContext({ inputs: { owner: 'makaio-ai', repo: 'makaio' } }),
+    );
+
+    expect(result.slug).toBe('makaio-ai/makaio');
+  });
+
+  it('resolves adjacent multiple placeholders as a string', () => {
+    const result = resolveTemplatesInObject(
+      {
+        slug: '{{ inputs.owner }}{{ inputs.repo }}',
+      },
+      createTestContext({ inputs: { owner: 'makaio-ai', repo: 'makaio' } }),
+    );
+
+    expect(result.slug).toBe('makaio-aimakaio');
   });
 });

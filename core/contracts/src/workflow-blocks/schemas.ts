@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { JsonObjectContractSchema } from '../shared/json-value.js';
 
 /**
  * Shared metadata schema for registered workflow blocks (trigger or step).
@@ -22,6 +23,26 @@ const RegisteredTriggerBlockSchema = z.object({
 });
 
 /**
+ * Zod schema for the bus-request run mapping on a registered step block.
+ *
+ * Mirrors {@link BusRequestWorkflowStepBlockRun} for bus transport validation.
+ */
+const BusRequestWorkflowStepBlockRunSchema = z.object({
+  type: z.literal('bus-request'),
+  subject: z.string().min(1),
+  payload: JsonObjectContractSchema.optional(),
+  timeoutMs: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * Discriminated union schema for all supported step block run mappings.
+ *
+ * Extend by adding additional variants to this union as new execution
+ * strategies are introduced.
+ */
+const WorkflowStepBlockRunSchema = BusRequestWorkflowStepBlockRunSchema;
+
+/**
  * Zod schema for registered step block metadata (including owning extension).
  */
 const RegisteredStepBlockSchema = z.object({
@@ -29,6 +50,7 @@ const RegisteredStepBlockSchema = z.object({
   configSchema: z.record(z.string(), z.unknown()),
   inputSchema: z.record(z.string(), z.unknown()),
   outputSchema: z.record(z.string(), z.unknown()),
+  runs: WorkflowStepBlockRunSchema,
 });
 
 /**

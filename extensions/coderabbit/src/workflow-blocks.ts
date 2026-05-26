@@ -1,6 +1,11 @@
 import { z } from 'zod';
-import type { WorkflowBlockCollection } from '@makaio/contracts';
-import { FindingTargetSchema } from '@makaio/contracts';
+import { getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
+import {
+  FindingStatusSchema,
+  FindingTargetSchema,
+  ReviewSubjects,
+  type WorkflowBlockCollection,
+} from '@makaio/contracts';
 
 /**
  * Workflow blocks contributed by the CodeRabbit extension.
@@ -46,7 +51,9 @@ export const codeRabbitBlocks: WorkflowBlockCollection = {
         categories: ['review'],
       },
       configSchema: z.object({
-        includeResolved: z.boolean().default(false).describe('Include findings that CodeRabbit marked as resolved.'),
+        status: FindingStatusSchema.optional().describe(
+          'Filter by lifecycle status. Leave empty to include all findings.',
+        ),
       }),
       inputSchema: z.object({
         target: FindingTargetSchema,
@@ -62,6 +69,14 @@ export const codeRabbitBlocks: WorkflowBlockCollection = {
           }),
         ),
       }),
+      runs: {
+        type: 'bus-request',
+        subject: getFullSubjectForSubjectDefinition(ReviewSubjects.findings.list),
+        payload: {
+          target: '{{ input.target }}',
+          status: '{{ config.status }}',
+        },
+      },
     },
   ],
 };

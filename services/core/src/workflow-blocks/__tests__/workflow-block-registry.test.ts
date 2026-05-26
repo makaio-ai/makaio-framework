@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import { WorkflowBlocksSubjects, type WorkflowBlockCollection } from '@makaio/contracts';
+import { WorkflowBlocksSchemas, WorkflowBlocksSubjects, type WorkflowBlockCollection } from '@makaio/contracts';
 import { WorkflowBlockRegistry } from '../workflow-block-registry.js';
 
 function makeBlocks(extensionName = 'alpha'): WorkflowBlockCollection {
@@ -38,6 +38,14 @@ function makeBlocks(extensionName = 'alpha'): WorkflowBlockCollection {
         outputSchema: z.object({
           findings: z.array(z.object({ id: z.string() })),
         }),
+        runs: {
+          type: 'bus-request',
+          subject: `${extensionName}.create`,
+          payload: {
+            title: '{{ config.title }}',
+            body: '{{ input.body }}',
+          },
+        },
       },
     ],
   };
@@ -62,6 +70,15 @@ describe('WorkflowBlockRegistry', () => {
           default: 'minor',
           enum: ['major', 'minor'],
         },
+      },
+    });
+
+    expect(listed.steps[0]?.runs).toEqual({
+      type: 'bus-request',
+      subject: 'alpha.create',
+      payload: {
+        title: '{{ config.title }}',
+        body: '{{ input.body }}',
       },
     });
 
@@ -170,6 +187,70 @@ describe('WorkflowBlockRegistry', () => {
     await expect(Promise.resolve().then(() => registry.register('alpha', makeBlocks('beta')))).rejects.toThrow(
       "Workflow block 'beta.review-posted' must be namespaced by extension 'alpha.'",
     );
+
+    await registry.destroy();
+  });
+
+  it('rejects step run payloads that are not JSON objects in the catalog response schema', async () => {
+    const bus = createBusInstance();
+    const registry = new WorkflowBlockRegistry(bus);
+    await registry.init();
+    const [step] = makeBlocks('alpha').steps ?? [];
+    if (!step) throw new Error('Test fixture must include a step block');
+
+    await registry.register('alpha', {
+      steps: [
+        {
+          ...step,
+          runs: {
+            ...step.runs,
+            payload: {
+              createdAt: new Date(0),
+            },
+          },
+        },
+      ],
+    });
+
+    const parsed = WorkflowBlocksSchemas.list.response.safeParse({
+      triggers: registry.listTriggers(),
+      steps: registry.listSteps(),
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.path.join('.'))).toContain('steps.0.runs.payload.createdAt');
+    }
+
+    await registry.destroy();
+  });
+
+  it('rejects empty bus-request subjects in the catalog response schema', async () => {
+    const bus = createBusInstance();
+    const registry = new WorkflowBlockRegistry(bus);
+    await registry.init();
+    const [step] = makeBlocks('alpha').steps ?? [];
+    if (!step) throw new Error('Test fixture must include a step block');
+
+    await registry.register('alpha', {
+      steps: [
+        {
+          ...step,
+          runs: {
+            ...step.runs,
+            subject: '',
+          },
+        },
+      ],
+    });
+
+    const parsed = WorkflowBlocksSchemas.list.response.safeParse({
+      triggers: registry.listTriggers(),
+      steps: registry.listSteps(),
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.map((issue) => issue.path.join('.'))).toContain('steps.0.runs.subject');
+    }
 
     await registry.destroy();
   });
