@@ -23,6 +23,21 @@ on:
         type: boolean
         default: true
         description: 'Whether to run SDK tests (TypeScript, Python, Rust).'
+      pr_number:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request number when dispatched through a wrapper workflow.'
+      source_sha:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request head SHA when dispatched through a wrapper workflow.'
+      base_sha:
+        required: false
+        type: string
+        default: ''
+        description: 'Pull request base SHA when dispatched through a wrapper workflow.'
       skip_labels:
         required: false
         type: string
@@ -96,20 +111,28 @@ jobs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || inputs.base_sha != ''
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: true
 
       - name: Classify PR changes
         id: changes
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || (inputs.pr_number != '' && inputs.base_sha != '')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
 
-          base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
-          pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          base="$BASE_SHA"
+          pr_number="$PR_NUMBER"
+          if [ -z "$base" ] || [ -z "$pr_number" ]; then
+            echo "::error::PR change classification requires base SHA and PR number."
+            exit 1
+          fi
 
           git fetch --no-tags origin "$base"
           git fetch --no-tags origin "refs/pull/${pr_number}/head"
@@ -140,7 +163,7 @@ jobs:
           fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
+        if: github.event_name != 'pull_request' && inputs.base_sha == '' && steps.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
 

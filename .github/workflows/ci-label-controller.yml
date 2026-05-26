@@ -43,6 +43,7 @@ jobs:
 
             const labels = new Set((pullRequest.labels ?? []).map((label) => label.name));
             const sourceSha = pullRequest.head.sha;
+            const baseSha = pullRequest.base.sha;
             const headRef = pullRequest.head.ref;
             const skipCi = labels.has('skip:ci') || labels.has('skip:all');
             const skipE2e = skipCi || labels.has('skip:e2e');
@@ -100,7 +101,7 @@ jobs:
               let runs = await listRuns(workflow);
               for (let attempt = 1; attempt <= 3; attempt += 1) {
                 const activeRuns = runs.filter(isActive);
-                const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+                const activeSkipRun = activeRuns.some((run) => isCurrentHead(run) && isSkipRun(workflow, run));
                 const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
                 if (activeWorkRun || activeSkipRun) return runs;
 
@@ -115,6 +116,7 @@ jobs:
               const inputs = {
                 pr_number: String(prNumber),
                 source_sha: sourceSha,
+                base_sha: baseSha,
               };
               if (skip) inputs[workflow.skipInput] = 'true';
 
@@ -130,7 +132,7 @@ jobs:
             for (const workflow of workflows) {
               const runs = workflow.skip ? await listRunsAfterPendingStartup(workflow) : await listRuns(workflow);
               const activeRuns = runs.filter(isActive);
-              const activeSkipRun = activeRuns.some((run) => isSkipRun(workflow, run));
+              const activeSkipRun = activeRuns.some((run) => isCurrentHead(run) && isSkipRun(workflow, run));
               const activeWorkRun = activeRuns.some((run) => !isSkipRun(workflow, run));
               const currentHeadPassed = runs.some((run) =>
                 isCurrentHead(run) &&

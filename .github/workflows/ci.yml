@@ -28,6 +28,10 @@ on:
         description: Pull request head SHA when dispatched by CI Label Controller.
         required: false
         type: string
+      base_sha:
+        description: Pull request base SHA when dispatched by CI Label Controller.
+        required: false
+        type: string
       skip_ci:
         description: Set to true to publish a lightweight skipped CI result.
         required: false
@@ -49,4 +53,7 @@ jobs:
       test_shards: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps"]'
       validation_command: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json'
       run_sdk_tests: true
+      pr_number: ${{ inputs.pr_number }}
+      source_sha: ${{ inputs.source_sha }}
+      base_sha: ${{ inputs.base_sha }}
       force_skip_ci: ${{ inputs.skip_ci == 'true' }}

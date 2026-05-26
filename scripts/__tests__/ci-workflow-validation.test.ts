@@ -10,6 +10,8 @@ function readWorkflow(fileName: string): string {
 }
 
 describe('CI workflow validation', () => {
+  const ciWorkflowText = readWorkflow('ci.yml');
+  const labelControllerWorkflowText = readWorkflow('ci-label-controller.yml');
   const reusableWorkflowText = readWorkflow('ci-reusable.yml');
   const e2eWorkflowText = readWorkflow('ci-e2e.yml');
 
@@ -33,6 +35,15 @@ describe('CI workflow validation', () => {
   it('fetches PR head refs from the authenticated origin remote', () => {
     expect(reusableWorkflowText).toContain('git fetch --no-tags origin "refs/pull/${pr_number}/head"');
     expect(e2eWorkflowText).toContain('git fetch --no-tags origin "refs/pull/${pr_number}/head"');
+    expect(reusableWorkflowText).toContain('persist-credentials: true');
+    expect(e2eWorkflowText).toContain('persist-credentials: true');
+  });
+
+  it('passes PR base SHA through dispatched CI reruns', () => {
+    expect(labelControllerWorkflowText).toContain('base_sha: baseSha');
+    expect(ciWorkflowText).toContain('base_sha: ${{ inputs.base_sha }}');
+    expect(reusableWorkflowText).toContain("inputs.pr_number != '' && inputs.base_sha != ''");
+    expect(e2eWorkflowText).toContain("inputs.pr_number != '' && inputs.base_sha != ''");
   });
 
   it('fails precheck before looping when skip label configuration is malformed', () => {
