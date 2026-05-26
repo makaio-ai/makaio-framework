@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { AdapterContribution } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
@@ -37,6 +38,16 @@ export interface WorkerContributionLoadOptions {
   readonly bus?: IMakaioBus;
   /** Cancellation signal for worker-local contribution setup. */
   readonly signal?: AbortSignal;
+  /**
+   * Absolute path to the Makaio home directory on the current machine.
+   *
+   * When provided, explicit relative `importPath` values in the manifest
+   * (produced by the host-side manifest resolver for npm-installed packages)
+   * are resolved to absolute paths by joining them with this directory.
+   * Absolute paths, URL specifiers, and package specifiers are passed through
+   * unchanged, preserving local-extension and explicit-manifest behaviour.
+   */
+  readonly makaioHome?: string;
 }
 
 /**
@@ -118,10 +129,14 @@ function createWorkerToolsetContext(options?: WorkerContributionLoadOptions): Re
  * Load worker-local contributions from the packages declared in a manifest.
  *
  * For each package reference in the manifest, the loader:
- * 1. Dynamic-imports the `importPath`
- * 2. Resolves the extension export (default or first matching named export)
- * 3. Extracts toolsets via `pkg.tools.createToolsets()` when available
- * 4. Collects adapter contributions from `pkg.adapters` when available
+ * 1. Resolves the `importPath` to an absolute path when `makaioHome` is
+ *    provided and `importPath` is an explicit relative specifier
+ *    (npm-installed packages use `makaioHome`-relative paths for
+ *    cross-machine portability)
+ * 2. Dynamic-imports the resolved path
+ * 3. Resolves the extension export (default or first matching named export)
+ * 4. Extracts toolsets via `pkg.tools.createToolsets()` when available
+ * 5. Collects adapter contributions from `pkg.adapters` when available
  *
  * Packages that fail to import or whose exports are unrecognizable emit a
  * diagnostic warning and are skipped -- the loader does not throw for
@@ -150,6 +165,48 @@ export async function loadWorkerContributions(
 }
 
 /**
+ * Resolve a manifest `importPath` to an absolute file-system path.
+ *
+ * Manifest entries for npm-installed packages are stored as explicit paths
+ * relative to `makaioHome` (e.g.
+ * `./node_modules/@acme/tools/dist/server.mjs`) so that the manifest is
+ * portable across machines. This function reconstructs the absolute path by
+ * joining `makaioHome` with the relative entry.
+ *
+ * Absolute paths (local-source extensions), URL specifiers (`file:`, `data:`,
+ * `node:`), and package specifiers are returned unchanged.
+ * @param importPath - Raw `importPath` from a {@link WorkerContributionPackageRef}.
+ * @param makaioHome - Absolute Makaio home directory on the current machine.
+ * @returns Absolute path suitable for `import()`.
+ */
+function resolveImportPath(importPath: string, makaioHome: string | undefined): string {
+  if (
+    makaioHome !== undefined &&
+    !path.isAbsolute(importPath) &&
+    (importPath.startsWith('./') || importPath.startsWith('../'))
+  ) {
+    const root = path.resolve(makaioHome);
+    const resolvedPath = path.resolve(root, importPath);
+    if (!isPathWithin(root, resolvedPath)) {
+      throw new Error(`importPath escapes makaioHome: ${importPath}`);
+    }
+    return resolvedPath;
+  }
+  return importPath;
+}
+
+/**
+ * Determine whether a resolved candidate path stays within a root directory.
+ * @param root - Absolute root path that bounds relative manifest imports.
+ * @param candidate - Absolute candidate path resolved from a manifest import.
+ * @returns `true` when candidate is root itself or a descendant path.
+ */
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+/**
  * Load and extract contributions from a single package reference.
  * @param pkgRef - Package reference with name and import path.
  * @param options - Worker-local runtime surfaces exposed during extraction.
@@ -159,18 +216,20 @@ async function loadSinglePackage(
   pkgRef: WorkerContributionPackageRef,
   options?: WorkerContributionLoadOptions,
 ): Promise<{ toolsets: Toolset[]; adapters: AdapterContribution[] } | undefined> {
+  let resolvedPath = pkgRef.importPath;
   let mod: Record<string, unknown>;
   try {
-    mod = (await import(pkgRef.importPath)) as Record<string, unknown>;
+    resolvedPath = resolveImportPath(pkgRef.importPath, options?.makaioHome);
+    mod = (await import(resolvedPath)) as Record<string, unknown>;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[worker-contributions] Failed to import "${pkgRef.name}" from "${pkgRef.importPath}": ${message}`);
+    console.warn(`[worker-contributions] Failed to import "${pkgRef.name}" from "${resolvedPath}": ${message}`);
     return undefined;
   }
 
   const ext = resolveExtensionExport(mod, pkgRef.name);
   if (!ext) {
-    console.warn(`[worker-contributions] No recognizable extension export in "${pkgRef.name}" (${pkgRef.importPath})`);
+    console.warn(`[worker-contributions] No recognizable extension export in "${pkgRef.name}" (${resolvedPath})`);
     return undefined;
   }
 
