@@ -354,6 +354,11 @@ jobs:
     steps:
       - name: Check results
         run: |
+          if [[ "${{ needs.precheck.result }}" == "failure" || "${{ needs.precheck.result }}" == "cancelled" ]]; then
+            echo "::error::Precheck failed or was cancelled (${{ needs.precheck.result }})"
+            exit 1
+          fi
+
           if [[ "${{ needs.precheck.outputs.skip_ci }}" == "true" ]]; then
             echo "::notice::CI skipped by label policy."
             exit 0
