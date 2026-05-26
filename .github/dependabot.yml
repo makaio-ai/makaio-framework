@@ -5,25 +5,23 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 20
     groups:
-      adapter-anthropic:
-        patterns: ["@anthropic-ai/*"]
-      adapter-gemini:
-        patterns: ["@google/gemini*", "@google/genai"]
-      adapter-github-copilot:
-        patterns: ["@github/copilot*"]
-      adapter-openai:
-        patterns: ["openai"]
-      adapter-pi:
-        patterns: ["@mariozechner/pi-*"]
-      adapter-qwen:
-        patterns: ["@agentclientprotocol/*"]
       production-minor-patch:
         dependency-type: "production"
         update-types: ["minor", "patch"]
         exclude-patterns:
+          # External SDKs back adapter contracts and must be reviewed as individual PRs.
+          - "@agentclientprotocol/*"
+          - "@anthropic-ai/*"
           - "@biomejs/biome"
           - "eslint*"
+          - "@github/copilot*"
+          - "@google/gemini*"
+          - "@google/genai"
+          - "@mariozechner/pi-*"
+          - "@modelcontextprotocol/*"
+          - "openai"
           - "@typescript-eslint*"
           - "prettier*"
           - "stylelint*"
@@ -31,8 +29,17 @@ updates:
         dependency-type: "development"
         update-types: ["minor", "patch"]
         exclude-patterns:
+          # External SDKs back adapter contracts and must be reviewed as individual PRs.
+          - "@agentclientprotocol/*"
+          - "@anthropic-ai/*"
           - "@biomejs/biome"
           - "eslint*"
+          - "@github/copilot*"
+          - "@google/gemini*"
+          - "@google/genai"
+          - "@mariozechner/pi-*"
+          - "@modelcontextprotocol/*"
+          - "openai"
           - "@typescript-eslint*"
           - "prettier*"
           - "stylelint*"

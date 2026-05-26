@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 jobs:
@@ -24,22 +25,55 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Check for adapter dependency group
-        id: adapter-check
+      - name: Check for adapter SDK dependencies
+        id: adapter-sdk-check
         shell: bash
+        env:
+          UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
         run: |
-          group="${{ steps.metadata.outputs.dependency-group }}"
-          if [[ "$group" == adapter-* ]]; then
-            echo "blocked=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping auto-merge — adapter dependency group: $group"
+          adapter_sdk_names="$(
+            jq -r '
+              .[]
+              | (.dependencyName // .dependency_name // .["dependency-name"] // empty)
+              | select(
+                  . == "openai" or
+                  . == "@google/genai" or
+                  startswith("@agentclientprotocol/") or
+                  startswith("@anthropic-ai/") or
+                  startswith("@github/copilot") or
+                  startswith("@google/gemini") or
+                  startswith("@mariozechner/pi-") or
+                  startswith("@modelcontextprotocol/")
+                )
+            ' <<< "$UPDATED_DEPENDENCIES_JSON"
+          )"
+
+          if [[ -n "$adapter_sdk_names" ]]; then
+            {
+              echo "matched=true"
+              echo "dependencies<<EOF"
+              echo "$adapter_sdk_names"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping auto-merge — adapter SDK dependency update: $adapter_sdk_names"
           else
-            echo "blocked=false" >> "$GITHUB_OUTPUT"
+            echo "matched=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Label adapter SDK updates
+        if: steps.adapter-sdk-check.outputs.matched == 'true'
+        run: |
+          gh label create "adapter-sdk" --description "External SDK used by adapter implementations" --color "5319E7" --force
+          gh label create "needs:conformance-tests" --description "Requires adapter conformance test coverage before merge" --color "D93F0B" --force
+          gh pr edit "$PR_URL" --add-label "adapter-sdk,needs:conformance-tests"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Auto-merge patch and minor updates
         if: >-
           steps.metadata.outputs.update-type != 'version-update:semver-major' &&
-          steps.adapter-check.outputs.blocked != 'true'
+          steps.adapter-sdk-check.outputs.matched != 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
