@@ -212,7 +212,7 @@ describe('DockerStepRunner', () => {
     const createCall = mockExecFile.mock.calls.find((call) => (call as [string, string[]])[1][0] === 'create');
     const createArgs = (createCall as [string, string[]])[1];
     const nodeIndex = createArgs.indexOf('node');
-    expect(createArgs.slice(nodeIndex)).toEqual(['node', '--import', 'tsx/esm', '/app/worker-entry.ts']);
+    expect(createArgs.slice(nodeIndex)).toEqual(['node', '--import', 'tsx', '/app/worker-entry.ts']);
 
     proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', method: 'ready' }) + '\n'));
     proc.stdout.emit('data', Buffer.from(JSON.stringify({ status: 'completed', telemetry: { duration: 1 } }) + '\n'));

@@ -45,9 +45,9 @@ describe('createPortablePackageJson', () => {
       version: '0.1.0',
       type: 'module',
       scripts: {
-        build: 'tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun',
+        build: 'bun ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun',
         test: 'vitest run --config vitest.config.ts',
-        'prepare:portable-package': 'tsx ./scripts/prepare-portable-package.ts',
+        'prepare:portable-package': 'bun ./scripts/prepare-portable-package.ts',
       },
       peerDependencies: {
         '@makaio/bus-core': 'link:../../framework/core/bus-core',
@@ -59,7 +59,6 @@ describe('createPortablePackageJson', () => {
         '@makaio/runtime-node': '^0.9.0',
         '@makaio/service-base': 'file:../../framework/packages/service-base',
         ...Object.fromEntries(UI_PACKAGE_REFERENCES),
-        tsx: '^4.20.4',
       },
     } satisfies ExtensionPackageJson;
 
@@ -83,7 +82,6 @@ describe('createPortablePackageJson', () => {
       '@makaio/runtime-node': '^0.9.0',
       '@makaio/service-base': '^0.1.0',
       ...uiExpected,
-      tsx: '^4.20.4',
     });
   });
 

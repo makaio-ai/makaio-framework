@@ -156,7 +156,7 @@ describe('ChildProcessStepRunner', () => {
 
     expect(mockTransportOptions).toMatchObject({
       command: 'node',
-      args: ['--import', 'tsx/esm', '/path/to/worker-entry.ts'],
+      args: ['--import', 'tsx', '/path/to/worker-entry.ts'],
     });
 
     emitReadyThenResult({ status: 'completed', telemetry: { duration: 1 } });

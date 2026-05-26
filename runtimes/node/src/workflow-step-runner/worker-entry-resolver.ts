@@ -33,14 +33,12 @@ export function resolveWorkerEntry(options: WorkerEntryResolverOptions): string 
 /**
  * Build Node argv for a worker entry.
  *
- * TypeScript source entries require the `tsx` ESM loader in development.
+ * TypeScript source entries require the `tsx` import hook in development.
  * Compiled `.mjs` entries are already executable by Node and must not load
  * `tsx`, which is not part of production dist runtime assumptions.
  * @param workerEntry - Absolute path to the worker entrypoint.
  * @returns argv tail to pass after the `node` executable.
  */
 export function buildNodeWorkerEntryArgs(workerEntry: string): string[] {
-  return workerEntry.endsWith('.ts') || workerEntry.endsWith('.tsx')
-    ? ['--import', 'tsx/esm', workerEntry]
-    : [workerEntry];
+  return workerEntry.endsWith('.ts') || workerEntry.endsWith('.tsx') ? ['--import', 'tsx', workerEntry] : [workerEntry];
 }

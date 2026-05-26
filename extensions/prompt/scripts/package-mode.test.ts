@@ -39,8 +39,8 @@ describe('createPortablePackageJson', () => {
       version: '0.1.0',
       type: 'module',
       scripts: {
-        build: 'tsx ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun',
-        test: 'tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
+        build: 'bun ./scripts/run-with-mode.ts repo-dev tsdown --config-loader unrun',
+        test: 'bun ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
       },
       peerDependencies: {
         '@makaio/bus-core': 'workspace:*',
@@ -51,7 +51,6 @@ describe('createPortablePackageJson', () => {
         '@makaio/core': 'file:../../framework/core/makaio-core',
         '@makaio/kernel': 'workspace:^',
         '@makaio/test-utils': '^0.9.0',
-        tsx: '^4.20.4',
       },
     } satisfies ExtensionPackageJson;
 
@@ -71,7 +70,6 @@ describe('createPortablePackageJson', () => {
       '@makaio/core': '^0.1.0',
       '@makaio/kernel': '^0.1.0',
       '@makaio/test-utils': '^0.9.0',
-      tsx: '^4.20.4',
     });
   });
 

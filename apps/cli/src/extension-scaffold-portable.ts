@@ -235,7 +235,7 @@ function buildRunWithModeScript(): string {
     '  const [mode, command, ...args] = process.argv.slice(2);',
     '',
     '  if (!mode || !command) {',
-    "    throw new Error('Usage: tsx ./scripts/run-with-mode.ts <mode> <command> [...args]');",
+    "    throw new Error('Usage: bun ./scripts/run-with-mode.ts <mode> <command> [...args]');",
     '  }',
     '',
     '  const child = spawn(command, args, {',

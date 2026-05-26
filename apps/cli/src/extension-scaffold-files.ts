@@ -11,7 +11,6 @@ const DEFAULT_EXTENSION_VERSION = '0.1.0';
 const DEFAULT_MAKAIO_FRAMEWORK_RANGE = '>=0.1.0';
 const DEFAULT_DEV_DEPENDENCY_VERSIONS = {
   tsdown: '^0.21.7',
-  tsx: '^4.20.4',
   typescript: '^6.0.2',
   vitest: '^4.1.0',
 } as const;
@@ -118,9 +117,9 @@ function buildPackageJson(options: ExtensionScaffoldBuildOptions): string {
       type: 'module',
       exports: sourceExports,
       scripts: {
-        build: 'tsx ./scripts/run-with-mode.ts repo-dev tsdown',
-        test: 'tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
-        verify: 'tsx ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
+        build: 'bun ./scripts/run-with-mode.ts repo-dev tsdown',
+        test: 'bun ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
+        verify: 'bun ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
         'prepare:portable-package': 'node ./scripts/prepare-portable-package.mjs',
       },
       ...(Object.keys(runtimeDependencies).length > 0 ? { dependencies: runtimeDependencies } : {}),

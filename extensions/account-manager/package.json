@@ -24,8 +24,8 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
-    "prepare:portable-package": "tsx ./scripts/prepare-portable-package.ts",
+    "test": "bun ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
+    "prepare:portable-package": "bun ./scripts/prepare-portable-package.ts",
     "db:generate": "tsx $(yarn bin drizzle-kit) generate",
     "db:generate:fresh": "rm -rf src/drizzle && tsx $(yarn bin drizzle-kit) generate",
     "db:push": "tsx $(yarn bin drizzle-kit) push",

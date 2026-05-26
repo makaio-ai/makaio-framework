@@ -459,6 +459,40 @@ describe('useUsageData', () => {
     expect(getCalls.length).toBe(getCntBeforeRefresh);
   });
 
+  it('disposes visibility listeners through the document captured at subscription time', async () => {
+    subscriptions.push(
+      bus.on(AccountManagerSubjects.usage.get, (ctx) => {
+        ctx.setResult({ usage: null });
+      }),
+    );
+
+    const documentRef = document;
+    const removeListenerSpy = vi.spyOn(documentRef, 'removeEventListener');
+    const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    const { result, unmount } = renderHook(() => useUsageData({ clientId: CLIENT_ID, accountId: ACCOUNT_ID }), {
+      wrapper: makeBusWrapper(bus),
+    });
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    unmount();
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: undefined,
+      });
+
+      clearUsageCache();
+    } finally {
+      if (documentDescriptor) {
+        Object.defineProperty(globalThis, 'document', documentDescriptor);
+      }
+    }
+
+    expect(removeListenerSpy).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+    removeListenerSpy.mockRestore();
+  });
+
   it('returns no-op shape when bus is absent', () => {
     const { result } = renderHook(() => useUsageData({ clientId: CLIENT_ID, accountId: ACCOUNT_ID }), {
       wrapper: makeNullBusWrapper(),
