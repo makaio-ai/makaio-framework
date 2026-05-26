@@ -10,7 +10,7 @@ import {
   type FinalizerDeps,
 } from '../workflow-execution-finalizer.js';
 import type { ActiveExecution } from '../types.js';
-import type { WorkflowDefinition } from '@makaio/contracts';
+import type { WorkflowDefinition, WorkflowStepType } from '@makaio/contracts';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
 describe('cancelExecution', () => {
@@ -86,7 +86,7 @@ describe('cancelExecution', () => {
     const failedStepEvents: Array<{
       executionId: string;
       stepId: string;
-      stepType: 'agent' | 'shell' | 'gate' | 'function';
+      stepType: WorkflowStepType;
       error: string;
     }> = [];
 

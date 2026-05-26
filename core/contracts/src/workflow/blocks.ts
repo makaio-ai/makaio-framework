@@ -1,4 +1,35 @@
 import type { z } from 'zod';
+import type { JsonValue } from '../shared/json-value.js';
+
+/**
+ * Serializable run mapping for bus-request step execution.
+ *
+ * Emitted by the builder when the step block is compiled into a workflow
+ * definition. The `config` and `input` roots in the payload are resolved
+ * against the builder form values and upstream step outputs respectively.
+ */
+export interface BusRequestWorkflowStepBlockRun {
+  /** Run mapping discriminant. */
+  readonly type: 'bus-request';
+  /** Full request subject string compiled into the workflow step. */
+  readonly subject: string;
+  /**
+   * Payload template.
+   * `config` and `input` roots are resolved by the builder when compiling the
+   * step into a concrete {@link BusRequestWorkflowStep}.
+   */
+  readonly payload?: Record<string, JsonValue>;
+  /** Request timeout in milliseconds forwarded to the compiled step. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Discriminated union of all supported workflow step block run mappings.
+ *
+ * Each variant maps a declared step block to a concrete execution mechanism.
+ * Extend this union when new execution strategies are introduced.
+ */
+export type WorkflowStepBlockRun = BusRequestWorkflowStepBlockRun;
 
 /**
  * Metadata shared by all workflow blocks.
@@ -50,6 +81,8 @@ export interface WorkflowStepBlock<
   inputSchema: TInput;
   /** What downstream steps can reference via steps.<id>.result. */
   outputSchema: TOutput;
+  /** Concrete execution mapping compiled into the workflow definition by the builder. */
+  runs: WorkflowStepBlockRun;
 }
 
 /**
@@ -92,4 +125,6 @@ export interface RegisteredStepBlock {
   inputSchema: Record<string, unknown>;
   /** JSON Schema representation of what downstream steps can reference. */
   outputSchema: Record<string, unknown>;
+  /** Concrete execution mapping preserved verbatim from the block declaration. */
+  runs: WorkflowStepBlockRun;
 }

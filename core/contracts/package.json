@@ -17,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./adapter": "./src/adapter/index.ts",
+    "./artifact": "./src/artifact/index.ts",
     "./adapter/schemas/session-lineage": "./src/adapter/schemas/session-lineage.ts",
     "./client": "./src/client/index.ts",
     "./common": "./src/common/index.ts",
@@ -62,6 +63,10 @@
       "./adapter": {
         "types": "./dist/adapter/index.d.ts",
         "default": "./dist/adapter/index.mjs"
+      },
+      "./artifact": {
+        "types": "./dist/artifact/index.d.ts",
+        "default": "./dist/artifact/index.mjs"
       },
       "./adapter/schemas/session-lineage": {
         "types": "./dist/adapter/schemas/session-lineage.d.ts",

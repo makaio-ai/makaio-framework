@@ -120,6 +120,79 @@ workflow.addStep('process', (ctx) => {
 | `needs` | `StepRef[]` | Predecessor steps (empty array for root steps) |
 | `if` | `string` | Optional jexl expression; falsy skips the step |
 
+### `workflow.addBusRequestStep(id, config, options)`
+
+Registers a typed bus RPC step. Unlike `addStep`, there is no function to register —
+the step is entirely schema-driven and executed inline by the scheduler. Returns a
+`StepRef` that carries the inferred response type from the subject definition.
+See [Bus Request Steps](#bus-request-steps) for a full example and runtime semantics.
+
+---
+
+## Bus Request Steps
+
+Use `bus-request` when a workflow step should call an existing typed bus RPC.
+The TypeScript authoring helper accepts a typed `SubjectDefinition`, while the
+stored workflow definition contains the full subject string.
+
+```ts
+import { ArtifactSubjects, BusEventWorkflowTrigger, BusRequestStep, defineWorkflow } from '@makaio/contracts';
+
+const workflow = defineWorkflow('publish-plan-artifact', {
+  name: 'Publish plan artifact',
+  triggers: [
+    BusEventWorkflowTrigger({
+      subject: ArtifactSubjects.created,
+      filter: { 'artifact.type': 'draft-plan' },
+    }),
+  ],
+});
+
+workflow.addBusRequestStep(
+  'publish-plan',
+  BusRequestStep({
+    subject: ArtifactSubjects.create,
+    payload: {
+      scope: 'global',
+      type: 'published-plan',
+      mimeType: 'text/markdown',
+      content: '{{ trigger.artifact.content }}',
+      metadata: {
+        sourceArtifactId: '{{ trigger.artifact.id }}',
+        sourceArtifactType: '{{ trigger.artifact.type }}',
+      },
+    },
+    timeoutMs: 10_000,
+  }),
+  { needs: [] },
+);
+
+export default workflow;
+```
+
+**How it works:**
+
+- `BusRequestStep()` accepts a typed `SubjectDefinition` for compile-time payload and
+  response type checking. It serializes the subject to its full string form
+  (e.g. `'github:app.issue.create'`) in the stored definition, keeping persisted
+  workflow definitions serializable.
+- String payload values support `{{ }}` template expressions. A lone expression
+  (`'{{ inputs.count }}'`) returns the native type (number, boolean, etc.); mixed
+  strings (`'count: {{ inputs.count }}'`) remain strings.
+- `timeoutMs` is configured on `BusRequestStep({ ... })`, alongside the request
+  subject and payload. It is forwarded to the bus RPC as the request timeout.
+- At runtime, the subject must be registered and must be a request subject. If the
+  subject is missing or not a request, the step fails with a descriptive error.
+- `bus-request` steps are compatible with persisted workflow definitions (unlike
+  `function` steps, which are file-workflow-only).
+
+**Step options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `needs` | `StepRef[]` | Predecessor steps (empty array for root steps) |
+| `if` | `string` | Optional jexl expression; falsy skips the step |
+
 ---
 
 ## Triggers

@@ -1,6 +1,7 @@
 export {
   AgentWorkflowStepSchema,
   BusEventTriggerSchema,
+  BusRequestWorkflowStepSchema,
   CompositeStepStateSchema,
   ExecutableStepStateSchema,
   EXECUTION_LIST_DEFAULT_LIMIT,
@@ -37,6 +38,7 @@ export {
 export type {
   AgentWorkflowStep,
   BusEventTrigger,
+  BusRequestWorkflowStep,
   CompositeStepState,
   ExecutableStepState,
   ExecutionListCursor,
@@ -105,11 +107,13 @@ export {
 } from './context.js';
 export type { ContextSource, ContextPublishTarget, ResolvedContextEntry, ContextBundle } from './context.js';
 export type {
+  BusRequestWorkflowStepBlockRun,
   RegisteredStepBlock,
   RegisteredTriggerBlock,
   WorkflowBlockCollection,
   WorkflowBlockMetadata,
   WorkflowStepBlock,
+  WorkflowStepBlockRun,
   WorkflowTriggerBlock,
 } from './blocks.js';
 export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
@@ -127,6 +131,8 @@ export type {
 } from './worker.js';
 export {
   BusEventWorkflowTrigger,
+  BusRequestStep,
+  BusRequestStepFromBlock,
   CronWorkflowTrigger,
   defineWorkflow,
   ExtensionWorkflowTrigger,
@@ -134,6 +140,7 @@ export {
   WebhookWorkflowTrigger,
 } from './authoring.js';
 export type {
+  BusRequestStepPayload,
   CronTriggerPayload,
   DefineWorkflowOptions,
   ExtractTriggerPayload,
@@ -141,11 +148,13 @@ export type {
   PreviousStepsFromRefs,
   StepContext,
   StepRef,
+  TypedBusRequestWorkflowStep,
   WebhookTriggerPayload,
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,
   WorkflowFunctionStepOptions,
+  WorkflowSchemaStepOptions,
   WorkflowStepFunction,
   WorkflowTriggerDef,
 } from './authoring.js';

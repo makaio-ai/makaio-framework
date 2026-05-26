@@ -394,6 +394,14 @@ export const createNamespaceRegistry = () => {
         .sort((a, b) => compareStrings(a.fullSubject, b.fullSubject));
     },
     /**
+     * Get the full registration record for a subject.
+     * @param subject - Fully-qualified subject identifier (e.g., "adapter.getCapabilities")
+     * @returns Registration record if found, undefined otherwise
+     */
+    getRegisteredSubject(subject: string): RegisteredSubjectSchema | undefined {
+      return registeredSubjects.get(subject);
+    },
+    /**
      * Check if a subject is registered as a request subject.
      * @param subject - Subject identifier
      * @returns True if subject exists and is a request schema

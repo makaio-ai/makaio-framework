@@ -318,6 +318,29 @@ export const FunctionWorkflowStepSchema = WorkflowStepBaseSchema.extend({
 export type FunctionWorkflowStep = z.infer<typeof FunctionWorkflowStepSchema>;
 
 /**
+ * Bus request step variant — performs a typed bus RPC from the scheduler.
+ *
+ * The serialized step stores the full subject string (`namespace.subject`) so
+ * persisted workflow definitions remain pure JSON. Type-safe authoring helpers
+ * accept `SubjectDefinition` values and serialize them into this shape.
+ */
+export const BusRequestWorkflowStepSchema = WorkflowStepBaseSchema.extend({
+  /** Step type discriminant. */
+  type: z.literal('bus-request'),
+  /** Fully qualified request subject, e.g. `github:app.issue.create`. */
+  subject: z.string().min(1),
+  /** JSON object payload template resolved against the workflow expression context. */
+  payload: JsonObjectContractSchema.optional(),
+  /**
+   * Request timeout in milliseconds. `0` disables automatic timeout and leaves
+   * cancellation to the workflow abort signal.
+   */
+  timeoutMs: z.number().int().nonnegative().optional(),
+});
+
+export type BusRequestWorkflowStep = z.infer<typeof BusRequestWorkflowStepSchema>;
+
+/**
  * For-each step variant type.
  * Declared manually ahead of its schema to break the z.lazy circular reference.
  */
@@ -338,6 +361,7 @@ export type WorkflowStep =
   | ShellWorkflowStep
   | GateWorkflowStep
   | FunctionWorkflowStep
+  | BusRequestWorkflowStep
   | ForEachWorkflowStep;
 
 /**
@@ -374,6 +398,7 @@ export const WorkflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
     ShellWorkflowStepSchema,
     GateWorkflowStepSchema,
     FunctionWorkflowStepSchema,
+    BusRequestWorkflowStepSchema,
     ForEachWorkflowStepSchema,
   ]),
 );

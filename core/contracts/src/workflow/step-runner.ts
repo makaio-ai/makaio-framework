@@ -17,7 +17,7 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
  * Composite `for-each` steps are excluded — they are scheduler coordination nodes,
  * not executor targets.
  */
-export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate', 'function']);
+export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate', 'function', 'bus-request']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 

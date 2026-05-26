@@ -17,7 +17,7 @@ const StepLifecycleBaseSchema = z.object({
   // Composite `for-each` steps are runtime scheduler coordination nodes, not
   // executor targets — they are excluded. Function steps run in the worker
   // orchestrator and are included so their lifecycle is observable on the bus.
-  stepType: z.enum(['agent', 'shell', 'gate', 'function']),
+  stepType: z.enum(['agent', 'shell', 'gate', 'function', 'bus-request']),
 });
 
 const GateLifecycleBaseSchema = StepLifecycleBaseSchema.extend({
