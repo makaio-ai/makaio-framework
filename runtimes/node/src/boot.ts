@@ -88,8 +88,19 @@ import { loadBootExtensions } from './boot-extension-loading.js';
 import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
-import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
+import {
+  FrameworkContractNamespaces,
+  FrameworkStorageNamespaces,
+  BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
+  registerWorkerNodeProvider,
+  unregisterWorkerNodeProvider,
+} from '@makaio/contracts';
 import { createNodeWorkflowRunnerPackageOptions } from './workflow-step-runner/index.js';
+import {
+  WorkflowPiscinaRunner,
+  PiscinaWorkerNodeProvider,
+  resolveWorkflowWorkerEntry,
+} from './workflow-worker/index.js';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -487,6 +498,43 @@ export async function bootMakaioRuntimeCore(
     }
 
     adapterServiceRef.current = coordinator.getExtensionService(AdapterSubsystemToken);
+
+    // -----------------------------------------------------------------------
+    // Built-in Piscina WorkerNode provider
+    //
+    // Register a PiscinaWorkerNodeProvider backed by a dedicated
+    // WorkflowPiscinaRunner so that the worker-pool dispatch path can
+    // resolve 'piscina' environments without any external provider package.
+    // Registration happens after coordinator.startAll() so that
+    // CapabilityService has registered its capability.register handler.
+    // The provider uses the same worker-entry resolution logic as the
+    // workflow engine step runner.
+    // -----------------------------------------------------------------------
+    const piscinaWorkerEntry = resolveWorkflowWorkerEntry({
+      packageRoot: path.resolve(srcDir, '..'),
+      mode: path.basename(srcDir) === 'src' ? 'source' : 'dist',
+    });
+    const piscinaRunner = new WorkflowPiscinaRunner({ workerEntry: piscinaWorkerEntry, manifest: { packages: [] } });
+    const piscinaProvider = new PiscinaWorkerNodeProvider({
+      id: BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
+      displayName: 'Local (Piscina)',
+      runner: piscinaRunner,
+    });
+    try {
+      await registerWorkerNodeProvider(bus, piscinaProvider);
+    } catch (error) {
+      await piscinaRunner.dispose().catch(() => undefined);
+      throw error;
+    }
+    shutdownSteps.push(async () => {
+      try {
+        await unregisterWorkerNodeProvider(bus, piscinaProvider.id);
+      } finally {
+        await piscinaRunner.dispose().catch(() => undefined);
+      }
+    });
+    console.info('[boot] Piscina WorkerNode provider registered (id=%s)', piscinaProvider.id);
+
     shutdownSteps.push(
       registerRuntimeHandlers(
         bus,

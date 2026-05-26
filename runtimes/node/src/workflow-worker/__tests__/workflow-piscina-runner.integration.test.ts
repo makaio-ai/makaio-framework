@@ -64,4 +64,15 @@ describe('WorkflowPiscinaRunner integration', () => {
       await runner.dispose();
     }
   });
+
+  it('does not create the Piscina pool before the first run', async () => {
+    const runner = new WorkflowPiscinaRunner({
+      workerEntry: join(tmpdir(), 'missing-workflow-worker-entry.mjs'),
+      manifest: { packages: [] },
+      maxConcurrency: 1,
+      idleTimeoutMs: 100,
+    });
+
+    await expect(runner.dispose()).resolves.toBeUndefined();
+  });
 });

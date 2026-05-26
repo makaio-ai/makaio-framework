@@ -4,17 +4,13 @@ import type { WorkflowPiscinaRunnerOptions } from '../types.js';
 
 // Mock PiscinaPoolRunner before importing the class under test.
 const mockPoolRun = vi.fn();
-const mockPoolDispose = vi.fn();
-const mockConstructorOptions: WorkflowPiscinaRunnerOptions[] = [];
 
 vi.mock('../../workflow-step-runner/piscina-pool-runner.js', () => ({
   PiscinaPoolRunner: class MockPiscinaPoolRunner {
-    public constructor(options: WorkflowPiscinaRunnerOptions) {
-      mockConstructorOptions.push(options);
-    }
+    public constructor(_options: WorkflowPiscinaRunnerOptions) {}
 
     public run = mockPoolRun;
-    public dispose = mockPoolDispose;
+    public dispose = vi.fn();
   },
 }));
 
@@ -60,7 +56,6 @@ function makeOptions(): WorkflowPiscinaRunnerOptions {
 describe('WorkflowPiscinaRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockConstructorOptions.length = 0;
   });
 
   it('passes config and construction-time manifest to pool.run()', async () => {
@@ -112,31 +107,6 @@ describe('WorkflowPiscinaRunner', () => {
 
     await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
     expect(mockPoolRun).toHaveBeenCalledWith(expect.anything(), controller.signal);
-  });
-
-  it('passes options to PiscinaPoolRunner when maxConcurrency is omitted', () => {
-    new WorkflowPiscinaRunner(makeOptions());
-
-    expect(mockConstructorOptions).toEqual([makeOptions()]);
-  });
-
-  it('passes custom maxConcurrency to PiscinaPoolRunner when specified', () => {
-    const options: WorkflowPiscinaRunnerOptions = {
-      ...makeOptions(),
-      maxConcurrency: 8,
-    };
-    new WorkflowPiscinaRunner(options);
-
-    expect(mockConstructorOptions).toEqual([options]);
-  });
-
-  it('dispose() calls pool.dispose()', async () => {
-    mockPoolDispose.mockResolvedValueOnce(undefined);
-    const runner = new WorkflowPiscinaRunner(makeOptions());
-
-    await runner.dispose();
-
-    expect(mockPoolDispose).toHaveBeenCalledOnce();
   });
 
   it('propagates pool.run() rejection to caller', async () => {

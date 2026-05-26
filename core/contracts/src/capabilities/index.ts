@@ -141,6 +141,7 @@ export type {
   ReviewsSummary,
 } from './vcs-pr/index.js';
 export {
+  BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
   WORKER_NODE_CAPABILITY_ID,
   WorkerNodeCapabilitiesSchema,
   WorkerNodeRequirementsSchema,

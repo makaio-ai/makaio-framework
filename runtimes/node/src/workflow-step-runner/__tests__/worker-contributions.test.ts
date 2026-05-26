@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { loadWorkerContributions } from '../worker-contributions.js';
 import type { WorkerContributionManifest } from '../types.js';
@@ -273,5 +273,74 @@ describe('loadWorkerContributions', () => {
 
     expect(result.toolsets).toHaveLength(0);
     expect(result.adapters).toHaveLength(0);
+  });
+
+  it('resolves a relative importPath against makaioHome when provided', async () => {
+    // Simulate the cross-machine portability case: an npm-installed package's
+    // importPath is stored relative to makaioHome in the manifest.  Here the
+    // resolved path does not exist, so the loader must handle it gracefully.
+    const manifest: WorkerContributionManifest = {
+      packages: [{ name: 'ghost-pkg', importPath: './node_modules/@acme/ghost/dist/server.mjs' }],
+    };
+
+    const result = await loadWorkerContributions(manifest, {
+      makaioHome: '/nonexistent-makaio-home-xyz',
+    });
+
+    // The resolved absolute path does not exist — loader skips with a warning.
+    expect(result.toolsets).toHaveLength(0);
+    expect(result.adapters).toHaveLength(0);
+  });
+
+  it('preserves URL import specifiers when makaioHome is provided', async () => {
+    const manifest: WorkerContributionManifest = {
+      packages: [{ name: 'tools-only-pkg', importPath: TOOLS_ONLY_MODULE }],
+    };
+
+    const result = await loadWorkerContributions(manifest, {
+      makaioHome: '/nonexistent-makaio-home-xyz',
+    });
+
+    expect(result.toolsets).toHaveLength(1);
+    expect(result.toolsets[0]!.metadata.name).toBe('test-tools');
+  });
+
+  it('preserves package import specifiers when makaioHome is provided', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const manifest: WorkerContributionManifest = {
+        packages: [{ name: 'ghost-pkg', importPath: '@makaio/nonexistent-package-xyz' }],
+      };
+
+      const result = await loadWorkerContributions(manifest, {
+        makaioHome: '/nonexistent-makaio-home-xyz',
+      });
+
+      expect(result.toolsets).toHaveLength(0);
+      expect(result.adapters).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('from "@makaio/nonexistent-package-xyz"'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('/nonexistent-makaio-home-xyz'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('skips relative importPaths that escape makaioHome', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const manifest: WorkerContributionManifest = {
+        packages: [{ name: 'escape-pkg', importPath: '../escape.mjs' }],
+      };
+
+      const result = await loadWorkerContributions(manifest, {
+        makaioHome: '/tmp/makaio-home',
+      });
+
+      expect(result.toolsets).toHaveLength(0);
+      expect(result.adapters).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('importPath escapes makaioHome: ../escape.mjs'));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

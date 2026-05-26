@@ -18,16 +18,15 @@ interface WorkflowPiscinaRunnerTask {
  * limits and idle thread reaping automatically.
  */
 export class WorkflowPiscinaRunner implements IWorkflowRunner {
-  private readonly pool: PiscinaPoolRunner<WorkflowPiscinaRunnerTask, WorkflowRunResult>;
   private readonly manifest: WorkerContributionManifest;
+  private pool: PiscinaPoolRunner<WorkflowPiscinaRunnerTask, WorkflowRunResult> | undefined;
 
   /**
    * @param options - Piscina runner configuration including worker entry path
    *   and concurrency settings.
    */
-  public constructor(options: WorkflowPiscinaRunnerOptions) {
+  public constructor(private readonly options: WorkflowPiscinaRunnerOptions) {
     this.manifest = options.manifest;
-    this.pool = new PiscinaPoolRunner(options);
   }
 
   /**
@@ -46,6 +45,7 @@ export class WorkflowPiscinaRunner implements IWorkflowRunner {
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
   ): Promise<WorkflowRunResult> {
+    this.pool ??= new PiscinaPoolRunner(this.options);
     return this.pool.run({ config, manifest: manifest ?? this.manifest }, signal);
   }
 
@@ -53,6 +53,6 @@ export class WorkflowPiscinaRunner implements IWorkflowRunner {
    * Destroy the thread pool and release all worker threads.
    */
   public async dispose(): Promise<void> {
-    await this.pool.dispose();
+    await this.pool?.dispose();
   }
 }

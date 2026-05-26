@@ -170,7 +170,18 @@ export const WorkflowRunResultSchema = z.object({
 export const WorkerContributionPackageRefSchema = z.object({
   /** Package name used for diagnostics and installed-package matching. */
   name: z.string().min(1),
-  /** ESM import path resolvable inside the target worker environment. */
+  /**
+   * Import path for the package's server entrypoint.
+   *
+   * Two formats are accepted:
+   * - **Absolute path** – used as-is (e.g. local-source extensions or
+   *   explicit manifests supplied by the caller).
+   * - **`makaioHome`-relative path** – a path relative to the Makaio home
+   *   directory, e.g. `node_modules/@acme/tools/dist/server.mjs`.  The
+   *   worker loader reconstructs the absolute path from the machine's own
+   *   `makaioHome`, making the manifest portable across machines (local
+   *   Piscina thread, Docker container, GitHub Actions runner, etc.).
+   */
   importPath: z.string().min(1),
 });
 

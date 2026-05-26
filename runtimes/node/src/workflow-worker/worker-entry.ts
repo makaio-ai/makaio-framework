@@ -236,10 +236,13 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
       abortController.abort();
     });
 
-    // Step 3: Load contributions
+    // Step 3: Load contributions — pass makaioHome so that relative import
+    // paths in the manifest (npm-installed packages) are resolved to absolute
+    // paths on this machine before import().
     const contributions = await loadWorkerContributions(params.manifest, {
       bus: handle.bus,
       signal: abortController.signal,
+      makaioHome: config.context.makaioHome,
     });
 
     // Step 4: Boot runtime only when contributions are present
