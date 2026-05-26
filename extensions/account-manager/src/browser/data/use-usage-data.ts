@@ -124,6 +124,7 @@ function getUsageObserver(
 
   existing?.dispose();
 
+  const documentRef = document;
   const listeners = new Set<() => void>();
   let latestRequestId = 0;
   let refreshPending = false;
@@ -214,7 +215,7 @@ function getUsageObserver(
   };
 
   const handleVisibilityChange = (): void => {
-    if (document.visibilityState === 'visible') {
+    if (documentRef.visibilityState === 'visible') {
       void fetchUsage();
     }
   };
@@ -251,11 +252,11 @@ function getUsageObserver(
   );
 
   const pollHandle = setInterval(() => {
-    if (document.visibilityState === 'visible') {
+    if (documentRef.visibilityState === 'visible') {
       void fetchUsage();
     }
   }, POLL_INTERVAL_MS);
-  document.addEventListener('visibilitychange', handleVisibilityChange);
+  documentRef.addEventListener('visibilitychange', handleVisibilityChange);
   void fetchUsage();
 
   observer.dispose = () => {
@@ -268,7 +269,7 @@ function getUsageObserver(
       deferredDisposeHandle = null;
     }
     clearInterval(pollHandle);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    documentRef.removeEventListener('visibilitychange', handleVisibilityChange);
     unsubscribeSwitched();
     unsubscribeRefreshed();
     unsubscribeUpdated();

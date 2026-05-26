@@ -120,12 +120,12 @@ describe('extension init builtin', () => {
     expect(tsconfig.include).toEqual(['src', 'scripts', 'test']);
 
     const packageJson = JSON.parse(await readFile(path.join(extensionRoot, 'package.json'), 'utf8'));
-    expect(packageJson.scripts.build).toBe('tsx ./scripts/run-with-mode.ts repo-dev tsdown');
+    expect(packageJson.scripts.build).toBe('bun ./scripts/run-with-mode.ts repo-dev tsdown');
     expect(packageJson.scripts.test).toBe(
-      'tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
+      'bun ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts',
     );
     expect(packageJson.scripts.verify).toBe(
-      'tsx ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
+      'bun ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
     );
     expect(packageJson.scripts['prepare:portable-package']).toBe('node ./scripts/prepare-portable-package.mjs');
 
@@ -168,9 +168,9 @@ describe('extension init builtin', () => {
     expect(packageJson.dependencies).toEqual({ zod: '^4.1.13' });
     expect(packageJson.devDependencies['@makaio/kernel']).toMatch(/^link:/);
     expect(packageJson.devDependencies['@makaio/ui-kernel']).toMatch(/^link:/);
-    expect(packageJson.scripts.build).toBe('tsx ./scripts/run-with-mode.ts repo-dev tsdown');
+    expect(packageJson.scripts.build).toBe('bun ./scripts/run-with-mode.ts repo-dev tsdown');
     expect(packageJson.scripts.verify).toBe(
-      'tsx ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
+      'bun ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
     );
     expect(packageJson.exports).toMatchObject({
       './server': './src/server.ts',
@@ -236,7 +236,7 @@ describe('extension init builtin', () => {
     const packageJson = JSON.parse(await readFile(path.join(extensionRoot, 'package.json'), 'utf8'));
     expect(packageJson.devDependencies['@makaio/ui-kernel']).toMatch(/^link:/);
     expect(packageJson.scripts.verify).toBe(
-      'tsx ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
+      'bun ./scripts/run-with-mode.ts repo-dev vitest run test/verify.test.ts --config vitest.config.ts',
     );
     expect(packageJson.dependencies).toBeUndefined();
 
@@ -324,7 +324,7 @@ describe('extension init builtin', () => {
       `^${expectedFrameworkVersions['@makaio/contracts']}`,
     );
     expect(stagedPackageJson.devDependencies['@makaio/kernel']).toBe(`^${expectedFrameworkVersions['@makaio/kernel']}`);
-    expect(stagedPackageJson.devDependencies['tsx']).toBe('^4.20.4');
+    expect(stagedPackageJson.devDependencies).not.toHaveProperty('tsx');
   });
 
   it('escapes special characters in generated entrypoints', async () => {

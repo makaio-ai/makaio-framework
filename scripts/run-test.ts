@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Smart test runner that resolves `yarn test <file>` into the correct Vitest
  * invocation for framework tests regardless of test category.

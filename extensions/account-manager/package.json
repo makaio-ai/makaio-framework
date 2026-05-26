@@ -24,8 +24,8 @@
   },
   "scripts": {
     "build": "bun build.ts",
-    "test": "tsx ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
-    "prepare:portable-package": "tsx ./scripts/prepare-portable-package.ts",
+    "test": "bun ./scripts/run-with-mode.ts repo-dev vitest run --config vitest.config.ts",
+    "prepare:portable-package": "bun ./scripts/prepare-portable-package.ts",
     "db:generate": "tsx $(yarn bin drizzle-kit) generate",
     "db:generate:fresh": "rm -rf src/drizzle && tsx $(yarn bin drizzle-kit) generate",
     "db:push": "tsx $(yarn bin drizzle-kit) push",
@@ -64,16 +64,16 @@
     "@makaio/ui-theme": "workspace:*",
     "@makaio/ui-views": "workspace:*",
     "@types/d3-shape": "^3.1.7",
-    "@types/react": "^19.2.2",
+    "@types/react": "^19.2.15",
     "drizzle-kit": "^0.31.8",
     "ink-testing-library": "^3.0.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tsdown": "^0.22.0",
-    "tsx": "^4.20.4",
+    "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "unrun": "^0.3.0",
-    "vitest": "4.1.5"
+    "vitest": "4.1.7"
   },
   "publishConfig": {
     "exports": {
