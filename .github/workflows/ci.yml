@@ -1,14 +1,23 @@
 name: PR - CI
 
 run-name: >-
-  ${{ inputs.skip_ci == 'true' && format('Skip PR - CI for #{0}', inputs.pr_number) || github.event.pull_request.title || format('PR - CI {0}', github.ref_name) }}
+  ${{
+    (
+      inputs.skip_ci == 'true' ||
+      contains(github.event.pull_request.labels.*.name, 'skip:ci') ||
+      contains(github.event.pull_request.labels.*.name, 'skip:all')
+    ) &&
+    format('Skip PR - CI for #{0}', github.event.pull_request.number || inputs.pr_number) ||
+    github.event.pull_request.title ||
+    format('PR - CI {0}', github.ref_name)
+  }}
 
 on:
   push:
     branches: [fix/ci]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -35,17 +44,9 @@ concurrency:
 
 jobs:
   ci:
-    if: inputs.skip_ci != 'true'
     uses: ./.github/workflows/ci-reusable.yml
     with:
       test_shards: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps"]'
       validation_command: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json'
       run_sdk_tests: true
-
-  skipped:
-    name: CI Gate
-    if: inputs.skip_ci == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    steps:
-      - run: echo "CI skipped by label controller."
+      force_skip_ci: ${{ inputs.skip_ci == 'true' }}

@@ -88,6 +88,10 @@ jobs:
               return run.head_sha === sourceSha;
             }
 
+            function isSuccessful(run) {
+              return run.status === 'completed' && run.conclusion === 'success';
+            }
+
             function sleep(milliseconds) {
               return new Promise((resolve) => setTimeout(resolve, milliseconds));
             }
@@ -131,16 +135,31 @@ jobs:
               const currentHeadPassed = runs.some((run) =>
                 isCurrentHead(run) &&
                 !isSkipRun(workflow, run) &&
-                run.status === 'completed' &&
-                run.conclusion === 'success'
+                isSuccessful(run)
+              );
+              const currentHeadSkipPassed = runs.some((run) =>
+                isCurrentHead(run) &&
+                isSkipRun(workflow, run) &&
+                isSuccessful(run)
               );
 
               if (workflow.skip) {
-                if (activeWorkRun && !activeSkipRun) {
+                if (activeSkipRun) {
+                  core.info(`${workflow.label}: active skip run already exists for PR #${prNumber}.`);
+                  continue;
+                }
+
+                if (currentHeadPassed || currentHeadSkipPassed) {
+                  core.info(`${workflow.label}: current head ${sourceSha} already has a successful required gate.`);
+                  continue;
+                }
+
+                if (activeWorkRun) {
                   await dispatch(workflow, true);
                   core.info(`${workflow.label}: dispatched skip run to cancel active work for PR #${prNumber}.`);
                 } else {
-                  core.info(`${workflow.label}: skip label active; no active work run needs cancellation.`);
+                  await dispatch(workflow, true);
+                  core.info(`${workflow.label}: dispatched skip run for PR #${prNumber} at ${sourceSha}.`);
                 }
                 continue;
               }

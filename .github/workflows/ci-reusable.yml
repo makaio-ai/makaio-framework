@@ -28,6 +28,11 @@ on:
         type: string
         default: '["skip:ci", "skip:all"]'
         description: 'JSON array of PR labels that skip CI.'
+      force_skip_ci:
+        required: false
+        type: boolean
+        default: false
+        description: 'Whether to publish a successful CI gate without running CI jobs.'
     outputs:
       docs_only:
         description: 'Whether the PR only changes documentation files.'
@@ -55,6 +60,12 @@ jobs:
           SKIP_LABELS: ${{ inputs.skip_labels }}
         with:
           script: |
+            if (${{ inputs.force_skip_ci }}) {
+              core.setOutput('skip_ci', 'true');
+              core.info('force_skip_ci input is true; publishing skipped CI gate.');
+              return;
+            }
+
             const configuredLabels = JSON.parse(process.env.SKIP_LABELS || '[]');
             if (!Array.isArray(configuredLabels) || configuredLabels.some((label) => typeof label !== 'string')) {
               throw new Error('skip_labels must be a JSON array of strings');
@@ -63,6 +74,7 @@ jobs:
             const pullRequestLabels = context.payload.pull_request?.labels?.map((label) => label.name) ?? [];
             const skipCi = configuredLabels.some((label) => pullRequestLabels.includes(label));
             core.setOutput('skip_ci', skipCi ? 'true' : 'false');
+            if (skipCi) core.info('skip CI label found; publishing skipped CI gate.');
 
   cache:
     name: Cache
@@ -338,12 +350,17 @@ jobs:
   gate:
     name: CI Gate
     if: always()
-    needs: [validation, test, sdk]
+    needs: [precheck, validation, test, sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
       - name: Check results
         run: |
+          if [[ "${{ needs.precheck.outputs.skip_ci }}" == "true" ]]; then
+            echo "::notice::CI skipped by label policy."
+            exit 0
+          fi
+
           results=( "${{ needs.validation.result }}" "${{ needs.test.result }}" "${{ needs.sdk.result }}" )
           for r in "${results[@]}"; do
             if [[ "$r" == "failure" || "$r" == "cancelled" ]]; then
