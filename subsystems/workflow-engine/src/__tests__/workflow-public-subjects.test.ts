@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { WorkflowExecutionScope } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -113,5 +113,44 @@ describe('workflow public subjects', () => {
     const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
 
     expect(execution?.scope).toEqual(executionScope);
+  });
+
+  it('returns execution spans through the public listSpans subject', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-span-read',
+      name: 'Public Span Read',
+      steps: [{ id: 'echo', type: 'agent' as const, prompt: 'Echo step' }],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const completedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        completedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      scope: { type: 'global' },
+    });
+
+    await vi.waitFor(() => expect(completedExecutions).toContain(executionId), { timeout: 10_000 });
+
+    const result = await MakaioBus.request(WorkflowSubjects.listSpans, { executionId });
+
+    expect(result.spans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          executionId,
+          stepId: 'echo',
+          status: 'completed',
+        }),
+      ]),
+    );
   });
 });
