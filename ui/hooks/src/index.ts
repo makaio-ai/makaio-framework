@@ -14,6 +14,11 @@
 export { BusProvider, BusContext, useBus, useOptionalBus } from './bus/bus-provider.js';
 export type { BusProviderProps } from './bus/bus-provider.js';
 
+export { useBusQuery } from './bus/use-bus-query.js';
+export type { UseBusQueryOptions, UseBusQueryResult } from './bus/use-bus-query.js';
+
+export { useBusEvent } from './bus/use-bus-event.js';
+
 // ---------------------------------------------------------------------------
 // Widget hooks
 // ---------------------------------------------------------------------------

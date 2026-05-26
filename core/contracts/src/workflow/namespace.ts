@@ -10,6 +10,7 @@ import {
   WorkflowResolvedRoleSchema,
 } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { SpanRecordSchema } from './span.js';
 
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
@@ -92,6 +93,16 @@ export const WorkflowSchemas = {
   listExecutions: {
     request: ExecutionListQuerySchema,
     response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
+  },
+  /**
+   * List persisted step spans for a workflow execution.
+   *
+   * This is the public read surface for execution traces. Storage subjects remain
+   * internal to the workflow subsystem.
+   */
+  listSpans: {
+    request: z.object({ executionId: z.string() }),
+    response: z.object({ spans: z.array(SpanRecordSchema) }),
   },
   listTriggerTypes: {
     request: z.object({}),
