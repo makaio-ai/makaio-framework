@@ -17,7 +17,7 @@ on:
     branches: [fix/ci]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -44,11 +44,6 @@ concurrency:
 
 jobs:
   ci:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.action != 'labeled' && github.event.action != 'unlabeled' ||
-      github.event.label.name == 'skip:ci' ||
-      github.event.label.name == 'skip:all'
     uses: ./.github/workflows/ci-reusable.yml
     with:
       test_shards: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps"]'
