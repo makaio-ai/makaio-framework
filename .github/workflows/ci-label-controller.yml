@@ -149,18 +149,19 @@ jobs:
                   continue;
                 }
 
+                if (activeWorkRun) {
+                  await dispatch(workflow, true);
+                  core.info(`${workflow.label}: dispatched skip run to cancel active work for PR #${prNumber}.`);
+                  continue;
+                }
+
                 if (currentHeadPassed || currentHeadSkipPassed) {
                   core.info(`${workflow.label}: current head ${sourceSha} already has a successful required gate.`);
                   continue;
                 }
 
-                if (activeWorkRun) {
-                  await dispatch(workflow, true);
-                  core.info(`${workflow.label}: dispatched skip run to cancel active work for PR #${prNumber}.`);
-                } else {
-                  await dispatch(workflow, true);
-                  core.info(`${workflow.label}: dispatched skip run for PR #${prNumber} at ${sourceSha}.`);
-                }
+                await dispatch(workflow, true);
+                core.info(`${workflow.label}: dispatched skip run for PR #${prNumber} at ${sourceSha}.`);
                 continue;
               }
 

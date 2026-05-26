@@ -79,9 +79,7 @@ jobs:
   cache:
     name: Cache
     needs: precheck
-    if: >-
-      github.event_name != 'pull_request' ||
-      needs.precheck.outputs.skip_ci != 'true'
+    if: needs.precheck.outputs.skip_ci != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
