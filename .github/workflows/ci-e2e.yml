@@ -59,7 +59,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Classify PR changes
         id: changes
@@ -69,13 +69,12 @@ jobs:
           set -euo pipefail
 
           base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
-          head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
-          head_repo="$(jq -r '.pull_request.head.repo.clone_url' "$GITHUB_EVENT_PATH")"
+          pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
 
           git fetch --no-tags origin "$base"
-          git fetch --no-tags "$head_repo" "$head"
+          git fetch --no-tags origin "refs/pull/${pr_number}/head"
 
-          mapfile -t files < <(git diff --name-only --diff-filter=d "$base...$head")
+          mapfile -t files < <(git diff --name-only "$base...FETCH_HEAD")
           docs_only=false
           if ((${#files[@]} > 0)); then
             docs_only=true
