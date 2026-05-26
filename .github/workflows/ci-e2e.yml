@@ -54,29 +54,49 @@ jobs:
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Classify PR changes
         id: changes
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            const docsOnly = files.length > 0 && files.every(({ filename: file }) =>
-              file.endsWith('.md') ||
-              file.startsWith('docs/') ||
-              (file.startsWith('.changeset/') && file.endsWith('.md'))
-            );
-            core.setOutput('docs_only', docsOnly ? 'true' : 'false');
-            if (docsOnly) core.info('Documentation-only PR; skipping E2E.');
+          base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
+          head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          head_repo="$(jq -r '.pull_request.head.repo.clone_url' "$GITHUB_EVENT_PATH")"
+
+          git fetch --no-tags origin "$base"
+          git fetch --no-tags "$head_repo" "$head"
+
+          mapfile -t files < <(git diff --name-only --diff-filter=d "$base...$head")
+          docs_only=false
+          if ((${#files[@]} > 0)); then
+            docs_only=true
+            for file in "${files[@]}"; do
+              case "$file" in
+                *.md|docs/*|.changeset/*.md) ;;
+                *)
+                  docs_only=false
+                  break
+                  ;;
+              esac
+            done
+          fi
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          if [ "$docs_only" = "true" ]; then
+            echo "Documentation-only PR; skipping E2E."
+          fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        if: steps.changes.outputs.docs_only != 'true'
+        if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
         with:
           ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false

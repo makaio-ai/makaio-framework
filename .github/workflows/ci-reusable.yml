@@ -55,26 +55,31 @@ jobs:
     steps:
       - name: Check skip labels
         id: skip-labels
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
+          FORCE_SKIP_CI: ${{ inputs.force_skip_ci }}
           SKIP_LABELS: ${{ inputs.skip_labels }}
-        with:
-          script: |
-            if (${{ inputs.force_skip_ci }}) {
-              core.setOutput('skip_ci', 'true');
-              core.info('force_skip_ci input is true; publishing skipped CI gate.');
-              return;
-            }
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            const configuredLabels = JSON.parse(process.env.SKIP_LABELS || '[]');
-            if (!Array.isArray(configuredLabels) || configuredLabels.some((label) => typeof label !== 'string')) {
-              throw new Error('skip_labels must be a JSON array of strings');
-            }
+          if [ "$FORCE_SKIP_CI" = "true" ]; then
+            echo "skip_ci=true" >> "$GITHUB_OUTPUT"
+            echo "force_skip_ci input is true; publishing skipped CI gate."
+            exit 0
+          fi
 
-            const pullRequestLabels = context.payload.pull_request?.labels?.map((label) => label.name) ?? [];
-            const skipCi = configuredLabels.some((label) => pullRequestLabels.includes(label));
-            core.setOutput('skip_ci', skipCi ? 'true' : 'false');
-            if (skipCi) core.info('skip CI label found; publishing skipped CI gate.');
+          skip_ci=false
+          while IFS= read -r configured_label; do
+            if jq -e --arg label "$configured_label" '.pull_request.labels // [] | any(.name == $label)' "$GITHUB_EVENT_PATH" > /dev/null; then
+              skip_ci=true
+              break
+            fi
+          done < <(jq -r 'if type == "array" and all(.[]; type == "string") then .[] else error("skip_labels must be a JSON array of strings") end' <<< "$SKIP_LABELS")
+
+          echo "skip_ci=$skip_ci" >> "$GITHUB_OUTPUT"
+          if [ "$skip_ci" = "true" ]; then
+            echo "skip CI label found; publishing skipped CI gate."
+          fi
 
   cache:
     name: Cache
@@ -85,32 +90,55 @@ jobs:
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Classify PR changes
         id: changes
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            const requiresValidation = files.some(({ filename: file }) => file === 'docs/package-overview.md');
-            const docsOnly = files.length > 0 && !requiresValidation && files.every(({ filename: file }) =>
-              file.endsWith('.md') ||
-              file.startsWith('docs/') ||
-              (file.startsWith('.changeset/') && file.endsWith('.md'))
-            );
-            core.setOutput('docs_only', docsOnly ? 'true' : 'false');
-            if (docsOnly) core.info('Documentation-only PR; skipping CI.');
+          base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
+          head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          head_repo="$(jq -r '.pull_request.head.repo.clone_url' "$GITHUB_EVENT_PATH")"
+
+          git fetch --no-tags origin "$base"
+          git fetch --no-tags "$head_repo" "$head"
+
+          mapfile -t files < <(git diff --name-only --diff-filter=d "$base...$head")
+          docs_only=false
+          if ((${#files[@]} > 0)); then
+            docs_only=true
+            for file in "${files[@]}"; do
+              if [ "$file" = "docs/package-overview.md" ]; then
+                docs_only=false
+                break
+              fi
+
+              case "$file" in
+                *.md|docs/*|.changeset/*.md) ;;
+                *)
+                  docs_only=false
+                  break
+                  ;;
+              esac
+            done
+          fi
+
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          if [ "$docs_only" = "true" ]; then
+            echo "Documentation-only PR; skipping CI."
+          fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: github.event_name != 'pull_request' && steps.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
-        if: steps.changes.outputs.docs_only != 'true'
 
       - name: Restore Yarn cache
         if: steps.changes.outputs.docs_only != 'true'

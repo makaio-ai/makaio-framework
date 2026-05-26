@@ -20,9 +20,7 @@ describe('CI workflow validation', () => {
   });
 
   it('does not skip CI for package overview documentation changes', () => {
-    expect(reusableWorkflowText).toContain(
-      "const requiresValidation = files.some(({ filename: file }) => file === 'docs/package-overview.md');",
-    );
-    expect(reusableWorkflowText).toContain('files.length > 0 && !requiresValidation && files.every');
+    expect(reusableWorkflowText).toContain('if [ "$file" = "docs/package-overview.md" ]; then');
+    expect(reusableWorkflowText).toContain('docs_only=false');
   });
 });
