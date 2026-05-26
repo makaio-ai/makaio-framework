@@ -69,12 +69,17 @@ jobs:
           fi
 
           skip_ci=false
+          configured_labels="$(jq -r 'if type == "array" and all(.[]; type == "string") then .[] else error("skip_labels must be a JSON array of strings") end' <<< "$SKIP_LABELS")"
           while IFS= read -r configured_label; do
+            if [ -z "$configured_label" ]; then
+              continue
+            fi
+
             if jq -e --arg label "$configured_label" '.pull_request.labels // [] | any(.name == $label)' "$GITHUB_EVENT_PATH" > /dev/null; then
               skip_ci=true
               break
             fi
-          done < <(jq -r 'if type == "array" and all(.[]; type == "string") then .[] else error("skip_labels must be a JSON array of strings") end' <<< "$SKIP_LABELS")
+          done <<< "$configured_labels"
 
           echo "skip_ci=$skip_ci" >> "$GITHUB_OUTPUT"
           if [ "$skip_ci" = "true" ]; then

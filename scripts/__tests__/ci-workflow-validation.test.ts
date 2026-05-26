@@ -34,4 +34,9 @@ describe('CI workflow validation', () => {
     expect(reusableWorkflowText).toContain('git fetch --no-tags origin "refs/pull/${pr_number}/head"');
     expect(e2eWorkflowText).toContain('git fetch --no-tags origin "refs/pull/${pr_number}/head"');
   });
+
+  it('fails precheck before looping when skip label configuration is malformed', () => {
+    expect(reusableWorkflowText).toContain('configured_labels="$(jq -r');
+    expect(reusableWorkflowText).toContain('done <<< "$configured_labels"');
+  });
 });
