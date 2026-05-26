@@ -17,7 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type WorkerNodeDispatch, type WorkflowWorkerConfig } from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -29,7 +29,8 @@ import {
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
 } from '../boot.js';
-import { resolveWorkflowStepRunnerFactoryOptions } from '../workflow-step-runner/index.js';
+import { createNodeWorkflowRunner, resolveWorkflowStepRunnerFactoryOptions } from '../workflow-step-runner/index.js';
+import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
 import { filesystemPackage } from '@makaio/extension-filesystem';
@@ -101,6 +102,26 @@ function minimalBootOptions(partial: Partial<CoreBootOptions> = {}): CoreBootOpt
 }
 
 const TEST_MAKAIO_HOME = '/home/test/.makaio';
+
+/**
+ * Create a minimal workflow worker config for runner composition tests.
+ * @returns A valid workflow worker config fixture.
+ */
+function makeWorkerConfig(): WorkflowWorkerConfig {
+  return {
+    source: { kind: 'definition', workflowId: 'workflow-1' },
+    executionId: 'wfx-1',
+    workflowId: 'workflow-1',
+    triggerPayload: {},
+    inputs: {},
+    scope: { type: 'global' },
+    busAuth: { kind: 'none' },
+    context: { repoPath: '/repo', makaioHome: TEST_MAKAIO_HOME, os: 'linux', arch: 'x64' },
+    env: {},
+    coordinatorSessionId: 'session-1',
+    cancelSubject: 'workflow.wfx-1.cancel',
+  };
+}
 
 describe('resolveExtensionOptions — extensions', () => {
   it('defaults to FilesystemDescriptorDiscovery when no override is provided', () => {
@@ -312,6 +333,33 @@ describe('workflow step runner boot composition', () => {
       workerEntry: '/app/runtime/worker-entry.mjs',
     });
   });
+
+  it('creates fresh default manifests for isolated runner options', () => {
+    const first = resolveWorkflowStepRunnerFactoryOptions({
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      packageRoot: '/opt/makaio/runtimes/node',
+      platformDefaults: { cwd: '/workspace' },
+      defaultWorkerEntryMode: 'source',
+      runner: { mode: 'piscina' },
+    });
+    const second = resolveWorkflowStepRunnerFactoryOptions({
+      busUrl: 'ws://127.0.0.1:3010/bus',
+      packageRoot: '/opt/makaio/runtimes/node',
+      platformDefaults: { cwd: '/workspace' },
+      defaultWorkerEntryMode: 'source',
+      runner: { mode: 'piscina' },
+    });
+
+    expect(first.mode).toBe('piscina');
+    expect(second.mode).toBe('piscina');
+    if (first.mode !== 'piscina' || second.mode !== 'piscina') {
+      throw new Error('Expected piscina runner options');
+    }
+
+    first.manifest.packages.push({ name: 'mutated-package', importPath: 'file:///ext/mutated-package.mjs' });
+
+    expect(second.manifest.packages).toStrictEqual([]);
+  });
 });
 
 describe('session orchestrator runtime ownership', () => {
@@ -507,6 +555,94 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     expect(result.packages).toHaveLength(1);
     expect(result.packages[0]?.name).toBe('detached-ext');
     expect(importModule).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workflow-level runner boot composition
+// ---------------------------------------------------------------------------
+
+describe('workflow-level runner boot composition', () => {
+  it('returns undefined when no runner is configured', () => {
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+    });
+
+    expect(runner).toBeUndefined();
+  });
+
+  it('returns undefined for in-process mode', () => {
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: { mode: 'in-process' },
+    });
+
+    expect(runner).toBeUndefined();
+  });
+
+  it('creates a WorkerNodeRunner for worker-node mode', () => {
+    const dispatch = vi.fn();
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: {
+        mode: 'worker-node',
+        dispatch,
+        manifest: { packages: [] },
+      },
+    });
+
+    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+  });
+
+  it('creates a WorkerNodeRunner with optional requirements forwarded', () => {
+    const dispatch = vi.fn();
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: {
+        mode: 'worker-node',
+        dispatch,
+        manifest: { packages: [] },
+        requirements: { persistentStorage: true, customCapabilities: [] },
+      },
+    });
+
+    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+  });
+
+  it('preserves omitted manifests for worker-node mode', async () => {
+    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
+    const dispatch: WorkerNodeDispatch = async (request) => {
+      capturedRequest = request;
+      return {
+        executionId: 'wfx-1',
+        workflowId: 'workflow-1',
+        status: 'completed',
+      };
+    };
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: {
+        mode: 'worker-node',
+        dispatch,
+      },
+    });
+    const signal = new AbortController().signal;
+
+    if (runner === undefined) {
+      throw new Error('Expected worker-node runner');
+    }
+    expect(runner).toBeInstanceOf(WorkerNodeRunner);
+    await runner.run(makeWorkerConfig(), signal);
+
+    if (capturedRequest === undefined) {
+      throw new Error('Expected dispatch request');
+    }
+    expect('manifest' in capturedRequest).toBe(false);
   });
 });
 

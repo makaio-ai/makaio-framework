@@ -3,7 +3,13 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
-import type { ExtensionConfigProvider, TrayManifest } from '@makaio/contracts';
+import type {
+  ExtensionConfigProvider,
+  TrayManifest,
+  WorkerContributionManifest,
+  WorkerNodeDispatch,
+  WorkerNodeRequirements,
+} from '@makaio/contracts';
 import type { AdapterSubsystemService } from '@makaio/subsystem-adapter';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type { DevPortalMap } from '@makaio/services-package-manager';
@@ -18,7 +24,6 @@ import type { ShutdownStep } from './boot-phase.js';
 import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
-import type { WorkerContributionManifest } from './workflow-step-runner/types.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
 
 /**
@@ -46,6 +51,37 @@ export type WorkflowRunnerBootOptions =
       readonly maxConcurrency?: number;
       /** Idle timeout before worker threads are reaped. */
       readonly idleTimeoutMs?: number;
+    }
+  | {
+      /**
+       * Delegate workflow executions to a product-owned WorkerNode dispatch seam.
+       *
+       * The dispatch function is supplied by the host composition root and
+       * typically wired to `workerPool.dispatch`. Framework code remains
+       * decoupled from any pool implementation details.
+       */
+      readonly mode: 'worker-node';
+      /**
+       * WorkerNode dispatch function injected by the host composition root.
+       *
+       * Called once per workflow execution with the full worker config and
+       * manifest. Product hosts wire this to `workerPool.dispatch`.
+       */
+      readonly dispatch: WorkerNodeDispatch;
+      /**
+       * Contribution manifest forwarded to each dispatch call.
+       *
+       * When omitted, an empty manifest is used. Product hosts that resolve
+       * project-level manifests in the dispatch function can leave this empty.
+       */
+      readonly manifest?: WorkerContributionManifest;
+      /**
+       * Optional resource requirements forwarded to pool dispatch.
+       *
+       * When provided, the pool uses these to select a compatible provider.
+       * Omit to accept any available pool with no constraints.
+       */
+      readonly requirements?: WorkerNodeRequirements;
     };
 
 /**

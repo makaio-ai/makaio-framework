@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { safeParseExtensionDescriptor } from '@makaio/contracts';
 import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { PackageInfo } from './schemas.js';
+import { resolveExtensionEntrypointImportPath } from './local-path-installer.js';
 
 const NODE_LINKER_SETTING = 'nodeLinker: node-modules';
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
@@ -329,6 +330,9 @@ export class YarnPackageManager {
           name,
           version,
           hasDescriptor: true,
+          ...(descriptorResult.serverImportPath !== undefined && {
+            serverImportPath: descriptorResult.serverImportPath,
+          }),
         });
       }
 
@@ -382,10 +386,40 @@ export class YarnPackageManager {
    * The package manager writes `.yarnrc.yml` with `nodeLinker: node-modules`,
    * so descriptor discovery mirrors runtime filesystem discovery.
    * @param packageName - Installed package ident.
-   * @returns Descriptor presence flag derived from the public reader.
+   * @returns Descriptor metadata derived from the public reader.
    */
-  private async readInstalledDescriptor(packageName: string): Promise<{ hasDescriptor: boolean }> {
-    return { hasDescriptor: (await this.readInstalledExtensionDescriptor(packageName)) !== null };
+  private async readInstalledDescriptor(
+    packageName: string,
+  ): Promise<{ hasDescriptor: false } | { hasDescriptor: true; serverImportPath?: string }> {
+    const descriptor = await this.readInstalledExtensionDescriptor(packageName);
+    if (descriptor === null) {
+      return { hasDescriptor: false };
+    }
+
+    const serverImportPath = await this.resolveInstalledServerEntrypoint(packageName, descriptor);
+    return {
+      hasDescriptor: true,
+      ...(serverImportPath !== undefined && { serverImportPath }),
+    };
+  }
+
+  /**
+   * Resolve an installed descriptor's server entrypoint to a concrete import path.
+   * @param packageName - npm package name (e.g., `@acme/weather-tools`).
+   * @param descriptor - Validated extension descriptor.
+   * @returns Absolute server import path when the descriptor declares a resolvable server entrypoint.
+   */
+  private async resolveInstalledServerEntrypoint(
+    packageName: string,
+    descriptor: ExtensionDescriptor,
+  ): Promise<string | undefined> {
+    const serverEntrypoint = descriptor.entrypoints?.server;
+    if (serverEntrypoint === undefined) {
+      return undefined;
+    }
+
+    const packageRoot = path.join(this.makaioHome, 'node_modules', ...packageName.split('/'));
+    return resolveExtensionEntrypointImportPath(packageRoot, 'server', serverEntrypoint);
   }
 
   /**

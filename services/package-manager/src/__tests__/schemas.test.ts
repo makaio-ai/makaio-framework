@@ -24,8 +24,10 @@ describe('PackageManagementSchemas', () => {
       name: '@acme/weather-tools',
       version: '1.0.0',
       hasDescriptor: true,
+      serverImportPath: '/extensions/weather-tools/dist/server.mjs',
     });
     expect(info.hasDescriptor).toBe(true);
+    expect(info.serverImportPath).toBe('/extensions/weather-tools/dist/server.mjs');
   });
 
   it('should default hasDescriptor to false', () => {

@@ -193,6 +193,11 @@ export {
   VCSPRNamespace,
   VCSPRSchemas,
   VCSPRSubjects,
+  WORKER_NODE_CAPABILITY_ID,
+  WorkerNodeCapabilitiesSchema,
+  WorkerNodeRequirementsSchema,
+  registerWorkerNodeProvider,
+  unregisterWorkerNodeProvider,
 } from './capabilities/index.js';
 export type {
   AudioChunk,
@@ -265,6 +270,14 @@ export type {
   ReviewerState,
   ReviewsSummary,
   UpgradeHandler,
+  IWorkerNodeProvider,
+  NormalizedWorkerNodeCapabilities,
+  NormalizedWorkerNodeRequirements,
+  WorkerNodeCapabilities,
+  WorkerNodeDispatch,
+  WorkerNodeHandle,
+  WorkerNodeProvisionRequest,
+  WorkerNodeRequirements,
 } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';
 export type {
@@ -657,6 +670,9 @@ export {
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,
   WorkflowWorkerConfigSchema,
+  WorkflowRunResultSchema,
+  WorkerContributionPackageRefSchema,
+  WorkerContributionManifestSchema,
 } from './workflow/index.js';
 export type {
   WorkflowWorkerBusAuth,
@@ -664,6 +680,8 @@ export type {
   WorkflowWorkerConfig,
   WorkflowRunResult,
   IWorkflowRunner,
+  WorkerContributionPackageRef,
+  WorkerContributionManifest,
 } from './workflow/index.js';
 export {
   BusEventWorkflowTrigger,
@@ -695,6 +713,7 @@ export type {
   WorkflowTriggerDef,
 } from './workflow/index.js';
 export { WorkflowBlocksNamespace, WorkflowBlocksSchemas, WorkflowBlocksSubjects } from './workflow-blocks/index.js';
+export { WorkerNodeNamespace, WorkerNodeSchemas, WorkerNodeSubjects } from './worker-node/index.js';
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,

@@ -84,6 +84,20 @@ describe('request timeout=0 with AbortSignal', () => {
     ).rejects.toThrow('local-abort');
   });
 
+  it('exposes the request AbortSignal to local handlers', async () => {
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    MakaioBus.on(RequestTimeoutSubjects.wait, (ctx) => {
+      observedSignal = ctx.signal;
+      ctx.setResult({ ok: true });
+    });
+
+    const result = await MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { signal: controller.signal });
+
+    expect(result).toEqual({ ok: true });
+    expect(observedSignal).toBe(controller.signal);
+  });
+
   it('aborts transport requests when timeout is 0 and forwards timeout to transport', async () => {
     // Advertise the pending transport as the handler so dispatch routes to it.
     MakaioBus.getContext().remoteRequestHandlers.set('requestTimeoutAbort.wait', [

@@ -1,4 +1,4 @@
-import type { WorkerContributionManifest } from '../workflow-step-runner/types.js';
+import type { WorkerContributionManifest } from '@makaio/contracts';
 
 export type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
 

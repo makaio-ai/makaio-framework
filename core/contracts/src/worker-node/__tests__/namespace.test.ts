@@ -1,0 +1,29 @@
+import { describe, expect, it } from 'vitest';
+import { WorkerNodeSchemas, WorkerNodeSubjects } from '../index.js';
+
+describe('worker-node namespace', () => {
+  it('registers lifecycle subjects under worker-node', () => {
+    expect(WorkerNodeSubjects.lifecycle.ready.$meta.namespace).toBe('worker-node');
+    expect(WorkerNodeSubjects.lifecycle.ready.subject).toBe('lifecycle.ready');
+  });
+
+  it('keeps pool identity out of framework lifecycle payloads', () => {
+    const parsed = WorkerNodeSchemas['lifecycle.ready'].parse({
+      nodeId: 'node-1',
+      executionId: 'wfx-1',
+      environment: 'piscina',
+      poolId: 'pool-1',
+      adapters: ['claude-code'],
+      metadata: { source: 'test' },
+    });
+
+    expect(parsed).toStrictEqual({
+      nodeId: 'node-1',
+      executionId: 'wfx-1',
+      environment: 'piscina',
+      adapters: ['claude-code'],
+      metadata: { source: 'test' },
+    });
+    expect('poolId' in parsed).toBe(false);
+  });
+});

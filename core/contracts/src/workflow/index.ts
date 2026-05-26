@@ -121,6 +121,9 @@ export {
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,
   WorkflowWorkerConfigSchema,
+  WorkflowRunResultSchema,
+  WorkerContributionPackageRefSchema,
+  WorkerContributionManifestSchema,
 } from './worker.js';
 export type {
   WorkflowWorkerBusAuth,
@@ -128,6 +131,8 @@ export type {
   WorkflowWorkerConfig,
   WorkflowRunResult,
   IWorkflowRunner,
+  WorkerContributionPackageRef,
+  WorkerContributionManifest,
 } from './worker.js';
 export {
   BusEventWorkflowTrigger,

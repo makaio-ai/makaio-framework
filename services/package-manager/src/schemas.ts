@@ -152,6 +152,13 @@ export const PackageInfoSchema = z.object({
    * Whether the package contains a valid extension descriptor.
    */
   hasDescriptor: z.boolean().default(false),
+
+  /**
+   * Absolute import path for the package's resolved server entrypoint, when
+   * its descriptor declares one and the installed files satisfy the runtime
+   * entrypoint convention.
+   */
+  serverImportPath: z.string().min(1).optional(),
 });
 
 export type PackageInfo = z.infer<typeof PackageInfoSchema>;

@@ -141,6 +141,23 @@ export type {
   ReviewsSummary,
 } from './vcs-pr/index.js';
 export {
+  WORKER_NODE_CAPABILITY_ID,
+  WorkerNodeCapabilitiesSchema,
+  WorkerNodeRequirementsSchema,
+  registerWorkerNodeProvider,
+  unregisterWorkerNodeProvider,
+} from './worker-node/index.js';
+export type {
+  IWorkerNodeProvider,
+  NormalizedWorkerNodeCapabilities,
+  NormalizedWorkerNodeRequirements,
+  WorkerNodeCapabilities,
+  WorkerNodeDispatch,
+  WorkerNodeHandle,
+  WorkerNodeProvisionRequest,
+  WorkerNodeRequirements,
+} from './worker-node/index.js';
+export {
   GIT_HOOK_EVENTS_CAPABILITY_ID,
   GitHookCoveredOperationSchema,
   GitHookCoverageReasonSchema,
