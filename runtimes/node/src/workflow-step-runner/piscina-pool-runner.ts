@@ -51,6 +51,16 @@ export class PiscinaPoolRunner<TTask, TResult> {
   }
 
   /**
+   * Subscribe to worker-thread messages emitted through Piscina.
+   * @param listener - Callback invoked for each worker message.
+   * @returns Cleanup callback that removes the listener.
+   */
+  public onMessage(listener: (message: unknown) => void): () => void {
+    this.pool.on('message', listener);
+    return () => this.pool.off('message', listener);
+  }
+
+  /**
    * Destroy the thread pool and release all worker threads.
    */
   public async dispose(): Promise<void> {

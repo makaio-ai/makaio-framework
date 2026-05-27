@@ -65,6 +65,7 @@ export type {
 } from './schemas.js';
 export type { IWorkflowTriggerTypeRegistry, WorkflowTriggerTypeRecord } from './trigger-type-registry.js';
 export {
+  WORKFLOW_CANCELLED_REASON,
   WorkflowStepTypeSchema,
   WorkflowRunnerStepTypeSchema,
   StepRunnerBusAuthSchema,

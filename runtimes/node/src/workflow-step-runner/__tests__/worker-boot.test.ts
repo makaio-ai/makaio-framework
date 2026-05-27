@@ -1,5 +1,9 @@
+import { createServer } from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { AgentSubjects, McpSubjects } from '@makaio/contracts';
+import { createBusInstance } from '@makaio/bus-core';
+import { AgentSubjects, FrameworkContractNamespaces, McpSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
+import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
 import { StepTelemetryCollector } from '../step-telemetry-collector.js';
 
@@ -91,4 +95,51 @@ describe('bootWorkerBus', () => {
       await handle.close();
     }
   });
+
+  it('worker bus is fully ready for host requests immediately after bootWorkerBus() returns', async () => {
+    const hostBus = createBusInstance();
+    hostBus.registerNamespaces(FrameworkContractNamespaces);
+
+    const server = createServer();
+    const port = await listenOnLoopback(server);
+
+    const transport = new BusServerTransportProvider({ httpServer: server });
+    let cleanup = (): void => undefined;
+    let worker: Awaited<ReturnType<typeof bootWorkerBus>> | undefined;
+
+    try {
+      await transport.connect(hostBus, 'worker-boot-readiness-host');
+      cleanup = hostBus.on(WorkflowSubjects.gate.awaitApproval, (ctx) => {
+        ctx.setResult({ action: 'approve', source: 'user' });
+      });
+      worker = await bootWorkerBus({
+        busUrl: `ws://127.0.0.1:${port}/bus`,
+        busAuth: { kind: 'none' },
+      });
+
+      const result = await worker.bus.request(
+        WorkflowSubjects.gate.awaitApproval,
+        {
+          executionId: 'exec-ready',
+          stepId: 'gate-ready',
+          stepType: 'gate',
+          workflowId: 'wf-ready',
+          workflowName: 'Readiness',
+          title: 'Ready?',
+          message: 'Ready?',
+          autoAction: 'reject',
+          timeoutMs: null,
+          openedAt: Date.now(),
+        },
+        { timeout: 1_000 },
+      );
+
+      expect(result).toEqual({ action: 'approve', source: 'user' });
+    } finally {
+      if (worker) await worker.close();
+      cleanup();
+      await transport.disconnect();
+      await closeHttpServer(server);
+    }
+  }, 10_000);
 });

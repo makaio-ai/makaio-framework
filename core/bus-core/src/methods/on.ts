@@ -32,6 +32,18 @@ export function getOnPropagationPromise(cleanup: (() => void) | null | undefined
 }
 
 /**
+ * Wait until a handler registration has propagated to registered transports.
+ *
+ * `on()` still returns a plain cleanup function for public ergonomics, but
+ * remote transports subscribe asynchronously. Callers that publish readiness
+ * based on remote routability can await this helper before proceeding.
+ * @param cleanup - Cleanup function returned by {@link on}.
+ */
+export async function waitForSubscriptionPropagation(cleanup: (() => void) | null | undefined): Promise<void> {
+  await (getOnPropagationPromise(cleanup) ?? Promise.resolve());
+}
+
+/**
  * Add a handler to a handler map with priority-based ordering.
  * @param context - Makaio bus context
  * @param mapKey - Which handler map to add to

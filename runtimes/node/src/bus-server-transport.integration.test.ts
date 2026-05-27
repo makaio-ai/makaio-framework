@@ -13,46 +13,17 @@
  */
 
 import { createServer } from 'node:http';
-import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { closeHttpServer, listenOnLoopback } from './__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Bind a real HTTP server on a random loopback port and resolve once listening.
- * @returns Bound HTTP server and its TCP port.
- */
-async function startRealHttpServer(): Promise<{ server: HttpServer; port: number }> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
-  const addr = server.address();
-  if (!addr || typeof addr === 'string') {
-    throw new Error('Failed to resolve HTTP server address');
-  }
-  return { server, port: addr.port };
-}
-
-/**
- * Close an HTTP server, resolving after all connections have drained.
- * @param server - Listening HTTP server to close.
- */
-async function closeHttpServer(server: HttpServer): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((err) => (err ? reject(err) : resolve()));
-  });
-}
 
 /**
  * Wait for a WebSocket to reach OPEN state or reject if an error fires first.
@@ -84,7 +55,8 @@ async function waitForOpen(ws: WebSocket): Promise<void> {
 
 describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
   it('accepts a real WebSocket upgrade on /bus and reaches OPEN state', async () => {
-    const { server, port } = await startRealHttpServer();
+    const server = createServer();
+    const port = await listenOnLoopback(server);
     // Use an isolated bus instance to avoid polluting the global singleton.
     const bus = createBusInstance({ context: createBusContext() });
     const transport = new BusServerTransportProvider({
@@ -109,7 +81,8 @@ describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
   }, 10_000);
 
   it('passes non-bus upgrade requests to downstream listeners without destroying the socket', async () => {
-    const { server, port } = await startRealHttpServer();
+    const server = createServer();
+    const port = await listenOnLoopback(server);
     const bus = createBusInstance({ context: createBusContext() });
     const transport = new BusServerTransportProvider({
       httpServer: server,

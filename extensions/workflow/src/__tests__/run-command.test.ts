@@ -693,4 +693,25 @@ describe('handleWorkflowRun with --dry-run', () => {
     expect(stderrChunks.join('')).toContain('payload must be a JSON object');
     expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(1);
   });
+
+  it('preserves signal exit code when dry-run stdin aborts while reading payload', async () => {
+    restoreStdin();
+    restoreStdin = stubPendingStdinPipe();
+    const runFileHandler = vi.fn();
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      runFileHandler(ctx.payload);
+      ctx.setResult({ executionId: 'exec-dry-stdin-abort' });
+    });
+    const controller = new AbortController();
+    const ctx = createContext(bus, makeArgs({ file: './wf.ts', dryRun: true }), controller.signal);
+
+    const runPromise = handleWorkflowRun(ctx);
+    controller.abort('SIGTERM');
+    await runPromise;
+    cleanupRunFile();
+
+    expect(runFileHandler).not.toHaveBeenCalled();
+    expect(stderrChunks.join('')).not.toContain('invalid JSON payload');
+    expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(143);
+  });
 });

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createBusInstance, type BusMessage, type BusTransport } from '@makaio/bus-core';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
+import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — declared before dynamic imports
@@ -10,6 +12,11 @@ const mockBootWorkerRuntime = vi.fn();
 const mockLoadWorkflowModule = vi.fn();
 const mockRunWorkflowOrchestrator = vi.fn();
 const mockLoadWorkerContributions = vi.fn();
+const mockParentPortPostMessage = vi.fn();
+
+vi.mock('node:worker_threads', () => ({
+  parentPort: { postMessage: mockParentPortPostMessage },
+}));
 
 vi.mock('../../workflow-step-runner/worker-boot.js', () => ({
   bootWorkerBus: mockBootWorkerBus,
@@ -84,10 +91,39 @@ function makeLoadedWorkflow() {
  * @returns Mock bus handle with bus object and close spy.
  */
 function makeBusHandle() {
+  const unsubscribe = vi.fn();
   return {
-    bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+    bus: { on: vi.fn().mockReturnValue(unsubscribe), off: vi.fn(), emit: vi.fn() },
     close: vi.fn().mockResolvedValue(undefined),
   };
+}
+
+/**
+ * Build a bus handle whose transport-level subscribe is externally released.
+ * @returns Worker bus handle plus subscription propagation controls.
+ */
+function makePropagationControlledBusHandle() {
+  let resolveSubscribe!: () => void;
+  const subscribePromise = new Promise<void>((resolve) => {
+    resolveSubscribe = resolve;
+  });
+  const transport: BusTransport = {
+    name: 'delayed-subscribe',
+    send: async <TMessage extends BusMessage>(_message: TMessage) => true as never,
+    onReceive: () => () => undefined,
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    subscribe: vi.fn().mockReturnValue(subscribePromise),
+    unsubscribe: vi.fn().mockResolvedValue(undefined),
+    isReady: () => true,
+  };
+  const bus = createBusInstance();
+  const registration = bus.registerTransport(transport);
+  const close = vi.fn(async () => {
+    registration.unregister();
+    await transport.disconnect();
+  });
+  return { busHandle: { bus, close }, resolveSubscribe, transport };
 }
 
 /**
@@ -96,6 +132,7 @@ function makeBusHandle() {
  */
 function makeRuntimeHandle() {
   return {
+    adapterIds: [],
     close: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -159,6 +196,66 @@ describe('runWorkflowInWorker', () => {
     expect(mockLoadWorkflowModule).toHaveBeenCalledWith(config.source);
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
     expect(result).toEqual(expectedResult);
+  });
+
+  it('posts ready after cancel subscription is propagated', async () => {
+    const { busHandle, resolveSubscribe, transport } = makePropagationControlledBusHandle();
+    const expectedResult = {
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed' as const,
+    };
+
+    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
+
+    const config = makeConfig();
+    const runPromise = runWorkflowInWorker({ config, manifest: { packages: [] } });
+    await vi.waitFor(() => expect(transport.subscribe).toHaveBeenCalled());
+
+    expect(mockParentPortPostMessage).not.toHaveBeenCalled();
+
+    resolveSubscribe();
+    await runPromise;
+
+    expect(mockParentPortPostMessage).toHaveBeenCalledWith(
+      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject),
+    );
+    const cancelSubscriptionOrder = vi.mocked(transport.subscribe).mock.invocationCallOrder[0];
+    const readyMessageOrder = mockParentPortPostMessage.mock.invocationCallOrder[0];
+    if (cancelSubscriptionOrder === undefined || readyMessageOrder === undefined) {
+      throw new Error('Missing invocation order for ready message assertion');
+    }
+    expect(cancelSubscriptionOrder).toBeLessThan(readyMessageOrder);
+  });
+
+  it('includes initialized adapter ids in the ready message', async () => {
+    const busHandle = makeBusHandle();
+    const runtimeHandle = {
+      adapterIds: ['adapter-a', 'adapter-b'],
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const expectedResult = {
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed' as const,
+    };
+    const contributions = { toolsets: [], adapters: [{ manifest: { name: 'adapter-a' } }] };
+
+    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
+    mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
+    mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
+    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
+
+    const config = makeConfig();
+    await runWorkflowInWorker({ config, manifest: { packages: [] } });
+
+    expect(mockParentPortPostMessage).toHaveBeenCalledWith(
+      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, ['adapter-a', 'adapter-b']),
+    );
   });
 
   it('closes runtime and bus in the finally block on success', async () => {

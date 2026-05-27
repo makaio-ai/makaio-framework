@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
+  WORKFLOW_CANCELLED_REASON,
   SessionSubjects,
   SubagentSubjects,
   type AgentWorkflowStep,
@@ -298,7 +299,7 @@ export async function executeAgentStep(
     // Re-check after persisting subagentId: cancellation may have arrived during spawn.
     // Now that subagentId is recorded, we can kill the just-spawned subagent.
     if (execution.status !== 'running') {
-      await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+      await bus.request(SubagentSubjects.kill, { subagentId, reason: WORKFLOW_CANCELLED_REASON }).catch(() => {});
       return failResult('Execution cancelled', startedAt);
     }
 

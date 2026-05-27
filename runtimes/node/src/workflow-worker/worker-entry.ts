@@ -1,3 +1,5 @@
+import { parentPort } from 'node:worker_threads';
+import { waitForSubscriptionPropagation } from '@makaio/bus-core';
 import {
   WorkflowWorkerConfigSchema,
   createWorkflowCancelSubject,
@@ -6,6 +8,7 @@ import {
 } from '@makaio/contracts';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
 import { loadWorkflowFromConfig } from './workflow-loader.js';
+import { createWorkflowWorkerReadyMessage } from './worker-ready-message.js';
 import {
   bootWorkerBus,
   bootWorkerRuntime,
@@ -87,6 +90,7 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
     cancelCleanup = handle.bus.on(createWorkflowCancelSubject(config.cancelSubject), () => {
       abortController.abort();
     });
+    await waitForSubscriptionPropagation(cancelCleanup);
 
     // Step 3: Load contributions — pass makaioHome so that relative import
     // paths in the manifest (npm-installed packages) are resolved to absolute
@@ -105,6 +109,10 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
         env: config.env,
       });
     }
+
+    parentPort?.postMessage(
+      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, runtime?.adapterIds ?? []),
+    );
 
     // Step 5: Load workflow module from source
     const loaded = await loadWorkflowFromConfig(config);

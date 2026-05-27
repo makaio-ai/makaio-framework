@@ -1,5 +1,4 @@
-import type { BusRequestWorkflowStep } from '@makaio/contracts';
-import { JsonValueSchema } from '@makaio/contracts';
+import { JsonValueSchema, WORKFLOW_CANCELLED_REASON, type BusRequestWorkflowStep } from '@makaio/contracts';
 import type { WorkflowExpressionContext } from '@makaio/expression';
 import { resolveTemplatesInObject } from '@makaio/expression';
 import { isRequestSchema } from '@makaio/bus-core';
@@ -7,6 +6,7 @@ import type { SubjectDefinition } from '@makaio/core';
 import type { ActiveExecution, WorkflowSchedulerDeps } from './types.js';
 import { executeGateStep } from './workflow-step-executors.js';
 import { applyStepRunResult, prepareRunnerManagedStep, type StepExecutionOutcome } from './workflow-step-result.js';
+import { cancelExecution } from './workflow-execution-finalizer.js';
 
 /**
  * Run an inline step callback with scheduler-owned cancellation registration.
@@ -124,6 +124,10 @@ export async function runGateInlineStep(
     const gateResult = await runInlineStepWithController(deps, executionId, nodeId, (signal) =>
       runGateStep(executionId, nodeId, resolvedInputs, signal),
     );
+    if (gateResult.status === 'failed' && gateResult.error === WORKFLOW_CANCELLED_REASON) {
+      await cancelExecution(deps, executionId, WORKFLOW_CANCELLED_REASON);
+      return { status: 'failed', error: WORKFLOW_CANCELLED_REASON, failedStepId: nodeId };
+    }
     return applyStepRunResult(deps.bus, active, nodeId, gateResult, resolvedInputs);
   }
 

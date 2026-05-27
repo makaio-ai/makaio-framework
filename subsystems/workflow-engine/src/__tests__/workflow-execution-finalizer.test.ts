@@ -10,6 +10,7 @@ import {
   type FinalizerDeps,
 } from '../workflow-execution-finalizer.js';
 import type { ActiveExecution } from '../types.js';
+import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
 import type { WorkflowDefinition, WorkflowStepType } from '@makaio/contracts';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
@@ -206,25 +207,25 @@ describe('cancelExecution', () => {
           executionId: execution.id,
           stepId: 'pending-step',
           stepType: 'agent',
-          error: 'Workflow cancelled',
+          error: WORKFLOW_CANCELLED_REASON,
         },
         {
           executionId: execution.id,
           stepId: 'running-step',
           stepType: 'agent',
-          error: 'Workflow cancelled',
+          error: WORKFLOW_CANCELLED_REASON,
         },
         {
           executionId: execution.id,
           stepId: 'waiting-step',
           stepType: 'gate',
-          error: 'Workflow cancelled',
+          error: WORKFLOW_CANCELLED_REASON,
         },
         {
           executionId: execution.id,
           stepId: 'foreach-expanding.0.child',
           stepType: 'agent',
-          error: 'Workflow cancelled',
+          error: WORKFLOW_CANCELLED_REASON,
         },
       ]);
     } finally {

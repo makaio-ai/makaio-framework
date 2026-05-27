@@ -6,6 +6,22 @@ import type {
   WorkerNodeProvisionRequest,
   WorkflowRunResult,
 } from '@makaio/contracts';
+import type { WorkflowPiscinaRunWithReadiness } from './workflow-piscina-runner.js';
+
+interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
+  /**
+   * Execute a workflow while exposing the worker bus readiness signal.
+   * @param config - Full workflow worker configuration.
+   * @param signal - AbortSignal for cooperative cancellation.
+   * @param manifest - Optional per-call contribution manifest.
+   * @returns Terminal result and readiness promises.
+   */
+  runWithReadiness(
+    config: WorkerNodeProvisionRequest['workerConfig'],
+    signal: AbortSignal,
+    manifest?: WorkerNodeProvisionRequest['workerManifest'],
+  ): WorkflowPiscinaRunWithReadiness;
+}
 
 /**
  * Convert an AbortSignal reason into the rejection value exposed by the handle.
@@ -17,6 +33,15 @@ function abortRejection(reason: unknown): Error {
     return reason;
   }
   return new Error(String(reason ?? 'WorkerNode wait aborted'));
+}
+
+/**
+ * Check whether a runner exposes Piscina worker readiness separately.
+ * @param runner - Workflow runner supplied to this provider.
+ * @returns True when the runner can expose worker readiness.
+ */
+function isReadinessAwareRunner(runner: IWorkflowRunner): runner is ReadinessAwareWorkflowRunner {
+  return typeof (runner as { runWithReadiness?: unknown }).runWithReadiness === 'function';
 }
 
 /**
@@ -57,8 +82,6 @@ export interface PiscinaWorkerNodeProviderOptions {
 export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
   /** Execution environment tag used for pool provider matching. */
   public readonly environment = 'piscina' as const;
-  /** This provider starts the runner inside {@link provision}. */
-  public readonly startsExecutionDuringProvision = true;
   /** Capabilities advertised to the pool dispatch selector. */
   public readonly baseCapabilities: WorkerNodeCapabilities;
 
@@ -94,7 +117,15 @@ export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
    */
   public async provision(request: WorkerNodeProvisionRequest): Promise<WorkerNodeHandle> {
     const controller = new AbortController();
-    const resultPromise = this.options.runner.run(request.workerConfig, controller.signal, request.workerManifest);
+    const run = isReadinessAwareRunner(this.options.runner)
+      ? this.options.runner.runWithReadiness(request.workerConfig, controller.signal, request.workerManifest)
+      : {
+          result: this.options.runner.run(request.workerConfig, controller.signal, request.workerManifest),
+          ready: undefined,
+        };
+    const resultPromise = run.result;
+    const ready = run.ready?.then((readiness) => ({ adapters: readiness.adapters }));
+    ready?.catch(() => undefined);
     // Absorb rejections that arrive before any caller awaits waitForResult,
     // preventing unhandled-rejection crashes if cancel/terminate is called
     // before the result is observed.
@@ -102,6 +133,7 @@ export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
 
     return {
       nodeId: request.nodeId,
+      ...(ready !== undefined && { ready }),
       /**
        * Wait for the execution to reach a terminal state.
        *

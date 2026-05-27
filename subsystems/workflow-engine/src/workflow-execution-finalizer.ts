@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from './namespace.js';
 import {
+  WORKFLOW_CANCELLED_REASON,
   createStepCancelSubject,
   SubagentSubjects,
   type CompositeStepState,
@@ -307,14 +308,19 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
           deps.bus
             .request(SubagentSubjects.kill, {
               subagentId: state.subagentId,
-              reason: 'Workflow cancelled',
+              reason: WORKFLOW_CANCELLED_REASON,
             })
             .catch(() => {}),
         ),
     );
 
     // Terminalize ALL non-terminal steps (pending, running, waiting, expanding).
-    const terminatedIds = terminalizeNonTerminalSteps(execution, 'Workflow cancelled', active, deps.gateCoordinator);
+    const terminatedIds = terminalizeNonTerminalSteps(
+      execution,
+      WORKFLOW_CANCELLED_REASON,
+      active,
+      deps.gateCoordinator,
+    );
 
     for (const [key, controller] of deps.shellAbortControllers) {
       if (key.startsWith(`${executionId}:`)) {

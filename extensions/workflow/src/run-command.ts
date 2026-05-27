@@ -174,8 +174,12 @@ async function handleDryRun(ctx: CommandContext<WorkflowRunArgs>): Promise<void>
   const { args } = ctx;
 
   try {
-    await resolvePayload(args.payload);
+    await resolvePayload(args.payload, ctx.signal);
   } catch (err) {
+    if (classifyCliCommandError(err) === 'abort') {
+      handleCommandError(err, args.timeout, ctx);
+      return;
+    }
     writeInvalidPayloadError(ctx, err);
     return;
   }

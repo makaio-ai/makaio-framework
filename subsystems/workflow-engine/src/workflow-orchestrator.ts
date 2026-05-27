@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
 import type {
   AgentWorkflowStep,
   GateWorkflowStep,
@@ -337,7 +338,7 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
         gateCoordinator: params.gateCoordinator,
       },
       params.executionId,
-      'Workflow cancelled',
+      WORKFLOW_CANCELLED_REASON,
     ).catch((error: unknown) => {
       console.error(`[WorkflowOrchestrator] Failed to persist cancellation for ${params.executionId}:`, error);
       return false;
@@ -405,7 +406,7 @@ async function persistPreSchedulerTerminalExecution(
         execution.steps[stepId] = {
           ...stepState,
           status: 'failed',
-          error: reason ?? 'Workflow cancelled',
+          error: reason ?? WORKFLOW_CANCELLED_REASON,
           completedAt: execution.completedAt,
         };
       }
@@ -486,7 +487,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   // Fast path: abort before scheduling any steps, while still terminalizing the
   // execution row that the main process created before dispatching the worker.
   if (signal.aborted) {
-    return persistPreSchedulerTerminalExecution(bus, config, execution, 'cancelled', 'Workflow cancelled');
+    return persistPreSchedulerTerminalExecution(bus, config, execution, 'cancelled', WORKFLOW_CANCELLED_REASON);
   }
 
   // Zero-step workflows complete immediately, but still persist and emit the

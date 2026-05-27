@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkerContributionManifest, WorkflowWorkerConfig } from '@makaio/contracts';
+import type { WorkerContributionManifest, WorkflowRunResult, WorkflowWorkerConfig } from '@makaio/contracts';
 import { PiscinaWorkerNodeProvider } from '../piscina-worker-node-provider.js';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -128,6 +128,40 @@ describe('PiscinaWorkerNodeProvider', () => {
     await handle.waitForResult(new AbortController().signal);
 
     expect(capturedManifest).toStrictEqual(requestManifest);
+  });
+
+  it('exposes runner readiness when the runner supports it', async () => {
+    // This provider unit test pins the handoff contract: readiness-aware
+    // runners must surface their ready promise on the WorkerNode handle. The
+    // real Piscina runner/worker readiness path is covered in
+    // workflow-piscina-runner and worker-entry integration tests.
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const result: Promise<WorkflowRunResult> = Promise.resolve({
+      executionId: 'wfx-1',
+      workflowId: 'workflow-1',
+      status: 'completed',
+    });
+    const runner = {
+      run: vi.fn(),
+      runWithReadiness: vi.fn().mockReturnValue({ result, ready: ready.then(() => ({ adapters: ['adapter-a'] })) }),
+    };
+    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+
+    const handle = await provider.provision({
+      nodeId: 'node-1',
+      executionId: 'wfx-1',
+      environment: 'piscina',
+      workerConfig: makeWorkerConfig(),
+      workerManifest: { packages: [] },
+    });
+
+    expect(runner.runWithReadiness).toHaveBeenCalledOnce();
+    expect(runner.run).not.toHaveBeenCalled();
+    resolveReady();
+    await expect(handle.ready).resolves.toEqual({ adapters: ['adapter-a'] });
   });
 
   it('cancel resolves after dispatching abort without waiting for runner settlement', async () => {

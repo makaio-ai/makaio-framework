@@ -727,14 +727,15 @@ describe('registerContribution — embedded bus (provideBus)', () => {
   });
 
   it.each([
-    'SIGINT',
-    'SIGTERM',
-    'SIGHUP',
-  ] as const)('aborts the handler signal when %s arrives during provideBus', async (signal) => {
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+    ['SIGHUP', 129],
+  ] as const)('stops before beforeRun when %s arrives during provideBus', async (signal, exitCode) => {
     const { bus: embeddedBus } = createMockBus();
     const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
     const handler = vi.fn(() => Promise.resolve());
+    const beforeRun = vi.fn(async () => ({ proceed: true as const }));
     const program = makeProgram();
 
     registerContribution(
@@ -748,19 +749,55 @@ describe('registerContribution — embedded bus (provideBus)', () => {
           process.emit(signal);
           return handle;
         },
-        async beforeRun() {
-          return { proceed: true };
-        },
+        beforeRun,
       },
       null,
     );
 
     await program.parseAsync(['workflow', 'run'], { from: 'user' });
 
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
-    );
+    expect(beforeRun).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(exitCode);
+  });
+
+  it('preserves the signal exit code when SIGTERM arrives during beforeRun', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const handler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          process.emit('SIGTERM');
+          return { proceed: false, message: 'blocked by policy', exitCode: 42 };
+        },
+      },
+      null,
+    );
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(143);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it('does not call provideBus when canProvideBus is omitted', async () => {
