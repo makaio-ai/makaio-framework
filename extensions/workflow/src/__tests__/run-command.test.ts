@@ -5,6 +5,8 @@
  * test-local `workflow.runFile` and `workflow.execution.*` handlers so tests
  * verify the full request dispatch path without relying on an actual runtime.
  */
+import { resolve } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '@makaio/contracts';
@@ -50,6 +52,20 @@ function stubStdinAsPipe(content: string): () => void {
   return () => spy.mockRestore();
 }
 
+/**
+ * Stub stdin as a pipe that stays open until destroyed.
+ * @returns Restore function.
+ */
+function stubPendingStdinPipe(): () => void {
+  const stdin = new PassThrough();
+  Object.defineProperty(stdin, 'isTTY', { value: false });
+  const spy = vi.spyOn(process, 'stdin', 'get').mockReturnValue(stdin as unknown as typeof process.stdin);
+  return () => {
+    stdin.destroy();
+    spy.mockRestore();
+  };
+}
+
 afterEach(() => {
   stdoutChunks.length = 0;
   stderrChunks.length = 0;
@@ -70,13 +86,14 @@ function createOutput() {
 function createContext(
   bus: IMakaioBus | null,
   args: WorkflowRunArgs,
+  signal: AbortSignal = new AbortController().signal,
 ): CommandContext<WorkflowRunArgs> & { readonly setExitCodeSpy: ReturnType<typeof vi.fn> } {
   const setExitCodeSpy = vi.fn<(code: number) => void>();
   return {
     args,
     bus,
     output: createOutput(),
-    signal: new AbortController().signal,
+    signal,
     setExitCode: setExitCodeSpy,
     setExitCodeSpy,
   };
@@ -219,11 +236,80 @@ describe('handleWorkflowRun with --payload', () => {
 
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0]).toMatchObject({
-      filePath: './wf.ts',
+      filePath: resolve(process.cwd(), './wf.ts'),
       triggerPayload: { branch: 'main' },
     });
     expect(stdoutChunks.join('')).toContain('exec-1');
     expect(ctx.setExitCodeSpy).not.toHaveBeenCalled();
+  });
+
+  it('dispatches workflow.runFile with an absolute file path resolved from cwd', async () => {
+    const capturedRequests: Array<Record<string, unknown>> = [];
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/repo/project');
+
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      capturedRequests.push(ctx.payload as Record<string, unknown>);
+      ctx.setResult({ executionId: 'exec-abs-1' });
+    });
+
+    const ctx = createContext(bus, makeArgs({ file: './workflows/review.ts', payload: '{}' }));
+    try {
+      const runPromise = handleWorkflowRun(ctx);
+
+      await bus.emit(WorkflowSubjects.execution.completed, {
+        executionId: 'exec-abs-1',
+        totalDuration: 100,
+      });
+
+      await runPromise;
+    } finally {
+      cleanupRunFile();
+      cwdSpy.mockRestore();
+    }
+
+    expect(capturedRequests[0]).toMatchObject({
+      filePath: resolve('/repo/project', './workflows/review.ts'),
+      triggerPayload: {},
+    });
+  });
+
+  it('preserves already-absolute workflow file paths', async () => {
+    const capturedRequests: Array<Record<string, unknown>> = [];
+
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      capturedRequests.push(ctx.payload as Record<string, unknown>);
+      ctx.setResult({ executionId: 'exec-abs-2' });
+    });
+
+    const ctx = createContext(bus, makeArgs({ file: '/tmp/workflow.mjs', payload: '{}' }));
+    const runPromise = handleWorkflowRun(ctx);
+
+    await bus.emit(WorkflowSubjects.execution.completed, {
+      executionId: 'exec-abs-2',
+      totalDuration: 101,
+    });
+
+    await runPromise;
+    cleanupRunFile();
+
+    expect(capturedRequests[0]).toMatchObject({ filePath: resolve('/tmp/workflow.mjs') });
+  });
+
+  it('does not dispatch workflow.runFile when the command signal is already aborted', async () => {
+    const runFileHandler = vi.fn();
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      runFileHandler(ctx.payload);
+      ctx.setResult({ executionId: 'exec-aborted' });
+    });
+    const controller = new AbortController();
+    controller.abort('SIGTERM');
+
+    const ctx = createContext(bus, makeArgs({ file: './wf.ts', payload: '{}' }), controller.signal);
+    await handleWorkflowRun(ctx);
+    cleanupRunFile();
+
+    expect(runFileHandler).not.toHaveBeenCalled();
+    expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(143);
   });
 
   it('sets exit code 1 and writes an error when runFile request fails', async () => {
@@ -241,6 +327,27 @@ describe('handleWorkflowRun with --payload', () => {
 
     expect(stderrChunks.join('')).toContain('invalid JSON payload');
     expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('aborts a pending runFile request when the command signal aborts', async () => {
+    let resolveRunFileStarted!: () => void;
+    const runFileStarted = new Promise<void>((resolveStarted) => {
+      resolveRunFileStarted = resolveStarted;
+    });
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, async () => {
+      resolveRunFileStarted();
+      await new Promise(() => undefined);
+    });
+    const controller = new AbortController();
+    const ctx = createContext(bus, makeArgs({ file: './wf.ts', payload: '{}' }), controller.signal);
+
+    const runPromise = handleWorkflowRun(ctx);
+    await runFileStarted;
+    controller.abort('SIGTERM');
+    await runPromise;
+    cleanupRunFile();
+
+    expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(143);
   });
 });
 
@@ -281,10 +388,30 @@ describe('handleWorkflowRun with piped stdin', () => {
     cleanupRunFile();
 
     expect(capturedRequests[0]).toMatchObject({
-      filePath: './wf.ts',
+      filePath: resolve(process.cwd(), './wf.ts'),
       triggerPayload: { event: 'push' },
     });
     expect(ctx.setExitCodeSpy).not.toHaveBeenCalled();
+  });
+
+  it('preserves signal exit code when stdin aborts while reading payload', async () => {
+    restoreStdin = stubPendingStdinPipe();
+    const runFileHandler = vi.fn();
+    const cleanupRunFile = bus.on(WorkflowSubjects.runFile, (ctx) => {
+      runFileHandler(ctx.payload);
+      ctx.setResult({ executionId: 'exec-stdin-abort' });
+    });
+    const controller = new AbortController();
+    const ctx = createContext(bus, makeArgs({ file: './wf.ts' }), controller.signal);
+
+    const runPromise = handleWorkflowRun(ctx);
+    controller.abort('SIGTERM');
+    await runPromise;
+    cleanupRunFile();
+
+    expect(runFileHandler).not.toHaveBeenCalled();
+    expect(stderrChunks.join('')).not.toContain('invalid JSON payload');
+    expect(ctx.setExitCodeSpy).toHaveBeenCalledWith(143);
   });
 });
 

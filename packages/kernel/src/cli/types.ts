@@ -95,11 +95,13 @@ export interface CommandContext<TArgs> {
   /** Output channel for writing to stdout/stderr. */
   readonly output: OutputWriter;
   /**
-   * Abort signal that is triggered when the process receives SIGINT (Ctrl-C).
+   * Abort signal that is triggered when local CLI execution receives SIGINT,
+   * SIGTERM, or SIGHUP.
    *
-   * Long-running commands (e.g. `watch`) should honour this signal to perform
-   * clean teardown instead of relying on process termination. Short-lived
-   * commands may ignore it.
+   * Commands must honour this signal before starting new work and during
+   * long-running operations. The local CLI translates process signals into this
+   * signal so command-owned `finally` blocks can dispose embedded runtimes
+   * before the process exits with the conventional signal exit code.
    *
    * Always present — contexts that cannot supply a meaningful signal must use
    * `AbortSignal.timeout(Infinity)` or a never-aborting controller signal.
@@ -230,11 +232,12 @@ export interface InteractiveCommandContext {
    */
   readonly bus: IMakaioBus | null;
   /**
-   * Abort signal triggered when the process receives SIGINT (Ctrl-C).
+   * Abort signal triggered when local CLI execution receives SIGINT, SIGTERM,
+   * or SIGHUP.
    *
    * Interactive handlers must observe this signal and tear down any TUI
-   * renderer they own, because installing process signal listeners suppresses
-   * Node's default immediate termination behavior.
+   * renderer they own, because local CLI signal handling defers immediate
+   * process termination until command-owned cleanup has run.
    */
   readonly signal: AbortSignal;
 }

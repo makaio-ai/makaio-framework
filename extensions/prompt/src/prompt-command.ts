@@ -17,7 +17,7 @@ import type { WildcardContext } from '@makaio/core';
 import { defineCliSubcommand, requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { AgentSubjects, SessionStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import type { CanonicalModelSelection, SystemPrompt } from '@makaio/contracts';
-import { CLI_EXIT_CODES, classifyCliCommandError, readStdin } from '@makaio/utils';
+import { CLI_EXIT_CODES, classifyCliCommandError, readStdin, resolveCliSignalExitCode } from '@makaio/utils';
 import { TextFormatter } from './formatters/text.js';
 import { JsonFormatter } from './formatters/json.js';
 import { StreamJsonFormatter } from './formatters/stream-json.js';
@@ -270,18 +270,18 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
   const { args, output, signal } = ctx;
   const startTime = Date.now();
 
-  const promptText = await resolvePromptText(args.prompt, output);
-  if (promptText === null) {
-    ctx.setExitCode(EXIT_FAILURE);
-    return;
-  }
-
-  const sessionId = args.sessionId ?? crypto.randomUUID();
-  const formatter = createOutputFormatter(args.outputFormat, output, sessionId, startTime);
-
   // Subscribe BEFORE sending to prevent turn-completion race.
   const cleanups: Array<() => void> = [];
   try {
+    const promptText = await resolvePromptText(args.prompt, output, signal);
+    if (promptText === null) {
+      ctx.setExitCode(EXIT_FAILURE);
+      return;
+    }
+
+    const sessionId = args.sessionId ?? crypto.randomUUID();
+    const formatter = createOutputFormatter(args.outputFormat, output, sessionId, startTime);
+
     cleanups.push(subscribeAgentEvents(ctx, sessionId, formatter));
     if (args.dangerouslySkipPermissions === true) {
       await enableFullAccessApprovalPolicy(ctx, sessionId);
@@ -315,7 +315,7 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
 
     ctx.setExitCode(formatter.flush(turnResult));
   } catch (err) {
-    handleCommandError(err, args.timeout, output, ctx.setExitCode.bind(ctx));
+    handleCommandError(err, args.timeout, output, signal, ctx.setExitCode.bind(ctx));
   } finally {
     for (const cleanup of cleanups) {
       cleanup();
@@ -335,11 +335,16 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
  * newline that shells typically append when piping.
  * @param promptArg - The positional prompt argument value.
  * @param output - Writer to send error messages to.
+ * @param signal - Command abort signal that cancels piped stdin reads.
  * @returns Resolved prompt string or `null`.
  */
-async function resolvePromptText(promptArg: string | undefined, output: OutputWriter): Promise<string | null> {
+async function resolvePromptText(
+  promptArg: string | undefined,
+  output: OutputWriter,
+  signal: AbortSignal,
+): Promise<string | null> {
   if (promptArg) return promptArg;
-  const stdin = await readStdin();
+  const stdin = await readStdin(signal);
   if (!stdin || stdin.trim() === '') {
     output.error('Error: no prompt provided. Pass a positional argument or pipe text to stdin.\n');
     return null;
@@ -350,23 +355,25 @@ async function resolvePromptText(promptArg: string | undefined, output: OutputWr
 /**
  * Map a caught error to the appropriate exit code and write user-facing output.
  *
- * `OnceAbortError` → 130 (SIGINT convention).
+ * `OnceAbortError` → signal-specific process exit code when available, otherwise 130.
  * Error named `'OnceTimeoutError'` → 124 (GNU timeout convention).
  * All other errors → 1 with the error message written to stderr.
  * @param err - The caught error value.
  * @param timeoutSeconds - Configured timeout in seconds (for the error message).
  * @param output - Writer for error messages.
+ * @param signal - Command abort signal whose reason may carry the process signal name.
  * @param setExitCode - Exit-code setter from the command context.
  */
 function handleCommandError(
   err: unknown,
   timeoutSeconds: number,
   output: OutputWriter,
+  signal: AbortSignal,
   setExitCode: (code: number) => void,
 ): void {
   switch (classifyCliCommandError(err)) {
     case 'abort':
-      setExitCode(EXIT_ABORT);
+      setExitCode(resolveCliSignalExitCode(signal.reason) ?? EXIT_ABORT);
       return;
     case 'timeout':
       output.error(`Error: prompt timed out after ${timeoutSeconds}s.\n`);

@@ -1227,6 +1227,48 @@ describe('registerManifestCommand — embedded bus (provideBus)', () => {
     }
   });
 
+  it.each([
+    'SIGINT',
+    'SIGTERM',
+    'SIGHUP',
+  ] as const)('aborts the handler signal when %s arrives during provideBus', async (signal) => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        process.emit(signal);
+        return handle;
+      },
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(subcommandHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it('does not call provideBus when schema validation fails', async () => {
     const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>();
     const subcommandHandler = vi.fn(() => Promise.resolve());

@@ -101,18 +101,27 @@ describe('getAuthorizedProvideBus', () => {
 });
 
 describe('createProcessCommandContext', () => {
-  let baselineListenerCount: number;
+  const commandAbortSignals = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+  const commandSignalExitCodes = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+  let baselineListenerCounts: Record<(typeof commandAbortSignals)[number], number>;
+  let baselineExitCode: typeof process.exitCode;
 
   beforeEach(() => {
-    baselineListenerCount = process.listenerCount('SIGINT');
+    baselineListenerCounts = Object.fromEntries(
+      commandAbortSignals.map((signal) => [signal, process.listenerCount(signal)]),
+    ) as Record<(typeof commandAbortSignals)[number], number>;
+    baselineExitCode = process.exitCode;
   });
 
   afterEach(() => {
     // Remove only listeners added during this test, not framework/Vitest ones.
-    while (process.listenerCount('SIGINT') > baselineListenerCount) {
-      const listeners = process.listeners('SIGINT');
-      process.removeListener('SIGINT', listeners[listeners.length - 1] as NodeJS.SignalsListener);
+    for (const signal of commandAbortSignals) {
+      while (process.listenerCount(signal) > baselineListenerCounts[signal]) {
+        const listeners = process.listeners(signal);
+        process.removeListener(signal, listeners[listeners.length - 1] as NodeJS.SignalsListener);
+      }
     }
+    process.exitCode = baselineExitCode;
   });
 
   it('returns a context with the supplied args and bus', () => {
@@ -128,38 +137,45 @@ describe('createProcessCommandContext', () => {
     }
   });
 
-  it('aborts the signal when SIGINT is emitted', () => {
+  it.each(commandAbortSignals)('aborts the signal when %s is emitted', (signal) => {
     const { bus } = createMockBus();
     const { context, cleanup } = createProcessCommandContext({}, bus);
 
-    process.emit('SIGINT');
+    process.emit(signal);
     // cleanup is safe to call even after signal fires
     cleanup();
 
     expect(context.signal.aborted).toBe(true);
+    expect(process.exitCode).toBe(commandSignalExitCodes[signal]);
   });
 
-  it('does not install SIGTERM or SIGHUP listeners', () => {
-    const { bus } = createMockBus();
-    const sigtermBefore = process.listenerCount('SIGTERM');
-    const sighupBefore = process.listenerCount('SIGHUP');
-    const { cleanup } = createProcessCommandContext({}, bus);
-
-    try {
-      expect(process.listenerCount('SIGTERM')).toBe(sigtermBefore);
-      expect(process.listenerCount('SIGHUP')).toBe(sighupBefore);
-    } finally {
-      cleanup();
-    }
-  });
-
-  it('cleanup() removes the SIGINT listener so subsequent signal does not abort', () => {
+  it('removes sibling command signal listeners after the first abort', () => {
     const { bus } = createMockBus();
     const { context, cleanup } = createProcessCommandContext({}, bus);
 
-    cleanup();
-    // Emitting SIGINT after cleanup should not trigger the listener
     process.emit('SIGINT');
+    cleanup();
+
+    expect(context.signal.aborted).toBe(true);
+    expect(process.exitCode).toBe(commandSignalExitCodes.SIGINT);
+    for (const signal of commandAbortSignals) {
+      expect(process.listenerCount(signal)).toBe(baselineListenerCounts[signal]);
+    }
+  });
+
+  it('cleanup() removes all command signal listeners so subsequent signals do not abort', () => {
+    const { bus } = createMockBus();
+    const { context, cleanup } = createProcessCommandContext({}, bus);
+
+    for (const signal of commandAbortSignals) {
+      expect(process.listenerCount(signal)).toBe(baselineListenerCounts[signal] + 1);
+    }
+
+    cleanup();
+    for (const signal of commandAbortSignals) {
+      expect(process.listenerCount(signal)).toBe(baselineListenerCounts[signal]);
+      process.emit(signal);
+    }
 
     expect(context.signal.aborted).toBe(false);
   });

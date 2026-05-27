@@ -726,7 +726,11 @@ describe('registerContribution — embedded bus (provideBus)', () => {
     }
   });
 
-  it('aborts the handler signal when a process signal arrives during provideBus', async () => {
+  it.each([
+    'SIGINT',
+    'SIGTERM',
+    'SIGHUP',
+  ] as const)('aborts the handler signal when %s arrives during provideBus', async (signal) => {
     const { bus: embeddedBus } = createMockBus();
     const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
@@ -741,7 +745,7 @@ describe('registerContribution — embedded bus (provideBus)', () => {
         canProvideBus: true,
         subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
         async provideBus() {
-          process.emit('SIGINT');
+          process.emit(signal);
           return handle;
         },
         async beforeRun() {

@@ -49,13 +49,16 @@ export interface PiscinaWorkerNodeProviderOptions {
  *
  * This provider wraps an {@link IWorkflowRunner} so it can be registered with
  * the framework capability registry and participate in pool-driven dispatch.
- * Each {@link provision} call starts the underlying runner immediately and
- * returns a {@link WorkerNodeHandle} that callers use to wait for the result
- * or request cancellation.
+ * Each {@link provision} call starts the underlying runner and returns a
+ * {@link WorkerNodeHandle} that callers use to wait for the result or request
+ * cancellation. Pool-level dispatch owns WorkerNode lifecycle events because it
+ * also owns cancellation ordering and terminal state emission.
  */
 export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
   /** Execution environment tag used for pool provider matching. */
   public readonly environment = 'piscina' as const;
+  /** This provider starts the runner inside {@link provision}. */
+  public readonly startsExecutionDuringProvision = true;
   /** Capabilities advertised to the pool dispatch selector. */
   public readonly baseCapabilities: WorkerNodeCapabilities;
 
@@ -82,10 +85,10 @@ export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
   /**
    * Provision a new isolated execution node for the given workflow request.
    *
-   * Starts the underlying runner immediately and returns a handle that the
-   * caller holds until the execution reaches a terminal state. Cancellation
-   * flows through the handle's `cancel` / `terminate` methods, which abort
-   * the internal `AbortController` wired to the runner's signal.
+   * Starts the underlying runner and returns a handle that the caller holds
+   * until the execution reaches a terminal state. Cancellation flows through
+   * the handle's `cancel` / `terminate` methods, which abort the internal
+   * `AbortController` wired to the runner's signal.
    * @param request - Full provision request containing worker config and manifest.
    * @returns A handle for the provisioned node with wait, cancel, and terminate operations.
    */

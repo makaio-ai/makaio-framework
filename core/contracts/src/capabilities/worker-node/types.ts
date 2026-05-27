@@ -115,6 +115,15 @@ export interface IWorkerNodeProvider extends ICapabilityProvider {
   /** Capabilities supported by this provider instance. */
   readonly baseCapabilities: WorkerNodeCapabilities;
   /**
+   * Whether {@link provision} starts workflow execution before it resolves.
+   *
+   * Providers that set this to `true` allow dispatchers to emit
+   * `worker-node.lifecycle.busy` before calling `provision()`. Providers that
+   * omit it are treated as allocation-first providers, so dispatchers wait
+   * until a handle exists before marking the node busy.
+   */
+  readonly startsExecutionDuringProvision?: boolean;
+  /**
    * Provision a new isolated execution node for the given request.
    * @param request - Full provision request containing worker config and manifest.
    * @returns A handle for the provisioned node.

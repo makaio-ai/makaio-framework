@@ -13,12 +13,13 @@
  * 6. In `--watch` mode with await-trigger: loop back to step 4.
  * 7. Clean up subscriptions in the `finally` block.
  */
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { WildcardContext } from '@makaio/core';
 import { defineCliSubcommand, requireBus, type CommandContext } from '@makaio/kernel/cli';
 import { WorkflowSubjects } from '@makaio/contracts';
 import { OnceAbortError } from '@makaio/bus-core';
-import { CLI_EXIT_CODES, classifyCliCommandError, readStdin } from '@makaio/utils';
+import { CLI_EXIT_CODES, classifyCliCommandError, readStdin, resolveCliSignalExitCode } from '@makaio/utils';
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -114,14 +115,15 @@ function parseTriggerPayload(value: string): Record<string, unknown> {
  * 2. Piped stdin (non-TTY, reads all available bytes).
  * 3. Await-trigger mode (TTY stdin, no flag).
  * @param payloadArg - Value of the `--payload` flag.
+ * @param signal - Optional command abort signal that cancels piped stdin reads.
  * @returns Resolved payload and mode.
  */
-export async function resolvePayload(payloadArg: string | undefined): Promise<ResolvedPayload> {
+export async function resolvePayload(payloadArg: string | undefined, signal?: AbortSignal): Promise<ResolvedPayload> {
   if (payloadArg !== undefined) {
     return { mode: 'payload', triggerPayload: parseTriggerPayload(payloadArg) };
   }
 
-  const stdin = await readStdin();
+  const stdin = await readStdin(signal);
   if (stdin !== null && stdin.trim() !== '') {
     return { mode: 'payload', triggerPayload: parseTriggerPayload(stdin.trim()) };
   }
@@ -228,6 +230,15 @@ function isUnrelatedLifecycleEvent(targetExecutionId: string | undefined, eventE
 }
 
 /**
+ * Resolve the workflow file path for the `workflow.runFile` bus contract.
+ * @param file - File path supplied through the CLI positional argument.
+ * @returns Absolute file path resolved from the command process working directory.
+ */
+function resolveWorkflowFilePath(file: string): string {
+  return resolve(process.cwd(), file);
+}
+
+/**
  * Wait for the workflow execution to complete or fail.
  *
  * Subscribes to `execution.completed` and `execution.failed` BEFORE the
@@ -270,9 +281,7 @@ function createCompletionWaiter(
    * for the same execution, the failure is reported.
    */
   function tryResolve(): void {
-    if (targetExecutionId === undefined) {
-      return;
-    }
+    if (targetExecutionId === undefined) return;
     const failure = bufferedFailures.find((e) => e.executionId === targetExecutionId);
     if (failure !== undefined) {
       buffered.length = 0;
@@ -303,11 +312,15 @@ function createCompletionWaiter(
     tryResolve();
   });
 
-  // Honour abort signal for Ctrl-C cancellation.
+  // Honour abort signal for process-signal cancellation.
   const abortHandler = () => {
     rejectCompletion(new OnceAbortError());
   };
-  signal.addEventListener('abort', abortHandler, { once: true });
+  if (signal.aborted) {
+    abortHandler();
+  } else {
+    signal.addEventListener('abort', abortHandler, { once: true });
+  }
 
   // Apply timeout if requested.
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -331,11 +344,7 @@ function createCompletionWaiter(
   // The .catch(() => {}) suppresses the unhandled-rejection warning on the
   // cleanup branch — the rejection still propagates through completionPromise
   // itself, which the caller awaits.
-  completionPromise
-    .finally(() => {
-      releaseResources();
-    })
-    .catch(() => {});
+  completionPromise.finally(() => releaseResources()).catch(() => {});
 
   return {
     promise: completionPromise,
@@ -383,9 +392,13 @@ export async function handleWorkflowRun(ctx: CommandContext<WorkflowRunArgs>): P
 
   let resolvedPayload: ResolvedPayload;
   try {
-    resolvedPayload = await resolvePayload(args.payload);
+    resolvedPayload = await resolvePayload(args.payload, signal);
   } catch (err) {
     waiter.cleanup();
+    if (classifyCliCommandError(err) === 'abort') {
+      handleCommandError(err, args.timeout, ctx);
+      return;
+    }
     writeInvalidPayloadError(ctx, err);
     return;
   }
@@ -438,10 +451,18 @@ async function runOnce(
   const cleanups: Array<() => void> = [waiter.cleanup];
 
   try {
-    const { executionId } = await bus.request(WorkflowSubjects.runFile, {
-      filePath: args.file,
-      ...(resolvedPayload.triggerPayload !== undefined && { triggerPayload: resolvedPayload.triggerPayload }),
-    });
+    if (ctx.signal.aborted) {
+      throw new OnceAbortError();
+    }
+    const filePath = resolveWorkflowFilePath(args.file);
+    const { executionId } = await bus.request(
+      WorkflowSubjects.runFile,
+      {
+        filePath,
+        ...(resolvedPayload.triggerPayload !== undefined && { triggerPayload: resolvedPayload.triggerPayload }),
+      },
+      { signal: ctx.signal },
+    );
 
     if (args.verbose === true) {
       cleanups.push(subscribeLifecycleEvents(ctx, executionId));
@@ -464,7 +485,7 @@ async function runOnce(
       ctx.setExitCode(EXIT_FAILURE);
       return true;
     }
-    handleCommandError(err, args.timeout, ctx);
+    handleCommandError(resolveCommandError(err, ctx.signal), args.timeout, ctx);
     return true;
   } finally {
     for (const cleanup of cleanups) {
@@ -502,6 +523,20 @@ function writeInvalidPayloadError(ctx: CommandContext<WorkflowRunArgs>, err: unk
 }
 
 /**
+ * Normalize generic abort errors produced by bus request cancellation into the
+ * stable CLI abort sentinel used for process-signal exit codes.
+ * @param err - Caught command error.
+ * @param signal - Command abort signal.
+ * @returns Original error, or a {@link OnceAbortError} when the command signal fired.
+ */
+function resolveCommandError(err: unknown, signal: AbortSignal): unknown {
+  if (signal.aborted && classifyCliCommandError(err) === 'failure') {
+    return new OnceAbortError();
+  }
+  return err;
+}
+
+/**
  * Sentinel thrown inside the execution-failed subscription to propagate the
  * failure reason back to the command handler.
  */
@@ -522,7 +557,7 @@ class WorkflowExecutionFailedError extends Error {
 /**
  * Map a caught error to the appropriate exit code and write user-facing output.
  *
- * `OnceAbortError` → 130 (SIGINT convention).
+ * `OnceAbortError` → signal-specific process exit code when available, otherwise 130.
  * Error named `'OnceTimeoutError'` → 124 (GNU timeout convention).
  * All other errors → 1 with the error message written to stderr.
  * @param err - The caught error value.
@@ -532,7 +567,7 @@ class WorkflowExecutionFailedError extends Error {
 function handleCommandError(err: unknown, timeoutMs: number | undefined, ctx: CommandContext<WorkflowRunArgs>): void {
   switch (classifyCliCommandError(err)) {
     case 'abort':
-      ctx.setExitCode(EXIT_ABORT);
+      ctx.setExitCode(resolveCliSignalExitCode(ctx.signal.reason) ?? EXIT_ABORT);
       return;
     case 'timeout': {
       const timeoutLabel = timeoutMs !== undefined ? `${timeoutMs}ms` : 'the configured timeout';
