@@ -37,6 +37,7 @@ describe('changeset-required reusable workflow', () => {
       expect(checkIndex).toBeGreaterThan(setupBunIndex);
       expect(workflow).toContain("steps.head_changeset.outputs.present != 'true'");
       expect(workflow).toContain('changeset_prefix="${framework_root%/}/.changeset/"');
+      expect(workflow).toContain('.github/*|docs/*|scripts/*|.changeset/*.md|*.md');
       expect(workflow).toContain("steps.checker.outputs.available == 'true'");
       expect(workflow).toContain('! git cat-file -e "$base:$checker_path"');
       expect(workflow).toContain('git cat-file -e "$head:$checker_path"');
@@ -46,6 +47,11 @@ describe('changeset-required reusable workflow', () => {
       expect(workflow).toContain('skip:changeset');
       expect(workflow).toContain('skip:ci');
       expect(workflow).toContain('skip:all');
+      expect(workflow).toContain('case "${file##*/}" in');
+      expect(workflow).toContain('bun.lock|bun.lockb|package-lock.json|pnpm-lock.yaml|yarn.lock');
+      expect(workflow).toContain('\\.(snap|(test|spec)\\.[cm]?[jt]sx?)$');
+      expect(workflow).toContain('__tests__/*|*/__tests__/*|fixtures/*|*/fixtures/*|snapshots/*|*/snapshots/*');
+      expect(workflow).not.toContain('|*/test/*|');
       expect(workflow).not.toContain('git diff --name-status "$base...$head"');
     });
   }

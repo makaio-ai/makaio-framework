@@ -15,8 +15,10 @@
  * - `extensions/<name>/`
  * - `sdks/typescript/`
  *
- * Non-package framework infrastructure maps to `@makaio/framework`. CodeRabbit
- * placeholder paths such as `clients/...` are ignored.
+ * Lockfiles, tests, fixtures, snapshots, private tooling, and non-package
+ * prefixes are ignored. Other framework-wide infrastructure maps to
+ * `@makaio/framework`. CodeRabbit placeholder paths such as `clients/...` are
+ * ignored.
  * @packageDocumentation
  */
 
@@ -24,7 +26,19 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 
 /** Directory prefixes that are never part of a publishable package. */
-const NON_PUBLISHABLE_PREFIXES = ['.github/', 'docs/'] as const;
+const NON_PUBLISHABLE_PREFIXES = ['.github/', 'docs/', 'scripts/'] as const;
+/** Path segments that are test support, not publishable release surface. */
+const NON_PUBLISHABLE_PATH_SEGMENTS = new Set(['__tests__', 'fixtures', 'snapshots']);
+/** Dependency lockfiles do not change package release notes by themselves. */
+const NON_PUBLISHABLE_FILE_NAMES = new Set([
+  'bun.lock',
+  'bun.lockb',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+]);
+/** File naming pattern for test support, not publishable release surface. */
+const NON_PUBLISHABLE_FILE_PATTERN = /\.(?:snap|(?:test|spec)\.[cm]?[jt]sx?)$/u;
 const FRAMEWORK_PACKAGE = '@makaio/framework';
 
 /** Options for package mapping. */
@@ -136,6 +150,29 @@ function isDisplayPlaceholder(file: string): boolean {
 }
 
 /**
+ * Tests whether a path should be ignored by changeset package mapping.
+ * @param file - Framework-root-relative path.
+ * @returns True when the path cannot affect a publishable package release.
+ */
+function isNonPublishablePath(file: string): boolean {
+  for (const prefix of NON_PUBLISHABLE_PREFIXES) {
+    if (file.startsWith(prefix)) {
+      return true;
+    }
+  }
+
+  const pathSegments = file.split('/');
+  if (pathSegments.some((segment) => NON_PUBLISHABLE_PATH_SEGMENTS.has(segment))) {
+    return true;
+  }
+
+  const fileName = file.split('/').at(-1);
+  return (
+    fileName !== undefined && (NON_PUBLISHABLE_FILE_NAMES.has(fileName) || NON_PUBLISHABLE_FILE_PATTERN.test(fileName))
+  );
+}
+
+/**
  * Attempts to derive a publishable package name from a single file path.
  * @param file - File path relative to the framework repository root.
  * @param frameworkRoot - Absolute framework root.
@@ -146,10 +183,8 @@ function resolvePackageName(file: string, frameworkRoot: string): string | undef
     return undefined;
   }
 
-  for (const prefix of NON_PUBLISHABLE_PREFIXES) {
-    if (file.startsWith(prefix)) {
-      return undefined;
-    }
+  if (isNonPublishablePath(file)) {
+    return undefined;
   }
 
   return findDirectPackageName(frameworkRoot, file) ?? FRAMEWORK_PACKAGE;

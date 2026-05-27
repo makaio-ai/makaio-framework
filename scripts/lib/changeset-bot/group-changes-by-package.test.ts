@@ -136,10 +136,6 @@ describe('groupChangesByPackage', () => {
         summaries: ['Adds reviewer extension metadata.'],
       },
       {
-        packageName: '@makaio/framework',
-        summaries: ['Updates shared adapter test setup.'],
-      },
-      {
         packageName: '@makaio/provider-qwen-acp',
         summaries: ['Updates Qwen provider registration.'],
       },

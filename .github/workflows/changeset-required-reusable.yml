@@ -105,13 +105,23 @@ jobs:
             fi
 
             case "$file" in
-              .github/*|docs/*|.changeset/*.md|*.md)
-                ;;
-              *)
-                relevant=true
-                break
-                ;;
+              .github/*|docs/*|scripts/*|.changeset/*.md|*.md) continue ;;
             esac
+
+            case "${file##*/}" in
+              bun.lock|bun.lockb|package-lock.json|pnpm-lock.yaml|yarn.lock) continue ;;
+            esac
+
+            if [[ "${file##*/}" =~ \.(snap|(test|spec)\.[cm]?[jt]sx?)$ ]]; then
+              continue
+            fi
+
+            case "$file" in
+              __tests__/*|*/__tests__/*|fixtures/*|*/fixtures/*|snapshots/*|*/snapshots/*) continue ;;
+            esac
+
+            relevant=true
+            break
           done < <(git diff --name-only --diff-filter=d "$base...$head")
 
           echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
