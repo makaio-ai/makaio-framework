@@ -16,7 +16,7 @@ on:
       validation_command:
         required: false
         type: string
-        default: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json'
+        default: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json --tools biome,eslint,typescript'
         description: 'Command to run for validation (lint, format, types).'
       run_sdk_tests:
         required: false

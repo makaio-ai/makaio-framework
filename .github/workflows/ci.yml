@@ -51,7 +51,7 @@ jobs:
     uses: ./.github/workflows/ci-reusable.yml
     with:
       test_shards: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps"]'
-      validation_command: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json'
+      validation_command: 'bun scripts/validate.ts --no-fix --cache --tsconfig tsconfig.json --tools biome,eslint,typescript'
       run_sdk_tests: true
       pr_number: ${{ inputs.pr_number }}
       source_sha: ${{ inputs.source_sha }}
