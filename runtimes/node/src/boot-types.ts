@@ -10,7 +10,7 @@ import type {
   WorkerNodeDispatch,
   WorkerNodeRequirements,
 } from '@makaio/contracts';
-import type { PostInstallHandler, StrategyDependencies } from '@makaio/framework/clients';
+import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
   ContributionProcessor,
   ExtensionCoordinator,
