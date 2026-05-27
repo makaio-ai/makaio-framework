@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { mapFilesToPackages } from './map-files-to-packages.js';
 
@@ -50,7 +53,48 @@ describe('mapFilesToPackages', () => {
   });
 
   it('returns empty array for non-publishable files', () => {
-    expect(mapFilesToPackages(['docs/README.md', '.github/workflows/ci.yml'])).toEqual([]);
+    expect(mapFilesToPackages(['docs/README.md', '.github/workflows/ci.yml', 'scripts/changeset-required.ts'])).toEqual(
+      [],
+    );
+  });
+
+  it('returns empty array for dependency lockfile-only changes', () => {
+    expect(mapFilesToPackages(['yarn.lock', 'scripts/bun.lock'])).toEqual([]);
+  });
+
+  it('ignores lockfiles while preserving publishable package changes', () => {
+    expect(mapFilesToPackages(['yarn.lock', 'core/contracts/src/index.ts'])).toEqual(['@makaio/contracts']);
+  });
+
+  it('returns empty array for tests-only changes in publishable packages', () => {
+    expect(
+      mapFilesToPackages([
+        'core/contracts/src/index.test.ts',
+        'clients/claude-code/src/__tests__/schemas.test.ts',
+        'providers/openai/src/fixtures/model-response.json',
+        'extensions/prompt/src/snapshots/render.json',
+        'packages/kernel/src/namespace.spec.mts',
+      ]),
+    ).toEqual([]);
+  });
+
+  it('ignores tests while preserving publishable source changes', () => {
+    expect(mapFilesToPackages(['core/contracts/src/index.test.ts', 'core/contracts/src/index.ts'])).toEqual([
+      '@makaio/contracts',
+    ]);
+  });
+
+  it('does not treat a package name segment "test" as non-publishable', () => {
+    const frameworkRoot = mkdtempSync(join(tmpdir(), 'makaio-changeset-map-'));
+    try {
+      const packageRoot = join(frameworkRoot, 'clients/test');
+      mkdirSync(packageRoot, { recursive: true });
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({ name: '@makaio/client-test' }));
+
+      expect(mapFilesToPackages(['clients/test/src/index.ts'], { frameworkRoot })).toEqual(['@makaio/client-test']);
+    } finally {
+      rmSync(frameworkRoot, { force: true, recursive: true });
+    }
   });
 
   it('deduplicates when two files belong to the same package', () => {
@@ -68,9 +112,7 @@ describe('mapFilesToPackages', () => {
   });
 
   it('does not turn CodeRabbit display placeholders into package names', () => {
-    expect(
-      mapFilesToPackages(['clients/...', 'extensions/...', 'adapters/implementations/__tests__/shared.ts']),
-    ).toEqual(['@makaio/framework']);
+    expect(mapFilesToPackages(['clients/...', 'extensions/...'])).toEqual([]);
   });
 
   it('maps adapters/shared/ to @makaio/framework', () => {
