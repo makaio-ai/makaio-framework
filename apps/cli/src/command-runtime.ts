@@ -7,6 +7,9 @@ import type {
   ProvideBusContext,
 } from '@makaio/kernel/cli';
 import { formatConnectionError } from './connection-error.js';
+import { CLI_COMMAND_ABORT_SIGNALS, CLI_COMMAND_SIGNAL_EXIT_CODES } from '@makaio/utils';
+
+type CommandAbortSignal = (typeof CLI_COMMAND_ABORT_SIGNALS)[number];
 
 // ---------------------------------------------------------------------------
 // Resolved bus — embedded or external bus with unified dispose contract
@@ -102,14 +105,14 @@ export function getAuthorizedProvideBus(
  * Result of {@link createProcessCommandContext}.
  *
  * Callers must invoke `cleanup()` when the command finishes (typically in a
- * `finally` block) to remove the SIGINT listener if no signal was received.
+ * `finally` block) to remove process signal listeners if no signal was received.
  * @typeParam TArgs - Inferred from the command's Zod schema.
  */
 export interface ProcessCommandContextResult<TArgs> {
   /** The command context to pass to the handler. */
   readonly context: CommandContext<TArgs>;
   /**
-   * Remove the SIGINT listener registered for this command.
+   * Remove process signal listeners registered for this command.
    *
    * Must be called when the command completes (success or failure) so the
    * listeners do not accumulate across many commands in a long-lived process.
@@ -122,35 +125,53 @@ export interface ProcessCommandContextResult<TArgs> {
  * Process-level signal context for one local command invocation.
  *
  * Create this after command args parse and before command-owned resources
- * (such as an embedded bus) are allocated, so SIGINT can abort the invocation
- * signal while `finally` blocks still dispose those resources.
+ * (such as an embedded bus) are allocated, so process signals can abort the
+ * invocation signal while `finally` blocks still dispose those resources.
  */
 export interface ProcessCommandSignalContext {
   /** Abort signal shared with the eventual {@link CommandContext}. */
   readonly signal: AbortSignal;
-  /** Remove the SIGINT listener registered for this invocation. */
+  /** Remove process signal listeners registered for this invocation. */
   cleanup(): void;
 }
 
 /**
  * Create a process-backed signal context for local CLI execution.
  *
- * Registers a one-shot SIGINT handler that aborts the returned `signal`.
- * SIGTERM and SIGHUP keep Node's default process termination behavior.
+ * Registers one-shot handlers for command-abort process signals. Each handler
+ * aborts the returned `signal` and sets the conventional signal exit code.
+ * This intentionally gives command `finally` blocks a chance to dispose
+ * embedded runtimes instead of letting Node terminate immediately.
  * The caller **must** invoke `cleanup()` when command dispatch finishes so the
- * listener is removed if no signal was received.
- * @returns Signal context and a `cleanup` function to remove the registered signal listener.
+ * listeners are removed if no signal was received.
+ * @returns Signal context and a `cleanup` function to remove registered signal listeners.
  */
 export function createProcessCommandSignalContext(): ProcessCommandSignalContext {
   const controller = new AbortController();
-  const onSigint = () => controller.abort();
-  process.once('SIGINT', onSigint);
+  let cleaned = false;
+  const listeners = CLI_COMMAND_ABORT_SIGNALS.map((signal) => {
+    const listener: NodeJS.SignalsListener = () => onSignal(signal);
+    process.once(signal, listener);
+    return { signal, listener };
+  });
+  const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const { signal, listener } of listeners) {
+      process.off(signal, listener);
+    }
+  };
+  const onSignal = (signal: CommandAbortSignal) => {
+    if (!controller.signal.aborted) {
+      cleanup();
+      controller.abort(signal);
+      process.exitCode = CLI_COMMAND_SIGNAL_EXIT_CODES[signal];
+    }
+  };
 
   return {
     signal: controller.signal,
-    cleanup: () => {
-      process.off('SIGINT', onSigint);
-    },
+    cleanup,
   };
 }
 
@@ -186,7 +207,7 @@ export async function disposeResolvedBusForCommand(resolved: ResolvedCliBus | un
  * @param args - Parsed command arguments.
  * @param bus - Connected bus instance.
  * @param signalContext - Optional pre-created signal context for this invocation.
- * @returns Context and a `cleanup` function to remove the registered SIGINT listener.
+ * @returns Context and a `cleanup` function to remove the registered signal listeners.
  */
 export function createProcessCommandContext<TArgs>(
   args: TArgs,

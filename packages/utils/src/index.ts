@@ -1,5 +1,12 @@
 export { DeferredPromise } from './deferred-promise.js';
-export { CLI_EXIT_CODES, classifyCliCommandError, readStdin } from './cli.js';
+export {
+  CLI_COMMAND_ABORT_SIGNALS,
+  CLI_COMMAND_SIGNAL_EXIT_CODES,
+  CLI_EXIT_CODES,
+  classifyCliCommandError,
+  readStdin,
+  resolveCliSignalExitCode,
+} from './cli.js';
 export { isRecord } from './is-record.js';
 export { extractJson } from './extract-json.js';
 export { getErrorString } from './getErrorString.js';
