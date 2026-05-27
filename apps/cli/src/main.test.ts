@@ -28,12 +28,14 @@ vi.mock('./serve.js', () => serveMocks);
 vi.mock('./app-launch.js', () => appLaunchMocks);
 
 import {
+  canInvocationProvideBus,
   createProgram,
   discoverLocalExtensions,
   extractRootConfigArg,
   isDiscoveryFreeBuiltin,
   main,
   toCliModuleImportSpecifier,
+  type LocalExtensionRegistration,
 } from './main.js';
 import { createTestTTYFixture } from './test-tty-fixture.js';
 
@@ -856,6 +858,262 @@ describe('discoverLocalExtensions', () => {
       expect(registrations).toHaveLength(0);
     } finally {
       await rm(extRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('canInvocationProvideBus', () => {
+  /**
+   * Build a minimal {@link LocalExtensionRegistration} with the given manifest.
+   * @param name - CLI command name for the manifest.
+   * @param canProvideBus - Whether the extension declares bus provisioning capability.
+   */
+  function makeLocalExt(name: string, canProvideBus?: boolean): LocalExtensionRegistration {
+    return {
+      manifest: {
+        name,
+        description: `${name} command`,
+        subcommands: [],
+        canProvideBus,
+      },
+      cliEntryPath: `/fake/${name}/cli.mjs`,
+      hasInteractive: false,
+      importModule: vi.fn(),
+    };
+  }
+
+  it('returns true when argv[2] matches a local extension with canProvideBus: true', () => {
+    const localExtensions = [makeLocalExt('workflow', true)];
+
+    expect(canInvocationProvideBus(['node', 'makaio', 'workflow'], localExtensions)).toBe(true);
+  });
+
+  it('returns false when argv[2] matches a local extension with canProvideBus: false', () => {
+    const localExtensions = [makeLocalExt('workflow', false)];
+
+    expect(canInvocationProvideBus(['node', 'makaio', 'workflow'], localExtensions)).toBe(false);
+  });
+
+  it('returns false when argv[2] matches a local extension with canProvideBus omitted', () => {
+    const localExtensions = [makeLocalExt('workflow')];
+
+    expect(canInvocationProvideBus(['node', 'makaio', 'workflow'], localExtensions)).toBe(false);
+  });
+
+  it('returns false when argv[2] does not match any local extension', () => {
+    const localExtensions = [makeLocalExt('workflow', true)];
+
+    expect(canInvocationProvideBus(['node', 'makaio', 'account-manager'], localExtensions)).toBe(false);
+  });
+
+  it('returns false when localExtensions is empty', () => {
+    expect(canInvocationProvideBus(['node', 'makaio', 'workflow'], [])).toBe(false);
+  });
+
+  it('returns false when argv has no command (bare invocation)', () => {
+    const localExtensions = [makeLocalExt('workflow', true)];
+
+    expect(canInvocationProvideBus(['node', 'makaio'], localExtensions)).toBe(false);
+  });
+});
+
+describe('main — canProvideBus skips desktop auto-launch', () => {
+  beforeEach(() => {
+    process.exitCode = undefined;
+    vi.clearAllMocks();
+    vi.mocked(busClientMocks.isAuthConnectionError).mockImplementation((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return /\b(401|403|auth|unauthori[sz]ed|forbidden|credential|secret)\b/i.test(message);
+    });
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it('skips launchAppAndWaitForBus when targeted local extension has canProvideBus: true and health returns null', async () => {
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+
+    // A local discovery that returns an extension with canProvideBus: true.
+    const extRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-canprovidebustest-'));
+    const cliEntry = path.join(extRoot, 'dist', 'cli.mjs');
+    await mkdir(path.dirname(cliEntry), { recursive: true });
+    await writeFile(
+      cliEntry,
+      [
+        'export default {',
+        "  name: 'workflow',",
+        "  description: 'Workflow commands',",
+        '  subcommands: [],',
+        '  async beforeRun() { return { proceed: true }; },',
+        '};',
+      ].join('\n'),
+    );
+
+    const localDiscovery = new ExplicitDescriptorDiscovery([
+      {
+        descriptor: {
+          name: 'workflow-ext',
+          displayName: 'Workflow Extension',
+          version: '0.1.0',
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
+          entrypoints: { cli: true as const },
+          cli: {
+            name: 'workflow',
+            description: 'Workflow commands',
+            canProvideBus: true,
+            subcommands: [],
+          },
+        },
+        extensionPath: extRoot,
+        source: 'local',
+      },
+    ]);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await main(['node', 'makaio', 'workflow'], [], localDiscovery);
+
+      expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
+      expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await rm(extRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('renders help for canProvideBus command without launching desktop or booting embedded bus', async () => {
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+
+    const extRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-canprovidebus-help-'));
+    const cliEntry = path.join(extRoot, 'dist', 'cli.mjs');
+    const stdout: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      stdout.push(typeof chunk === 'string' ? chunk : chunk.toString());
+      return true;
+    });
+
+    await mkdir(path.dirname(cliEntry), { recursive: true });
+    await writeFile(
+      cliEntry,
+      [
+        'export default {',
+        "  name: 'workflow',",
+        "  description: 'Workflow commands',",
+        "  provideBus() { throw new Error('embedded bus should not boot for help'); },",
+        '  subcommands: [],',
+        '};',
+      ].join('\n'),
+    );
+
+    const localDiscovery = new ExplicitDescriptorDiscovery([
+      {
+        descriptor: {
+          name: 'workflow-ext',
+          displayName: 'Workflow Extension',
+          version: '0.1.0',
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
+          entrypoints: { cli: true as const },
+          cli: {
+            name: 'workflow',
+            description: 'Workflow commands',
+            canProvideBus: true,
+            subcommands: [],
+          },
+        },
+        extensionPath: extRoot,
+        source: 'local',
+      },
+    ]);
+
+    try {
+      try {
+        await main(['node', 'makaio', 'workflow', '--help'], [], localDiscovery);
+      } catch {
+        // Commander may throw for help display in the test harness.
+      }
+
+      expect(stdout.join('')).toContain('Workflow commands');
+      expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
+      expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
+    } finally {
+      stdoutSpy.mockRestore();
+      await rm(extRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses external bus when probeHealth succeeds even for canProvideBus extension', async () => {
+    const { bus } = createMockBus();
+
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue({ auth: false });
+    vi.mocked(busClientMocks.resolveClientAuth).mockReturnValue(undefined);
+    vi.mocked(busClientMocks.connectBusClient).mockResolvedValue(bus);
+    vi.mocked(bus.request).mockResolvedValue({ contributions: [] });
+
+    const extRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-canprovidebus-extbus-'));
+    const cliEntry = path.join(extRoot, 'dist', 'cli.mjs');
+    await mkdir(path.dirname(cliEntry), { recursive: true });
+    await writeFile(
+      cliEntry,
+      [
+        'export default {',
+        "  name: 'workflow',",
+        "  description: 'Workflow commands',",
+        '  subcommands: [],',
+        '  async beforeRun() { return { proceed: true }; },',
+        '};',
+      ].join('\n'),
+    );
+
+    const localDiscovery = new ExplicitDescriptorDiscovery([
+      {
+        descriptor: {
+          name: 'workflow-ext',
+          displayName: 'Workflow Extension',
+          version: '0.1.0',
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
+          entrypoints: { cli: true as const },
+          cli: {
+            name: 'workflow',
+            description: 'Workflow commands',
+            canProvideBus: true,
+            subcommands: [],
+          },
+        },
+        extensionPath: extRoot,
+        source: 'local',
+      },
+    ]);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await main(['node', 'makaio', 'workflow'], [], localDiscovery);
+
+      expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
+      expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
+      expect(busClientMocks.connectBusClient).toHaveBeenCalledOnce();
+    } finally {
+      consoleErrorSpy.mockRestore();
+      await rm(extRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves existing launch attempt for commands WITHOUT canProvideBus', async () => {
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+    vi.mocked(appLaunchMocks.launchAppAndWaitForBus).mockResolvedValue({ health: null, launched: false });
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await main(['node', 'makaio', 'account-manager'], [], emptyDiscovery);
+
+      expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
+      expect(appLaunchMocks.launchAppAndWaitForBus).toHaveBeenCalledOnce();
+    } finally {
+      consoleErrorSpy.mockRestore();
     }
   });
 });

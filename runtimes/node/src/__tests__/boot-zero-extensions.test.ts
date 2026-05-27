@@ -146,6 +146,7 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
     const activePackageNames = extensions.filter((pkg) => pkg.state === 'active').map((pkg) => pkg.name);
 
     expect(transport.connectedWith?.machineId).toBe(runtime.machineId);
+    expect(runtime.bus).toBe(transport.connectedWith?.bus);
     expect(MakaioBus.getSchema(SessionSubjects.created)).toBeDefined();
     expect(MakaioBus.getSchema(MessageStorageSubjects.get)).toBeDefined();
     expect(MakaioBus.getSchema(RuntimeSubjects.busPort)).toBeDefined();

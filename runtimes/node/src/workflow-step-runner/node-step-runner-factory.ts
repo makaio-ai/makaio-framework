@@ -1,5 +1,6 @@
 import { basename, resolve } from 'node:path';
 import type { IStepRunner, IWorkflowRunner, StepRunnerBusAuth, StepRunnerPlatformDefaults } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { NodeStepRunnerFactoryOptions, WorkerContributionManifest } from './types.js';
 import { PiscinaStepRunner } from './piscina-step-runner.js';
@@ -9,6 +10,7 @@ import { resolveWorkerEntry, type WorkerEntryMode } from './worker-entry-resolve
 import { WorkflowPiscinaRunner } from '../workflow-worker/workflow-piscina-runner.js';
 import { resolveWorkflowWorkerEntry } from '../workflow-worker/worker-entry-resolver.js';
 import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
+import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 
 /** Internal configuration retained for legacy step-runner tests and migration work. */
 type InternalWorkflowStepRunnerOptions =
@@ -63,6 +65,13 @@ export interface CreateNodeWorkflowStepRunnerPackageOptionsParams {
   readonly workflowRunner?: WorkflowRunnerBootOptions;
   /** Makaio data-home path forwarded to the executor config. */
   readonly makaioHome?: string;
+  /**
+   * Host-owned bus instance forwarded to in-process runner construction.
+   *
+   * Required when `workflowRunner.mode` is `'in-process'` (or omitted with an
+   * explicit runner object). Ignored for Piscina and WorkerNode modes.
+   */
+  readonly bus?: IMakaioBus;
 }
 
 /** Workflow engine package options produced by Node runtime composition. */
@@ -174,6 +183,7 @@ export function createNodeWorkflowStepRunnerPackageOptions(
     packageRoot,
     defaultWorkerEntryMode,
     runner: params.workflowRunner,
+    bus: params.bus,
   });
   const executorConfig = {
     busUrl: params.busUrl,
@@ -203,6 +213,7 @@ export function createNodeWorkflowRunnerPackageOptions(
     packageRoot,
     defaultWorkerEntryMode,
     runner: params.workflowRunner,
+    bus: params.bus,
   });
 
   return {
@@ -268,16 +279,25 @@ interface CreateNodeWorkflowRunnerParams {
   readonly defaultWorkerEntryMode: WorkerEntryMode;
   /** Optional boot-level workflow runner configuration. */
   readonly runner?: WorkflowRunnerBootOptions;
+  /**
+   * Host-owned bus instance forwarded to {@link InProcessWorkflowRunner}.
+   *
+   * Required when `runner` is present and its `mode` is `'in-process'` (or
+   * omitted). Ignored for Piscina and WorkerNode modes.
+   */
+  readonly bus?: IMakaioBus;
 }
 
 /**
  * Create a workflow-level runner based on the Node runtime configuration.
  *
- * Returns `undefined` for `in-process` mode (or when no runner is configured),
- * letting the workflow engine fall back to its built-in DAG scheduler.
+ * Returns `undefined` when no runner is configured, letting the workflow engine
+ * fall back to its built-in DAG scheduler.
+ * Returns an {@link InProcessWorkflowRunner} for explicit `in-process` mode
+ * (or when `mode` is omitted but a `runner` object is present).
  * Returns a {@link WorkflowPiscinaRunner} for `piscina` mode.
  * Returns a {@link WorkerNodeRunner} for `worker-node` mode.
- * @param params - Package root, entry mode, and optional runner configuration.
+ * @param params - Package root, entry mode, optional runner configuration, and optional bus.
  * @returns A workflow runner instance, or `undefined` to use the engine default.
  */
 export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams): IWorkflowRunner | undefined {
@@ -288,8 +308,15 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
 
   switch (runner.mode) {
     case undefined:
-    case 'in-process':
-      return undefined;
+    case 'in-process': {
+      if (params.bus === undefined) {
+        throw new Error(
+          `InProcessWorkflowRunner requires a bus instance. ` +
+            `Pass 'bus' to createNodeWorkflowRunner when runner.mode is 'in-process'.`,
+        );
+      }
+      return new InProcessWorkflowRunner({ bus: params.bus });
+    }
 
     case 'worker-node':
       return new WorkerNodeRunner({

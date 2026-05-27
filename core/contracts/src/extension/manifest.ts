@@ -254,6 +254,20 @@ export interface CliManifest {
    * the function implementation rather than a boolean flag.
    */
   readonly hasInteractive?: boolean;
+  /**
+   * Pre-connection routing hint indicating that this extension can embed and
+   * provide its own bus instance.
+   *
+   * When `true`, the CLI router may skip desktop auto-launch for a matching
+   * local command after probing for an already-running external daemon. The
+   * executable contribution can then bootstrap a self-contained bus for
+   * standalone or embedded execution if no external bus connected.
+   *
+   * This is a serializable declaration only — it carries no executable startup
+   * logic. The actual bus provisioning is performed by the executable
+   * `CliContribution.provideBus` handler.
+   */
+  readonly canProvideBus?: boolean;
 }
 
 /** Zod schema for {@link CliManifest}. */
@@ -262,6 +276,7 @@ export const CliManifestSchema = z.object({
   description: z.string(),
   subcommands: z.array(CliSubcommandManifestSchema).readonly().optional(),
   hasInteractive: z.boolean().optional(),
+  canProvideBus: z.boolean().optional(),
 }) satisfies z.ZodType<CliManifest>;
 
 // ---------------------------------------------------------------------------

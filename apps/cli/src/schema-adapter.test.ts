@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { CliContribution } from '@makaio/kernel/cli';
+import type { CliContribution, EmbeddedBusHandle } from '@makaio/kernel/cli';
 import { createMockBus } from '@makaio/test-utils';
 import { z } from 'zod';
 
@@ -163,7 +163,9 @@ describe('registerContribution — interactive TTY guard', () => {
 
       await program.parseAsync(['test-cmd'], { from: 'user' });
 
-      expect(interactiveHandler).toHaveBeenCalledWith({ bus: fakeBus });
+      expect(interactiveHandler).toHaveBeenCalledWith(
+        expect.objectContaining({ bus: fakeBus, signal: expect.any(AbortSignal) }),
+      );
     });
 
     it('does NOT set process.exitCode to 1', async () => {
@@ -406,7 +408,9 @@ describe('registerContribution — connection handling', () => {
 
     await program.parseAsync(['test-cmd'], { from: 'user' });
     expect(interactiveHandler).toHaveBeenCalledOnce();
-    expect(interactiveHandler).toHaveBeenCalledWith({ bus: null });
+    expect(interactiveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ bus: null, signal: expect.any(AbortSignal) }),
+    );
   });
 
   it('passes subcommand name and parsed args to beforeRun', async () => {
@@ -472,5 +476,375 @@ describe('registerContribution — connection handling', () => {
     }).not.toThrow();
     expect(program.commands.find((command) => command.name() === 'serve')?.description()).toBe('builtin');
     expect(program.commands.filter((command) => command.name() === 'serve')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Embedded bus (provideBus) integration
+// ---------------------------------------------------------------------------
+
+describe('registerContribution — embedded bus (provideBus)', () => {
+  const ttyFixture = createTestTTYFixture();
+
+  beforeEach(() => {
+    ttyFixture.snapshot();
+    process.exitCode = undefined;
+  });
+
+  afterEach(() => {
+    ttyFixture.restore();
+    process.exitCode = undefined;
+  });
+
+  it('uses embedded bus when no external bus and calls dispose after handler', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: embeddedBus }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT call provideBus when an external bus is already connected', async () => {
+    const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>().mockResolvedValue(null);
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        provideBus,
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      fakeBus,
+    );
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(provideBus).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: fakeBus }));
+  });
+
+  it('disposes embedded bus even when the handler throws', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [
+          {
+            name: 'run',
+            description: 'Run workflow',
+            schema: z.object({}),
+            handler: vi.fn().mockRejectedValue(new Error('handler boom')),
+          },
+        ],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('reports provideBus failures through the command failure path', async () => {
+    const handler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          throw new Error('runtime boot failed');
+        },
+      },
+      null,
+    );
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Command failed'), 'runtime boot failed');
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('disposes embedded bus when beforeRun throws', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const handler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          throw new Error('gate crashed');
+        },
+      },
+      null,
+    );
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('beforeRun receives the embedded bus', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const beforeRun = vi.fn(async () => ({ proceed: true as const }));
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [
+          { name: 'run', description: 'Run workflow', schema: z.object({}), handler: vi.fn(() => Promise.resolve()) },
+        ],
+        async provideBus() {
+          return handle;
+        },
+        beforeRun,
+      },
+      null,
+    );
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(beforeRun).toHaveBeenCalledWith(expect.objectContaining({ bus: embeddedBus, subcommandName: 'run' }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('disposes embedded bus when beforeRun blocks execution', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const handler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          return { proceed: false, message: 'blocked by policy' };
+        },
+      },
+      null,
+    );
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('aborts the handler signal when a process signal arrives during provideBus', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        async provideBus() {
+          process.emit('SIGINT');
+          return handle;
+        },
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('does not call provideBus when canProvideBus is omitted', async () => {
+    const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>();
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        subcommands: [{ name: 'run', description: 'Run workflow', schema: z.object({}), handler }],
+        provideBus,
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(provideBus).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({ bus: null }));
+  });
+
+  it('does not call provideBus when schema validation fails', async () => {
+    const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>();
+    const handler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [
+          {
+            name: 'run',
+            description: 'Run workflow',
+            schema: z.object({ file: z.string().min(5).meta({ positional: true }) }),
+            handler,
+          },
+        ],
+        provideBus,
+      },
+      null,
+    );
+
+    await expect(program.parseAsync(['workflow', 'run', 'x'], { from: 'user' })).rejects.toThrow();
+
+    expect(provideBus).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('interactive handler receives embedded bus and dispose is called', async () => {
+    ttyFixture.set({ stdoutIsTTY: true, stdinIsTTY: true });
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const interactiveHandler = vi.fn(() => Promise.resolve());
+    const program = makeProgram();
+
+    registerContribution(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        interactive: interactiveHandler,
+        subcommands: [],
+        async provideBus() {
+          return handle;
+        },
+        async beforeRun() {
+          return { proceed: true };
+        },
+      },
+      null,
+    );
+
+    await program.parseAsync(['workflow'], { from: 'user' });
+
+    expect(interactiveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ bus: embeddedBus, signal: expect.any(AbortSignal) }),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });

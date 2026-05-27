@@ -13,3 +13,6 @@ export { WorkerNodeRunner } from './worker-node-runner.js';
 export type { WorkerNodeRunnerOptions } from './worker-node-runner.js';
 export { PiscinaWorkerNodeProvider } from './piscina-worker-node-provider.js';
 export type { PiscinaWorkerNodeProviderOptions } from './piscina-worker-node-provider.js';
+export { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
+export type { InProcessWorkflowRunnerOptions } from './in-process-workflow-runner.js';
+export { loadWorkflowFromConfig } from './workflow-loader.js';

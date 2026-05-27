@@ -1,10 +1,18 @@
 {
   "name": "@makaio/runtime-node",
+  "description": "Node.js runtime composition root for Makaio framework hosts.",
   "version": "1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "runtimes/node"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=22.15.0"
+  },
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "private": true,
   "exports": {
     ".": "./src/index.ts",
     "./extension-discovery": "./src/extension-discovery.ts",
@@ -13,8 +21,15 @@
     "./runtime/schemas": "./src/bus/runtime/schemas.ts",
     "./runtime/namespace": "./src/bus/runtime/namespace.ts",
     "./workflow-worker": "./src/workflow-worker/index.ts",
-    "./workflow-worker/worker-entry": "./src/workflow-worker/worker-entry.ts"
+    "./workflow-worker/worker-entry": "./src/workflow-worker/worker-entry.ts",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "package.json"
+  ],
   "dependencies": {
     "@hono/node-server": "^1.14.1",
     "@makaio/ai-adapters-core": "workspace:*",
@@ -50,8 +65,55 @@
     "yaml": "^2.9.0",
     "zod": "^4.1.13"
   },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.7"
+  },
   "license": "MIT",
   "scripts": {
+    "build": "bun build.ts",
     "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./extension-discovery": {
+        "types": "./dist/extension-discovery.d.ts",
+        "default": "./dist/extension-discovery.mjs"
+      },
+      "./extension-validation": {
+        "types": "./dist/extension-validation.d.ts",
+        "default": "./dist/extension-validation.mjs"
+      },
+      "./makaio-config": {
+        "types": "./dist/makaio-config.d.ts",
+        "default": "./dist/makaio-config.mjs"
+      },
+      "./runtime/schemas": {
+        "types": "./dist/bus/runtime/schemas.d.ts",
+        "default": "./dist/bus/runtime/schemas.mjs"
+      },
+      "./runtime/namespace": {
+        "types": "./dist/bus/runtime/namespace.d.ts",
+        "default": "./dist/bus/runtime/namespace.mjs"
+      },
+      "./workflow-worker": {
+        "types": "./dist/workflow-worker/index.d.ts",
+        "default": "./dist/workflow-worker/index.mjs"
+      },
+      "./workflow-worker/worker-entry": {
+        "types": "./dist/workflow-worker/worker-entry.d.ts",
+        "default": "./dist/workflow-worker/worker-entry.mjs"
+      },
+      "./package.json": "./package.json"
+    }
   }
 }

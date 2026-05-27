@@ -449,15 +449,45 @@ interface CliHealthProbeResult {
 }
 
 /**
+ * Determine whether the current invocation targets a locally-discovered
+ * extension that declares it can provide its own embedded bus.
+ *
+ * When `true`, the CLI router can skip the desktop auto-launch path because
+ * the targeted extension will bootstrap a self-contained bus via
+ * `CliContribution.provideBus`. An external bus can still win if the health
+ * probe returns a live server.
+ * @param parsedArgv - Processed argv vector (already had root flags stripped).
+ * @param localExtensions - Extensions discovered from the local filesystem.
+ * @returns `true` when `argv[2]` names a locally-registered extension with
+ *   `canProvideBus: true` in its manifest.
+ */
+export function canInvocationProvideBus(
+  parsedArgv: readonly string[],
+  localExtensions: readonly LocalExtensionRegistration[],
+): boolean {
+  const commandName = parsedArgv[2];
+  if (!commandName) return false;
+  return localExtensions.some((ext) => ext.manifest.name === commandName && ext.manifest.canProvideBus === true);
+}
+
+/**
  * Probe the bus health endpoint and attempt background desktop launch only
- * when the initial probe fails.
+ * when the initial probe fails and the targeted command cannot provide its
+ * own embedded bus.
  * @param busUrl - Resolved bus URL used for both probing and launch polling.
+ * @param skipLaunch - When `true`, skip the desktop auto-launch step even if
+ *   the health probe returns `null`. Used when the invocation targets a
+ *   command that can embed its own bus.
  * @returns The final health result and whether a launch was attempted.
  */
-async function probeCliHealthWithOptionalLaunch(busUrl: string): Promise<CliHealthProbeResult> {
+async function probeCliHealthWithOptionalLaunch(busUrl: string, skipLaunch: boolean): Promise<CliHealthProbeResult> {
   const health = await probeHealth(busUrl);
   if (health) {
     return { health, backgroundLaunchAttempted: false };
+  }
+
+  if (skipLaunch) {
+    return { health: null, backgroundLaunchAttempted: false };
   }
 
   const launchResult = await launchAppAndWaitForBus(busUrl);
@@ -524,8 +554,12 @@ export async function main(
   // --- Single bus for the entire invocation ---
   // Resolve the bus URL once — probeHealth is a lightweight HTTP GET that gates
   // whether to attempt the heavier auto-launch + WebSocket connection path.
+  // Skip the desktop launch when the targeted command can embed its own bus:
+  // probeHealth still runs so an already-running server can win, but we don't
+  // block on a desktop launch cycle that would be redundant.
   const busUrl = resolveBusUrl();
-  const { health, backgroundLaunchAttempted } = await probeCliHealthWithOptionalLaunch(busUrl);
+  const skipLaunch = canInvocationProvideBus(parsedArgv, localExtensions);
+  const { health, backgroundLaunchAttempted } = await probeCliHealthWithOptionalLaunch(busUrl, skipLaunch);
 
   const { bus, connectionError } = await connectCliBus(health, {
     backgroundLaunchAttempted,

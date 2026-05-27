@@ -10,13 +10,13 @@ import type {
   WorkerNodeDispatch,
   WorkerNodeRequirements,
 } from '@makaio/contracts';
-import type { AdapterSubsystemService } from '@makaio/subsystem-adapter';
-import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
-import type { DevPortalMap } from '@makaio/services-package-manager';
+import type { PostInstallHandler, StrategyDependencies } from '@makaio/framework/clients';
 import type {
   ContributionProcessor,
   ExtensionCoordinator,
   ExtensionRuntimeSurface,
+  KernelExtensionContext,
+  KernelMakaioExtension,
   TransportProvider,
   WindowRegistry,
 } from '@makaio/kernel';
@@ -26,16 +26,45 @@ import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
 
+/** Dev-mode map from npm package name to absolute workspace package directory. */
+export type DevPortalMap = ReadonlyMap<string, string>;
+
+/**
+ * Public handle for the adapter subsystem service methods exposed during host
+ * coordinator wiring.
+ */
+export interface AdapterSubsystemServiceHandle {
+  /**
+   * Process adapter contributions for one active extension package.
+   * @param packageName - Package that transitioned to active.
+   * @param pkg - Extension manifest.
+   * @param ctx - Per-extension context.
+   */
+  processAdapterContributions(
+    packageName: string,
+    pkg: KernelMakaioExtension,
+    ctx: KernelExtensionContext,
+  ): Promise<void>;
+
+  /**
+   * Stop adapter contributions for one stopped extension package.
+   * @param packageName - Package that stopped or was disabled.
+   */
+  stopAdapterContributions(packageName: string): Promise<void>;
+}
+
 /**
  * Runtime boot configuration for the workflow-level runner.
  *
- * Defaults to `in-process` (in-process DAG scheduler) when omitted.
+ * When omitted, the workflow engine uses its built-in runner default.
+ * Explicit `{ mode: 'in-process' }` installs the Node runtime's concrete
+ * in-process runner.
  * Set `mode: 'piscina'` to dispatch each full workflow execution to a
  * Piscina worker-thread pool running the workflow worker entry.
  */
 export type WorkflowRunnerBootOptions =
   | {
-      /** Use the workflow engine's in-process DAG scheduler (default). */
+      /** Use the Node runtime's concrete in-process workflow runner. */
       readonly mode?: 'in-process';
     }
   | {
@@ -279,8 +308,9 @@ export interface CoreBootOptions {
   /**
    * Workflow-level runner for dispatching full workflow executions.
    *
-   * Defaults to `in-process` (uses the engine's built-in DAG scheduler).
-   * Set to `piscina` to dispatch each execution to a worker-thread pool
+   * Omit to use the workflow engine's built-in default runner. Set to
+   * `{ mode: 'in-process' }` to install the Node runtime's concrete in-process
+   * runner, or `piscina` to dispatch each execution to a worker-thread pool
    * that runs the workflow worker entry end-to-end.
    */
   readonly workflowRunner?: WorkflowRunnerBootOptions;
@@ -378,7 +408,7 @@ export interface BootCoordinatorSetupContext {
   /** Register an awaited contribution processor. */
   readonly registerContributionProcessor: (processor: ContributionProcessor) => void;
   /** Read the active adapter subsystem service when it exists. */
-  readonly getAdapterSubsystemService: () => AdapterSubsystemService | undefined;
+  readonly getAdapterSubsystemService: () => AdapterSubsystemServiceHandle | undefined;
 }
 
 /**
@@ -414,6 +444,15 @@ export interface MakaioRuntime {
    * Machine identifier (UUID).
    */
   machineId: string;
+
+  /**
+   * The booted bus instance.
+   *
+   * Exposed so host composition roots can pass the live bus to seams that
+   * need a direct reference after boot (e.g. in-process workflow runner,
+   * test harnesses, host-owned contribution processors).
+   */
+  bus: IMakaioBus;
 
   /**
    * Tray manifest entries collected from all loaded packages.

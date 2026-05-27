@@ -4,23 +4,23 @@ import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { WorkflowDefinitionInputSchema, type WorkflowWorkerSource } from '@makaio/contracts';
-import type { LoadedWorkflow } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
+import type { RuntimeLoadedWorkflow } from './types.js';
 
 // ─────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Validate that a value matches the {@link LoadedWorkflow} shape.
+ * Validate that a value matches the {@link RuntimeLoadedWorkflow} shape.
  *
  * Guards against incorrectly structured default exports — anything that
  * looks like a `defineWorkflow()` result (has a `definition` object and a
  * `runtimeSteps` Map) passes.
  * @param value - Candidate value from the module's default export.
- * @returns The value narrowed to {@link LoadedWorkflow}.
+ * @returns The value narrowed to {@link RuntimeLoadedWorkflow}.
  * @throws When the value does not match the expected shape.
  */
-function normalizeWorkflowDefaultExport(value: unknown): LoadedWorkflow {
+function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   if (typeof value !== 'object' || value === null) {
     throw new Error(
       `Invalid workflow module default export: expected an object with 'definition' and 'runtimeSteps', got ${typeof value}.`,
@@ -45,8 +45,8 @@ function normalizeWorkflowDefaultExport(value: unknown): LoadedWorkflow {
   }
 
   return {
-    definition: definitionResult.data as LoadedWorkflow['definition'],
-    runtimeSteps: obj['runtimeSteps'] as LoadedWorkflow['runtimeSteps'],
+    definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
+    runtimeSteps: obj['runtimeSteps'] as RuntimeLoadedWorkflow['runtimeSteps'],
   };
 }
 
@@ -104,16 +104,16 @@ async function writeWorkflowSourceToTempFile(
  * @returns Loaded workflow with `definition` and `runtimeSteps`.
  * @throws For `'definition'` kind or when the module shape is invalid.
  */
-export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<LoadedWorkflow> {
+export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<RuntimeLoadedWorkflow> {
   if (source.kind === 'path') {
-    const mod = (await import(pathToFileURL(source.path).href)) as { default?: unknown };
+    const mod = (await import(/* @vite-ignore */ pathToFileURL(source.path).href)) as { default?: unknown };
     return normalizeWorkflowDefaultExport(mod.default);
   }
 
   if (source.kind === 'source') {
     const { tempDir, tempPath } = await writeWorkflowSourceToTempFile(source.filename, source.source);
     try {
-      const mod = (await import(pathToFileURL(tempPath).href)) as { default?: unknown };
+      const mod = (await import(/* @vite-ignore */ pathToFileURL(tempPath).href)) as { default?: unknown };
       return normalizeWorkflowDefaultExport(mod.default);
     } finally {
       await rm(tempDir, { recursive: true, force: true });

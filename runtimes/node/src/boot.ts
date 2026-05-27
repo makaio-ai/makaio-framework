@@ -410,6 +410,7 @@ export async function bootMakaioRuntimeCore(
       platformDefaults,
       workflowRunner: options.workflowRunner,
       makaioHome,
+      bus,
     });
 
     frameworkPackages.push(
@@ -591,6 +592,7 @@ export async function bootMakaioRuntimeCore(
       port: boundPort,
       host: boundHost,
       machineId,
+      bus,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
       shutdown,
