@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Command } from 'commander';
 import { z } from 'zod';
 import type { CliManifest } from '@makaio/contracts';
-import type { CliContribution } from '@makaio/kernel/cli';
+import type { CliContribution, EmbeddedBusHandle } from '@makaio/kernel/cli';
 import { createMockBus } from '@makaio/test-utils';
 import { registerManifestCommand } from '../manifest-commands.js';
 import type { ManifestCommandContext } from '../manifest-commands.js';
@@ -754,7 +754,9 @@ describe('registerManifestCommand — interactive TTY guard', () => {
     await program.parseAsync(['tui-cmd'], { from: 'user' });
 
     expect(interactiveHandler).toHaveBeenCalledOnce();
-    expect(interactiveHandler).toHaveBeenCalledWith({ bus: fakeBus });
+    expect(interactiveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ bus: fakeBus, signal: expect.any(AbortSignal) }),
+    );
   });
 });
 
@@ -929,5 +931,389 @@ describe('registerManifestCommand — interactive error paths', () => {
     expect(process.exitCode).toBe(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('/fake/entry.js'), 'Module not found');
     expect(consoleErrorSpy).not.toHaveBeenCalledWith('Bus unavailable');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Embedded bus (provideBus) integration
+// ---------------------------------------------------------------------------
+
+describe('registerManifestCommand — embedded bus (provideBus)', () => {
+  const ttyFixture = createTestTTYFixture();
+
+  const subcommandManifest: CliManifest = {
+    name: 'workflow',
+    description: 'Workflow commands',
+    canProvideBus: true,
+    subcommands: [{ name: 'run', description: 'Run a workflow' }],
+  };
+
+  const interactiveManifestTui: CliManifest = {
+    name: 'workflow',
+    description: 'Workflow commands',
+    canProvideBus: true,
+    subcommands: [],
+  };
+
+  beforeEach(() => {
+    process.exitCode = undefined;
+    ttyFixture.snapshot();
+  });
+
+  afterEach(() => {
+    ttyFixture.restore();
+    process.exitCode = undefined;
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('uses embedded bus when no external bus exists and calls dispose after handler', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(subcommandHandler).toHaveBeenCalledOnce();
+    expect(subcommandHandler).toHaveBeenCalledWith(expect.objectContaining({ bus: embeddedBus }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT call provideBus when an external bus is already connected', async () => {
+    const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>().mockResolvedValue(null);
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      provideBus,
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx = makeCtx(importModule);
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(provideBus).not.toHaveBeenCalled();
+    expect(subcommandHandler).toHaveBeenCalledWith(expect.objectContaining({ bus: fakeBus }));
+  });
+
+  it('disposes embedded bus even when the handler throws', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [
+        {
+          name: 'run',
+          description: 'Run a workflow',
+          schema: z.object({}),
+          handler: vi.fn().mockRejectedValue(new Error('workflow boom')),
+        },
+      ],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('reports provideBus failures through the command failure path', async () => {
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        throw new Error('runtime boot failed');
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(subcommandHandler).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Command failed'), 'runtime boot failed');
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('disposes embedded bus when beforeRun throws', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        throw new Error('gate crashed');
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(subcommandHandler).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('beforeRun receives embedded bus when provideBus supplies it', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const beforeRun = vi.fn(async () => ({ proceed: true as const }));
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [
+        { name: 'run', description: 'Run a workflow', schema: z.object({}), handler: vi.fn(() => Promise.resolve()) },
+      ],
+      async provideBus() {
+        return handle;
+      },
+      beforeRun,
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+    expect(beforeRun).toHaveBeenCalledWith(expect.objectContaining({ bus: embeddedBus, subcommandName: 'run' }));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('disposes embedded bus when beforeRun blocks execution', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        return { proceed: false, message: 'blocked by policy' };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(subcommandHandler).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('does not call provideBus when schema validation fails', async () => {
+    const provideBus = vi.fn<NonNullable<CliContribution['provideBus']>>();
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [
+        {
+          name: 'run',
+          description: 'Run a workflow',
+          schema: z.object({ file: z.string().min(5) }),
+          handler: subcommandHandler,
+        },
+      ],
+      provideBus,
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(
+      program,
+      {
+        name: 'workflow',
+        description: 'Workflow commands',
+        canProvideBus: true,
+        subcommands: [
+          {
+            name: 'run',
+            description: 'Run a workflow',
+            args: [{ name: 'file', description: 'Workflow file', positional: true, required: true }],
+          },
+        ],
+      },
+      ctx,
+    );
+
+    await expect(program.parseAsync(['workflow', 'run', 'x'], { from: 'user' })).rejects.toThrow();
+
+    expect(provideBus).not.toHaveBeenCalled();
+    expect(subcommandHandler).not.toHaveBeenCalled();
+  });
+
+  it('interactive path uses embedded bus and calls dispose', async () => {
+    ttyFixture.set({ stdoutIsTTY: true, stdinIsTTY: true });
+
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const interactiveHandler = vi.fn(() => Promise.resolve());
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      interactive: interactiveHandler,
+      subcommands: [],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        return { proceed: true };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: true,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, interactiveManifestTui, ctx);
+
+    await program.parseAsync(['workflow'], { from: 'user' });
+
+    expect(interactiveHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ bus: embeddedBus, signal: expect.any(AbortSignal) }),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });

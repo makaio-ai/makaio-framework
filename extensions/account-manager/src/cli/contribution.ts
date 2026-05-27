@@ -47,7 +47,7 @@ export const accountManagerCli: CliContribution = {
   interactive: async (ctx) => {
     const bus = requireBus(ctx);
     const { renderApp } = await import('./interactive.js');
-    await renderApp(bus);
+    await renderApp(bus, ctx.signal);
   },
 
   subcommands: [

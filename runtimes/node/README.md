@@ -172,4 +172,6 @@ export default defineMakaioConfig({
 | `@makaio/runtime-node/extension-validation` | Extension descriptor validation helpers |
 | `@makaio/runtime-node/makaio-config` | Config loading, parsing, and resolution |
 | `@makaio/runtime-node/runtime/schemas` | Runtime bus message schemas |
-| `@makaio/runtime-node` | Side-effect import to register runtime bus namespace |
+| `@makaio/runtime-node/runtime/namespace` | Side-effect import to register runtime bus namespace |
+| `@makaio/runtime-node/workflow-worker` | Public Node workflow runner helpers and runner option types |
+| `@makaio/runtime-node/workflow-worker/worker-entry` | Worker-thread entrypoint for Piscina-backed workflow execution |

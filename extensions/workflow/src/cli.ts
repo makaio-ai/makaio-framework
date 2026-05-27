@@ -15,7 +15,9 @@
  * ```
  */
 import type { CliContribution } from '@makaio/kernel/cli';
+import { ALWAYS_PROCEED } from '@makaio/kernel/cli';
 import { workflowRunCommand } from './run-command.js';
+import { bootEmbeddedWorkflowRuntime } from './embedded-workflow-runtime.js';
 
 /**
  * Workflow extension CLI contribution.
@@ -23,11 +25,20 @@ import { workflowRunCommand } from './run-command.js';
  * Registered as `makaio workflow` in the Makaio CLI. The `run` subcommand
  * accepts a workflow file path, an optional trigger payload (from flag, stdin,
  * or await-trigger mode), and lifecycle options.
+ *
+ * This contribution declares `canProvideBus: true` so the CLI router can skip
+ * desktop auto-launch after probing for an already-running daemon. When no
+ * external bus connects, `provideBus` boots an embedded headless runtime.
+ * `beforeRun` returns {@link ALWAYS_PROCEED} so the default "bus must be
+ * connected" gate is bypassed for the embedded path.
  */
 const workflowCli: CliContribution = {
   name: 'workflow',
   description: 'Run Makaio workflows',
+  canProvideBus: true,
   subcommands: [workflowRunCommand],
+  provideBus: bootEmbeddedWorkflowRuntime,
+  beforeRun: () => ALWAYS_PROCEED,
 };
 
 export default workflowCli;

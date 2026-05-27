@@ -4887,6 +4887,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@makaio/kernel": "workspace:*"
+    "@makaio/runtime-node": "workspace:*"
     "@makaio/test-utils": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
@@ -4895,8 +4896,8 @@ __metadata:
     vitest: "npm:4.1.7"
     zod: "npm:^4.1.13"
   peerDependencies:
-    "@makaio/bus-core": "*"
     "@makaio/framework": ^1.0.0
+    "@makaio/runtime-node": ^1.0.0
   languageName: unknown
   linkType: soft
 
@@ -5315,6 +5316,7 @@ __metadata:
   dependencies:
     "@hono/node-server": "npm:^1.14.1"
     "@makaio/ai-adapters-core": "workspace:*"
+    "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server": "workspace:*"
     "@makaio/bus-transport-stdio": "workspace:*"
@@ -5336,6 +5338,7 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/subsystem-mcp-http-server": "workspace:*"
     "@makaio/subsystem-workflow-engine": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
@@ -5343,6 +5346,9 @@ __metadata:
     hono: "npm:^4.12.18"
     minimatch: "npm:^10.0.3"
     piscina: "npm:^5.1.4"
+    tsdown: "npm:^0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.7"
     ws: "npm:^8.20.1"
     yaml: "npm:^2.9.0"
     zod: "npm:^4.1.13"

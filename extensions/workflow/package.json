@@ -17,8 +17,8 @@
     "test": "vitest run"
   },
   "peerDependencies": {
-    "@makaio/bus-core": "*",
-    "@makaio/framework": "^1.0.0"
+    "@makaio/framework": "^1.0.0",
+    "@makaio/runtime-node": "^1.0.0"
   },
   "dependencies": {
     "@makaio/utils": "workspace:*",
@@ -30,6 +30,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/kernel": "workspace:*",
+    "@makaio/runtime-node": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "^0.22.0",

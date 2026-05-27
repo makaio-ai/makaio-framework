@@ -419,6 +419,36 @@ describe('CliManifestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts canProvideBus: true', () => {
+    const result = CliManifestSchema.safeParse({
+      name: 'my-cmd',
+      description: 'My command',
+      canProvideBus: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.canProvideBus).toBe(true);
+    }
+  });
+
+  it('accepts canProvideBus: false', () => {
+    const result = CliManifestSchema.safeParse({
+      name: 'my-cmd',
+      description: 'My command',
+      canProvideBus: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects canProvideBus with a non-boolean value', () => {
+    const result = CliManifestSchema.safeParse({
+      name: 'my-cmd',
+      description: 'My command',
+      canProvideBus: 'yes',
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects a CLI manifest with empty name', () => {
     const result = CliManifestSchema.safeParse({ name: '', description: 'My command' });
     expect(result.success).toBe(false);

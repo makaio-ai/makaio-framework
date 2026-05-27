@@ -13,6 +13,10 @@ describe('framework import map', () => {
     expect(rewriteFrameworkImportSpecifier('@makaio/subsystem-client')).toBe('@makaio/framework/clients');
   });
 
+  it('does not rewrite standalone public runtime packages to umbrella subpaths', () => {
+    expect(rewriteFrameworkImportSpecifier('@makaio/runtime-node')).toBeUndefined();
+  });
+
   it('rewrites framework-owned package subpaths', () => {
     expect(rewriteFrameworkImportSpecifier('@makaio/contracts/extension')).toBe(
       '@makaio/framework/contracts/extension',

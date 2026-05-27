@@ -150,4 +150,9 @@ describe('getFrameworkPublicPackageByName', () => {
     expect(entry?.frameworkSubpath).toBe('git');
     expect(entry?.packageRoot).toBe('subsystems/git');
   });
+
+  it('does not assemble the public Node runtime into the framework umbrella', () => {
+    expect(getFrameworkPublicPackageByName('@makaio/runtime-node')).toBeUndefined();
+    expect(FRAMEWORK_DIST_SUBPATHS.map((e) => e.packageName as string)).not.toContain('@makaio/runtime-node');
+  });
 });

@@ -31,6 +31,7 @@ import {
 } from '../boot.js';
 import { createNodeWorkflowRunner, resolveWorkflowStepRunnerFactoryOptions } from '../workflow-step-runner/index.js';
 import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
+import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
 import { filesystemPackage } from '@makaio/extension-filesystem';
@@ -572,14 +573,16 @@ describe('workflow-level runner boot composition', () => {
     expect(runner).toBeUndefined();
   });
 
-  it('returns undefined for in-process mode', () => {
+  it('creates an InProcessWorkflowRunner for in-process mode when a bus is provided', () => {
+    const bus = createBusInstance();
     const runner = createNodeWorkflowRunner({
       packageRoot: '/runtime',
       defaultWorkerEntryMode: 'source',
       runner: { mode: 'in-process' },
+      bus,
     });
 
-    expect(runner).toBeUndefined();
+    expect(runner).toBeInstanceOf(InProcessWorkflowRunner);
   });
 
   it('creates a WorkerNodeRunner for worker-node mode', () => {
@@ -643,6 +646,29 @@ describe('workflow-level runner boot composition', () => {
       throw new Error('Expected dispatch request');
     }
     expect('manifest' in capturedRequest).toBe(false);
+  });
+
+  it('creates an InProcessWorkflowRunner when runner mode is omitted but a runner object is present', () => {
+    const bus = createBusInstance();
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: {},
+      bus,
+    });
+
+    expect(runner).toBeInstanceOf(InProcessWorkflowRunner);
+  });
+
+  it('throws when in-process mode is configured but no bus is provided', () => {
+    expect(() =>
+      createNodeWorkflowRunner({
+        packageRoot: '/runtime',
+        defaultWorkerEntryMode: 'source',
+        runner: { mode: 'in-process' },
+        // bus intentionally omitted
+      }),
+    ).toThrow(/InProcessWorkflowRunner requires a bus instance/i);
   });
 });
 

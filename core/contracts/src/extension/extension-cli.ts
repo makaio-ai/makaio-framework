@@ -50,6 +50,8 @@ export interface ExtensionCliInteractiveContext<TBus extends MakaioBusLike = Mak
    * hook opted into bus-optional execution.
    */
   readonly bus: TBus | null;
+  /** Abort signal triggered when the interactive invocation is cancelled. */
+  readonly signal: AbortSignal;
 }
 
 /**

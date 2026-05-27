@@ -17,7 +17,16 @@ import { INTERACTIVE_SUBCOMMAND } from '@makaio/kernel/cli';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { formatInteractiveTerminalError, formatZodError, hasInteractiveTerminal } from './schema-adapter.js';
 import { toCliLongOptionName } from './flag-names.js';
-import { createProcessCommandContext, evaluateBeforeRunGate } from './command-runtime.js';
+import {
+  createProcessCommandContext,
+  createProcessCommandSignalContext,
+  disposeResolvedBusForCommand,
+  evaluateBeforeRunGate,
+  getAuthorizedProvideBus,
+  reportCommandFailure,
+  resolveContributionBus,
+} from './command-runtime.js';
+import type { ResolvedCliBus } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
 import { findOrCreateCommand, claimSubcommandName, type CommandInstance } from './command-tree.js';
 
@@ -87,14 +96,14 @@ export function registerManifestCommand(
   const { cmd, created } = findOrCreateCommand(program, manifest.name, manifest.description);
 
   for (const sub of manifest.subcommands ?? []) {
-    registerSubcommand(cmd, sub, manifest.name, ctx);
+    registerSubcommand(cmd, sub, manifest.name, manifest.canProvideBus === true, ctx);
   }
 
   // Interactive handler is per-command, first registrant wins. Two TUI
   // experiences cannot meaningfully merge — same first-wins as subcommands.
   if (created && ctx.hasInteractive) {
     cmd.action(async () => {
-      await resolveAndExecuteInteractive(ctx, manifest.name);
+      await resolveAndExecuteInteractive(ctx, manifest.name, manifest.canProvideBus === true);
     });
   }
 }
@@ -108,12 +117,14 @@ export function registerManifestCommand(
  * @param parent - The parent Commander command.
  * @param sub - Subcommand metadata.
  * @param parentName - Name of the parent command (for error messages).
+ * @param manifestCanProvideBus - Whether the serializable manifest declared bus provisioning.
  * @param ctx - Runtime context.
  */
 function registerSubcommand(
   parent: CommandInstance,
   sub: CliSubcommandManifest,
   parentName: string,
+  manifestCanProvideBus: boolean,
   ctx: ManifestCommandContext,
 ): void {
   if (!claimSubcommandName(parent, sub.name, `${parentName} ${sub.name}`, 'extension contribution')) return;
@@ -122,7 +133,7 @@ function registerSubcommand(
   registerManifestArgs(cmd, sub.args ?? []);
 
   cmd.action(async () => {
-    await resolveAndExecute(ctx, sub.name, cmd, parentName);
+    await resolveAndExecute(ctx, sub.name, cmd, parentName, manifestCanProvideBus);
   });
 }
 
@@ -168,18 +179,21 @@ export function registerManifestArgs(cmd: CommandInstance, args: readonly CliArg
  * Import the extension contribution and execute the matching subcommand handler.
  *
  * Finds the matching subcommand by name, validates parsed args through the
- * subcommand's Zod schema, and invokes the handler. Bus teardown is owned by
- * the CLI entry point, not the individual command executor.
+ * subcommand's Zod schema, resolves the effective bus, and invokes the handler.
+ * The executor disposes only embedded handles created for this command; the CLI
+ * entry point still owns the top-level external bus connection.
  * @param ctx - Runtime context.
  * @param subcommandName - Name of the subcommand to dispatch to.
  * @param cmd - The Commander command instance after parsing (for arg collection).
  * @param parentName - Top-level command name for error messages.
+ * @param manifestCanProvideBus - Whether the serializable manifest declared bus provisioning.
  */
 async function resolveAndExecute(
   ctx: ManifestCommandContext,
   subcommandName: string,
   cmd: CommandInstance,
   parentName: string,
+  manifestCanProvideBus: boolean,
 ): Promise<void> {
   let contribution: CliContribution;
   try {
@@ -216,37 +230,53 @@ async function resolveAndExecute(
     return;
   }
 
-  const gate = await evaluateBeforeRunGate(
-    contribution.beforeRun,
-    { subcommandName, args: parsed.data as Record<string, unknown>, bus: ctx.bus },
-    ctx.connectionError,
-  );
-  if (!gate.allowed) {
-    console.error(gate.message);
-    process.exitCode = gate.exitCode;
-    return;
-  }
-
-  const { context, cleanup } = createProcessCommandContext(parsed.data, ctx.bus);
+  const signalContext = createProcessCommandSignalContext();
+  let resolved: ResolvedCliBus | undefined;
   try {
+    resolved = await resolveContributionBus(
+      ctx.bus,
+      getAuthorizedProvideBus(contribution, manifestCanProvideBus),
+      subcommandName,
+      parsed.data as Record<string, unknown>,
+      process.cwd(),
+    );
+    const gate = await evaluateBeforeRunGate(
+      contribution.beforeRun,
+      { subcommandName, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
+      ctx.connectionError,
+    );
+    if (!gate.allowed) {
+      console.error(gate.message);
+      process.exitCode = gate.exitCode;
+      return;
+    }
+
+    const { context } = createProcessCommandContext(parsed.data, resolved.bus, signalContext);
     await entry.handler(context);
   } catch (err) {
-    console.error(`Command failed:`, err instanceof Error ? err.message : err);
-    process.exitCode = 1;
+    reportCommandFailure(err);
   } finally {
-    cleanup();
+    signalContext.cleanup();
+    await disposeResolvedBusForCommand(resolved);
   }
 }
 
 /**
  * Import the extension contribution and invoke the interactive handler.
  *
- * Guards against non-TTY environments. Bus teardown is owned by the CLI
- * entry point, not this executor.
+ * Guards against non-TTY environments, resolves the effective bus, and invokes
+ * the handler. The executor disposes only embedded handles created for this
+ * invocation; the CLI entry point still owns the top-level external bus
+ * connection.
  * @param ctx - Runtime context.
  * @param commandName - Top-level command name for error messages.
+ * @param manifestCanProvideBus - Whether the serializable manifest declared bus provisioning.
  */
-async function resolveAndExecuteInteractive(ctx: ManifestCommandContext, commandName: string): Promise<void> {
+async function resolveAndExecuteInteractive(
+  ctx: ManifestCommandContext,
+  commandName: string,
+  manifestCanProvideBus: boolean,
+): Promise<void> {
   if (!hasInteractiveTerminal()) {
     console.error(formatInteractiveTerminalError(commandName));
     process.exitCode = 1;
@@ -274,22 +304,33 @@ async function resolveAndExecuteInteractive(ctx: ManifestCommandContext, command
     return;
   }
 
-  const gate = await evaluateBeforeRunGate(
-    contribution.beforeRun,
-    { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: ctx.bus },
-    ctx.connectionError,
-  );
-  if (!gate.allowed) {
-    console.error(gate.message);
-    process.exitCode = gate.exitCode;
-    return;
-  }
-
+  const signalContext = createProcessCommandSignalContext();
+  let resolved: ResolvedCliBus | undefined;
   try {
-    await contribution.interactive({ bus: ctx.bus });
+    resolved = await resolveContributionBus(
+      ctx.bus,
+      getAuthorizedProvideBus(contribution, manifestCanProvideBus),
+      INTERACTIVE_SUBCOMMAND,
+      {},
+      process.cwd(),
+    );
+    const gate = await evaluateBeforeRunGate(
+      contribution.beforeRun,
+      { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
+      ctx.connectionError,
+    );
+    if (!gate.allowed) {
+      console.error(gate.message);
+      process.exitCode = gate.exitCode;
+      return;
+    }
+
+    await contribution.interactive({ bus: resolved.bus, signal: signalContext.signal });
   } catch (err) {
-    console.error(`Command failed:`, err instanceof Error ? err.message : err);
-    process.exitCode = 1;
+    reportCommandFailure(err);
+  } finally {
+    signalContext.cleanup();
+    await disposeResolvedBusForCommand(resolved);
   }
 }
 

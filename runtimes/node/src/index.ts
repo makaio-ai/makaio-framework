@@ -80,11 +80,12 @@ export {
 } from './framework-module-resolver.js';
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
-export { WorkflowPiscinaRunner, resolveWorkflowWorkerEntry } from './workflow-worker/index.js';
+export { WorkflowPiscinaRunner, resolveWorkflowWorkerEntry, InProcessWorkflowRunner } from './workflow-worker/index.js';
 export type {
   IWorkflowRunner,
   WorkflowRunResult,
   WorkflowPiscinaRunnerOptions,
   WorkflowWorkerEntryMode,
   WorkflowWorkerEntryResolverOptions,
+  InProcessWorkflowRunnerOptions,
 } from './workflow-worker/index.js';

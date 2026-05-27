@@ -215,6 +215,74 @@ export const INTERACTIVE_SUBCOMMAND = '__interactive__' as const;
 export const ALWAYS_PROCEED: BeforeRunResult = { proceed: true } as const;
 
 // ---------------------------------------------------------------------------
+// Interactive command context
+// ---------------------------------------------------------------------------
+
+/**
+ * Execution context provided to bare interactive CLI handlers.
+ */
+export interface InteractiveCommandContext {
+  /**
+   * Bus client connected to the running Makaio instance.
+   *
+   * `null` when the bus is unavailable and the contribution's `beforeRun`
+   * hook opted into bus-optional execution.
+   */
+  readonly bus: IMakaioBus | null;
+  /**
+   * Abort signal triggered when the process receives SIGINT (Ctrl-C).
+   *
+   * Interactive handlers must observe this signal and tear down any TUI
+   * renderer they own, because installing process signal listeners suppresses
+   * Node's default immediate termination behavior.
+   */
+  readonly signal: AbortSignal;
+}
+
+// ---------------------------------------------------------------------------
+// Bus provisioning — embedded bus lifecycle for standalone execution
+// ---------------------------------------------------------------------------
+
+/**
+ * Context passed to {@link CliContribution.provideBus} so the extension can
+ * inspect the incoming invocation before deciding whether to bootstrap a bus.
+ */
+export interface ProvideBusContext {
+  /**
+   * Name of the subcommand being invoked (e.g. `'run'`, `'start'`).
+   *
+   * Set to {@link INTERACTIVE_SUBCOMMAND} (`'__interactive__'`) when the bare
+   * interactive invocation is dispatched.
+   */
+  readonly subcommandName: string;
+  /** Parsed and validated arguments for the subcommand. */
+  readonly args: Record<string, unknown>;
+  /** Absolute path of the working directory from which the CLI was invoked. */
+  readonly cwd: string;
+}
+
+/**
+ * Handle returned by {@link CliContribution.provideBus} when the extension
+ * successfully bootstraps an embedded bus.
+ *
+ * The CLI router holds this handle for the duration of the command invocation
+ * and calls `dispose` during teardown to shut down the embedded bus cleanly.
+ */
+export interface EmbeddedBusHandle {
+  /** The live bus instance to inject into command handlers. */
+  readonly bus: IMakaioBus;
+  /**
+   * Shut down the embedded bus and release all associated resources.
+   *
+   * Called by the CLI router after the command handler completes (or errors).
+   * Implementations must be idempotent — calling `dispose` more than once must
+   * not throw.
+   * @returns A promise that resolves when teardown is complete.
+   */
+  dispose(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level CLI contribution — what extensions export
 // ---------------------------------------------------------------------------
 
@@ -230,6 +298,14 @@ export const ALWAYS_PROCEED: BeforeRunResult = { proceed: true } as const;
  * - `makaio account-manager`        → {@link interactive} (if defined)
  * - `makaio account-manager --help` → auto-generated from subcommands + schema metadata
  * - `makaio account-manager list`   → matched subcommand handler
+ *
+ * Bus resolution order (first match wins):
+ * 1. External daemon connection — if the server is reachable, its bus is used.
+ * 2. {@link provideBus} — extension embeds its own bus (standalone mode).
+ * 3. `null` bus — passed to handlers only when {@link beforeRun} opts in.
+ *
+ * {@link beforeRun} is evaluated **after** bus resolution completes so that its
+ * context always reflects the final resolved bus state.
  */
 export interface CliContribution extends CliManifest {
   /**
@@ -244,11 +320,12 @@ export interface CliContribution extends CliManifest {
    * execution, `bus` may be `null` — use {@link requireBus} at the top of the
    * handler if the TUI needs bus RPC calls.
    */
-  readonly interactive?: (ctx: { bus: IMakaioBus | null }) => Promise<void>;
+  readonly interactive?: (ctx: InteractiveCommandContext) => Promise<void>;
   /** Typed subcommand definitions with Zod schemas and strongly-typed handlers. */
   readonly subcommands: ReadonlyArray<CliSubcommandEntry>;
   /**
-   * Pre-execution gate evaluated before the default bus-required check.
+   * Pre-execution gate evaluated **after** bus resolution (including any
+   * embedded bus from {@link provideBus}) completes.
    *
    * When provided, this hook **replaces** the default "bus must be connected"
    * gate. The extension inspects the context (including bus availability) and
@@ -266,6 +343,21 @@ export interface CliContribution extends CliManifest {
    * @returns Whether to proceed or block with a message.
    */
   readonly beforeRun?: (context: BeforeRunContext) => BeforeRunResult | Promise<BeforeRunResult>;
+  /**
+   * Bootstrap an embedded bus for standalone or in-process execution.
+   *
+   * When defined and {@link CliManifest.canProvideBus} is `true` in the
+   * manifest, the CLI router calls this hook **only when no external daemon
+   * connection was established**. If it returns a non-null handle the embedded
+   * bus is used for the lifetime of the command; the router calls
+   * {@link EmbeddedBusHandle.dispose} after the handler completes.
+   *
+   * Returning `null` signals that this invocation should not use an embedded
+   * bus and the handler receives `bus: null`.
+   * @param context - Subcommand name, parsed args, and working directory.
+   * @returns A live bus handle, or `null` to fall through to normal connection.
+   */
+  readonly provideBus?: (context: ProvideBusContext) => Promise<EmbeddedBusHandle | null>;
 }
 
 // ---------------------------------------------------------------------------

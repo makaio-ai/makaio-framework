@@ -1,13 +1,7 @@
 import { build } from 'tsdown';
-import { defineExtensionConfig } from '@makaio/build-tooling/tsdown-extension-preset';
 import { emitDeclarations } from '@makaio/build-tooling/tsgo-declarations';
+import { workflowExtensionConfig } from './build-config.js';
 
-await build({
-  ...defineExtensionConfig({
-    entry: {
-      cli: './src/cli.ts',
-    },
-  }),
-});
+await build(workflowExtensionConfig);
 
 emitDeclarations({ packageDir: import.meta.dirname });

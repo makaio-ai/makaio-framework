@@ -10,7 +10,16 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { CliSubcommandEntry, CliContribution, FieldSchema } from '@makaio/kernel/cli';
 import { INTERACTIVE_SUBCOMMAND, getMeta, isBooleanSchema, isNumberSchema } from '@makaio/kernel/cli';
 import { toCliLongOptionName } from './flag-names.js';
-import { createProcessCommandContext, evaluateBeforeRunGate } from './command-runtime.js';
+import {
+  createProcessCommandContext,
+  createProcessCommandSignalContext,
+  disposeResolvedBusForCommand,
+  evaluateBeforeRunGate,
+  getAuthorizedProvideBus,
+  reportCommandFailure,
+  resolveContributionBus,
+} from './command-runtime.js';
+import type { ResolvedCliBus } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
 import { findOrCreateCommand, claimSubcommandName, type CommandInstance } from './command-tree.js';
 
@@ -57,33 +66,39 @@ export function registerContribution(
 
   for (const sub of contribution.subcommands) {
     if (!claimSubcommandName(cmd, sub.name, `${contribution.name} ${sub.name}`, 'contribution')) continue;
-    registerSubcommand(cmd, sub, bus, connectionError, contribution.beforeRun);
+    registerSubcommand(cmd, sub, bus, connectionError, contribution.beforeRun, getAuthorizedProvideBus(contribution));
   }
 
   if (created && contribution.interactive) {
     const interactiveHandler = contribution.interactive;
     const contributionBeforeRun = contribution.beforeRun;
+    const contributionProvideBus = getAuthorizedProvideBus(contribution);
     cmd.action(async () => {
       if (!hasInteractiveTerminal()) {
         console.error(formatInteractiveTerminalError(contribution.name));
         process.exitCode = 1;
         return;
       }
-      const gate = await evaluateBeforeRunGate(
-        contributionBeforeRun,
-        { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus },
-        connectionError,
-      );
-      if (!gate.allowed) {
-        console.error(gate.message);
-        process.exitCode = gate.exitCode;
-        return;
-      }
+      const signalContext = createProcessCommandSignalContext();
+      let resolved: ResolvedCliBus | undefined;
       try {
-        await interactiveHandler({ bus });
+        resolved = await resolveContributionBus(bus, contributionProvideBus, INTERACTIVE_SUBCOMMAND, {}, process.cwd());
+        const gate = await evaluateBeforeRunGate(
+          contributionBeforeRun,
+          { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
+          connectionError,
+        );
+        if (!gate.allowed) {
+          console.error(gate.message);
+          process.exitCode = gate.exitCode;
+          return;
+        }
+        await interactiveHandler({ bus: resolved.bus, signal: signalContext.signal });
       } catch (err) {
-        console.error(`Command failed:`, err instanceof Error ? err.message : err);
-        process.exitCode = 1;
+        reportCommandFailure(err);
+      } finally {
+        signalContext.cleanup();
+        await disposeResolvedBusForCommand(resolved);
       }
     });
   }
@@ -99,6 +114,7 @@ export function registerContribution(
  * @param bus - Pre-connected bus instance, or `null` when the connection failed.
  * @param connectionError - Human-readable reason the bus connection failed.
  * @param beforeRun - Optional pre-execution gate from the contribution.
+ * @param provideBus - Optional embedded bus factory from the contribution.
  */
 function registerSubcommand(
   parent: CommandInstance,
@@ -106,6 +122,7 @@ function registerSubcommand(
   bus: IMakaioBus | null,
   connectionError?: string,
   beforeRun?: CliContribution['beforeRun'],
+  provideBus?: CliContribution['provideBus'],
 ): void {
   const cmd = parent.command(entry.name).description(entry.description);
 
@@ -133,25 +150,34 @@ function registerSubcommand(
       return;
     }
 
-    const gate = await evaluateBeforeRunGate(
-      beforeRun,
-      { subcommandName: entry.name, args: parsed.data as Record<string, unknown>, bus },
-      connectionError,
-    );
-    if (!gate.allowed) {
-      console.error(gate.message);
-      process.exitCode = gate.exitCode;
-      return;
-    }
-
-    const { context, cleanup } = createProcessCommandContext(parsed.data, bus);
+    const signalContext = createProcessCommandSignalContext();
+    let resolved: ResolvedCliBus | undefined;
     try {
+      resolved = await resolveContributionBus(
+        bus,
+        provideBus,
+        entry.name,
+        parsed.data as Record<string, unknown>,
+        process.cwd(),
+      );
+      const gate = await evaluateBeforeRunGate(
+        beforeRun,
+        { subcommandName: entry.name, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
+        connectionError,
+      );
+      if (!gate.allowed) {
+        console.error(gate.message);
+        process.exitCode = gate.exitCode;
+        return;
+      }
+
+      const { context } = createProcessCommandContext(parsed.data, resolved.bus, signalContext);
       await entry.handler(context);
     } catch (err) {
-      console.error(`Command failed:`, err instanceof Error ? err.message : err);
-      process.exitCode = 1;
+      reportCommandFailure(err);
     } finally {
-      cleanup();
+      signalContext.cleanup();
+      await disposeResolvedBusForCommand(resolved);
     }
   });
 }

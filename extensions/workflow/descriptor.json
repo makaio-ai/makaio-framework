@@ -11,6 +11,7 @@
   "cli": {
     "name": "workflow",
     "description": "Run Makaio workflows",
+    "canProvideBus": true,
     "subcommands": [
       {
         "name": "run",
