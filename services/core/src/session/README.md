@@ -165,7 +165,6 @@ session/
 ├── adapter-registry.ts              # adapterName → adapterId resolution
 ├── selection-utils.ts                # Adapter/selection normalization
 ├── fallback-runtime-options.ts       # Fallback model/runtime selection
-├── attachment-artifacts.ts           # Attachment artifact creation
 ├── capability-expansion.ts           # Capability expansion logic
 ├── extension-context.ts              # Extension runtime integration
 ├── constants.ts                      # Shared constants

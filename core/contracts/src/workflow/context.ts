@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ArtifactQueryRequestSchema, ArtifactScopeSchema } from '../artifact/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Context Source (Pull Pipeline)
@@ -6,11 +7,15 @@ import { z } from 'zod';
 
 /**
  * Artifact-query context source — resolves context from the artifact system.
+ *
+ * Uses the generic {@link ArtifactQueryRequestSchema} so any combination of
+ * `kind`, `scope`, `indexed`, `currentOnly`, etc. can be expressed without
+ * duplicating query vocabulary here.
  */
 export const ArtifactQuerySourceSchema = z.object({
   type: z.literal('artifact-query'),
-  /** Artifact filter (type, metadata fields, etc.). */
-  filter: z.record(z.string(), z.unknown()),
+  /** Structured artifact query — all fields are optional and composed with AND semantics. */
+  query: ArtifactQueryRequestSchema,
   /** Selection mode: 'latest' returns the most recent match, 'all' returns all matches. */
   select: z.enum(['latest', 'all']),
   /** When true, missing results do not fail the context resolution. */
@@ -38,6 +43,13 @@ export const BusRequestSourceSchema = z.object({
  */
 export const ContextSourceSchema = z.discriminatedUnion('type', [ArtifactQuerySourceSchema, BusRequestSourceSchema]);
 
+/** Artifact-query context source — resolves context from the artifact store. */
+export type ArtifactQuerySource = z.infer<typeof ArtifactQuerySourceSchema>;
+
+/** Bus-request context source — resolves context via a typed bus RPC. */
+export type BusRequestSource = z.infer<typeof BusRequestSourceSchema>;
+
+/** Discriminated union of all context source types. */
 export type ContextSource = z.infer<typeof ContextSourceSchema>;
 
 // ─────────────────────────────────────────────────────────────
@@ -45,14 +57,21 @@ export type ContextSource = z.infer<typeof ContextSourceSchema>;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Artifact publish target — persists step output as an artifact.
+ * Artifact publish target — persists step output as a new artifact revision.
+ *
+ * `kind` and `schemaVersion` together identify the artifact kind registration
+ * that the artifact service will use to validate and index the produced revision.
+ * `scope` follows the open-ended {@link ArtifactScopeSchema} so product-owned
+ * scope levels (e.g. `'project'`) do not require framework changes.
  */
 export const ArtifactPublishTargetSchema = z.object({
   type: z.literal('artifact'),
-  /** Artifact type string (e.g., 'station-output', 'station-feedback'). */
-  artifactType: z.string().min(1),
-  /** Artifact scope level. Product domains use `external` metadata instead of framework-owned names. */
-  scope: z.enum(['global', 'workspace', 'worktree', 'session', 'external']),
+  /** Artifact kind string (e.g. `'station-output'`, `'implementation-plan'`). */
+  kind: z.string().min(1),
+  /** Schema version that the artifact service will use to validate the `data` payload. */
+  schemaVersion: z.string().min(1),
+  /** Scope at which this artifact revision is relevant. */
+  scope: ArtifactScopeSchema,
   /** Additional metadata to attach to the artifact. */
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -80,6 +99,13 @@ export const ContextPublishTargetSchema = z.discriminatedUnion('type', [
   BusEventPublishTargetSchema,
 ]);
 
+/** Artifact publish target — persists step output as a new artifact revision. */
+export type ArtifactPublishTarget = z.infer<typeof ArtifactPublishTargetSchema>;
+
+/** Bus-event publish target — emits step output as a bus event. */
+export type BusEventPublishTarget = z.infer<typeof BusEventPublishTargetSchema>;
+
+/** Discriminated union of all context publish target types. */
 export type ContextPublishTarget = z.infer<typeof ContextPublishTargetSchema>;
 
 // ─────────────────────────────────────────────────────────────

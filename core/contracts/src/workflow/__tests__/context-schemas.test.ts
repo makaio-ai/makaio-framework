@@ -14,20 +14,25 @@ import {
 // ─────────────────────────────────────────────────────────────
 
 describe('ContextSourceSchema', () => {
-  it('accepts an artifact-query source', () => {
+  it('accepts an artifact-query source using the generic artifact query shape', () => {
     const result = ArtifactQuerySourceSchema.parse({
       type: 'artifact-query',
-      filter: { type: 'station-output', 'metadata.station': 'requirements-analysis' },
+      query: {
+        kind: 'implementation-plan',
+        scope: { level: 'project', ids: { projectId: 'project-1' } },
+        currentOnly: true,
+        indexed: { status: 'approved' },
+      },
       select: 'latest',
     });
-    expect(result.type).toBe('artifact-query');
-    expect(result.select).toBe('latest');
+
+    expect(result.query.kind).toBe('implementation-plan');
   });
 
   it('accepts an artifact-query source selecting all', () => {
     const result = ArtifactQuerySourceSchema.parse({
       type: 'artifact-query',
-      filter: { type: 'station-feedback' },
+      query: { kind: 'station-feedback' },
       select: 'all',
       optional: true,
     });
@@ -35,10 +40,10 @@ describe('ContextSourceSchema', () => {
     expect(result.optional).toBe(true);
   });
 
-  it('defaults optional to false when omitted', () => {
+  it('defaults optional to undefined when omitted', () => {
     const result = ArtifactQuerySourceSchema.parse({
       type: 'artifact-query',
-      filter: { type: 'station-output' },
+      query: { kind: 'station-output' },
       select: 'latest',
     });
     expect(result.optional).toBeUndefined();
@@ -63,7 +68,7 @@ describe('ContextSourceSchema', () => {
     ).toThrow();
   });
 
-  it('rejects artifact-query without filter', () => {
+  it('rejects artifact-query without query', () => {
     expect(() =>
       ContextSourceSchema.parse({
         type: 'artifact-query',
@@ -76,7 +81,7 @@ describe('ContextSourceSchema', () => {
     expect(() =>
       ContextSourceSchema.parse({
         type: 'artifact-query',
-        filter: { type: 'station-output' },
+        query: { kind: 'station-output' },
         select: 'first',
       }),
     ).toThrow();
@@ -88,16 +93,17 @@ describe('ContextSourceSchema', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('ContextPublishTargetSchema', () => {
-  it('accepts an artifact publish target', () => {
+  it('accepts an artifact publish target using kind and schemaVersion', () => {
     const result = ArtifactPublishTargetSchema.parse({
       type: 'artifact',
-      artifactType: 'station-output',
-      scope: 'workspace',
+      kind: 'station-output',
+      schemaVersion: '1',
+      scope: { level: 'workspace', ids: { workspaceId: 'workspace-1' } },
       metadata: { station: 'requirements-analysis' },
     });
-    expect(result.type).toBe('artifact');
-    expect(result.artifactType).toBe('station-output');
-    expect(result.scope).toBe('workspace');
+
+    expect(result.kind).toBe('station-output');
+    expect(result.scope.level).toBe('workspace');
   });
 
   it('accepts a bus-event publish target', () => {
@@ -118,11 +124,12 @@ describe('ContextPublishTargetSchema', () => {
     ).toThrow();
   });
 
-  it('rejects artifact target without artifactType', () => {
+  it('rejects artifact target without kind', () => {
     expect(() =>
       ContextPublishTargetSchema.parse({
         type: 'artifact',
-        scope: 'workspace',
+        schemaVersion: '1',
+        scope: { level: 'workspace', ids: { workspaceId: 'workspace-1' } },
       }),
     ).toThrow();
   });

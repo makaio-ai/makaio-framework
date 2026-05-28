@@ -65,13 +65,6 @@ export { CONNECTOR_SWAP_DEFAULT_PIPELINE } from './constants.js';
 // Connector swap warning policy is host-owned.
 export { pickFallbackRuntimeOptions, type FallbackRuntimeOptions } from './fallback-runtime-options.js';
 export { assembleForkContext } from './context/assemble-fork-context.js';
-export {
-  createAttachmentArtifacts,
-  type AttachmentArtifactInput,
-  type AttachmentArtifactMetadata,
-  type StoreArtifactFn,
-  type StoreArtifactResult,
-} from './attachment-artifacts.js';
 
 export type { ISessionOrchestrator } from './session-orchestrator.js';
 

@@ -12,7 +12,6 @@ export {
   buildTurnInitiator,
   CONNECTOR_SWAP_DEFAULT_PIPELINE,
   ContextWindowTracker,
-  createAttachmentArtifacts,
   createSessionExtensionContext,
   ensureAgentCwd,
   ensureAgentModel,
@@ -96,8 +95,6 @@ export {
 } from './session/index.js';
 export type {
   AgentContextState,
-  AttachmentArtifactInput,
-  AttachmentArtifactMetadata,
   BuildContextOptions,
   ContextAssemblyResult,
   ContextWindowTrackerConfig,
@@ -120,8 +117,6 @@ export type {
   SessionLoggerOptions,
   SessionPreviewMaps,
   StartTurnOptions,
-  StoreArtifactFn,
-  StoreArtifactResult,
   TurnCompleteCallback,
   TurnCompletionResult,
   TurnConfig,
@@ -129,6 +124,7 @@ export type {
   TurnResult,
   TurnStateChange,
 } from './session/index.js';
+export { ArtifactSchemaRegistry, createArtifactKindContributionProcessor } from './artifact/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
 export type {
@@ -200,6 +196,8 @@ export type {
 } from './canonical-model/index.js';
 export { activateProviderContext, activateProviderContextStrict } from './provider-context/index.js';
 export {
+  artifactSchemaRegistryPackage,
+  ArtifactSchemaRegistryToken,
   capabilityPackage,
   CapabilityToken,
   createModelRegistryPackage,

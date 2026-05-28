@@ -32,6 +32,20 @@ async function assertTableExists(db: MakaioDatabase, tableName: string): Promise
   expect(rows).toHaveLength(1);
 }
 
+/**
+ * Assert that no sqlite_master row exists for the given table name.
+ * @param db - Drizzle SQLite database handle.
+ * @param tableName - SQLite table name to check.
+ */
+async function assertTableAbsent(db: MakaioDatabase, tableName: string): Promise<void> {
+  const rows = await db.all<{ name: string }>(sql`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ${tableName}
+  `);
+  expect(rows).toHaveLength(0);
+}
+
 describe('runMigrations', () => {
   it('creates the expected post-migration schema', async () => {
     const { db, close } = await createDatabaseClient({ url: ':memory:' });
@@ -42,7 +56,9 @@ describe('runMigrations', () => {
       // Core session tables — declared in @makaio/services-core
       await assertTableExists(db, 'sessions');
       await assertTableExists(db, 'messages');
+      await assertTableExists(db, 'messages_fts');
       await assertTableExists(db, 'agents');
+      await assertTableAbsent(db, 'artifacts_revisions_fts');
 
       // Harness table — declared in @makaio/services-core (framework tier)
       await assertTableExists(db, 'harness_definitions');

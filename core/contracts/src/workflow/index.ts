@@ -106,7 +106,16 @@ export {
   ResolvedContextEntrySchema,
   ContextBundleSchema,
 } from './context.js';
-export type { ContextSource, ContextPublishTarget, ResolvedContextEntry, ContextBundle } from './context.js';
+export type {
+  ArtifactQuerySource,
+  BusRequestSource,
+  ContextSource,
+  ArtifactPublishTarget,
+  BusEventPublishTarget,
+  ContextPublishTarget,
+  ResolvedContextEntry,
+  ContextBundle,
+} from './context.js';
 export type {
   BusRequestWorkflowStepBlockRun,
   RegisteredStepBlock,

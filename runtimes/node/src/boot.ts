@@ -51,6 +51,7 @@ import {
 } from '@makaio/subsystem-adapter';
 import {
   createModelRegistryPackage,
+  createArtifactKindContributionProcessor,
   createToolContributionProcessor,
   createWorkflowBlockContributionProcessor,
   FrameworkServicesCoreNamespaces,
@@ -457,6 +458,7 @@ export async function bootMakaioRuntimeCore(
       }),
     );
     coordinator.registerContributionProcessor(createLogImportContributionProcessor());
+    coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
     coordinator.registerContributionProcessor(createWorkflowBlockContributionProcessor());
     if (options.routeGraphBuilder) {
