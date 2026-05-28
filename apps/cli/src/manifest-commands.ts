@@ -25,6 +25,7 @@ import {
   getAuthorizedProvideBus,
   reportCommandFailure,
   resolveContributionBus,
+  shouldStopForCommandSignal,
 } from './command-runtime.js';
 import type { ResolvedCliBus } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
@@ -240,11 +241,13 @@ async function resolveAndExecute(
       parsed.data as Record<string, unknown>,
       process.cwd(),
     );
+    if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
       contribution.beforeRun,
       { subcommandName, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
       ctx.connectionError,
     );
+    if (shouldStopForCommandSignal(signalContext.signal)) return;
     if (!gate.allowed) {
       console.error(gate.message);
       process.exitCode = gate.exitCode;
@@ -254,7 +257,9 @@ async function resolveAndExecute(
     const { context } = createProcessCommandContext(parsed.data, resolved.bus, signalContext);
     await entry.handler(context);
   } catch (err) {
-    reportCommandFailure(err);
+    if (!shouldStopForCommandSignal(signalContext.signal)) {
+      reportCommandFailure(err);
+    }
   } finally {
     signalContext.cleanup();
     await disposeResolvedBusForCommand(resolved);
@@ -314,11 +319,13 @@ async function resolveAndExecuteInteractive(
       {},
       process.cwd(),
     );
+    if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
       contribution.beforeRun,
       { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
       ctx.connectionError,
     );
+    if (shouldStopForCommandSignal(signalContext.signal)) return;
     if (!gate.allowed) {
       console.error(gate.message);
       process.exitCode = gate.exitCode;
@@ -327,7 +334,9 @@ async function resolveAndExecuteInteractive(
 
     await contribution.interactive({ bus: resolved.bus, signal: signalContext.signal });
   } catch (err) {
-    reportCommandFailure(err);
+    if (!shouldStopForCommandSignal(signalContext.signal)) {
+      reportCommandFailure(err);
+    }
   } finally {
     signalContext.cleanup();
     await disposeResolvedBusForCommand(resolved);

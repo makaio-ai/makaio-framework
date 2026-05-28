@@ -248,6 +248,19 @@ export const StepRunConfigSchema = z
 export type StepRunConfig = z.infer<typeof StepRunConfigSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Cancellation constants
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Human-readable reason string placed in step error fields and abort-signal
+ * reasons when a workflow is cancelled.
+ *
+ * Used by orchestrators, step executors, worker-pool dispatch, and gate
+ * coordinators to ensure consistent messaging across the execution pipeline.
+ */
+export const WORKFLOW_CANCELLED_REASON = 'Workflow cancelled';
+
+// ─────────────────────────────────────────────────────────────
 // Step Run Result (output from a StepRunner)
 // ─────────────────────────────────────────────────────────────
 

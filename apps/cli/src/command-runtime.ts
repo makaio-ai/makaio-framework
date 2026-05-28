@@ -245,6 +245,19 @@ export function disconnectBusSafely(bus: IMakaioBus): void {
   }
 }
 
+/**
+ * Stop command dispatch once the process-backed command signal has fired.
+ *
+ * The signal handler already set `process.exitCode` to the conventional
+ * signal-specific value. Pre-run gates must not run after that point or
+ * overwrite the signal exit with their own policy/connection failure code.
+ * @param signal - Command abort signal for this invocation.
+ * @returns Whether command dispatch should return immediately.
+ */
+export function shouldStopForCommandSignal(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
 // ---------------------------------------------------------------------------
 // beforeRun gate — shared between schema-adapter and manifest-commands
 // ---------------------------------------------------------------------------

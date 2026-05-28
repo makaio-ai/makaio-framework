@@ -187,19 +187,23 @@ function subscribeAgentEvents(
  */
 async function enableFullAccessApprovalPolicy(ctx: CommandContext<PromptArgs>, sessionId: string): Promise<void> {
   const bus = requireBus(ctx);
-  const { session } = await bus.request(SessionSubjects.get, { sessionId });
+  const { session } = await bus.request(SessionSubjects.get, { sessionId }, { signal: ctx.signal });
   if (session && session.status !== 'active') {
     throw new Error(`Session is not active: ${sessionId}`);
   }
 
   if (!session) {
-    await bus.request(SessionSubjects.create, { sessionId });
+    await bus.request(SessionSubjects.create, { sessionId }, { signal: ctx.signal });
   }
 
-  const update = await bus.request(SessionStorageSubjects.update, {
-    sessionId,
-    approvalPolicyOverride: 'full-access',
-  });
+  const update = await bus.request(
+    SessionStorageSubjects.update,
+    {
+      sessionId,
+      approvalPolicyOverride: 'full-access',
+    },
+    { signal: ctx.signal },
+  );
   if (!update.success) {
     throw new Error(`Failed to set full-access approval policy for session: ${sessionId}`);
   }
@@ -294,14 +298,19 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
       signal,
       timeoutMs: args.timeout * 1000,
     });
+    completionPromise.catch(() => undefined);
 
-    await bus.request(SessionSubjects.sendMessage, {
-      sessionId,
-      message: promptText,
-      source: 'extension',
-      extensionId: 'prompt',
-      ...(agent !== undefined && { agent }),
-    });
+    await bus.request(
+      SessionSubjects.sendMessage,
+      {
+        sessionId,
+        message: promptText,
+        source: 'extension',
+        extensionId: 'prompt',
+        ...(agent !== undefined && { agent }),
+      },
+      { signal },
+    );
 
     const completionCtx = await completionPromise;
 
@@ -315,7 +324,7 @@ export async function handlePrompt(ctx: CommandContext<PromptArgs>): Promise<voi
 
     ctx.setExitCode(formatter.flush(turnResult));
   } catch (err) {
-    handleCommandError(err, args.timeout, output, signal, ctx.setExitCode.bind(ctx));
+    handleCommandError(resolveCommandError(err, signal), args.timeout, output, signal, ctx.setExitCode.bind(ctx));
   } finally {
     for (const cleanup of cleanups) {
       cleanup();
@@ -350,6 +359,21 @@ async function resolvePromptText(
     return null;
   }
   return stdin.replace(/\r?\n$/, '');
+}
+
+/**
+ * Normalize generic request-abort errors into the stable CLI abort sentinel.
+ * @param err - Caught command error.
+ * @param signal - Command abort signal.
+ * @returns Original error, or an abort-classified error when the command signal fired.
+ */
+function resolveCommandError(err: unknown, signal: AbortSignal): unknown {
+  if (signal.aborted && classifyCliCommandError(err) === 'failure') {
+    const abort = new Error(String(signal.reason ?? 'Command aborted'));
+    abort.name = 'OnceAbortError';
+    return abort;
+  }
+  return err;
 }
 
 /**

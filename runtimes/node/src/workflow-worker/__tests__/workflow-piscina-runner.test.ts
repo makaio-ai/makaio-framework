@@ -1,15 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowWorkerConfig } from '@makaio/contracts';
 import type { WorkflowPiscinaRunnerOptions } from '../types.js';
+import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 
 // Mock PiscinaPoolRunner before importing the class under test.
 const mockPoolRun = vi.fn();
+const mockMessageListeners = new Set<(message: unknown) => void>();
 
 vi.mock('../../workflow-step-runner/piscina-pool-runner.js', () => ({
   PiscinaPoolRunner: class MockPiscinaPoolRunner {
     public constructor(_options: WorkflowPiscinaRunnerOptions) {}
 
     public run = mockPoolRun;
+    public onMessage(listener: (message: unknown) => void): () => void {
+      mockMessageListeners.add(listener);
+      return () => mockMessageListeners.delete(listener);
+    }
     public dispose = vi.fn();
   },
 }));
@@ -53,9 +59,40 @@ function makeOptions(): WorkflowPiscinaRunnerOptions {
   };
 }
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+}
+
+/**
+ * Create a promise whose settlement is controlled by the test.
+ * @returns Deferred promise controls.
+ */
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Emit a mocked Piscina worker message to all active listeners.
+ * @param message - Message payload to deliver.
+ */
+function emitPoolMessage(message: unknown): void {
+  for (const listener of mockMessageListeners) {
+    listener(message);
+  }
+}
+
 describe('WorkflowPiscinaRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMessageListeners.clear();
   });
 
   it('passes config and construction-time manifest to pool.run()', async () => {
@@ -116,5 +153,42 @@ describe('WorkflowPiscinaRunner', () => {
     const runner = new WorkflowPiscinaRunner(makeOptions());
 
     await expect(runner.run(makeConfig(), new AbortController().signal)).rejects.toThrow('Worker thread crashed');
+  });
+
+  it('resolves readiness from the matching worker ready message', async () => {
+    const result = createDeferred<{ executionId: string; workflowId: string; status: 'completed' }>();
+    mockPoolRun.mockReturnValueOnce(result.promise);
+    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const config = makeConfig();
+
+    const run = runner.runWithReadiness(config, new AbortController().signal);
+
+    emitPoolMessage(createWorkflowWorkerReadyMessage('other-exec', config.cancelSubject));
+    await expect(Promise.race([run.ready.then(() => 'ready'), Promise.resolve('pending')])).resolves.toBe('pending');
+
+    emitPoolMessage(createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, ['adapter-a']));
+    await expect(run.ready).resolves.toMatchObject({ adapters: ['adapter-a'] });
+    result.resolve({ executionId: config.executionId, workflowId: config.workflowId, status: 'completed' });
+    await expect(run.result).resolves.toMatchObject({ status: 'completed' });
+  });
+
+  it('rejects readiness when the worker result rejects before ready', async () => {
+    const error = new Error('worker crashed');
+    mockPoolRun.mockRejectedValueOnce(error);
+    const runner = new WorkflowPiscinaRunner(makeOptions());
+
+    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
+
+    await expect(run.ready).rejects.toThrow('worker crashed');
+    await expect(run.result).rejects.toBe(error);
+  });
+
+  it('rejects readiness when the worker completes before ready', async () => {
+    mockPoolRun.mockResolvedValueOnce({ executionId: 'test-exec', workflowId: 'test-workflow', status: 'completed' });
+    const runner = new WorkflowPiscinaRunner(makeOptions());
+
+    const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
+
+    await expect(run.ready).rejects.toThrow('Workflow worker completed before ready signal: test-exec');
   });
 });

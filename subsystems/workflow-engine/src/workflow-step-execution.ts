@@ -1,6 +1,7 @@
 import type { WorkflowExpressionContext } from '@makaio/expression';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
+  WORKFLOW_CANCELLED_REASON,
   SubagentSubjects,
   JsonValueSchema,
   type AgentWorkflowStep,
@@ -157,7 +158,7 @@ function failedWorkerStepResult(error: unknown, startedAt: number): StepRunResul
  * @returns Failed step result carrying the workflow cancellation reason.
  */
 function cancelledWorkerStepResult(startedAt: number): StepRunResult {
-  return { status: 'failed', error: 'Workflow cancelled', telemetry: { duration: performance.now() - startedAt } };
+  return { status: 'failed', error: WORKFLOW_CANCELLED_REASON, telemetry: { duration: performance.now() - startedAt } };
 }
 
 /**
@@ -206,7 +207,7 @@ async function spawnAgentSubagentInWorker(
 
   const { subagentId } = spawnResult.data;
   if (signal?.aborted) {
-    await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+    await bus.request(SubagentSubjects.kill, { subagentId, reason: WORKFLOW_CANCELLED_REASON }).catch(() => {});
     return { status: 'failed', result: cancelledWorkerStepResult(startedAt) };
   }
 
@@ -263,7 +264,7 @@ export async function executeAgentStepInWorker(params: ExecuteAgentStepInWorkerP
   const onAbort = (): void => {
     abortedWhileWaiting = true;
     if (subagentId !== undefined) {
-      void bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+      void bus.request(SubagentSubjects.kill, { subagentId, reason: WORKFLOW_CANCELLED_REASON }).catch(() => {});
     }
   };
 
@@ -273,7 +274,7 @@ export async function executeAgentStepInWorker(params: ExecuteAgentStepInWorkerP
 
     subagentId = spawn.subagentId;
     if (signal?.aborted) {
-      await bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow cancelled' }).catch(() => {});
+      await bus.request(SubagentSubjects.kill, { subagentId, reason: WORKFLOW_CANCELLED_REASON }).catch(() => {});
       return cancelledWorkerStepResult(startedAt);
     }
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -285,7 +286,7 @@ export async function executeAgentStepInWorker(params: ExecuteAgentStepInWorkerP
     const duration = performance.now() - startedAt;
 
     if (abortedWhileWaiting || signal?.aborted) {
-      return { status: 'failed', error: 'Workflow cancelled', telemetry: { duration } };
+      return { status: 'failed', error: WORKFLOW_CANCELLED_REASON, telemetry: { duration } };
     }
 
     if (awaitResult.status !== 'completed') {
@@ -342,6 +343,11 @@ export interface ExecuteGateStepInWorkerParams {
  * The main-process handler registers the pending resolution promise, emits
  * `gate.requested`, and awaits the user's `gate.respond` response — ensuring
  * the race-safe ordering is handled centrally.
+ *
+ * When `signal` is present it is forwarded to the transport-level request so
+ * the in-flight RPC is structurally cancelled when the workflow is aborted.
+ * The `gate.respond` cleanup path also fires on abort so the coordinator is
+ * notified regardless of whether the transport cancellation wins the race.
  * @param params - Gate step execution parameters.
  * @returns Terminal step result with status and telemetry.
  */
@@ -350,24 +356,39 @@ export async function executeGateStepInWorker(params: ExecuteGateStepInWorkerPar
   const startedAt = performance.now();
 
   if (signal?.aborted) {
-    return { status: 'failed', error: 'Workflow cancelled', telemetry: { duration: performance.now() - startedAt } };
+    return {
+      status: 'failed',
+      error: WORKFLOW_CANCELLED_REASON,
+      telemetry: { duration: performance.now() - startedAt },
+    };
   }
 
   let abortCleanup: (() => void) | undefined;
 
   try {
-    const approvalPromise = bus.request(WorkflowSubjects.gate.awaitApproval, {
-      executionId,
-      stepId: step.id,
-      stepType: 'gate',
-      workflowId,
-      workflowName,
-      title: resolvedTitle,
-      message: resolvedPrompt,
-      autoAction: step.autoAction,
-      timeoutMs: typeof step.timeoutMs === 'number' ? step.timeoutMs : null,
-      openedAt: Date.now(),
-    });
+    const gateTimeout = typeof step.timeoutMs === 'number' ? step.timeoutMs : null;
+    // The bus request timeout must exceed the gate's own timeout so the central
+    // handler can resolve (approve/reject by timeout) and send a response before
+    // the transport request budget expires. A 5 000 ms margin is sufficient for
+    // the handler's synchronous resolution path.
+    const requestTimeout = gateTimeout === null ? 0 : gateTimeout + 5_000;
+
+    const approvalPromise = bus.request(
+      WorkflowSubjects.gate.awaitApproval,
+      {
+        executionId,
+        stepId: step.id,
+        stepType: 'gate',
+        workflowId,
+        workflowName,
+        title: resolvedTitle,
+        message: resolvedPrompt,
+        autoAction: step.autoAction,
+        timeoutMs: gateTimeout,
+        openedAt: Date.now(),
+      },
+      { timeout: requestTimeout, signal },
+    );
 
     const abortPromise = new Promise<never>((_resolve, reject) => {
       const onAbort = (): void => {
@@ -376,10 +397,10 @@ export async function executeGateStepInWorker(params: ExecuteGateStepInWorkerPar
             executionId,
             stepId: step.id,
             action: 'reject',
-            reason: 'Workflow cancelled',
+            reason: WORKFLOW_CANCELLED_REASON,
           })
           .catch(() => {});
-        reject(new Error('Workflow cancelled'));
+        reject(new Error(WORKFLOW_CANCELLED_REASON));
       };
 
       if (signal?.aborted) {
@@ -402,6 +423,13 @@ export async function executeGateStepInWorker(params: ExecuteGateStepInWorkerPar
     const error = resolution.source === 'user' ? 'Rejected by user' : 'Auto-rejected (timeout)';
     return { status: 'failed', error, telemetry: { duration } };
   } catch (error) {
+    if (signal?.aborted) {
+      return {
+        status: 'failed',
+        error: WORKFLOW_CANCELLED_REASON,
+        telemetry: { duration: performance.now() - startedAt },
+      };
+    }
     return failedWorkerStepResult(error, startedAt);
   } finally {
     abortCleanup?.();

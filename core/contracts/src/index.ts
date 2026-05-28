@@ -552,6 +552,7 @@ export type {
   VariantUpgradeStatus,
 } from './variant/index.js';
 export {
+  WORKFLOW_CANCELLED_REASON,
   AgentWorkflowStepSchema,
   BusEventTriggerSchema,
   BusRequestWorkflowStepSchema,

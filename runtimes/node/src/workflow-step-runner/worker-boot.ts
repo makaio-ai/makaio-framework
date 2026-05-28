@@ -28,6 +28,8 @@ export interface WorkerBusHandle {
 
 /** Handle for worker-local services and adapter instances. */
 export interface WorkerRuntimeHandle {
+  /** Adapter identifiers initialized inside this worker runtime. */
+  readonly adapterIds: readonly string[];
   /** Close worker-local services and adapter instances. */
   close(): Promise<void>;
 }
@@ -140,6 +142,7 @@ export async function bootWorkerRuntime(
   const toolRegistry = new ToolRegistry({ bus: handle.bus });
   const mcpBridge = new McpServerBridgeService(handle.bus);
   const adapters: WorkerLocalAdapter[] = [];
+  const adapterIds: string[] = [];
 
   const closeRuntime = async (): Promise<void> => {
     const adapterCloseResults = await Promise.allSettled(
@@ -186,13 +189,14 @@ export async function bootWorkerRuntime(
       });
       adapters.push(adapter);
       await adapter.init?.();
+      adapterIds.push(adapterId);
     }
   } catch (error) {
     await closeRuntime();
     throw error;
   }
 
-  return { close: closeRuntime };
+  return { adapterIds, close: closeRuntime };
 }
 
 /**

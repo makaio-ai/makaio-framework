@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createWorkflowCancelSubject } from '@makaio/contracts';
+import { WORKFLOW_CANCELLED_REASON, createWorkflowCancelSubject } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { asExecutable, createWorkflowDefinition } from './shared.js';
@@ -299,7 +299,7 @@ describe('WorkflowExecutor Gate Steps', () => {
     const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(execution?.status).toBe('cancelled');
     expect(execution?.steps['gate-step']?.status).toBe('failed');
-    expect(execution?.steps['gate-step']?.error).toBe('Workflow cancelled');
+    expect(execution?.steps['gate-step']?.error).toBe(WORKFLOW_CANCELLED_REASON);
 
     await expect(
       MakaioBus.request(WorkflowSubjects.gate.respond, { executionId, stepId: 'gate-step', action: 'approve' }),

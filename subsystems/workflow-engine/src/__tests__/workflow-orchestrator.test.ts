@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { WorkflowWorkerConfig, JsonValue, WorkflowExecution } from '@makaio/contracts';
 import {
+  WORKFLOW_CANCELLED_REASON,
   defineWorkflow,
   ManualWorkflowTrigger,
   SubagentSubjects,
@@ -11,7 +12,7 @@ import {
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { LoadedWorkflow } from '../workflow-orchestrator.js';
 import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
-import { executeAgentStepInWorker, executeFunctionStep } from '../workflow-step-execution.js';
+import { executeAgentStepInWorker, executeFunctionStep, executeGateStepInWorker } from '../workflow-step-execution.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 
 // ---------------------------------------------------------------------------
@@ -440,7 +441,7 @@ describe('runWorkflowOrchestrator', () => {
       const execution = executions.get('exec-orch-001');
       expect(execution?.status).toBe('cancelled');
       expect(execution?.steps['agent-step']).toMatchObject({ kind: 'executable', status: 'failed' });
-      expect(cancelledEvents).toEqual([{ executionId: 'exec-orch-001', reason: 'Workflow cancelled' }]);
+      expect(cancelledEvents).toEqual([{ executionId: 'exec-orch-001', reason: WORKFLOW_CANCELLED_REASON }]);
     } finally {
       offCancelled();
       cleanup();
@@ -539,7 +540,7 @@ describe('executeFunctionStep', () => {
       signal: controller.signal,
     });
 
-    expect(result).toMatchObject({ status: 'failed', error: 'Workflow cancelled' });
+    expect(result).toMatchObject({ status: 'failed', error: WORKFLOW_CANCELLED_REASON });
   });
 });
 
@@ -563,7 +564,7 @@ describe('executeAgentStepInWorker', () => {
         resolvedPrompt: 'do it',
       });
 
-      expect(result).toMatchObject({ status: 'failed', error: 'Workflow cancelled' });
+      expect(result).toMatchObject({ status: 'failed', error: WORKFLOW_CANCELLED_REASON });
       expect(spawnCalled).toBe(false);
     } finally {
       offSpawn();
@@ -695,7 +696,7 @@ describe('executeAgentStepInWorker', () => {
 
       const result = await promise;
 
-      expect(result).toMatchObject({ status: 'failed', error: 'Workflow cancelled' });
+      expect(result).toMatchObject({ status: 'failed', error: WORKFLOW_CANCELLED_REASON });
       expect(killedSubagents).toEqual(['subagent-race']);
       expect(awaitCalled).toBe(false);
     } finally {
@@ -704,5 +705,126 @@ describe('executeAgentStepInWorker', () => {
       offSpawn();
       cleanup();
     }
+  });
+});
+
+describe('executeGateStepInWorker', () => {
+  /**
+   * Build a real bus instance with the workflow namespace registered and a spy
+   * pre-installed on `request`. The spy short-circuits routing so no handler
+   * registration is needed; it returns a fixed approve response.
+   *
+   * These unit tests pin the worker gate executor's request options and abort
+   * normalization. Real bus routing for worker gates is covered by
+   * worker-entry integration tests, where gate.awaitApproval crosses WebSocket.
+   * @returns Tuple of the fully-typed bus and the `request` spy.
+   */
+  function makeGateBus(): [ReturnType<typeof createBusInstance>, ReturnType<typeof vi.spyOn>] {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    const requestSpy = vi.spyOn(bus, 'request').mockResolvedValue({ action: 'approve', source: 'user' } as never);
+    return [bus, requestSpy];
+  }
+
+  it('passes request timeout derived from gate timeoutMs (timeoutMs + 5s margin)', async () => {
+    const [bus, requestSpy] = makeGateBus();
+
+    await executeGateStepInWorker({
+      step: {
+        id: 'approval',
+        type: 'gate',
+        prompt: 'Approve deploy?',
+        autoAction: 'reject',
+        timeoutMs: 120_000,
+      },
+      bus,
+      executionId: 'exec-gate-timeout',
+      workflowId: 'wf-gate-timeout',
+      workflowName: 'Gate Timeout',
+      resolvedPrompt: 'Approve deploy?',
+      resolvedTitle: 'Approval required',
+    });
+
+    expect(requestSpy).toHaveBeenCalledWith(
+      WorkflowSubjects.gate.awaitApproval,
+      expect.objectContaining({
+        executionId: 'exec-gate-timeout',
+        stepId: 'approval',
+        timeoutMs: 120_000,
+      }),
+      expect.objectContaining({
+        timeout: expect.any(Number),
+      }),
+    );
+    // The bus request timeout is gate timeoutMs + 5 000 ms margin so the central
+    // handler can resolve its own timeout and send a response before the transport
+    // budget expires. Assert the exact value to catch margin regressions.
+    expect(requestSpy.mock.calls[0]?.[2].timeout).toBe(125_000);
+  });
+
+  it('passes timeout: 0 (indefinite) when gate timeoutMs is null', async () => {
+    const [bus, requestSpy] = makeGateBus();
+
+    await executeGateStepInWorker({
+      step: {
+        id: 'approval',
+        type: 'gate',
+        prompt: 'Approve deploy?',
+        autoAction: 'reject',
+        timeoutMs: null,
+      },
+      bus,
+      executionId: 'exec-gate-no-timeout',
+      workflowId: 'wf-gate-no-timeout',
+      workflowName: 'Gate No Timeout',
+      resolvedPrompt: 'Approve deploy?',
+      resolvedTitle: 'Approval required',
+    });
+
+    expect(requestSpy).toHaveBeenCalledWith(
+      WorkflowSubjects.gate.awaitApproval,
+      expect.objectContaining({
+        executionId: 'exec-gate-no-timeout',
+        stepId: 'approval',
+        timeoutMs: null,
+      }),
+      expect.objectContaining({
+        timeout: expect.any(Number),
+      }),
+    );
+    // timeout: 0 means "no automatic timeout" — bus stays open until responded or cancelled.
+    expect(requestSpy.mock.calls[0]?.[2].timeout).toBe(0);
+  });
+
+  it('normalizes transport abort errors to workflow cancellation', async () => {
+    const controller = new AbortController();
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    vi.spyOn(bus, 'request').mockImplementation(async (subject, _payload) => {
+      if (subject === WorkflowSubjects.gate.awaitApproval) {
+        controller.abort();
+        throw new Error('Request aborted');
+      }
+      return { action: 'reject', source: 'user' };
+    });
+
+    const result = await executeGateStepInWorker({
+      step: {
+        id: 'approval',
+        type: 'gate',
+        prompt: 'Approve deploy?',
+        autoAction: 'reject',
+        timeoutMs: null,
+      },
+      bus,
+      executionId: 'exec-gate-cancel',
+      workflowId: 'wf-gate-cancel',
+      workflowName: 'Gate Cancel',
+      resolvedPrompt: 'Approve deploy?',
+      resolvedTitle: 'Approval required',
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ status: 'failed', error: WORKFLOW_CANCELLED_REASON });
   });
 });

@@ -1228,14 +1228,15 @@ describe('registerManifestCommand — embedded bus (provideBus)', () => {
   });
 
   it.each([
-    'SIGINT',
-    'SIGTERM',
-    'SIGHUP',
-  ] as const)('aborts the handler signal when %s arrives during provideBus', async (signal) => {
+    ['SIGINT', 130],
+    ['SIGTERM', 143],
+    ['SIGHUP', 129],
+  ] as const)('stops before beforeRun when %s arrives during provideBus', async (signal, exitCode) => {
     const { bus: embeddedBus } = createMockBus();
     const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
     const subcommandHandler = vi.fn(() => Promise.resolve());
+    const beforeRun = vi.fn(async () => ({ proceed: true as const }));
 
     const contribution: CliContribution = {
       name: 'workflow',
@@ -1246,9 +1247,7 @@ describe('registerManifestCommand — embedded bus (provideBus)', () => {
         process.emit(signal);
         return handle;
       },
-      async beforeRun() {
-        return { proceed: true };
-      },
+      beforeRun,
     };
     const importModule = vi.fn(() => Promise.resolve(contribution));
     const ctx: ManifestCommandContext = {
@@ -1263,10 +1262,53 @@ describe('registerManifestCommand — embedded bus (provideBus)', () => {
 
     await program.parseAsync(['workflow', 'run'], { from: 'user' });
 
-    expect(subcommandHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: expect.objectContaining({ aborted: true }) }),
-    );
+    expect(beforeRun).not.toHaveBeenCalled();
+    expect(subcommandHandler).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(exitCode);
+  });
+
+  it('preserves the signal exit code when SIGTERM arrives during beforeRun', async () => {
+    const { bus: embeddedBus } = createMockBus();
+    const dispose = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const handle: EmbeddedBusHandle = { bus: embeddedBus, dispose };
+    const subcommandHandler = vi.fn(() => Promise.resolve());
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const contribution: CliContribution = {
+      name: 'workflow',
+      description: 'Workflow commands',
+      canProvideBus: true,
+      subcommands: [{ name: 'run', description: 'Run a workflow', schema: z.object({}), handler: subcommandHandler }],
+      async provideBus() {
+        return handle;
+      },
+      async beforeRun() {
+        process.emit('SIGTERM');
+        return { proceed: false, message: 'blocked by policy', exitCode: 42 };
+      },
+    };
+    const importModule = vi.fn(() => Promise.resolve(contribution));
+    const ctx: ManifestCommandContext = {
+      cliEntryPath: '/fake/entry.js',
+      bus: null,
+      hasInteractive: false,
+      importModule,
+    };
+
+    const program = makeProgram();
+    registerManifestCommand(program, subcommandManifest, ctx);
+
+    try {
+      await program.parseAsync(['workflow', 'run'], { from: 'user' });
+
+      expect(subcommandHandler).not.toHaveBeenCalled();
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+      expect(process.exitCode).toBe(143);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it('does not call provideBus when schema validation fails', async () => {

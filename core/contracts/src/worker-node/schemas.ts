@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { JsonObjectContractSchema } from '../shared/json-value.js';
 
 /**
  * Base fields present on every WorkerNode lifecycle event.
@@ -77,10 +77,7 @@ export const WorkerNodeSchemas = {
    * Subject: `worker-node.lifecycle.completed`
    * Type: Event
    */
-  'lifecycle.completed': WorkerNodeLifecycleBaseSchema.extend({
-    /** Final output value produced by the workflow, if any. */
-    result: JsonValueSchema.optional(),
-  }),
+  'lifecycle.completed': WorkerNodeLifecycleBaseSchema,
 
   /**
    * Execution terminated with an error.

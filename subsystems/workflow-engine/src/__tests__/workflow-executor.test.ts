@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, SubagentSubjects, SpawnSubagentRpcRequestSchema } from '@makaio/contracts';
+import {
+  WORKFLOW_CANCELLED_REASON,
+  SessionSubjects,
+  SubagentSubjects,
+  SpawnSubagentRpcRequestSchema,
+  type IWorkflowRunner,
+  type WorkflowRunResult,
+  type WorkflowWorkerConfig,
+} from '@makaio/contracts';
 import { z } from 'zod';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -641,5 +649,143 @@ describe('WorkflowExecutor', () => {
 
     expect(spawnPayloads).toHaveLength(1);
     expect(spawnPayloads[0]?.config.contextMode).toBe('fresh');
+  });
+
+  it('persists cancellation when workflow-level runner aborts before worker finalization', async () => {
+    await setup.workflowExecutor.destroy();
+
+    // The runner is intentionally controlled here: this executor test owns the
+    // parent-side fallback when a workflow-level runner rejects before the
+    // worker can persist terminal state. Real runner/WorkerNode cancellation is
+    // covered by worker-entry and Piscina runner integration tests.
+    let runnerSignal: AbortSignal | undefined;
+    const runner: IWorkflowRunner = {
+      run: vi.fn((_config: WorkflowWorkerConfig, signal: AbortSignal) => {
+        runnerSignal = signal;
+        return new Promise<WorkflowRunResult>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error(String(signal.reason))), { once: true });
+        });
+      }),
+    };
+    setup.workflowExecutor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 }, runner);
+    await setup.workflowExecutor.init();
+
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-runner-cancel-before-worker-finalization',
+      name: 'runner-cancel-before-worker-finalization',
+      steps: [{ id: 'remote', type: 'agent' as const, prompt: 'remote', adapter: 'claude-code' }],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const cancelledExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+        cancelledExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await vi.waitFor(() => expect(runner.run).toHaveBeenCalledOnce());
+
+    const { cancelled } = await MakaioBus.request(WorkflowSubjects.cancel, {
+      executionId,
+      reason: 'dispatch cancelled',
+    });
+
+    expect(cancelled).toBe(true);
+    await vi.waitFor(async () => {
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('cancelled');
+    });
+    expect(runnerSignal?.aborted).toBe(true);
+    expect(runnerSignal?.reason).toBe('dispatch cancelled');
+    expect(cancelledExecutions).toEqual([executionId]);
+  });
+
+  it('cancels runner-managed executions from the latest persisted worker snapshot', async () => {
+    await setup.workflowExecutor.destroy();
+
+    // The controlled runner creates the exact interleaving under review:
+    // worker-owned storage has advanced, then the parent runner rejects on
+    // abort. The invariant under test is parent finalization from that latest
+    // storage snapshot; real worker execution paths are covered separately.
+    const runner: IWorkflowRunner = {
+      run: vi.fn((config: WorkflowWorkerConfig, signal: AbortSignal) => {
+        return new Promise<WorkflowRunResult>((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => {
+              void MakaioBus.request(WorkflowStorageSubjects.updateExecution, {
+                executionId: config.executionId,
+                stepUpdates: {
+                  loop: {
+                    kind: 'composite',
+                    status: 'expanding',
+                    startedAt: Date.now(),
+                    expansion: {
+                      parentStepId: 'loop',
+                      childSteps: [{ id: 'loop.0.waiting', type: 'shell', command: ['echo', 'wait'] }],
+                      stepContext: { 'loop.0.waiting': { item: 'first', index: 0 } },
+                      leafStepIds: ['loop.0.waiting'],
+                    },
+                  },
+                  'loop.0.waiting': { kind: 'executable', status: 'running', startedAt: Date.now() },
+                },
+              }).then(() => reject(new Error(String(signal.reason))));
+            },
+            { once: true },
+          );
+        });
+      }),
+    };
+    setup.workflowExecutor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 }, runner);
+    await setup.workflowExecutor.init();
+
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-runner-cancel-storage-snapshot',
+      name: 'runner-cancel-storage-snapshot',
+      steps: [
+        {
+          id: 'loop',
+          type: 'for-each' as const,
+          collection: 'trigger.items',
+          steps: [{ id: 'waiting', type: 'shell' as const, command: ['echo', 'wait'] }],
+        },
+      ],
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const failedStepEvents: Array<{ executionId: string; stepId: string; stepType: string }> = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.step.failed, (ctx) => {
+        failedStepEvents.push(ctx.payload);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await vi.waitFor(() => expect(runner.run).toHaveBeenCalledOnce());
+
+    const { cancelled } = await MakaioBus.request(WorkflowSubjects.cancel, {
+      executionId,
+      reason: 'dispatch cancelled',
+    });
+
+    expect(cancelled).toBe(true);
+    await vi.waitFor(async () => {
+      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      expect(execution?.status).toBe('cancelled');
+      expect(execution?.steps.loop).toMatchObject({
+        kind: 'composite',
+        status: 'cancelled',
+      });
+      expect(execution?.steps['loop.0.waiting']).toMatchObject({
+        kind: 'executable',
+        status: 'failed',
+        error: WORKFLOW_CANCELLED_REASON,
+      });
+    });
+    expect(failedStepEvents).toContainEqual(
+      expect.objectContaining({ executionId, stepId: 'loop.0.waiting', stepType: 'shell' }),
+    );
   });
 });

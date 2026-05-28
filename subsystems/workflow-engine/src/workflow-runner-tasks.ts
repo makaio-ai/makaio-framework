@@ -1,7 +1,14 @@
-import type { IWorkflowRunner, WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
+import {
+  WORKFLOW_CANCELLED_REASON,
+  type IWorkflowRunner,
+  type WorkflowDefinition,
+  type WorkflowWorkerConfig,
+} from '@makaio/contracts';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { FinalizerDeps } from './workflow-execution-finalizer.js';
-import { completeExecutionWithFailure } from './workflow-execution-finalizer.js';
+import { cancelExecution, completeExecutionWithFailure } from './workflow-execution-finalizer.js';
+import { rebuildSchedulerGraph } from './workflow-scheduler-rebuild.js';
+import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
 export type WorkerOs = 'darwin' | 'linux' | 'win32';
@@ -56,6 +63,68 @@ export function bindWorkflowInputs(
   }
 
   return bound;
+}
+
+/**
+ * Convert an AbortSignal reason into a stable cancellation reason string.
+ * @param signal - AbortSignal attached to the workflow-level runner.
+ * @returns Human-readable cancellation reason.
+ */
+function runnerCancellationReason(signal: AbortSignal): string {
+  if (signal.reason instanceof Error) {
+    return signal.reason.message;
+  }
+  if (typeof signal.reason === 'string' && signal.reason.length > 0) {
+    return signal.reason;
+  }
+  return WORKFLOW_CANCELLED_REASON;
+}
+
+/**
+ * Replace active execution state from a durable snapshot and rebuild any runtime-expanded step metadata.
+ * @param active - Active execution registry entry to refresh.
+ * @param execution - Latest durable execution snapshot.
+ */
+function refreshActiveExecutionFromSnapshot(active: ActiveExecution, execution: ActiveExecution['execution']): void {
+  active.execution = execution;
+  if (active.workflow.steps.length === 0) return;
+
+  const graph = rebuildSchedulerGraph({ workflow: active.workflow, execution });
+  active.stepMap = new Map(Array.from(graph.nodes, ([stepId, node]) => [stepId, node.step]));
+  active.stepContext = new Map(graph.stepContext);
+}
+
+/**
+ * Cancel durable execution state when runner dispatch aborts before worker ownership.
+ *
+ * Workflow-level runners own finalization after the worker orchestrator starts.
+ * If dispatch/preparation/readiness rejects from a cancellation before the worker
+ * can persist terminal state, storage still contains the parent executor's initial
+ * `running` record. This helper reads storage first to avoid overwriting a worker
+ * that has already terminalized the execution.
+ * @param deps - Runner task dependencies.
+ * @param executionId - Workflow execution identifier.
+ * @param signal - Runner AbortSignal that has already been aborted.
+ */
+async function cancelRunningExecutionAfterRunnerAbort(
+  deps: RunnerTaskDeps,
+  executionId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const active = deps.activeExecutions.get(executionId);
+  if (!active || active.execution.status !== 'running') return;
+
+  const finalizerDeps = deps.buildFinalizerDeps();
+  const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
+    executionId,
+  });
+  if (execution?.status !== 'running') return;
+
+  refreshActiveExecutionFromSnapshot(active, execution);
+  const cancelled = await cancelExecution(finalizerDeps, executionId, runnerCancellationReason(signal));
+  if (!cancelled) {
+    console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}: execution not active`);
+  }
 }
 
 /**
@@ -140,6 +209,14 @@ export function buildFileExecutionTask(
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {
+        await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
+          (persistError: unknown) => {
+            console.error(
+              `[WorkflowExecutor] Failed to persist file runner cancellation for ${executionId}:`,
+              persistError,
+            );
+          },
+        );
         return;
       }
       const active = activeExecutions.get(executionId);
@@ -229,6 +306,11 @@ export function buildExecutionTask(
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {
+        await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
+          (persistError: unknown) => {
+            console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}:`, persistError);
+          },
+        );
         return;
       }
       // The runner rejected before the worker could manage the execution

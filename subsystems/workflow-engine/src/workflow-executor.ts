@@ -3,6 +3,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
   SubagentSubjects,
+  WORKFLOW_CANCELLED_REASON,
   createWorkflowCancelSubject,
   type IStepRunner,
   type IWorkflowRunner,
@@ -291,7 +292,7 @@ export class WorkflowExecutor extends BaseService {
 
       const workflowController = this.workflowAbortControllers.get(executionId);
       if (workflowController) {
-        workflowController.abort();
+        workflowController.abort(reason ?? WORKFLOW_CANCELLED_REASON);
         ctx.setResult({ cancelled: true });
         return;
       }

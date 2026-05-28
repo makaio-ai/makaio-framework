@@ -18,6 +18,7 @@ import {
   getAuthorizedProvideBus,
   reportCommandFailure,
   resolveContributionBus,
+  shouldStopForCommandSignal,
 } from './command-runtime.js';
 import type { ResolvedCliBus } from './command-runtime.js';
 import { parseNumericArg } from './cli-arg-parsers.js';
@@ -83,11 +84,13 @@ export function registerContribution(
       let resolved: ResolvedCliBus | undefined;
       try {
         resolved = await resolveContributionBus(bus, contributionProvideBus, INTERACTIVE_SUBCOMMAND, {}, process.cwd());
+        if (shouldStopForCommandSignal(signalContext.signal)) return;
         const gate = await evaluateBeforeRunGate(
           contributionBeforeRun,
           { subcommandName: INTERACTIVE_SUBCOMMAND, args: {}, bus: resolved.bus },
           connectionError,
         );
+        if (shouldStopForCommandSignal(signalContext.signal)) return;
         if (!gate.allowed) {
           console.error(gate.message);
           process.exitCode = gate.exitCode;
@@ -95,7 +98,9 @@ export function registerContribution(
         }
         await interactiveHandler({ bus: resolved.bus, signal: signalContext.signal });
       } catch (err) {
-        reportCommandFailure(err);
+        if (!shouldStopForCommandSignal(signalContext.signal)) {
+          reportCommandFailure(err);
+        }
       } finally {
         signalContext.cleanup();
         await disposeResolvedBusForCommand(resolved);
@@ -160,11 +165,13 @@ function registerSubcommand(
         parsed.data as Record<string, unknown>,
         process.cwd(),
       );
+      if (shouldStopForCommandSignal(signalContext.signal)) return;
       const gate = await evaluateBeforeRunGate(
         beforeRun,
         { subcommandName: entry.name, args: parsed.data as Record<string, unknown>, bus: resolved.bus },
         connectionError,
       );
+      if (shouldStopForCommandSignal(signalContext.signal)) return;
       if (!gate.allowed) {
         console.error(gate.message);
         process.exitCode = gate.exitCode;
@@ -174,7 +181,9 @@ function registerSubcommand(
       const { context } = createProcessCommandContext(parsed.data, resolved.bus, signalContext);
       await entry.handler(context);
     } catch (err) {
-      reportCommandFailure(err);
+      if (!shouldStopForCommandSignal(signalContext.signal)) {
+        reportCommandFailure(err);
+      }
     } finally {
       signalContext.cleanup();
       await disposeResolvedBusForCommand(resolved);
