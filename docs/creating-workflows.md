@@ -143,7 +143,7 @@ const workflow = defineWorkflow('publish-plan-artifact', {
   triggers: [
     BusEventWorkflowTrigger({
       subject: ArtifactSubjects.created,
-      filter: { 'artifact.type': 'draft-plan' },
+      filter: { 'artifact.kind': 'implementation-plan' },
     }),
   ],
 });
@@ -153,14 +153,12 @@ workflow.addBusRequestStep(
   BusRequestStep({
     subject: ArtifactSubjects.create,
     payload: {
-      scope: 'global',
-      type: 'published-plan',
-      mimeType: 'text/markdown',
-      content: '{{ trigger.artifact.content }}',
-      metadata: {
-        sourceArtifactId: '{{ trigger.artifact.id }}',
-        sourceArtifactType: '{{ trigger.artifact.type }}',
-      },
+      kind: 'published-plan',
+      schemaVersion: '1',
+      scope: { level: 'global' },
+      data: { content: '{{ trigger.artifact.data.content }}' },
+      relations: [],
+      actor: { kind: 'system', id: 'workflow' },
     },
     timeoutMs: 10_000,
   }),

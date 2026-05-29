@@ -1,5 +1,5 @@
 export { registerAdapterNameResolver } from './register-adapter-name-resolver.js';
-export { runMigrations, createArtifactsFts5Tables, setupArtifactsFtsSync } from './db-migrations.js';
+export { runMigrations } from './db-migrations.js';
 export {
   loadOrCreateMachineIdentity,
   machineKeysExist,

@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
+import { ArtifactSchemaRegistry } from './artifact/artifact-schema-registry.js';
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
@@ -61,6 +62,17 @@ export const FileSystemToken = extensionToken<FileSystemService>('filesystem');
 export const GitToken = extensionToken<GitService>('git');
 /** Token for the framework subagent orchestration service. */
 export { SubagentServiceToken };
+/** Token for the artifact schema registry service. */
+export const ArtifactSchemaRegistryToken = extensionToken<ArtifactSchemaRegistry>('artifact-schema-registry');
+
+/** Package that starts the framework artifact schema registry. */
+export const artifactSchemaRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: ArtifactSchemaRegistryToken.name,
+  displayName: 'Artifact Schema Registry',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new ArtifactSchemaRegistry(ctx.bus),
+};
 
 /** Package that registers framework session storage handlers. */
 export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
@@ -224,6 +236,7 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
 
 /** Framework packages that are independent of host-specific factories. */
 export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
+  artifactSchemaRegistryPackage,
   sessionStoragePackage,
   sessionBridgePackage,
   sessionClientAccountLinkingPackage,

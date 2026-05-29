@@ -19,6 +19,7 @@ import type { ProviderDefinitionInput } from '../provider/definition.js';
 import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
+import type { AnyArtifactKindDefinition } from '../artifact/index.js';
 
 /**
  * Awaited contribution processor registered with the runtime coordinator.
@@ -91,6 +92,16 @@ export interface ExtensionRuntimeBootContribution<THostContext extends Extension
   readonly configure: (
     context: ExtensionRuntimeBootContext<THostContext>,
   ) => void | (() => void) | readonly (() => void)[];
+}
+
+/**
+ * Executable artifact kind contribution declared by an extension package.
+ */
+export interface ExtensionArtifactKindsContribution {
+  /**
+   * Artifact kind definitions to register during extension activation.
+   */
+  readonly kinds?: readonly AnyArtifactKindDefinition[];
 }
 
 /**
@@ -353,6 +364,20 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * and {@link WorkflowStepBlock} to define blocks with typed Zod schemas.
    */
   readonly workflowBlocks?: ExtensionWorkflowBlocksContribution;
+
+  /**
+   * Artifact kind definitions contributed by this extension.
+   *
+   * Each entry is an executable {@link AnyArtifactKindDefinition} produced by
+   * {@link defineArtifactKind}. The artifact kind contribution processor reads
+   * this field during extension activation and registers each kind with the
+   * {@link ArtifactSchemaRegistry} via the `artifact.kind.register` bus RPC.
+   *
+   * This is runtime registration data, not descriptor metadata. The
+   * `ArtifactSchemaRegistry` package must be started before any extension that
+   * declares artifact kinds.
+   */
+  readonly artifactKinds?: ExtensionArtifactKindsContribution;
 
   /**
    * Bus namespace introspection for this extension.

@@ -20,8 +20,6 @@ export type { FrameworkModuleResolver } from '@makaio/runtime-node';
 export {
   registerAdapterNameResolver,
   runMigrations,
-  createArtifactsFts5Tables,
-  setupArtifactsFtsSync,
   loadOrCreateMachineIdentity,
   machineKeysExist,
   validateMachineKeys,

@@ -1,9 +1,10 @@
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus, NoHandlerError, type IMakaioBus } from '@makaio/bus-core';
-import { MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import { ArtifactSubjects, defineArtifactKind, MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
 import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects } from '@makaio/kernel';
 import {
@@ -198,6 +199,47 @@ export default [bootPackage, targetPackage];
     });
 
     expect(events).toStrictEqual(['boot-configured', 'contribution:boot-fixture.target']);
+  });
+
+  it('registers extension artifactKinds during boot', async () => {
+    const transport = new FakeTransportProvider();
+    const pkg: KernelMakaioExtension = {
+      name: 'artifact-kind-fixture',
+      displayName: 'Artifact Kind Fixture',
+      version: '1.0.0',
+      artifactKinds: {
+        kinds: [
+          defineArtifactKind({
+            kind: 'boot-note',
+            schemaVersion: '1',
+            dataSchema: z.object({ title: z.string() }),
+            conflictPolicy: 'coexist',
+          }),
+        ],
+      },
+    };
+    const descriptor: DiscoveredExtension = {
+      descriptor: {
+        name: 'artifact-kind-fixture',
+        displayName: 'Artifact Kind Fixture',
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { server: true },
+      },
+      extensionPath: tempHome,
+      source: 'local',
+      preloadedModule: { default: pkg },
+    };
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      discovery: new ExplicitDescriptorDiscovery([descriptor]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const listed = await MakaioBus.request(ArtifactSubjects.kind.list, { kind: 'boot-note' });
+
+    expect(listed.kinds.map((kind) => kind.kind)).toEqual(['boot-note']);
   });
 
   it('ignores persisted-disabled runtime owners before framework package selection and runtime boot', async () => {
