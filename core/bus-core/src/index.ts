@@ -101,6 +101,7 @@ export type {
   BusSubscribeMessage,
   BusUnsubscribeMessage,
   BusSubscribeSyncCompleteMessage,
+  BusSubscriptionAckMessage,
   BusHeartbeatMessage,
   BusTransportError,
 } from './types/transports.js';

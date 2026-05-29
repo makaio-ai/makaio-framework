@@ -203,7 +203,15 @@ class FakeWebSocket implements WebSocketLike {
     // subscribe-sync-complete is a transport-internal handshake — exclude from
     // the recorded frame list so count assertions are not affected.
     if (!str.includes('"subscribe-sync-complete"')) {
-      this.sent.push(JSON.parse(str) as Record<string, unknown>);
+      const frame = JSON.parse(str) as Record<string, unknown>;
+      this.sent.push(frame);
+      if ((frame.type === 'subscribe' || frame.type === 'unsubscribe') && typeof frame.ackId === 'string') {
+        queueMicrotask(() => {
+          if (this.readyState === 1) {
+            this.receiveMessage({ type: 'subscription-ack', ackId: frame.ackId });
+          }
+        });
+      }
     }
   }
 
@@ -422,13 +430,14 @@ describe('BusClient public facade', () => {
     const unsubscribe = client.subscribe(AgentSubjects.$all, () => undefined);
 
     const subscribeFrame = await fake.waitSent(1);
-    expect(subscribeFrame).toEqual(msg('subscribe.agent.wildcard'));
+    expect(subscribeFrame).toEqual({ ...msg('subscribe.agent.wildcard'), ackId: expect.any(String) });
 
     unsubscribe();
 
     const unsubscribeFrame = await fake.waitSent(2);
     expect(unsubscribeFrame).toEqual({
       type: 'unsubscribe',
+      ackId: expect.any(String),
       subjects: {
         'agent.*': [],
       },
@@ -445,7 +454,7 @@ describe('BusClient public facade', () => {
     );
 
     const subscribeFrame = await fake.waitSent(1);
-    expect(subscribeFrame).toEqual(msg('subscribe.approval.request'));
+    expect(subscribeFrame).toEqual({ ...msg('subscribe.approval.request'), ackId: expect.any(String) });
 
     fake.receiveMessage({
       type: 'request',
@@ -476,7 +485,7 @@ describe('BusClient public facade', () => {
     );
 
     const subscribeFrame = await fake.waitSent(1);
-    expect(subscribeFrame).toEqual(msg('subscribe.approval.request'));
+    expect(subscribeFrame).toEqual({ ...msg('subscribe.approval.request'), ackId: expect.any(String) });
 
     const requestFixture = msg('request.approval.request');
     const result = await client.request<unknown, { action: 'allow' }>(
@@ -516,7 +525,7 @@ describe('BusClient public facade', () => {
     );
 
     const subscribeFrame = await fake.waitSent(1);
-    expect(subscribeFrame).toEqual(msg('subscribe.approval.request'));
+    expect(subscribeFrame).toEqual({ ...msg('subscribe.approval.request'), ackId: expect.any(String) });
 
     const requestFixture = msg('request.approval.request');
     const responsePromise = client.request<unknown, { action: 'allow' }>(
@@ -1020,7 +1029,7 @@ describe(conformanceCase('local-wildcard-event-matching').title, () => {
     });
 
     const subscribeFrame = await fake.waitSent(1);
-    expect(subscribeFrame).toEqual(msg('subscribe.agent.wildcard'));
+    expect(subscribeFrame).toEqual({ ...msg('subscribe.agent.wildcard'), ackId: expect.any(String) });
 
     const eventFixture = msg('event.agent.complete');
     await client.emit(localAgentComplete, eventFixture.payload as Record<string, unknown>);

@@ -17,6 +17,7 @@ import { createWebSocketTransport } from '../index.js';
 import { ServerTransport } from '../server-transport.js';
 import { HmacAuth } from '../auth/hmac-auth.js';
 import { MockWebSocket, MockWebSocketServer, computeHmacSignature } from './test-helpers.js';
+import { waitForCondition } from './test-utils.js';
 import type { BusEventMessage, BusRequestMessage } from '@makaio/bus-core';
 
 /**
@@ -155,7 +156,11 @@ describe('Client mode behavior', () => {
 
     try {
       await transport.connect();
-      await transport.subscribe('approval.request', { sessionId: 'session-1' });
+      const subscribe = transport.subscribe('approval.request', { sessionId: 'session-1' });
+      await waitForCondition(() => ws.sentMessages.length > 0, 1000, 'subscription message was not sent');
+      const subscribeMessage = JSON.parse(ws.sentMessages.at(-1)!) as { ackId?: string };
+      ws.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: subscribeMessage.ackId }));
+      await subscribe;
       ws.clearSentMessages();
 
       await transport.disconnect();

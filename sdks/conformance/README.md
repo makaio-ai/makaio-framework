@@ -27,7 +27,7 @@ The cases cover the current Makaio bus protocol shapes and SDK behavioral contra
 - `event`, `request`, `response`
 - `broadcast`, `broadcast-response`
 - `heartbeat`
-- `subscribe`, `unsubscribe`, `subscribe-sync-complete`
+- `subscribe`, `unsubscribe`, `subscribe-sync-complete`, `subscription-ack`
 
 **Local dispatch behavior:**
 - `local-request-dispatch` — request resolved by a local handler without wire roundtrip
@@ -47,6 +47,8 @@ framework runtime.
 - `subscribe.subjects` is always a `Record<string, number[]>`.
 - `subscribe` messages represent replace semantics for the current local subscription snapshot.
 - `unsubscribe` messages remove the full remaining priority set for a subject when no handlers remain.
+- `subscribe` and `unsubscribe` may carry an optional `ackId`; transports that support dynamic
+  subscription acknowledgement reply with `subscription-ack` for the same `ackId`.
 - Request messages include `timeout`, `deadline`, and optional `priority` when the scenario exercises
   request propagation.
 - Timestamp-like numbers are fixture-relative millisecond values, not wall-clock epoch values.

@@ -16,6 +16,15 @@ import type { PayloadFilter } from '@makaio/core';
 // ---------------------------------------------------------------------------
 
 /**
+ * Pending acknowledgement for a dynamic subscription control message.
+ */
+export interface SubscriptionAckHandle {
+  ackId: string;
+  promise: Promise<void>;
+  reject(error: unknown): void;
+}
+
+/**
  * Dependencies required by the subscription helpers.
  */
 export interface SubscriptionDeps {
@@ -29,6 +38,8 @@ export interface SubscriptionDeps {
   readonly socket: WebSocketLike | null;
   /** Buffered local subscription map to persist across reconnects. */
   readonly localSubscriptions: Map<string, SubscriptionEntry>;
+  /** Begin tracking an acknowledgement for a dynamic subscription update. */
+  readonly beginSubscriptionAck?: () => SubscriptionAckHandle;
 }
 
 // ---------------------------------------------------------------------------
@@ -57,8 +68,15 @@ export async function addSubscription(
   deps.localSubscriptions.set(subject, { filter: resolvedFilter, priorities });
 
   if (deps.socket !== null && deps.socket.readyState === 1) {
-    const message = buildSubscribeMessage(new Map([[subject, { filter: resolvedFilter, priorities }]]));
-    await sendEncoded(message, deps.codec, deps.socket);
+    const ack = deps.beginSubscriptionAck?.();
+    const message = buildSubscribeMessage(new Map([[subject, { filter: resolvedFilter, priorities }]]), ack?.ackId);
+    try {
+      await sendEncoded(message, deps.codec, deps.socket);
+      await ack?.promise;
+    } catch (error) {
+      ack?.reject(error);
+      throw error;
+    }
   }
 
   if (deps.debug) {
@@ -80,8 +98,15 @@ export async function removeSubscription(subject: string, deps: SubscriptionDeps
   deps.localSubscriptions.delete(subject);
 
   if (deps.socket !== null && deps.socket.readyState === 1) {
-    const message = buildUnsubscribeMessage({ [subject]: existing?.priorities ?? [] });
-    await sendEncoded(message, deps.codec, deps.socket);
+    const ack = deps.beginSubscriptionAck?.();
+    const message = buildUnsubscribeMessage({ [subject]: existing?.priorities ?? [] }, ack?.ackId);
+    try {
+      await sendEncoded(message, deps.codec, deps.socket);
+      await ack?.promise;
+    } catch (error) {
+      ack?.reject(error);
+      throw error;
+    }
   }
 
   if (deps.debug) {

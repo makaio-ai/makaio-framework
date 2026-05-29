@@ -53,6 +53,7 @@ export interface MessageHandlerDeps {
  * @param message - Bus message to dispatch
  * @param handlers - Set of registered bus handlers
  * @param options - Dispatch options
+ * @returns True when every registered handler completed successfully
  */
 async function invokeHandlers(
   message: BusMessage,
@@ -62,19 +63,19 @@ async function invokeHandlers(
     receiveContext?: TransportReceiveContext;
     logContext?: string;
   },
-): Promise<void> {
-  await Promise.all(
-    Array.from(handlers).map(async (handler) => {
-      try {
-        await handler(message, options.receiveContext);
-      } catch (error) {
-        if (options.debug) {
-          const suffix = options.logContext ? ` ${options.logContext}` : '';
-          console.error(`[ServerTransport] Handler error${suffix}:`, error);
-        }
-      }
-    }),
+): Promise<boolean> {
+  const results = await Promise.allSettled(
+    Array.from(handlers).map((handler) => handler(message, options.receiveContext)),
   );
+
+  for (const result of results) {
+    if (result.status === 'rejected' && options.debug) {
+      const suffix = options.logContext ? ` ${options.logContext}` : '';
+      console.error(`[ServerTransport] Handler error${suffix}:`, result.reason);
+    }
+  }
+
+  return results.every((result) => result.status === 'fulfilled');
 }
 
 /**
@@ -143,22 +144,38 @@ export async function routeMessage(
   // so the transport registry can populate remoteRequestHandlers for
   // priority-based dispatch.
   if (message.type === 'subscribe') {
-    if (!isRecord((message as BusSubscribeMessage).subjects)) {
+    const subscribeMessage = message as BusSubscribeMessage;
+    if (!isRecord(subscribeMessage.subjects)) {
       if (debug) console.warn('[ServerTransport] Malformed subscribe message: missing subjects record');
       return;
     }
-    registry.handleSubscribeMessage(socket, message as BusSubscribeMessage);
-    await invokeHandlers(message, handlers, { debug, receiveContext, logContext: 'dispatching subscribe' });
+    registry.handleSubscribeMessage(socket, subscribeMessage);
+    const handlersApplied = await invokeHandlers(subscribeMessage, handlers, {
+      debug,
+      receiveContext,
+      logContext: 'dispatching subscribe',
+    });
+    if (handlersApplied && typeof subscribeMessage.ackId === 'string') {
+      sendSafely(socket, JSON.stringify({ type: 'subscription-ack', ackId: subscribeMessage.ackId }));
+    }
     return;
   }
 
   if (message.type === 'unsubscribe') {
-    if (!isRecord((message as BusUnsubscribeMessage).subjects)) {
+    const unsubscribeMessage = message as BusUnsubscribeMessage;
+    if (!isRecord(unsubscribeMessage.subjects)) {
       if (debug) console.warn('[ServerTransport] Malformed unsubscribe message: missing subjects record');
       return;
     }
-    registry.handleUnsubscribeMessage(socket, (message as BusUnsubscribeMessage).subjects);
-    await invokeHandlers(message, handlers, { debug, receiveContext, logContext: 'dispatching unsubscribe' });
+    registry.handleUnsubscribeMessage(socket, unsubscribeMessage.subjects);
+    const handlersApplied = await invokeHandlers(unsubscribeMessage, handlers, {
+      debug,
+      receiveContext,
+      logContext: 'dispatching unsubscribe',
+    });
+    if (handlersApplied && typeof unsubscribeMessage.ackId === 'string') {
+      sendSafely(socket, JSON.stringify({ type: 'subscription-ack', ackId: unsubscribeMessage.ackId }));
+    }
     return;
   }
 

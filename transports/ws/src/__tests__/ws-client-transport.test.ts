@@ -45,6 +45,19 @@ function makeTransport(options: {
   return { transport, mock };
 }
 
+/**
+ * Acknowledge the latest dynamic subscription message sent by a mock socket.
+ * @param mock - Socket whose last sent message carries the ack id.
+ */
+async function acknowledgeLatestSubscription(mock: MockWebSocket): Promise<void> {
+  await waitForCondition(() => mock.sentMessages.length > 0, 1000, 'subscription message was not sent');
+  const last = mock.sentMessages.at(-1);
+  expect(last).toBeDefined();
+  const message = JSON.parse(last!) as { ackId?: string };
+  expect(message.ackId).toEqual(expect.any(String));
+  mock.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: message.ackId }));
+}
+
 // ---------------------------------------------------------------------------
 // onConnected
 // ---------------------------------------------------------------------------
@@ -188,21 +201,111 @@ describe('WebSocketClientTransport — unsubscribe', () => {
   it('sends an unsubscribe wire message when the socket is open', async () => {
     const { transport, mock } = makeTransport({});
     await transport.connect();
-    await transport.subscribe('test.*');
+    const subscribe = transport.subscribe('test.*');
+    await acknowledgeLatestSubscription(mock);
+    await subscribe;
 
     mock.clearSentMessages();
 
-    await transport.unsubscribe('test.*');
+    const unsubscribe = transport.unsubscribe('test.*');
+    await acknowledgeLatestSubscription(mock);
+    await unsubscribe;
 
     expect(mock.sentMessages).toHaveLength(1);
-    const msg = JSON.parse(mock.sentMessages[0]) as { type: string; subjects: Record<string, number[]> };
+    const msg = JSON.parse(mock.sentMessages[0]) as {
+      type: string;
+      ackId?: string;
+      subjects: Record<string, number[]>;
+    };
     expect(msg.type).toBe('unsubscribe');
+    expect(msg.ackId).toEqual(expect.any(String));
     expect(Object.keys(msg.subjects)).toContain('test.*');
     // The subjects value must be a number[] (priority array) — even an empty one.
     expect(Array.isArray(msg.subjects['test.*'])).toBe(true);
     for (const priority of msg.subjects['test.*']) {
       expect(typeof priority).toBe('number');
     }
+
+    await transport.disconnect();
+  });
+
+  it('keeps subscribe pending until the server acknowledges routing state', async () => {
+    const { transport, mock } = makeTransport({});
+    await transport.connect();
+
+    let settled = false;
+    const subscribe = transport.subscribe('test.*').then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await acknowledgeLatestSubscription(mock);
+    await subscribe;
+    expect(settled).toBe(true);
+
+    await transport.disconnect();
+  });
+
+  it('acknowledges inbound subscription updates after local handlers run', async () => {
+    const { transport, mock } = makeTransport({});
+    const handled: string[] = [];
+    transport.onReceive(async (message) => {
+      if (message.type === 'subscribe') {
+        handled.push(Object.keys(message.subjects)[0] ?? '');
+      }
+    });
+    await transport.connect();
+
+    mock.receiveMessage(
+      JSON.stringify({
+        type: 'subscribe',
+        ackId: 'peer-subscribe-1',
+        subjects: { 'peer.topic': [] },
+      }),
+    );
+
+    await waitForCondition(
+      () =>
+        mock.sentMessages.some((entry) => {
+          const message = JSON.parse(entry) as { type?: string; ackId?: string };
+          return message.type === 'subscription-ack' && message.ackId === 'peer-subscribe-1';
+        }),
+      1000,
+      'subscription ack was not sent',
+    );
+    expect(handled).toEqual(['peer.topic']);
+
+    await transport.disconnect();
+  });
+
+  it('does not acknowledge inbound subscription updates when a local handler fails', async () => {
+    const { transport, mock } = makeTransport({});
+    let handlerFinished = false;
+    transport.onReceive(async (message) => {
+      if (message.type === 'subscribe') {
+        handlerFinished = true;
+        throw new Error('subscription handler failed');
+      }
+    });
+    await transport.connect();
+
+    mock.receiveMessage(
+      JSON.stringify({
+        type: 'subscribe',
+        ackId: 'peer-subscribe-failed',
+        subjects: { 'peer.topic': [] },
+      }),
+    );
+
+    await waitForCondition(() => handlerFinished, 1000, 'failing handler did not run');
+    expect(
+      mock.sentMessages.some((entry) => {
+        const message = JSON.parse(entry) as { type?: string; ackId?: string };
+        return message.type === 'subscription-ack' && message.ackId === 'peer-subscribe-failed';
+      }),
+    ).toBe(false);
 
     await transport.disconnect();
   });
@@ -373,11 +476,15 @@ describe('WebSocketClientTransport — reconnect backoff', () => {
 
 describe('WebSocketClientTransport — getSubscriptions', () => {
   it('returns the set of currently subscribed subjects', async () => {
-    const { transport } = makeTransport({});
+    const { transport, mock } = makeTransport({});
     await transport.connect();
 
-    await transport.subscribe('topic.a');
-    await transport.subscribe('topic.b');
+    const subscribeA = transport.subscribe('topic.a');
+    await acknowledgeLatestSubscription(mock);
+    await subscribeA;
+    const subscribeB = transport.subscribe('topic.b');
+    await acknowledgeLatestSubscription(mock);
+    await subscribeB;
 
     const subs = transport.getSubscriptions();
     expect(subs.has('topic.a')).toBe(true);

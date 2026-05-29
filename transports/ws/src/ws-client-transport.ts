@@ -25,7 +25,7 @@ import {
   installNoReconnectCloseListener,
   type ConnectionDeps,
 } from './ws-client-connection.js';
-import { addSubscription, removeSubscription } from './ws-client-subscriptions.js';
+import { addSubscription, removeSubscription, type SubscriptionAckHandle } from './ws-client-subscriptions.js';
 
 // Re-export public types so that consumers and index.ts can import them
 // from this module's path without needing to know the sub-module layout.
@@ -65,6 +65,8 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly correlations = new CorrelationTracker();
   private readonly handlers = new Set<(message: BusMessage) => Promise<void>>();
   private readonly localSubscriptions = new Map<string, SubscriptionEntry>();
+  private readonly pendingSubscriptionAcks = new Map<string, { resolve(): void; reject(error: unknown): void }>();
+  private subscriptionAckSeq = 0;
 
   private messageListener: ((event: { data: string | Buffer }) => void) | null = null;
   private closeListener: ((event: unknown) => void) | null = null;
@@ -168,6 +170,7 @@ export class WebSocketClientTransport implements BusTransport {
     }
 
     this.correlations.cleanup();
+    this.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
     // Auth strategies own pending handshakes, timers, and derived session
     // keys. The client transport owns the strategy lifecycle, so every
     // explicit disconnect must release that state before the instance can be
@@ -329,7 +332,67 @@ export class WebSocketClientTransport implements BusTransport {
       codec: this.codec,
       socket: this.socket,
       localSubscriptions: this.localSubscriptions,
+      beginSubscriptionAck: () => this.beginSubscriptionAck(),
     };
+  }
+
+  /**
+   * Track one dynamic subscription update until the remote peer acknowledges it.
+   * @returns Ack identifier, pending promise, and cleanup reject callback.
+   */
+  private beginSubscriptionAck(): SubscriptionAckHandle {
+    const ackId = `${this.name}:sub:${++this.subscriptionAckSeq}`;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    promise.catch(() => undefined);
+
+    const settle = (settler: () => void): void => {
+      if (!this.pendingSubscriptionAcks.has(ackId)) return;
+      this.pendingSubscriptionAcks.delete(ackId);
+      settler();
+    };
+
+    this.pendingSubscriptionAcks.set(ackId, {
+      resolve: () => settle(resolve),
+      reject: (error) => settle(() => reject(error)),
+    });
+
+    return {
+      ackId,
+      promise,
+      reject: (error) => this.rejectSubscriptionAck(ackId, error),
+    };
+  }
+
+  /**
+   * Resolve a pending dynamic subscription acknowledgement.
+   * @param ackId - Ack identifier received from the peer.
+   */
+  private resolveSubscriptionAck(ackId: string): void {
+    this.pendingSubscriptionAcks.get(ackId)?.resolve();
+  }
+
+  /**
+   * Reject one pending dynamic subscription acknowledgement.
+   * @param ackId - Ack identifier to reject.
+   * @param error - Rejection reason.
+   */
+  private rejectSubscriptionAck(ackId: string, error: unknown): void {
+    this.pendingSubscriptionAcks.get(ackId)?.reject(error);
+  }
+
+  /**
+   * Reject all pending subscription acknowledgements for a closing socket session.
+   * @param error - Rejection reason.
+   */
+  private rejectPendingSubscriptionAcks(error: Error): void {
+    for (const ackId of this.pendingSubscriptionAcks.keys()) {
+      this.rejectSubscriptionAck(ackId, error);
+    }
   }
 
   /**
@@ -372,6 +435,12 @@ export class WebSocketClientTransport implements BusTransport {
           this.readyResolve = resolve;
         });
         this.onNewReadySession?.(this.ready);
+      },
+      resolveSubscriptionAck: (ackId) => {
+        this.resolveSubscriptionAck(ackId);
+      },
+      rejectPendingSubscriptionAcks: (error) => {
+        this.rejectPendingSubscriptionAcks(error);
       },
       notifyConnected: () => {
         this.onConnectedCallback?.();

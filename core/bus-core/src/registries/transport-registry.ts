@@ -344,11 +344,11 @@ const handleBroadcastMessage = async (
  * @param sourceTransportName - Name of the transport the subscribe arrived from
  * @param message - The subscribe message to propagate
  */
-const propagateSubscribe = (
+const propagateSubscribe = async (
   context: MakaioBusContext,
   sourceTransportName: BusTransportKeys,
   message: Extract<BusMessage, { type: 'subscribe' }>,
-): void => {
+): Promise<void> => {
   // Update the remote handler registry from the incoming subscribe payload.
   // A subscribe message replaces the previous priority set for this
   // transport+subject pair, so stale entries are removed before inserting new ones.
@@ -380,7 +380,7 @@ const propagateSubscribe = (
   // Push the full aggregated advertised state to all peer transports (excluding source).
   // Each peer receives the union of local + all foreign remote priorities for each
   // affected subject — not just the source's priorities — avoiding replace-semantics races.
-  void pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
+  await pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
 };
 
 /**
@@ -404,11 +404,11 @@ const propagateSubscribe = (
  * @param sourceTransportName - Name of the transport the unsubscribe arrived from
  * @param message - The unsubscribe message to propagate
  */
-const propagateUnsubscribe = (
+const propagateUnsubscribe = async (
   context: MakaioBusContext,
   sourceTransportName: BusTransportKeys,
   message: Extract<BusMessage, { type: 'unsubscribe' }>,
-): void => {
+): Promise<void> => {
   // For each subject in the unsubscribe message, remove ALL entries for the
   // source transport. Symmetric with propagateSubscribe's full-replace logic.
   //
@@ -433,7 +433,7 @@ const propagateUnsubscribe = (
   // Push the full aggregated advertised state to all peer transports (excluding source).
   // Peers may still have local handlers or other remote handlers for these subjects,
   // so we must recompute rather than blindly forwarding the unsubscribe.
-  void pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
+  await pushAdvertisedSubjectsToPeers(context, sourceTransportName, Object.keys(message.subjects));
 };
 
 /**
@@ -546,13 +546,19 @@ const createTransportRegistry = (context: MakaioBusContext) => {
         return;
       }
 
+      if (message.type === 'subscription-ack') {
+        // Dynamic subscription acknowledgements are consumed by transport
+        // implementations before application-level bus dispatch.
+        return;
+      }
+
       if (message.type === 'subscribe') {
-        propagateSubscribe(context, transportName, message);
+        await propagateSubscribe(context, transportName, message);
         return;
       }
 
       if (message.type === 'unsubscribe') {
-        propagateUnsubscribe(context, transportName, message);
+        await propagateUnsubscribe(context, transportName, message);
         return;
       }
 

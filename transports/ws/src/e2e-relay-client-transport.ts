@@ -11,6 +11,7 @@ import type {
   BusMessage,
   BusResponseMessage,
   BusSubscribeMessage,
+  BusSubscriptionAckMessage,
   BusUnsubscribeMessage,
   BusTransport,
 } from '@makaio/bus-core';
@@ -96,6 +97,17 @@ const isSubscriptionControlMessage = (message: BusMessage): message is BusSubscr
   message.type === 'subscribe' || message.type === 'unsubscribe';
 
 /**
+ * Check whether a message is a subscription acknowledgement frame.
+ * @param message - Candidate message
+ * @returns True when the message acknowledges a subscribe/unsubscribe frame
+ */
+const isSubscriptionAckMessage = (message: unknown): message is BusSubscriptionAckMessage => {
+  if (!message || typeof message !== 'object') return false;
+  const candidate = message as { type?: unknown; ackId?: unknown };
+  return candidate.type === 'subscription-ack' && typeof candidate.ackId === 'string';
+};
+
+/**
  * Create the codec used by relay E2E transport.
  * @param e2eAuth - Relay E2E auth instance
  * @param debug - Enable diagnostic logging
@@ -140,6 +152,9 @@ function createRelayCodec(
         // Allow transport subscription sync before peer E2E session exists.
         return JSON.stringify(message);
       }
+      if (!sessionKey && isSubscriptionAckMessage(message)) {
+        return JSON.stringify(message);
+      }
       if (!sessionKey) {
         throw new Error('E2E relay session not established');
       }
@@ -166,6 +181,9 @@ function createRelayCodec(
       pruneRelayControlIds(relayControlResponseIds);
       if (isPlainResponse(message) && relayControlResponseIds.has(message.correlationId)) {
         relayControlResponseIds.delete(message.correlationId);
+        return message;
+      }
+      if (!sessionKey && isSubscriptionAckMessage(message)) {
         return message;
       }
       if (!sessionKey) {
