@@ -3288,12 +3288,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@hono/node-server@npm:^1.14.1, @hono/node-server@npm:^1.19.9":
+"@hono/node-server@npm:^1.19.9":
   version: 1.19.14
   resolution: "@hono/node-server@npm:1.19.14"
   peerDependencies:
     hono: ^4
   checksum: 10c0/41a099bb3705d96aac44b7a8db8805f2a22ce8a0f767a27b6d10b74a9964925df01c5f35d3631e882f8bcdeee3518884c30f40588ac8c960d88bf71048ba0df3
+  languageName: node
+  linkType: hard
+
+"@hono/node-server@npm:^2.0.4":
+  version: 2.0.4
+  resolution: "@hono/node-server@npm:2.0.4"
+  peerDependencies:
+    hono: ^4
+  checksum: 10c0/c13ce8a72d34ff3996346e4c5e5589d221c0f5526c534d1e6cf7d685fdb6b325a2e2f3f27c363359c6cf1c4579109544be21a6fa1faa5b04d6f81926759b6017
   languageName: node
   linkType: hard
 
@@ -4351,7 +4360,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/cli@workspace:apps/cli"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.4"
     "@makaio/app-mcp-server": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
@@ -4531,7 +4540,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/electron@workspace:apps/electron"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.4"
     "@makaio/bus-core": "workspace:*"
     "@makaio/bus-server-vite": "workspace:*"
     "@makaio/bus-transport-websocket": "workspace:*"
@@ -4922,7 +4931,7 @@ __metadata:
     "@biomejs/biome": "npm:2.4.15"
     "@changesets/cli": "npm:^2.29.0"
     "@eslint/js": "npm:^9.36.0"
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.4"
     "@libsql/client": "npm:^0.17.3"
     "@makaio/build-tooling": "workspace:*"
     "@octokit/rest": "npm:^22.0.1"
@@ -5314,7 +5323,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/runtime-node@workspace:runtimes/node"
   dependencies:
-    "@hono/node-server": "npm:^1.14.1"
+    "@hono/node-server": "npm:^2.0.4"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
