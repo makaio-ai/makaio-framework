@@ -3166,9 +3166,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@google/gemini-cli@npm:0.43.0":
-  version: 0.43.0
-  resolution: "@google/gemini-cli@npm:0.43.0"
+"@google/gemini-cli@npm:0.44.1":
+  version: 0.44.1
+  resolution: "@google/gemini-cli@npm:0.44.1"
   dependencies:
     "@github/keytar": "npm:^7.10.6"
     "@lydell/node-pty": "npm:1.1.0"
@@ -3197,7 +3197,7 @@ __metadata:
       optional: true
   bin:
     gemini: bundle/gemini.js
-  checksum: 10c0/315f72d14ca6d762c9fffca97b2ab834eb3ee78c42c2bda645094b590c23c2f39574dd09f33bc2d023180164c7ba39ff318a40da500055739485c2665cda05a3
+  checksum: 10c0/99c37c7f7f47ab676f735434e75734c77896f1f3eb77581af275be09f8d2d5f87edf27daff9ce74b80e7b4c3f3a8933e8edba37c14acb16c99e9255a2a85d410
   languageName: node
   linkType: hard
 
@@ -3997,7 +3997,7 @@ __metadata:
   resolution: "@makaio/adapter-gemini-sdk@workspace:adapters/implementations/gemini-sdk"
   dependencies:
     "@agentclientprotocol/sdk": "npm:0.21.0"
-    "@google/gemini-cli": "npm:0.43.0"
+    "@google/gemini-cli": "npm:0.44.1"
     "@google/gemini-cli-core": "npm:0.43.0"
     "@google/genai": "npm:1.48.0"
     "@makaio/ai-adapters-core": "workspace:*"
