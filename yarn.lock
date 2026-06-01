@@ -3216,9 +3216,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@google/genai@npm:1.48.0":
-  version: 1.48.0
-  resolution: "@google/genai@npm:1.48.0"
+"@google/genai@npm:2.7.0":
+  version: 2.7.0
+  resolution: "@google/genai@npm:2.7.0"
   dependencies:
     google-auth-library: "npm:^10.3.0"
     p-retry: "npm:^4.6.2"
@@ -3229,7 +3229,7 @@ __metadata:
   peerDependenciesMeta:
     "@modelcontextprotocol/sdk":
       optional: true
-  checksum: 10c0/f8d06e4fb46c784de7a9b73aedfa80cfd11683dcc57794005e891aba92bf06a40d14037f56fa1234bd9292624b4cacc58b03e7e3dd4b7495659a9b2b3c2e852a
+  checksum: 10c0/835aa50c6e676c7a851c93c27f69b6d9d7118608d740d28f6e9dcf622d2fb9108bce288e9022b6b8d829dcce15d0fd97b826b5527f20638d74b53d4b546d8619
   languageName: node
   linkType: hard
 
@@ -3999,7 +3999,7 @@ __metadata:
     "@agentclientprotocol/sdk": "npm:0.21.0"
     "@google/gemini-cli": "npm:0.43.0"
     "@google/gemini-cli-core": "npm:0.43.0"
-    "@google/genai": "npm:1.48.0"
+    "@google/genai": "npm:2.7.0"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
