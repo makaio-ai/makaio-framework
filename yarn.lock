@@ -2870,14 +2870,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@github/copilot-sdk@npm:0.2.2":
-  version: 0.2.2
-  resolution: "@github/copilot-sdk@npm:0.2.2"
+"@github/copilot-sdk@npm:0.3.0":
+  version: 0.3.0
+  resolution: "@github/copilot-sdk@npm:0.3.0"
   dependencies:
-    "@github/copilot": "npm:^1.0.21"
+    "@github/copilot": "npm:^1.0.36-0"
     vscode-jsonrpc: "npm:^8.2.1"
     zod: "npm:^4.3.6"
-  checksum: 10c0/6d68805e9933e3f3bf1588937858a7aa54184834a7fc39e5e516702bdac4e13baf9f00ea34b0553680ef63201977026dec197487b34d42a1bd445256289ceb98
+  checksum: 10c0/d8ca7637530a71ab89518430c2771ef219ea2021484b14f6076f3310873842611d08e08b5294990f29904c584a6ccc7fa8f1eb47d0f4650f6d419a5c84a2c484
   languageName: node
   linkType: hard
 
@@ -4023,7 +4023,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-github-copilot-sdk@workspace:adapters/implementations/github-copilot-sdk"
   dependencies:
-    "@github/copilot-sdk": "npm:0.2.2"
+    "@github/copilot-sdk": "npm:0.3.0"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
