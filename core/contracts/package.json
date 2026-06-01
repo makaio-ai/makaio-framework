@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@makaio/core": "workspace:*",
-    "semver": "^7.8.0",
+    "semver": "^7.8.1",
     "zod": "^4.1.13"
   },
   "devDependencies": {
