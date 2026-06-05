@@ -7,11 +7,12 @@
  * instance, making them straightforward to unit-test with a mock.
  *
  * **Session-events group:** One hook per `hookEvents` entry that carries a
- * `frameworkSubject`.  The hook command is:
- *   `${makaioCommand} hook received claude-code ${eventName}`
+ * `frameworkSubject`.  The hook command depends on the event's `mode`:
+ * - `mode: 'event'`   → `${makaioCommand} hook received claude-code ${eventName}`
+ * - `mode: 'request'` → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
  *
- * The command sentinel `'hook received claude-code'` is used for removal and
- * installation detection.
+ * The command sentinels `'hook received claude-code'` and
+ * `'hook handle claude-code'` are used for removal and installation detection.
  *
  * **Usage-stream group:** A single statusline entry with name `'statusline'`.
  * The command is: `${makaioCommand} claude statusline`
@@ -21,12 +22,21 @@
  */
 
 import type { ClientWiringEntry } from '@makaio/subsystem-client';
-import { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from '@makaio/subsystem-client';
+import {
+  buildClientCommand,
+  DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
+  deriveSessionEventDescriptors,
+} from '@makaio/subsystem-client';
 
 import { clientDefinition } from '../definition.js';
 import type { ClaudeCodeClientSettings } from './client-settings.js';
 import type { ClaudeCodeScope } from '../schemas/config.js';
-import { extractUpstreamCommand, HOOK_COMMAND_SENTINEL, STATUSLINE_COMMAND_SENTINEL } from './managed-wiring.js';
+import {
+  extractUpstreamCommand,
+  HOOK_COMMAND_SENTINEL,
+  HOOK_HANDLE_COMMAND_SENTINEL,
+  STATUSLINE_COMMAND_SENTINEL,
+} from './managed-wiring.js';
 
 /**
  * Minimal settings API required by Claude Code wiring helpers.
@@ -67,6 +77,102 @@ const SESSION_EVENTS_DESCRIPTORS = deriveSessionEventDescriptors(clientDefinitio
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolved hook command descriptor for a single wiring event.
+ */
+interface HookDescriptor {
+  /** Sentinel substring embedded in the command (used for detection and removal). */
+  sentinel: string;
+  /** CLI flags inserted between the executable and the sentinel. */
+  rootFlags: readonly string[];
+  /** CLI flags appended after the event name. */
+  trailingFlags: readonly string[];
+}
+
+/**
+ * Resolve the sentinel, root flags, and trailing flags for a hook event.
+ *
+ * - `'event'` — fire-and-forget; uses `HOOK_COMMAND_SENTINEL` with
+ *   `--debounce-failure` as a root flag and no trailing flags.
+ * - `'request'` — request/response; uses `HOOK_HANDLE_COMMAND_SENTINEL` with
+ *   `--no-launch` as a root flag and `--timeout 5000` appended after the
+ *   event name.
+ * @param mode - Hook interaction mode from the event descriptor.
+ * @returns Sentinel, root flags inserted before the sentinel, and trailing flags
+ *   appended after the event name.
+ */
+function resolveHookDescriptor(mode: 'event' | 'request'): HookDescriptor {
+  if (mode === 'request') {
+    return {
+      sentinel: HOOK_HANDLE_COMMAND_SENTINEL,
+      rootFlags: ['--no-launch'],
+      trailingFlags: ['--timeout', String(DEFAULT_HOOK_HANDLE_TIMEOUT_MS)],
+    };
+  }
+  return {
+    sentinel: HOOK_COMMAND_SENTINEL,
+    rootFlags: ['--debounce-failure'],
+    trailingFlags: [],
+  };
+}
+
+/**
+ * Build the full hook command string for a single session-event wiring entry,
+ * selecting the sentinel and flags based on the event's interaction mode.
+ *
+ * - `'event'` mode produces: `[envPairs...] makaioCommand --debounce-failure hook received claude-code eventName`
+ * - `'request'` mode produces: `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 5000`
+ * @param makaioCommand - Makaio CLI binary name or path.
+ * @param mode - Hook interaction mode from the event descriptor.
+ * @param eventName - Native hook event name.
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
+ * @returns Full hook command string to write into the client's native config.
+ */
+function buildModeAwareHookCommand(
+  makaioCommand: string,
+  mode: 'event' | 'request',
+  eventName: string,
+  envPairs?: readonly string[],
+): string {
+  const { sentinel, rootFlags, trailingFlags } = resolveHookDescriptor(mode);
+  return buildClientCommand(
+    makaioCommand,
+    [...rootFlags, ...sentinel.split(' '), eventName, ...trailingFlags],
+    envPairs,
+  );
+}
+
+/**
+ * Find a stale Makaio-managed hook command for an event, checking both the
+ * current-mode sentinel and the alternate-mode sentinel.
+ *
+ * When a hook event's mode changes (e.g. `'event'` → `'request'`), the
+ * previously installed command may carry the old sentinel.  This helper
+ * searches both to ensure the caller can remove the stale entry.
+ * @param scopeEvents - Per-scope events map for the target scope.
+ * @param eventName - Claude Code hook event name to search.
+ * @param primarySentinel - Sentinel for the current descriptor mode.
+ * @param alternateSentinel - Sentinel for the opposite mode.
+ * @returns The stale command and the sentinel to use for removal, or `null`
+ *   when no managed hook exists for this event.
+ */
+function findStaleHookCommand(
+  scopeEvents: Record<string, unknown[]>,
+  eventName: string,
+  primarySentinel: string,
+  alternateSentinel: string,
+): { command: string; sentinel: string } | null {
+  const fromPrimary = findManagedHookCommand(scopeEvents, eventName, primarySentinel);
+  if (fromPrimary !== null) {
+    return { command: fromPrimary, sentinel: primarySentinel };
+  }
+  const fromAlternate = findManagedHookCommand(scopeEvents, eventName, alternateSentinel);
+  if (fromAlternate !== null) {
+    return { command: fromAlternate, sentinel: alternateSentinel };
+  }
+  return null;
+}
 
 /**
  * Build the statusline command string.
@@ -174,12 +280,56 @@ function hasManagedHookCommand(
  * not enough: older commands missing required root flags must report as stale.
  * @param effective - Effective hooks map from {@link ClaudeCodeClientSettings.listHooks}.
  * @param eventName - Claude Code hook event name to check.
+ * @param hookSentinel - The base sentinel to use (e.g. `HOOK_COMMAND_SENTINEL`
+ *   or `HOOK_HANDLE_COMMAND_SENTINEL`) without the trailing event name.
  * @param command - Exact command string expected for the hook.
  * @returns `true` when the exact hook command exists.
  */
-function isHookInstalled(effective: Record<string, unknown[]>, eventName: string, command: string): boolean {
-  const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
+function isHookInstalled(
+  effective: Record<string, unknown[]>,
+  eventName: string,
+  hookSentinel: string,
+  command: string,
+): boolean {
+  const sentinel = `${hookSentinel} ${eventName}`;
   return hasManagedHookCommand(effective, eventName, sentinel, command);
+}
+
+/**
+ * Remove stale managed hook commands before installing the current command.
+ *
+ * When both the current-mode sentinel and alternate-mode sentinel are present,
+ * both must be removed before adding the replacement to avoid duplicate hook
+ * ingress after mode or flag migrations.
+ * @param settings - Settings instance scoped to the target project directory.
+ * @param scope - Claude Code settings scope to write into.
+ * @param eventName - Claude Code hook event name being replaced.
+ * @param scopeEvents - Existing per-scope hooks map.
+ * @param stale - Stale command found for either the primary or alternate sentinel.
+ * @param alternateSentinel - Opposite-mode sentinel for the same event.
+ */
+async function removeStaleHookCommands(
+  settings: ClaudeCodeWiringSettings,
+  scope: ClaudeCodeScope,
+  eventName: string,
+  scopeEvents: Record<string, unknown[]>,
+  stale: { command: string; sentinel: string },
+  alternateSentinel: string,
+): Promise<void> {
+  await settings.removeHook({
+    scope,
+    eventName,
+    match: { commandContains: stale.sentinel },
+  });
+
+  if (stale.sentinel === alternateSentinel) return;
+  if (findManagedHookCommand(scopeEvents, eventName, alternateSentinel) === null) return;
+
+  await settings.removeHook({
+    scope,
+    eventName,
+    match: { commandContains: alternateSentinel },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +365,10 @@ export async function buildClaudeCodeWiringList(
     settings.listStatusline(),
   ]);
 
-  const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName }) => {
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs, ['--debounce-failure']);
-    const installed = isHookInstalled(effectiveHooks, eventName, command);
+  const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName, mode }) => {
+    const { sentinel } = resolveHookDescriptor(mode);
+    const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
+    const installed = isHookInstalled(effectiveHooks, eventName, sentinel, command);
     return { group: 'session-events', name: eventName, installed, command };
   });
 
@@ -283,25 +434,36 @@ export async function applyClaudeCodeWiring(
   // Sequential: addHook writes to the same config file per scope, and the
   // internal mutex would serialize parallel calls anyway. Sequential keeps
   // the applied/skipped bookkeeping straightforward.
-  for (const { eventName } of SESSION_EVENTS_DESCRIPTORS) {
-    const sentinel = `${HOOK_COMMAND_SENTINEL} ${eventName}`;
-    const command = buildHookCommand(makaioCommand, HOOK_COMMAND_SENTINEL, eventName, envPairs, ['--debounce-failure']);
+  for (const { eventName, mode } of SESSION_EVENTS_DESCRIPTORS) {
+    const { sentinel: baseSentinel } = resolveHookDescriptor(mode);
+    const sentinel = `${baseSentinel} ${eventName}`;
+    const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
 
-    const existingCommand = findManagedHookCommand(scopeEvents, eventName, sentinel);
+    // Check both the primary and alternate-mode sentinels to handle migrations
+    // (e.g. PreToolUse moving from 'hook received' to 'hook handle') cleanly.
+    const alternateSentinel = `${mode === 'request' ? HOOK_COMMAND_SENTINEL : HOOK_HANDLE_COMMAND_SENTINEL} ${eventName}`;
+    const stale = findStaleHookCommand(scopeEvents, eventName, sentinel, alternateSentinel);
 
-    if (existingCommand !== null) {
-      if (existingCommand === command) {
-        // Identical hook already installed — nothing to do.
+    if (stale !== null) {
+      if (stale.command === command) {
+        // Primary entry is correct — but an orphaned alternate-mode entry may
+        // still be present (e.g. old 'hook received' alongside correct new
+        // 'hook handle').  Remove it so the config stays clean after a mode
+        // migration even when the primary sentinel already matched correctly.
+        const orphanedAlternate = findManagedHookCommand(scopeEvents, eventName, alternateSentinel);
+        if (orphanedAlternate !== null) {
+          await settings.removeHook({
+            scope,
+            eventName,
+            match: { commandContains: alternateSentinel },
+          });
+        }
         skipped++;
         continue;
       }
-      // Same sentinel but different command prefix — remove the stale entry
+      // Stale entry found (different command or different mode sentinel) — remove
       // before installing the updated one.
-      await settings.removeHook({
-        scope,
-        eventName,
-        match: { commandContains: sentinel },
-      });
+      await removeStaleHookCommands(settings, scope, eventName, scopeEvents, stale, alternateSentinel);
     }
 
     const result = await settings.addHook({
@@ -349,9 +511,11 @@ export async function applyClaudeCodeWiring(
  * Remove all Makaio wiring entries from the specified Claude Code settings
  * scope.
  *
- * Each session-events hook is removed by matching the command sentinel
- * `'hook received claude-code <eventName>'` via
- * {@link ClaudeCodeClientSettings.removeHook}. The statusline entry is removed
+ * Each session-events hook is removed by matching both the primary sentinel for
+ * the event's current mode (`'hook received claude-code <eventName>'` or
+ * `'hook handle claude-code <eventName>'`) and the alternate sentinel, via
+ * {@link ClaudeCodeClientSettings.removeHook}.  Checking both ensures that
+ * mode migrations leave no orphaned entries.  The statusline entry is removed
  * via {@link ClaudeCodeClientSettings.removeStatusline} when its command
  * contains the Makaio statusline sentinel. Entries that are not present are
  * silently skipped.
@@ -366,13 +530,27 @@ export async function removeClaudeCodeWiring(
 ): Promise<{ removed: number }> {
   let removed = 0;
 
-  for (const { eventName } of SESSION_EVENTS_DESCRIPTORS) {
-    const result = await settings.removeHook({
+  // Remove hooks for both sentinels per event to handle mode migrations
+  // cleanly.  An event that was previously installed as 'hook received' and
+  // is now declared as 'hook handle' (or vice versa) must have its old entry
+  // cleaned up even though the descriptor now points to the other sentinel.
+  for (const { eventName, mode } of SESSION_EVENTS_DESCRIPTORS) {
+    const { sentinel: primarySentinel } = resolveHookDescriptor(mode);
+    const alternateSentinel = mode === 'request' ? HOOK_COMMAND_SENTINEL : HOOK_HANDLE_COMMAND_SENTINEL;
+
+    const primary = await settings.removeHook({
       scope,
       eventName,
-      match: { commandContains: `${HOOK_COMMAND_SENTINEL} ${eventName}` },
+      match: { commandContains: `${primarySentinel} ${eventName}` },
     });
-    removed += result.removed;
+    removed += primary.removed;
+
+    const alternate = await settings.removeHook({
+      scope,
+      eventName,
+      match: { commandContains: `${alternateSentinel} ${eventName}` },
+    });
+    removed += alternate.removed;
   }
 
   // Only remove the statusline when the *target scope itself* has a

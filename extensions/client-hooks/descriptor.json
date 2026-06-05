@@ -29,6 +29,32 @@
             "description": "Optional JSON object for pass-through metadata (e.g. process PID)"
           }
         ]
+      },
+      {
+        "name": "handle",
+        "description": "Ingest a client hook event and return a handler response via stdout/stderr/exitCode",
+        "args": [
+          {
+            "name": "client",
+            "description": "Client identifier (e.g. codex, claude-code)"
+          },
+          {
+            "name": "eventName",
+            "description": "Hook event name as reported by the native client"
+          },
+          {
+            "name": "metadataJson",
+            "description": "Optional JSON object for pass-through metadata (e.g. process PID)"
+          },
+          {
+            "name": "timeout",
+            "description": "Maximum wait time for a bus response in milliseconds"
+          },
+          {
+            "name": "failClose",
+            "description": "On error or timeout: exit non-zero instead of failing open"
+          }
+        ]
       }
     ]
   },

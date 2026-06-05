@@ -36,8 +36,11 @@ export { ClientSessionConfigService } from './client-session-config-service.js';
 export {
   buildClientSessionBase,
   canonicalizeClientId,
+  ClientHookHandleResponseSchema,
   ClientSubjects,
+  createRawClientHookHandleSubject,
   createRawClientHookReceivedSubject,
+  DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
   emitBestEffort,
   pickNonEmptyString,
   pickNonEmptyStringValue,
@@ -45,6 +48,8 @@ export {
 } from './client-session-observed-semantics.js';
 export type {
   BuildClientSessionBaseOpts,
+  ClientHookHandleResponse,
+  RawClientHookHandleSubject,
   RawClientHookPayload,
   RawClientHookReceivedSubject,
 } from './client-session-observed-semantics.js';

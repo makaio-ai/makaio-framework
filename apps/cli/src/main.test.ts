@@ -50,6 +50,7 @@ describe('extractRootConfigArg', () => {
       configPath: './makaio.config.json',
       debounceFailure: false,
       noFailure: false,
+      noLaunch: false,
     });
   });
 
@@ -58,7 +59,7 @@ describe('extractRootConfigArg', () => {
 
     const result = extractRootConfigArg(argv);
 
-    expect(result).toEqual({ argv, debounceFailure: false, noFailure: false });
+    expect(result).toEqual({ argv, debounceFailure: false, noFailure: false, noLaunch: false });
   });
 
   it('throws when root-level --config has no path', () => {
@@ -72,6 +73,7 @@ describe('extractRootConfigArg', () => {
       argv: ['node', 'makaio', 'hook', 'received'],
       debounceFailure: true,
       noFailure: false,
+      noLaunch: false,
     });
   });
 
@@ -82,6 +84,18 @@ describe('extractRootConfigArg', () => {
       argv: ['node', 'makaio', 'hook', 'received'],
       debounceFailure: false,
       noFailure: true,
+      noLaunch: false,
+    });
+  });
+
+  it('extracts --no-launch before the command name', () => {
+    const result = extractRootConfigArg(['node', 'makaio', '--no-launch', 'hook', 'handle']);
+
+    expect(result).toEqual({
+      argv: ['node', 'makaio', 'hook', 'handle'],
+      debounceFailure: false,
+      noFailure: false,
+      noLaunch: true,
     });
   });
 
@@ -93,14 +107,16 @@ describe('extractRootConfigArg', () => {
       configPath: './my.config.ts',
       debounceFailure: true,
       noFailure: false,
+      noLaunch: false,
     });
   });
 
-  it('does not extract --debounce-failure after a subcommand', () => {
-    const argv = ['node', 'makaio', 'hook', '--debounce-failure'];
+  it('does not extract root behavior flags after a subcommand', () => {
+    const argv = ['node', 'makaio', 'hook', '--debounce-failure', '--no-launch'];
     const result = extractRootConfigArg(argv);
 
     expect(result.debounceFailure).toBe(false);
+    expect(result.noLaunch).toBe(false);
     expect(result.argv).toEqual(argv);
   });
 });
@@ -1112,6 +1128,21 @@ describe('main — canProvideBus skips desktop auto-launch', () => {
 
       expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
       expect(appLaunchMocks.launchAppAndWaitForBus).toHaveBeenCalledOnce();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('skips launchAppAndWaitForBus when root --no-launch is set', async () => {
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      await main(['node', 'makaio', '--no-launch', 'account-manager'], [], emptyDiscovery);
+
+      expect(busClientMocks.probeHealth).toHaveBeenCalledOnce();
+      expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
     } finally {
       consoleErrorSpy.mockRestore();
     }

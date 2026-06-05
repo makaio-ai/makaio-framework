@@ -1331,4 +1331,42 @@ describe('ClaudeCodeClientService', () => {
 
     expect(received).toHaveLength(0);
   });
+
+  // ---------------------------------------------------------------------------
+  // hook.handle request/response
+  // ---------------------------------------------------------------------------
+
+  describe('hook.handle request handler', () => {
+    it('returns a no-op response for PreToolUse (passthrough stub)', async () => {
+      const response = await bus.request(ClaudeCodeClientSubjects.hook.handle, {
+        eventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID, tool_name: 'bash', tool_use_id: 'tu-1' },
+      });
+
+      expect(response).toMatchObject({ exitCode: 0, stdout: '', stderr: '' });
+    });
+
+    it('returns a no-op default response for unknown request-mode events', async () => {
+      const response = await bus.request(ClaudeCodeClientSubjects.hook.handle, {
+        eventName: 'SomeFutureEvent',
+        receivedAt: RECEIVED_AT,
+        payload: {},
+      });
+
+      expect(response).toMatchObject({ exitCode: 0, stdout: '', stderr: '' });
+    });
+
+    it('does not handle hook.handle requests after destroy()', async () => {
+      await service.destroy();
+
+      const response = await bus.requestOptional(ClaudeCodeClientSubjects.hook.handle, {
+        eventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID, tool_name: 'bash', tool_use_id: 'tu-1' },
+      });
+
+      expect(response).toEqual({ handled: false });
+    });
+  });
 });

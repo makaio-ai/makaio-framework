@@ -35,6 +35,11 @@ const FRAMEWORK_BUILD_INPUT_PATHS = [
   'yarn.lock',
 ] as const;
 
+const FRAMEWORK_BUILD_INPUT_EXCLUDE_PATHS = [
+  ':(exclude)packages/framework/dist/**',
+  ':(exclude)packages/framework/lib/**',
+] as const;
+
 const FILESYSTEM_FINGERPRINT_EXCLUDED_DIRS = new Set([
   '.cache',
   '.git',
@@ -79,9 +84,28 @@ export function computeFrameworkDistFingerprint(workspaceRoot = WORKSPACE_ROOT):
   hash.update(`framework-dist-fingerprint-v${STAMP_VERSION}\0`);
 
   if (hasGitMetadata(workspaceRoot)) {
-    appendGitOutput(hash, workspaceRoot, ['ls-files', '-s', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
-    appendGitOutput(hash, workspaceRoot, ['diff', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
-    appendGitOutput(hash, workspaceRoot, ['diff', '--cached', '--binary', '--', ...FRAMEWORK_BUILD_INPUT_PATHS]);
+    appendGitOutput(hash, workspaceRoot, [
+      'ls-files',
+      '-s',
+      '--',
+      ...FRAMEWORK_BUILD_INPUT_PATHS,
+      ...FRAMEWORK_BUILD_INPUT_EXCLUDE_PATHS,
+    ]);
+    appendGitOutput(hash, workspaceRoot, [
+      'diff',
+      '--binary',
+      '--',
+      ...FRAMEWORK_BUILD_INPUT_PATHS,
+      ...FRAMEWORK_BUILD_INPUT_EXCLUDE_PATHS,
+    ]);
+    appendGitOutput(hash, workspaceRoot, [
+      'diff',
+      '--cached',
+      '--binary',
+      '--',
+      ...FRAMEWORK_BUILD_INPUT_PATHS,
+      ...FRAMEWORK_BUILD_INPUT_EXCLUDE_PATHS,
+    ]);
     appendUntrackedInputFiles(hash, workspaceRoot);
   } else {
     appendFilesystemInputFiles(hash, workspaceRoot);
@@ -181,7 +205,14 @@ function appendGitOutput(hash: Hash, cwd: string, args: readonly string[]): void
 function appendUntrackedInputFiles(hash: Hash, workspaceRoot: string): void {
   const output = execFileSync(
     'git',
-    ['ls-files', '--others', '--exclude-standard', '--', ...FRAMEWORK_BUILD_INPUT_PATHS],
+    [
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '--',
+      ...FRAMEWORK_BUILD_INPUT_PATHS,
+      ...FRAMEWORK_BUILD_INPUT_EXCLUDE_PATHS,
+    ],
     {
       cwd: workspaceRoot,
       encoding: 'utf8',

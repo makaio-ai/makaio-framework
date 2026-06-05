@@ -19,6 +19,7 @@ import { render, cleanup } from 'ink-testing-library';
 import { ConsentStep } from './consent-step.js';
 import { DetectStep } from './detect-step.js';
 import { ManifestStep } from './manifest-step.js';
+import { runSetupTui } from './app.js';
 // Importing test-helpers also installs the EventEmitter ref/unref shim for
 // ink v6 / ink-testing-library v3 compatibility.
 import { makeState, makeClient } from './test-helpers.js';
@@ -297,8 +298,7 @@ describe('ManifestStep', () => {
 // ---------------------------------------------------------------------------
 
 describe('runSetupTui export', () => {
-  it('exports runSetupTui as a function', async () => {
-    const mod = await import('./app.js');
-    expect(typeof mod.runSetupTui).toBe('function');
+  it('exports runSetupTui as a function', () => {
+    expect(typeof runSetupTui).toBe('function');
   });
 });

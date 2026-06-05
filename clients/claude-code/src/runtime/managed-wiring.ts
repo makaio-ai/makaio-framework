@@ -7,9 +7,19 @@
  */
 
 /**
- * Sentinel string embedded in every hook command written by Makaio.
+ * Sentinel string embedded in every fire-and-forget hook command written by Makaio.
  */
 export const HOOK_COMMAND_SENTINEL = 'hook received claude-code';
+
+/**
+ * Sentinel string embedded in every request/response hook command written by Makaio.
+ *
+ * Events declared with `mode: 'request'` in the client definition install
+ * `makaio hook handle claude-code <eventName> --timeout <ms>` instead of the
+ * fire-and-forget `hook received` variant.  The sentinel is used for detection,
+ * removal, and stale-entry replacement by the wiring layer.
+ */
+export const HOOK_HANDLE_COMMAND_SENTINEL = 'hook handle claude-code';
 
 /**
  * Sentinel string embedded in the statusline command written by Makaio.

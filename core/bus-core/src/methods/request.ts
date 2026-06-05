@@ -133,7 +133,6 @@ export async function request<
     outcome = await awaitWithTimeoutAndSignal(dispatchPromise, timeout, signal);
   } catch (error) {
     if (error instanceof pTimeoutError) {
-      console.error(`[${correlationId}][${messageId}] Request to "${subjectKey}" timed out after ${timeout}ms`);
       throw new TimeoutError(subjectKey, timeout);
     }
     throw error;

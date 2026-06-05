@@ -10,7 +10,12 @@
 
 import type { ClaudeCodeHookDefinition, ClaudeCodeHookMatcherGroup } from '../schemas/config.js';
 import { getRawHooksMap, hooksAreIdentical, isHookMatcherGroup, isStatuslineValue } from './client-settings-guards.js';
-import { extractUpstreamCommand, HOOK_COMMAND_SENTINEL, STATUSLINE_COMMAND_SENTINEL } from './managed-wiring.js';
+import {
+  extractUpstreamCommand,
+  HOOK_COMMAND_SENTINEL,
+  HOOK_HANDLE_COMMAND_SENTINEL,
+  STATUSLINE_COMMAND_SENTINEL,
+} from './managed-wiring.js';
 
 // ---------------------------------------------------------------------------
 // Hook add
@@ -188,7 +193,10 @@ export function scrubManagedClaudeCodeWiring(current: Record<string, unknown>): 
           continue;
         }
 
-        const remainingHooks = group.hooks.filter((hook) => !hook.command.includes(HOOK_COMMAND_SENTINEL));
+        const remainingHooks = group.hooks.filter(
+          (hook) =>
+            !hook.command.includes(HOOK_COMMAND_SENTINEL) && !hook.command.includes(HOOK_HANDLE_COMMAND_SENTINEL),
+        );
         if (remainingHooks.length !== group.hooks.length) {
           removedFromEvent = true;
         }
