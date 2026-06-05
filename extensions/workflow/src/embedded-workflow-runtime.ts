@@ -8,7 +8,16 @@
  */
 import { NoTransportProvider } from '@makaio/kernel/providers';
 import type { EmbeddedBusHandle, ProvideBusContext } from '@makaio/kernel/cli';
-import { bootMakaioRuntimeCore, type ServerTransportProvider } from '@makaio/runtime-node';
+// `resolveUpstreamTelemetryBootOptionsFromEnv` is introduced in the same
+// runtime-node release as this consumer, and release tooling tightens the
+// runtime-node peer range in package.json to that introducing version at
+// publish. The declared `^1.0.0` therefore cannot resolve to a runtime-node
+// build that predates this export.
+import {
+  bootMakaioRuntimeCore,
+  resolveUpstreamTelemetryBootOptionsFromEnv,
+  type ServerTransportProvider,
+} from '@makaio/runtime-node';
 
 /**
  * Boot a headless Makaio runtime for standalone workflow execution.
@@ -22,11 +31,13 @@ import { bootMakaioRuntimeCore, type ServerTransportProvider } from '@makaio/run
  */
 export async function bootEmbeddedWorkflowRuntime(_context: ProvideBusContext): Promise<EmbeddedBusHandle> {
   const transport: ServerTransportProvider = new NoTransportProvider();
+  const upstreamTelemetry = resolveUpstreamTelemetryBootOptionsFromEnv();
 
   const runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
     surface: 'headless',
     enablePackageManager: false,
     workflowRunner: { mode: 'in-process' },
+    ...(upstreamTelemetry === undefined ? {} : { upstreamTelemetry }),
   });
 
   let shutdownPromise: Promise<void> | undefined;
