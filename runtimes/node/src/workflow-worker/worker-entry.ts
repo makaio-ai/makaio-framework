@@ -25,7 +25,7 @@ import { resolveAwaitTriggerConfig } from './await-trigger.js';
 /**
  * Parameters accepted by the Piscina worker entrypoint.
  *
- * Mirrors the shape passed by {@link WorkflowPiscinaRunner.run} — the `config`
+ * Mirrors the shape passed by {@link ThinWorkflowPiscinaRunner.run} — the `config`
  * is the raw (unserialized) `WorkflowWorkerConfig` and the `manifest` declares
  * which extension packages to load.
  */
@@ -49,7 +49,7 @@ export interface WorkflowWorkerRunParams {
  * 1. Parse and validate `config` against `WorkflowWorkerConfigSchema`
  * 2. Boot an isolated bus instance (with optional WebSocket transport)
  * 3. Load worker-local contributions from the manifest
- * 4. Boot worker-local tool and adapter runtime if contributions exist
+ * 4. Boot worker-local tool runtime if toolset contributions exist
  * 5. Load the workflow module from the source descriptor
  * 6. Run the workflow orchestrator
  * 7. Always close the runtime (when booted) and bus in the `finally` block
@@ -101,18 +101,13 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
       makaioHome: config.context.makaioHome,
     });
 
-    // Step 4: Boot runtime only when contributions are present
-    const hasContributions = contributions.toolsets.length > 0 || contributions.adapters.length > 0;
-    if (hasContributions) {
-      runtime = await bootWorkerRuntime(handle, contributions, {
-        cwd: config.context.repoPath,
-        env: config.env,
-      });
+    // Step 4: Boot the worker-local tool runtime only when toolsets are present.
+    const hasToolsets = contributions.toolsets.length > 0;
+    if (hasToolsets) {
+      runtime = await bootWorkerRuntime(handle, contributions);
     }
 
-    parentPort?.postMessage(
-      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, runtime?.adapterIds ?? []),
-    );
+    parentPort?.postMessage(createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject));
 
     // Step 5: Load workflow module from source
     const loaded = await loadWorkflowFromConfig(config);

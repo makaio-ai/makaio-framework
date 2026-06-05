@@ -1,6 +1,43 @@
 import { z } from 'zod';
 
 /**
+ * One-shot stdin bootstrap payload written by the host before the container
+ * entrypoint reads from stdin.
+ *
+ * All values are already-resolved plaintext — the host resolves any
+ * `CredentialRef`s before serialising this payload. The container cannot
+ * resolve refs over the bus because `credential.getChannelToken` is a
+ * `localSubject` by design and is never routed to remote transports.
+ *
+ * Fields are all optional so the container can fall back to environment
+ * variables when a field is absent or when stdin is not available.
+ */
+export const ContainerBootstrapConfigSchema = z.object({
+  /**
+   * HMAC secret for authenticating bus WebSocket connections.
+   * Absent until Unit D wires HMAC auth end-to-end.
+   */
+  busAuthSecret: z.string().optional(),
+  /**
+   * Git access token for cloning private repositories inside the container.
+   * Replaces the `MAKAIO_GIT_TOKEN` environment variable.
+   */
+  gitToken: z.string().optional(),
+  /**
+   * Credential environment variables resolved by the host.
+   * Keys are environment variable names; values are plaintext credential values.
+   * Applied onto `process.env` before the container runtime initialises.
+   */
+  credentialEnv: z.record(z.string(), z.string()).optional(),
+  /**
+   * Provider-level environment variables resolved by the host.
+   * Applied onto `process.env` after `credentialEnv`.
+   */
+  providerEnv: z.record(z.string(), z.string()).optional(),
+});
+export type ContainerBootstrapConfig = z.infer<typeof ContainerBootstrapConfigSchema>;
+
+/**
  * Container runtime type.
  */
 export const ContainerRuntimeSchema = z.enum(['simple', 'full']);
@@ -21,8 +58,15 @@ const SpawnRequestBase = z.object({
   runtime: ContainerRuntimeSchema.default('simple'),
   /** Override base image */
   image: z.string().optional(),
-  /** Extra environment variables */
+  /** Extra environment variables (non-secret config only — secrets travel via bootstrapConfig) */
   env: z.record(z.string(), z.string()).optional(),
+  /**
+   * Host-resolved bootstrap payload delivered to the container over stdin.
+   * Carries plaintext secrets that must not appear in `docker inspect` output.
+   * When present the DockerService writes this as a single JSON line to the
+   * container's stdin before the entrypoint reads from it.
+   */
+  bootstrapConfig: ContainerBootstrapConfigSchema.optional(),
 });
 
 /**
@@ -46,10 +90,8 @@ export const ContainerIsolatedSpawnRequestSchema = SpawnRequestBase.extend({
   mode: z.literal('container-isolated'),
   /** Git remote URL to clone */
   repoUrl: z.string(),
-  /** Branch to check out inside the container */
-  branch: z.string(),
-  /** Git authentication token for cloning */
-  gitToken: z.string(),
+  /** Branch to check out inside the container. When omitted, the repo's default branch is cloned. */
+  branch: z.string().optional(),
   /**
    * Bus connectivity mode.
    * - 'host': ws://host.docker.internal

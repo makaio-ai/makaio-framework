@@ -132,7 +132,6 @@ function makePropagationControlledBusHandle() {
  */
 function makeRuntimeHandle() {
   return {
-    adapterIds: [],
     close: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -169,7 +168,6 @@ describe('runWorkflowInWorker', () => {
     // Non-empty contributions so the runtime is booted.
     const contributions = {
       toolsets: [{ name: 'test-toolset', tools: [] }],
-      adapters: [],
     };
     const expectedResult = {
       executionId: 'exec-001',
@@ -207,7 +205,7 @@ describe('runWorkflowInWorker', () => {
     };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
@@ -231,38 +229,11 @@ describe('runWorkflowInWorker', () => {
     expect(cancelSubscriptionOrder).toBeLessThan(readyMessageOrder);
   });
 
-  it('includes initialized adapter ids in the ready message', async () => {
-    const busHandle = makeBusHandle();
-    const runtimeHandle = {
-      adapterIds: ['adapter-a', 'adapter-b'],
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    const expectedResult = {
-      executionId: 'exec-001',
-      workflowId: 'wf-001',
-      status: 'completed' as const,
-    };
-    const contributions = { toolsets: [], adapters: [{ manifest: { name: 'adapter-a' } }] };
-
-    mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
-    mockBootWorkerRuntime.mockResolvedValueOnce(runtimeHandle);
-    mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
-    mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
-
-    const config = makeConfig();
-    await runWorkflowInWorker({ config, manifest: { packages: [] } });
-
-    expect(mockParentPortPostMessage).toHaveBeenCalledWith(
-      createWorkflowWorkerReadyMessage(config.executionId, config.cancelSubject, ['adapter-a', 'adapter-b']),
-    );
-  });
-
   it('closes runtime and bus in the finally block on success', async () => {
     const busHandle = makeBusHandle();
     const runtimeHandle = makeRuntimeHandle();
     // Non-empty contributions so the runtime is booted and must be closed.
-    const contributions = { toolsets: [{ name: 'test', tools: [] }], adapters: [] };
+    const contributions = { toolsets: [{ name: 'test', tools: [] }] };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
     mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
@@ -284,7 +255,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
     const runtimeHandle = makeRuntimeHandle();
     // Non-empty contributions so the runtime is booted and must be closed even on error.
-    const contributions = { toolsets: [{ name: 'test', tools: [] }], adapters: [] };
+    const contributions = { toolsets: [{ name: 'test', tools: [] }] };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
     mockLoadWorkerContributions.mockResolvedValueOnce(contributions);
@@ -311,7 +282,7 @@ describe('runWorkflowInWorker', () => {
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
     // No toolsets or adapters
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(loadedWorkflow);
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
@@ -326,7 +297,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
     mockLoadWorkflowModule.mockResolvedValueOnce(makeLoadedWorkflow());
     mockRunWorkflowOrchestrator.mockResolvedValueOnce({
       executionId: 'exec-001',
@@ -369,7 +340,7 @@ describe('runWorkflowInWorker', () => {
     };
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
     mockRunWorkflowOrchestrator.mockResolvedValueOnce(expectedResult);
 
     const config = makeConfig({
@@ -397,7 +368,7 @@ describe('runWorkflowInWorker', () => {
     const busHandle = makeBusHandle();
 
     mockBootWorkerBus.mockResolvedValueOnce(busHandle);
-    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [], adapters: [] });
+    mockLoadWorkerContributions.mockResolvedValueOnce({ toolsets: [] });
 
     const config = makeConfig({
       source: { kind: 'definition', workflowId: 'wf-001' },

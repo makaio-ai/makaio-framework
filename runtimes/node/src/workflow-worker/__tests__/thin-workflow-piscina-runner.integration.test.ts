@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { WorkerContributionManifest } from '@makaio/contracts';
-import { WorkflowPiscinaRunner } from '../workflow-piscina-runner.js';
+import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
+import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
 import { makeWorkerConfig } from './fixtures.js';
 
 let tempDir: string | undefined;
@@ -13,7 +14,7 @@ let tempDir: string | undefined;
  * @returns Absolute path to the worker entry module.
  */
 async function createEchoWorkerEntry(): Promise<string> {
-  tempDir = await mkdtemp(join(tmpdir(), 'workflow-piscina-runner-'));
+  tempDir = await mkdtemp(join(tmpdir(), 'thin-workflow-piscina-runner-'));
   const workerEntry = join(tempDir, 'worker-entry.mjs');
   await writeFile(
     workerEntry,
@@ -31,7 +32,7 @@ async function createEchoWorkerEntry(): Promise<string> {
   return workerEntry;
 }
 
-describe('WorkflowPiscinaRunner integration', () => {
+describe('ThinWorkflowPiscinaRunner integration', () => {
   afterEach(async () => {
     if (tempDir !== undefined) {
       await rm(tempDir, { recursive: true, force: true });
@@ -41,7 +42,7 @@ describe('WorkflowPiscinaRunner integration', () => {
 
   it('runs a real Piscina worker with the per-call manifest', async () => {
     const workerEntry = await createEchoWorkerEntry();
-    const runner = new WorkflowPiscinaRunner({
+    const runner = new ThinWorkflowPiscinaRunner({
       workerEntry,
       manifest: { packages: [{ name: 'construction-package', importPath: 'file:///construction.mjs' }] },
       maxConcurrency: 1,
@@ -65,8 +66,45 @@ describe('WorkflowPiscinaRunner integration', () => {
     }
   });
 
+  it('provisions through the provider with a real thin Piscina runner', async () => {
+    const workerEntry = await createEchoWorkerEntry();
+    const runner = new ThinWorkflowPiscinaRunner({
+      workerEntry,
+      manifest: { packages: [{ name: 'construction-package', importPath: 'file:///construction.mjs' }] },
+      maxConcurrency: 1,
+      idleTimeoutMs: 100,
+    });
+    const provider = new PiscinaThinWorkflowProvider({
+      id: 'piscina-integration',
+      displayName: 'Piscina Integration',
+      runner,
+    });
+    const perCallManifest: WorkerContributionManifest = {
+      packages: [{ name: 'provider-package', importPath: 'file:///provider.mjs' }],
+    };
+
+    try {
+      const handle = await provider.provision({
+        nodeId: 'node-integration',
+        executionId: 'wfx-1',
+        environment: 'piscina',
+        workerConfig: makeWorkerConfig(),
+        workerManifest: perCallManifest,
+      });
+
+      await expect(handle.waitForResult(new AbortController().signal)).resolves.toMatchObject({
+        executionId: 'wfx-1',
+        workflowId: 'workflow-1',
+        status: 'completed',
+        output: { packages: ['provider-package'] },
+      });
+    } finally {
+      await runner.dispose();
+    }
+  });
+
   it('does not create the Piscina pool before the first run', async () => {
-    const runner = new WorkflowPiscinaRunner({
+    const runner = new ThinWorkflowPiscinaRunner({
       workerEntry: join(tmpdir(), 'missing-workflow-worker-entry.mjs'),
       manifest: { packages: [] },
       maxConcurrency: 1,

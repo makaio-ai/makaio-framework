@@ -1,4 +1,12 @@
 export { registerAdapterNameResolver } from './register-adapter-name-resolver.js';
+export {
+  prepareAdapterRuntime,
+  activateAdapterRuntimeIdentity,
+  type PrepareAdapterRuntimeInput,
+  type PreparedAdapterRuntime,
+  type ActivateAdapterRuntimeIdentityInput,
+  type ActivatedAdapterRuntimeIdentity,
+} from './compose-adapter-runtime.js';
 export { runMigrations } from './db-migrations.js';
 export {
   loadOrCreateMachineIdentity,
@@ -91,11 +99,17 @@ export {
 } from './framework-module-resolver.js';
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
-export { WorkflowPiscinaRunner, resolveWorkflowWorkerEntry, InProcessWorkflowRunner } from './workflow-worker/index.js';
+// Intentionally export only the thin Piscina name; the previous runner name
+// implied self-contained WorkerNode execution isolation that this path does not provide.
+export {
+  ThinWorkflowPiscinaRunner,
+  resolveWorkflowWorkerEntry,
+  InProcessWorkflowRunner,
+} from './workflow-worker/index.js';
 export type {
   IWorkflowRunner,
   WorkflowRunResult,
-  WorkflowPiscinaRunnerOptions,
+  ThinWorkflowPiscinaRunnerOptions,
   WorkflowWorkerEntryMode,
   WorkflowWorkerEntryResolverOptions,
   InProcessWorkflowRunnerOptions,

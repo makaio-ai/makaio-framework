@@ -6,8 +6,14 @@ import { JsonObjectContractSchema } from '../../shared/json-value.js';
 /** Capability identifier used for WorkerNode providers. */
 export const WORKER_NODE_CAPABILITY_ID = 'worker-node' as const;
 
-/** Provider identifier reserved for the runtime-node built-in Piscina WorkerNode provider. */
-export const BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID = 'makaio.runtime-node.piscina-local' as const;
+/**
+ * Provider identifier reserved for the runtime-node built-in thin workflow provider.
+ *
+ * The previous Piscina WorkerNode export name is intentionally not preserved as
+ * an alias: this pre-release API must keep thin local orchestration distinct
+ * from self-contained WorkerNode providers.
+ */
+export const BUILT_IN_THIN_WORKFLOW_PROVIDER_ID = 'makaio.runtime-node.piscina-local' as const;
 
 /**
  * Zod schema for the capabilities advertised by a WorkerNode provider.

@@ -44,8 +44,6 @@ import { initializeNodeDatabase } from './initialize-node-database.js';
 import { KernelSubjects } from '@makaio/kernel/namespace';
 import {
   AdapterSubsystemToken,
-  createAdapterSubsystemPackage,
-  createAdapterSubsystemContributionProcessor,
   FileAdapterConfigRepository,
   type AdapterSubsystemService,
 } from '@makaio/subsystem-adapter';
@@ -60,13 +58,11 @@ import { createLogImportContributionProcessor, logImportRegistryPackage } from '
 import { createWorkflowEnginePackage } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
-import { registerAdapterRuntimeIdentityHandlers } from '@makaio/services-core/adapter-runtime';
-import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
 import { createClientsCorePackage } from '@makaio/subsystem-client';
 import { createNodeClientBinaryStrategyDependencies } from './client-binary-strategy-dependencies.js';
-import { registerAdapterNameResolver } from './register-adapter-name-resolver.js';
+import { activateAdapterRuntimeIdentity, prepareAdapterRuntime } from './compose-adapter-runtime.js';
 import { tryImport } from './optional-package.js';
 import { registerRuntimeHandlers } from './register-runtime-handlers.js';
 import {
@@ -93,13 +89,13 @@ import { attachUpstreamTelemetry } from './upstream-telemetry.js';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
-  BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
+  BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
   registerWorkerNodeProvider,
   unregisterWorkerNodeProvider,
 } from '@makaio/contracts';
 import {
-  WorkflowPiscinaRunner,
-  PiscinaWorkerNodeProvider,
+  ThinWorkflowPiscinaRunner,
+  PiscinaThinWorkflowProvider,
   resolveWorkflowWorkerEntry,
   createNodeWorkflowRunnerPackageOptions,
 } from './workflow-worker/index.js';
@@ -420,8 +416,14 @@ export async function bootMakaioRuntimeCore(
       bus,
     });
 
+    const { adapterSubsystemPackage } = prepareAdapterRuntime({
+      coordinator,
+      configRepository: adapterConfigRepository,
+      platformDefaults,
+    });
+
     frameworkPackages.push(
-      createAdapterSubsystemPackage({ configRepository: adapterConfigRepository, coordinator, platformDefaults }),
+      adapterSubsystemPackage,
       ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
@@ -458,11 +460,8 @@ export async function bootMakaioRuntimeCore(
     // Framework processors are boot-owned; host/domain processors are
     // declared by loaded packages through MakaioExtension.runtimeBoot.
     // -----------------------------------------------------------------------
-    coordinator.registerContributionProcessor(
-      createAdapterSubsystemContributionProcessor({
-        getAdapterSubsystemService: () => coordinator.getExtensionService(AdapterSubsystemToken),
-      }),
-    );
+    // The adapter contribution processor is registered by prepareAdapterRuntime()
+    // (above, before load) so the adapter subsystem composes as one unit.
     coordinator.registerContributionProcessor(createLogImportContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
@@ -509,11 +508,13 @@ export async function bootMakaioRuntimeCore(
     adapterServiceRef.current = coordinator.getExtensionService(AdapterSubsystemToken);
 
     // -----------------------------------------------------------------------
-    // Built-in Piscina WorkerNode provider
+    // Built-in thin Piscina workflow provider
     //
-    // Register a PiscinaWorkerNodeProvider backed by a dedicated
-    // WorkflowPiscinaRunner so that the worker-pool dispatch path can
+    // Register a PiscinaThinWorkflowProvider backed by a dedicated
+    // ThinWorkflowPiscinaRunner so that the worker-pool dispatch path can
     // resolve 'piscina' environments without any external provider package.
+    // This path isolates workflow orchestration only; it is not the
+    // self-contained external WorkerNode runtime model.
     // Registration happens after coordinator.startAll() so that
     // CapabilityService has registered its capability.register handler.
     // The provider uses the same worker-entry resolution logic as the
@@ -523,9 +524,12 @@ export async function bootMakaioRuntimeCore(
       packageRoot: path.resolve(srcDir, '..'),
       mode: path.basename(srcDir) === 'src' ? 'source' : 'dist',
     });
-    const piscinaRunner = new WorkflowPiscinaRunner({ workerEntry: piscinaWorkerEntry, manifest: { packages: [] } });
-    const piscinaProvider = new PiscinaWorkerNodeProvider({
-      id: BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
+    const piscinaRunner = new ThinWorkflowPiscinaRunner({
+      workerEntry: piscinaWorkerEntry,
+      manifest: { packages: [] },
+    });
+    const piscinaProvider = new PiscinaThinWorkflowProvider({
+      id: BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
       displayName: 'Local (Piscina)',
       runner: piscinaRunner,
     });
@@ -542,7 +546,7 @@ export async function bootMakaioRuntimeCore(
         await piscinaRunner.dispose().catch(() => undefined);
       }
     });
-    console.info('[boot] Piscina WorkerNode provider registered (id=%s)', piscinaProvider.id);
+    console.info('[boot] Piscina thin workflow provider registered (id=%s)', piscinaProvider.id);
 
     shutdownSteps.push(
       registerRuntimeHandlers(
@@ -556,17 +560,8 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 9. Adapter runtime identity
     // -----------------------------------------------------------------------
-    const adapterRuntimeIdentity = registerAdapterRuntimeIdentityHandlers(bus, {
-      currentMachineId: machineId,
-      listKnownAdapterNames: async () => {
-        const { configs } = await bus.request(AdapterSubsystemSubjects.listAdapterConfigs, {});
-        return configs.map((config) => config.name);
-      },
-    });
+    const adapterRuntimeIdentity = activateAdapterRuntimeIdentity({ bus, currentMachineId: machineId });
     shutdownSteps.push(adapterRuntimeIdentity.cleanup);
-
-    const unregisterAdapterNameResolver = registerAdapterNameResolver(bus);
-    shutdownSteps.push(unregisterAdapterNameResolver);
 
     // -----------------------------------------------------------------------
     // 10. Host coordinator-ready broadcast

@@ -8,7 +8,7 @@ import type {
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { WorkflowWorkerEntryMode } from './worker-entry-resolver.js';
-import { WorkflowPiscinaRunner } from './workflow-piscina-runner.js';
+import { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
 import { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
 import { WorkerNodeRunner } from './worker-node-runner.js';
 import { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
@@ -151,7 +151,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
           mode: runner.workerEntryMode ?? params.defaultWorkerEntryMode,
         });
 
-      return new WorkflowPiscinaRunner({
+      return new ThinWorkflowPiscinaRunner({
         workerEntry,
         manifest: runner.manifest ?? createEmptyWorkerContributionManifest(),
         maxConcurrency: runner.maxConcurrency,

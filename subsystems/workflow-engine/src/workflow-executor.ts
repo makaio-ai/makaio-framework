@@ -263,7 +263,7 @@ export class WorkflowExecutor extends BaseService {
     this.registerHandler(WorkflowSubjects.runFile, async (ctx) => {
       if (this.workflowRunner === undefined) {
         throw new Error(
-          'workflow.runFile requires a workflow runner — configure a WorkflowPiscinaRunner or equivalent.',
+          'workflow.runFile requires a workflow runner — configure a ThinWorkflowPiscinaRunner or equivalent.',
         );
       }
       const { filePath, triggerPayload, scope } = ctx.payload;

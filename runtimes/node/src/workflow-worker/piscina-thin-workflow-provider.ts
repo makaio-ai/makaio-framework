@@ -6,7 +6,7 @@ import type {
   WorkerNodeProvisionRequest,
   WorkflowRunResult,
 } from '@makaio/contracts';
-import type { WorkflowPiscinaRunWithReadiness } from './workflow-piscina-runner.js';
+import type { ThinWorkflowPiscinaRunWithReadiness } from './thin-workflow-piscina-runner.js';
 
 interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
   /**
@@ -20,7 +20,7 @@ interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
     config: WorkerNodeProvisionRequest['workerConfig'],
     signal: AbortSignal,
     manifest?: WorkerNodeProvisionRequest['workerManifest'],
-  ): WorkflowPiscinaRunWithReadiness;
+  ): ThinWorkflowPiscinaRunWithReadiness;
 }
 
 /**
@@ -45,9 +45,9 @@ function isReadinessAwareRunner(runner: IWorkflowRunner): runner is ReadinessAwa
 }
 
 /**
- * Construction options for {@link PiscinaWorkerNodeProvider}.
+ * Construction options for {@link PiscinaThinWorkflowProvider}.
  */
-export interface PiscinaWorkerNodeProviderOptions {
+export interface PiscinaThinWorkflowProviderOptions {
   /** Stable unique identifier for this provider instance. */
   readonly id: string;
   /** Human-readable label for display in UI and logs. */
@@ -55,7 +55,7 @@ export interface PiscinaWorkerNodeProviderOptions {
   /**
    * Underlying workflow runner used to execute incoming provision requests.
    *
-   * Typically a {@link WorkflowPiscinaRunner} instance, but any
+   * Typically a {@link ThinWorkflowPiscinaRunner} instance, but any
    * {@link IWorkflowRunner} implementation is accepted so tests can supply
    * lightweight fakes without spawning real worker threads.
    */
@@ -63,14 +63,14 @@ export interface PiscinaWorkerNodeProviderOptions {
   /**
    * Capabilities advertised when this provider is registered.
    *
-   * Defaults to `{ persistentStorage: true, customCapabilities: ['workflow.local-runtime'] }`
-   * reflecting that the Piscina runner shares the host process file-system.
+   * Defaults to a local, delegating workflow capability set. The Piscina runner shares the
+   * host process filesystem and delegates agent/subagent execution to the host runtime.
    */
   readonly baseCapabilities?: WorkerNodeCapabilities;
 }
 
 /**
- * Built-in WorkerNode provider backed by the existing workflow-level Piscina runner.
+ * Built-in thin workflow provider backed by the existing workflow-level Piscina runner.
  *
  * This provider wraps an {@link IWorkflowRunner} so it can be registered with
  * the framework capability registry and participate in pool-driven dispatch.
@@ -79,7 +79,7 @@ export interface PiscinaWorkerNodeProviderOptions {
  * cancellation. Pool-level dispatch owns WorkerNode lifecycle events because it
  * also owns cancellation ordering and terminal state emission.
  */
-export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
+export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
   /** Execution environment tag used for pool provider matching. */
   public readonly environment = 'piscina' as const;
   /** Capabilities advertised to the pool dispatch selector. */
@@ -88,10 +88,10 @@ export class PiscinaWorkerNodeProvider implements IWorkerNodeProvider {
   /**
    * @param options - Provider identity, runner, and optional capability overrides.
    */
-  public constructor(private readonly options: PiscinaWorkerNodeProviderOptions) {
+  public constructor(private readonly options: PiscinaThinWorkflowProviderOptions) {
     this.baseCapabilities = options.baseCapabilities ?? {
       persistentStorage: true,
-      customCapabilities: ['workflow.local-runtime'],
+      customCapabilities: ['workflow.local-runtime', 'workflow.thin-runner'],
     };
   }
 

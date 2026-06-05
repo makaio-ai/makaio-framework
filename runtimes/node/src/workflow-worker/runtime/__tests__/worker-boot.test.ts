@@ -34,7 +34,7 @@ describe('bootWorkerBus', () => {
 
   it('boots the worker-local MCP bridge as part of worker runtime', async () => {
     const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
-    const runtime = await bootWorkerRuntime(handle, { toolsets: [], adapters: [] }, { cwd: process.cwd() });
+    const runtime = await bootWorkerRuntime(handle, { toolsets: [] });
 
     try {
       const registration = await handle.bus.request(McpSubjects.session.register, {

@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { WorkerContributionManifest, WorkflowRunResult, WorkflowWorkerConfig } from '@makaio/contracts';
-import { PiscinaWorkerNodeProvider } from '../piscina-worker-node-provider.js';
+import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
 import { makeWorkerConfig } from './fixtures.js';
 
-describe('PiscinaWorkerNodeProvider', () => {
+describe('PiscinaThinWorkflowProvider', () => {
   it('returns a handle that waits on the underlying workflow runner', async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({ executionId: 'wfx-1', workflowId: 'workflow-1', status: 'completed' }),
       dispose: vi.fn(),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-default', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-default', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -25,23 +25,24 @@ describe('PiscinaWorkerNodeProvider', () => {
 
   it('exposes the correct environment constant', () => {
     const runner = { run: vi.fn() };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     expect(provider.environment).toBe('piscina');
   });
 
   it('uses default base capabilities when none provided', () => {
     const runner = { run: vi.fn() };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     expect(provider.baseCapabilities.persistentStorage).toBe(true);
     expect(provider.baseCapabilities.customCapabilities).toContain('workflow.local-runtime');
+    expect(provider.baseCapabilities.customCapabilities).toContain('workflow.thin-runner');
   });
 
   it('uses custom base capabilities when provided', () => {
     const runner = { run: vi.fn() };
     const customCapabilities = { persistentStorage: false, customCapabilities: ['custom.tag'] };
-    const provider = new PiscinaWorkerNodeProvider({
+    const provider = new PiscinaThinWorkflowProvider({
       id: 'piscina-1',
       displayName: 'Piscina',
       runner,
@@ -62,7 +63,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         });
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -87,7 +88,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         });
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -114,7 +115,7 @@ describe('PiscinaWorkerNodeProvider', () => {
           },
         ),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
     const requestManifest: WorkerContributionManifest = { packages: [{ name: 'pkg-a', importPath: './pkg-a.js' }] };
 
     const handle = await provider.provision({
@@ -134,7 +135,7 @@ describe('PiscinaWorkerNodeProvider', () => {
     // This provider unit test pins the handoff contract: readiness-aware
     // runners must surface their ready promise on the WorkerNode handle. The
     // real Piscina runner/worker readiness path is covered in
-    // workflow-piscina-runner and worker-entry integration tests.
+    // thin-workflow-piscina-runner and worker-entry integration tests.
     let resolveReady!: () => void;
     const ready = new Promise<void>((resolve) => {
       resolveReady = resolve;
@@ -148,7 +149,7 @@ describe('PiscinaWorkerNodeProvider', () => {
       run: vi.fn(),
       runWithReadiness: vi.fn().mockReturnValue({ result, ready: ready.then(() => ({ adapters: ['adapter-a'] })) }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -172,7 +173,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         return new Promise<never>(() => {});
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -200,7 +201,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         return new Promise<never>(() => {});
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -234,7 +235,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         return Promise.resolve({ executionId: 'wfx-1', workflowId: 'workflow-1', status: 'completed' });
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
@@ -269,7 +270,7 @@ describe('PiscinaWorkerNodeProvider', () => {
         return new Promise<never>(() => {});
       }),
     };
-    const provider = new PiscinaWorkerNodeProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
+    const provider = new PiscinaThinWorkflowProvider({ id: 'piscina-1', displayName: 'Piscina', runner });
 
     const handle = await provider.provision({
       nodeId: 'node-1',
