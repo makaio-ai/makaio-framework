@@ -36,13 +36,13 @@
     "@makaio/ui-theme": "workspace:*",
     "@makaio/ui-views": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "hono": "^4.12.18",
+    "hono": "^4.12.23",
     "lucide-react": "^0.562.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react-dom": "^19.2.7",
     "yaml": "^2.9.0",
     "zod": "^4.1.13",
-    "zustand": "^5.0.0"
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@makaio/bus-server-vite": "workspace:*",
@@ -55,7 +55,7 @@
     "get-port": "^7.0.0",
     "sass": "^1.100.0",
     "tsx": "^4.22.3",
-    "vite": "^8.0.13"
+    "vite": "^8.0.16"
   },
   "license": "MIT"
 }
