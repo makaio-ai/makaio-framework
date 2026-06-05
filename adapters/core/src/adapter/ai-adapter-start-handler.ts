@@ -17,7 +17,7 @@ import type { AIAgentConnector } from '../agent/index.js';
 import type { AgentCreationOptions, StartAgentRequestPayload } from './types.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { PlatformDefaults } from '../types/index.js';
-import type { AgentRegistry } from './agent-registry.js';
+import type { ActiveAgentRegistry } from './agent-registry.js';
 import type { ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import {
   AdapterSubjects,
@@ -53,7 +53,7 @@ export interface StartAgentHandlerDeps<
   /** Resolve current platform-provided defaults (cwd, env). */
   getPlatformDefaults: () => PlatformDefaults | undefined;
   /** Registry of active agents. */
-  registry: AgentRegistry<TBus, TConnector, TAgent>;
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   /** Global bus for cross-adapter communication. */
   globalBus: IMakaioBus;
   /** Factory that produces a new agent instance (delegates to adapter.createAgent). */
@@ -172,7 +172,7 @@ async function rollbackRegisteredAgent<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
-  registry: AgentRegistry<TBus, TConnector, TAgent>,
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
   agentId: string,
   adapterName: string,
   cause: unknown,
@@ -245,7 +245,7 @@ async function cleanupEphemeralAgentAfterTurn<
   TConnector extends AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector>,
 >(
-  registry: AgentRegistry<TBus, TConnector, TAgent>,
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>,
   agentId: string,
   adapterName: string,
   messageHandle: MessageHandle | undefined,

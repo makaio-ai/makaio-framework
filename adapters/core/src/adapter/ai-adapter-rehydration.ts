@@ -8,7 +8,7 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
-import type { AgentRegistry } from './agent-registry.js';
+import type { ActiveAgentRegistry } from './agent-registry.js';
 import type { AgentCreationOptions } from './types.js';
 import type { McpSessionContext } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
@@ -35,7 +35,7 @@ export interface AgentRehydrationManagerConfig<
   /** Global bus for storage and service resolution calls. */
   globalBus: IMakaioBus;
   /** Agent registry for entry lookup and registration. */
-  registry: AgentRegistry<TBus, TConnector, TAgent>;
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   /** Factory that produces a new agent instance (delegates to adapter.createAgent). */
   createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
 }
@@ -57,7 +57,7 @@ export class AgentRehydrationManager<
   /** In-flight rehydrate operations keyed by agentId (single-flight dedupe). */
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly globalBus: IMakaioBus;
-  private readonly registry: AgentRegistry<TBus, TConnector, TAgent>;
+  private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   private readonly createAgentFn: (
     agentId: string,
     sessionId: string,
