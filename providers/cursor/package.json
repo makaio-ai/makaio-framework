@@ -1,0 +1,43 @@
+{
+  "name": "@makaio/provider-cursor",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "bun build.ts"
+  },
+  "peerDependencies": {
+    "@makaio/framework": "^1.0.0"
+  },
+  "dependencies": {
+    "@makaio/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "^0.22.0",
+    "typescript": "^6.0.3"
+  },
+  "files": [
+    "dist",
+    "descriptor.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./server": "./dist/server.mjs"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "providers/cursor"
+  },
+  "license": "MIT"
+}

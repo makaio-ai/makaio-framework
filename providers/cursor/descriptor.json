@@ -1,0 +1,7 @@
+{
+  "name": "provider-cursor",
+  "displayName": "Cursor Provider",
+  "entrypoints": {
+    "server": true
+  }
+}

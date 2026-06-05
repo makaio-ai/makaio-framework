@@ -1,0 +1,21 @@
+{
+  "name": "cursor-sdk",
+  "displayName": "Cursor SDK",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "entrypoints": {
+    "server": true
+  },
+  "contributions": {
+    "adapters": [
+      {
+        "name": "cursor-sdk",
+        "displayName": "Cursor SDK",
+        "description": "Cursor Composer via its native TypeScript SDK",
+        "protocols": []
+      }
+    ]
+  }
+}
