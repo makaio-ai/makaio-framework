@@ -36,6 +36,8 @@
     "./timeout": "./src/timeout/index.ts",
     "./variant": "./src/variant/index.ts",
     "./platform": "./src/platform/index.ts",
+    "./facet": "./src/facet/index.ts",
+    "./materialization": "./src/materialization/index.ts",
     "./package.json": "./package.json"
   },
   "dependencies": {
@@ -140,6 +142,14 @@
       "./platform": {
         "types": "./dist/platform/index.d.ts",
         "default": "./dist/platform/index.mjs"
+      },
+      "./facet": {
+        "types": "./dist/facet/index.d.ts",
+        "default": "./dist/facet/index.mjs"
+      },
+      "./materialization": {
+        "types": "./dist/materialization/index.d.ts",
+        "default": "./dist/materialization/index.mjs"
       },
       "./package.json": "./package.json"
     }

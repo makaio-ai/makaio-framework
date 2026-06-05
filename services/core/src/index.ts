@@ -125,6 +125,8 @@ export type {
   TurnStateChange,
 } from './session/index.js';
 export { ArtifactSchemaRegistry, createArtifactKindContributionProcessor } from './artifact/index.js';
+export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } from './facet/index.js';
+export { SurfaceBindingRegistry, createSurfaceBindingContributionProcessor } from './materialization/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
 export {
@@ -208,6 +210,10 @@ export {
   capabilityPackage,
   CapabilityToken,
   createModelRegistryPackage,
+  facetNamespaceRegistryPackage,
+  FacetNamespaceRegistryToken,
+  surfaceBindingRegistryPackage,
+  SurfaceBindingRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
   sessionBridgePackage,

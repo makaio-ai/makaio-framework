@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { ArtifactProjectionPolicySchema } from '../materialization/schemas.js';
 
 /**
  * Identifies the actor (agent, user, system) that produced or asserted
@@ -346,6 +347,13 @@ export const ArtifactKindRegistrationSchema = z.object({
   indexedFields: z.array(z.string().min(1)).optional(),
   /** Field paths within `data` that should be included in full-text search. */
   searchableFields: z.array(z.string().min(1)).optional(),
+  /**
+   * Optional projection policy controlling how this artifact kind surfaces on
+   * external providers (e.g. GitHub issues, Jira tickets).
+   *
+   * When absent, materialization adapters apply their own defaults.
+   */
+  projection: ArtifactProjectionPolicySchema.optional(),
 });
 
 /**

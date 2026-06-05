@@ -996,9 +996,53 @@ export {
 // Toast schemas and namespace registration are available via the
 // '@makaio/contracts/toast' subpath import. Excluded from the root
 // barrel to avoid adding another namespace registration side effect
-// — the root barrel already pulls in some (config, session) but we
-// are not making that worse.
+// — the root barrel only exports namespaces that are part of the stable
+// framework contract surface.
+export {
+  FacetAppliesToSchema,
+  FacetAuthoritySchema,
+  FacetCardinalitySchema,
+  FacetNamespace,
+  FacetNamespaceRegistrationSchema,
+  FacetSchemas,
+  FacetSubjects,
+  defineFacetNamespace,
+} from './facet/index.js';
+export type {
+  FacetAppliesTo,
+  FacetAuthority,
+  FacetCardinality,
+  FacetNamespaceChangedPayload,
+  FacetNamespaceDefinition,
+  FacetNamespaceListRequest,
+  FacetNamespaceListResponse,
+  FacetNamespaceRegisterRequest,
+  FacetNamespaceRegisterResponse,
+  FacetNamespaceRegistration,
+} from './facet/index.js';
 export { FrameworkContractNamespaces, FrameworkStorageNamespaces } from './namespace-catalog.js';
+export {
+  ArtifactMaterializationRefSchema,
+  ArtifactProjectionPolicySchema,
+  defineSurfaceBinding,
+  MaterializationNamespace,
+  MaterializationSchemas,
+  MaterializationSubjects,
+  SurfaceBindingRegistrationSchema,
+  SurfaceBindingTargetSchema,
+} from './materialization/index.js';
+export type {
+  ArtifactMaterializationRef,
+  ArtifactProjectionPolicy,
+  SurfaceBindingChangedPayload,
+  SurfaceBindingDefinition,
+  SurfaceBindingListRequest,
+  SurfaceBindingListResponse,
+  SurfaceBindingRegisterRequest,
+  SurfaceBindingRegisterResponse,
+  SurfaceBindingRegistration,
+  SurfaceBindingTarget,
+} from './materialization/index.js';
 export {
   SubjectTelemetryAttributeValueSchema,
   SubjectTelemetryDirectionSchema,

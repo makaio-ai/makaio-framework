@@ -9,6 +9,8 @@ import { CapabilityNamespace } from './capability/namespace.js';
 import { ClientNamespace } from './client/namespace.js';
 import { ConfigNamespace } from './config/config-namespace.js';
 import { CredentialNamespace } from './credential/namespace.js';
+import { FacetNamespace } from './facet/namespace.js';
+import { MaterializationNamespace } from './materialization/namespace.js';
 import { HarnessNamespace } from './harness/namespace.js';
 import { HostNamespace } from './host/namespace.js';
 import { McpNamespace } from './mcp/namespace.js';
@@ -64,7 +66,9 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   ClientNamespace,
   ConfigNamespace,
   CredentialNamespace,
+  FacetNamespace,
   GitHookNamespace,
+  MaterializationNamespace,
   HarnessNamespace,
   HostNamespace,
   McpNamespace,

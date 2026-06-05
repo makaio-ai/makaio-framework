@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ArtifactKindRegistration, ArtifactRevision, ArtifactScope } from './schemas.js';
+import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
 
 type JsonSchemaObject = Record<string, unknown>;
 
@@ -41,6 +42,12 @@ export interface ArtifactKindDefinition<TData extends Record<string, unknown>, T
   readonly indexedFields?: readonly string[];
   /** JSON Pointer paths to `data` fields included in full-text search. */
   readonly searchableFields?: readonly string[];
+  /**
+   * Optional projection policy controlling how this artifact kind surfaces on
+   * external providers. When absent, materialization adapters apply their own
+   * defaults.
+   */
+  readonly projection?: ArtifactProjectionPolicy;
   /**
    * Phantom field for compile-time `data` type extraction.
    * Never assigned at runtime.
@@ -131,6 +138,11 @@ interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScop
   readonly indexedFields?: readonly string[];
   /** JSON Pointer paths to searchable fields within `data`. */
   readonly searchableFields?: readonly string[];
+  /**
+   * Optional projection policy controlling how this artifact kind surfaces on
+   * external providers.
+   */
+  readonly projection?: ArtifactProjectionPolicy;
 }
 
 /**
@@ -192,10 +204,25 @@ export function defineArtifactKind<TData extends Record<string, unknown>, TScope
           }
         : {}),
       conflictPolicy: options.conflictPolicy,
-      ...(options.status ? { status: options.status } : {}),
+      ...(options.status
+        ? {
+            status: {
+              ...options.status,
+              ...(options.status.values ? { values: [...options.status.values] } : {}),
+            },
+          }
+        : {}),
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.indexedFields ? { indexedFields: [...options.indexedFields] } : {}),
       ...(options.searchableFields ? { searchableFields: [...options.searchableFields] } : {}),
+      ...(options.projection
+        ? {
+            projection: {
+              ...options.projection,
+              ...(options.projection.semanticEvents ? { semanticEvents: [...options.projection.semanticEvents] } : {}),
+            },
+          }
+        : {}),
     }),
   };
 }

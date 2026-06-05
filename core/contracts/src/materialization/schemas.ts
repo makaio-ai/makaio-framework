@@ -1,0 +1,147 @@
+import { z } from 'zod';
+
+/**
+ * Discriminated target that a surface binding maps to on the external provider.
+ *
+ * Each variant carries the fields required to identify the target element
+ * on the provider surface:
+ *
+ * - `'label'` — a label or tag on the issue/work item (optional prefix filter)
+ * - `'field'` — a named custom field on the work item (optional external field id)
+ * - `'issue-type'` — a named issue type classification (optional external type id)
+ * - `'body-fragment'` — a named slot in the issue or PR body
+ * - `'comment'` — a structured comment rendered from a template string
+ */
+export const SurfaceBindingTargetSchema = z.discriminatedUnion('kind', [
+  z.object({
+    /** Target kind discriminant. */
+    kind: z.literal('label'),
+    /** Optional label prefix filter (e.g. `'status/'`). */
+    prefix: z.string().min(1).optional(),
+  }),
+  z.object({
+    /** Target kind discriminant. */
+    kind: z.literal('field'),
+    /** Display name of the custom field on the provider. */
+    name: z.string().min(1),
+    /** Optional stable provider-assigned field identifier. */
+    fieldId: z.string().min(1).optional(),
+  }),
+  z.object({
+    /** Target kind discriminant. */
+    kind: z.literal('issue-type'),
+    /** Display name of the issue type on the provider. */
+    name: z.string().min(1),
+    /** Optional stable provider-assigned type identifier. */
+    typeId: z.string().min(1).optional(),
+  }),
+  z.object({
+    /** Target kind discriminant. */
+    kind: z.literal('body-fragment'),
+    /** Named slot in the body where this fragment is rendered. */
+    slot: z.string().min(1),
+  }),
+  z.object({
+    /** Target kind discriminant. */
+    kind: z.literal('comment'),
+    /** Handlebars-style template string for rendering the comment body. */
+    template: z.string().min(1),
+  }),
+]);
+
+/**
+ * Serializable registration record for a surface binding.
+ *
+ * Surface binding registrations describe how a framework namespace maps to a
+ * provider-specific surface element (field, label, issue type, etc.).
+ * Registrations are declared by product extensions and consumed by
+ * materialization adapters at sync time.
+ *
+ * The `id` field is a dot-namespaced stable string (e.g. `'github.status.field'`).
+ */
+export const SurfaceBindingRegistrationSchema = z.object({
+  /**
+   * Stable identifier for this surface binding.
+   * Dot-namespaced by convention, e.g. `'github.status.field'`.
+   */
+  id: z.string().min(1),
+  /** Provider identifier this binding targets (e.g. `'github'`, `'jira'`). */
+  provider: z.string().min(1),
+  /** Framework namespace identifier this binding covers (e.g. `'status'`). */
+  namespace: z.string().min(1),
+  /** Provider-side target element this namespace maps to. */
+  target: SurfaceBindingTargetSchema,
+  /**
+   * Entity classes this binding applies to.
+   * At least one entry is required.
+   */
+  appliesTo: z.array(z.enum(['workpiece', 'artifact', 'surface'])).min(1),
+  /**
+   * Optional mapping from framework namespace values to provider surface values.
+   *
+   * Keys are framework-side values; values are the corresponding provider-side
+   * labels or identifiers. When absent the framework value is used verbatim.
+   */
+  valueMapping: z.record(z.string(), z.string()).optional(),
+  /** Optional human-readable description of this surface binding. */
+  description: z.string().min(1).optional(),
+});
+
+/** Serializable registration record for a surface binding. */
+export type SurfaceBindingRegistration = z.infer<typeof SurfaceBindingRegistrationSchema>;
+
+/** Discriminated target on the external provider surface. */
+export type SurfaceBindingTarget = z.infer<typeof SurfaceBindingTargetSchema>;
+
+/**
+ * Projection policy that controls how an artifact kind surfaces on a provider.
+ *
+ * - `'none'` — the artifact is never materialized to a provider surface
+ * - `'surface'` — the artifact maps to a provider work item or issue
+ * - `'comment'` — the artifact is rendered as a structured comment on an existing item
+ */
+export const ArtifactProjectionPolicySchema = z.object({
+  /** Materialization mode for this artifact kind. */
+  mode: z.enum(['none', 'surface', 'comment']),
+  /**
+   * Default surface role when the artifact is materialized.
+   * - `'workpiece'` — the artifact is the primary tracked item
+   * - `'artifact'` — the artifact is a secondary record attached to a workpiece
+   */
+  defaultRole: z.enum(['workpiece', 'artifact']).optional(),
+  /**
+   * Semantic events that trigger a re-sync of the artifact to the provider surface.
+   * When absent all events trigger a sync.
+   */
+  semanticEvents: z.array(z.enum(['created', 'revised', 'status-changed', 'observation-added'])).optional(),
+});
+
+/** Projection policy that controls how an artifact kind surfaces on a provider. */
+export type ArtifactProjectionPolicy = z.infer<typeof ArtifactProjectionPolicySchema>;
+
+/**
+ * A reference linking a framework artifact to an external provider object.
+ *
+ * `artifactId` and `provider`+`externalId` together form the composite primary
+ * key for a materialization ref. The `surfaceRole` captures whether the artifact
+ * was materialized as the top-level workpiece or as a subordinate artifact record.
+ */
+export const ArtifactMaterializationRefSchema = z.object({
+  /** Stable framework artifact identity. */
+  artifactId: z.string().min(1),
+  /** Provider identifier (e.g. `'github'`, `'jira'`). */
+  provider: z.string().min(1),
+  /** Provider-assigned stable object identifier (e.g. a GitHub node ID). */
+  externalId: z.string().min(1),
+  /** Optional deep-link URL to the provider object. */
+  externalUrl: z.string().optional(),
+  /** Surface role the artifact occupies on the provider. */
+  surfaceRole: z.enum(['workpiece', 'artifact']),
+  /** Artifact revision that was last successfully synced to this provider object. */
+  lastSyncedRevision: z.string().optional(),
+  /** Provider-specific metadata snapshot (e.g. owner, repo, issue number). */
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+/** A reference linking a framework artifact to an external provider object. */
+export type ArtifactMaterializationRef = z.infer<typeof ArtifactMaterializationRefSchema>;
