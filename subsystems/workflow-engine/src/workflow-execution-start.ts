@@ -86,7 +86,7 @@ export interface StartExecutionDeps {
  */
 async function emitExecutionStarted(
   bus: IMakaioBus,
-  payload: { executionId: string; workflowId: string; coordinatorSessionId: string },
+  payload: { executionId: string; workflowId: string; coordinatorSessionId: string; startedAt: number },
 ): Promise<void> {
   try {
     await bus.emit(WorkflowSubjects.execution.started, payload);
@@ -341,7 +341,12 @@ export async function startExecution(
     );
     await persistExecutionStart(bus, execution, runContext);
 
-    const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId });
+    const startedEventTask = emitExecutionStarted(bus, {
+      executionId,
+      workflowId,
+      coordinatorSessionId,
+      startedAt: execution.startedAt,
+    });
     const executionTask = launchDefinitionExecutionTask(deps, {
       executionId,
       workflowId,
@@ -452,6 +457,14 @@ export async function startFileExecution(
 
   let launched = false;
   try {
+    // workflowRunner presence is enforced by the runFile handler before
+    // startFileExecution is called — this guard is a defensive belt-and-suspenders
+    // check that also satisfies the type narrowing without a non-null assertion.
+    const { workflowRunner } = deps;
+    if (workflowRunner === undefined) {
+      throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
+    }
+
     const runContext = deps.buildRunContext({
       executionId,
       workflowId,
@@ -467,14 +480,12 @@ export async function startFileExecution(
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
-    const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId });
-    // workflowRunner presence is enforced by the runFile handler before
-    // startFileExecution is called — this guard is a defensive belt-and-suspenders
-    // check that also satisfies the type narrowing without a non-null assertion.
-    const { workflowRunner } = deps;
-    if (workflowRunner === undefined) {
-      throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
-    }
+    const startedEventTask = emitExecutionStarted(bus, {
+      executionId,
+      workflowId,
+      coordinatorSessionId,
+      startedAt: execution.startedAt,
+    });
     const executionTask = buildFileExecutionTask(deps.buildRunnerTaskDeps(workflowRunner), {
       executionId,
       workflowId,

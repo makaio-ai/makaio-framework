@@ -19,6 +19,7 @@ import {
 import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeStationNode } from '../runtime/station-node.js';
 import { executeDelegateAgentNode, executeDelegateRoleNode } from '../runtime/delegate-node.js';
+import { executeRoleSubagentNode } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -97,6 +98,8 @@ const emptyExpressionCtx = {
   frames: {},
   previousSteps: {},
 };
+
+const SESSION_LINK_TEST_CLEANUP_TIMEOUT_MS = 60_000;
 
 // ─────────────────────────────────────────────────────────────
 // Station node tests
@@ -515,6 +518,303 @@ describe('executeStationNode', () => {
       unsubscribeSpawn();
       unsubscribeAwait();
       unsubscribeKill();
+    }
+  });
+
+  it('emits frame.sessionLinked after a role-backed node obtains a child session', async () => {
+    const links: Array<{ executionId: string; frameId: string; sessionId: string }> = [];
+    const ctx = makeCtx({});
+    const cleanupLink = ctx.bus.on(WorkflowSubjects.frame.sessionLinked, (eventCtx) => {
+      links.push(eventCtx.payload);
+    });
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({
+        adapterName: 'test-adapter',
+        model: 'test-model',
+      });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-role-station', status: 'spawning' });
+    });
+    const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, (requestCtx) => {
+      expect(requestCtx.payload.subagentId).toBe('subagent-role-station');
+      requestCtx.setResult({
+        status: 'running',
+        childSessionId: 'sess-child',
+        progress: [],
+      });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'done' });
+    });
+
+    try {
+      const outcome = await executeRoleSubagentNode(
+        {
+          nodeId: 'analyze',
+          nodeLabel: 'Station node',
+          roleId: 'reviewer',
+          prompt: 'Analyze',
+          unresolvedRoleError: 'role missing',
+          unavailableRuntimeError: 'runtime missing',
+          unavailableAwaitError: 'await missing',
+          cancellationLabel: 'station',
+          frameId: 'frame-analyze',
+        },
+        ctx,
+        emptyExpressionCtx,
+      );
+
+      expect(outcome).toEqual({ status: 'completed', output: 'done' });
+      expect(links).toEqual([
+        {
+          executionId: ctx.executionId,
+          frameId: 'frame-analyze',
+          sessionId: 'sess-child',
+        },
+      ]);
+    } finally {
+      cleanupAwait();
+      cleanupStatus();
+      cleanupSpawn();
+      cleanupRole();
+      cleanupLink();
+    }
+  });
+
+  it('emits frame.sessionLinked when the child session appears after await', async () => {
+    const links: Array<{ executionId: string; frameId: string; sessionId: string }> = [];
+    const ctx = makeCtx({});
+    let childSessionReady = false;
+    const cleanupLink = ctx.bus.on(WorkflowSubjects.frame.sessionLinked, (eventCtx) => {
+      links.push(eventCtx.payload);
+    });
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({
+        adapterName: 'test-adapter',
+        model: 'test-model',
+      });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-delayed-session', status: 'spawning' });
+    });
+    const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, (requestCtx) => {
+      expect(requestCtx.payload.subagentId).toBe('subagent-delayed-session');
+      requestCtx.setResult({
+        status: 'running',
+        ...(childSessionReady ? { childSessionId: 'sess-delayed-child' } : {}),
+        progress: [],
+      });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      childSessionReady = true;
+      requestCtx.setResult({ status: 'completed', result: 'done after delayed link' });
+    });
+
+    try {
+      const outcome = await executeRoleSubagentNode(
+        {
+          nodeId: 'delayed-link',
+          nodeLabel: 'Station node',
+          roleId: 'reviewer',
+          prompt: 'Analyze',
+          unresolvedRoleError: 'role missing',
+          unavailableRuntimeError: 'runtime missing',
+          unavailableAwaitError: 'await missing',
+          cancellationLabel: 'station',
+          frameId: 'frame-delayed-link',
+        },
+        ctx,
+        emptyExpressionCtx,
+      );
+
+      expect(outcome).toEqual({ status: 'completed', output: 'done after delayed link' });
+      expect(links).toEqual([
+        {
+          executionId: ctx.executionId,
+          frameId: 'frame-delayed-link',
+          sessionId: 'sess-delayed-child',
+        },
+      ]);
+    } finally {
+      cleanupAwait();
+      cleanupStatus();
+      cleanupSpawn();
+      cleanupRole();
+      cleanupLink();
+    }
+  });
+
+  it('continues execution when frame session status polling times out', async () => {
+    vi.useFakeTimers();
+
+    const ctx = makeCtx({});
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-status-timeout', status: 'spawning' });
+    });
+    const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, () => new Promise(() => undefined));
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'done after timeout' });
+    });
+
+    const outcomePromise = executeRoleSubagentNode(
+      {
+        nodeId: 'timeout-link',
+        nodeLabel: 'Station node',
+        roleId: 'reviewer',
+        prompt: 'Analyze',
+        unresolvedRoleError: 'role missing',
+        unavailableRuntimeError: 'runtime missing',
+        unavailableAwaitError: 'await missing',
+        cancellationLabel: 'station',
+        frameId: 'frame-timeout-link',
+      },
+      ctx,
+      emptyExpressionCtx,
+    );
+    let settledOutcome: unknown;
+    void outcomePromise.then((outcome) => {
+      settledOutcome = outcome;
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settledOutcome).toEqual({ status: 'completed', output: 'done after timeout' });
+    } finally {
+      if (settledOutcome === undefined) {
+        await vi.advanceTimersByTimeAsync(SESSION_LINK_TEST_CLEANUP_TIMEOUT_MS);
+      }
+      await outcomePromise.catch(() => undefined);
+      cleanupAwait();
+      cleanupStatus();
+      cleanupSpawn();
+      cleanupRole();
+      vi.useRealTimers();
+    }
+  });
+
+  it('passes the workflow abort signal to frame session status polling', async () => {
+    const controller = new AbortController();
+    const ctx = makeCtx({}, controller.signal);
+    const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-status-signal', status: 'spawning' });
+    });
+    const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, (requestCtx) => {
+      requestCtx.setResult({
+        status: 'running',
+        progress: [],
+      });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'done with signal' });
+    });
+
+    try {
+      await expect(
+        executeRoleSubagentNode(
+          {
+            nodeId: 'signal-link',
+            nodeLabel: 'Station node',
+            roleId: 'reviewer',
+            prompt: 'Analyze',
+            unresolvedRoleError: 'role missing',
+            unavailableRuntimeError: 'runtime missing',
+            unavailableAwaitError: 'await missing',
+            cancellationLabel: 'station',
+            frameId: 'frame-signal-link',
+          },
+          ctx,
+          emptyExpressionCtx,
+        ),
+      ).resolves.toEqual({ status: 'completed', output: 'done with signal' });
+
+      expect(requestOptionalSpy).toHaveBeenCalledWith(
+        SubagentSubjects.getStatus,
+        { subagentId: 'subagent-status-signal' },
+        expect.objectContaining({ signal: controller.signal, timeout: expect.any(Number) }),
+      );
+    } finally {
+      requestOptionalSpy.mockRestore();
+      cleanupAwait();
+      cleanupStatus();
+      cleanupSpawn();
+      cleanupRole();
+    }
+  });
+
+  it('stops frame session polling immediately when aborted between attempts', async () => {
+    vi.useFakeTimers();
+
+    const controller = new AbortController();
+    const ctx = makeCtx({}, controller.signal);
+    let statusCalls = 0;
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-status-abort-delay', status: 'spawning' });
+    });
+    const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, (requestCtx) => {
+      statusCalls += 1;
+      requestCtx.setResult({
+        status: 'running',
+        progress: [],
+      });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'should not await' });
+    });
+    const cleanupKill = ctx.bus.on(SubagentSubjects.kill, (requestCtx) => {
+      requestCtx.setResult({ killed: true });
+    });
+
+    const outcomePromise = executeRoleSubagentNode(
+      {
+        nodeId: 'abort-delay-link',
+        nodeLabel: 'Station node',
+        roleId: 'reviewer',
+        prompt: 'Analyze',
+        unresolvedRoleError: 'role missing',
+        unavailableRuntimeError: 'runtime missing',
+        unavailableAwaitError: 'await missing',
+        cancellationLabel: 'station',
+        frameId: 'frame-abort-delay-link',
+      },
+      ctx,
+      emptyExpressionCtx,
+    );
+    let settledOutcome: unknown;
+    void outcomePromise.then((outcome) => {
+      settledOutcome = outcome;
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls).toBe(1);
+
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(settledOutcome).toEqual({ status: 'cancelled' });
+      expect(statusCalls).toBe(1);
+    } finally {
+      if (settledOutcome === undefined) {
+        await vi.advanceTimersByTimeAsync(SESSION_LINK_TEST_CLEANUP_TIMEOUT_MS);
+      }
+      await outcomePromise.catch(() => undefined);
+      cleanupKill();
+      cleanupAwait();
+      cleanupStatus();
+      cleanupSpawn();
+      cleanupRole();
+      vi.useRealTimers();
     }
   });
 

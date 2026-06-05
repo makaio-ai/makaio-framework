@@ -9,6 +9,13 @@ import {
 import type { NodeOutcome } from './node-execution.js';
 
 type ResolvedSubagentAwaitResult = { handled: true; data: AwaitSubagentResponse } | { handled: false };
+type ChildStatusResult = { handled: true; data: { childSessionId?: string } } | { handled: false };
+
+// Best-effort session linking uses a short pre-await polling window; a final
+// single status check runs after await for slow child session creation.
+const SESSION_LINK_POLL_ATTEMPTS = 5;
+const SESSION_LINK_POLL_DELAY_MS = 20;
+const SESSION_LINK_POLL_TIMEOUT_MS = 25;
 
 interface ResolvedSubagentConfigInput {
   readonly task: string;
@@ -42,6 +49,8 @@ export interface ExecuteRoleSubagentNodeParams {
   readonly unavailableAwaitError: string;
   /** Label included in best-effort child cancellation reasons. */
   readonly cancellationLabel: string;
+  /** Runtime frame that owns the spawned child session. */
+  readonly frameId?: string;
 }
 
 export interface ExecuteResolvedSubagentNodeParams {
@@ -63,6 +72,8 @@ export interface ExecuteResolvedSubagentNodeParams {
   readonly unavailableAwaitError: string;
   /** Label included in best-effort child cancellation reasons. */
   readonly cancellationLabel: string;
+  /** Runtime frame that owns the spawned child session. */
+  readonly frameId?: string;
 }
 
 /**
@@ -139,9 +150,16 @@ export async function executeResolvedSubagentNode(
     };
   }
 
+  const sessionLinkEmitted = await emitFrameSessionLink(params, ctx, spawnResult.data.subagentId, {
+    attempts: SESSION_LINK_POLL_ATTEMPTS,
+  });
+
   const awaitResult = await awaitResolvedSubagent(params, ctx, spawnResult.data.subagentId);
   if (awaitResult === 'aborted') {
     return { status: 'cancelled' };
+  }
+  if (!sessionLinkEmitted) {
+    await emitFrameSessionLink(params, ctx, spawnResult.data.subagentId, { attempts: 1 });
   }
   if (!awaitResult.handled) {
     return {
@@ -162,6 +180,146 @@ export async function executeResolvedSubagentNode(
       awaitResult.data.error ?? 'no result'
     }`,
   };
+}
+
+/**
+ * Best-effort emission of a `frame.sessionLinked` bus event after a subagent
+ * spawns, linking the runtime frame to the child session.
+ *
+ * Polls `SubagentSubjects.getStatus` with bounded requests and short
+ * abort-aware delays to allow the subagent runtime to populate the
+ * `childSessionId`. Failures at any step are swallowed so that session link
+ * emission never affects workflow execution outcomes.
+ * @param params - Resolved execution params carrying the optional frame ID.
+ * @param ctx - Execution-wide runtime context.
+ * @param subagentId - Spawned subagent identifier.
+ * @param options - Polling bounds for this emission attempt.
+ * @returns True when a frame-session link was emitted.
+ */
+async function emitFrameSessionLink(
+  params: ExecuteResolvedSubagentNodeParams,
+  ctx: RuntimeContext,
+  subagentId: string,
+  options: { readonly attempts: number },
+): Promise<boolean> {
+  if (params.frameId === undefined) {
+    return true;
+  }
+
+  try {
+    const childSessionId = await resolveChildSessionId(ctx, subagentId, options.attempts);
+    if (childSessionId === undefined) {
+      return false;
+    }
+
+    await ctx.bus.emit(WorkflowSubjects.frame.sessionLinked, {
+      executionId: ctx.executionId,
+      frameId: params.frameId,
+      sessionId: childSessionId,
+    });
+    return true;
+  } catch (error) {
+    console.warn(
+      `[workflow-engine] Failed to emit frame.sessionLinked for frame '${params.frameId}' and subagent '${subagentId}'`,
+      error,
+    );
+    return false;
+  }
+}
+
+/**
+ * Poll `SubagentSubjects.getStatus` until a `childSessionId` is available or
+ * the maximum number of attempts is reached.
+ *
+ * Stops immediately when no handler is registered for the subject — no retry
+ * makes sense if the subagent runtime is absent. Timeout, abort, and handler
+ * failures also return `undefined` because frame-session linking is
+ * best-effort telemetry. Only retries when a handler is present but the child
+ * session ID is not yet populated, covering the race between spawn and the
+ * runtime wiring up the session.
+ * @param ctx - Execution-wide runtime context.
+ * @param subagentId - Spawned subagent identifier.
+ * @param attempts - Maximum status requests to issue.
+ * @returns The child session ID, or `undefined` if it could not be resolved.
+ */
+async function resolveChildSessionId(
+  ctx: RuntimeContext,
+  subagentId: string,
+  attempts: number,
+): Promise<string | undefined> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (ctx.signal?.aborted) {
+      return undefined;
+    }
+    const statusResult = await requestChildStatus(ctx, subagentId);
+    if (statusResult === undefined) {
+      return undefined;
+    }
+    if (!statusResult.handled) {
+      // No handler registered — the subagent runtime is absent. Retrying will
+      // not help, so bail out immediately without sleeping.
+      return undefined;
+    }
+    if (statusResult.data.childSessionId !== undefined) {
+      return statusResult.data.childSessionId;
+    }
+    if (attempt < attempts - 1) {
+      const elapsed = await waitForSessionLinkPollDelay(ctx.signal, SESSION_LINK_POLL_DELAY_MS);
+      if (!elapsed) {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Request the child subagent status with a short best-effort budget.
+ * @param ctx - Execution-wide runtime context.
+ * @param subagentId - Spawned subagent identifier.
+ * @returns Optional status result, or `undefined` when polling should stop.
+ */
+async function requestChildStatus(ctx: RuntimeContext, subagentId: string): Promise<ChildStatusResult | undefined> {
+  try {
+    return await ctx.bus.requestOptional(
+      SubagentSubjects.getStatus,
+      { subagentId },
+      { timeout: SESSION_LINK_POLL_TIMEOUT_MS, signal: ctx.signal },
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Wait between child-session status polls while honoring workflow abort.
+ * @param signal - Workflow cancellation signal.
+ * @param delayMs - Delay in milliseconds.
+ * @returns `true` when the delay elapsed, `false` when aborted first.
+ */
+function waitForSessionLinkPollDelay(signal: AbortSignal, delayMs: number): Promise<boolean> {
+  if (signal.aborted) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise<boolean>((resolve) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const finish = (elapsed: boolean): void => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      signal.removeEventListener('abort', abort);
+      resolve(elapsed);
+    };
+    const abort = (): void => finish(false);
+
+    timeout = setTimeout(() => finish(true), delayMs);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) {
+      finish(false);
+    }
+  });
 }
 
 /**

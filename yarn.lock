@@ -4961,6 +4961,29 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/extension-telemetry-otel@workspace:extensions/telemetry-otel":
+  version: 0.0.0-use.local
+  resolution: "@makaio/extension-telemetry-otel@workspace:extensions/telemetry-otel"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/rules": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@opentelemetry/api": "npm:^1.9.0"
+    "@opentelemetry/exporter-trace-otlp-http": "npm:0.217.0"
+    "@opentelemetry/resources": "npm:2.7.1"
+    "@opentelemetry/sdk-trace-base": "npm:2.7.1"
+    "@opentelemetry/semantic-conventions": "npm:^1.39.0"
+    "@types/node": "npm:^24.3.0"
+    tsdown: "npm:0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.7"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/extension-workflow@workspace:extensions/workflow":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-workflow@workspace:extensions/workflow"

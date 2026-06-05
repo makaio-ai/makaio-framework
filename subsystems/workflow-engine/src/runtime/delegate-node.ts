@@ -18,12 +18,14 @@ import { executeResolvedSubagentNode, executeRoleSubagentNode } from './role-sub
  * @param node - The delegate-agent node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
+ * @param frameId - Frame ID of this node's frame, forwarded for session link emission.
  * @returns Terminal execution outcome for this delegation.
  */
 export async function executeDelegateAgentNode(
   node: WorkflowDelegateAgentNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
+  frameId?: string,
 ): Promise<NodeOutcome> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
@@ -58,6 +60,7 @@ export async function executeDelegateAgentNode(
       unavailableRuntimeError: `Subagent runtime is not available for delegate-agent node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await delegate-agent node '${node.id}'`,
       cancellationLabel: 'delegate-agent',
+      ...(frameId !== undefined ? { frameId } : {}),
     },
     ctx,
   );
@@ -73,12 +76,14 @@ export async function executeDelegateAgentNode(
  * @param node - The delegate-role node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
+ * @param frameId - Frame ID of this node's frame, forwarded for session link emission.
  * @returns Terminal execution outcome for this delegation.
  */
 export async function executeDelegateRoleNode(
   node: WorkflowDelegateRoleNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
+  frameId?: string,
 ): Promise<NodeOutcome> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
@@ -96,6 +101,7 @@ export async function executeDelegateRoleNode(
       unavailableRuntimeError: `Subagent runtime is not available for delegate-role node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await delegate-role node '${node.id}'`,
       cancellationLabel: 'delegate-role',
+      ...(frameId !== undefined ? { frameId } : {}),
     },
     ctx,
     expressionCtx,

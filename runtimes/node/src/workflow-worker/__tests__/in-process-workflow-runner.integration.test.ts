@@ -116,7 +116,13 @@ describe('InProcessWorkflowRunner integration', () => {
         status: 'completed',
       });
       expect(executions.get('exec-runner-001')?.status).toBe('completed');
-      expect(completedEvents).toEqual([{ executionId: 'exec-runner-001', totalDuration: expect.any(Number) }]);
+      expect(completedEvents).toEqual([
+        {
+          executionId: 'exec-runner-001',
+          totalDuration: expect.any(Number),
+          completedAt: expect.any(Number),
+        },
+      ]);
     } finally {
       offCompleted();
       cleanup();

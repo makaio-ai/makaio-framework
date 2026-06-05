@@ -54,7 +54,7 @@ export async function executeStationNode(
 
   const handler: StationHandler | undefined = ctx.runtimeHandlers.get(node.id);
   if (handler === undefined) {
-    return executeRoleStationNode(node, ctx, expressionCtx);
+    return executeRoleStationNode(node, ctx, expressionCtx, frameId);
   }
 
   // Build artifact context when the execution has an active artifact binding.
@@ -109,12 +109,14 @@ export async function executeStationNode(
  * @param node - Station node without a registered runtime handler.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
+ * @param frameId - Frame ID of this station's frame, forwarded for session link emission.
  * @returns Terminal execution outcome for the role-backed station.
  */
 async function executeRoleStationNode(
   node: WorkflowStationNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
+  frameId?: string,
 ): Promise<NodeOutcome> {
   if (node.role === undefined) {
     return {
@@ -135,6 +137,7 @@ async function executeRoleStationNode(
       unavailableRuntimeError: `Subagent runtime is not available for station node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await station node '${node.id}'`,
       cancellationLabel: 'station',
+      ...(frameId !== undefined ? { frameId } : {}),
     },
     ctx,
     expressionCtx,

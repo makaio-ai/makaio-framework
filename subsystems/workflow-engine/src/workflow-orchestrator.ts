@@ -94,9 +94,14 @@ async function persistPreRuntimeTerminalExecution(
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: config.executionId,
       totalDuration: 0,
+      completedAt: execution.completedAt,
     });
   } else {
-    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId: config.executionId, reason });
+    await bus.emit(WorkflowSubjects.execution.cancelled, {
+      executionId: config.executionId,
+      reason,
+      completedAt: execution.completedAt,
+    });
   }
 
   return { executionId: config.executionId, workflowId: config.workflowId, status };
@@ -297,13 +302,19 @@ async function emitTerminalExecutionEvent(
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: config.executionId,
       totalDuration: completedAt - liveExecution.startedAt,
+      completedAt,
     });
   } else if (status === 'cancelled') {
-    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId: config.executionId });
+    await bus.emit(WorkflowSubjects.execution.cancelled, {
+      executionId: config.executionId,
+      reason: WORKFLOW_CANCELLED_REASON,
+      completedAt,
+    });
   } else {
     await bus.emit(WorkflowSubjects.execution.failed, {
       executionId: config.executionId,
       error: error ?? 'Workflow execution failed',
+      completedAt,
     });
   }
 }
