@@ -7,6 +7,11 @@ describe('worker-node namespace', () => {
     expect(WorkerNodeSubjects.lifecycle.ready.subject).toBe('lifecycle.ready');
   });
 
+  it('registers dispatch under worker-node', () => {
+    expect(WorkerNodeSubjects.dispatch.$meta.namespace).toBe('worker-node');
+    expect(WorkerNodeSubjects.dispatch.subject).toBe('dispatch');
+  });
+
   it('keeps pool identity out of framework lifecycle payloads', () => {
     const parsed = WorkerNodeSchemas['lifecycle.ready'].parse({
       nodeId: 'node-1',

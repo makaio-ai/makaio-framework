@@ -48,7 +48,7 @@ export interface ServeBootOverrides {
   readonly launcherCommand?: CoreBootOptions['launcherCommand'];
   /** Optional loopback transport registry name. */
   readonly loopbackName?: CoreBootOptions['loopbackName'];
-  /** Workflow runner mode for the workflow engine. Defaults to `piscina`. */
+  /** Base workflow runner mode for the workflow engine. Defaults to Piscina. */
   readonly workflowRunner?: CoreBootOptions['workflowRunner'];
   /**
    * Dev-mode workspace package map forwarded to the package-manager service.

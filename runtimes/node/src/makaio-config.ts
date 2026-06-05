@@ -29,7 +29,7 @@ export interface ConfiguredDiscoveryRoot {
 
 const WorkflowRunnerConfigSchema = z
   .object({
-    mode: z.enum(['in-process', 'piscina']).optional(),
+    mode: z.enum(['in-process', 'piscina', 'worker-node']).optional(),
     maxConcurrency: z.number().int().positive().optional(),
     idleTimeoutMs: z.number().int().positive().optional(),
   })

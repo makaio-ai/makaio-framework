@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
+import { WorkerNodeRequirementsSchema } from '../capabilities/worker-node/index.js';
+import {
+  WorkflowRunResultSchema,
+  WorkflowWorkerConfigSchema,
+  WorkerContributionManifestSchema,
+} from '../workflow/index.js';
 
 /**
  * Base fields present on every WorkerNode lifecycle event.
@@ -20,6 +26,35 @@ const WorkerNodeLifecycleBaseSchema = z.object({
 });
 
 /**
+ * Framework-level WorkerNode dispatch request.
+ *
+ * Pool selection and provider allocation remain product-owned. This request is
+ * the generic bus seam used by workflow-level runners that need WorkerNode
+ * execution without importing a concrete pool service.
+ */
+export const WorkerNodeDispatchRequestSchema = z.object({
+  /** Full workflow worker configuration. */
+  config: WorkflowWorkerConfigSchema,
+  /**
+   * Optional concrete manifest already resolved by the caller.
+   *
+   * Omit this field when the dispatch implementation should resolve the
+   * applicable manifest itself. Callers that need to force an explicit empty
+   * manifest should pass a manifest with `packages: []`.
+   */
+  manifest: WorkerContributionManifestSchema.optional(),
+  /** Optional resource requirements used by the dispatch implementation. */
+  requirements: WorkerNodeRequirementsSchema.optional(),
+  /** Opaque caller metadata forwarded to lifecycle and provisioning payloads. */
+  metadata: JsonObjectContractSchema.optional(),
+});
+
+/**
+ * Framework-level WorkerNode dispatch response.
+ */
+export const WorkerNodeDispatchResponseSchema = WorkflowRunResultSchema;
+
+/**
  * WorkerNode lifecycle bus schemas.
  *
  * All keys map to `worker-node.<key>` subjects on the bus. Each subject
@@ -36,6 +71,17 @@ const WorkerNodeLifecycleBaseSchema = z.object({
  * - `lifecycle.terminated`   — node environment has been torn down
  */
 export const WorkerNodeSchemas = {
+  /**
+   * Dispatch a workflow execution to a WorkerNode dispatcher.
+   *
+   * Subject: `worker-node.dispatch`
+   * Type: Request (RPC)
+   */
+  dispatch: {
+    request: WorkerNodeDispatchRequestSchema,
+    response: WorkerNodeDispatchResponseSchema,
+  },
+
   /**
    * Dispatch has selected a provider; node allocation is in progress.
    *

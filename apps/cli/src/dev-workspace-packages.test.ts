@@ -51,6 +51,7 @@ vi.mock('@makaio/runtime-node', () => runtimeNodeMocks);
 
 import { discoverDevWorkspacePackages } from './dev-workspace-packages.js';
 import {
+  applyConfigToServeConfig,
   applyDevWorkspacePackages,
   resolveCliRuntimeConfig,
   shouldApplyDevWorkspacePackages,
@@ -228,6 +229,24 @@ describe('resolveCliRuntimeConfig', () => {
     expect(shouldApplyDevWorkspacePackages(['node', 'makaio', 'open'])).toBe(false);
     expect(shouldApplyDevWorkspacePackages(['node', 'makaio', '--version'])).toBe(false);
     expect(shouldApplyDevWorkspacePackages(['node', 'makaio'])).toBe(false);
+  });
+});
+
+describe('applyConfigToServeConfig', () => {
+  it('defaults base workflow execution to Piscina when config omits a runner', () => {
+    const result = applyConfigToServeConfig(undefined, {
+      extensions: {
+        autoDiscover: true,
+        discoveryPaths: [],
+        discoveryRoots: [],
+        include: [],
+        exclude: [],
+      },
+      launcherCommand: 'makaio',
+      packageConfigDefaults: new Map(),
+    });
+
+    expect(result.boot?.workflowRunner).toEqual({ mode: 'piscina' });
   });
 });
 

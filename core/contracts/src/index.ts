@@ -815,7 +815,13 @@ export type {
   WorkLogDynamicNodeMaterialization,
   WorkflowArtifactBinding,
 } from './workflow/index.js';
-export { WorkerNodeNamespace, WorkerNodeSchemas, WorkerNodeSubjects } from './worker-node/index.js';
+export {
+  WorkerNodeDispatchRequestSchema,
+  WorkerNodeDispatchResponseSchema,
+  WorkerNodeNamespace,
+  WorkerNodeSchemas,
+  WorkerNodeSubjects,
+} from './worker-node/index.js';
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,
