@@ -248,7 +248,6 @@ Read [`.agents/policies/adapters.md`](../.agents/policies/adapters.md) and
 | `adapters/implementations/claude-code-cli`    | `@makaio/adapter-claude-code-cli`           | Claude Code CLI adapter.                                             |
 | `adapters/implementations/claude-code-tmux`   | `@makaio/adapter-claude-code-tmux`          | Claude Code tmux adapter.                                            |
 | `adapters/implementations/codex-app-server`   | `@makaio/adapter-codex-app-server`          | OpenAI Codex App-Server adapter.                                     |
-| `adapters/implementations/cursor-sdk`         | `@makaio/adapter-cursor-sdk`                | Cursor SDK adapter.                                                  |
 | `adapters/implementations/gemini-sdk`         | `@makaio/adapter-gemini-sdk`                | Gemini SDK adapter.                                                  |
 | `adapters/implementations/github-copilot-sdk` | `@makaio/adapter-github-copilot-sdk`        | GitHub Copilot SDK adapter.                                          |
 | `adapters/implementations/openai-node`        | `@makaio/adapter-openai-node`               | OpenAI Node SDK adapter.                                             |
@@ -266,7 +265,6 @@ Clients model external installed tools and runtime binaries. Provider identity a
 | ------------------------ | ------------------------------- | ---------------------------------- |
 | `clients/claude-code`    | `@makaio/client-claude-code`    | Claude Code client integration.    |
 | `clients/codex`          | `@makaio/client-codex`          | OpenAI Codex client integration.   |
-| `clients/cursor`         | `@makaio/client-cursor`         | Cursor client integration.         |
 | `clients/gemini`         | `@makaio/client-gemini`         | Gemini client integration.         |
 | `clients/github-copilot` | `@makaio/client-github-copilot` | GitHub Copilot client integration. |
 | `clients/qwen`           | `@makaio/client-qwen`           | Qwen client integration.           |
@@ -282,7 +280,6 @@ should stay metadata-focused and avoid runtime orchestration.
 | -------------------------- | --------------------------------- | ------------------------ |
 | `providers/alibaba`        | `@makaio/provider-alibaba`        | Alibaba Cloud provider.  |
 | `providers/anthropic`      | `@makaio/provider-anthropic`      | Anthropic provider.      |
-| `providers/cursor`         | `@makaio/provider-cursor`         | Cursor provider.         |
 | `providers/github-copilot` | `@makaio/provider-github-copilot` | GitHub Copilot provider. |
 | `providers/google`         | `@makaio/provider-google`         | Google provider.         |
 | `providers/kimi`           | `@makaio/provider-kimi`           | Kimi provider.           |
@@ -319,7 +316,6 @@ Read [`.agents/policies/extensions.md`](../.agents/policies/extensions.md),
 | `extensions/reviewer-copilot`       | `@makaio/reviewer-copilot`                 | Copilot reviewer extension.                     |
 | `extensions/shell`                  | `@makaio/extension-shell`                  | Shell execution tool extension.                 |
 | `extensions/subagent`               | `@makaio/extension-subagent`               | Subagent communication tool and state manager.  |
-| `extensions/telemetry-otel`         | `@makaio/extension-telemetry-otel`         | OpenTelemetry trace exporter extension.         |
 | `extensions/workflow`               | `@makaio/extension-workflow`               | Workflow CLI extension.                         |
 
 ### `ui/`
