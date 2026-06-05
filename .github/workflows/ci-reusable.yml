@@ -11,7 +11,7 @@ on:
       test_shards:
         required: false
         type: string
-        default: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps"]'
+        default: '["Core", "Packages", "Platform", "Adapters", "Extensions", "Apps", "forks-required"]'
         description: 'JSON array of Vitest project/shard names to run in the test matrix.'
       validation_command:
         required: false

@@ -73,6 +73,35 @@ export function categoryIncludes(dirs: string[], categories: Set<TestCategory>, 
 }
 
 /**
+ * Checks whether an explicit test file belongs to the enabled category set.
+ * @param filePath - File path relative to the active Vitest root.
+ * @param categories - Enabled test categories.
+ * @param adapterDirs - Directories that qualify for the `adapters` category.
+ */
+export function fileMatchesCategories(
+  filePath: string,
+  categories: Set<TestCategory>,
+  adapterDirs?: Set<string>,
+): boolean {
+  const category = inferCategory(filePath);
+  if (category !== 'unit') return categories.has(category);
+  if (categories.has('unit')) return true;
+  return categories.has('adapters') && Boolean(adapterDirs && matchesAnyPrefix(filePath, adapterDirs));
+}
+
+/**
+ * Checks whether a file path belongs to one of the candidate directories.
+ * @param filePath - File path relative to the active Vitest root.
+ * @param dirs - Candidate shard directories.
+ */
+function matchesAnyPrefix(filePath: string, dirs: Set<string>): boolean {
+  for (const dir of dirs) {
+    if (filePath.startsWith(`${dir}/`)) return true;
+  }
+  return false;
+}
+
+/**
  * Resolves which shard a file path belongs to (longest-prefix match).
  * @param filePath - File path relative to the vitest root.
  * @param shards - Shard name → directory list mapping.
@@ -105,6 +134,25 @@ export const frameworkShards: Record<string, string[]> = {
 };
 
 export const FRAMEWORK_ADAPTER_DIRS = new Set(['adapters']);
+
+/**
+ * Test files that require process isolation (`forks` pool).
+ * Paths are relative to the framework root.
+ */
+export const FORKS_REQUIRED_FILES: string[] = [
+  // process.chdir() not supported in worker threads
+  'storage/drizzle/src/__tests__/client.test.ts',
+  'services/package-manager/src/__tests__/local-path-installer.test.ts',
+  'scripts/lib/validate/validators/typescript-validator.test.ts',
+  'runtimes/node/src/__tests__/makaio-config.test.ts',
+  'runtimes/node/src/__tests__/extension-discovery.test.ts',
+  'runtimes/node/src/__tests__/node-runtime-options.test.ts',
+  // Requires process isolation for filesystem/global state
+  'clients/claude-code/src/runtime/__tests__/client-settings.test.ts',
+  'clients/claude-code/src/runtime/__tests__/wiring-config-dir.test.ts',
+  'clients/claude-code/src/runtime/__tests__/session-config-handler.test.ts',
+  'clients/claude-code/src/runtime/__tests__/claude-code-client-service.config.test.ts',
+];
 
 /**
  * Infers the test category from a file's name suffix.

@@ -25,9 +25,12 @@
  * E2E, browser, SDK, and conformance tests have separate configs and scripts.
  */
 import { defineConfig } from 'vitest/config';
+import type { TestProjectConfiguration } from 'vitest/config';
 import { resolve } from 'path';
 import {
   categoryIncludes,
+  fileMatchesCategories,
+  FORKS_REQUIRED_FILES,
   frameworkShards as shards,
   FRAMEWORK_ADAPTER_DIRS as ADAPTER_DIRS,
   parseTestCategories,
@@ -36,6 +39,9 @@ import {
 const root = import.meta.dirname;
 
 const enabledCategories = parseTestCategories(process.env.MAKAIO_TEST_CATEGORIES);
+const forksRequiredInclude = FORKS_REQUIRED_FILES.filter((file) =>
+  fileMatchesCategories(file, enabledCategories, ADAPTER_DIRS),
+);
 
 const exclude: string[] = [
   '**/node_modules/**',
@@ -66,18 +72,30 @@ export default defineConfig({
     environment: 'node',
     reporters: [resolve(root, 'scripts/lib/token-efficient-reporter.ts')],
     setupFiles: [resolve(root, 'vitest.setup.ts')],
-    pool: 'forks',
+    pool: 'threads',
     fileParallelism: true,
-    maxWorkers: '50%',
     onConsoleLog: () => (process.env.MAKAIO_DEBUG ? undefined : false),
     exclude,
-    projects: Object.entries(shards).map(([name, dirs]) => ({
-      extends: true,
-      test: {
-        name,
-        include: categoryIncludes(dirs, enabledCategories, ADAPTER_DIRS),
-      },
-    })),
+    projects: [
+      ...Object.entries(shards).map(
+        ([name, dirs]): TestProjectConfiguration => ({
+          extends: true,
+          test: {
+            name,
+            exclude: [...exclude, ...FORKS_REQUIRED_FILES],
+            include: categoryIncludes(dirs, enabledCategories, ADAPTER_DIRS),
+          },
+        }),
+      ),
+      {
+        extends: true,
+        test: {
+          name: 'forks-required',
+          pool: 'forks',
+          include: forksRequiredInclude,
+        },
+      } satisfies TestProjectConfiguration,
+    ],
   },
   resolve: {
     tsconfigPaths: true,
