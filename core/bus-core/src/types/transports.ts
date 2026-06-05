@@ -28,6 +28,13 @@ import type { PayloadFilter, TransportReceiveContext } from '@makaio/core';
 export interface BusSubscribeMessage {
   type: 'subscribe';
   /**
+   * Optional acknowledgement identifier.
+   * Transports that support dynamic subscription acknowledgements send a
+   * `subscription-ack` after applying the subscription update to their local
+   * routing state.
+   */
+  ackId?: string;
+  /**
    * Subjects and their handler priorities.
    * Keys are subject patterns (can include wildcards like `'adapter.*'`).
    * Values are arrays of handler priorities registered for that subject.
@@ -61,6 +68,13 @@ export interface BusSubscribeMessage {
 export interface BusUnsubscribeMessage {
   type: 'unsubscribe';
   /**
+   * Optional acknowledgement identifier.
+   * Transports that support dynamic subscription acknowledgements send a
+   * `subscription-ack` after applying the unsubscription update to their local
+   * routing state.
+   */
+  ackId?: string;
+  /**
    * Subjects and the handler priorities being removed.
    * Keys are subject patterns.
    * Values are the specific priorities being unregistered (for ref-counting).
@@ -82,6 +96,18 @@ export interface BusSubscribeSyncCompleteMessage {
 }
 
 /**
+ * Acknowledges a dynamic subscribe/unsubscribe control message.
+ *
+ * Complements the initial `subscribe-sync-complete` handshake: the handshake
+ * covers connection startup, while this message confirms one later
+ * subscription change has reached the remote routing state.
+ */
+export interface BusSubscriptionAckMessage {
+  type: 'subscription-ack';
+  ackId: string;
+}
+
+/**
  * Message types for transport wire protocol.
  */
 export type BusMessage =
@@ -93,7 +119,8 @@ export type BusMessage =
   | BusHeartbeatMessage
   | BusSubscribeMessage
   | BusUnsubscribeMessage
-  | BusSubscribeSyncCompleteMessage;
+  | BusSubscribeSyncCompleteMessage
+  | BusSubscriptionAckMessage;
 
 /**
  * Handler invoked by transports when a bus message arrives.

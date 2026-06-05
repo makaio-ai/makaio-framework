@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TrayMenuListEntry } from '@makaio/services-core/tray-menu';
 import type { WindowState } from '@makaio/host-shared';
 import type { WindowRegistration } from '@makaio/kernel';
-import { buildTrayMenuTemplate } from '../src/main/tray.js';
+import { buildTrayMenuTemplate } from '../src/main/tray-menu-template.js';
 
 function makeWindow(overrides: Partial<WindowState> & { windowId: number; registrationId: string }): WindowState {
   return {

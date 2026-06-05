@@ -6,15 +6,29 @@ import { describe, it, expect, vi } from 'vitest';
 import { createE2ERelayClientTransport, createE2ERelayCodec } from '../e2e-relay-client-transport.js';
 import { E2ERelayAuth } from '../auth/e2e-relay-auth.js';
 import { generateSigningKeyPair } from '../crypto/ecdsa.js';
-import { decryptRelayEnvelope, type RelayEnvelopeMessage } from '../e2e-relay-envelope.js';
+import { decryptRelayEnvelope, encryptRelayEnvelope, type RelayEnvelopeMessage } from '../e2e-relay-envelope.js';
 import { createRelayControlRegistry } from '../relay-control-registry.js';
 import { MockWebSocket, createRelayAuthPairRaw } from './test-helpers.js';
 import { buildRelayControlTestRegistry, createRelayControlTestHelpers } from './relay-control-test-registry.js';
+import { waitForCondition } from './test-utils.js';
 
 const testRegistry = buildRelayControlTestRegistry();
 const { createRelayControlEnvelope } = createRelayControlTestHelpers(testRegistry);
 
 const EXPIRED_RELAY_CONTROL_RESPONSE_TTL_MS = 5 * 60 * 1000 + 1;
+
+/**
+ * Assert that a promise does not settle within a short observation window.
+ * @param promise - Promise expected to remain pending
+ * @param timeoutMs - Observation window in milliseconds
+ */
+async function expectStillPending(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  const result = await Promise.race([
+    promise.then(() => 'settled' as const),
+    new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), timeoutMs)),
+  ]);
+  expect(result).toBe('pending');
+}
 
 /**
  * Create an unauthenticated relay codec for tests that exercise pre-session
@@ -96,27 +110,56 @@ describe('createE2ERelayClientTransport', () => {
     expect(sessionKey).not.toBeNull();
 
     ws.clearSentMessages();
-    await transport.subscribe('agent.started', { agentId: 'agent-1' });
-    await transport.unsubscribe('agent.started');
+    const subscribe = transport.subscribe('agent.started', { agentId: 'agent-1' });
+    await waitForCondition(() => ws.sentMessages.length > 0, 1000, 'subscribe envelope was not sent');
+    const subscribeEnvelope = JSON.parse(ws.sentMessages[0]) as RelayEnvelopeMessage;
+    const subscribeMessage = await decryptRelayEnvelope(subscribeEnvelope, sessionKey!);
+    expect(subscribeMessage.type).toBe('subscribe');
+    if (subscribeMessage.type !== 'subscribe') {
+      throw new Error('Expected encrypted subscribe message');
+    }
+    const subscribeAckId = subscribeMessage.ackId;
+    expect(subscribeAckId).toEqual(expect.any(String));
+    // Once the relay E2E session exists, plaintext subscription acks are
+    // rejected as injection attempts and must not resolve the pending update.
+    ws.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: subscribeAckId }));
+    await expectStillPending(subscribe, 20);
+    ws.receiveMessage(
+      JSON.stringify(await encryptRelayEnvelope({ type: 'subscription-ack', ackId: subscribeAckId! }, sessionKey!)),
+    );
+    await subscribe;
+
+    const unsubscribe = transport.unsubscribe('agent.started');
+    await waitForCondition(() => ws.sentMessages.length > 1, 1000, 'unsubscribe envelope was not sent');
+    const unsubscribeEnvelope = JSON.parse(ws.sentMessages[1]) as RelayEnvelopeMessage;
+    const unsubscribeMessage = await decryptRelayEnvelope(unsubscribeEnvelope, sessionKey!);
+    expect(unsubscribeMessage.type).toBe('unsubscribe');
+    if (unsubscribeMessage.type !== 'unsubscribe') {
+      throw new Error('Expected encrypted unsubscribe message');
+    }
+    const unsubscribeAckId = unsubscribeMessage.ackId;
+    expect(unsubscribeAckId).toEqual(expect.any(String));
+    ws.receiveMessage(
+      JSON.stringify(await encryptRelayEnvelope({ type: 'subscription-ack', ackId: unsubscribeAckId! }, sessionKey!)),
+    );
+    await unsubscribe;
 
     expect(ws.sentMessages).toHaveLength(2);
 
-    const subscribeEnvelope = JSON.parse(ws.sentMessages[0]) as RelayEnvelopeMessage;
     expect(subscribeEnvelope.type).toBe('e2e-relay-envelope');
 
-    const subscribeMessage = await decryptRelayEnvelope(subscribeEnvelope, sessionKey!);
     expect(subscribeMessage).toEqual({
       type: 'subscribe',
+      ackId: expect.any(String),
       subjects: { 'agent.started': [] },
       filters: { 'agent.started': { agentId: 'agent-1' } },
     });
 
-    const unsubscribeEnvelope = JSON.parse(ws.sentMessages[1]) as RelayEnvelopeMessage;
     expect(unsubscribeEnvelope.type).toBe('e2e-relay-envelope');
 
-    const unsubscribeMessage = await decryptRelayEnvelope(unsubscribeEnvelope, sessionKey!);
     expect(unsubscribeMessage).toEqual({
       type: 'unsubscribe',
+      ackId: expect.any(String),
       subjects: { 'agent.started': [] },
     });
   });
@@ -176,18 +219,36 @@ describe('createE2ERelayClientTransport', () => {
     const transport = createE2ERelayClientTransport({ websocket: ws, e2eAuth, registry: testRegistry });
 
     await transport.connect();
-    await transport.subscribe('relay.error');
-    await transport.unsubscribe('relay.error');
+    const subscribe = transport.subscribe('relay.error');
+    await waitForCondition(() => ws.sentMessages.length > 0, 1000, 'subscribe message was not sent');
+    const subscribeMessage = JSON.parse(ws.sentMessages[0]) as { ackId?: string };
+    ws.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: subscribeMessage.ackId }));
+    await subscribe;
+    const unsubscribe = transport.unsubscribe('relay.error');
+    await waitForCondition(() => ws.sentMessages.length > 1, 1000, 'unsubscribe message was not sent');
+    const unsubscribeMessage = JSON.parse(ws.sentMessages[1]) as { ackId?: string };
+    ws.receiveMessage(JSON.stringify({ type: 'subscription-ack', ackId: unsubscribeMessage.ackId }));
+    await unsubscribe;
 
     expect(ws.sentMessages).toHaveLength(2);
     expect(JSON.parse(ws.sentMessages[0])).toEqual({
       type: 'subscribe',
+      ackId: expect.any(String),
       subjects: { 'relay.error': [] },
     });
     expect(JSON.parse(ws.sentMessages[1])).toEqual({
       type: 'unsubscribe',
+      ackId: expect.any(String),
       subjects: { 'relay.error': [] },
     });
+  });
+
+  it('encodes subscription acknowledgements as plaintext only before the E2E session exists', async () => {
+    const codec = await createUnauthenticatedRelayCodec('machine-pre-session-ack');
+
+    await expect(codec.encode({ type: 'subscription-ack', ackId: 'ack-before-session' })).resolves.toBe(
+      JSON.stringify({ type: 'subscription-ack', ackId: 'ack-before-session' }),
+    );
   });
 
   it('ignores plaintext relay events before session key is established', async () => {

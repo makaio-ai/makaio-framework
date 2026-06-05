@@ -382,6 +382,12 @@ describe('E2E encrypted transport', () => {
     });
   }, 15000);
 
+  it('resolves dynamic subscription acknowledgements from a direct E2E server', async () => {
+    await withE2EFixture(async ({ clientTransport }) => {
+      await expect(clientTransport.subscribe('test.dynamic-e2e')).resolves.toBeUndefined();
+    });
+  }, 15000);
+
   it('clears the client session key when the E2E transport disconnects', async () => {
     await withE2EFixture(async ({ clientTransport, clientAuth }) => {
       expect(clientAuth.getSessionKey()).not.toBeNull();

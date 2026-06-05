@@ -56,11 +56,47 @@ export interface InboundMessageHandlerDeps {
    * transport's `ready` promise for the current session.
    */
   onSyncComplete(): void;
+  /**
+   * Called when a dynamic subscription acknowledgement is received.
+   * @param ackId - Acknowledgement identifier from the wire message.
+   */
+  onSubscriptionAck(ackId: string): void;
+  /**
+   * Send an acknowledgement for an inbound dynamic subscription update after
+   * application handlers have applied it to local routing state.
+   * @param ackId - Acknowledgement identifier from the inbound control frame.
+   */
+  sendSubscriptionAck(ackId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
+
+/**
+ * Fan out a decoded message to registered handlers and report aggregate success.
+ * @param message - Decoded bus message
+ * @param handlers - Registered message handlers
+ * @param options - Logging options
+ * @returns True when every handler completed successfully
+ */
+async function dispatchToHandlers(
+  message: BusMessage,
+  handlers: Set<(message: BusMessage) => Promise<void>>,
+  options: {
+    debug: boolean;
+    name: string;
+  },
+): Promise<boolean> {
+  const handlerResults = await Promise.allSettled(Array.from(handlers).map((handler) => handler(message)));
+  for (const result of handlerResults) {
+    if (result.status === 'rejected' && options.debug) {
+      console.error(`[WebSocketClientTransport:${options.name}] Handler error:`, result.reason);
+    }
+  }
+
+  return handlerResults.every((result) => result.status === 'fulfilled');
+}
 
 /**
  * Process a single raw inbound frame from the WebSocket.
@@ -120,21 +156,25 @@ export async function handleInboundMessage(data: string | Buffer, deps: InboundM
       return;
     }
 
+    if (decoded.type === 'subscription-ack') {
+      if (typeof decoded.ackId === 'string') {
+        deps.onSubscriptionAck(decoded.ackId);
+      }
+      return;
+    }
+
     if (handleCorrelationResponse(decoded, correlations)) {
       return;
     }
 
-    await Promise.all(
-      Array.from(handlers).map(async (handler) => {
-        try {
-          await handler(decoded);
-        } catch (error) {
-          if (debug) {
-            console.error(`[WebSocketClientTransport:${name}] Handler error:`, error);
-          }
-        }
-      }),
-    );
+    const handlersApplied = await dispatchToHandlers(decoded, handlers, { debug, name });
+    if (
+      handlersApplied &&
+      (decoded.type === 'subscribe' || decoded.type === 'unsubscribe') &&
+      typeof decoded.ackId === 'string'
+    ) {
+      await deps.sendSubscriptionAck(decoded.ackId);
+    }
   } catch (error) {
     if (debug) {
       console.error(`[WebSocketClientTransport:${name}] Failed to parse message:`, error);

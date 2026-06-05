@@ -2,7 +2,7 @@ import { CorrelationTracker, type BusReceiveHandler } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BroadcastAggregator } from '../broadcast-aggregator.js';
 import { ClientRegistry } from '../client-registry.js';
-import { createInboundMessageHandler, type MessageHandlerDeps } from '../server-message-handler.js';
+import { createInboundMessageHandler, routeMessage, type MessageHandlerDeps } from '../server-message-handler.js';
 import type { TransportAuth } from '../types.js';
 import { MockWebSocket } from './test-helpers.js';
 
@@ -83,5 +83,55 @@ describe('createInboundMessageHandler', () => {
     // The message must NOT reach any handler — the auth gate must have dropped it.
     expect(handlerSpy).not.toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith('[ServerTransport] Ignoring message from unauthenticated client');
+  });
+
+  it('does not acknowledge subscribe messages when a handler fails', async () => {
+    const socket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const handlers = new Set<BusReceiveHandler>([
+      async () => {
+        throw new Error('subscribe handler failed');
+      },
+    ]);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        ackId: 'subscribe-failed',
+        subjects: { 'test.subject': [] },
+      },
+      socket,
+      makeDeps({ debug: false, handlers, sendSafely }),
+    );
+
+    expect(sendSafely).not.toHaveBeenCalledWith(
+      socket,
+      JSON.stringify({ type: 'subscription-ack', ackId: 'subscribe-failed' }),
+    );
+  });
+
+  it('does not acknowledge unsubscribe messages when a handler fails', async () => {
+    const socket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const handlers = new Set<BusReceiveHandler>([
+      async () => {
+        throw new Error('unsubscribe handler failed');
+      },
+    ]);
+
+    await routeMessage(
+      {
+        type: 'unsubscribe',
+        ackId: 'unsubscribe-failed',
+        subjects: { 'test.subject': [] },
+      },
+      socket,
+      makeDeps({ debug: false, handlers, sendSafely }),
+    );
+
+    expect(sendSafely).not.toHaveBeenCalledWith(
+      socket,
+      JSON.stringify({ type: 'subscription-ack', ackId: 'unsubscribe-failed' }),
+    );
   });
 });

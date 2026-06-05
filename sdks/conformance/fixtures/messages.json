@@ -182,6 +182,10 @@
     "subscribe-sync-complete": {
       "type": "subscribe-sync-complete"
     },
+    "subscription-ack": {
+      "type": "subscription-ack",
+      "ackId": "ack-1"
+    },
     "unsubscribe.agent.complete": {
       "type": "unsubscribe",
       "subjects": {

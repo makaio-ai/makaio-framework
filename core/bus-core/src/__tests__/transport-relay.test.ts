@@ -357,6 +357,42 @@ describe('Transport relay and subscription propagation', () => {
       }
     });
 
+    it('waits for advertised subscribe propagation before resolving inbound subscribe handling', async () => {
+      let releaseSubscribe!: () => void;
+      const subscribePropagation = new Promise<void>((resolve) => {
+        releaseSubscribe = resolve;
+      });
+      const subscribable = createStubTransport({
+        subscribe: async () => {
+          await subscribePropagation;
+        },
+      });
+
+      const unregister = registerTransport('sub' as keyof BusTransportRegistry, subscribable).unregister;
+
+      try {
+        let settled = false;
+        const receive = sourceTransport
+          .simulateReceive({
+            type: 'subscribe',
+            subjects: { 'test.confirm': [] },
+          })
+          .then(() => {
+            settled = true;
+          });
+
+        await Promise.resolve();
+        expect(subscribable.subscribe).toHaveBeenCalledWith('test.confirm', undefined, []);
+        expect(settled).toBe(false);
+
+        releaseSubscribe();
+        await receive;
+        expect(settled).toBe(true);
+      } finally {
+        unregister();
+      }
+    });
+
     it('should propagate unsubscribe messages to transports with unsubscribe()', async () => {
       const recordedUnsubscribes: string[] = [];
       const subscribable: BusTransport = {
@@ -382,6 +418,43 @@ describe('Transport relay and subscription propagation', () => {
         await sourceTransport.simulateReceive(unsubscribeMsg);
 
         expect(recordedUnsubscribes).toEqual(['test.confirm', 'test.prompt']);
+      } finally {
+        unregister();
+      }
+    });
+
+    it('waits for advertised unsubscribe propagation before resolving inbound unsubscribe handling', async () => {
+      let releaseUnsubscribe!: () => void;
+      const unsubscribePropagation = new Promise<void>((resolve) => {
+        releaseUnsubscribe = resolve;
+      });
+      const subscribable = createStubTransport({
+        subscribe: async () => {},
+        unsubscribe: async () => {
+          await unsubscribePropagation;
+        },
+      });
+
+      const unregister = registerTransport('unsub' as keyof BusTransportRegistry, subscribable).unregister;
+
+      try {
+        let settled = false;
+        const receive = sourceTransport
+          .simulateReceive({
+            type: 'unsubscribe',
+            subjects: { 'test.confirm': [] },
+          })
+          .then(() => {
+            settled = true;
+          });
+
+        await Promise.resolve();
+        expect(subscribable.unsubscribe).toHaveBeenCalledWith('test.confirm');
+        expect(settled).toBe(false);
+
+        releaseUnsubscribe();
+        await receive;
+        expect(settled).toBe(true);
       } finally {
         unregister();
       }

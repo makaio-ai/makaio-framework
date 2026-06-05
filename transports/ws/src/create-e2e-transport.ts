@@ -15,7 +15,13 @@
 import type { E2EAuth } from './auth/e2e-auth.js';
 import type { WebSocketLike } from './types.js';
 import { WebSocketClientTransport, type WebSocketClientTransportOptions } from './ws-client-transport.js';
-import type { BusMessage, BusRequestMessage, BusBroadcastMessage, BusTransport } from '@makaio/bus-core';
+import type {
+  BusMessage,
+  BusRequestMessage,
+  BusBroadcastMessage,
+  BusSubscriptionAckMessage,
+  BusTransport,
+} from '@makaio/bus-core';
 import { encryptMessage, decryptMessage, type MaybeEncryptedMessage } from './e2e-message-crypto.js';
 
 /**
@@ -49,6 +55,16 @@ export interface E2ETransportOptions
 }
 
 /**
+ * Check whether a plaintext frame is the transport-level acknowledgement for a
+ * dynamic subscription control message.
+ * @param message - Candidate message
+ * @returns True when the frame acknowledges a subscribe/unsubscribe update
+ */
+function isSubscriptionAckMessage(message: BusMessage): message is BusSubscriptionAckMessage {
+  return message.type === 'subscription-ack' && typeof message.ackId === 'string';
+}
+
+/**
  * Create an E2E encrypted client transport.
  *
  * Wraps a `WebSocketClientTransport` to transparently encrypt/decrypt
@@ -77,6 +93,9 @@ export function createE2ETransport(options: E2ETransportOptions): BusTransport {
     messageTransform: async (message: BusMessage): Promise<BusMessage> => {
       const sessionKey = e2eAuth.getSessionKey();
       if (!sessionKey) return message; // Pre-auth: pass through
+      if (isSubscriptionAckMessage(message)) {
+        return message;
+      }
       const maybe = message as MaybeEncryptedMessage;
       if (!maybe.e2e) {
         // After session is established, reject plaintext to prevent injection

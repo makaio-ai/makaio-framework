@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBootErrorHtml } from '../src/main/boot-error.js';
+import { buildBootErrorHtml } from '../src/main/boot-error-html.js';
 
 describe('buildBootErrorHtml', () => {
   it('includes the error message in the HTML body', () => {

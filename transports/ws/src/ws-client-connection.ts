@@ -70,6 +70,10 @@ export interface ConnectionDeps {
   resolveReady(): void;
   /** Create a new ready promise for the upcoming session and notify the registry. */
   resetReadyPromise(): void;
+  /** Resolve a pending dynamic subscription acknowledgement. */
+  resolveSubscriptionAck(ackId: string): void;
+  /** Reject all pending dynamic subscription acknowledgements for a closed session. */
+  rejectPendingSubscriptionAcks(error: Error): void;
 
   /** Called after a successful connect (auth + subscriptions replayed). */
   notifyConnected(): void;
@@ -99,6 +103,13 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
       handlers: deps.handlers,
       onSyncComplete: () => {
         deps.resolveReady();
+      },
+      onSubscriptionAck: (ackId) => {
+        deps.resolveSubscriptionAck(ackId);
+      },
+      sendSubscriptionAck: async (ackId) => {
+        if (ws.readyState !== 1) return;
+        await sendEncoded({ type: 'subscription-ack', ackId }, deps.codec, ws);
       },
     });
   };
@@ -141,6 +152,7 @@ export function removeSocketListeners(ws: WebSocketLike, deps: ConnectionDeps): 
 export async function connectOnce(deps: ConnectionDeps): Promise<void> {
   // Resolve any stale ready promise from the previous session to avoid hanging awaiters.
   deps.resolveReady();
+  deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: reconnecting before subscription ack'));
   // Create a fresh ready promise and notify the registry.
   deps.resetReadyPromise();
 
@@ -311,6 +323,9 @@ export async function runReconnectLoop(
               if (deps.debug) {
                 console.info(`[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection closed`);
               }
+              deps.rejectPendingSubscriptionAcks(
+                new Error('WebSocketClientTransport: disconnected before subscription ack'),
+              );
             };
             deps.setCloseListener(closeListener);
             newWs.addEventListener('close', closeListener);
@@ -362,6 +377,7 @@ export function installNoReconnectCloseListener(
     deps.setSocket(null);
     clearReconnectAbort();
     deps.resolveReady();
+    deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
     deps.notifyDisconnected();
   };
   deps.setCloseListener(onClose);
