@@ -115,7 +115,7 @@ export const clientDefinition = createClientDefinition({
         name: 'UserPromptSubmit',
         frameworkSubject: 'client.session.userPrompt.submitted',
       },
-      { name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre' },
+      { name: 'PreToolUse', frameworkSubject: 'client.session.tool.pre', mode: 'request' },
       { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
       { name: 'Stop', frameworkSubject: 'client.session.turn.completed' },
       { name: 'SubagentStop' },

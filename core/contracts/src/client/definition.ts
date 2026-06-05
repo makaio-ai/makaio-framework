@@ -98,6 +98,17 @@ export const ClientHookEventDeclarationSchema = z.object({
    * handled by hook-event-sync integration tests in each client package.
    */
   frameworkSubject: z.string().min(1).optional(),
+  /**
+   * Hook interaction mode for this event.
+   *
+   * - `'event'` (default) — fire-and-forget: the wiring layer installs
+   *   `makaio hook received ...` for this event. The client binary does
+   *   not wait for a response.
+   * - `'request'` — request/response: the wiring layer installs
+   *   `makaio hook handle ...` for this event. The client binary blocks
+   *   until the command exits and reads its stdout as the response.
+   */
+  mode: z.enum(['event', 'request']).default('event'),
 });
 
 export type ClientHookEventDeclaration = z.infer<typeof ClientHookEventDeclarationSchema>;

@@ -2,7 +2,9 @@
  * Claude Code client runtime service.
  *
  * Subscribes to `client:claude-code.hook.received` events and translates them
- * into normalized `client.session.*` observed-semantics emissions.  Raw events
+ * into normalized `client.session.*` observed-semantics emissions.  Also
+ * registers a request handler on `client:claude-code.hook.handle` for
+ * request-mode hook events (e.g. `PreToolUse`) that need a response.  Raw events
  * that do not map to the v1 set (Notification, MCPServerStart, etc.) are
  * silently ignored — they remain observable in `client:claude-code.*` for
  * consumers that care about Claude-specific extras.
@@ -63,7 +65,13 @@
  */
 
 import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
-import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
+import {
+  BinaryNotFoundError,
+  ClientSubjects,
+  assertAbsoluteProjectDir,
+  type ClientHookHandleResponse,
+  type RawClientHookPayload,
+} from '@makaio/subsystem-client';
 import { ClientAccountIdentifierSchema, type ClientRuntimeStarted } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
@@ -118,6 +126,10 @@ const SESSION_IDENTITY_CACHE_CAP = MANAGED_SESSION_CAP;
  *
  * Also handles the three `wiring.*` request subjects for listing, applying,
  * and removing the Makaio hook wiring entries.
+ *
+ * Also handles the `hook.handle` request subject for request-mode hook events
+ * (e.g. `PreToolUse`), returning a {@link ClientHookHandleResponse} that the
+ * CLI bridge forwards to the client binary as its stdout.
  *
  * Instantiate via the runtime package and call `init()` once per process.
  */
@@ -185,9 +197,9 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Register the hook ingress subscription, all config request handlers,
-   * all wiring request handlers, and the session config setup handler on the
-   * bus.
+   * Register the hook ingress subscription, the hook handle request handler,
+   * all config request handlers, all wiring request handlers, and the session
+   * config setup handler on the bus.
    *
    * Also subscribes to `client.runtime.started` to track adapter-managed
    * sessions for the {@link handleHookReceived} suppression gate.
@@ -226,6 +238,7 @@ export class ClaudeCodeClientService extends BaseService {
       await this.handleStatuslineReceived(payload);
     });
 
+    this.registerHookHandleHandler();
     this.registerConfigHandlers();
     this.registerConfigPrimeHandler();
     this.registerSessionConfigHandler();
@@ -430,6 +443,59 @@ export class ClaudeCodeClientService extends BaseService {
     this.registerHandler(ClaudeCodeClientSubjects.config.mcpServers.remove, async (ctx) => {
       ctx.setResult(await (await this.createSettings(ctx.payload.projectDir)).removeMcpServer(ctx.payload));
     });
+  }
+
+  /**
+   * Register the `hook.handle` request handler.
+   *
+   * The handler receives request-mode hook payloads (e.g. `PreToolUse`) and
+   * returns a {@link ClientHookHandleResponse} that the CLI bridge writes to
+   * stdout so the client binary can read it.
+   *
+   * Dispatches to a per-event handler via {@link handleHookRequest}.
+   * Events with no dedicated handler return the no-op default response
+   * (`exitCode: 0, stdout: '', stderr: ''`).
+   *
+   * Extracted from {@link onInit} to keep the init method within the
+   * max-lines-per-function lint threshold.
+   */
+  private registerHookHandleHandler(): void {
+    this.registerHandler(ClaudeCodeClientSubjects.hook.handle, async (ctx) => {
+      ctx.setResult(await this.handleHookRequest(ctx.payload));
+    });
+  }
+
+  /**
+   * Dispatch a raw hook handle payload to the appropriate per-event handler.
+   *
+   * Returns the no-op default response for any event without a dedicated
+   * handler.  This keeps the dispatch table minimal and future-proof: new
+   * request-mode events can add a handler branch without touching the
+   * registration plumbing.
+   * @param payload - Raw hook payload delivered on `client:claude-code.hook.handle`.
+   * @returns Response to forward to the client binary via stdout.
+   */
+  private async handleHookRequest(payload: RawClientHookPayload): Promise<ClientHookHandleResponse> {
+    switch (payload.eventName) {
+      case 'PreToolUse':
+        return this.handlePreToolUse(payload);
+      default:
+        return { exitCode: 0, stdout: '', stderr: '' };
+    }
+  }
+
+  /**
+   * Handle a `PreToolUse` request-mode hook.
+   *
+   * Native hook payloads do not yet provide a reliable agent/session correlation
+   * key for bus-mediated tool policy requests.  Until that contract exists this
+   * handler remains a fail-open passthrough.
+   * @param _payload - Raw `PreToolUse` hook payload, currently unused while the
+   *   handler is a passthrough.
+   * @returns No-op response that permits the tool invocation to proceed.
+   */
+  private async handlePreToolUse(_payload: RawClientHookPayload): Promise<ClientHookHandleResponse> {
+    return { exitCode: 0, stdout: '', stderr: '' };
   }
 
   /**

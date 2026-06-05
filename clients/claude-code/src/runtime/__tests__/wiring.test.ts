@@ -185,6 +185,18 @@ describe('buildClaudeCodeWiringList', () => {
     expect(hookEntries.length).toBeGreaterThan(0);
     expect(hookEntries.every((e) => e.name !== 'statusline')).toBe(true);
   });
+
+  it('PreToolUse entry uses hook handle sentinel with --no-launch and --timeout 5000', async () => {
+    const settings = createMockSettings();
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const preToolUse = result.entries.find((e) => e.name === 'PreToolUse');
+    expect(preToolUse).toBeDefined();
+    expect(preToolUse?.command).toContain('--no-launch');
+    expect(preToolUse?.command).toContain('hook handle claude-code');
+    expect(preToolUse?.command).toContain('PreToolUse');
+    expect(preToolUse?.command).toContain('--timeout 5000');
+    expect(preToolUse?.command).not.toContain('hook received');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -397,6 +409,173 @@ describe('applyClaudeCodeWiring', () => {
     const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [{ hook: { command: string } }][];
     const commandsWritten = calls.map((args) => args[0].hook.command);
     expect(commandsWritten.some((cmd) => cmd.includes('hook received claude-code'))).toBe(true);
+  });
+
+  it('installs hook handle sentinel with --no-launch and --timeout 5000 for PreToolUse', async () => {
+    await applyClaudeCodeWiring(settings, 'user', 'makaio');
+    const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [
+      { eventName: string; hook: { command: string } },
+    ][];
+    const preToolUseCall = calls.find((args) => args[0].eventName === 'PreToolUse');
+    expect(preToolUseCall).toBeDefined();
+    expect(preToolUseCall![0].hook.command).toBe(
+      'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000',
+    );
+    expect(preToolUseCall![0].hook.command).not.toContain('hook received');
+  });
+
+  it('migrates old hook received PreToolUse to hook handle on apply', async () => {
+    // Seed the user scope with an old 'hook received' entry for PreToolUse
+    // (simulates a user who wired before the mode changed to 'request').
+    const stalePerScope = [
+      {
+        scope: 'user' as const,
+        path: '/home/.claude/settings.json',
+        events: {
+          PreToolUse: [
+            { hooks: [{ type: 'command' as const, command: 'makaio hook received claude-code PreToolUse' }] },
+          ],
+        },
+      },
+    ];
+
+    const callLog: Array<{ op: 'remove' | 'add'; eventName: string; detail: string }> = [];
+
+    const migrateSettings: ClaudeCodeWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({
+        effective: {},
+        perScope: stalePerScope,
+      }),
+      addHook: vi.fn().mockImplementation(async (req: { eventName: string; hook: { command: string } }) => {
+        callLog.push({ op: 'add', eventName: req.eventName, detail: req.hook.command });
+        return { added: true };
+      }),
+      removeHook: vi.fn().mockImplementation(async (req: { eventName: string; match: { commandContains: string } }) => {
+        callLog.push({ op: 'remove', eventName: req.eventName, detail: req.match.commandContains });
+        return { removed: 1 };
+      }),
+      listStatusline: vi.fn().mockResolvedValue({ effective: null, perScope: [] }),
+      setStatusline: vi
+        .fn()
+        .mockResolvedValue({ previous: null, applied: { type: 'command', command: 'makaio claude statusline' } }),
+      removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+      setSkipDangerousModePermissionPrompt: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await applyClaudeCodeWiring(migrateSettings, 'user', 'makaio');
+
+    // The stale 'hook received' entry must be removed first.
+    const removeEntry = callLog.find((e) => e.op === 'remove' && e.eventName === 'PreToolUse');
+    expect(removeEntry).toBeDefined();
+    expect(removeEntry!.detail).toContain('hook received claude-code PreToolUse');
+
+    // Then the new 'hook handle' entry is installed.
+    const addEntry = callLog.find((e) => e.op === 'add' && e.eventName === 'PreToolUse');
+    expect(addEntry).toBeDefined();
+    expect(addEntry!.detail).toBe('makaio --no-launch hook handle claude-code PreToolUse --timeout 5000');
+    expect(addEntry!.detail).not.toContain('hook received');
+
+    // Remove must precede add for PreToolUse.
+    const removeIdx = callLog.indexOf(removeEntry!);
+    const addIdx = callLog.indexOf(addEntry!);
+    expect(removeIdx).toBeLessThan(addIdx);
+  });
+
+  it('replaces request hook handle entries missing --no-launch and removes stale alternates', async () => {
+    const stalePrimaryCommand = 'makaio hook handle claude-code PreToolUse --timeout 5000';
+    const staleAlternateCommand = 'makaio hook received claude-code PreToolUse';
+    const callLog: Array<{ op: 'remove' | 'add'; eventName: string; detail: string }> = [];
+
+    const migrateSettings: ClaudeCodeWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({
+        effective: {},
+        perScope: [
+          {
+            scope: 'user' as const,
+            path: '/home/.claude/settings.json',
+            events: {
+              PreToolUse: [
+                {
+                  hooks: [
+                    { type: 'command' as const, command: stalePrimaryCommand },
+                    { type: 'command' as const, command: staleAlternateCommand },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      addHook: vi.fn().mockImplementation(async (req: { eventName: string; hook: { command: string } }) => {
+        callLog.push({ op: 'add', eventName: req.eventName, detail: req.hook.command });
+        return { added: true };
+      }),
+      removeHook: vi.fn().mockImplementation(async (req: { eventName: string; match: { commandContains: string } }) => {
+        callLog.push({ op: 'remove', eventName: req.eventName, detail: req.match.commandContains });
+        return { removed: 1 };
+      }),
+      listStatusline: vi.fn().mockResolvedValue({ effective: null, perScope: [] }),
+      setStatusline: vi
+        .fn()
+        .mockResolvedValue({ previous: null, applied: { type: 'command', command: 'makaio claude statusline' } }),
+      removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+      setSkipDangerousModePermissionPrompt: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await applyClaudeCodeWiring(migrateSettings, 'user', 'makaio');
+
+    const removeEntries = callLog.filter((e) => e.op === 'remove' && e.eventName === 'PreToolUse');
+    expect(removeEntries.map((e) => e.detail)).toEqual([
+      'hook handle claude-code PreToolUse',
+      'hook received claude-code PreToolUse',
+    ]);
+
+    const addEntry = callLog.find((e) => e.op === 'add' && e.eventName === 'PreToolUse');
+    expect(addEntry).toBeDefined();
+    expect(addEntry!.detail).toBe('makaio --no-launch hook handle claude-code PreToolUse --timeout 5000');
+
+    const removeIdx = callLog.indexOf(removeEntries[1]);
+    const addIdx = callLog.indexOf(addEntry!);
+    expect(removeIdx).toBeLessThan(addIdx);
+  });
+
+  it('removes stale PreToolUse alternate when the current hook handle entry already exists', async () => {
+    const currentCommand = 'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000';
+    const staleCommand = 'makaio hook received claude-code PreToolUse';
+    const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-code-wiring-coexist-'));
+    try {
+      await fs.writeFile(
+        path.join(configDir, 'settings.json'),
+        JSON.stringify(
+          {
+            hooks: {
+              PreToolUse: [
+                {
+                  hooks: [
+                    { type: 'command', command: currentCommand },
+                    { type: 'command', command: staleCommand },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
+      const realSettings = new ClaudeCodeClientSettings({ configDir });
+
+      const result = await applyClaudeCodeWiring(realSettings, 'user', 'makaio');
+
+      const { effective } = await realSettings.listHooks({ eventName: 'PreToolUse' });
+      const serializedPreToolUseHooks = JSON.stringify(effective['PreToolUse'] ?? []);
+      expect(serializedPreToolUseHooks).not.toContain(staleCommand);
+      expect(serializedPreToolUseHooks.split(currentCommand)).toHaveLength(2);
+      expect(result.skipped).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(configDir, { recursive: true, force: true });
+    }
   });
 
   it('prepends envPairs before the executable in hook and statusline commands', async () => {
@@ -687,5 +866,20 @@ describe('removeClaudeCodeWiring', () => {
     (settings.removeHook as ReturnType<typeof vi.fn>).mockResolvedValue({ removed: 0 });
     const result = await removeClaudeCodeWiring(settings, 'user');
     expect(result.removed).toBe(0);
+  });
+
+  it('removes both hook received and hook handle sentinels for PreToolUse', async () => {
+    // removeClaudeCodeWiring issues two removeHook calls per event (primary and
+    // alternate sentinel) to clean up mode migrations.  Verify both sentinels
+    // are targeted for PreToolUse.
+    await removeClaudeCodeWiring(settings, 'user');
+    const calls = (settings.removeHook as ReturnType<typeof vi.fn>).mock.calls as [
+      { eventName: string; match: { commandContains: string } },
+    ][];
+    const preToolUseCalls = calls.filter((args) => args[0].eventName === 'PreToolUse');
+    expect(preToolUseCalls).toHaveLength(2);
+    const targets = preToolUseCalls.map((args) => args[0].match.commandContains);
+    expect(targets).toContain('hook handle claude-code PreToolUse');
+    expect(targets).toContain('hook received claude-code PreToolUse');
   });
 });

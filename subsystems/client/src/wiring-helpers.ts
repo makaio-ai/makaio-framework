@@ -36,6 +36,13 @@ import type { ClientDefinition } from '@makaio/contracts/client';
 export interface SessionEventDescriptor {
   /** Native event name as declared in the client definition (e.g. `'SessionStart'`). */
   readonly eventName: string;
+  /**
+   * Hook interaction mode for this event.
+   *
+   * - `'event'` — fire-and-forget: install `makaio hook received ...`
+   * - `'request'` — request/response: install `makaio hook handle ...`
+   */
+  readonly mode: 'event' | 'request';
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +108,14 @@ export function buildHookCommand(
  * without one are client-internal and do not need framework wiring.
  * @param clientDefinition - The parsed static client definition whose
  *   `runtimeCapabilities.hookEvents` array is the source of truth.
- * @returns Read-only array of `{ eventName }` descriptors in declaration order.
+ * @returns Read-only array of `{ eventName, mode }` descriptors in declaration order.
  */
 export function deriveSessionEventDescriptors(
   clientDefinition: ClientDefinition,
 ): ReadonlyArray<SessionEventDescriptor> {
   return clientDefinition.runtimeCapabilities.hookEvents
     .filter((e) => e.frameworkSubject !== undefined)
-    .map((e) => ({ eventName: e.name }));
+    .map((e) => ({ eventName: e.name, mode: e.mode }));
 }
 
 /**

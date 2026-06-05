@@ -3,13 +3,12 @@
  *
  * Concrete client packages call {@link createClientNamespace} once at module
  * load time to register their `client:<clientId>` bus namespace.  The factory
- * pre-registers the raw catch-all hook ingress subject (`hook.received`) using
- * the shared {@link RawClientHookPayloadSchema} so all client families expose a
- * consistent ingress point.
+ * pre-registers the shared hook subjects (`hook.received` and `hook.handle`) so
+ * all client families expose consistent hook ingress and request handling points.
  *
- * Clients that need additional subjects beyond `hook.received` pass them via the
+ * Clients that need subjects beyond those shared hook subjects pass them via the
  * optional `additionalSchemas` parameter.  The resulting subjects object includes
- * both the shared `hook.received` subject and any extra subjects, fully typed.
+ * both shared hook subjects and any extra subjects, fully typed.
  *
  * **Subject conventions:**
  * - Raw client-native data lives in `client:<id>.*` only — never in `client.*`.
@@ -21,12 +20,18 @@
 
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
-import { canonicalizeClientId, RawClientHookPayloadSchema } from './client-session-observed-semantics.js';
+import {
+  canonicalizeClientId,
+  ClientHookHandleResponseSchema,
+  RawClientHookPayloadSchema,
+} from './client-session-observed-semantics.js';
+
+const RESERVED_CLIENT_HOOK_SUBJECTS = new Set(['hook.received', 'hook.handle']);
 
 /**
  * Result returned by {@link createClientNamespace}.
  * @typeParam AdditionalSchemas - Extra subject schemas registered alongside the
- *   shared `hook.received` subject.  Defaults to an empty record (no extras).
+ *   shared hook subjects.  Defaults to an empty record (no extras).
  */
 export interface ClientNamespaceResult<AdditionalSchemas extends SchemaRecord = Record<never, never>> {
   /**
@@ -36,7 +41,8 @@ export interface ClientNamespaceResult<AdditionalSchemas extends SchemaRecord = 
   /**
    * Typed bus subjects for the per-client namespace.
    *
-   * Always includes `hook.received` for the raw catch-all hook ingress.
+   * Always includes `hook.received` for raw hook ingress and `hook.handle` for
+   * hook request handling.
    * When `additionalSchemas` were provided at construction time the extra
    * subjects are also present here, fully typed.
    */
@@ -50,8 +56,10 @@ export interface ClientNamespaceResult<AdditionalSchemas extends SchemaRecord = 
  * and can be referenced by {@link ClientNamespaceResult} via instantiation
  * expressions.
  * @param clientId - Stable client identifier (e.g. `'codex'`)
- * @param additionalSchemas - Extra subjects to register alongside `hook.received`
- * @returns Namespace subjects with `hook.received` plus any additional subjects
+ * @param additionalSchemas - Extra subjects to register alongside the shared
+ *   hook subjects.
+ * @returns Namespace subjects with shared hook subjects plus any additional
+ *   subjects.
  */
 function buildClientSubjects<AdditionalSchemas extends SchemaRecord>(
   clientId: string,
@@ -60,10 +68,40 @@ function buildClientSubjects<AdditionalSchemas extends SchemaRecord>(
   const namespace = MakaioBus.registerNamespace(
     createBusNamespace(`client:${clientId}`, {
       'hook.received': RawClientHookPayloadSchema,
+      'hook.handle': {
+        request: RawClientHookPayloadSchema,
+        response: ClientHookHandleResponseSchema,
+      },
       ...additionalSchemas,
     }),
   );
   return namespace.subjects;
+}
+
+/**
+ * Reject attempts to redefine shared hook subjects.
+ *
+ * `hook.received` and `hook.handle` are universal bridge contracts. Concrete
+ * client packages own additional subjects in their namespace, but these two
+ * shared subjects must keep the same schemas for every client.
+ * @param clientId - Normalized client identifier.
+ * @param additionalSchemas - Additional subject schemas requested by the caller.
+ */
+function assertNoReservedSubjectOverrides(clientId: string, additionalSchemas: SchemaRecord): void {
+  const collisions = Object.keys(additionalSchemas).filter((subjectKey) =>
+    RESERVED_CLIENT_HOOK_SUBJECTS.has(subjectKey),
+  );
+  if (collisions.length === 0) {
+    return;
+  }
+
+  const collisionList = collisions.join(', ');
+  throw new Error(
+    [
+      `[createClientNamespace] additionalSchemas for client:${clientId}`,
+      `cannot override reserved shared hook subjects: ${collisionList}`,
+    ].join(' '),
+  );
 }
 
 /**
@@ -115,13 +153,15 @@ function assertAdditionalSubjectsRegistered(
  * The namespace is registered idempotently — calling this function multiple
  * times with the same `clientId` returns equivalent subjects.
  *
- * The resulting namespace pre-registers the `hook.received` subject so client
- * ingress bridges have a consistent raw-event ingress point:
+ * The resulting namespace pre-registers the `hook.received` and `hook.handle`
+ * subjects so client bridges have consistent hook ingress and request handling
+ * points:
  *
  * ```ts
  * // In @makaio/client-codex
  * export const { subjects: CodexClientSubjects } = createClientNamespace('codex');
  * // CodexClientSubjects.hook.received → 'client:codex.hook.received'
+ * // CodexClientSubjects.hook.handle → 'client:codex.hook.handle'
  * ```
  *
  * Clients that need extra subjects pass them as the second argument:
@@ -137,7 +177,7 @@ function assertAdditionalSubjectsRegistered(
  *   `'claude-code'`), optionally prefixed with `client:`.  Canonicalized to
  *   lowercase and restricted to letters, numbers, and hyphens.
  * @param additionalSchemas - Optional extra subject schemas to register alongside
- *   the shared `hook.received` subject.
+ *   the shared hook subjects.  Must not include `hook.received` or `hook.handle`.
  * @returns Namespace domain string and typed bus subjects.
  */
 export function createClientNamespace<AdditionalSchemas extends SchemaRecord = Record<never, never>>(
@@ -147,6 +187,7 @@ export function createClientNamespace<AdditionalSchemas extends SchemaRecord = R
   const normalizedClientId = canonicalizeClientId(clientId, 'createClientNamespace');
 
   const schemas = (additionalSchemas ?? {}) as AdditionalSchemas;
+  assertNoReservedSubjectOverrides(normalizedClientId, schemas);
   const subjects = buildClientSubjects(normalizedClientId, schemas);
   assertAdditionalSubjectsRegistered(normalizedClientId, subjects, schemas);
 

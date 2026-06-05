@@ -95,6 +95,7 @@ describe('handleClaudeCodeSessionConfigSetup', () => {
             {
               hooks: [
                 { type: 'command', command: 'makaio hook received claude-code SessionStart' },
+                { type: 'command', command: 'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000' },
                 { type: 'command', command: 'echo keep-session-start' },
               ],
             },

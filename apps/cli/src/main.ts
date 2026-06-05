@@ -471,6 +471,23 @@ export function canInvocationProvideBus(
 }
 
 /**
+ * Determine whether the CLI should skip desktop auto-launch after the initial
+ * health probe fails.
+ * @param parsedArgv - Processed argv vector (already had root flags stripped).
+ * @param localExtensions - Extensions discovered from the local filesystem.
+ * @param noLaunch - Root `--no-launch` flag extracted from the invocation.
+ * @returns `true` when the invocation should fail through without launch.
+ */
+function shouldSkipDesktopAutoLaunch(
+  parsedArgv: readonly string[],
+  localExtensions: readonly LocalExtensionRegistration[],
+  noLaunch: boolean,
+): boolean {
+  if (noLaunch) return true;
+  return canInvocationProvideBus(parsedArgv, localExtensions);
+}
+
+/**
  * Probe the bus health endpoint and attempt background desktop launch only
  * when the initial probe fails and the targeted command cannot provide its
  * own embedded bus.
@@ -533,6 +550,7 @@ export async function main(
     serveConfig: effectiveServeConfig,
     debounceFailure,
     noFailure,
+    noLaunch,
   } = await resolveCliRuntimeConfig(argv, discovery, serveConfig);
 
   // Bare `makaio` (no subcommand, no flags) defaults to `open`.
@@ -554,11 +572,11 @@ export async function main(
   // --- Single bus for the entire invocation ---
   // Resolve the bus URL once — probeHealth is a lightweight HTTP GET that gates
   // whether to attempt the heavier auto-launch + WebSocket connection path.
-  // Skip the desktop launch when the targeted command can embed its own bus:
-  // probeHealth still runs so an already-running server can win, but we don't
-  // block on a desktop launch cycle that would be redundant.
+  // Skip the desktop launch when explicitly requested or when the targeted
+  // command can embed its own bus. probeHealth still runs so an already-running
+  // server can win, but timeout-sensitive hooks do not block on a launch cycle.
   const busUrl = resolveBusUrl();
-  const skipLaunch = canInvocationProvideBus(parsedArgv, localExtensions);
+  const skipLaunch = shouldSkipDesktopAutoLaunch(parsedArgv, localExtensions, noLaunch);
   const { health, backgroundLaunchAttempted } = await probeCliHealthWithOptionalLaunch(busUrl, skipLaunch);
 
   const { bus, connectionError } = await connectCliBus(health, {

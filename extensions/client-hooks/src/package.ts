@@ -1,9 +1,11 @@
 /**
  * Package manifest for the client-hooks extension.
  *
- * Registers the generic hook CLI bridge
- * (`makaio hook received <client> <event-name>`) that forwards raw client hook
- * events to the Makaio bus without a background service.
+ * Registers the generic hook CLI bridge:
+ * - `makaio hook received <client> <event-name>` forwards raw client hook events
+ *   to the Makaio bus without a response path.
+ * - `makaio hook handle <client> <event-name>` forwards the same raw observation,
+ *   then translates a bus handler response into process stdout/stderr/exit code.
  * @packageDocumentation
  */
 
@@ -16,7 +18,7 @@ import { clientHooksCli } from './cli/index.js';
  *
  * This is a CLI-only package: it has no background service and no storage
  * requirements. It exposes the `hook` command that any native client tool can
- * invoke to forward hook events into the bus.
+ * invoke to forward hook events into the bus or request a response.
  */
 export const clientHooksPackage: MakaioNodeExtension<IMakaioBus> = {
   name: 'client-hooks',

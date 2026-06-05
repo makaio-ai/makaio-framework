@@ -47,4 +47,12 @@ describe('ClaudeCodeClientSubjects', () => {
     ).toBe(true);
     expect(schema.safeParse('not-an-object').success).toBe(false);
   });
+
+  it('registers the Claude hook handle request schema', () => {
+    expect(ClaudeCodeClientSubjects.hook.handle.subject).toBe('hook.handle');
+    expect(ClaudeCodeClientSubjects.hook.handle.$meta.namespace).toBe('client:claude-code');
+    expect(ClaudeCodeClientSubjects.hook.handle.$meta.isRequest).toBe(true);
+
+    expect(MakaioBus.getSchema(ClaudeCodeClientSubjects.hook.handle)).toBeDefined();
+  });
 });

@@ -23,6 +23,11 @@ export interface RootConfigParseResult {
    * fire-and-forget hooks where a missing server is not an error.
    */
   readonly noFailure: boolean;
+  /**
+   * Whether `--no-launch` was specified before the command name.
+   * When set, the CLI skips desktop auto-launch after a failed health probe.
+   */
+  readonly noLaunch: boolean;
 }
 
 /** Resolved CLI runtime configuration. */
@@ -40,6 +45,11 @@ export interface CliRuntimeConfig {
    * When set, unknown-command errors exit 0 instead of 1.
    */
   readonly noFailure: boolean;
+  /**
+   * Whether `--no-launch` was specified before the command name.
+   * When set, the CLI skips desktop auto-launch after a failed health probe.
+   */
+  readonly noLaunch: boolean;
 }
 
 /**
@@ -55,6 +65,7 @@ export function extractRootConfigArg(argv: readonly string[]): RootConfigParseRe
   let configPath: string | undefined;
   let debounceFailure = false;
   let noFailure = false;
+  let noLaunch = false;
 
   for (let index = 2; index < result.length; ) {
     const arg = result[index];
@@ -92,10 +103,16 @@ export function extractRootConfigArg(argv: readonly string[]): RootConfigParseRe
       continue;
     }
 
+    if (arg === '--no-launch') {
+      result.splice(index, 1);
+      noLaunch = true;
+      continue;
+    }
+
     index += 1;
   }
 
-  return { argv: result, configPath, debounceFailure, noFailure };
+  return { argv: result, configPath, debounceFailure, noFailure, noLaunch };
 }
 
 /**
@@ -145,6 +162,7 @@ export async function resolveCliRuntimeConfig(
     serveConfig: effectiveServeConfig,
     debounceFailure: parsedRoot.debounceFailure,
     noFailure: parsedRoot.noFailure,
+    noLaunch: parsedRoot.noLaunch,
   };
 }
 
