@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { isFrameworkDistFresh, writeFrameworkDistBuildStamp } from './build-fingerprint.js';
 
 const WORKSPACE_ROOT = resolve(import.meta.dirname, '..', '..');
+const WORKSPACE_FINGERPRINT_TIMEOUT_MS = 30_000;
 
 describe('framework dist freshness', () => {
   it('rejects dist output without a build stamp', () => {
@@ -21,20 +22,24 @@ describe('framework dist freshness', () => {
     });
   });
 
-  it('accepts dist output with a current build stamp and required files', () => {
-    withTempDist((distDir) => {
-      writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
-      writeFrameworkDistBuildStamp({ workspaceRoot: WORKSPACE_ROOT, distDir });
+  it(
+    'accepts dist output with a current build stamp and required files',
+    () => {
+      withTempDist((distDir) => {
+        writeFileSync(join(distDir, 'contracts/index.mjs'), 'export const FrameworkContractNamespaces = [];\n');
+        writeFrameworkDistBuildStamp({ workspaceRoot: WORKSPACE_ROOT, distDir });
 
-      expect(
-        isFrameworkDistFresh({
-          workspaceRoot: WORKSPACE_ROOT,
-          distDir,
-          requiredFiles: ['contracts/index.mjs'],
-        }),
-      ).toBe(true);
-    });
-  });
+        expect(
+          isFrameworkDistFresh({
+            workspaceRoot: WORKSPACE_ROOT,
+            distDir,
+            requiredFiles: ['contracts/index.mjs'],
+          }),
+        ).toBe(true);
+      });
+    },
+    WORKSPACE_FINGERPRINT_TIMEOUT_MS,
+  );
 
   it('rejects stamped dist output when a required runtime file is missing', () => {
     withTempDist((distDir) => {

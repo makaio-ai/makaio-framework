@@ -167,6 +167,43 @@ describe('Artifact core schemas', () => {
     ).toBe('derives_from');
   });
 
+  it('allows artifact relation queries by artifact identity without revision', () => {
+    const parsed = ArtifactQueryRequestSchema.parse({
+      relation: {
+        type: 'blocked-by',
+        target: {
+          refClass: 'artifact',
+          kind: 'implementation-plan',
+          id: 'sap-data-model',
+        },
+      },
+    });
+
+    expect(parsed.relation?.target).toEqual({
+      refClass: 'artifact',
+      kind: 'implementation-plan',
+      id: 'sap-data-model',
+    });
+  });
+
+  it('infers artifact refClass for identity-only query targets when refClass is omitted', () => {
+    const parsed = ArtifactQueryRequestSchema.parse({
+      relation: {
+        type: 'blocked-by',
+        target: {
+          kind: 'implementation-plan',
+          id: 'sap-data-model',
+        },
+      },
+    });
+
+    expect(parsed.relation?.target).toEqual({
+      refClass: 'artifact',
+      kind: 'implementation-plan',
+      id: 'sap-data-model',
+    });
+  });
+
   it('accepts a generic query over service-derived indexes', () => {
     expect(
       ArtifactQueryRequestSchema.parse({
