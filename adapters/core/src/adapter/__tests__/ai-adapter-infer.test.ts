@@ -769,12 +769,13 @@ describe('AIAdapter.handleInfer', () => {
       });
 
       expect(result.success).toBe(true);
-      await new Promise((resolve) => setImmediate(resolve));
 
-      expect(capture.connectors[0]?.closeCalls).toBe(1);
-      expect(adapter.getActiveAgents()).toHaveLength(0);
+      await vi.waitFor(() => {
+        expect(capture.connectors[0]?.closeCalls).toBe(1);
+        expect(adapter.getActiveAgents()).toHaveLength(0);
+      });
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[AgentRegistry:test-adapter-infer] Agent'),
+        expect.stringContaining('[ActiveAgentRegistry:test-adapter-infer] Agent'),
         expect.any(Error),
       );
     } finally {
