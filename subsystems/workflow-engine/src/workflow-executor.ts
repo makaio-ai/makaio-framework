@@ -8,17 +8,13 @@ import {
   type IStepRunner,
   type IWorkflowRunner,
   type IWorkflowTriggerTypeRegistry,
-  type WorkflowExecution,
-  type WorkflowExecutionScope,
+  type WorkflowRunContext,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
-import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
 import { DEFAULT_EXECUTOR_CONFIG, type ActiveRunnerStep, type ExecutorConfig, type ActiveExecution } from './types.js';
-import { generateId } from './executor-helpers.js';
-import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import {
   registerWorkflowStorageDelegationHandlers,
   registerWorkflowTriggerTypeHandlers,
@@ -27,14 +23,8 @@ import { cancelExecution, type FinalizerDeps } from './workflow-execution-finali
 import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { InProcessStepRunner } from './in-process-step-runner.js';
 import { WorkflowScheduler } from './workflow-scheduler.js';
-import { buildInitialStepStates, validateAuthoredWorkflowSteps } from './dag-utils.js';
-import {
-  resolveWorkerOs,
-  bindWorkflowInputs,
-  buildExecutionTask,
-  buildFileExecutionTask,
-  type RunnerTaskDeps,
-} from './workflow-runner-tasks.js';
+import { resolveWorkerOs, type RunnerTaskDeps } from './workflow-runner-tasks.js';
+import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 
 /**
  * Core workflow executor service.
@@ -238,6 +228,71 @@ export class WorkflowExecutor extends BaseService {
     return session?.targetWorkingDirectory ?? this.config.platformDefaults.cwd;
   }
 
+  /**
+   * Build the {@link StartExecutionDeps} bundle used by {@link startExecution}
+   * and {@link startFileExecution}.
+   * @returns Start execution dependency bundle.
+   */
+  private buildStartDeps(): StartExecutionDeps {
+    return {
+      bus: this.bus,
+      config: this.config,
+      activeExecutions: this.activeExecutions,
+      executionTasks: this.executionTasks,
+      workflowRunner: this.workflowRunner,
+      buildRunContext: (params) => this.buildRunContext(params),
+      buildRunnerTaskDeps: (runner) => this.buildRunnerTaskDeps(runner),
+      buildFinalizerDeps: () => this.buildFinalizerDeps(),
+      resolveExecutionWorkspaceRoot: (parentSessionId) => this.resolveExecutionWorkspaceRoot(parentSessionId),
+      runExecution: (executionId) => this.runExecution(executionId),
+    };
+  }
+
+  /**
+   * Build a {@link WorkflowRunContext} from the invariant fields common to all
+   * execution start paths (workerManifest, cancelSubject, context, env, createdAt)
+   * merged with the caller-specific source, definitionSnapshot, inputs and scope.
+   * @param params - Variant fields unique to each start path.
+   * @returns Fully populated run context ready for persistence.
+   */
+  private buildRunContext({
+    executionId,
+    workflowId,
+    coordinatorSessionId,
+    source,
+    definitionSnapshot,
+    inputs,
+    scope,
+    triggerPayload,
+    workspaceRoot,
+  }: {
+    executionId: string;
+    workflowId: string;
+    coordinatorSessionId: string;
+    source: WorkflowRunContext['source'];
+    definitionSnapshot?: WorkflowRunContext['definitionSnapshot'];
+    inputs: WorkflowRunContext['inputs'];
+    scope: WorkflowRunContext['scope'];
+    triggerPayload: WorkflowRunContext['triggerPayload'];
+    workspaceRoot: string;
+  }): WorkflowRunContext {
+    return {
+      executionId,
+      workflowId,
+      source,
+      ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
+      workerManifest: { packages: [] },
+      inputs,
+      scope,
+      triggerPayload,
+      coordinatorSessionId,
+      cancelSubject: `workflow.${executionId}.cancel`,
+      context: this.resolveWorkflowContext(workspaceRoot),
+      env: this.config.platformDefaults.env ?? {},
+      createdAt: Date.now(),
+    };
+  }
+
   /** Register gate approval RPC and execution control handlers (start, cancel). */
   private registerExecutionHandlers(): void {
     this.registerHandler(WorkflowSubjects.gate.awaitApproval, async (ctx) => {
@@ -247,7 +302,7 @@ export class WorkflowExecutor extends BaseService {
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
       const { workflowId, inputs = {}, parentSessionId, triggerPayload, scope } = ctx.payload;
       try {
-        const executionId = await this.startExecution(workflowId, {
+        const executionId = await startExecution(this.buildStartDeps(), workflowId, {
           inputs,
           parentSessionId,
           triggerPayload,
@@ -268,7 +323,7 @@ export class WorkflowExecutor extends BaseService {
       }
       const { filePath, triggerPayload, scope } = ctx.payload;
       try {
-        const executionId = await this.startFileExecution(filePath, {
+        const executionId = await startFileExecution(this.buildStartDeps(), filePath, {
           triggerPayload,
           scopeOverride: scope,
         });
@@ -300,235 +355,6 @@ export class WorkflowExecutor extends BaseService {
       const finalizerDeps = this.buildFinalizerDeps();
       const cancelled = await cancelExecution(finalizerDeps, executionId, reason);
       ctx.setResult({ cancelled });
-    });
-  }
-
-  /**
-   * Start a new workflow execution.
-   * @param workflowId - The workflow definition ID
-   * @param options - Execution options
-   * @returns The execution ID
-   */
-  private async startExecution(
-    workflowId: string,
-    options: {
-      inputs?: Record<string, unknown>;
-      parentSessionId?: string;
-      triggerPayload?: Record<string, unknown>;
-      scopeOverride?: WorkflowExecutionScope;
-    } = {},
-  ): Promise<string> {
-    const { inputs = {}, parentSessionId, triggerPayload, scopeOverride } = options;
-    const { workflow } = await this.bus.request(WorkflowStorageSubjects.get, { id: workflowId });
-    if (!workflow) {
-      throw new Error(`Workflow not found: ${workflowId}`);
-    }
-    validateAuthoredWorkflowSteps(workflow.steps);
-
-    const executionId = generateId('wfx');
-    const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
-    const boundInputs = bindWorkflowInputs(workflow.inputs, inputs);
-
-    // Resolve execution scope: caller override wins; otherwise use the definition's required scope.
-    const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
-    const workspaceRoot = await this.resolveExecutionWorkspaceRoot(parentSessionId);
-
-    const { sessionId: coordinatorSessionId } = await this.bus.request(SessionSubjects.create, {
-      parentSessionId,
-      branchKind: 'coordinator',
-      title: `Workflow: ${workflow.name}`,
-      targetWorkingDirectory: workspaceRoot,
-    });
-
-    const execution: WorkflowExecution = {
-      id: executionId,
-      workflowId,
-      coordinatorSessionId,
-      status: 'running',
-      inputs: boundInputs,
-      steps: buildInitialStepStates(workflow.steps),
-      startedAt: Date.now(),
-      triggerPayload: sanitizedTriggerPayload,
-      scope: resolvedScope,
-    };
-
-    let launched = false;
-    try {
-      await this.bus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-      // Seed stepMap from authored steps (scheduler adds children as for-each nodes expand).
-      const stepMap = new Map(workflow.steps.map((step) => [step.id, step]));
-
-      this.activeExecutions.set(executionId, {
-        execution,
-        workflow,
-        stepMap,
-        stepContext: new Map(),
-      });
-
-      const startedEventTask = this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
-      const executionTask =
-        this.workflowRunner !== undefined
-          ? buildExecutionTask(this.buildRunnerTaskDeps(this.workflowRunner), {
-              executionId,
-              workflowId,
-              workflow,
-              coordinatorSessionId,
-              sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
-              boundInputs,
-              scope: resolvedScope,
-              workspaceRoot,
-            })
-          : this.runExecution(executionId).finally(() => {
-              this.executionTasks.delete(executionId);
-            });
-
-      this.executionTasks.set(executionId, executionTask);
-      launched = true;
-      void executionTask;
-
-      await startedEventTask;
-      return executionId;
-    } catch (error) {
-      if (!launched) {
-        this.activeExecutions.delete(executionId);
-        this.executionTasks.delete(executionId);
-        await this.closeCoordinatorSession(coordinatorSessionId);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Start a new workflow execution from a file path on disk.
-   *
-   * Unlike {@link startExecution}, this variant does not look up the workflow
-   * from storage. The ephemeral execution is dispatched directly to the
-   * configured {@link IWorkflowRunner} with a `path`-sourced
-   * {@link WorkflowWorkerConfig}. The runner loads and validates the file.
-   *
-   * Only valid when a workflow runner is configured; the caller is responsible
-   * for ensuring that precondition before calling this method.
-   * @param filePath - Absolute path to the workflow TypeScript or JavaScript file.
-   * @param options - Execution options.
-   * @returns The execution ID.
-   */
-  private async startFileExecution(
-    filePath: string,
-    options: {
-      triggerPayload?: Record<string, unknown>;
-      scopeOverride?: WorkflowExecutionScope;
-    } = {},
-  ): Promise<string> {
-    const { triggerPayload, scopeOverride } = options;
-    const executionId = generateId('wfx');
-    const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
-    const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
-    const workspaceRoot = this.config.platformDefaults.cwd;
-
-    const { sessionId: coordinatorSessionId } = await this.bus.request(SessionSubjects.create, {
-      branchKind: 'coordinator',
-      title: `Workflow: ${filePath}`,
-      targetWorkingDirectory: workspaceRoot,
-    });
-
-    // Ephemeral execution: use the execution ID as workflowId so storage does
-    // not require a persisted file/source workflow definition row.
-    const workflowId = executionId;
-    const execution: WorkflowExecution = {
-      id: executionId,
-      workflowId,
-      coordinatorSessionId,
-      status: 'running',
-      inputs: {},
-      steps: {},
-      startedAt: Date.now(),
-      triggerPayload: sanitizedTriggerPayload,
-      scope: resolvedScope,
-    };
-
-    let launched = false;
-    try {
-      await this.bus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-      // The runner manages the full execution lifecycle (step events, completion).
-      // Register a minimal ActiveExecution entry so cancellation and shutdown
-      // can abort the runner via workflowAbortControllers.
-      this.activeExecutions.set(executionId, {
-        execution,
-        workflow: {
-          id: workflowId,
-          name: filePath,
-          scope: resolvedScope,
-          steps: [],
-          createdAt: 0,
-          updatedAt: 0,
-        },
-        stepMap: new Map(),
-        stepContext: new Map(),
-      });
-
-      const startedEventTask = this.emitExecutionStarted({ executionId, workflowId, coordinatorSessionId });
-      // workflowRunner presence is enforced by the runFile handler before
-      // startFileExecution is called — this guard is a defensive belt-and-suspenders
-      // check that also satisfies the type narrowing without a non-null assertion.
-      const { workflowRunner } = this;
-      if (workflowRunner === undefined) {
-        throw new Error('[WorkflowExecutor] startFileExecution called without a workflow runner');
-      }
-      const executionTask = buildFileExecutionTask(this.buildRunnerTaskDeps(workflowRunner), {
-        executionId,
-        workflowId,
-        filePath,
-        coordinatorSessionId,
-        sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
-        scope: resolvedScope,
-        workspaceRoot,
-      });
-
-      this.executionTasks.set(executionId, executionTask);
-      launched = true;
-      void executionTask;
-
-      await startedEventTask;
-      return executionId;
-    } catch (error) {
-      if (!launched) {
-        this.activeExecutions.delete(executionId);
-        this.executionTasks.delete(executionId);
-        await this.closeCoordinatorSession(coordinatorSessionId);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Emit the execution-started lifecycle event without letting observer failures
-   * prevent an already-persisted execution from running.
-   * @param payload - Execution lifecycle payload.
-   */
-  private async emitExecutionStarted(payload: {
-    executionId: string;
-    workflowId: string;
-    coordinatorSessionId: string;
-  }): Promise<void> {
-    try {
-      await this.bus.emit(WorkflowSubjects.execution.started, payload);
-    } catch (error) {
-      console.error('[WorkflowExecutor] execution.started listener failed:', error);
-    }
-  }
-
-  /**
-   * Close a coordinator session created for an execution that failed before launch.
-   * @param sessionId - Coordinator session ID.
-   */
-  private async closeCoordinatorSession(sessionId: string): Promise<void> {
-    await this.bus.request(SessionSubjects.close, { sessionId }).catch((error: unknown) => {
-      console.error(
-        `[WorkflowExecutor] Failed to close coordinator session "${sessionId}" after launch failure:`,
-        error,
-      );
     });
   }
 

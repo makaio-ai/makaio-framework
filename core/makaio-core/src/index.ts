@@ -2,6 +2,7 @@
 export { createBusNamespace } from './bus-namespace-definition.js';
 export type {
   BusNamespaceDefinition,
+  CreateBusNamespaceOptions,
   NamespaceRegistrationOptions,
   RegistrableBusNamespaceDefinition,
   SchemaViolationReport,
@@ -18,6 +19,8 @@ export {
   isCollectorOnlySchema,
   channelSubject,
   isChannelSchema,
+  defaultTransports,
+  isDefaultTransportsSchema,
   unwrapSchema,
 } from './subject-helpers/index.js';
 export type { BusSubjects, NestedSubjectDefinitions, FlatSubjectDefinitions } from './subject-helpers/index.js';
@@ -58,6 +61,7 @@ export type {
   AnyMessageContext,
   BaseSubjectSchema,
   ChannelSubjectSchema,
+  DefaultTransportsSubjectSchema,
   CollectorOnlySubjectSchema,
   ContextForSubjectDefinition,
   EventContext,
@@ -74,6 +78,8 @@ export type {
   InferSchemaPayload,
   InferSubjectMeta,
   LocalSubjectSchema,
+  BaseMessageContext,
+  MessageOrigin,
   MessagePayload,
   OptionalResult,
   PayloadFilter,
@@ -90,6 +96,7 @@ export type {
   SubjectSchema,
   TransportPeerContext,
   TransportReceiveContext,
+  TransportRoutingDefault,
   TypedPayloadFilter,
   WildcardSubject,
   WildcardContext,

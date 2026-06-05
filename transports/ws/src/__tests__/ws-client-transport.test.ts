@@ -14,6 +14,7 @@ import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { MockWebSocket } from './test-helpers.js';
 import { waitForCondition } from './test-utils.js';
 import type { TransportAuth } from '../types.js';
+import type { TransportReceiveContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -377,6 +378,46 @@ describe('WebSocketClientTransport — ready promise', () => {
 // ---------------------------------------------------------------------------
 
 describe('WebSocketClientTransport — auth lifecycle', () => {
+  it('merges auth receive context into inbound handler context', async () => {
+    const receiveContext: TransportReceiveContext = {
+      transportName: '',
+      peer: { kind: 'workflow-execution', id: 'exec-1', authenticated: true },
+    };
+    const auth: TransportAuth = {
+      authenticateClient: vi.fn(async () => {}),
+      authenticateServer: vi.fn(async () => {}),
+      handleAuthMessage: vi.fn(() => false),
+      getReceiveContext: vi.fn(() => receiveContext),
+      cleanupSocket: vi.fn(),
+      cleanup: vi.fn(),
+    };
+    const { transport, mock } = makeTransport({ auth });
+    const receivedContexts: Array<TransportReceiveContext | undefined> = [];
+    transport.onReceive(async (_message, context) => {
+      receivedContexts.push(context);
+    });
+
+    await transport.connect();
+    mock.receiveMessage(
+      JSON.stringify({
+        type: 'event',
+        namespace: 'test',
+        subject: 'received',
+        messageId: 'msg-auth-context',
+        payload: {},
+      }),
+    );
+
+    await waitForCondition(() => receivedContexts.length === 1, 1000, 'inbound handler did not receive message');
+    expect(auth.getReceiveContext).toHaveBeenCalledTimes(1);
+    expect(receivedContexts[0]).toEqual({
+      transportName: 'ws-client',
+      peer: { kind: 'workflow-execution', id: 'exec-1', authenticated: true },
+    });
+
+    await transport.disconnect();
+  });
+
   it('cleans auth resources on explicit disconnect', async () => {
     const auth: TransportAuth = {
       authenticateClient: vi.fn(async () => {}),

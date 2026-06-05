@@ -10,7 +10,13 @@
  */
 
 import type { TransportAuth, ClientTransportCodec } from './types.js';
-import { handleCorrelationResponse, type BusMessage, type CorrelationTracker } from '@makaio/bus-core';
+import {
+  handleCorrelationResponse,
+  type BusMessage,
+  type BusReceiveHandler,
+  type CorrelationTracker,
+} from '@makaio/bus-core';
+import type { TransportReceiveContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,7 +56,7 @@ export interface InboundMessageHandlerDeps {
   /**
    * Registered application-level message handlers.
    */
-  readonly handlers: Set<(message: BusMessage) => Promise<void>>;
+  readonly handlers: Set<BusReceiveHandler>;
   /**
    * Called when a `subscribe-sync-complete` message is received, resolving the
    * transport's `ready` promise for the current session.
@@ -77,18 +83,21 @@ export interface InboundMessageHandlerDeps {
  * Fan out a decoded message to registered handlers and report aggregate success.
  * @param message - Decoded bus message
  * @param handlers - Registered message handlers
- * @param options - Logging options
+ * @param options - Logging options and receive context
  * @returns True when every handler completed successfully
  */
 async function dispatchToHandlers(
   message: BusMessage,
-  handlers: Set<(message: BusMessage) => Promise<void>>,
+  handlers: Set<BusReceiveHandler>,
   options: {
     debug: boolean;
     name: string;
+    receiveContext?: TransportReceiveContext;
   },
 ): Promise<boolean> {
-  const handlerResults = await Promise.allSettled(Array.from(handlers).map((handler) => handler(message)));
+  const handlerResults = await Promise.allSettled(
+    Array.from(handlers).map((handler) => handler(message, options.receiveContext)),
+  );
   for (const result of handlerResults) {
     if (result.status === 'rejected' && options.debug) {
       console.error(`[WebSocketClientTransport:${options.name}] Handler error:`, result.reason);
@@ -96,6 +105,19 @@ async function dispatchToHandlers(
   }
 
   return handlerResults.every((result) => result.status === 'fulfilled');
+}
+
+/**
+ * Build the receive context passed to bus handlers.
+ * @param name - Transport name used for diagnostics.
+ * @param auth - Optional auth strategy that may expose peer identity.
+ * @returns Receive context for handlers invoked by this transport.
+ */
+function buildReceiveContext(name: string, auth: TransportAuth | undefined): TransportReceiveContext {
+  return {
+    ...auth?.getReceiveContext?.(),
+    transportName: name,
+  };
 }
 
 /**
@@ -167,7 +189,8 @@ export async function handleInboundMessage(data: string | Buffer, deps: InboundM
       return;
     }
 
-    const handlersApplied = await dispatchToHandlers(decoded, handlers, { debug, name });
+    const receiveContext = buildReceiveContext(name, auth);
+    const handlersApplied = await dispatchToHandlers(decoded, handlers, { debug, name, receiveContext });
     if (
       handlersApplied &&
       (decoded.type === 'subscribe' || decoded.type === 'unsubscribe') &&

@@ -1,10 +1,12 @@
 import type { RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
 import type { RequestContext, RequestHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 import { nanoid } from 'nanoid';
+import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../utils/transport-helpers.js';
 import { getMatchingHandlers } from './request/getMatchingHandlers.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { getReadyTransports } from '../utils/transport.js';
 import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
+import { resolveEffectiveTransports } from './resolve-effective-transports.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { TimeoutError as pTimeoutError } from 'p-timeout';
@@ -64,12 +66,15 @@ function createBroadcastContext<P, R>(
   let resultSet = false;
   let resultValue: R | undefined;
 
+  const origin = transport ? REMOTE_ORIGIN : LOCAL_ORIGIN;
+
   const context: BroadcastContext<P, R> = {
     isRequest: true,
     payload,
     messageId,
     correlationId,
     transport,
+    origin,
     get result() {
       return resultValue;
     },
@@ -212,10 +217,16 @@ export async function broadcast<
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const signal = options?.signal;
   const validationCtx = resolveRequestValidation(context, fullSubjectKey);
+  const effectiveTransports = resolveEffectiveTransports(
+    context,
+    subjectDefinition,
+    fullSubjectKey,
+    options?.transports,
+  );
   const localOnly =
     subjectDefinition.$meta.local ||
     context.namespaceRegistry.isCollectorOnlySubject(fullSubjectKey) ||
-    isExplicitLocalOnlyTransportSpec(options?.transports);
+    isExplicitLocalOnlyTransportSpec(effectiveTransports);
   validateRequestPayload(fullSubjectKey, payload, validationCtx);
 
   // Invoke __onAny handlers (debugging/testing)
@@ -257,11 +268,11 @@ export async function broadcast<
   // critical for handleBroadcastMessage which passes transports:[] to suppress
   // transport dispatch during relay (local-only execution).
   const transportTargets =
-    options?.transports === undefined
+    effectiveTransports === undefined
       ? subjectDefinition.$meta.local
         ? []
         : getReadyTransports(context).map(({ transport }) => transport)
-      : normalizeTransportTargets(context, options.transports, subjectDefinition);
+      : normalizeTransportTargets(context, effectiveTransports, subjectDefinition);
 
   const localPromises = handlers.map(async (handler) => {
     const handlerResults = await executeLocalBroadcastHandler<Request, Response>(handler, {

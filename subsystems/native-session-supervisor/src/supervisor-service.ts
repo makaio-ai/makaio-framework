@@ -204,9 +204,15 @@ export class SupervisorService extends BaseService {
     await this.registry.loadFromStorage();
     await this._markHydratedRunningRuntimesUnknown();
 
-    this.registerHandler(NativeSessionSupervisorSubjects.launch, (ctx) => this._handleLaunch(ctx));
+    this.registerHandler(NativeSessionSupervisorSubjects.launch, (ctx) => {
+      if (!ctx.origin.local) throw new Error('Unauthorized: supervisor.launch requires a local-origin request');
+      return this._handleLaunch(ctx);
+    });
     this.registerHandler(NativeSessionSupervisorSubjects.attach, (ctx) => this._handleAttach(ctx));
-    this.registerHandler(NativeSessionSupervisorSubjects.stop, (ctx) => this._handleStop(ctx));
+    this.registerHandler(NativeSessionSupervisorSubjects.stop, (ctx) => {
+      if (!ctx.origin.local) throw new Error('Unauthorized: supervisor.stop requires a local-origin request');
+      return this._handleStop(ctx);
+    });
     this.registerHandler(NativeSessionSupervisorSubjects.status, (ctx) => this._handleStatus(ctx));
   }
 

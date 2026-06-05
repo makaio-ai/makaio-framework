@@ -10,6 +10,7 @@ import {
   EXECUTION_LIST_MIN_LIMIT,
   WorkflowExecutionScopeSchema,
   ExecutionListQuerySchema,
+  WorkflowRunContextSchema,
 } from '@makaio/contracts';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 
@@ -215,6 +216,66 @@ describe('workflow storage handlers', () => {
       status: 'completed',
     });
     expect(completedOnly.map((item) => item.id)).toEqual([completedExecution.id]);
+  });
+
+  it('stores execution start and run context in one storage request', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-execution-start' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-start-atomic', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-atomic',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+
+    const result = await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+
+    expect(result).toEqual({ id: execution.id, executionId: execution.id });
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id }),
+    ).resolves.toEqual(expect.objectContaining({ execution: expect.objectContaining({ id: execution.id }) }));
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id }),
+    ).resolves.toEqual(expect.objectContaining({ runContext: expect.objectContaining({ executionId: execution.id }) }));
+  });
+
+  it('rejects execution start snapshots whose ids do not match', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-execution-start-mismatch' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-start-mismatch', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: 'different-execution-id',
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-mismatch',
+      cancelSubject: 'workflow.different-execution-id.cancel',
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext }),
+    ).rejects.toThrow('setExecutionStart requires execution.id to match runContext.executionId');
+    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: execution.id,
+    });
+    expect(fetched).toBeNull();
   });
 
   it('persists step state changes without rewriting the execution steps snapshot', async () => {

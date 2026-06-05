@@ -308,6 +308,28 @@ CREATE TABLE `workflow_executions` (
 CREATE INDEX `idx_workflow_executions_status` ON `workflow_executions` (`status`);--> statement-breakpoint
 CREATE INDEX `idx_workflow_executions_scope_started` ON `workflow_executions` (`scope_type`,`scope_kind`,`scope_id`,`started_at`);--> statement-breakpoint
 CREATE INDEX `idx_workflow_executions_workflow_started` ON `workflow_executions` (`workflow_id`,`started_at`);--> statement-breakpoint
+CREATE TABLE `workflow_run_contexts` (
+	`execution_id` text PRIMARY KEY NOT NULL,
+	`workflow_id` text NOT NULL,
+	`coordinator_session_id` text NOT NULL,
+	`source_kind` text NOT NULL,
+	`source_path` text,
+	`source_filename` text,
+	`source_code` text,
+	`definition_snapshot` text,
+	`worker_manifest` text NOT NULL,
+	`inputs` text NOT NULL,
+	`trigger_payload` text NOT NULL,
+	`scope_type` text DEFAULT 'global' NOT NULL,
+	`scope_kind` text DEFAULT '' NOT NULL,
+	`scope_id` text DEFAULT '' NOT NULL,
+	`cancel_subject` text NOT NULL,
+	`context` text NOT NULL,
+	`env` text NOT NULL,
+	`created_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE INDEX `idx_run_contexts_workflow` ON `workflow_run_contexts` (`workflow_id`);--> statement-breakpoint
 CREATE TABLE `workflow_step_spans` (
 	`execution_id` text NOT NULL,
 	`step_id` text NOT NULL,

@@ -6,6 +6,7 @@
  * known peer signing keys, deriving a shared session key.
  */
 
+import type { TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
 import {
@@ -274,6 +275,24 @@ export class E2ERelayAuth implements TransportAuth {
    */
   public getPeerId(): string | null {
     return this.peerId ?? null;
+  }
+
+  /**
+   * Return trusted receive context after a successful relay handshake.
+   *
+   * Relay auth is always client-mode (no socket parameter). The `transportName`
+   * is intentionally left as `''`; the transport registry fills it in.
+   * @returns Trusted receive context with peer identity, or `undefined`.
+   */
+  public getReceiveContext(): TransportReceiveContext | undefined {
+    const peerId = this.getPeerId();
+    if (peerId === null) {
+      return undefined;
+    }
+    return {
+      transportName: '',
+      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
+    };
   }
 
   private async waitForPeerExchange(): Promise<RelayKeyExchangeMessage> {

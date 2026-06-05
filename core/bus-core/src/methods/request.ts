@@ -16,21 +16,29 @@ import { dispatch } from './request/dispatch.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 import { isExplicitLocalOnlyTransportSpec } from './request/normalizeTransportTargets.js';
+import { resolveEffectiveTransports } from './resolve-effective-transports.js';
 
 /**
  * Determine whether a request should be dispatched locally only.
  *
- * `transports: []` or an empty Set means "do not route to any transport" —
- * equivalent to local-only. Undefined means "allow any remote transport", and
- * non-empty transport allowlists also remain remote-capable so dispatch can
- * route through the advertised remote handler registry.
- * @param subjectDefinition - Subject definition (checked for `$meta.local`)
+ * Checks `$meta.local` (hard invariant), then runs the `defaultTransports`
+ * cascade (subject-level → namespace-level) to suppress remote dispatch for
+ * `'local-only'` subjects. Explicit caller-supplied transport specs always win.
+ * @param context - Bus context for namespace registry access
+ * @param subjectDefinition - Subject definition (checked for `$meta.local` and `defaultTransports`)
+ * @param fullSubjectKey - Fully-qualified subject key for namespace lookup
  * @param transports - Caller-supplied transport spec from RequestOptions
  * @returns `true` if dispatch must stay local
  */
-function resolveLocalOnly(subjectDefinition: SubjectDefinition, transports: RequestOptions['transports']): boolean {
+function resolveLocalOnly(
+  context: MakaioBusContext,
+  subjectDefinition: SubjectDefinition,
+  fullSubjectKey: string,
+  transports: RequestOptions['transports'],
+): boolean {
   if (subjectDefinition.$meta.local) return true;
-  return isExplicitLocalOnlyTransportSpec(transports);
+  const effective = resolveEffectiveTransports(context, subjectDefinition, fullSubjectKey, transports);
+  return isExplicitLocalOnlyTransportSpec(effective);
 }
 
 /**
@@ -81,7 +89,7 @@ export async function request<
   const correlationId = options?.correlationId ?? nanoid();
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const signal = options?.signal;
-  const localOnly = resolveLocalOnly(subjectDefinition, options?.transports);
+  const localOnly = resolveLocalOnly(context, subjectDefinition, fullSubjectKey, options?.transports);
 
   const validationCtx = resolveRequestValidation(context, fullSubjectKey);
   validateRequestPayload(fullSubjectKey, payload, validationCtx);

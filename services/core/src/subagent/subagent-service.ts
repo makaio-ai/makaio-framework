@@ -1,6 +1,9 @@
+// NOTE: do NOT change eslint rules without explicit human approval
+/* eslint max-lines: ["error", { "max": 630, "skipBlankLines": true, "skipComments": true }] */
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
-import type { ExtractSubjectPayload } from '@makaio/core';
+import type { BaseMessageContext, ExtractSubjectPayload } from '@makaio/core';
+import { isPeerAuthorizedToDelegate, type SpawnDelegationAllowSet } from './spawn-delegation.js';
 import {
   SubagentSubjects,
   SessionSubjects,
@@ -75,14 +78,43 @@ export class SubagentService extends BaseService {
    * @param bus - The event bus for inter-service communication
    * @param constraints - Subagent execution constraints
    * @param machineId - Optional machine ID for adapter resolution
+   * @param delegationAllowSet - Set of peer identities permitted to request
+   *   spawn or execute on this node from a remote origin. Authenticated
+   *   `workflow-execution` peers are allowed by identity; this set is for
+   *   additional delegated peer kinds.
    */
   public constructor(
     bus: IMakaioBus = MakaioBus,
     constraints: SubagentConstraints = DEFAULT_CONSTRAINTS,
     private readonly machineId?: string,
+    private readonly delegationAllowSet: SpawnDelegationAllowSet = new Set(),
   ) {
     super(bus);
     this.manager = new SubagentManager(constraints);
+  }
+
+  /**
+   * Grant an authenticated peer permission to delegate spawn/execute requests.
+   *
+   * Adds the canonical `kind:id` key to the allow-set so subsequent remote
+   * calls from this peer pass the delegation guard.
+   * @param kind - Peer kind (e.g. `'workflow-execution'`)
+   * @param id - Peer identifier
+   */
+  public grantDelegation(kind: string, id: string): void {
+    this.delegationAllowSet.add(`${kind}:${id}`);
+  }
+
+  /**
+   * Revoke delegation permission for an authenticated peer.
+   *
+   * Removes the canonical `kind:id` key from the allow-set. Subsequent
+   * remote calls from this peer will be denied by the delegation guard.
+   * @param kind - Peer kind (e.g. `'workflow-execution'`)
+   * @param id - Peer identifier
+   */
+  public revokeDelegation(kind: string, id: string): void {
+    this.delegationAllowSet.delete(`${kind}:${id}`);
   }
 
   /**
@@ -99,6 +131,9 @@ export class SubagentService extends BaseService {
 
     // Handle execute RPC (for explicit execution requests)
     this.registerHandler(SubagentSubjects.execute, async (ctx) => {
+      if (!this.isRemoteDelegationAllowed(ctx)) {
+        return;
+      }
       const result = await this.handleExecute(ctx.payload);
       ctx.setResult(result);
     });
@@ -167,6 +202,9 @@ export class SubagentService extends BaseService {
 
     // spawn RPC - validates constraints, tracks, emits spawned
     this.registerHandler(SubagentSubjects.spawn, async (busCtx) => {
+      if (!this.isRemoteDelegationAllowed(busCtx)) {
+        return;
+      }
       const payload = SpawnSubagentRpcRequestSchema.parse(busCtx.payload);
       const result = await handleSpawnRpc(ctx, payload);
       busCtx.setResult(result);
@@ -378,6 +416,7 @@ export class SubagentService extends BaseService {
       systemPrompt: config.systemPrompt,
       allowedTools: config.tools,
       disallowedTools: config.disallowedTools,
+      allowedDirectories: config.allowedDirectories,
       ...(config.harnessId !== undefined && { harnessId: config.harnessId }),
     });
 
@@ -583,6 +622,19 @@ export class SubagentService extends BaseService {
         return;
       }
     }
+  }
+
+  /**
+   * Return true when a handler may proceed.
+   *
+   * Local callers always proceed. Remote callers proceed only when they are an
+   * authenticated workflow execution peer or their authenticated peer appears
+   * in the delegation allow-set.
+   * @param ctx - Incoming message context
+   * @returns True when the handler should process the request
+   */
+  private isRemoteDelegationAllowed(ctx: BaseMessageContext): boolean {
+    return ctx.origin.local || isPeerAuthorizedToDelegate(ctx.transport?.peer, this.delegationAllowSet);
   }
 
   private async emitExecutionFailed(

@@ -43,9 +43,7 @@ const TestRequestNamespace = createBusNamespace('workflow-test', {
 /**
  * Register in-memory storage handlers for all workflow storage subjects.
  *
- * Covers the minimal surface the {@link WorkflowExecutor} calls during inline step
- * execution: `get` (definition lookup), `setExecution`, `updateExecution`,
- * `getExecution`, and `setSpan`.
+ * Covers the minimal surface the {@link WorkflowExecutor} calls during inline step execution.
  * @param bus - Isolated bus instance to register handlers on.
  * @param definition - Workflow definition returned for matching ID requests.
  * @param spans - Optional accumulator for persisted step spans.
@@ -65,6 +63,10 @@ function registerMemoryWorkflowStorage(
     executions.set(ctx.payload.execution.id, ctx.payload.execution);
     ctx.setResult({ id: ctx.payload.execution.id });
   });
+  bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+    executions.set(ctx.payload.execution.id, ctx.payload.execution);
+    ctx.setResult({ id: ctx.payload.execution.id, executionId: ctx.payload.execution.id });
+  });
   bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
     const execution = executions.get(ctx.payload.executionId);
     if (!execution) {
@@ -83,6 +85,9 @@ function registerMemoryWorkflowStorage(
   bus.on(WorkflowStorageSubjects.setSpan, (ctx) => {
     spans.push(ctx.payload.span);
     ctx.setResult({ id: `${ctx.payload.span.executionId}:${ctx.payload.span.stepId}` });
+  });
+  bus.on(WorkflowStorageSubjects.setRunContext, (ctx) => {
+    ctx.setResult({ executionId: ctx.payload.runContext.executionId });
   });
 
   return executions;

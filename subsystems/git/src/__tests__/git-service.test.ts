@@ -1,12 +1,74 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import {
+  createBusInstance,
+  type BusBroadcastMessage,
+  type BusMessage,
+  type BusReceiveHandler,
+  type BusRequestMessage,
+  type BusTransport,
+  type IMakaioBus,
+} from '@makaio/bus-core';
+import type { TransportReceiveContext } from '@makaio/core';
 import { GitSubjects } from '../namespace.js';
 import { GitService } from '../git-service.js';
 import { configureTestGit, createRepoWithTwoCommits, createTestRepoWithCommit } from './git-test-utils.js';
 
 let bus: IMakaioBus;
+
+/**
+ * Create a controllable transport for inbound request-origin tests.
+ * @param name - Registered transport name.
+ * @returns Transport plus helpers for injecting messages and reading responses.
+ */
+function createInboundTransport(name: string): {
+  transport: BusTransport;
+  responses: BusMessage[];
+  simulateReceive: (message: BusMessage, context?: TransportReceiveContext) => Promise<void>;
+} {
+  const responses: BusMessage[] = [];
+  let handler: BusReceiveHandler | undefined;
+  const transport: BusTransport = {
+    name,
+    send: <TMessage extends BusMessage>(
+      message: TMessage,
+    ): Promise<
+      TMessage extends BusRequestMessage
+        ? unknown
+        : TMessage extends BusBroadcastMessage
+          ? Array<{ nodeId: string; payload: unknown }>
+          : boolean
+    > => {
+      responses.push(message);
+      const result = message.type === 'broadcast' ? [] : true;
+      return Promise.resolve(result) as Promise<
+        TMessage extends BusRequestMessage
+          ? unknown
+          : TMessage extends BusBroadcastMessage
+            ? Array<{ nodeId: string; payload: unknown }>
+            : boolean
+      >;
+    },
+    onReceive: (nextHandler) => {
+      handler = nextHandler;
+      return () => {
+        handler = undefined;
+      };
+    },
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    subscribe: async () => undefined,
+    unsubscribe: async () => undefined,
+  };
+  return {
+    responses,
+    transport,
+    simulateReceive: async (message, context) => {
+      await handler?.(message, context);
+    },
+  };
+}
 
 describe('GitService', { timeout: 30_000 }, () => {
   let gitService: GitService;
@@ -944,6 +1006,98 @@ describe('GitService', { timeout: 30_000 }, () => {
         expect(result.success).toBe(false);
         expect(result.error).toBeDefined();
       } finally {
+        await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
+      }
+    });
+
+    it('accepts stage requests from the host UI worker transport', async () => {
+      const { repoPath } = await createRepoWithInitialCommit();
+      const inbound = createInboundTransport('worker');
+      bus.registerTransport(inbound.transport);
+
+      try {
+        await import('node:fs/promises').then((fs) => fs.writeFile(path.join(repoPath, 'ui-file.txt'), 'content'));
+
+        await inbound.simulateReceive({
+          type: 'request',
+          namespace: 'git',
+          subject: 'stage',
+          payload: { repoPath, paths: ['ui-file.txt'] },
+          correlationId: 'corr-worker-stage',
+          messageId: 'msg-worker-stage',
+        });
+
+        const response = inbound.responses.find((message) => message.type === 'response');
+        expect(response).toMatchObject({
+          type: 'response',
+          correlationId: 'corr-worker-stage',
+          result: { success: true },
+        });
+
+        const status = await bus.request(GitSubjects.getStatus, { repoPath });
+        expect(status.staged).toContain('ui-file.txt');
+      } finally {
+        bus.unregisterTransport('worker');
+        await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
+      }
+    });
+
+    it('rejects stage requests from non-host transports', async () => {
+      const { repoPath } = await createRepoWithInitialCommit();
+      const inbound = createInboundTransport('websocket');
+      bus.registerTransport(inbound.transport);
+
+      try {
+        await inbound.simulateReceive({
+          type: 'request',
+          namespace: 'git',
+          subject: 'stage',
+          payload: { repoPath, paths: ['file.txt'] },
+          correlationId: 'corr-websocket-stage',
+          messageId: 'msg-websocket-stage',
+        });
+
+        const response = inbound.responses.find((message) => message.type === 'response');
+        expect(response).toMatchObject({
+          type: 'response',
+          correlationId: 'corr-websocket-stage',
+          error: { message: expect.stringContaining('requires a host-owned request') },
+        });
+      } finally {
+        bus.unregisterTransport('websocket');
+        await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
+      }
+    });
+
+    it('rejects stage requests from worker transport when a remote peer is present', async () => {
+      const { repoPath } = await createRepoWithInitialCommit();
+      const inbound = createInboundTransport('worker');
+      bus.registerTransport(inbound.transport);
+
+      try {
+        await inbound.simulateReceive(
+          {
+            type: 'request',
+            namespace: 'git',
+            subject: 'stage',
+            payload: { repoPath, paths: ['file.txt'] },
+            correlationId: 'corr-worker-peer-stage',
+            messageId: 'msg-worker-peer-stage',
+          },
+          {
+            transportName: 'worker',
+            peer: { kind: 'workflow-execution', id: 'wfx-peer', authenticated: true },
+          },
+        );
+
+        const response = inbound.responses.find((message) => message.type === 'response');
+        expect(response).toMatchObject({
+          type: 'response',
+          correlationId: 'corr-worker-peer-stage',
+          error: { message: expect.stringContaining('requires a host-owned request') },
+        });
+      } finally {
+        bus.unregisterTransport('worker');
         await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
       }
     });

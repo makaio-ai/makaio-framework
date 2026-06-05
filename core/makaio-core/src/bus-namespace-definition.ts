@@ -1,4 +1,9 @@
-import type { FilterablePayloadIntersection, SubjectRecordFromSchemaRecord, SubjectSchema } from './types/index.js';
+import type {
+  FilterablePayloadIntersection,
+  SubjectRecordFromSchemaRecord,
+  SubjectSchema,
+  TransportRoutingDefault,
+} from './types/index.js';
 import { nestSubjectDefinitions } from './subject-helpers/index.js';
 import type { BusSubjects, FlatSubjectDefinitions } from './subject-helpers/index.js';
 
@@ -63,6 +68,19 @@ export interface BusNamespaceDefinition<
   /** Registration options (validation mode, violation callback) */
   readonly options?: NamespaceRegistrationOptions;
   /**
+   * Default transport routing for all subjects in this namespace when the
+   * caller does not provide an explicit `transports` option.
+   *
+   * Subject-level `defaultTransports` (set via `SubjectDefinitionMeta`) takes
+   * precedence over this namespace-level default when both are set.
+   *
+   * - `'all'` (default when omitted) — send to all registered transports.
+   * - `'local-only'` — suppress outbound transport fan-out by default. Callers
+   *   can still force transport delivery by passing an explicit `transports`
+   *   option. Weaker than `localSubject()`: subjects remain reachable remotely.
+   */
+  readonly defaultTransports?: TransportRoutingDefault;
+  /**
    * Phantom field for type inference of filterable payload shape.
    *
    * Never set at runtime. Exists solely so TypeScript can infer the
@@ -89,6 +107,27 @@ export type RegistrableBusNamespaceDefinition = Omit<BusNamespaceDefinition, 'su
 };
 
 /**
+ * Options for {@link createBusNamespace}.
+ *
+ * Extends each variant of {@link NamespaceRegistrationOptions} with an optional
+ * `defaultTransports` field so callers can pass both validation mode and routing
+ * default in a single options object.
+ */
+export type CreateBusNamespaceOptions = NamespaceRegistrationOptions & {
+  /**
+   * Default transport routing for every subject in this namespace when the
+   * caller does not provide an explicit `transports` option.
+   *
+   * Subject-level `defaultTransports` (set via `SubjectDefinitionMeta`) takes
+   * precedence over this namespace-level default when both are set.
+   *
+   * - `'all'` (default when omitted) — send to all registered transports.
+   * - `'local-only'` — suppress outbound transport fan-out by default.
+   */
+  defaultTransports?: TransportRoutingDefault;
+};
+
+/**
  * Creates a bus namespace definition with typed subject tokens.
  *
  * Pure function — no side-effects, no bus singleton mutation. The returned
@@ -97,7 +136,7 @@ export type RegistrableBusNamespaceDefinition = Omit<BusNamespaceDefinition, 'su
  * `MakaioBus.registerNamespace(definition)`.
  * @param name - Namespace domain string (e.g., `'adapter'`, `'session'`)
  * @param schemas - Schema record mapping subject keys to Zod schemas
- * @param options - Optional registration options (validation mode, violation callback)
+ * @param options - Optional registration and routing options
  * @returns Namespace definition with typed subject tokens and carried schemas
  * @example
  * ```typescript
@@ -111,12 +150,21 @@ export type RegistrableBusNamespaceDefinition = Omit<BusNamespaceDefinition, 'su
 export function createBusNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
   name: Domain,
   schemas: Schemas,
-  options?: NamespaceRegistrationOptions,
+  options?: CreateBusNamespaceOptions,
 ): BusNamespaceDefinition<Domain, Schemas> {
+  const defaultTransports = options?.defaultTransports;
+  // Strip defaultTransports before forwarding as NamespaceRegistrationOptions —
+  // it is a createBusNamespace-level concern, not a namespace-registration one.
+  let registrationOptions: NamespaceRegistrationOptions | undefined;
+  if (options !== undefined) {
+    const { defaultTransports: _ignored, ...rest } = options;
+    registrationOptions = Object.keys(rest).length > 0 ? (rest as NamespaceRegistrationOptions) : undefined;
+  }
   return {
     name,
-    subjects: nestSubjectDefinitions(name, schemas),
+    subjects: nestSubjectDefinitions(name, schemas, defaultTransports),
     schemas,
-    ...(options ? { options } : {}),
+    ...(registrationOptions !== undefined ? { options: registrationOptions } : {}),
+    ...(defaultTransports !== undefined ? { defaultTransports } : {}),
   };
 }

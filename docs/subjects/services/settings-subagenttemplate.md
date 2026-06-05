@@ -1,19 +1,19 @@
 ---
-title: "settings:worker"
+title: "settings:subagentTemplate"
 editUrl: false
 prev: false
 next: false
 ---
 
-# `settings:worker`
+# `settings:subagentTemplate`
 
 | Field | Value |
 |-------|-------|
-| Prefix | `settings:worker` |
-| Namespace constant | `WorkerSettingsNamespace` |
-| Subjects constant | `WorkerSettingsSubjects` |
+| Prefix | `settings:subagentTemplate` |
+| Namespace constant | `SubagentTemplateSettingsNamespace` |
+| Subjects constant | `SubagentTemplateSettingsSubjects` |
 | Kind | bus |
-| Schema record | `WorkerSettingsSchemas` |
+| Schema record | `SubagentTemplateSettingsSchemas` |
 | Tier | framework |
 | Package | `@makaio/services-core` |
 | Defined in | [`services/core/src/settings/namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/settings/namespace.ts) |
@@ -22,17 +22,17 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
-| `create` | [`settings:worker.create`](#settings:worker.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
-| `delete` | [`settings:worker.delete`](#settings:worker.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
-| `get` | [`settings:worker.get`](#settings:worker.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
-| `list` | [`settings:worker.list`](#settings:worker.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
-| `update` | [`settings:worker.update`](#settings:worker.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/worker/schemas.ts) |
+| `create` | [`settings:subagentTemplate.create`](#settings:subagentTemplate.create) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/subagent-template/schemas.ts) |
+| `delete` | [`settings:subagentTemplate.delete`](#settings:subagentTemplate.delete) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/subagent-template/schemas.ts) |
+| `get` | [`settings:subagentTemplate.get`](#settings:subagentTemplate.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/subagent-template/schemas.ts) |
+| `list` | [`settings:subagentTemplate.list`](#settings:subagentTemplate.list) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/subagent-template/schemas.ts) |
+| `update` | [`settings:subagentTemplate.update`](#settings:subagentTemplate.update) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/subagent-template/schemas.ts) |
 
 ## Subject Details
 
-### <a id="settings:worker.create"></a>`settings:worker.create` (rpc)
+### <a id="settings:subagentTemplate.create"></a>`settings:subagentTemplate.create` (rpc)
 
-Subject: `settings:worker.create`
+Subject: `settings:subagentTemplate.create`
 Type: Request (RPC)
 
 **Request:**
@@ -56,9 +56,9 @@ Type: Request (RPC)
 |-------|------|----------|
 | `id` | `string` | yes |
 
-### <a id="settings:worker.delete"></a>`settings:worker.delete` (rpc)
+### <a id="settings:subagentTemplate.delete"></a>`settings:subagentTemplate.delete` (rpc)
 
-Subject: `settings:worker.delete`
+Subject: `settings:subagentTemplate.delete`
 Type: Request (RPC)
 
 **Request:**
@@ -73,9 +73,9 @@ Type: Request (RPC)
 |-------|------|----------|
 | `success` | `boolean` | yes |
 
-### <a id="settings:worker.get"></a>`settings:worker.get` (rpc)
+### <a id="settings:subagentTemplate.get"></a>`settings:subagentTemplate.get` (rpc)
 
-Subject: `settings:worker.get`
+Subject: `settings:subagentTemplate.get`
 Type: Request (RPC)
 
 **Request:**
@@ -104,9 +104,9 @@ Type: Request (RPC)
 | `systemPrompt` | `string \| undefined` | no |
 | `updatedAt` | `number` | yes |
 
-### <a id="settings:worker.list"></a>`settings:worker.list` (rpc)
+### <a id="settings:subagentTemplate.list"></a>`settings:subagentTemplate.list` (rpc)
 
-Subject: `settings:worker.list`
+Subject: `settings:subagentTemplate.list`
 Type: Request (RPC)
 
 **Request:**
@@ -119,9 +119,9 @@ _Empty object._
 |-------|------|----------|
 | `definitions` | `{ id: string; name: string; adapterName: string; enabled: boolean; model?: string \| undefined; }[]` | yes |
 
-### <a id="settings:worker.update"></a>`settings:worker.update` (rpc)
+### <a id="settings:subagentTemplate.update"></a>`settings:subagentTemplate.update` (rpc)
 
-Subject: `settings:worker.update`
+Subject: `settings:subagentTemplate.update`
 Type: Request (RPC)
 
 **Request:**

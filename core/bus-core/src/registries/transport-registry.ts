@@ -565,12 +565,20 @@ const createTransportRegistry = (context: MakaioBusContext) => {
         return;
       }
 
+      // Synthesize a guaranteed TransportReceiveContext so that ctx.transport is
+      // always populated for all inbound transport messages, making
+      // origin.local = !ctx.transport correct everywhere. The transport name is
+      // filled in from the registration key when the auth layer omits it.
+      const effectiveReceiveContext: TransportReceiveContext = receiveContext
+        ? { ...receiveContext, transportName: receiveContext.transportName || String(transportName) }
+        : { transportName: String(transportName) };
+
       if (message.type === 'event') {
-        await handleEventMessage(context, transportName, message, receiveContext);
+        await handleEventMessage(context, transportName, message, effectiveReceiveContext);
       } else if (message.type === 'request') {
-        await handleRequestMessage(context, transportName, transport, message, receiveContext);
+        await handleRequestMessage(context, transportName, transport, message, effectiveReceiveContext);
       } else if (message.type === 'broadcast') {
-        await handleBroadcastMessage(context, transportName, transport, message, receiveContext);
+        await handleBroadcastMessage(context, transportName, transport, message, effectiveReceiveContext);
       }
     } catch (error) {
       console.error('[TransportRegistry] Unhandled error processing transport message:', error);

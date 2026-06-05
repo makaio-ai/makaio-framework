@@ -3,12 +3,14 @@ import {
   type InferSubjectMeta,
   type SubjectDefinition,
   type SubjectSchema,
+  type TransportRoutingDefault,
   type WildcardSubjectDefinition,
   WildcardSubjectKey,
 } from '../types/index.js';
 import { isRequestSchema } from './is-request-schema.js';
 import { isChannelSchema } from './is-channel-schema.js';
 import { isLocalSchema } from './is-local-schema.js';
+import { isDefaultTransportsSchema } from './default-transports-schema.js';
 import { unwrapSchema } from './unwrap-schema.js';
 
 /**
@@ -75,11 +77,15 @@ export type BusSubjects<
  * Nests flat dotted subject keys into a hierarchical structure.
  * @param namespace - The domain/namespace for the subject definitions
  * @param flat - Flat record of subject schemas with dotted keys
+ * @param namespaceDefaultTransports - Optional namespace-level transport default
+ *   propagated to each subject's `$meta.defaultTransports` unless the subject
+ *   schema is wrapped with `defaultTransports()`.
  * @returns Nested subject definitions with hierarchical structure and a $all wildcard
  */
 export function nestSubjectDefinitions<Domain extends string, T extends Record<string, SubjectSchema>>(
   namespace: Domain,
   flat: T,
+  namespaceDefaultTransports?: TransportRoutingDefault,
 ): NestedSubjectDefinitions<FlatSubjectDefinitions<Domain, T>> & {
   $all: WildcardSubjectDefinition<Domain>;
 } {
@@ -95,6 +101,9 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
     // Check if schema is wrapped as local or channel and unwrap for type detection
     const local = isLocalSchema(schema);
     const channel = isChannelSchema(schema);
+    const subjectDefaultTransports = isDefaultTransportsSchema(schema)
+      ? schema.__defaultTransports
+      : namespaceDefaultTransports;
     const innerSchema = unwrapSchema(schema);
 
     const definition: PartialDeep<SubjectDefinition> = {
@@ -104,6 +113,7 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
         isRequest: isRequestSchema(innerSchema),
         local,
         channel,
+        ...(subjectDefaultTransports !== undefined && { defaultTransports: subjectDefaultTransports }),
       },
     };
 

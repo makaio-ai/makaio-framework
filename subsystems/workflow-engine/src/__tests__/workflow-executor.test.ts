@@ -307,15 +307,15 @@ describe('WorkflowExecutor', () => {
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
     const failSetExecution = MakaioBus.on(
-      WorkflowStorageSubjects.setExecution,
+      WorkflowStorageSubjects.setExecutionStart,
       () => {
-        throw new Error('setExecution unavailable');
+        throw new Error('setExecutionStart unavailable');
       },
       { priority: 1_000 },
     );
     try {
       await expect(MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id, inputs: {} })).rejects.toThrow(
-        'setExecution unavailable',
+        'setExecutionStart unavailable',
       );
     } finally {
       failSetExecution();
@@ -787,5 +787,41 @@ describe('WorkflowExecutor', () => {
     expect(failedStepEvents).toContainEqual(
       expect.objectContaining({ executionId, stepId: 'loop.0.waiting', stepType: 'shell' }),
     );
+  });
+
+  it('persists a WorkflowRunContext snapshot when a workflow execution starts', async () => {
+    const workflow = createWorkflowDefinition({
+      id: 'workflow-run-context-at-start',
+      name: 'run-context-at-start',
+      steps: [{ id: 'step-one', type: 'agent' as const, prompt: 'Step one', adapter: 'claude-code' }],
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const completedExecutions: string[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        completedExecutions.push(ctx.payload.executionId);
+      }),
+    );
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await vi.waitFor(() => expect(completedExecutions).toContain(executionId));
+
+    // The public getRunContext subject should return the persisted snapshot.
+    const runContext = await MakaioBus.request(WorkflowSubjects.getRunContext, { executionId });
+    expect(runContext.executionId).toBe(executionId);
+    expect(runContext.workflowId).toBe(workflow.id);
+    expect(runContext.source).toEqual({ kind: 'definition', workflowId: workflow.id });
+    expect(runContext.definitionSnapshot).toMatchObject(workflow);
+    expect(runContext.cancelSubject).toBe(`workflow.${executionId}.cancel`);
+    expect(runContext.context).toMatchObject({
+      os: expect.any(String),
+      arch: expect.any(String),
+      repoPath: expect.any(String),
+      makaioHome: expect.any(String),
+    });
+    expect(runContext.scope).toEqual({ type: 'global' });
+    expect(runContext.workerManifest).toEqual({ packages: [] });
   });
 });

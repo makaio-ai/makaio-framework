@@ -11,6 +11,7 @@ import {
 } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { SpanRecordSchema } from './span.js';
+import { WorkflowRunContextSchema } from './run-context.js';
 
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
@@ -161,6 +162,23 @@ export const WorkflowSchemas = {
   resolveRole: {
     request: z.object({ roleId: z.string().min(1) }),
     response: WorkflowResolvedRoleSchema,
+  },
+
+  /**
+   * Pull the persisted run-context snapshot for a workflow execution.
+   *
+   * Called by executors (Piscina threads, Docker containers, remote workers)
+   * after authenticating on the bus. The host validates the caller's identity
+   * against the requested `executionId` before returning the snapshot.
+   *
+   * Trust-boundary rules (enforced by the handler, not the schema):
+   * - Local callers: always permitted.
+   * - Direct HMAC callers: `peer.kind === 'workflow-execution' && peer.id === executionId`.
+   * - Relay/E2E callers: authenticated and encrypted peer required.
+   */
+  getRunContext: {
+    request: z.object({ executionId: z.string().min(1) }),
+    response: WorkflowRunContextSchema,
   },
 
   'execution.started': z.object({
