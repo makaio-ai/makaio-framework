@@ -127,6 +127,13 @@ export type {
 export { ArtifactSchemaRegistry, createArtifactKindContributionProcessor } from './artifact/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
 export { createWorkflowBlockContributionProcessor, WorkflowBlockRegistry } from './workflow-blocks/index.js';
+export {
+  createTransitionContributionProcessor,
+  TransitionActionRegistry,
+  TransitionPipelineService,
+  TransitionRuleRegistry,
+  WORKFLOW_START_ACTION_TYPE,
+} from './workflow-transitions/index.js';
 export type {
   ListToolsFilter,
   ToolRegistryOptions,
@@ -218,6 +225,8 @@ export {
   ToolRegistryToken,
   trayMenuPackage,
   TrayMenuToken,
+  transitionPipelinePackage,
+  TransitionPipelineToken,
   workflowBlockRegistryPackage,
   WorkflowBlockRegistryToken,
 } from './framework-packages.js';

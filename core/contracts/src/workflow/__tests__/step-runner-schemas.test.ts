@@ -13,23 +13,65 @@ import {
 import type { IStepRunner, StepRunConfig, StepRunResult } from '../step-runner.js';
 
 // ─────────────────────────────────────────────────────────────
-// StepType
+// WorkflowStepTypeSchema (observable node types)
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowStepTypeSchema', () => {
-  it('accepts valid step types', () => {
-    expect(WorkflowStepTypeSchema.parse('agent')).toBe('agent');
-    expect(WorkflowStepTypeSchema.parse('shell')).toBe('shell');
+  it('accepts station as a lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.parse('station')).toBe('station');
+  });
+
+  it('accepts delegate-agent as a lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.parse('delegate-agent')).toBe('delegate-agent');
+  });
+
+  it('accepts delegate-role as a lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.parse('delegate-role')).toBe('delegate-role');
+  });
+
+  it('accepts gate as a lifecycle node type', () => {
     expect(WorkflowStepTypeSchema.parse('gate')).toBe('gate');
   });
 
-  it('accepts bus-request as a workflow lifecycle step type', () => {
-    expect(WorkflowStepTypeSchema.parse('bus-request')).toBe('bus-request');
+  it('rejects structural node types that do not emit lifecycle events', () => {
+    expect(() => WorkflowStepTypeSchema.parse('sequence')).toThrow();
+    expect(() => WorkflowStepTypeSchema.parse('parallel')).toThrow();
+    expect(() => WorkflowStepTypeSchema.parse('iterate')).toThrow();
+    expect(() => WorkflowStepTypeSchema.parse('iterate-chain')).toThrow();
   });
 
-  it('rejects unknown step types', () => {
+  it('rejects unknown node types', () => {
     expect(() => WorkflowStepTypeSchema.parse('lambda')).toThrow();
     expect(() => WorkflowStepTypeSchema.parse('')).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowRunnerStepTypeSchema (runner-executable only)
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowRunnerStepTypeSchema', () => {
+  it('accepts station as the only runner-executable type', () => {
+    expect(WorkflowRunnerStepTypeSchema.parse('station')).toBe('station');
+  });
+
+  it('rejects gate (gates are not runner-executable)', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow();
+  });
+
+  it('rejects delegation nodes (handled by the orchestrator)', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('delegate-agent')).toThrow();
+    expect(() => WorkflowRunnerStepTypeSchema.parse('delegate-role')).toThrow();
+  });
+
+  it('rejects structural node types', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('sequence')).toThrow();
+    expect(() => WorkflowRunnerStepTypeSchema.parse('parallel')).toThrow();
+  });
+
+  it('rejects unknown types', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('lambda')).toThrow();
+    expect(() => WorkflowRunnerStepTypeSchema.parse('')).toThrow();
   });
 });
 
@@ -78,53 +120,51 @@ describe('StepTelemetrySchema', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// StepRunConfig
+// StepRunConfig (station node dispatch)
 // ─────────────────────────────────────────────────────────────
 
 describe('StepRunConfigSchema', () => {
+  /** Minimal valid station node config. */
   const minimalConfig = {
-    stepId: 'checkout-branch',
+    stepId: 'analyze-requirements',
     executionId: 'wfx-abc123',
     workflowId: 'requirements-analysis',
     coordinatorSessionId: 'sess-coord-1',
-    stepType: 'shell',
+    stepType: 'station',
     stepDefinition: {
-      id: 'checkout-branch',
-      type: 'shell',
-      command: ['git', 'checkout', '-b', 'req/42'],
+      id: 'analyze-requirements',
+      type: 'station',
+      prompt: 'Analyze the requirements for {{ inputs.project }}',
     },
     resolvedInputs: {},
     platformDefaults: { cwd: '/workspace/project' },
-    cancelSubject: 'workflow.wfx-abc123.step.checkout-branch.cancel',
+    cancelSubject: 'workflow.wfx-abc123.step.analyze-requirements.cancel',
   };
 
-  it('accepts minimal shell step config', () => {
+  it('accepts a minimal station node config', () => {
     const result = StepRunConfigSchema.parse(minimalConfig);
-    expect(result.stepId).toBe('checkout-branch');
+    expect(result.stepId).toBe('analyze-requirements');
     expect(result.executionId).toBe('wfx-abc123');
     expect(result.workflowId).toBe('requirements-analysis');
-    expect(result.stepType).toBe('shell');
+    expect(result.stepType).toBe('station');
   });
 
-  it('accepts agent step config with resolved inputs', () => {
+  it('accepts a station config with role and outputSchema', () => {
     const result = StepRunConfigSchema.parse({
       ...minimalConfig,
-      stepType: 'agent',
       stepDefinition: {
-        id: 'analyze',
-        type: 'agent',
-        prompt: 'Analyze the requirements for {{inputs.project}}',
+        id: 'analyze-requirements',
+        type: 'station',
+        prompt: 'Analyze the requirements',
+        role: 'requirements-analyst',
+        outputSchema: { type: 'object', properties: { findings: { type: 'array' } } },
       },
       resolvedInputs: {
         project: 'ranking-voucher-service',
-        issueNumber: 42,
       },
     });
-    expect(result.stepType).toBe('agent');
-    expect(result.resolvedInputs).toEqual({
-      project: 'ranking-voucher-service',
-      issueNumber: 42,
-    });
+    expect(result.stepType).toBe('station');
+    expect(result.resolvedInputs).toEqual({ project: 'ranking-voucher-service' });
   });
 
   it('accepts optional busUrl and busAuth', () => {
@@ -135,6 +175,11 @@ describe('StepRunConfigSchema', () => {
     });
     expect(result.busUrl).toBe('ws://localhost:3100');
     expect(result.busAuth).toEqual({ kind: 'hmac', secret: 'hmac-secret' });
+  });
+
+  it('defaults busAuth to none when omitted', () => {
+    const result = StepRunConfigSchema.parse(minimalConfig);
+    expect(result.busAuth).toEqual({ kind: 'none' });
   });
 
   it('rejects missing stepId', () => {
@@ -151,25 +196,11 @@ describe('StepRunConfigSchema', () => {
     expect(() => StepRunConfigSchema.parse({ ...minimalConfig, stepType: 'invalid' })).toThrow();
   });
 
-  it('rejects mismatched stepType and stepDefinition type', () => {
+  it('rejects gate stepType — gates are not runner-executable', () => {
     expect(() =>
       StepRunConfigSchema.parse({
         ...minimalConfig,
-        stepType: 'agent',
-        stepDefinition: {
-          id: 'checkout-branch',
-          type: 'shell',
-          command: ['git', 'status'],
-        },
-      }),
-    ).toThrow();
-  });
-
-  it('rejects gate definitions even when stepType is runner-executable', () => {
-    expect(() =>
-      StepRunConfigSchema.parse({
-        ...minimalConfig,
-        stepType: 'agent',
+        stepType: 'gate',
         stepDefinition: {
           id: 'approval',
           type: 'gate',
@@ -181,19 +212,42 @@ describe('StepRunConfigSchema', () => {
     ).toThrow();
   });
 
-  it('rejects for-each definitions even when stepType is runner-executable', () => {
+  it('rejects mismatched stepType and stepDefinition.type', () => {
+    // stepType says 'station' but stepDefinition.type is something else
     expect(() =>
       StepRunConfigSchema.parse({
         ...minimalConfig,
-        stepType: 'shell',
+        stepType: 'station',
         stepDefinition: {
-          id: 'process-items',
-          type: 'for-each',
-          collection: 'inputs.items',
-          steps: [{ id: 'child', type: 'shell', command: ['echo', '{{ item }}'] }],
+          id: 'approval',
+          type: 'gate',
+          prompt: 'Approve?',
+          autoAction: 'reject',
+          timeoutMs: null,
         },
       }),
     ).toThrow();
+  });
+
+  it('accepts config without optional busUrl', () => {
+    const { busUrl: _, ...noBusUrl } = { ...minimalConfig, busUrl: 'ws://localhost:3100' };
+    const result = StepRunConfigSchema.parse(noBusUrl);
+    expect(result.busUrl).toBeUndefined();
+  });
+
+  it('requires coordinatorSessionId', () => {
+    const { coordinatorSessionId: _, ...noCoord } = minimalConfig;
+    expect(() => StepRunConfigSchema.parse(noCoord)).toThrow();
+  });
+
+  it('requires cancelSubject', () => {
+    const { cancelSubject: _, ...noCancel } = minimalConfig;
+    expect(() => StepRunConfigSchema.parse(noCancel)).toThrow();
+  });
+
+  it('requires platformDefaults', () => {
+    const { platformDefaults: _, ...noPlatform } = minimalConfig;
+    expect(() => StepRunConfigSchema.parse(noPlatform)).toThrow();
   });
 });
 
@@ -216,24 +270,24 @@ describe('StepRunResultSchema', () => {
   it('accepts failed result with error', () => {
     const result = StepRunResultSchema.parse({
       status: 'failed',
-      error: 'Agent timed out after 300s',
+      error: 'Station timed out after 300s',
       telemetry: { duration: 300000 },
     });
     expect(result.status).toBe('failed');
-    expect(result.error).toBe('Agent timed out after 300s');
+    expect(result.error).toBe('Station timed out after 300s');
     expect(result.output).toBeUndefined();
   });
 
-  it('accepts string output (shell stdout)', () => {
+  it('accepts string output', () => {
     const result = StepRunResultSchema.parse({
       status: 'completed',
-      output: 'Already on branch req/42\n',
+      output: 'Analysis complete',
       telemetry: { duration: 2100 },
     });
-    expect(result.output).toBe('Already on branch req/42\n');
+    expect(result.output).toBe('Analysis complete');
   });
 
-  it('accepts null output (gate step, no payload)', () => {
+  it('accepts null output (no payload produced)', () => {
     const result = StepRunResultSchema.parse({
       status: 'completed',
       output: null,
@@ -267,33 +321,6 @@ describe('StepRunResultSchema', () => {
         output: 'ok',
       }),
     ).toThrow();
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// WorkflowRunnerStepTypeSchema (runner-only, excludes gate)
-// ─────────────────────────────────────────────────────────────
-
-describe('WorkflowRunnerStepTypeSchema', () => {
-  it('accepts agent', () => {
-    expect(WorkflowRunnerStepTypeSchema.parse('agent')).toBe('agent');
-  });
-
-  it('accepts shell', () => {
-    expect(WorkflowRunnerStepTypeSchema.parse('shell')).toBe('shell');
-  });
-
-  it('rejects gate (gates are not runner-executable)', () => {
-    expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow();
-  });
-
-  it('rejects bus-request as a runner-executable step type', () => {
-    expect(() => WorkflowRunnerStepTypeSchema.parse('bus-request')).toThrow();
-  });
-
-  it('rejects unknown types', () => {
-    expect(() => WorkflowRunnerStepTypeSchema.parse('lambda')).toThrow();
-    expect(() => WorkflowRunnerStepTypeSchema.parse('')).toThrow();
   });
 });
 
@@ -358,22 +385,22 @@ describe('StepCancelPayloadSchema / createStepCancelSubject', () => {
   it('accepts valid cancellation payloads', () => {
     const result = StepCancelPayloadSchema.parse({
       executionId: 'wfx-abc123',
-      stepId: 'checkout-branch',
+      stepId: 'analyze-requirements',
       reason: 'user_cancelled',
     });
 
     expect(result).toEqual({
       executionId: 'wfx-abc123',
-      stepId: 'checkout-branch',
+      stepId: 'analyze-requirements',
       reason: 'user_cancelled',
     });
   });
 
   it('builds a workflow subject definition from a fully qualified subject', () => {
-    const subject = createStepCancelSubject('workflow.wfx-abc123.step.checkout-branch.cancel');
+    const subject = createStepCancelSubject('workflow.wfx-abc123.step.analyze-requirements.cancel');
 
     expect(subject.$meta.namespace).toBe('workflow');
-    expect(subject.subject).toBe('wfx-abc123.step.checkout-branch.cancel');
+    expect(subject.subject).toBe('wfx-abc123.step.analyze-requirements.cancel');
   });
 
   it('rejects malformed fully qualified subjects', () => {
@@ -383,112 +410,11 @@ describe('StepCancelPayloadSchema / createStepCancelSubject', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// StepRunConfigSchema (tightened — runner-only step types)
-// ─────────────────────────────────────────────────────────────
-
-describe('StepRunConfigSchema (tightened)', () => {
-  const agentConfig = {
-    stepId: 'analyze-requirements',
-    executionId: 'wfx-abc123',
-    workflowId: 'requirements-analysis',
-    coordinatorSessionId: 'sess-coord-1',
-    stepType: 'agent',
-    stepDefinition: {
-      id: 'analyze-requirements',
-      type: 'agent',
-      prompt: 'Analyze the requirements for {{inputs.project}}',
-    },
-    resolvedInputs: { project: 'ranking-voucher-service' },
-    busUrl: 'ws://localhost:3100',
-    busAuth: { kind: 'hmac', secret: 'workflow-secret' },
-    platformDefaults: { cwd: '/workspace/project' },
-    cancelSubject: 'workflow.wfx-abc123.step.analyze-requirements.cancel',
-  };
-
-  const shellConfig = {
-    stepId: 'checkout-branch',
-    executionId: 'wfx-abc123',
-    workflowId: 'requirements-analysis',
-    coordinatorSessionId: 'sess-coord-1',
-    stepType: 'shell',
-    stepDefinition: {
-      id: 'checkout-branch',
-      type: 'shell',
-      command: ['git', 'checkout', '-b', 'req/42'],
-    },
-    resolvedInputs: {},
-    platformDefaults: { cwd: '/workspace/project', env: { GIT_AUTHOR_NAME: 'Bot' } },
-    cancelSubject: 'workflow.wfx-abc123.step.checkout-branch.cancel',
-  };
-
-  it('accepts agent runner config with bus auth and platform defaults', () => {
-    const result = StepRunConfigSchema.parse(agentConfig);
-    expect(result.stepType).toBe('agent');
-    expect(result.coordinatorSessionId).toBe('sess-coord-1');
-    expect(result.busAuth).toEqual({ kind: 'hmac', secret: 'workflow-secret' });
-    expect(result.platformDefaults).toEqual({ cwd: '/workspace/project' });
-    expect(result.cancelSubject).toBe('workflow.wfx-abc123.step.analyze-requirements.cancel');
-  });
-
-  it('accepts shell runner config with platform defaults and env', () => {
-    const result = StepRunConfigSchema.parse(shellConfig);
-    expect(result.stepType).toBe('shell');
-    expect(result.platformDefaults).toEqual({
-      cwd: '/workspace/project',
-      env: { GIT_AUTHOR_NAME: 'Bot' },
-    });
-  });
-
-  it('rejects gate step type in runner config', () => {
-    expect(() =>
-      StepRunConfigSchema.parse({
-        ...agentConfig,
-        stepType: 'gate',
-        stepDefinition: {
-          id: 'approval',
-          type: 'gate',
-          prompt: 'Approve?',
-          autoAction: 'reject',
-          timeoutMs: null,
-        },
-      }),
-    ).toThrow();
-  });
-
-  it('defaults busAuth to none when omitted', () => {
-    const result = StepRunConfigSchema.parse(shellConfig);
-    expect(result.busAuth).toEqual({ kind: 'none' });
-  });
-
-  it('accepts config without optional busUrl', () => {
-    const { busUrl: _, ...noBusUrl } = agentConfig;
-    const result = StepRunConfigSchema.parse(noBusUrl);
-    expect(result.busUrl).toBeUndefined();
-  });
-
-  it('requires coordinatorSessionId', () => {
-    const { coordinatorSessionId: _, ...noCoord } = agentConfig;
-    expect(() => StepRunConfigSchema.parse(noCoord)).toThrow();
-  });
-
-  it('requires cancelSubject', () => {
-    const { cancelSubject: _, ...noCancel } = agentConfig;
-    expect(() => StepRunConfigSchema.parse(noCancel)).toThrow();
-  });
-
-  it('requires platformDefaults', () => {
-    const { platformDefaults: _, ...noPlatform } = agentConfig;
-    expect(() => StepRunConfigSchema.parse(noPlatform)).toThrow();
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
 // IStepRunner interface (type-level contract assertions)
 // ─────────────────────────────────────────────────────────────
 
 describe('IStepRunner interface', () => {
   it('requires managesWorkflowLifecycle boolean property', () => {
-    // Type-level assertion: a compliant implementation must have this property
     const runner: IStepRunner = {
       managesWorkflowLifecycle: false,
       run: async (_config: StepRunConfig, _signal: AbortSignal): Promise<StepRunResult> => {
@@ -507,7 +433,6 @@ describe('IStepRunner interface', () => {
         return { status: 'completed', telemetry: { duration: 0 } };
       },
     };
-    // Execute to confirm signal is passed through
     return expect(
       runner.run(
         StepRunConfigSchema.parse({
@@ -515,8 +440,8 @@ describe('IStepRunner interface', () => {
           executionId: 'wfx-1',
           workflowId: 'wf-1',
           coordinatorSessionId: 'sess-1',
-          stepType: 'shell',
-          stepDefinition: { id: 'test', type: 'shell', command: ['echo', 'hi'] },
+          stepType: 'station',
+          stepDefinition: { id: 'test', type: 'station', prompt: 'Run the test suite' },
           resolvedInputs: {},
           platformDefaults: { cwd: '/tmp' },
           cancelSubject: 'workflow.wfx-1.step.test.cancel',

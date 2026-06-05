@@ -2,12 +2,13 @@ import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
-  SubagentSubjects,
   WORKFLOW_CANCELLED_REASON,
   createWorkflowCancelSubject,
-  type IStepRunner,
+  ExecutionHintsSchema,
+  JsonValueSchema,
   type IWorkflowRunner,
   type IWorkflowTriggerTypeRegistry,
+  type JsonValue,
   type WorkflowRunContext,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -19,12 +20,42 @@ import {
   registerWorkflowStorageDelegationHandlers,
   registerWorkflowTriggerTypeHandlers,
 } from './workflow-executor-handlers.js';
-import { cancelExecution, type FinalizerDeps } from './workflow-execution-finalizer.js';
-import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
-import { InProcessStepRunner } from './in-process-step-runner.js';
-import { WorkflowScheduler } from './workflow-scheduler.js';
+import {
+  cancelExecution,
+  completeExecutionWithFailure,
+  completeExecutionWithSuccess,
+  type FinalizerDeps,
+} from './workflow-execution-finalizer.js';
 import { resolveWorkerOs, type RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
+import { RuntimeContext } from './runtime/runtime-context.js';
+import { executeSequence } from './runtime/primitive-runtime.js';
+import type { NodeOutcome } from './runtime/node-execution.js';
+import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
+
+/**
+ * Normalize workflow.start input to the public JsonValue contract.
+ * @param input - Request payload input value.
+ * @returns The parsed JSON input, or undefined when omitted.
+ */
+function normalizeStartInput(input: unknown): JsonValue | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  return JsonValueSchema.parse(input);
+}
+
+/**
+ * Normalize workflow.start execution hints to the public opaque hints contract.
+ * @param executionHints - Request payload hints value.
+ * @returns Parsed execution hints, or undefined when omitted.
+ */
+function normalizeExecutionHints(executionHints: unknown): WorkflowRunContext['executionHints'] {
+  if (executionHints === undefined) {
+    return undefined;
+  }
+  return ExecutionHintsSchema.parse(executionHints);
+}
 
 /**
  * Core workflow executor service.
@@ -52,8 +83,6 @@ export class WorkflowExecutor extends BaseService {
    * Keyed by execution ID; only populated when a {@link IWorkflowRunner} is used.
    */
   private readonly workflowAbortControllers = new Map<string, AbortController>();
-  private readonly gateCoordinator: WorkflowGateCoordinator;
-  private readonly stepRunner: IStepRunner;
   private readonly workflowRunner?: IWorkflowRunner;
   private triggerTypeRegistry?: IWorkflowTriggerTypeRegistry;
 
@@ -66,15 +95,7 @@ export class WorkflowExecutor extends BaseService {
   public constructor(bus: IMakaioBus, config?: Partial<ExecutorConfig>, workflowRunner?: IWorkflowRunner) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
-    this.gateCoordinator = new WorkflowGateCoordinator(bus);
     this.workflowRunner = workflowRunner;
-    this.stepRunner = new InProcessStepRunner({
-      bus,
-      activeExecutions: this.activeExecutions,
-      shellAbortControllers: this.shellAbortControllers,
-      gateCoordinator: this.gateCoordinator,
-      config: this.config,
-    });
   }
 
   /**
@@ -133,7 +154,6 @@ export class WorkflowExecutor extends BaseService {
     for (const cleanup of registerWorkflowTriggerTypeHandlers(this.bus, () => this.triggerTypeRegistry)) {
       this.addCleanup(cleanup);
     }
-    this.gateCoordinator.registerResponseHandler((cleanup) => this.addCleanup(cleanup));
   }
 
   /**
@@ -152,7 +172,6 @@ export class WorkflowExecutor extends BaseService {
         }
       }),
     );
-    this.gateCoordinator.dispose();
     // 2. Abort all pending workflow-level runners (cooperative cancellation).
     for (const controller of this.workflowAbortControllers.values()) {
       controller.abort();
@@ -169,7 +188,6 @@ export class WorkflowExecutor extends BaseService {
       if (entry.hardKillTimer) clearTimeout(entry.hardKillTimer);
     }
     this.activeRunnerSteps.clear();
-    await this.stepRunner.dispose?.();
     await this.workflowRunner?.dispose?.();
     this.activeExecutions.clear();
   }
@@ -187,9 +205,7 @@ export class WorkflowExecutor extends BaseService {
       activeExecutions: this.activeExecutions,
       shellAbortControllers: this.shellAbortControllers,
       activeRunnerSteps: this.activeRunnerSteps,
-      stepRunner: this.stepRunner,
       cancelTimeoutMs: this.config.cancelTimeoutMs,
-      gateCoordinator: this.gateCoordinator,
     };
   }
 
@@ -262,8 +278,11 @@ export class WorkflowExecutor extends BaseService {
     source,
     definitionSnapshot,
     inputs,
+    config,
     scope,
     triggerPayload,
+    artifactRef,
+    executionHints,
     workspaceRoot,
   }: {
     executionId: string;
@@ -272,8 +291,11 @@ export class WorkflowExecutor extends BaseService {
     source: WorkflowRunContext['source'];
     definitionSnapshot?: WorkflowRunContext['definitionSnapshot'];
     inputs: WorkflowRunContext['inputs'];
+    config: WorkflowRunContext['config'];
     scope: WorkflowRunContext['scope'];
     triggerPayload: WorkflowRunContext['triggerPayload'];
+    artifactRef?: WorkflowRunContext['artifactRef'];
+    executionHints?: WorkflowRunContext['executionHints'];
     workspaceRoot: string;
   }): WorkflowRunContext {
     return {
@@ -283,8 +305,11 @@ export class WorkflowExecutor extends BaseService {
       ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
       workerManifest: { packages: [] },
       inputs,
+      config,
       scope,
       triggerPayload,
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+      ...(executionHints !== undefined ? { executionHints } : {}),
       coordinatorSessionId,
       cancelSubject: `workflow.${executionId}.cancel`,
       context: this.resolveWorkflowContext(workspaceRoot),
@@ -293,19 +318,23 @@ export class WorkflowExecutor extends BaseService {
     };
   }
 
-  /** Register gate approval RPC and execution control handlers (start, cancel). */
+  /** Register execution control handlers (start, cancel). */
   private registerExecutionHandlers(): void {
-    this.registerHandler(WorkflowSubjects.gate.awaitApproval, async (ctx) => {
-      const { action, source } = await this.gateCoordinator.awaitApprovalRequest(ctx.payload);
-      ctx.setResult({ action, source });
-    });
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
-      const { workflowId, inputs = {}, parentSessionId, triggerPayload, scope } = ctx.payload;
+      const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope, executionHints } =
+        ctx.payload;
+      const workflowConfig: Record<string, unknown> =
+        config !== null && typeof config === 'object' && !Array.isArray(config)
+          ? (config as Record<string, unknown>)
+          : {};
       try {
         const executionId = await startExecution(this.buildStartDeps(), workflowId, {
-          inputs,
+          input: normalizeStartInput(input),
+          config: workflowConfig,
           parentSessionId,
           triggerPayload,
+          artifactRef,
+          executionHints: normalizeExecutionHints(executionHints),
           scopeOverride: scope,
         });
         ctx.setResult({ executionId });
@@ -348,7 +377,8 @@ export class WorkflowExecutor extends BaseService {
       const workflowController = this.workflowAbortControllers.get(executionId);
       if (workflowController) {
         workflowController.abort(reason ?? WORKFLOW_CANCELLED_REASON);
-        ctx.setResult({ cancelled: true });
+        const cancelled = await cancelExecution(this.buildFinalizerDeps(), executionId, reason);
+        ctx.setResult({ cancelled });
         return;
       }
 
@@ -359,35 +389,65 @@ export class WorkflowExecutor extends BaseService {
   }
 
   /**
-   * Main execution loop — delegates to the mutable DAG scheduler.
+   * Main execution loop — drives the primitive runtime over the workflow's
+   * root sequence node.
    *
-   * The scheduler finds ready nodes at each tick, expands composite for-each
-   * nodes on-demand, and runs executable nodes via the step runner.
-   * @param executionId - The execution ID
+   * Creates a per-execution `RuntimeContext` and `AbortController`, then
+   * delegates to {@link executeSequence} to walk the node tree. The abort
+   * controller is registered in `workflowAbortControllers` so the cancel
+   * handler can interrupt a running execution.
+   * @param executionId - The execution ID.
    */
   private async runExecution(executionId: string): Promise<void> {
     const active = this.activeExecutions.get(executionId);
     if (!active) return;
 
-    const stepRunner = this.stepRunner;
-    const scheduler = new WorkflowScheduler(
-      {
-        bus: this.bus,
-        activeExecutions: this.activeExecutions,
-        shellAbortControllers: this.shellAbortControllers,
-        activeRunnerSteps: this.activeRunnerSteps,
-        gateCoordinator: this.gateCoordinator,
-        runStep: (config, signal) => stepRunner.run(config, signal),
-        forceKillStep: stepRunner.forceKill ? (execId, stepId) => stepRunner.forceKill!(execId, stepId) : undefined,
-        runnerManagesLifecycle: stepRunner.managesWorkflowLifecycle,
-        onAbortSubagent: async (_nodeId, subagentId) => {
-          await this.bus.request(SubagentSubjects.kill, { subagentId, reason: 'Workflow step failed' });
-        },
-        config: this.config,
-      },
-      executionId,
-    );
+    const abortController = new AbortController();
+    this.workflowAbortControllers.set(executionId, abortController);
 
-    await scheduler.run(active.workflow.steps);
+    try {
+      let outcome: NodeOutcome;
+      try {
+        const artifactBinding = await resolveWorkflowArtifactBinding({
+          definition: active.workflow,
+          execution: active.execution,
+          runContext: active.runContext,
+          bus: this.bus,
+        });
+        const runtimeCtx = new RuntimeContext(
+          executionId,
+          active.workflow.id,
+          active.workflow,
+          active.execution,
+          active.runtimeHandlers,
+          this.bus,
+          abortController.signal,
+          undefined,
+          artifactBinding,
+          { context: active.runContext.context, env: active.runContext.env },
+        );
+        const expressionCtx = runtimeCtx.buildExpressionContext();
+        outcome = await executeSequence(active.workflow.root, runtimeCtx, expressionCtx);
+      } catch (error) {
+        if (abortController.signal.aborted || active.execution.status === 'cancelled') {
+          await cancelExecution(this.buildFinalizerDeps(), executionId, WORKFLOW_CANCELLED_REASON);
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        await completeExecutionWithFailure(this.buildFinalizerDeps(), active.execution, executionId, message);
+        return;
+      }
+
+      const finalizerDeps = this.buildFinalizerDeps();
+      if (outcome.status === 'cancelled' || abortController.signal.aborted || active.execution.status === 'cancelled') {
+        await cancelExecution(finalizerDeps, executionId, WORKFLOW_CANCELLED_REASON);
+      } else if (outcome.status === 'failed') {
+        await completeExecutionWithFailure(finalizerDeps, active.execution, executionId, outcome.error);
+      } else {
+        await completeExecutionWithSuccess(finalizerDeps, active.execution, executionId, active.execution.startedAt);
+      }
+    } finally {
+      this.workflowAbortControllers.delete(executionId);
+    }
   }
 }

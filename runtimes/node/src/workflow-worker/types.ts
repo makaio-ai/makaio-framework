@@ -1,9 +1,8 @@
 import type {
-  JsonValue,
-  PreviousStepOutput,
+  StationHandler,
   WorkerContributionManifest,
-  WorkflowDefinitionInput,
-  WorkflowStepFunction,
+  WorkflowDefinition,
+  WorkflowZodSchemas,
 } from '@makaio/contracts';
 
 export type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
@@ -13,12 +12,14 @@ export type { IWorkflowRunner, WorkflowRunResult } from '@makaio/contracts';
  */
 export interface RuntimeLoadedWorkflow {
   /** Serializable workflow definition. */
-  readonly definition: WorkflowDefinitionInput;
-  /** Runtime function steps keyed by workflow step ID. */
-  readonly runtimeSteps: ReadonlyMap<
-    string,
-    WorkflowStepFunction<unknown, Record<string, PreviousStepOutput<JsonValue>>, JsonValue>
-  >;
+  readonly definition: WorkflowDefinition;
+  /** Optional Zod schemas retained from workflow builder exports. */
+  readonly zodSchemas?: WorkflowZodSchemas;
+  /**
+   * Runtime station handler functions keyed by node ID.
+   * Used by the orchestrator to dispatch `station`-type nodes.
+   */
+  readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
 }
 
 /**

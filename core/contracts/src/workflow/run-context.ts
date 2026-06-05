@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
-import { JsonObjectContractSchema } from '../shared/json-value.js';
+import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowWorkerSourceSchema, WorkerContributionManifestSchema } from './worker.js';
+import { WorkflowArtifactRefSchema } from './artifact-ref.js';
+import { ExecutionHintsSchema } from './execution-hints.js';
 
 /**
  * Persisted, per-execution snapshot of the configuration and context needed to
@@ -31,14 +33,25 @@ export const WorkflowRunContextSchema = z
     definitionSnapshot: WorkflowDefinitionSchema.optional(),
     /** Resolved worker-local contribution packages for this execution. */
     workerManifest: WorkerContributionManifestSchema.default({ packages: [] }),
-    /** Bound input values. */
-    inputs: JsonObjectContractSchema.default({}),
+    /** Bound input value. */
+    inputs: JsonValueSchema.default({}),
+    /** Bound workflow configuration values. */
+    config: JsonObjectContractSchema.optional(),
     /** Resolved execution scope. */
     scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
     /** Trigger payload from cron/event/manual start. */
     triggerPayload: JsonObjectContractSchema.default({}),
+    /**
+     * Explicit artifact reference supplied by the execution starter.
+     *
+     * When present, workflow artifact binding resolves this artifact before
+     * evaluating definition-level resolve/create expressions.
+     */
+    artifactRef: WorkflowArtifactRefSchema.optional(),
     /** Coordinator session that owns this execution. */
     coordinatorSessionId: z.string().min(1),
+    /** Advisory worker provisioning hints supplied by the start request. */
+    executionHints: ExecutionHintsSchema.optional(),
     /** Bus subject for cancellation signals. */
     cancelSubject: z.string().min(1),
     /** Platform/workspace context for expression resolution and tool access. */

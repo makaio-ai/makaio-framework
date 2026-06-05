@@ -1,13 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { createBusInstance, getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import {
   CapabilitySubjects,
   parseExtensionDescriptor,
   type ProviderRegistration,
   REVIEWER_PROCESSOR_CAPABILITY_ID,
   REVIEW_SOURCE_CAPABILITY_ID,
-  ReviewSubjects,
   type ProviderUnregistration,
   WorkflowBlocksSubjects,
 } from '@makaio/contracts';
@@ -43,9 +42,7 @@ describe('coderabbitPackage', () => {
     expect(coderabbitPackage.workflowBlocks?.blocks.triggers?.map((block) => block.metadata.name)).toEqual([
       'coderabbit.review-posted',
     ]);
-    expect(coderabbitPackage.workflowBlocks?.blocks.steps?.map((block) => block.metadata.name)).toEqual([
-      'coderabbit.fetch-findings',
-    ]);
+    expect(coderabbitPackage.workflowBlocks?.blocks.steps).toEqual([]);
 
     await service.destroy?.();
     expect(capabilityService.getProviders(REVIEW_SOURCE_CAPABILITY_ID)).toEqual([]);
@@ -176,49 +173,7 @@ describe('coderabbitPackage', () => {
       },
     });
 
-    expect(listed.steps).toHaveLength(1);
-    expect(listed.steps[0]?.metadata).toMatchObject({
-      name: 'coderabbit.fetch-findings',
-      extensionName: 'coderabbit',
-      categories: ['review'],
-    });
-    expect(listed.steps[0]?.runs).toEqual({
-      type: 'bus-request',
-      subject: getFullSubjectForSubjectDefinition(ReviewSubjects.findings.list),
-      payload: {
-        target: '{{ input.target }}',
-        status: '{{ config.status }}',
-      },
-    });
-    expect(listed.steps[0]?.configSchema).toMatchObject({
-      properties: {
-        status: {
-          enum: ['open', 'addressed', 'verified', 'dismissed', 'deferred'],
-        },
-      },
-    });
-    expect(listed.steps[0]?.inputSchema).toMatchObject({
-      properties: {
-        target: {
-          properties: {
-            repository: { type: 'string' },
-          },
-        },
-      },
-    });
-    expect(listed.steps[0]?.outputSchema).toMatchObject({
-      properties: {
-        findings: {
-          items: {
-            properties: {
-              id: { type: 'string' },
-              severity: { enum: ['critical', 'major', 'minor', 'nitpick'] },
-              message: { type: 'string' },
-            },
-          },
-        },
-      },
-    });
+    expect(listed.steps).toEqual([]);
 
     await registry.destroy();
   });

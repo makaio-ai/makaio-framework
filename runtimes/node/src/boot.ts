@@ -51,6 +51,7 @@ import {
   createModelRegistryPackage,
   createArtifactKindContributionProcessor,
   createToolContributionProcessor,
+  createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
   FrameworkServicesCoreNamespaces,
 } from '@makaio/services-core';
@@ -466,6 +467,7 @@ export async function bootMakaioRuntimeCore(
     coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
     coordinator.registerContributionProcessor(createWorkflowBlockContributionProcessor());
+    coordinator.registerContributionProcessor(createTransitionContributionProcessor());
     if (options.routeGraphBuilder) {
       coordinator.registerContributionProcessor(createHttpContributionProcessor(options.routeGraphBuilder));
     }

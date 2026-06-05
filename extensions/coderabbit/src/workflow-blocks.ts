@@ -1,18 +1,16 @@
 import { z } from 'zod';
-import { getFullSubjectForSubjectDefinition } from '@makaio/bus-core';
-import {
-  FindingStatusSchema,
-  FindingTargetSchema,
-  ReviewSubjects,
-  type WorkflowBlockCollection,
-} from '@makaio/contracts';
+import { FindingTargetSchema, type WorkflowBlockCollection } from '@makaio/contracts';
 
 /**
  * Workflow blocks contributed by the CodeRabbit extension.
  *
- * Provides trigger and step declarations for the workflow builder:
+ * Provides trigger declarations for the workflow builder:
  * - Trigger: `coderabbit.review-posted` — fires when CodeRabbit submits a review
- * - Step: `coderabbit.fetch-findings` — fetches normalized findings
+ *
+ * Finding fetches are exposed through review capabilities, not workflow roles.
+ * Role-backed workflow steps must resolve through `WorkflowSubjects.resolveRole`
+ * before execution; this extension does not register a CodeRabbit workflow role
+ * resolver, so it must not publish a role-backed findings fetcher step.
  */
 export const codeRabbitBlocks: WorkflowBlockCollection = {
   triggers: [
@@ -42,41 +40,5 @@ export const codeRabbitBlocks: WorkflowBlockCollection = {
       }),
     },
   ],
-  steps: [
-    {
-      metadata: {
-        name: 'coderabbit.fetch-findings',
-        label: 'Fetch CodeRabbit Findings',
-        description: 'Fetches normalized findings from the latest CodeRabbit review.',
-        categories: ['review'],
-      },
-      configSchema: z.object({
-        status: FindingStatusSchema.optional().describe(
-          'Filter by lifecycle status. Leave empty to include all findings.',
-        ),
-      }),
-      inputSchema: z.object({
-        target: FindingTargetSchema,
-      }),
-      outputSchema: z.object({
-        findings: z.array(
-          z.object({
-            id: z.string(),
-            severity: z.enum(['critical', 'major', 'minor', 'nitpick']),
-            message: z.string(),
-            file: z.string().nullable(),
-            startLine: z.number().nullable(),
-          }),
-        ),
-      }),
-      runs: {
-        type: 'bus-request',
-        subject: getFullSubjectForSubjectDefinition(ReviewSubjects.findings.list),
-        payload: {
-          target: '{{ input.target }}',
-          status: '{{ config.status }}',
-        },
-      },
-    },
-  ],
+  steps: [],
 };

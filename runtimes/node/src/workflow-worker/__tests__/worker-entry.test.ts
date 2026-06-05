@@ -78,11 +78,11 @@ function makeLoadedWorkflow() {
     definition: {
       id: 'wf-001',
       name: 'Test Workflow',
-      steps: [],
+      root: { id: 'wf-001__root', type: 'sequence' as const, nodes: [] },
       triggers: [],
       scope: { type: 'global' as const },
     },
-    runtimeSteps: new Map(),
+    runtimeHandlers: new Map(),
   };
 }
 
@@ -144,11 +144,9 @@ function makeWorkflowDefinition(): WorkflowDefinition {
   return {
     id: 'wf-001',
     name: 'DB Workflow',
-    steps: [],
+    root: { id: 'wf-001__root', type: 'sequence', nodes: [] },
     triggers: [],
     scope: { type: 'global' as const },
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_000,
   };
 }
 
@@ -351,13 +349,13 @@ describe('runWorkflowInWorker', () => {
 
     // File-loader must never be called for definition-sourced workflows
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
-    // Orchestrator receives the definition directly with an empty runtimeSteps Map
+    // Orchestrator receives the definition directly with an empty runtimeHandlers Map
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(
       expect.objectContaining({
         loaded: {
           definition,
-          runtimeSteps: new Map(),
+          runtimeHandlers: new Map(),
         },
       }),
     );

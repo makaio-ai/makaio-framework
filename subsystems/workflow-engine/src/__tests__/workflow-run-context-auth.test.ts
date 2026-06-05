@@ -87,7 +87,7 @@ const runContext = WorkflowRunContextSchema.parse({
   definitionSnapshot: {
     id: 'wf-auth',
     name: 'Auth Test Workflow',
-    steps: [],
+    root: { id: 'wf-auth__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' },
     createdAt: 1,
     updatedAt: 1,

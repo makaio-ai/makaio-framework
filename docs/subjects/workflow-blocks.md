@@ -57,7 +57,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `steps` | `{ metadata: { name: string; label: string; description: string; extensionName: string; categories?: string[] \| undefined; }; configSchema: Record<string, unknown>; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; }[]` | yes |
+| `steps` | `{ metadata: { name: string; label: string; description: string; extensionName: string; categories?: string[] \| undefined; }; configSchema: Record<string, unknown>; inputSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; runs: { type: "station"; prompt: string; role?: string \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; timeoutMs?: number \| undefined; } \| { type: "delegate-agent"; agentId: string; inputExpression?: string \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; } \| { type: "delegate-role"; role: string; prompt: string; outputSchema?: Record<string, JsonValue> \| undefined; timeoutMs?: number \| undefined; }; }[]` | yes |
 | `triggers` | `{ metadata: { name: string; label: string; description: string; extensionName: string; categories?: string[] \| undefined; }; configSchema: Record<string, unknown>; outputSchema: Record<string, unknown>; }[]` | yes |
 
 ---

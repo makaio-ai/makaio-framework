@@ -27,29 +27,31 @@ afterEach(async () => {
  * workflow-builder-shaped default export without requiring workspace imports.
  *
  * The shape mirrors the output of `defineWorkflow()`: an object with
- * `definition` (WorkflowDefinitionInput) and `runtimeSteps` (`Map<string, fn>`).
+ * `definition` (WorkflowDefinition with pipeline-primitive `root`) and
+ * `runtimeHandlers` (`Map<string, fn>`).
  * @param id - Workflow identifier.
  * @param stepIds - Step IDs to register in the runtime map.
  * @returns ESM module source string.
  */
 function makeWorkflowModuleSource(id: string, stepIds: string[]): string {
   const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
+  const stationNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'station', prompt: '${sid}' }`).join(', ');
   return `
 const definition = {
   id: '${id}',
   name: '${id}',
-  steps: [${stepIds.map((sid) => `{ id: '${sid}', type: 'function', runtime: true }`).join(', ')}],
+  root: { id: '${id}__root', type: 'sequence', nodes: [${stationNodes}] },
   triggers: [],
   scope: { type: 'global' },
 };
-const runtimeSteps = new Map([${stepEntries}]);
-export default { definition, runtimeSteps };
+const runtimeHandlers = new Map([${stepEntries}]);
+export default { definition, runtimeHandlers };
 `;
 }
 
 describe('loadWorkflowModule', () => {
   describe('kind: path', () => {
-    it('loads a .mjs workflow module and returns definition + runtimeSteps', async () => {
+    it('loads a .mjs workflow module and returns definition + runtimeHandlers', async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       await mkdir(dir, { recursive: true });
@@ -62,9 +64,9 @@ describe('loadWorkflowModule', () => {
 
       expect(loaded.definition.id).toBe('file-loader-test');
       expect(loaded.definition.name).toBe('file-loader-test');
-      expect(loaded.runtimeSteps.size).toBe(1);
-      expect(loaded.runtimeSteps.has('step1')).toBe(true);
-      expect(loaded.runtimeSteps.get('step1')).toBeTypeOf('function');
+      expect(loaded.runtimeHandlers.size).toBe(1);
+      expect(loaded.runtimeHandlers.has('step1')).toBe(true);
+      expect(loaded.runtimeHandlers.get('step1')).toBeTypeOf('function');
     });
 
     it('returns all registered step functions from a multi-step workflow', async () => {
@@ -78,13 +80,13 @@ describe('loadWorkflowModule', () => {
 
       const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
 
-      expect(loaded.runtimeSteps.size).toBe(3);
-      expect(loaded.runtimeSteps.has('fetch')).toBe(true);
-      expect(loaded.runtimeSteps.has('process')).toBe(true);
-      expect(loaded.runtimeSteps.has('output')).toBe(true);
+      expect(loaded.runtimeHandlers.size).toBe(3);
+      expect(loaded.runtimeHandlers.has('fetch')).toBe(true);
+      expect(loaded.runtimeHandlers.has('process')).toBe(true);
+      expect(loaded.runtimeHandlers.has('output')).toBe(true);
     });
 
-    it('throws when the default export is missing definition and runtimeSteps', async () => {
+    it('throws when the default export is missing definition and runtimeHandlers', async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       await mkdir(dir, { recursive: true });
@@ -108,16 +110,22 @@ describe('loadWorkflowModule', () => {
       await expect(loadWorkflowModule({ kind: 'path', path: filePath })).rejects.toThrow(/invalid workflow module/i);
     });
 
-    it('throws when runtimeSteps is not a Map', async () => {
+    it('throws when runtimeHandlers is not a Map', async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       await mkdir(dir, { recursive: true });
 
-      // definition present but runtimeSteps is a plain object, not a Map
+      // definition present but runtimeHandlers is a plain object, not a Map
       const content = `
 export default {
-  definition: { id: 'x', name: 'x', steps: [], triggers: [], scope: { type: 'global' } },
-  runtimeSteps: { step1: () => {} },
+  definition: {
+    id: 'x',
+    name: 'x',
+    root: { id: 'x__root', type: 'sequence', nodes: [] },
+    triggers: [],
+    scope: { type: 'global' },
+  },
+  runtimeHandlers: { step1: () => {} },
 };
 `;
       const filePath = join(dir, 'bad-steps.mjs');
@@ -126,15 +134,16 @@ export default {
       await expect(loadWorkflowModule({ kind: 'path', path: filePath })).rejects.toThrow(/invalid workflow module/i);
     });
 
-    it('throws when the default export definition fails the workflow definition input schema', async () => {
+    it('throws when the default export definition fails the workflow definition schema (missing root)', async () => {
       const dir = makeTempDir();
       tempDirs.push(dir);
       await mkdir(dir, { recursive: true });
 
+      // Missing required 'root' field — invalid under WorkflowDefinitionSchema.
       const content = `
 export default {
-  definition: { id: 'invalid', name: 'invalid', steps: [{ id: 'bad', type: 'unknown' }], scope: { type: 'global' } },
-  runtimeSteps: new Map(),
+  definition: { id: 'invalid', name: 'invalid', scope: { type: 'global' } },
+  runtimeHandlers: new Map(),
 };
 `;
       const filePath = join(dir, 'invalid-definition.mjs');
@@ -145,7 +154,7 @@ export default {
   });
 
   describe('kind: source', () => {
-    it('loads an inline source workflow and returns definition + runtimeSteps', async () => {
+    it('loads an inline source workflow and returns definition + runtimeHandlers', async () => {
       const source = makeWorkflowModuleSource('source-test', ['greet']);
 
       const loaded = await loadWorkflowModule({
@@ -155,8 +164,8 @@ export default {
       });
 
       expect(loaded.definition.id).toBe('source-test');
-      expect(loaded.runtimeSteps.size).toBe(1);
-      expect(loaded.runtimeSteps.has('greet')).toBe(true);
+      expect(loaded.runtimeHandlers.size).toBe(1);
+      expect(loaded.runtimeHandlers.has('greet')).toBe(true);
     });
 
     it('imports inline source from an .mjs temp module even when the virtual filename is TypeScript', async () => {
@@ -164,11 +173,11 @@ export default {
 const definition = {
   id: import.meta.url.endsWith('.mjs') ? 'mjs-temp-module' : 'wrong-extension',
   name: 'source-extension-test',
-  steps: [],
+  root: { id: 'root', type: 'sequence', nodes: [] },
   triggers: [],
   scope: { type: 'global' },
 };
-export default { definition, runtimeSteps: new Map() };
+export default { definition, runtimeHandlers: new Map() };
 `;
 
       const loaded = await loadWorkflowModule({
@@ -190,7 +199,7 @@ export default { definition, runtimeSteps: new Map() };
       });
 
       expect(loaded.definition.id).toBe('source-multi');
-      expect(loaded.runtimeSteps.size).toBe(2);
+      expect(loaded.runtimeHandlers.size).toBe(2);
     });
 
     it('throws for a filename that resolves to an empty basename after sanitization', async () => {

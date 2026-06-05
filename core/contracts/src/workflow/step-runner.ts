@@ -1,35 +1,34 @@
 import { z } from 'zod';
 import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
-import { AgentWorkflowStepSchema, ShellWorkflowStepSchema } from './schemas.js';
+import { WorkflowStationNodeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
-// Step Type (lifecycle — includes gate for spans/events)
+// Node Type (lifecycle — observable node types)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Discriminant for all workflow step execution types, including gate and function.
- * Used by lifecycle events and span records where gate steps participate.
- * Matches the `type` discriminant on {@link WorkflowStepSchema} variants.
+ * Discriminant for all workflow node types that produce lifecycle events.
+ * Used by lifecycle events and span records.
  *
- * `function` steps run in the worker orchestrator (not the main-process scheduler)
- * and emit lifecycle events on the worker-local bus for observability.
- * Composite `for-each` steps are excluded — they are scheduler coordination nodes,
- * not executor targets.
+ * Structural nodes (`sequence`, `parallel`, `iterate`, `iterate-chain`) are
+ * excluded — they emit lifecycle events only as parent frames, not as runner
+ * targets. `gate` is included because gate resolution events are observable.
  */
-export const WorkflowStepTypeSchema = z.enum(['agent', 'shell', 'gate', 'function', 'bus-request']);
+export const WorkflowStepTypeSchema = z.enum(['station', 'delegate-agent', 'delegate-role', 'gate']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Runner Step Type (excludes gate — runner-executable only)
+// Runner Node Type (runner-executable only)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Step types that are executable by a {@link IStepRunner}.
- * Gates are coordination steps handled by the orchestrator, not dispatched to runners.
+ * Node types that are dispatchable to a {@link IStepRunner}.
+ * Gates and delegation nodes are coordination steps handled by the orchestrator,
+ * not dispatched to runners.
  */
-export const WorkflowRunnerStepTypeSchema = z.enum(['agent', 'shell']);
+export const WorkflowRunnerStepTypeSchema = z.enum(['station']);
 
 export type WorkflowRunnerStepType = z.infer<typeof WorkflowRunnerStepTypeSchema>;
 
@@ -198,20 +197,19 @@ export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancel
 
 /**
  * Configuration passed through the scheduler runStep callback to execute a
- * single runner-serializable step.
+ * single runner-dispatachable node.
  *
  * Internal API — only the Executor/Bridge creates these from a resolved,
- * runner-executable WorkflowStep. Runtime `gate` and `for-each` scheduler
- * nodes are coordination steps, not runner targets.
+ * runner-executable node. Structural nodes (`gate`, `sequence`, `parallel`,
+ * `iterate`, `iterate-chain`) are orchestrator coordination nodes and are
+ * never dispatched to runners.
  *
- * Uses {@link WorkflowRunnerStepTypeSchema} (agent | shell) — gate steps are
- * coordination steps handled by the orchestrator, never dispatched to runners.
+ * Uses {@link WorkflowRunnerStepTypeSchema} (`station`) — all other node
+ * types are handled by the orchestrator directly.
  */
-const WorkflowRunnerStepSchema = z.discriminatedUnion('type', [AgentWorkflowStepSchema, ShellWorkflowStepSchema]);
-
 export const StepRunConfigSchema = z
   .object({
-    /** Step identifier within the workflow definition. */
+    /** Node (step) identifier within the workflow definition. */
     stepId: z.string().min(1),
     /** Execution ID of the running workflow. */
     executionId: z.string().min(1),
@@ -219,11 +217,11 @@ export const StepRunConfigSchema = z
     workflowId: z.string().min(1),
     /** Coordinator session ID owning this execution. */
     coordinatorSessionId: z.string().min(1),
-    /** Step type discriminant (runner-executable types only). */
+    /** Node type discriminant (runner-executable types only). */
     stepType: WorkflowRunnerStepTypeSchema,
-    /** Resolved runner-executable step definition from the workflow DAG. */
-    stepDefinition: WorkflowRunnerStepSchema,
-    /** Expression context values resolved from previous step outputs and workflow inputs. */
+    /** Resolved runner-executable station node definition. */
+    stepDefinition: WorkflowStationNodeSchema,
+    /** Expression context values resolved from previous node outputs and workflow inputs. */
     resolvedInputs: JsonObjectContractSchema,
     /** Bus server WebSocket URL for the worker to connect to. */
     busUrl: z.string().optional(),

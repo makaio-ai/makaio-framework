@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import type { WorkflowDefinitionInput, WorkflowWorkerConfig } from '@makaio/contracts';
+import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
 import { z } from 'zod';
 import { resolveAwaitTriggerConfig } from '../await-trigger.js';
 
@@ -35,13 +35,13 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
 /**
  * Build a minimal workflow definition for await-trigger tests.
  * @param overrides - Optional definition overrides.
- * @returns Valid workflow definition input.
+ * @returns Valid workflow definition.
  */
-function makeDefinition(overrides: Partial<WorkflowDefinitionInput> = {}): WorkflowDefinitionInput {
+function makeDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
   return {
     id: 'wf-await-001',
     name: 'Await Trigger Test',
-    steps: [],
+    root: { id: 'wf-await-001__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' },
     ...overrides,
   };
@@ -71,7 +71,7 @@ describe('resolveAwaitTriggerConfig', () => {
               { type: 'bus-event', subject: 'invalid' },
             ],
           }),
-          runtimeSteps: new Map(),
+          runtimeHandlers: new Map(),
         },
         bus,
         new AbortController().signal,

@@ -53,4 +53,18 @@ describe('StartAgentSchema', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('accepts responseSchema on start requests', () => {
+    const parsed = StartAgentSchema.request.safeParse({
+      adapterId: 'adapter-1',
+      role: 'lead',
+      initialMessage: 'hello',
+      responseSchema: {
+        type: 'object',
+        properties: { approved: { type: 'boolean' } },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
 });

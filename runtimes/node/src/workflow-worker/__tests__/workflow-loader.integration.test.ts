@@ -35,14 +35,14 @@ describe('loadWorkflowFromConfig integration', () => {
 const definition = {
   id: 'wf-source-001',
   name: 'Source Workflow',
-  steps: [],
+  root: { id: 'wf-source-001__root', type: 'sequence', nodes: [] },
   triggers: [],
   scope: { type: 'global' },
 };
 
 export default {
   definition,
-  runtimeSteps: new Map(),
+  runtimeHandlers: new Map(),
 };
 `;
 
@@ -55,11 +55,11 @@ export default {
     expect(loaded.definition).toEqual({
       id: 'wf-source-001',
       name: 'Source Workflow',
-      steps: [],
+      root: { id: 'wf-source-001__root', type: 'sequence', nodes: [] },
       triggers: [],
       scope: { type: 'global' },
     });
-    expect(loaded.runtimeSteps).toBeInstanceOf(Map);
-    expect(loaded.runtimeSteps.size).toBe(0);
+    expect(loaded.runtimeHandlers).toBeInstanceOf(Map);
+    expect(loaded.runtimeHandlers.size).toBe(0);
   });
 });

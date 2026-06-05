@@ -57,12 +57,9 @@ function makePackage(): KernelMakaioExtension {
             inputSchema: z.object({ body: z.string() }),
             outputSchema: z.object({ issueId: z.string() }),
             runs: {
-              type: 'bus-request',
-              subject: 'alpha.create',
-              payload: {
-                title: '{{ config.title }}',
-                body: '{{ input.body }}',
-              },
+              type: 'station',
+              prompt: 'Create an issue with title {{ config.title }} and body {{ input.body }}.',
+              role: 'alpha.issue-creator',
             },
           },
         ],
@@ -80,12 +77,9 @@ describe('createWorkflowBlockContributionProcessor', () => {
     await processor.processActivated('alpha', makePackage(), makeContext(registry));
     expect(registry.listTriggers().map((trigger) => trigger.metadata.name)).toEqual(['alpha.review-posted']);
     expect(registry.listSteps()[0]?.runs).toEqual({
-      type: 'bus-request',
-      subject: 'alpha.create',
-      payload: {
-        title: '{{ config.title }}',
-        body: '{{ input.body }}',
-      },
+      type: 'station',
+      prompt: 'Create an issue with title {{ config.title }} and body {{ input.body }}.',
+      role: 'alpha.issue-creator',
     });
 
     await processor.processStopped?.('alpha');

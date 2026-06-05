@@ -1,10 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type {
-  FunctionWorkflowStep,
-  ForEachWorkflowStep,
-  GateWorkflowStep,
-  ShellWorkflowStep,
   WorkflowDefinition,
+  WorkflowGateNode,
+  WorkflowStationNode,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 
@@ -19,7 +17,7 @@ vi.mock('../workflow-file-loader.js', () => ({
 }));
 
 // Import after mocking
-const { loadWorkflowFromConfig, findFunctionStep } = await import('../workflow-loader.js');
+const { loadWorkflowFromConfig } = await import('../workflow-loader.js');
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -34,10 +32,8 @@ function makeDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDe
   return {
     id: 'wf-001',
     name: 'Test Workflow',
-    steps: [],
+    root: { id: 'wf-001__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' as const },
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_000,
     ...overrides,
   };
 }
@@ -70,55 +66,6 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
 }
 
 // ---------------------------------------------------------------------------
-// findFunctionStep
-// ---------------------------------------------------------------------------
-
-/** A minimal valid {@link ShellWorkflowStep} for testing (command is an array). */
-const SHELL_STEP: ShellWorkflowStep = { id: 'shell-step', type: 'shell', command: ['echo', 'hi'] };
-/** A minimal valid {@link GateWorkflowStep} for testing. */
-const GATE_STEP: GateWorkflowStep = {
-  id: 'gate-step',
-  type: 'gate',
-  prompt: 'Approve?',
-  autoAction: 'reject',
-  timeoutMs: null,
-};
-/** A minimal valid {@link FunctionWorkflowStep} for testing. */
-const FUNCTION_STEP: FunctionWorkflowStep = { id: 'fn-step', type: 'function', runtime: true };
-
-describe('findFunctionStep', () => {
-  it('returns undefined when no function steps exist', () => {
-    const result = findFunctionStep([SHELL_STEP, GATE_STEP]);
-
-    expect(result).toBeUndefined();
-  });
-
-  it('returns the first function step found', () => {
-    const result = findFunctionStep([SHELL_STEP, FUNCTION_STEP]);
-
-    expect(result).toBe(FUNCTION_STEP);
-  });
-
-  it('finds function steps nested inside for-each steps', () => {
-    const nestedFunctionStep: FunctionWorkflowStep = { id: 'nested-fn', type: 'function', runtime: true };
-    const forEachStep: ForEachWorkflowStep = {
-      id: 'for-each-step',
-      type: 'for-each',
-      collection: 'items',
-      steps: [nestedFunctionStep],
-    };
-
-    const result = findFunctionStep([forEachStep]);
-
-    expect(result).toBe(nestedFunctionStep);
-  });
-
-  it('returns undefined for an empty steps array', () => {
-    expect(findFunctionStep([])).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // loadWorkflowFromConfig — definition kind
 // ---------------------------------------------------------------------------
 
@@ -134,8 +81,8 @@ describe('loadWorkflowFromConfig — definition source', () => {
     const loaded = await loadWorkflowFromConfig(config);
 
     expect(loaded.definition).toBe(definition);
-    expect(loaded.runtimeSteps).toBeInstanceOf(Map);
-    expect(loaded.runtimeSteps.size).toBe(0);
+    expect(loaded.runtimeHandlers).toBeInstanceOf(Map);
+    expect(loaded.runtimeHandlers.size).toBe(0);
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 
@@ -149,30 +96,30 @@ describe('loadWorkflowFromConfig — definition source', () => {
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 
-  it('throws when the definition contains a function step', async () => {
+  it('returns an empty runtimeHandlers map for pipeline-primitive definitions', async () => {
     const definition = makeDefinition({
-      steps: [FUNCTION_STEP],
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          { id: 'analyze', type: 'station' as const, prompt: 'Analyze' } as WorkflowStationNode,
+          {
+            id: 'gate-1',
+            type: 'gate' as const,
+            prompt: 'Approve?',
+            autoAction: 'reject' as const,
+            timeoutMs: null,
+          } as WorkflowGateNode,
+        ],
+      },
     });
     const config = makeConfig({ definition });
 
-    await expect(loadWorkflowFromConfig(config)).rejects.toThrow(
-      `Definition-sourced workflow "wf-001" contains function step "fn-step".`,
-    );
-    expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
-  });
+    const loaded = await loadWorkflowFromConfig(config);
 
-  it('throws when a nested function step is detected inside a for-each step', async () => {
-    const nestedFunctionStep: FunctionWorkflowStep = { id: 'nested-fn', type: 'function', runtime: true };
-    const forEachStep: ForEachWorkflowStep = {
-      id: 'for-each-step',
-      type: 'for-each',
-      collection: 'items',
-      steps: [nestedFunctionStep],
-    };
-    const definition = makeDefinition({ steps: [forEachStep] });
-    const config = makeConfig({ definition });
-
-    await expect(loadWorkflowFromConfig(config)).rejects.toThrow(/contains function step/i);
+    // Pipeline-primitive definitions are fully serializable — no runtime functions needed.
+    expect(loaded.runtimeHandlers.size).toBe(0);
+    expect(loaded.definition).toBe(definition);
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 });
@@ -189,7 +136,7 @@ describe('loadWorkflowFromConfig — path and source delegation', () => {
   it('delegates path-sourced config to loadWorkflowModule', async () => {
     const expectedLoaded = {
       definition: makeDefinition({ id: 'path-wf' }),
-      runtimeSteps: new Map(),
+      runtimeHandlers: new Map(),
     };
     mockLoadWorkflowModule.mockResolvedValueOnce(expectedLoaded);
 
@@ -204,7 +151,7 @@ describe('loadWorkflowFromConfig — path and source delegation', () => {
   it('delegates source-kind config to loadWorkflowModule', async () => {
     const expectedLoaded = {
       definition: makeDefinition({ id: 'source-wf' }),
-      runtimeSteps: new Map(),
+      runtimeHandlers: new Map(),
     };
     mockLoadWorkflowModule.mockResolvedValueOnce(expectedLoaded);
 

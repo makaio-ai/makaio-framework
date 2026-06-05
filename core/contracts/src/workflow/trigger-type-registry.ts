@@ -2,6 +2,8 @@
  * Record describing a registered workflow trigger type.
  * Produced by serializing plugin-contributed Zod schemas to JSON Schema.
  */
+import type { JsonValue } from '../shared/json-value.js';
+
 export interface WorkflowTriggerTypeRecord {
   /** Globally unique trigger type string. */
   type: string;
@@ -14,9 +16,9 @@ export interface WorkflowTriggerTypeRecord {
   /** Human-readable description. */
   description?: string;
   /** JSON Schema derived from configSchema. */
-  configJsonSchema: Record<string, unknown>;
+  configJsonSchema: Record<string, JsonValue>;
   /** JSON Schema derived from outputSchema. */
-  outputJsonSchema: Record<string, unknown>;
+  outputJsonSchema: Record<string, JsonValue>;
   /** 'builtin' or plugin name. */
   source: string;
 }

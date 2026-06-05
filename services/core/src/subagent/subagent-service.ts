@@ -414,6 +414,7 @@ export class SubagentService extends BaseService {
       initialMessage: task,
       model: config.model,
       systemPrompt: config.systemPrompt,
+      responseSchema: config.responseSchema,
       allowedTools: config.tools,
       disallowedTools: config.disallowedTools,
       allowedDirectories: config.allowedDirectories,

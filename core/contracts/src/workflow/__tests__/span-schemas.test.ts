@@ -23,19 +23,21 @@ describe('ExecutionLinkTypeSchema', () => {
 describe('SpanRecordSchema', () => {
   const minimalSpan = {
     executionId: 'wfx-abc123',
-    stepId: 'checkout-branch',
-    stepType: 'shell',
+    frameId: 'frm-abc123',
+    stepId: 'analyze-requirements',
+    stepType: 'station',
     status: 'completed',
     startedAt: 1716000000000,
     completedAt: 1716000002100,
     durationMs: 2100,
   };
 
-  it('accepts a minimal completed shell span', () => {
+  it('accepts a minimal completed station span', () => {
     const result = SpanRecordSchema.parse(minimalSpan);
     expect(result.executionId).toBe('wfx-abc123');
-    expect(result.stepId).toBe('checkout-branch');
-    expect(result.stepType).toBe('shell');
+    expect(result.frameId).toBe('frm-abc123');
+    expect(result.stepId).toBe('analyze-requirements');
+    expect(result.stepType).toBe('station');
     expect(result.status).toBe('completed');
     expect(result.durationMs).toBe(2100);
   });
@@ -43,8 +45,9 @@ describe('SpanRecordSchema', () => {
   it('accepts a running span without completedAt', () => {
     const result = SpanRecordSchema.parse({
       executionId: 'wfx-abc123',
+      frameId: 'frm-running',
       stepId: 'analyze',
-      stepType: 'agent',
+      stepType: 'station',
       status: 'running',
       startedAt: 1716000000000,
     });
@@ -52,10 +55,10 @@ describe('SpanRecordSchema', () => {
     expect(result.durationMs).toBeUndefined();
   });
 
-  it('accepts a full agent span with telemetry fields', () => {
+  it('accepts a full station span with LLM telemetry fields', () => {
     const result = SpanRecordSchema.parse({
       ...minimalSpan,
-      stepType: 'agent',
+      stepType: 'station',
       inputTokens: 12400,
       outputTokens: 3200,
       estimatedCost: 0.12,
@@ -69,11 +72,27 @@ describe('SpanRecordSchema', () => {
     expect(result.toolCallCount).toBe(8);
   });
 
+  it('accepts a gate span', () => {
+    const result = SpanRecordSchema.parse({
+      executionId: 'wfx-abc123',
+      frameId: 'frm-gate',
+      stepId: 'approval-gate',
+      stepType: 'gate',
+      status: 'completed',
+      startedAt: 1716000000000,
+      completedAt: 1716000060000,
+      durationMs: 60000,
+    });
+    expect(result.stepType).toBe('gate');
+    expect(result.status).toBe('completed');
+  });
+
   it('accepts a skipped span', () => {
     const result = SpanRecordSchema.parse({
       executionId: 'wfx-abc123',
-      stepId: 'optional-step',
-      stepType: 'shell',
+      frameId: 'frm-skipped',
+      stepId: 'optional-station',
+      stepType: 'station',
       status: 'skipped',
     });
     expect(result.status).toBe('skipped');
@@ -83,8 +102,9 @@ describe('SpanRecordSchema', () => {
   it('accepts a failed span with no telemetry', () => {
     const result = SpanRecordSchema.parse({
       executionId: 'wfx-abc123',
-      stepId: 'deploy',
-      stepType: 'shell',
+      frameId: 'frm-failed',
+      stepId: 'deploy-station',
+      stepType: 'station',
       status: 'failed',
       startedAt: 1716000000000,
       completedAt: 1716000005000,
@@ -99,6 +119,11 @@ describe('SpanRecordSchema', () => {
     expect(() => SpanRecordSchema.parse(noExecId)).toThrow();
   });
 
+  it('rejects missing frameId', () => {
+    const { frameId: _, ...noFrameId } = minimalSpan;
+    expect(() => SpanRecordSchema.parse(noFrameId)).toThrow();
+  });
+
   it('rejects missing stepId', () => {
     const { stepId: _, ...noStepId } = minimalSpan;
     expect(() => SpanRecordSchema.parse(noStepId)).toThrow();
@@ -110,6 +135,8 @@ describe('SpanRecordSchema', () => {
 
   it('rejects invalid stepType', () => {
     expect(() => SpanRecordSchema.parse({ ...minimalSpan, stepType: 'lambda' })).toThrow();
+    expect(() => SpanRecordSchema.parse({ ...minimalSpan, stepType: 'agent' })).toThrow();
+    expect(() => SpanRecordSchema.parse({ ...minimalSpan, stepType: 'shell' })).toThrow();
   });
 });
 

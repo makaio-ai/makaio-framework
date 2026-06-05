@@ -32,6 +32,7 @@ class ConfigurableConnector extends AIAgentConnector {
   private readonly behavior: ConnectorBehavior;
   public capturedStartMessage?: NormalizedMessageInput;
   public capturedStartSystemPrompt?: string;
+  public capturedStartResponseSchema?: Record<string, unknown>;
   public capturedInitializeSystemPrompt?: string;
   public readonly startedHandles: MessageHandle[] = [];
 
@@ -45,9 +46,13 @@ class ConfigurableConnector extends AIAgentConnector {
     this.capturedInitializeSystemPrompt = options?.systemPrompt;
   }
 
-  public async start(message: NormalizedMessageInput, options?: { systemPrompt?: string }): Promise<AgentStartResult> {
+  public async start(
+    message: NormalizedMessageInput,
+    options?: { systemPrompt?: string; responseSchema?: Record<string, unknown> },
+  ): Promise<AgentStartResult> {
     this.capturedStartMessage = message;
     this.capturedStartSystemPrompt = options?.systemPrompt;
+    this.capturedStartResponseSchema = options?.responseSchema;
 
     if (this.behavior.throwOnStart) {
       throw this.behavior.throwOnStart;
@@ -454,6 +459,31 @@ describe('AIAdapter.handleInfer', () => {
 
     expect(result.success).toBe(true);
     expect(capture.agentConfigs[0]?.reasoningEffort).toBe('low');
+  });
+
+  it('forwards responseSchema from startAgent payload into the initial connector turn', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '' }, capture);
+    await adapter.init();
+
+    const responseSchema = {
+      type: 'object',
+      properties: { approved: { type: 'boolean' } },
+    };
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'create',
+      initialMessage: 'hello',
+      responseSchema,
+    });
+
+    expect(result.success).toBe(true);
+    expect(capture.connectors[0]?.capturedStartResponseSchema).toEqual(responseSchema);
   });
 
   it('ephemeral agent: skips session creation, skips persistence, and is evicted after response', async () => {

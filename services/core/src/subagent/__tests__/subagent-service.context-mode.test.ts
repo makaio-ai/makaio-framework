@@ -83,6 +83,41 @@ describe('SubagentService - context mode', () => {
     });
   });
 
+  it('forwards structured output schemas to adapter startup', async () => {
+    const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
+      title: 'Parent',
+    });
+    const responseSchema = {
+      type: 'object',
+      properties: { verdict: { type: 'string' } },
+    };
+    let capturedResponseSchema: unknown;
+    MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+      capturedResponseSchema = ctx.payload.responseSchema;
+      ctx.setResult({
+        success: true,
+        agentId: 'mock-agent',
+        adapterId: String(ctx.payload.adapterId),
+        adapterSessionId: 'adapter-session-structured',
+        sessionId: String(ctx.payload.sessionId ?? 'session-missing'),
+        messageId: 'msg-structured',
+      });
+    });
+
+    await MakaioBus.request(SubagentSubjects.spawn, {
+      parentSessionId,
+      config: {
+        task: 'Return structured review',
+        adapterName: 'claude-code',
+        contextMode: 'fresh',
+        responseSchema,
+      },
+      depth: 1,
+    });
+
+    await vi.waitFor(() => expect(capturedResponseSchema).toEqual(responseSchema));
+  });
+
   it('closes child sessions when subagents complete or cancel', async () => {
     const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
       title: 'Parent',

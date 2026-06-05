@@ -1,5 +1,11 @@
 import { z } from 'zod';
-export { JsonValueSchema, JsonObjectSchema, JsonObjectContractSchema, type JsonValue } from './json-value.js';
+export {
+  JsonValueSchema,
+  JsonObjectSchema,
+  JsonObjectContractSchema,
+  JsonSchemaRecordSchema,
+  type JsonValue,
+} from './json-value.js';
 
 /**
  * Content source for binary data or external resources.

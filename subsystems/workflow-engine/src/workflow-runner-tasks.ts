@@ -1,13 +1,13 @@
 import {
   WORKFLOW_CANCELLED_REASON,
   type IWorkflowRunner,
+  type JsonValue,
   type WorkflowDefinition,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { FinalizerDeps } from './workflow-execution-finalizer.js';
 import { cancelExecution, completeExecutionWithFailure } from './workflow-execution-finalizer.js';
-import { rebuildSchedulerGraph } from './workflow-scheduler-rebuild.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
@@ -30,39 +30,34 @@ export function resolveWorkerOs(platform: string): WorkerOs {
 }
 
 /**
- * Merge provided inputs with workflow input definitions, applying defaults and
- * throwing for missing required inputs.
- * @param definitions - Workflow input parameter definitions.
+ * Bind caller-supplied inputs for a workflow execution.
+ *
+ * The primitive runtime uses a JSON Schema (`inputSchema`) for input validation.
+ * At execution start we preserve the caller-supplied JSON value as-is so
+ * object, array, and scalar input schemas all reach the runtime unchanged.
+ * @param _workflow - Workflow definition (reserved for future schema-based validation).
  * @param provided - Caller-supplied input values.
- * @returns Bound input record with defaults applied.
+ * @returns Bound input value.
  */
-export function bindWorkflowInputs(
-  definitions: WorkflowDefinition['inputs'] | undefined,
+export function bindWorkflowInputs(_workflow: Pick<WorkflowDefinition, 'inputSchema'>, provided: JsonValue): JsonValue {
+  return provided;
+}
+
+/**
+ * Bind caller-supplied configuration for a workflow execution.
+ *
+ * Mirrors input binding: schema validation is handled at authoring/UI seams for
+ * now, while the runtime receives a plain object available as `config.*` in
+ * expressions and station contexts.
+ * @param _workflow - Workflow definition (reserved for future schema-based validation).
+ * @param provided - Caller-supplied configuration values.
+ * @returns Bound configuration record.
+ */
+export function bindWorkflowConfig(
+  _workflow: Pick<WorkflowDefinition, 'configSchema'>,
   provided: Record<string, unknown>,
 ): Record<string, unknown> {
-  const bound: Record<string, unknown> = {};
-
-  for (const input of definitions ?? []) {
-    if (Object.prototype.hasOwnProperty.call(provided, input.name)) {
-      bound[input.name] = provided[input.name];
-      continue;
-    }
-    if (Object.prototype.hasOwnProperty.call(input, 'default')) {
-      bound[input.name] = input.default;
-      continue;
-    }
-    if (input.required) {
-      throw new Error(`Missing required workflow input: ${input.name}`);
-    }
-  }
-
-  for (const [key, value] of Object.entries(provided)) {
-    if (!Object.prototype.hasOwnProperty.call(bound, key)) {
-      bound[key] = value;
-    }
-  }
-
-  return bound;
+  return { ...provided };
 }
 
 /**
@@ -78,20 +73,6 @@ function runnerCancellationReason(signal: AbortSignal): string {
     return signal.reason;
   }
   return WORKFLOW_CANCELLED_REASON;
-}
-
-/**
- * Replace active execution state from a durable snapshot and rebuild any runtime-expanded step metadata.
- * @param active - Active execution registry entry to refresh.
- * @param execution - Latest durable execution snapshot.
- */
-function refreshActiveExecutionFromSnapshot(active: ActiveExecution, execution: ActiveExecution['execution']): void {
-  active.execution = execution;
-  if (active.workflow.steps.length === 0) return;
-
-  const graph = rebuildSchedulerGraph({ workflow: active.workflow, execution });
-  active.stepMap = new Map(Array.from(graph.nodes, ([stepId, node]) => [stepId, node.step]));
-  active.stepContext = new Map(graph.stepContext);
 }
 
 /**
@@ -120,7 +101,9 @@ async function cancelRunningExecutionAfterRunnerAbort(
   });
   if (execution?.status !== 'running') return;
 
-  refreshActiveExecutionFromSnapshot(active, execution);
+  // Refresh the in-memory execution state from the durable snapshot so the
+  // finalizer sees the latest status before issuing the cancellation.
+  active.execution = execution;
   const cancelled = await cancelExecution(finalizerDeps, executionId, runnerCancellationReason(signal));
   if (!cancelled) {
     console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}: execution not active`);
@@ -189,6 +172,7 @@ export function buildFileExecutionTask(
     workflowId,
     triggerPayload: sanitizedTriggerPayload,
     inputs: {},
+    config: {},
     scope,
     busUrl: config.busUrl,
     busAuth: config.busAuth,
@@ -259,7 +243,10 @@ export function buildExecutionTask(
     workflow: WorkflowDefinition;
     coordinatorSessionId: string;
     sanitizedTriggerPayload: Record<string, unknown>;
-    boundInputs: Record<string, unknown>;
+    boundInputs: JsonValue;
+    boundConfig: Record<string, unknown>;
+    artifactRef?: WorkflowWorkerConfig['artifactRef'];
+    executionHints?: WorkflowWorkerConfig['executionHints'];
     scope: WorkflowDefinition['scope'];
     workspaceRoot: string;
   },
@@ -271,6 +258,9 @@ export function buildExecutionTask(
     coordinatorSessionId,
     sanitizedTriggerPayload,
     boundInputs,
+    boundConfig,
+    artifactRef,
+    executionHints,
     scope,
     workspaceRoot,
   } = params;
@@ -286,6 +276,9 @@ export function buildExecutionTask(
     workflowId,
     triggerPayload: sanitizedTriggerPayload,
     inputs: boundInputs,
+    config: boundConfig,
+    ...(artifactRef !== undefined ? { artifactRef } : {}),
+    ...(executionHints !== undefined ? { executionHints } : {}),
     scope,
     busUrl: config.busUrl,
     busAuth: config.busAuth,

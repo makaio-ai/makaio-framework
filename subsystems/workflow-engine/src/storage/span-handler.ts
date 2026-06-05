@@ -1,6 +1,6 @@
 import { and, asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExecutionLink, SpanRecord } from '@makaio/contracts';
+import type { ExecutionLink, SpanRecord, WorkflowStepType } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowExecutionLinks, workflowStepSpans } from './schema.js';
@@ -16,8 +16,9 @@ type DbExecutionLinkRow = typeof workflowExecutionLinks.$inferSelect;
 function mapSpan(row: DbSpanRow): SpanRecord {
   return {
     executionId: row.executionId,
+    frameId: row.frameId,
     stepId: row.stepId,
-    stepType: row.stepType,
+    stepType: row.stepType as WorkflowStepType,
     status: row.status,
     startedAt: row.startedAt ?? undefined,
     completedAt: row.completedAt ?? undefined,
@@ -62,10 +63,10 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
       .insert(workflowStepSpans)
       .values(span)
       .onConflictDoUpdate({
-        target: [workflowStepSpans.executionId, workflowStepSpans.stepId],
+        target: [workflowStepSpans.executionId, workflowStepSpans.frameId],
         set: span,
       });
-    ctx.setResult({ id: `${span.executionId}:${span.stepId}` });
+    ctx.setResult({ id: `${span.executionId}:${span.frameId}` });
   });
 
   const unsubListSpans = bus.on(WorkflowStorageSubjects.listSpans, async (ctx) => {
@@ -73,7 +74,7 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
       .select()
       .from(workflowStepSpans)
       .where(eq(workflowStepSpans.executionId, ctx.payload.executionId))
-      .orderBy(asc(workflowStepSpans.startedAt), asc(workflowStepSpans.stepId));
+      .orderBy(asc(workflowStepSpans.startedAt), asc(workflowStepSpans.stepId), asc(workflowStepSpans.frameId));
     ctx.setResult({ spans: rows.map(mapSpan) });
   });
 

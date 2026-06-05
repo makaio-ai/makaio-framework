@@ -1,13 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AgentWorkflowStepSchema,
-  CompositeStepStateSchema,
-  ExecutableStepStateSchema,
-  ForEachExpansionSnapshotSchema,
-  StepStateSchema,
+  WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
+  WorkflowStationNodeSchema,
+  WorkflowDelegateAgentNodeSchema,
+  WorkflowDelegateRoleNodeSchema,
+  WorkflowGateNodeSchema,
+  WorkflowParallelNodeSchema,
+  WorkflowIterateNodeSchema,
+  WorkflowIterateChainNodeSchema,
+  WorkflowSequenceNodeSchema,
+  WorkflowNodeSchema,
+  WorkflowDefinitionSchema,
+  WorkflowArtifactBindingSchema,
+  WorkflowFrameStateSchema,
+  WorkflowGateInstanceSchema,
+  WorkflowNodeTypeSchema,
+  WorkflowParallelModeSchema,
 } from '../schemas.js';
+import type { WorkflowParallelNode } from '../schemas.js';
 import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
+import { WorkLogExecutionSummarySchema } from '../worklog.js';
+
+// ─────────────────────────────────────────────────────────────
+// Namespace subjects
+// ─────────────────────────────────────────────────────────────
 
 describe('WorkflowNamespace', () => {
   it('exposes dotted lifecycle subjects as nested accessors', () => {
@@ -18,76 +35,32 @@ describe('WorkflowNamespace', () => {
     expect(WorkflowSubjects.step.beforeStart.subject).toBe('step.beforeStart');
     expect(WorkflowSubjects.step.completed.subject).toBe('step.completed');
   });
-});
 
-describe('AgentWorkflowStepSchema', () => {
-  it('accepts and preserves harnessId and contextMode fields', () => {
-    const step = AgentWorkflowStepSchema.parse({
-      id: 'review',
-      type: 'agent',
-      prompt: 'Review {{ inputs.path }}',
-      harnessId: 'harness-reviewer',
-      contextMode: 'fresh',
-    });
-
-    expect(step).toMatchObject({
-      harnessId: 'harness-reviewer',
-      contextMode: 'fresh',
-    });
+  it('exposes new frame lifecycle subjects as nested accessors', () => {
+    expect(WorkflowSubjects.frame.started.subject).toBe('frame.started');
+    expect(WorkflowSubjects.frame.completed.subject).toBe('frame.completed');
+    expect(WorkflowSubjects.frame.failed.subject).toBe('frame.failed');
   });
 
-  it('accepts a step without harnessId and contextMode (both optional)', () => {
-    const step = AgentWorkflowStepSchema.parse({
-      id: 'simple',
-      type: 'agent',
-      prompt: 'Do something',
-    });
-
-    expect(step.harnessId).toBeUndefined();
-    expect(step.contextMode).toBeUndefined();
+  it('exposes gate suspension/resumption subjects as nested accessors', () => {
+    expect(WorkflowSubjects.gate.suspended.subject).toBe('gate.suspended');
+    expect(WorkflowSubjects.gate.resumed.subject).toBe('gate.resumed');
   });
 
-  it('rejects invalid contextMode values', () => {
-    expect(() =>
-      AgentWorkflowStepSchema.parse({
-        id: 'bad',
-        type: 'agent',
-        prompt: 'Do something',
-        contextMode: 'invalid-mode',
-      }),
-    ).toThrow();
+  it('exposes public execution trace read subjects', () => {
+    expect(WorkflowSubjects.listSpans.subject).toBe('listSpans');
+    expect(WorkflowSubjects.listGateInstances.subject).toBe('listGateInstances');
   });
 
-  it('accepts and preserves the optional role field', () => {
-    const step = AgentWorkflowStepSchema.parse({
-      id: 'review',
-      type: 'agent',
-      prompt: 'Review the spec',
-      role: 'spec-reviewer',
-    });
-
-    expect(step.role).toBe('spec-reviewer');
+  it('exposes dynamic and artifact subjects', () => {
+    expect(WorkflowSubjects.dynamic.materialized.subject).toBe('dynamic.materialized');
+    expect(WorkflowSubjects.artifact.updated.subject).toBe('artifact.updated');
   });
 
-  it('accepts a step without role (optional)', () => {
-    const step = AgentWorkflowStepSchema.parse({
-      id: 'simple',
-      type: 'agent',
-      prompt: 'Do something',
-    });
-
-    expect(step.role).toBeUndefined();
-  });
-
-  it('rejects an empty role string', () => {
-    expect(() =>
-      AgentWorkflowStepSchema.parse({
-        id: 'bad',
-        type: 'agent',
-        prompt: 'Do something',
-        role: '',
-      }),
-    ).toThrow();
+  it('exposes worklog RPC and event subjects', () => {
+    expect(WorkflowSubjects.worklog.get.subject).toBe('worklog.get');
+    expect(WorkflowSubjects.worklog.list.subject).toBe('worklog.list');
+    expect(WorkflowSubjects.worklog.changed.subject).toBe('worklog.changed');
   });
 });
 
@@ -96,6 +69,685 @@ describe('WorkflowSubjects.resolveRole', () => {
     expect(WorkflowSubjects.resolveRole.subject).toBe('resolveRole');
   });
 });
+
+describe('WorkflowSubjects.resolveAgent', () => {
+  it('exposes the resolveAgent subject', () => {
+    expect(WorkflowSubjects.resolveAgent.subject).toBe('resolveAgent');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowNodeTypeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowNodeTypeSchema', () => {
+  it('accepts all 8 node types', () => {
+    const validTypes = [
+      'station',
+      'delegate-agent',
+      'delegate-role',
+      'parallel',
+      'gate',
+      'iterate',
+      'iterate-chain',
+      'sequence',
+    ];
+    for (const t of validTypes) {
+      expect(WorkflowNodeTypeSchema.parse(t)).toBe(t);
+    }
+  });
+
+  it('rejects old DAG step types', () => {
+    expect(() => WorkflowNodeTypeSchema.parse('agent')).toThrow();
+    expect(() => WorkflowNodeTypeSchema.parse('shell')).toThrow();
+    expect(() => WorkflowNodeTypeSchema.parse('function')).toThrow();
+    expect(() => WorkflowNodeTypeSchema.parse('for-each')).toThrow();
+    expect(() => WorkflowNodeTypeSchema.parse('bus-request')).toThrow();
+  });
+});
+
+describe('WorkflowArtifactBindingSchema', () => {
+  it('accepts artifact resolve, create, and status path options', () => {
+    const binding = WorkflowArtifactBindingSchema.parse({
+      kind: 'implementation-review',
+      schemaVersion: '1',
+      scope: { level: 'global' },
+      resolve: 'inputs.reviewArtifactRef',
+      create: '{ status: "draft" }',
+      statusPath: 'status',
+    });
+
+    expect(binding.resolve).toBe('inputs.reviewArtifactRef');
+    expect(binding.create).toBe('{ status: "draft" }');
+    expect(binding.statusPath).toBe('status');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowStationNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowStationNodeSchema', () => {
+  it('accepts a minimal station node with id and prompt', () => {
+    const node = WorkflowStationNodeSchema.parse({
+      id: 'analyze',
+      type: 'station',
+      prompt: 'Analyze the requirements document',
+    });
+    expect(node.type).toBe('station');
+    expect(node.id).toBe('analyze');
+    expect(node.prompt).toBe('Analyze the requirements document');
+  });
+
+  it('accepts a station with optional role and outputSchema', () => {
+    const node = WorkflowStationNodeSchema.parse({
+      id: 'review',
+      type: 'station',
+      prompt: 'Review the implementation plan',
+      role: 'requirements-analyst',
+      outputSchema: { type: 'object', properties: { status: { type: 'string' } } },
+      timeoutMs: 300000,
+    });
+    expect(node.role).toBe('requirements-analyst');
+    expect(node.outputSchema).toBeDefined();
+    expect(node.timeoutMs).toBe(300000);
+  });
+
+  it('accepts when and skip conditions', () => {
+    const node = WorkflowStationNodeSchema.parse({
+      id: 'conditional',
+      type: 'station',
+      prompt: 'Run only if env is production',
+      when: "ctx.inputs.env == 'production'",
+      skip: 'ctx.inputs.dryRun == true',
+    });
+    expect(node.when).toBe("ctx.inputs.env == 'production'");
+    expect(node.skip).toBe('ctx.inputs.dryRun == true');
+  });
+
+  it('rejects a station with empty id', () => {
+    expect(() => WorkflowStationNodeSchema.parse({ id: '', type: 'station', prompt: 'Do something' })).toThrow();
+  });
+
+  it('rejects a station with empty prompt', () => {
+    expect(() => WorkflowStationNodeSchema.parse({ id: 'step', type: 'station', prompt: '' })).toThrow();
+  });
+
+  it('rejects functions in outputSchema (must be JSON-safe)', () => {
+    expect(() =>
+      WorkflowStationNodeSchema.parse({
+        id: 'bad',
+        type: 'station',
+        prompt: 'Run',
+        outputSchema: { validator: () => undefined },
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowDelegateAgentNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDelegateAgentNodeSchema', () => {
+  it('accepts a minimal delegate-agent node', () => {
+    const node = WorkflowDelegateAgentNodeSchema.parse({
+      id: 'delegate-1',
+      type: 'delegate-agent',
+      agentId: 'code-review-agent',
+    });
+    expect(node.type).toBe('delegate-agent');
+    expect(node.agentId).toBe('code-review-agent');
+  });
+
+  it('accepts delegate-agent with inputExpression and outputSchema', () => {
+    const node = WorkflowDelegateAgentNodeSchema.parse({
+      id: 'delegate-1',
+      type: 'delegate-agent',
+      agentId: 'code-review-agent',
+      inputExpression: 'ctx.frames["build"].output',
+      outputSchema: { type: 'object' },
+    });
+    expect(node.inputExpression).toBe('ctx.frames["build"].output');
+    expect(node.outputSchema).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowDelegateRoleNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDelegateRoleNodeSchema', () => {
+  it('accepts a minimal delegate-role node', () => {
+    const node = WorkflowDelegateRoleNodeSchema.parse({
+      id: 'role-delegate',
+      type: 'delegate-role',
+      role: 'senior-reviewer',
+      prompt: 'Review the PR and provide feedback',
+    });
+    expect(node.type).toBe('delegate-role');
+    expect(node.role).toBe('senior-reviewer');
+    expect(node.prompt).toBe('Review the PR and provide feedback');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowGateNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowGateNodeSchema', () => {
+  it('accepts a gate node with null timeoutMs', () => {
+    const node = WorkflowGateNodeSchema.parse({
+      id: 'approval',
+      type: 'gate',
+      prompt: 'Approve deployment to production?',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+    expect(node.type).toBe('gate');
+    expect(node.timeoutMs).toBeNull();
+    expect(node.autoAction).toBe('reject');
+  });
+
+  it('accepts a gate with a numeric timeout', () => {
+    const node = WorkflowGateNodeSchema.parse({
+      id: 'timed-gate',
+      type: 'gate',
+      prompt: 'Review required',
+      autoAction: 'approve',
+      timeoutMs: 3600000,
+      resumeSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+    });
+    expect(node.timeoutMs).toBe(3600000);
+    expect(node.resumeSchema).toBeDefined();
+  });
+
+  it('rejects gate without prompt', () => {
+    expect(() =>
+      WorkflowGateNodeSchema.parse({ id: 'g', type: 'gate', autoAction: 'reject', timeoutMs: null }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowParallelNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowParallelNodeSchema', () => {
+  it('accepts all parallel execution modes', () => {
+    expect(WorkflowParallelModeSchema.parse('all-settled')).toBe('all-settled');
+    expect(WorkflowParallelModeSchema.parse('fail-fast')).toBe('fail-fast');
+  });
+
+  it('accepts a parallel node with named branches', () => {
+    const node = WorkflowParallelNodeSchema.parse({
+      id: 'parallel-review',
+      type: 'parallel',
+      mode: 'fail-fast',
+      branches: {
+        security: { id: 'sec-branch', type: 'sequence', nodes: [] },
+        performance: { id: 'perf-branch', type: 'sequence', nodes: [] },
+      },
+    });
+    expect(node.type).toBe('parallel');
+    expect(node.mode).toBe('fail-fast');
+    expect(Object.keys(node.branches)).toHaveLength(2);
+    expect(node.branches['security']).toBeDefined();
+    expect(node.branches['performance']).toBeDefined();
+  });
+
+  it('rejects removed parallel execution modes', () => {
+    expect(() =>
+      WorkflowParallelNodeSchema.parse({
+        id: 'parallel-review',
+        type: 'parallel',
+        mode: 'first-success',
+        branches: {},
+      }),
+    ).toThrow();
+  });
+
+  it('rejects parallel with empty branches record', () => {
+    // Zod record allows empty objects — this is valid for schema purposes
+    const node = WorkflowParallelNodeSchema.parse({
+      id: 'empty-parallel',
+      type: 'parallel',
+      branches: {},
+    });
+    expect(Object.keys(node.branches)).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowIterateNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowIterateNodeSchema', () => {
+  it('accepts an iterate node with collection and body', () => {
+    const node = WorkflowIterateNodeSchema.parse({
+      id: 'process-items',
+      type: 'iterate',
+      collection: 'ctx.inputs.items',
+      body: { id: 'item-body', type: 'sequence', nodes: [] },
+    });
+    expect(node.type).toBe('iterate');
+    expect(node.collection).toBe('ctx.inputs.items');
+  });
+
+  it('accepts optional concurrency limit', () => {
+    const node = WorkflowIterateNodeSchema.parse({
+      id: 'bounded-iterate',
+      type: 'iterate',
+      collection: 'ctx.inputs.repos',
+      body: { id: 'repo-body', type: 'sequence', nodes: [] },
+      concurrency: 3,
+    });
+    expect(node.concurrency).toBe(3);
+  });
+
+  it('accepts concurrency 0 (unlimited)', () => {
+    const node = WorkflowIterateNodeSchema.parse({
+      id: 'unlimited-iterate',
+      type: 'iterate',
+      collection: 'ctx.inputs.items',
+      body: { id: 'body', type: 'sequence', nodes: [] },
+      concurrency: 0,
+    });
+    expect(node.concurrency).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowIterateChainNodeSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowIterateChainNodeSchema', () => {
+  it('accepts an iterate-chain node', () => {
+    const node = WorkflowIterateChainNodeSchema.parse({
+      id: 'pipeline',
+      type: 'iterate-chain',
+      collection: 'ctx.inputs.stages',
+      body: { id: 'stage-body', type: 'sequence', nodes: [] },
+    });
+    expect(node.type).toBe('iterate-chain');
+    expect(node.collection).toBe('ctx.inputs.stages');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowSequenceNodeSchema (recursive)
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowSequenceNodeSchema', () => {
+  it('accepts an empty sequence', () => {
+    const node = WorkflowSequenceNodeSchema.parse({
+      id: 'root',
+      type: 'sequence',
+      nodes: [],
+    });
+    expect(node.type).toBe('sequence');
+    expect(node.nodes).toHaveLength(0);
+  });
+
+  it('accepts nested node types', () => {
+    const node = WorkflowSequenceNodeSchema.parse({
+      id: 'root',
+      type: 'sequence',
+      nodes: [
+        { id: 'step-1', type: 'station', prompt: 'Analyze' },
+        {
+          id: 'gate-1',
+          type: 'gate',
+          prompt: 'Approve?',
+          autoAction: 'reject',
+          timeoutMs: null,
+        },
+        { id: 'step-2', type: 'station', prompt: 'Deploy' },
+      ],
+    });
+    expect(node.nodes).toHaveLength(3);
+    expect(node.nodes[0]?.type).toBe('station');
+    expect(node.nodes[1]?.type).toBe('gate');
+    expect(node.nodes[2]?.type).toBe('station');
+  });
+
+  it('accepts deeply nested sequences', () => {
+    const node = WorkflowSequenceNodeSchema.parse({
+      id: 'root',
+      type: 'sequence',
+      nodes: [
+        {
+          id: 'parallel-1',
+          type: 'parallel',
+          branches: {
+            a: {
+              id: 'branch-a',
+              type: 'sequence',
+              nodes: [{ id: 'inner-station', type: 'station', prompt: 'Inner work' }],
+            },
+          },
+        },
+      ],
+    });
+    const parallel = node.nodes[0];
+    expect(parallel?.type).toBe('parallel');
+    if (parallel?.type === 'parallel') {
+      expect(Object.keys((parallel as WorkflowParallelNode).branches)).toHaveLength(1);
+    }
+  });
+
+  it('rejects functions inside node trees', () => {
+    expect(() =>
+      WorkflowSequenceNodeSchema.parse({
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'bad-station',
+            type: 'station',
+            prompt: 'Run',
+            outputSchema: { transform: () => undefined },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowNodeSchema (discriminated union)
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowNodeSchema', () => {
+  it('routes station nodes by type discriminant', () => {
+    const node = WorkflowNodeSchema.parse({
+      id: 'station-1',
+      type: 'station',
+      prompt: 'Do work',
+    });
+    expect(node.type).toBe('station');
+  });
+
+  it('routes gate nodes by type discriminant', () => {
+    const node = WorkflowNodeSchema.parse({
+      id: 'gate-1',
+      type: 'gate',
+      prompt: 'Approve?',
+      autoAction: 'approve',
+      timeoutMs: 3600000,
+    });
+    expect(node.type).toBe('gate');
+  });
+
+  it('rejects nodes without a type discriminant', () => {
+    expect(() => WorkflowNodeSchema.parse({ id: 'no-type', prompt: 'Do work' })).toThrow();
+  });
+
+  it('rejects unknown node types', () => {
+    expect(() => WorkflowNodeSchema.parse({ id: 'bad', type: 'unknown-type' })).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowDefinitionSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDefinitionSchema', () => {
+  it('accepts a minimal workflow definition with a root sequence', () => {
+    const def = WorkflowDefinitionSchema.parse({
+      id: 'simple-flow',
+      root: { id: 'root', type: 'sequence', nodes: [] },
+    });
+    expect(def.id).toBe('simple-flow');
+    expect(def.root.type).toBe('sequence');
+    expect(def.scope).toEqual({ type: 'global' });
+  });
+
+  it('accepts a workflow with inputSchema, outputSchema, and artifact binding', () => {
+    const def = WorkflowDefinitionSchema.parse({
+      id: 'advanced-flow',
+      name: 'Advanced Flow',
+      description: 'A complex pipeline',
+      inputSchema: { type: 'object', properties: { env: { type: 'string' } } },
+      outputSchema: { type: 'object', properties: { result: { type: 'string' } } },
+      artifact: {
+        kind: 'implementation-plan',
+        schemaVersion: '1',
+        scope: { level: 'workspace', ids: { workspaceId: 'ws-1' } },
+      },
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          { id: 'analyze', type: 'station', prompt: 'Analyze' },
+          {
+            id: 'approve',
+            type: 'gate',
+            prompt: 'Approve plan?',
+            autoAction: 'reject',
+            timeoutMs: null,
+          },
+          { id: 'implement', type: 'station', prompt: 'Implement' },
+        ],
+      },
+      triggers: [{ type: 'manual' }],
+      scope: { type: 'external', kind: 'project', id: 'proj-1' },
+    });
+    expect(def.id).toBe('advanced-flow');
+    expect(def.root.nodes).toHaveLength(3);
+    expect(def.artifact?.kind).toBe('implementation-plan');
+    expect(def.scope).toEqual({ type: 'external', kind: 'project', id: 'proj-1' });
+  });
+
+  it('rejects a workflow definition without id', () => {
+    expect(() => WorkflowDefinitionSchema.parse({ root: { id: 'root', type: 'sequence', nodes: [] } })).toThrow();
+  });
+
+  it('rejects a workflow definition without root', () => {
+    expect(() => WorkflowDefinitionSchema.parse({ id: 'bad-flow' })).toThrow();
+  });
+
+  it('rejects functions inside the definition (must be JSON-safe)', () => {
+    expect(() =>
+      WorkflowDefinitionSchema.parse({
+        id: 'fn-flow',
+        root: {
+          id: 'root',
+          type: 'sequence',
+          nodes: [
+            {
+              id: 'bad',
+              type: 'station',
+              prompt: 'Run',
+              outputSchema: { handler: () => undefined },
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowFrameStateSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowFrameStateSchema', () => {
+  it('parses a minimal pending frame', () => {
+    const frame = WorkflowFrameStateSchema.parse({
+      frameId: 'frame-1',
+      nodeId: 'analyze',
+      nodeType: 'station',
+      path: ['frame-root', 'frame-1'],
+      status: 'pending',
+      attempt: 0,
+    });
+    expect(frame.frameId).toBe('frame-1');
+    expect(frame.status).toBe('pending');
+    expect(frame.attempt).toBe(0);
+  });
+
+  it('defaults attempt to 0 when omitted', () => {
+    const frame = WorkflowFrameStateSchema.parse({
+      frameId: 'frame-2',
+      nodeId: 'review',
+      nodeType: 'gate',
+      path: ['frame-root'],
+      status: 'waiting',
+    });
+    expect(frame.attempt).toBe(0);
+  });
+
+  it('parses a completed frame with output', () => {
+    const frame = WorkflowFrameStateSchema.parse({
+      frameId: 'frame-3',
+      nodeId: 'analyze',
+      nodeType: 'station',
+      path: ['frame-root', 'frame-3'],
+      status: 'completed',
+      attempt: 0,
+      output: { findings: ['issue-1', 'issue-2'] },
+      startedAt: 1000,
+      completedAt: 2000,
+    });
+    expect(frame.output).toEqual({ findings: ['issue-1', 'issue-2'] });
+    expect(frame.startedAt).toBe(1000);
+    expect(frame.completedAt).toBe(2000);
+  });
+
+  it('parses an iterate frame with iteration index', () => {
+    const frame = WorkflowFrameStateSchema.parse({
+      frameId: 'frame-4',
+      nodeId: 'process',
+      nodeType: 'station',
+      path: ['root', 'iterate', 'frame-4'],
+      status: 'running',
+      attempt: 0,
+      iteration: 2,
+    });
+    expect(frame.iteration).toBe(2);
+  });
+
+  it('parses a parallel branch frame with branchKey', () => {
+    const frame = WorkflowFrameStateSchema.parse({
+      frameId: 'frame-5',
+      nodeId: 'security-check',
+      nodeType: 'station',
+      path: ['root', 'parallel', 'frame-5'],
+      status: 'running',
+      attempt: 0,
+      branchKey: 'security',
+    });
+    expect(frame.branchKey).toBe('security');
+  });
+
+  it('rejects invalid node types', () => {
+    expect(() =>
+      WorkflowFrameStateSchema.parse({
+        frameId: 'frame-bad',
+        nodeId: 'x',
+        nodeType: 'agent',
+        path: [],
+        status: 'pending',
+        attempt: 0,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects invalid status values', () => {
+    expect(() =>
+      WorkflowFrameStateSchema.parse({
+        frameId: 'f',
+        nodeId: 'x',
+        nodeType: 'station',
+        path: [],
+        status: 'expanding',
+        attempt: 0,
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowGateInstanceSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowGateInstanceSchema', () => {
+  it('parses a minimal waiting gate instance', () => {
+    const gate = WorkflowGateInstanceSchema.parse({
+      executionId: 'wfx-1',
+      nodeId: 'approval',
+      frameId: 'frame-gate',
+      schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+      status: 'waiting',
+      createdAt: 1000,
+    });
+    expect(gate.status).toBe('waiting');
+    expect(gate.schema).toBeDefined();
+    expect(gate.resolvedAt).toBeUndefined();
+  });
+
+  it('parses a resumed gate instance with resumeData', () => {
+    const gate = WorkflowGateInstanceSchema.parse({
+      executionId: 'wfx-1',
+      nodeId: 'approval',
+      frameId: 'frame-gate',
+      schema: { type: 'object' },
+      status: 'resumed',
+      createdAt: 1000,
+      resolvedAt: 2000,
+      resumeData: { approved: true, comment: 'LGTM' },
+    });
+    expect(gate.status).toBe('resumed');
+    expect(gate.resolvedAt).toBe(2000);
+    expect(gate.resumeData).toEqual({ approved: true, comment: 'LGTM' });
+  });
+
+  it('parses a timed-out gate instance', () => {
+    const gate = WorkflowGateInstanceSchema.parse({
+      executionId: 'wfx-1',
+      nodeId: 'approval',
+      frameId: 'frame-gate',
+      schema: {},
+      status: 'timed-out',
+      createdAt: 1000,
+      resolvedAt: 3600000,
+    });
+    expect(gate.status).toBe('timed-out');
+  });
+
+  it('parses a rejected gate instance with resumeData', () => {
+    const gate = WorkflowGateInstanceSchema.parse({
+      executionId: 'wfx-1',
+      nodeId: 'approval',
+      frameId: 'frame-gate',
+      schema: {},
+      status: 'rejected',
+      createdAt: 1000,
+      resolvedAt: 2000,
+      resumeData: { decision: 'rejected' },
+    });
+    expect(gate.status).toBe('rejected');
+    expect(gate.resumeData).toEqual({ decision: 'rejected' });
+  });
+
+  it('rejects invalid gate status', () => {
+    expect(() =>
+      WorkflowGateInstanceSchema.parse({
+        executionId: 'wfx-1',
+        nodeId: 'g',
+        frameId: 'f',
+        schema: {},
+        status: 'open',
+        createdAt: 1000,
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkflowResolvedRoleSchema
+// ─────────────────────────────────────────────────────────────
 
 describe('WorkflowResolvedRoleSchema', () => {
   it('parses a minimal resolved role (adapterName only)', () => {
@@ -138,185 +790,32 @@ describe('WorkflowResolvedRoleSchema', () => {
   });
 });
 
-describe('ExecutableStepStateSchema', () => {
-  it('parses a minimal executable state', () => {
-    const state = ExecutableStepStateSchema.parse({ kind: 'executable', status: 'pending' });
-    expect(state).toMatchObject({ kind: 'executable', status: 'pending' });
-  });
-
-  it('parses a complete executable state', () => {
-    const state = ExecutableStepStateSchema.parse({
-      kind: 'executable',
-      status: 'completed',
-      result: 'done',
-      subagentId: 'sa-123',
-      sessionId: 'sess-456',
-      startedAt: 1000,
-      completedAt: 2000,
+describe('WorkflowResolvedAgentSchema', () => {
+  it('uses the same executable adapter config shape as resolved roles', () => {
+    const agent = WorkflowResolvedAgentSchema.parse({
+      adapterName: 'claudeCode',
+      model: 'sonnet',
+      harnessId: 'implementation-harness',
     });
-    expect(state.result).toBe('done');
-    expect(state.subagentId).toBe('sa-123');
-    expect(state.startedAt).toBe(1000);
-  });
 
-  it('rejects state without kind', () => {
-    expect(() => ExecutableStepStateSchema.parse({ status: 'pending' })).toThrow();
-  });
-
-  it('rejects composite kind', () => {
-    expect(() => ExecutableStepStateSchema.parse({ kind: 'composite', status: 'pending' })).toThrow();
+    expect(agent).toEqual({
+      adapterName: 'claudeCode',
+      model: 'sonnet',
+      harnessId: 'implementation-harness',
+    });
   });
 });
 
-describe('CompositeStepStateSchema', () => {
-  it('parses a minimal composite state', () => {
-    const state = CompositeStepStateSchema.parse({ kind: 'composite', status: 'pending' });
-    expect(state).toMatchObject({ kind: 'composite', status: 'pending' });
-  });
-
-  it('parses a composite state with expansion', () => {
-    const state = CompositeStepStateSchema.parse({
-      kind: 'composite',
-      status: 'expanding',
-      startedAt: 1000,
-      expansion: {
-        parentStepId: 'loop',
-        childSteps: [],
-        stepContext: {},
-        leafStepIds: [],
-      },
-    });
-    expect(state.expansion?.parentStepId).toBe('loop');
-    expect(state.status).toBe('expanding');
-  });
-
-  it('accepts cancelled status', () => {
-    const state = CompositeStepStateSchema.parse({ kind: 'composite', status: 'cancelled' });
-    expect(state.status).toBe('cancelled');
-  });
-
-  it('rejects executable statuses not in the composite enum (e.g. running)', () => {
-    expect(() => CompositeStepStateSchema.parse({ kind: 'composite', status: 'running' })).toThrow();
-  });
-
-  it('rejects executable kind', () => {
-    expect(() => CompositeStepStateSchema.parse({ kind: 'executable', status: 'pending' })).toThrow();
-  });
-});
-
-describe('StepStateSchema (discriminated union)', () => {
-  it('parses executable state via discriminated union', () => {
-    const state = StepStateSchema.parse({ kind: 'executable', status: 'running' });
-    expect(state.kind).toBe('executable');
-    expect(state.status).toBe('running');
-  });
-
-  it('parses composite state via discriminated union', () => {
-    const state = StepStateSchema.parse({ kind: 'composite', status: 'completed' });
-    expect(state.kind).toBe('composite');
-    expect(state.status).toBe('completed');
-  });
-
-  it('rejects state with unknown kind', () => {
-    expect(() => StepStateSchema.parse({ kind: 'unknown', status: 'pending' })).toThrow();
-  });
-
-  it('rejects state without kind', () => {
-    expect(() => StepStateSchema.parse({ status: 'pending' })).toThrow();
-  });
-});
-
-describe('ForEachExpansionSnapshotSchema', () => {
-  const minimalChildStep = {
-    id: 'loop.0.test',
-    type: 'agent',
-    prompt: 'Test',
-  };
-
-  it('parses a minimal snapshot', () => {
-    const snapshot = ForEachExpansionSnapshotSchema.parse({
-      parentStepId: 'loop',
-      childSteps: [],
-      stepContext: {},
-      leafStepIds: [],
-    });
-    expect(snapshot.parentStepId).toBe('loop');
-    expect(snapshot.childSteps).toHaveLength(0);
-    expect(snapshot.leafStepIds).toHaveLength(0);
-  });
-
-  it('parses a snapshot with child steps and context', () => {
-    const snapshot = ForEachExpansionSnapshotSchema.parse({
-      parentStepId: 'loop',
-      childSteps: [minimalChildStep],
-      stepContext: {
-        'loop.0.test': { item: { name: 'a' }, index: 0 },
-      },
-      leafStepIds: ['loop.0.test'],
-    });
-
-    expect(snapshot.childSteps).toHaveLength(1);
-    expect(snapshot.stepContext['loop.0.test']).toMatchObject({ item: { name: 'a' }, index: 0 });
-    expect(snapshot.leafStepIds).toContain('loop.0.test');
-  });
-
-  it('accepts JSON values as item in stepContext', () => {
-    const snapshot = ForEachExpansionSnapshotSchema.parse({
-      parentStepId: 'loop',
-      childSteps: [],
-      stepContext: {
-        'loop.0.test': { item: null, index: 0 },
-        'loop.1.test': { item: [1, 2, 3], index: 1 },
-      },
-      leafStepIds: [],
-    });
-    expect(snapshot.stepContext['loop.0.test']?.item).toBeNull();
-    expect(snapshot.stepContext['loop.1.test']?.item).toEqual([1, 2, 3]);
-  });
-
-  it('rejects runtime-only values as item in stepContext', () => {
-    expect(() =>
-      ForEachExpansionSnapshotSchema.parse({
-        parentStepId: 'loop',
-        childSteps: [],
-        stepContext: {
-          'loop.0.test': { item: () => undefined, index: 0 },
-        },
-        leafStepIds: [],
-      }),
-    ).toThrow();
-  });
-
-  it('validates childSteps as WorkflowStep schemas', () => {
-    // A valid shell step inside childSteps
-    const snapshot = ForEachExpansionSnapshotSchema.parse({
-      parentStepId: 'loop',
-      childSteps: [{ id: 'loop.0.run', type: 'shell', command: ['echo', 'hi'] }],
-      stepContext: { 'loop.0.run': { item: 'hi', index: 0 } },
-      leafStepIds: ['loop.0.run'],
-    });
-    const child = snapshot.childSteps[0];
-    expect(child).toMatchObject({ id: 'loop.0.run', type: 'shell' });
-  });
-
-  it('rejects childSteps with an invalid step type', () => {
-    expect(() =>
-      ForEachExpansionSnapshotSchema.parse({
-        parentStepId: 'loop',
-        childSteps: [{ id: 'loop.0.bad', type: 'invalid-type' }],
-        stepContext: {},
-        leafStepIds: [],
-      }),
-    ).toThrow();
-  });
-});
+// ─────────────────────────────────────────────────────────────
+// Namespace bus schemas
+// ─────────────────────────────────────────────────────────────
 
 describe('step.completed JSON result', () => {
   it('accepts JSON step completion results', () => {
     const payload = WorkflowSchemas['step.completed'].parse({
       executionId: 'wfx-1',
       stepId: 'collect',
-      stepType: 'shell',
+      stepType: 'station',
       result: { copied: ['.env'], count: 1 },
       duration: 12,
     });
@@ -346,7 +845,7 @@ describe('gate.awaitApproval subject', () => {
     const gatePayload = {
       executionId: 'wfx-1',
       stepId: 'approve',
-      stepType: 'shell',
+      stepType: 'station',
       workflowId: 'wf-1',
       workflowName: 'Workflow One',
       title: 'Approve',
@@ -358,5 +857,528 @@ describe('gate.awaitApproval subject', () => {
 
     expect(() => WorkflowSchemas['gate.requested'].parse(gatePayload)).toThrow();
     expect(() => WorkflowSchemas['gate.awaitApproval'].request.parse(gatePayload)).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// workflow.start updated payload
+// ─────────────────────────────────────────────────────────────
+
+describe('workflow.start updated payload', () => {
+  it('accepts start with new input, config, and artifactRef fields', () => {
+    const req = WorkflowSchemas.start.request.parse({
+      workflowId: 'wf-1',
+      input: { env: 'production', count: 5 },
+      config: { timeoutMs: 60000 },
+      artifactRef: { kind: 'implementation-plan', id: 'art-42' },
+      scope: { type: 'global' },
+      executionHints: { priority: 'high' },
+    });
+    expect(req.workflowId).toBe('wf-1');
+    expect(req.input).toEqual({ env: 'production', count: 5 });
+    expect(req.config).toEqual({ timeoutMs: 60000 });
+    expect(req.artifactRef).toEqual({ kind: 'implementation-plan', id: 'art-42' });
+    expect(req.executionHints).toEqual({ priority: 'high' });
+  });
+
+  it('accepts start with only workflowId (all new fields optional)', () => {
+    const req = WorkflowSchemas.start.request.parse({ workflowId: 'wf-minimal' });
+    expect(req.workflowId).toBe('wf-minimal');
+    expect(req.input).toBeUndefined();
+    expect(req.config).toBeUndefined();
+    expect(req.artifactRef).toBeUndefined();
+    expect(req.executionHints).toBeUndefined();
+  });
+
+  it('accepts input as any JSON value (not just objects)', () => {
+    const withArrayInput = WorkflowSchemas.start.request.parse({
+      workflowId: 'wf-1',
+      input: ['item-1', 'item-2'],
+    });
+    expect(withArrayInput.input).toEqual(['item-1', 'item-2']);
+
+    const withStringInput = WorkflowSchemas.start.request.parse({
+      workflowId: 'wf-1',
+      input: 'plain-string',
+    });
+    expect(withStringInput.input).toBe('plain-string');
+  });
+
+  it('rejects artifactRef with missing id', () => {
+    expect(() =>
+      WorkflowSchemas.start.request.parse({
+        workflowId: 'wf-1',
+        artifactRef: { kind: 'plan' },
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// gate.respond updated payload
+// ─────────────────────────────────────────────────────────────
+
+describe('gate.respond updated payload', () => {
+  it('accepts gate.respond with gateId, action, and resumeData', () => {
+    const req = WorkflowSchemas['gate.respond'].request.parse({
+      executionId: 'wfx-1',
+      gateId: 'approval-gate',
+      action: 'approve',
+      resumeData: { approved: true, comment: 'LGTM' },
+    });
+    expect(req.gateId).toBe('approval-gate');
+    expect(req.action).toBe('approve');
+    expect(req.resumeData).toEqual({ approved: true, comment: 'LGTM' });
+    expect(req.frameId).toBeUndefined();
+  });
+
+  it('accepts gate.respond with optional frameId for iterate gates', () => {
+    const req = WorkflowSchemas['gate.respond'].request.parse({
+      executionId: 'wfx-1',
+      gateId: 'iter-gate',
+      frameId: 'frame-42',
+      action: 'approve',
+      resumeData: { proceed: true },
+      reason: 'Approved by reviewer',
+    });
+    expect(req.frameId).toBe('frame-42');
+    expect(req.reason).toBe('Approved by reviewer');
+  });
+
+  it('accepts null resumeData (valid JSON value)', () => {
+    const req = WorkflowSchemas['gate.respond'].request.parse({
+      executionId: 'wfx-1',
+      gateId: 'gate-1',
+      action: 'approve',
+      resumeData: null,
+    });
+    expect(req.resumeData).toBeNull();
+  });
+
+  it('rejects gate.respond without resumeData', () => {
+    expect(() =>
+      WorkflowSchemas['gate.respond'].request.parse({
+        executionId: 'wfx-1',
+        gateId: 'gate-1',
+        action: 'approve',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects gate.respond without an explicit action', () => {
+    expect(() =>
+      WorkflowSchemas['gate.respond'].request.parse({
+        executionId: 'wfx-1',
+        gateId: 'gate-1',
+        resumeData: null,
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Frame lifecycle events
+// ─────────────────────────────────────────────────────────────
+
+describe('frame lifecycle events', () => {
+  it('parses a frame.started event', () => {
+    const payload = WorkflowSchemas['frame.started'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-analyze',
+      nodeId: 'analyze',
+      nodeType: 'station',
+      path: ['frame-root', 'frame-analyze'],
+      parentFrameId: 'frame-root',
+    });
+    expect(payload.frameId).toBe('frame-analyze');
+    expect(payload.nodeType).toBe('station');
+    expect(payload.path).toEqual(['frame-root', 'frame-analyze']);
+    expect(payload.parentFrameId).toBe('frame-root');
+  });
+
+  it('parses a frame.started event for the root frame (no parentFrameId)', () => {
+    const payload = WorkflowSchemas['frame.started'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-root',
+      nodeId: 'root',
+      nodeType: 'sequence',
+      path: ['frame-root'],
+    });
+    expect(payload.parentFrameId).toBeUndefined();
+  });
+
+  it('rejects frame.started with unknown nodeType', () => {
+    expect(() =>
+      WorkflowSchemas['frame.started'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        nodeId: 'n',
+        nodeType: 'unknown-type',
+        path: [],
+      }),
+    ).toThrow();
+  });
+
+  it('parses a frame.completed event with output and duration', () => {
+    const payload = WorkflowSchemas['frame.completed'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-analyze',
+      nodeId: 'analyze',
+      output: { findings: 3 },
+      duration: 1500,
+    });
+    expect(payload.output).toEqual({ findings: 3 });
+    expect(payload.duration).toBe(1500);
+  });
+
+  it('parses a frame.completed event with no output', () => {
+    const payload = WorkflowSchemas['frame.completed'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-gate',
+      nodeId: 'gate-1',
+    });
+    expect(payload.output).toBeUndefined();
+    expect(payload.duration).toBeUndefined();
+  });
+
+  it('rejects frame.completed with negative duration', () => {
+    expect(() =>
+      WorkflowSchemas['frame.completed'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        nodeId: 'n',
+        duration: -1,
+      }),
+    ).toThrow();
+  });
+
+  it('parses a frame.failed event with error and duration', () => {
+    const payload = WorkflowSchemas['frame.failed'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-deploy',
+      nodeId: 'deploy',
+      error: 'Timeout exceeded',
+      duration: 300000,
+    });
+    expect(payload.error).toBe('Timeout exceeded');
+    expect(payload.duration).toBe(300000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Gate suspension / resumption events
+// ─────────────────────────────────────────────────────────────
+
+describe('gate.suspended event', () => {
+  it('parses a gate.suspended event with schema and prompt', () => {
+    const payload = WorkflowSchemas['gate.suspended'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-gate',
+      nodeId: 'approval',
+      schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+      prompt: 'Approve deployment to production?',
+      title: 'Deployment approval',
+      autoAction: 'reject',
+      timeoutMs: 300000,
+      openedAt: 1000,
+    });
+    expect(payload.nodeId).toBe('approval');
+    expect(payload.schema).toBeDefined();
+    expect(payload.prompt).toBe('Approve deployment to production?');
+  });
+
+  it('parses a gate.suspended event without prompt', () => {
+    const payload = WorkflowSchemas['gate.suspended'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-gate',
+      nodeId: 'gate-1',
+      schema: {},
+      autoAction: 'approve',
+      timeoutMs: null,
+      openedAt: 1000,
+    });
+    expect(payload.prompt).toBeUndefined();
+  });
+});
+
+describe('gate.resumed event', () => {
+  it('parses a gate.resumed event with resumeData', () => {
+    const payload = WorkflowSchemas['gate.resumed'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-gate',
+      nodeId: 'approval',
+      resumeData: { approved: true, reviewer: 'alice' },
+    });
+    expect(payload.resumeData).toEqual({ approved: true, reviewer: 'alice' });
+  });
+
+  it('accepts null as resumeData', () => {
+    const payload = WorkflowSchemas['gate.resumed'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-gate',
+      nodeId: 'gate-1',
+      resumeData: null,
+    });
+    expect(payload.resumeData).toBeNull();
+  });
+});
+
+describe('gate.resolved event', () => {
+  it('parses frame-scoped gate resolution metadata', () => {
+    const payload = WorkflowSchemas['gate.resolved'].parse({
+      executionId: 'wfx-1',
+      stepId: 'approval',
+      stepType: 'gate',
+      frameId: 'frame-gate',
+      action: 'approve',
+      source: 'user',
+    });
+
+    expect(payload.frameId).toBe('frame-gate');
+    expect(payload.source).toBe('user');
+    if (payload.source !== 'user') throw new Error('expected user gate resolution');
+    expect(payload.action).toBe('approve');
+  });
+
+  it('parses cancelled gate settlement metadata without an approval action', () => {
+    const payload = WorkflowSchemas['gate.resolved'].parse({
+      executionId: 'wfx-1',
+      stepId: 'approval',
+      stepType: 'gate',
+      frameId: 'frame-gate',
+      source: 'cancelled',
+    });
+
+    expect(payload.frameId).toBe('frame-gate');
+    expect('action' in payload).toBe(false);
+    expect(payload.source).toBe('cancelled');
+  });
+
+  it('rejects gate.resolved without frame identity', () => {
+    expect(() =>
+      WorkflowSchemas['gate.resolved'].parse({
+        executionId: 'wfx-1',
+        stepId: 'approval',
+        stepType: 'gate',
+        action: 'approve',
+        source: 'user',
+      }),
+    ).toThrow();
+  });
+});
+
+describe('listGateInstances subject', () => {
+  it('parses public gate instance read responses', () => {
+    const response = WorkflowSchemas.listGateInstances.response.parse({
+      gates: [
+        {
+          executionId: 'wfx-1',
+          nodeId: 'approval',
+          frameId: 'frame-gate',
+          schema: {},
+          prompt: 'Approve?',
+          status: 'waiting',
+          createdAt: 1000,
+        },
+      ],
+    });
+
+    expect(response.gates[0]?.frameId).toBe('frame-gate');
+    expect(response.gates[0]?.status).toBe('waiting');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Dynamic topology event
+// ─────────────────────────────────────────────────────────────
+
+describe('dynamic.materialized event', () => {
+  it('parses a dynamic.materialized event', () => {
+    const payload = WorkflowSchemas['dynamic.materialized'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-dynamic',
+      factoryId: 'review-factory',
+      materializedNodes: 4,
+    });
+    expect(payload.factoryId).toBe('review-factory');
+    expect(payload.materializedNodes).toBe(4);
+  });
+
+  it('accepts zero materialized nodes', () => {
+    const payload = WorkflowSchemas['dynamic.materialized'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-dynamic',
+      factoryId: 'empty-factory',
+      materializedNodes: 0,
+    });
+    expect(payload.materializedNodes).toBe(0);
+  });
+
+  it('rejects empty factoryId', () => {
+    expect(() =>
+      WorkflowSchemas['dynamic.materialized'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        factoryId: '',
+        materializedNodes: 1,
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Artifact update event
+// ─────────────────────────────────────────────────────────────
+
+describe('artifact.updated event', () => {
+  it('parses an artifact.updated event', () => {
+    const payload = WorkflowSchemas['artifact.updated'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-write',
+      artifactRef: { kind: 'implementation-plan', id: 'art-42' },
+      paths: ['/sections/0', '/summary'],
+      operation: 'revise',
+      revision: 'rev-7',
+    });
+    expect(payload.artifactRef.kind).toBe('implementation-plan');
+    expect(payload.paths).toEqual(['/sections/0', '/summary']);
+    expect(payload.operation).toBe('revise');
+    expect(payload.revision).toBe('rev-7');
+  });
+
+  it('accepts empty paths array (full artifact replaced)', () => {
+    const payload = WorkflowSchemas['artifact.updated'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-write',
+      artifactRef: { kind: 'plan', id: 'art-1' },
+      paths: [],
+      operation: 'create',
+    });
+    expect(payload.paths).toHaveLength(0);
+    expect(payload.revision).toBeUndefined();
+  });
+
+  it('rejects artifact.updated with empty operation', () => {
+    expect(() =>
+      WorkflowSchemas['artifact.updated'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        artifactRef: { kind: 'plan', id: 'art-1' },
+        paths: [],
+        operation: '',
+      }),
+    ).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// WorkLog RPC subjects
+// ─────────────────────────────────────────────────────────────
+
+describe('worklog.get RPC', () => {
+  it('accepts a valid worklog.get request', () => {
+    const req = WorkflowSchemas['worklog.get'].request.parse({ executionId: 'wfx-1' });
+    expect(req.executionId).toBe('wfx-1');
+  });
+
+  it('rejects worklog.get with empty executionId', () => {
+    expect(() => WorkflowSchemas['worklog.get'].request.parse({ executionId: '' })).toThrow();
+  });
+
+  it('parses a null worklog.get response (execution not found)', () => {
+    const res = WorkflowSchemas['worklog.get'].response.parse({ summary: null });
+    expect(res.summary).toBeNull();
+  });
+
+  it('parses a populated worklog.get response', () => {
+    const summary = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'completed' as const,
+      startedAt: 1000,
+      completedAt: 2000,
+      durationMs: 1000,
+    };
+    const res = WorkflowSchemas['worklog.get'].response.parse({ summary });
+    expect(res?.summary?.executionId).toBe('wfx-1');
+    expect(res?.summary?.status).toBe('completed');
+  });
+
+  it('response schema is compatible with WorkLogExecutionSummarySchema', () => {
+    // The response type should accept anything WorkLogExecutionSummarySchema produces
+    const summary = WorkLogExecutionSummarySchema.parse({
+      executionId: 'wfx-2',
+      workflowId: 'wf-2',
+      status: 'running',
+      startedAt: 1000,
+    });
+    const res = WorkflowSchemas['worklog.get'].response.parse({ summary });
+    expect(res?.summary?.executionId).toBe('wfx-2');
+  });
+});
+
+describe('worklog.list RPC', () => {
+  it('accepts a worklog.list request with all filters', () => {
+    const req = WorkflowSchemas['worklog.list'].request.parse({
+      workflowId: 'wf-1',
+      status: 'failed',
+      limit: 20,
+      offset: 40,
+    });
+    expect(req.workflowId).toBe('wf-1');
+    expect(req.status).toBe('failed');
+    expect(req.limit).toBe(20);
+    expect(req.offset).toBe(40);
+  });
+
+  it('accepts an empty worklog.list request (all fields optional)', () => {
+    const req = WorkflowSchemas['worklog.list'].request.parse({});
+    expect(req.workflowId).toBeUndefined();
+    expect(req.status).toBeUndefined();
+  });
+
+  it('rejects worklog.list with invalid status', () => {
+    expect(() => WorkflowSchemas['worklog.list'].request.parse({ status: 'not-a-status' })).toThrow();
+  });
+
+  it('rejects worklog.list with negative offset', () => {
+    expect(() => WorkflowSchemas['worklog.list'].request.parse({ offset: -1 })).toThrow();
+  });
+
+  it('rejects worklog.list with zero limit', () => {
+    expect(() => WorkflowSchemas['worklog.list'].request.parse({ limit: 0 })).toThrow();
+  });
+
+  it('parses a worklog.list response', () => {
+    const res = WorkflowSchemas['worklog.list'].response.parse({
+      items: [
+        {
+          executionId: 'wfx-1',
+          workflowId: 'wf-1',
+          status: 'completed',
+          startedAt: 1000,
+        },
+      ],
+      total: 1,
+    });
+    expect(res.items).toHaveLength(1);
+    expect(res.total).toBe(1);
+  });
+
+  it('parses a worklog.list response with empty items', () => {
+    const res = WorkflowSchemas['worklog.list'].response.parse({ items: [], total: 0 });
+    expect(res.items).toHaveLength(0);
+    expect(res.total).toBe(0);
+  });
+});
+
+describe('worklog.changed event', () => {
+  it('parses a worklog.changed event', () => {
+    const payload = WorkflowSchemas['worklog.changed'].parse({ executionId: 'wfx-1' });
+    expect(payload.executionId).toBe('wfx-1');
+  });
+
+  it('rejects worklog.changed with empty executionId', () => {
+    expect(() => WorkflowSchemas['worklog.changed'].parse({ executionId: '' })).toThrow();
   });
 });

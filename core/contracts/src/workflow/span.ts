@@ -13,41 +13,44 @@ export const SpanStatusSchema = z.enum(['running', 'completed', 'failed', 'skipp
 export type SpanStatus = z.infer<typeof SpanStatusSchema>;
 
 /**
- * A single step execution record in the OTel-style span model.
+ * A single node execution record in the OTel-style span model.
  *
- * Maps to the `workflow_step_spans` table. One row per step per execution.
- * Telemetry fields are populated from the terminal step result when the step
+ * One row per observable execution frame. `stepId` names the workflow node for
+ * grouping/display, while `frameId` uniquely identifies this concrete node run.
+ * Telemetry fields are populated from the terminal frame result when the node
  * completes.
  */
 export const SpanRecordSchema = z.object({
   /** Workflow execution this span belongs to. */
   executionId: z.string().min(1),
-  /** Step identifier within the workflow definition. */
+  /** Runtime frame identifier for this concrete node execution. */
+  frameId: z.string().min(1),
+  /** Node (step) identifier within the workflow definition. */
   stepId: z.string().min(1),
-  /** Step type discriminant. */
+  /** Node type discriminant. */
   stepType: WorkflowStepTypeSchema,
   /** Current span status. */
   status: SpanStatusSchema,
 
-  /** Step start timestamp (epoch ms). */
+  /** Node start timestamp (epoch ms). */
   startedAt: z.number().optional(),
-  /** Step completion timestamp (epoch ms). */
+  /** Node completion timestamp (epoch ms). */
   completedAt: z.number().optional(),
   /** Wall-clock duration in milliseconds. */
   durationMs: z.number().nonnegative().optional(),
 
-  /** Input tokens consumed (agent steps). */
+  /** Input tokens consumed (station nodes with LLM execution). */
   inputTokens: z.number().int().nonnegative().optional(),
-  /** Output tokens produced (agent steps). */
+  /** Output tokens produced (station nodes with LLM execution). */
   outputTokens: z.number().int().nonnegative().optional(),
-  /** Estimated cost in USD (agent steps). */
+  /** Estimated cost in USD (station nodes with LLM execution). */
   estimatedCost: z.number().nonnegative().optional(),
-  /** Number of tool calls (agent steps). */
+  /** Number of tool calls made during execution (station nodes). */
   toolCallCount: z.number().int().nonnegative().optional(),
 
-  /** Serialized step input (JSON string). */
+  /** Serialized node input (JSON string). */
   input: z.string().optional(),
-  /** Serialized step output (JSON string). */
+  /** Serialized node output (JSON string). */
   output: z.string().optional(),
 });
 

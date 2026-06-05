@@ -2,10 +2,10 @@
  * Workflow execution engine for Makaio.
  *
  * Provides:
- * - Mutable DAG scheduler with persisted runtime for-each expansion snapshots
+ * - Persisted execution frames for static workflow primitive topology
  * - Workflow-level execution delegation through the IWorkflowRunner runtime seam
- * - Workflow expression context from inputs, trigger payloads, step results, and for-each item/index overlays
- * - OTel-style span records for step duration and future usage ingestion
+ * - Workflow expression context from inputs, trigger payloads, node outputs, and iteration item/index overlays
+ * - OTel-style span records for node duration and usage ingestion
  * - Durable gate state through workflow execution checkpoints
  * @packageDocumentation
  */

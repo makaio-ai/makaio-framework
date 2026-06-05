@@ -36,10 +36,8 @@ function makeDefinition(overrides: Partial<WorkflowDefinition> = {}): WorkflowDe
   return {
     id: 'wf-001',
     name: 'Test Workflow',
-    steps: [],
+    root: { id: 'wf-001__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' as const },
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_000,
     ...overrides,
   };
 }
@@ -93,7 +91,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const expectedResult = { executionId: 'exec-001', workflowId: 'wf-001', status: 'completed' as const };
     const signal = new AbortController().signal;
     const config = makeConfig();
@@ -112,7 +110,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const config = makeConfig({ workflowId: 'specific-workflow' });
     const signal = new AbortController().signal;
 
@@ -127,6 +125,32 @@ describe('InProcessWorkflowRunner', () => {
 
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledOnce();
     expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ config }));
+  });
+
+  it('preserves start artifact references through worker config validation', async () => {
+    const bus = makeBus();
+    const runner = new InProcessWorkflowRunner({ bus });
+
+    const artifactRef = { kind: 'implementation-plan', id: 'artifact-42' };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
+    const config = makeConfig({ artifactRef });
+    const signal = new AbortController().signal;
+
+    mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
+    mockRunWorkflowOrchestrator.mockResolvedValueOnce({
+      executionId: 'exec-001',
+      workflowId: 'wf-001',
+      status: 'completed',
+    });
+
+    await runner.run(config, signal);
+
+    expect(mockLoadWorkflowFromConfig).toHaveBeenCalledWith(expect.objectContaining({ artifactRef }));
+    expect(mockRunWorkflowOrchestrator).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ artifactRef }),
+      }),
+    );
   });
 
   it('validates config before loading the workflow', async () => {
@@ -146,7 +170,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const signal = new AbortController().signal;
 
     mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
@@ -165,7 +189,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const signal = new AbortController().signal;
 
     mockLoadWorkflowFromConfig.mockResolvedValueOnce(loadedWorkflow);
@@ -184,7 +208,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const controller = new AbortController();
     const signal = controller.signal;
 
@@ -211,7 +235,7 @@ describe('InProcessWorkflowRunner', () => {
       definition: makeDefinition({
         triggers: [{ type: 'bus-event', subject: 'demo.started' }],
       }),
-      runtimeSteps: new Map(),
+      runtimeHandlers: new Map(),
     };
     const expectedResult = { executionId: 'exec-001', workflowId: 'wf-001', status: 'completed' as const };
 
@@ -230,7 +254,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const signal = new AbortController().signal;
     const manifest = { packages: [{ name: 'ignored-pkg', importPath: 'file:///ext/ignored.mjs' }] };
 
@@ -252,7 +276,7 @@ describe('InProcessWorkflowRunner', () => {
     const bus = makeBus();
     const runner = new InProcessWorkflowRunner({ bus });
 
-    const loadedWorkflow = { definition: makeDefinition(), runtimeSteps: new Map() };
+    const loadedWorkflow = { definition: makeDefinition(), runtimeHandlers: new Map() };
     const signal = new AbortController().signal;
     const orchestratorError = new Error('Orchestrator failed');
 
