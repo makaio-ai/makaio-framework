@@ -1,0 +1,13 @@
+name: Cursor
+families:
+  - composer
+models:
+  - name: composer-2.5
+    friendlyName: Composer 2.5
+    contextWindowSize: 200000
+  - name: composer-2
+    friendlyName: Composer 2
+    contextWindowSize: 200000
+  - name: auto
+    friendlyName: Auto
+    contextWindowSize: 200000

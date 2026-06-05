@@ -13,9 +13,10 @@ describe('buildEntityGraph', () => {
     expect(ids).toContain('claude-code');
     expect(ids).toContain('gemini');
     expect(ids).toContain('codex');
+    expect(ids).toContain('cursor');
     expect(ids).toContain('qwen');
     expect(ids).toContain('github-copilot');
-    expect(ids).toHaveLength(5);
+    expect(ids).toHaveLength(6);
   });
 
   it('discovers all adapters', () => {
@@ -26,11 +27,12 @@ describe('buildEntityGraph', () => {
     expect(names).toContain('claude-code');
     expect(names).toContain('claude-code-tmux');
     expect(names).toContain('codex-app-server');
+    expect(names).toContain('cursor-sdk');
     expect(names).toContain('gemini-sdk');
     expect(names).toContain('github-copilot-sdk');
     expect(names).toContain('pi-sdk');
     expect(names).toContain('qwen-acp');
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
   });
 
   it('discovers all providers', () => {

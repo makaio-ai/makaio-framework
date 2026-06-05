@@ -876,6 +876,43 @@ describe('discoverLocalExtensions', () => {
       await rm(extRoot, { recursive: true, force: true });
     }
   });
+
+  it('skips injected contribution names before manifest registration', async () => {
+    const extRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-injected-hook-'));
+    const cliEntry = path.join(extRoot, 'dist', 'cli.mjs');
+    const program = createProgram();
+
+    try {
+      await mkdir(path.dirname(cliEntry), { recursive: true });
+      await writeFile(cliEntry, "export default { name: 'hook', description: 'placeholder', subcommands: [] };\n");
+
+      const localDiscovery = new ExplicitDescriptorDiscovery([
+        {
+          descriptor: {
+            name: 'client-hooks',
+            displayName: 'Client Hooks',
+            version: '0.1.0',
+            makaio: { framework: TEST_FRAMEWORK_RANGE },
+            entrypoints: { cli: true as const },
+            cli: {
+              name: 'hook',
+              description: 'Manifest placeholder for hooks',
+              subcommands: [{ name: 'handle', description: 'Placeholder handler' }],
+            },
+          },
+          extensionPath: extRoot,
+          source: 'local',
+        },
+      ]);
+
+      const registrations = await discoverLocalExtensions(program, localDiscovery, new Set(['hook']));
+
+      expect(registrations).toHaveLength(0);
+      expect(program.commands.some((command) => command.name() === 'hook')).toBe(false);
+    } finally {
+      await rm(extRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('canInvocationProvideBus', () => {
@@ -1145,6 +1182,62 @@ describe('main — canProvideBus skips desktop auto-launch', () => {
       expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
     } finally {
       consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('keeps the built-in hook handler when an installed client-hooks descriptor is discovered', async () => {
+    vi.mocked(busClientMocks.probeHealth).mockResolvedValue(null);
+
+    const extRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-client-hooks-shadow-'));
+    const cliEntry = path.join(extRoot, 'dist', 'cli.mjs');
+    const stderr: string[] = [];
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderr.push(typeof chunk === 'string' ? chunk : chunk.toString());
+      return true;
+    });
+    const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+
+    await mkdir(path.dirname(cliEntry), { recursive: true });
+    await writeFile(cliEntry, "throw new Error('installed hook descriptor should not be imported');\n");
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+
+    const localDiscovery = new ExplicitDescriptorDiscovery([
+      {
+        descriptor: {
+          name: 'client-hooks',
+          displayName: 'Client Hooks',
+          version: '0.1.0',
+          makaio: { framework: TEST_FRAMEWORK_RANGE },
+          entrypoints: { cli: true as const },
+          cli: {
+            name: 'hook',
+            description: 'Manifest placeholder for hooks',
+            subcommands: [{ name: 'handle', description: 'Placeholder handler' }],
+          },
+        },
+        extensionPath: extRoot,
+        source: 'local',
+      },
+    ]);
+
+    try {
+      await main(
+        ['node', 'makaio', '--no-launch', 'hook', 'handle', 'cursor', 'preToolUse', '--fail-close'],
+        [],
+        localDiscovery,
+      );
+
+      expect(appLaunchMocks.launchAppAndWaitForBus).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      expect(stderr.join('')).toContain('[hook handle] error: Makaio bus is unavailable.');
+    } finally {
+      stderrSpy.mockRestore();
+      if (originalStdinIsTTY) {
+        Object.defineProperty(process.stdin, 'isTTY', originalStdinIsTTY);
+      } else {
+        delete (process.stdin as { isTTY?: boolean }).isTTY;
+      }
+      await rm(extRoot, { recursive: true, force: true });
     }
   });
 });

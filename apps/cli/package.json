@@ -20,6 +20,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/contracts": "workspace:*",
+    "@makaio/extension-client-hooks": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/runtime-node": "workspace:*",
     "@makaio/services-core": "workspace:*",

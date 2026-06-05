@@ -11,6 +11,7 @@
  */
 import { pathToFileURL } from 'node:url';
 import { Command, InvalidOptionArgumentError } from 'commander';
+import { clientHooksCli } from '@makaio/extension-client-hooks';
 import type { CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
@@ -57,6 +58,15 @@ const NATIVE_CLIENTS: readonly NativeClientCliDefinition[] = [
   { clientId: 'gemini', command: 'gemini', displayName: 'Gemini' },
   { clientId: 'qwen', command: 'qwen', displayName: 'Qwen Code' },
 ];
+
+/**
+ * CLI contributions provided directly by the framework CLI.
+ *
+ * The hook bridge must be available before extension discovery because native
+ * client hooks are often invoked from isolated subprocesses where no product
+ * config or installed-extension catalog is available.
+ */
+const BUILTIN_CLI_CONTRIBUTIONS: readonly CliContribution[] = [clientHooksCli];
 
 /**
  * Determine whether argv is asking Commander to render help without dispatching
@@ -559,6 +569,7 @@ export async function main(
   }
 
   const program = createProgram(effectiveServeConfig);
+  const allContributions = [...BUILTIN_CLI_CONTRIBUTIONS, ...contributions];
 
   if (isDiscoveryFreeBuiltin(parsedArgv)) {
     await program.parseAsync(parsedArgv);
@@ -566,7 +577,9 @@ export async function main(
   }
 
   // --- Layer 1: Local filesystem discovery (pure data, no bus needed) ---
-  const injectedNames = new Set(contributions.map((c) => c.name));
+  // Injected contribution names are skipped before manifest registration, so
+  // direct built-ins such as `hook` own their command action once the bus exists.
+  const injectedNames = new Set(allContributions.map((c) => c.name));
   const localExtensions = await discoverLocalExtensions(program, effectiveDiscovery, injectedNames);
 
   // --- Single bus for the entire invocation ---
@@ -591,8 +604,10 @@ export async function main(
   registerMcpServerCommand(program, { bus, connectionError });
   registerSetupCommand(program, { bus, makaioHome: resolveMakaioHome() });
 
-  // Pre-loaded contributions (testing/DI).
-  for (const contribution of contributions) {
+  // Pre-loaded contributions (testing/DI). Names in allContributions were
+  // excluded from local discovery above, avoiding manifest placeholders that
+  // would otherwise compete with direct in-process handlers such as `hook`.
+  for (const contribution of allContributions) {
     registerContribution(program, contribution, bus, connectionError);
   }
 
