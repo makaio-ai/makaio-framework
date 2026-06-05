@@ -68,7 +68,8 @@ const getRelayTargets = (
 /**
  * Handle an event received from a transport.
  *
- * ALWAYS relays events to other transports (excluding source).
+ * Relays events to other transports (excluding source), except collector-only
+ * subjects, which are handled locally without lateral relay.
  * Executes local handlers unconditionally — `emit()` no-ops gracefully when
  * no handlers or schema exist for the subject.
  * @param context - Bus context
@@ -100,16 +101,18 @@ const handleEventMessage = async (
   }
 
   // PHASE 1: RELAY — forward to other transports (excluding source)
-  // This happens ALWAYS, even when no schema exists (SharedWorker relay case).
+  // This happens unless the subject is collector-only, even when no schema exists (SharedWorker relay case).
   // Uses readiness filtering (not subscription filtering) — see getRelayTargets.
-  const relayTargets = getRelayTargets(context, sourceTransportName);
-  const relayResults = await Promise.allSettled(relayTargets.map(async ({ transport }) => transport.send(message)));
-  for (const [index, result] of relayResults.entries()) {
-    if (result.status === 'rejected') {
-      console.error(
-        `[TransportRegistry] Failed to relay event '${fullSubject}' to transport '${String(relayTargets[index].name)}':`,
-        result.reason,
-      );
+  if (!context.namespaceRegistry.isCollectorOnlySubject(fullSubject)) {
+    const relayTargets = getRelayTargets(context, sourceTransportName);
+    const relayResults = await Promise.allSettled(relayTargets.map(async ({ transport }) => transport.send(message)));
+    for (const [index, result] of relayResults.entries()) {
+      if (result.status === 'rejected') {
+        console.error(
+          `[TransportRegistry] Failed to relay event '${fullSubject}' to transport '${String(relayTargets[index].name)}':`,
+          result.reason,
+        );
+      }
     }
   }
 

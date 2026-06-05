@@ -52,6 +52,7 @@ interface MockBusShape {
   reconnect: Mock;
   connect: Mock;
   readonly ready: Promise<void>;
+  observeMessages: Mock;
 }
 
 /**
@@ -223,6 +224,7 @@ export function createMockBus(): MockBusResult {
     disconnect: transportMethods.disconnect,
     reconnect: vi.fn().mockResolvedValue(undefined),
     connect: transportMethods.connect,
+    observeMessages: vi.fn().mockReturnValue(() => undefined),
     get ready(): Promise<void> {
       return transportMethods.currentReady;
     },
@@ -297,6 +299,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
     disconnect: transportMethods.disconnect,
     reconnect: vi.fn().mockResolvedValue(undefined),
     connect: transportMethods.connect,
+    observeMessages: vi.fn().mockReturnValue(() => undefined),
     get ready(): Promise<void> {
       return transportMethods.currentReady;
     },

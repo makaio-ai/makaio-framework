@@ -29,6 +29,7 @@ export type {
   EventSchema,
   RequestSchema,
   LocalSubjectSchema,
+  CollectorOnlySubjectSchema,
   ChannelSubjectSchema,
   BaseSubjectSchema,
   SubjectSchema,

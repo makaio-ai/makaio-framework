@@ -4,8 +4,9 @@ import { nanoid } from 'nanoid';
 import { getMatchingHandlers } from './request/getMatchingHandlers.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { getReadyTransports } from '../utils/transport.js';
-import { normalizeTransportTargets } from './request/normalizeTransportTargets.js';
+import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
+import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { TimeoutError as pTimeoutError } from 'p-timeout';
 import { TimeoutError } from '../errors/index.js';
 import { awaitWithTimeoutAndSignal } from './request/await-with-timeout-and-signal.js';
@@ -193,6 +194,7 @@ async function executeLocalBroadcastHandler<Request, Response>(
  * const allSources = results.flatMap(r => r.payload.sources);
  * ```
  */
+// eslint-disable-next-line max-lines-per-function -- notifyMessageObservers() adds 5 lines to a function that already used its budget
 export async function broadcast<
   T extends SubjectDefinition,
   Request extends T['$meta']['payload']['request'],
@@ -210,6 +212,10 @@ export async function broadcast<
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const signal = options?.signal;
   const validationCtx = resolveRequestValidation(context, fullSubjectKey);
+  const localOnly =
+    subjectDefinition.$meta.local ||
+    context.namespaceRegistry.isCollectorOnlySubject(fullSubjectKey) ||
+    isExplicitLocalOnlyTransportSpec(options?.transports);
   validateRequestPayload(fullSubjectKey, payload, validationCtx);
 
   // Invoke __onAny handlers (debugging/testing)
@@ -222,6 +228,18 @@ export async function broadcast<
     messageId,
     correlationId,
   );
+
+  // Notify production-capable message observers (fire-and-forget)
+  notifyMessageObservers(context, {
+    type: 'broadcast',
+    namespace: subjectDefinition.$meta.namespace,
+    subject: subjectKey,
+    payload,
+    messageId,
+    correlationId,
+    transport: options?.transport,
+    localOnly,
+  });
 
   // Collect results from all sources
   const results: BroadcastResult<Response>[] = [];

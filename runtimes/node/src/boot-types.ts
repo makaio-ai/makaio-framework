@@ -1,5 +1,5 @@
 import type { Server as HttpServer } from 'node:http';
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { BusTransport, IMakaioBus, SubjectTelemetryProjectorRegistry } from '@makaio/bus-core';
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
@@ -140,6 +140,34 @@ export interface ServerTransportProvider extends TransportProvider {
    * {@link DispatchingAuth}.
    */
   readonly dispatchingAuth?: DispatchingAuth;
+}
+
+/**
+ * Boot-time configuration for the optional projected upstream telemetry transport.
+ */
+export interface UpstreamTelemetryBootOptions {
+  /**
+   * Inner transport connected to the upstream collector.
+   *
+   * Raw application messages are never sent to it directly — only sanitized
+   * `subject-telemetry.fact` events are forwarded by the projection layer.
+   */
+  readonly transport: BusTransport;
+  /**
+   * Registry name for the projected transport.
+   *
+   * Defaults to `'upstream-telemetry'`. Must be unique within the bus
+   * transport registry.
+   */
+  readonly name?: string;
+  /**
+   * Optional sidecar projector registry for namespace-owned attribute extraction.
+   *
+   * When provided, sidecar projectors registered for a message's namespace and
+   * subject take precedence over schema-driven attribute projection inside the
+   * projected transport.
+   */
+  readonly projectorRegistry?: SubjectTelemetryProjectorRegistry;
 }
 
 /**
@@ -397,6 +425,15 @@ export interface CoreBootOptions {
   readonly configureCoordinator?: (
     context: BootCoordinatorSetupContext,
   ) => void | ShutdownStep | readonly ShutdownStep[];
+
+  /**
+   * Optional projected upstream telemetry transport.
+   *
+   * Boot wraps this transport with a projector that only sends
+   * `subject-telemetry.fact` events upstream. The raw transport is never
+   * registered directly on the bus.
+   */
+  readonly upstreamTelemetry?: UpstreamTelemetryBootOptions;
 }
 
 /** Context passed to host-owned coordinator setup. */

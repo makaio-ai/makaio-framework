@@ -19,6 +19,7 @@ import { ReviewNamespace } from './capabilities/review/namespace.js';
 import { SessionNamespace } from './session/namespace.js';
 import { SkillNamespace } from './skill/namespace.js';
 import { SubagentNamespace } from './subagent/namespace.js';
+import { SubjectTelemetryNamespace } from './telemetry/namespace.js';
 import { ToastNamespace } from './toast/namespace.js';
 import { ToolNamespace } from './tool/namespace.js';
 import { VariantNamespace } from './variant/namespace.js';
@@ -73,6 +74,7 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   SessionNamespace,
   SkillNamespace,
   SubagentNamespace,
+  SubjectTelemetryNamespace,
   ToastNamespace,
   ToolNamespace,
   VariantNamespace,

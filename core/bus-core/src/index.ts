@@ -150,6 +150,7 @@ export type { OptionalResult } from '@makaio/core';
 export type { BroadcastContext, BroadcastResult } from './methods/broadcast.js';
 
 export { localSubject } from './utils/local-schema.js';
+export { collectorOnlySubject } from '@makaio/core';
 export { channelSubject } from './utils/channel-schema.js';
 
 export type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './channel/index.js';
@@ -178,3 +179,18 @@ export type {
 } from './extension-namespace-types.js';
 
 export { __resetWarnedSubjects } from './utils/warn-unregistered.js';
+
+export {
+  createProjectedTelemetryTransport,
+  createSubjectTelemetryProjectorRegistry,
+  projectSubjectTelemetryFacts,
+} from './observability/index.js';
+export type { ProjectableBusMessage, SubjectTelemetryProjectionInput } from './observability/index.js';
+export type {
+  ProjectedTelemetryTransportOptions,
+  SubjectTelemetryAttributes,
+  SubjectTelemetryProjector,
+  SubjectTelemetryProjectorInput,
+  SubjectTelemetryProjectorRegistry,
+} from './observability/index.js';
+export type { BusMessageObserver, ObservedBusMessage } from './types/bus.js';
