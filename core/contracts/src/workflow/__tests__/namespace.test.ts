@@ -598,6 +598,41 @@ describe('WorkflowDefinitionSchema', () => {
       }),
     ).toThrow();
   });
+
+  it('parses extension-sourced workflow definitions with execution hints', () => {
+    const def = WorkflowDefinitionSchema.parse({
+      id: 'factory:intake',
+      name: 'intake',
+      root: { id: 'root', type: 'sequence', nodes: [] },
+      source: {
+        kind: 'extension',
+        extension: 'factory',
+        externalId: 'cyberport/ai-factory:.makaio/workflows/intake.ts',
+        syncedAt: '2026-06-01T00:00:00.000Z',
+        metadata: {
+          repo: 'cyberport/ai-factory',
+          file: '.makaio/workflows/intake.ts',
+        },
+      },
+      executionHints: {
+        requirements: {
+          capabilities: ['makaio.factory.github-actions'],
+        },
+        providers: {
+          'github-actions': {
+            owner: 'cyberport',
+            repo: 'ai-factory',
+            workflowFile: '.github/workflows/makaio-dispatch.yml',
+            sourceFile: '.makaio/workflows/intake.ts',
+            ref: 'main',
+          },
+        },
+      },
+    });
+
+    expect(def.source?.kind).toBe('extension');
+    expect(def.executionHints?.requirements?.capabilities).toEqual(['makaio.factory.github-actions']);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────

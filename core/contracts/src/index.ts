@@ -608,6 +608,7 @@ export {
   ExecutionStatusSchema,
   ExtensionWorkflowTriggerSchema,
   ExecutionListQuerySchema,
+  WorkflowDefinitionProvenanceSchema,
   WorkflowDefinitionSchema,
   WorkflowDelegateAgentNodeSchema,
   WorkflowDelegateRoleNodeSchema,
@@ -680,6 +681,7 @@ export type {
   ExecutionListCursor,
   ExecutionListQuery,
   WorkflowDefinition,
+  WorkflowDefinitionProvenance,
   WorkflowDelegateAgentNode,
   WorkflowDelegateRoleNode,
   WorkflowExecution,
@@ -777,6 +779,7 @@ export type {
 export { WorkflowBlocksNamespace, WorkflowBlocksSchemas, WorkflowBlocksSubjects } from './workflow-blocks/index.js';
 export {
   ExecutionHintsSchema,
+  ExecutionSourceHintSchema,
   TransitionActionInvocationSchema,
   TransitionConditionSchema,
   TransitionEventTypeSchema,

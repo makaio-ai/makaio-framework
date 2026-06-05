@@ -1,12 +1,16 @@
+import { isAbsolute, resolve } from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
+  WorkflowWorkerSourceSchema,
+  type ExecutionHints,
   type IWorkflowRunner,
   type JsonValue,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowExecutionScope,
   type WorkflowRunContext,
+  type WorkflowWorkerSource,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -170,6 +174,34 @@ async function persistExecutionStart(
 }
 
 /**
+ * Resolve an optional executable source from merged execution hints.
+ *
+ * Generated definitions may exist only as trigger/provenance metadata while
+ * their actual runtime lives in a workflow module. A validated source hint lets
+ * the generic workflow executor dispatch those definitions through the same
+ * worker loading path as `workflow.runFile`, without coupling framework code to
+ * any product extension.
+ * @param executionHints - Merged definition/request execution hints.
+ * @param workspaceRoot - Workspace root used to resolve relative path sources.
+ * @returns Worker source override, or `undefined` to use definition-sourced execution.
+ */
+function resolveExecutionHintSource(
+  executionHints: WorkflowRunContext['executionHints'],
+  workspaceRoot: string,
+): WorkflowWorkerSource | undefined {
+  const source = executionHints?.source;
+  if (source === undefined) {
+    return undefined;
+  }
+
+  const parsed = WorkflowWorkerSourceSchema.parse(source);
+  if (parsed.kind === 'path' && !isAbsolute(parsed.path)) {
+    return { ...parsed, path: resolve(workspaceRoot, parsed.path) };
+  }
+  return parsed;
+}
+
+/**
  * Register the execution task, fire-and-forget it, then await the started event.
  *
  * Shared by {@link startExecution} and {@link startFileExecution} to avoid
@@ -220,6 +252,7 @@ function launchDefinitionExecutionTask(
     executionId: string;
     workflowId: string;
     workflow: WorkflowDefinition;
+    source: WorkflowWorkerSource;
     coordinatorSessionId: string;
     sanitizedTriggerPayload: Record<string, unknown>;
     boundInputs: JsonValue;
@@ -236,6 +269,64 @@ function launchDefinitionExecutionTask(
   return deps.runExecution(params.executionId).finally(() => {
     deps.executionTasks.delete(params.executionId);
   });
+}
+
+/**
+ * Merge requirements from two hint sources, unioning capabilities.
+ *
+ * Capabilities from both sources are deduplicated so no tag is required twice.
+ * When neither source contributes requirements, returns `undefined`.
+ * @param def - Requirements from the stored workflow definition.
+ * @param req - Requirements from the per-call execution start request.
+ * @returns Merged requirements, or `undefined` when both are absent.
+ */
+function mergeRequirements(
+  def: ExecutionHints['requirements'],
+  req: ExecutionHints['requirements'],
+): ExecutionHints['requirements'] {
+  if (def === undefined && req === undefined) {
+    return undefined;
+  }
+  const caps = [...new Set([...(def?.capabilities ?? []), ...(req?.capabilities ?? [])])];
+  return {
+    ...def,
+    ...req,
+    ...(caps.length > 0 && { capabilities: caps }),
+  };
+}
+
+/**
+ * Merge definition-level execution hints with per-call overrides.
+ *
+ * Merge semantics:
+ * - Request values win over definition defaults on all scalar fields.
+ * - `requirements.capabilities` arrays are unioned and deduplicated so both
+ *   the definition's declared needs and the caller's runtime needs are satisfied.
+ * - `providers` records are merged shallowly (request entries override).
+ *
+ * Returns `undefined` when both sources are absent or empty.
+ * @param definitionHints - Hints baked into the stored workflow definition.
+ * @param requestHints - Per-call hints supplied by the execution starter.
+ * @returns Merged hints, or `undefined` when neither source contributes values.
+ */
+export function mergeExecutionHints(
+  definitionHints: ExecutionHints | undefined,
+  requestHints: ExecutionHints | undefined,
+): ExecutionHints | undefined {
+  if (definitionHints === undefined && requestHints === undefined) {
+    return undefined;
+  }
+
+  const requirements = mergeRequirements(definitionHints?.requirements, requestHints?.requirements);
+  const hasProviders = definitionHints?.providers !== undefined || requestHints?.providers !== undefined;
+  const providers = hasProviders ? { ...definitionHints?.providers, ...requestHints?.providers } : undefined;
+
+  return {
+    ...definitionHints,
+    ...requestHints,
+    ...(requirements !== undefined && { requirements }),
+    ...(providers !== undefined && { providers }),
+  };
 }
 
 /** Options accepted by {@link startExecution}. */
@@ -303,7 +394,12 @@ export async function startExecution(
   const boundInputs = bindWorkflowInputs(workflow, input);
   const boundConfig = bindWorkflowConfig(workflow, config);
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
+  const mergedExecutionHints = mergeExecutionHints(workflow.executionHints, executionHints);
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
+  const executionSource = resolveExecutionHintSource(mergedExecutionHints, workspaceRoot) ?? {
+    kind: 'definition' as const,
+    workflowId,
+  };
 
   const { sessionId: coordinatorSessionId } = await bus.request(SessionSubjects.create, {
     parentSessionId,
@@ -318,14 +414,14 @@ export async function startExecution(
       executionId,
       workflowId,
       coordinatorSessionId,
-      source: { kind: 'definition', workflowId },
-      definitionSnapshot: workflow,
+      source: executionSource,
+      ...(executionSource.kind === 'definition' ? { definitionSnapshot: workflow } : {}),
       inputs: boundInputs,
       config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(executionHints !== undefined ? { executionHints } : {}),
+      ...(mergedExecutionHints !== undefined ? { executionHints: mergedExecutionHints } : {}),
       workspaceRoot,
     });
     const execution = seedDefinitionExecution(
@@ -351,13 +447,14 @@ export async function startExecution(
       executionId,
       workflowId,
       workflow,
+      source: executionSource,
       coordinatorSessionId,
       sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
       boundInputs,
       boundConfig,
       scope: resolvedScope,
       ...(artifactRef !== undefined ? { artifactRef } : {}),
-      ...(executionHints !== undefined ? { executionHints } : {}),
+      ...(mergedExecutionHints !== undefined ? { executionHints: mergedExecutionHints } : {}),
       workspaceRoot,
     });
 

@@ -2,14 +2,34 @@ import { z } from 'zod';
 import { JsonValueSchema } from '../shared/json-value.js';
 
 /**
+ * Executable source override for module-backed stored definitions.
+ *
+ * Generated workflow definitions can carry only trigger/provenance metadata
+ * while their runtime remains in a module. This hint lets the executor dispatch
+ * those definitions through a concrete file or inline source without knowing
+ * which extension produced them.
+ */
+export const ExecutionSourceHintSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('path'), path: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('source'), filename: z.string().min(1), source: z.string() }).strict(),
+]);
+
+/**
  * Advisory hints for worker provisioning passed to the workflow executor.
  *
- * The executor preserves these values opaquely so workflow providers can use
- * provider-specific scheduling, pool, isolation, or capability hints without
- * coupling the framework contract to one execution backend.
+ * Most values remain opaque provider-specific scheduling, pool, isolation, or
+ * capability hints. `source` is the one generic executable hint: when present,
+ * the executor uses it as the worker source for definition-backed starts.
  */
 export const ExecutionHintsSchema = z
   .object({
+    /**
+     * Optional executable source for module-backed definitions.
+     *
+     * Relative `path` values are resolved against the execution workspace root
+     * before being forwarded to the worker.
+     */
+    source: ExecutionSourceHintSchema.optional(),
     /**
      * Infrastructure requirements for worker selection.
      */

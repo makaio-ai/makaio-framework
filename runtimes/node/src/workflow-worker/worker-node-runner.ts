@@ -8,6 +8,32 @@ import type {
 } from '@makaio/contracts';
 
 /**
+ * Merge execution-hint capabilities from the worker config into the base
+ * requirements supplied at runner construction time.
+ *
+ * Capabilities are deduplicated so the same tag is never sent twice. When the
+ * hint contributes no additional capabilities, the original requirements object
+ * is returned unchanged (or `undefined` if none was supplied).
+ * @param base - Requirements baked into the runner at construction time.
+ * @param config - Worker config that may carry per-execution hint capabilities.
+ * @returns Merged requirements, or `undefined` when no requirements apply.
+ */
+function mergeRequirements(
+  base: WorkerNodeRequirements | undefined,
+  config: WorkflowWorkerConfig,
+): WorkerNodeRequirements | undefined {
+  const hintCaps = config.executionHints?.requirements?.capabilities ?? [];
+  if (hintCaps.length === 0) {
+    return base;
+  }
+  const baseCaps = base?.customCapabilities ?? [];
+  return {
+    ...base,
+    customCapabilities: [...new Set([...baseCaps, ...hintCaps])],
+  };
+}
+
+/**
  * Construction options for {@link WorkerNodeRunner}.
  */
 export interface WorkerNodeRunnerOptions {
@@ -65,12 +91,13 @@ export class WorkerNodeRunner implements IWorkflowRunner {
     manifest?: WorkerContributionManifest,
   ): Promise<WorkflowRunResult> {
     const resolvedManifest = manifest ?? this.options.manifest;
+    const resolvedRequirements = mergeRequirements(this.options.requirements, config);
 
     return this.options.dispatch(
       {
         config,
         ...(resolvedManifest !== undefined && { manifest: resolvedManifest }),
-        ...(this.options.requirements !== undefined && { requirements: this.options.requirements }),
+        ...(resolvedRequirements !== undefined && { requirements: resolvedRequirements }),
       },
       signal,
     );

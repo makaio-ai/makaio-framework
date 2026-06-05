@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   ArtifactNamespace,
@@ -9,6 +10,7 @@ import {
   type WorkflowExecutionScope,
   type WorkflowDelegateRoleNode,
   type WorkflowGateNode,
+  type WorkflowRunResult,
   type WorkflowStationNode,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -229,6 +231,126 @@ describe('workflow public subjects', () => {
     expect(capturedConfigs).toHaveLength(starts.length);
     expect(capturedConfigs.map((config) => config.inputs)).toEqual(starts);
     expect(capturedConfigs.map((config) => config.executionHints)).toEqual(starts.map(() => executionHints));
+  });
+
+  it('persists and forwards definition execution hints merged with public start overrides', async () => {
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+
+    const capturedConfigs: WorkflowWorkerConfig[] = [];
+    const workflowRunner: IWorkflowRunner = {
+      async run(config): Promise<WorkflowRunResult> {
+        capturedConfigs.push(config);
+        return {
+          executionId: config.executionId,
+          workflowId: config.workflowId,
+          status: 'completed',
+        };
+      },
+    };
+
+    setup = await setupWorkflowExecutorTest({ workflowRunner });
+
+    const workflow = {
+      ...createWorkflowDefinition({
+        id: 'public-start-merged-definition-hints',
+        name: 'Public Start Merged Definition Hints',
+        root: { id: 'public-start-merged-definition-hints-root', type: 'sequence', nodes: [] },
+      }),
+      executionHints: {
+        source: { kind: 'path' as const, path: '.makaio/workflows/intake.ts' },
+        requirements: { isolation: 'local' as const, capabilities: ['workflow.local-runtime'] },
+        providers: { piscina: { maxWorkers: 2 } },
+      },
+    };
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      executionHints: {
+        requirements: { capabilities: ['gpu'] },
+        providers: { 'github-actions': { pool: 'remote' } },
+      },
+    });
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+
+    const expectedSource = { kind: 'path' as const, path: resolve(process.cwd(), '.makaio/workflows/intake.ts') };
+    expect(runContext?.source).toEqual(expectedSource);
+    expect(runContext?.executionHints).toMatchObject({
+      requirements: {
+        isolation: 'local',
+        capabilities: ['workflow.local-runtime', 'gpu'],
+      },
+      providers: {
+        piscina: { maxWorkers: 2 },
+        'github-actions': { pool: 'remote' },
+      },
+    });
+    expect(capturedConfigs[0]?.source).toEqual(expectedSource);
+    expect(capturedConfigs[0]?.executionHints).toEqual(runContext?.executionHints);
+  });
+
+  it.each([
+    { returnedStatus: 'completed' as const, expectedStatus: 'completed' },
+    { returnedStatus: 'failed' as const, expectedStatus: 'failed' },
+    { returnedStatus: 'cancelled' as const, expectedStatus: 'cancelled' },
+  ])('persists $returnedStatus results returned by definition-backed workflow runners', async ({
+    returnedStatus,
+    expectedStatus,
+  }) => {
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+
+    const capturedConfigs: WorkflowWorkerConfig[] = [];
+    const workflowRunner: IWorkflowRunner = {
+      async run(config): Promise<WorkflowRunResult> {
+        capturedConfigs.push(config);
+        return {
+          executionId: config.executionId,
+          workflowId: config.workflowId,
+          status: returnedStatus,
+          ...(returnedStatus !== 'completed' ? { output: { reason: `${returnedStatus} by remote runner` } } : {}),
+        };
+      },
+    };
+
+    setup = await setupWorkflowExecutorTest({ workflowRunner });
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-start-runner-returned-result',
+      name: 'Public Start Runner Returned Result',
+      root: { id: 'public-start-runner-returned-result-root', type: 'sequence', nodes: [] },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const terminalPromise = new Promise<string>((resolve) => {
+      const unsubscribers = [
+        MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+          unsubscribers.forEach((unsubscribe) => unsubscribe());
+          resolve(ctx.payload.executionId);
+        }),
+        MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+          unsubscribers.forEach((unsubscribe) => unsubscribe());
+          resolve(ctx.payload.executionId);
+        }),
+        MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+          unsubscribers.forEach((unsubscribe) => unsubscribe());
+          resolve(ctx.payload.executionId);
+        }),
+      ];
+    });
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+
+    await expect(terminalPromise).resolves.toBe(executionId);
+    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
+
+    expect(capturedConfigs).toHaveLength(1);
+    expect(execution?.status).toBe(expectedStatus);
+    expect(execution?.completedAt).toEqual(expect.any(Number));
   });
 
   it('persists the requested artifact reference when starting through the public start subject', async () => {

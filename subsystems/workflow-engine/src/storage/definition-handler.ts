@@ -27,6 +27,8 @@ function mapDefinition(row: DbDefinitionRow): WorkflowDefinition {
     triggers: row.triggers ?? undefined,
     scope: fromScopeColumns(row),
     canvasLayout: (row.canvasLayout as WorkflowDefinition['canvasLayout']) ?? undefined,
+    source: (row.source as WorkflowDefinition['source']) ?? undefined,
+    executionHints: (row.executionHints as WorkflowDefinition['executionHints']) ?? undefined,
   };
 }
 
@@ -49,6 +51,8 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     artifact: workflow.artifact ?? null,
     triggers: workflow.triggers ?? null,
     canvasLayout: (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null,
+    source: workflow.source ?? null,
+    executionHints: workflow.executionHints ?? null,
     createdAt: now,
     updatedAt: now,
     ...scopeColumns,
@@ -107,6 +111,8 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
         artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
         triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
         canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
+        source: values.source !== null ? values.source : sql`${columns.source}`,
+        executionHints: values.executionHints !== null ? values.executionHints : sql`${columns.executionHints}`,
         ...toScopeColumns(workflow.scope),
       })
       .where(eq(workflowDefinitions.id, workflow.id))

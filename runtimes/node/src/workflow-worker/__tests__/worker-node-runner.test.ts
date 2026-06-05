@@ -126,4 +126,34 @@ describe('WorkerNodeRunner', () => {
 
     await expect(runner.run(makeWorkerConfig(), new AbortController().signal)).rejects.toThrow('Dispatch failed');
   });
+
+  it('merges execution hint capabilities into dispatch requirements', async () => {
+    const dispatch = vi.fn().mockResolvedValue({ status: 'completed', output: undefined });
+    const runner = new WorkerNodeRunner({ dispatch, requirements: { customCapabilities: ['base'] } });
+
+    await runner.run(
+      makeWorkerConfig({
+        source: { kind: 'definition', workflowId: 'factory:intake' },
+        executionId: 'exec-1',
+        workflowId: 'factory:intake',
+        executionHints: {
+          requirements: {
+            capabilities: ['makaio.factory.github-actions'],
+          },
+        },
+        busUrl: 'ws://localhost:1',
+        context: { repoPath: '/tmp/workspace', makaioHome: '/tmp/makaio', os: 'linux', arch: 'x64' },
+        coordinatorSessionId: 'session-1',
+        cancelSubject: 'workflow.exec-1.cancel',
+      }),
+      new AbortController().signal,
+    );
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requirements: { customCapabilities: ['base', 'makaio.factory.github-actions'] },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
 });

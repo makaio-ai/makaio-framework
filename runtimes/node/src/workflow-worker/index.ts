@@ -26,3 +26,4 @@ export type { PiscinaThinWorkflowProviderOptions } from './piscina-thin-workflow
 export { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 export type { InProcessWorkflowRunnerOptions } from './in-process-workflow-runner.js';
 export { loadWorkflowFromConfig } from './workflow-loader.js';
+export { loadWorkflowModule, loadWorkflowModules } from './workflow-file-loader.js';

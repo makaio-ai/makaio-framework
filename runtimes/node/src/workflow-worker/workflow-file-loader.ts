@@ -100,7 +100,64 @@ async function writeWorkflowSourceToTempFile(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Load a workflow module from the given source descriptor.
+ * Normalize a module's default export to an array of {@link RuntimeLoadedWorkflow}.
+ *
+ * Accepts two export shapes:
+ * - **Bundle**: `{ workflows: RuntimeLoadedWorkflow[] }` — used when a single
+ *   file defines multiple workflows.
+ * - **Single**: a plain `RuntimeLoadedWorkflow` object — the common single-workflow
+ *   case.
+ * @param value - The default export of the loaded module.
+ * @returns An array of validated {@link RuntimeLoadedWorkflow} instances.
+ * @throws When any individual workflow entry fails shape validation.
+ */
+function normalizeWorkflowExport(value: unknown): RuntimeLoadedWorkflow[] {
+  if (typeof value === 'object' && value !== null && Array.isArray((value as { workflows?: unknown }).workflows)) {
+    return (value as { workflows: unknown[] }).workflows.map(normalizeWorkflowDefaultExport);
+  }
+  return [normalizeWorkflowDefaultExport(value)];
+}
+
+/**
+ * Load one or more workflow modules from the given source descriptor and
+ * return a normalized array.
+ *
+ * Supports two source kinds:
+ * - `'path'`: dynamically imports the file at `source.path` via a `file://` URL.
+ * - `'source'`: writes inline ESM code to a temp file, imports it, then
+ *   removes the temp directory.
+ *
+ * Each module's default export may be either a single workflow object or a
+ * bundle `{ workflows: [...] }`. Both are normalized to a flat
+ * `RuntimeLoadedWorkflow[]`.
+ * @param source - Workflow source descriptor (must not be `'definition'` kind).
+ * @returns Array of loaded workflows with `definition` and `runtimeHandlers`.
+ * @throws When the module shape is invalid or any workflow entry fails validation.
+ */
+export async function loadWorkflowModules(
+  source: Exclude<WorkflowWorkerSource, { kind: 'definition' }>,
+): Promise<RuntimeLoadedWorkflow[]> {
+  if (source.kind === 'path') {
+    const mod = (await import(/* @vite-ignore */ pathToFileURL(source.path).href)) as { default?: unknown };
+    return normalizeWorkflowExport(mod.default);
+  }
+
+  // source.kind === 'source'
+  const { tempDir, tempPath } = await writeWorkflowSourceToTempFile(source.filename, source.source);
+  try {
+    const mod = (await import(/* @vite-ignore */ pathToFileURL(tempPath).href)) as { default?: unknown };
+    return normalizeWorkflowExport(mod.default);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Load a single workflow module from the given source descriptor.
+ *
+ * A convenience wrapper around {@link loadWorkflowModules} for the common
+ * single-workflow case. Throws if the source resolves to a bundle with more
+ * than one workflow.
  *
  * Supports two source kinds:
  * - `'path'`: dynamically imports the file at `source.path` via a `file://` URL.
@@ -113,27 +170,25 @@ async function writeWorkflowSourceToTempFile(
  * always throws.
  * @param source - Workflow source descriptor from `WorkflowWorkerConfig.source`.
  * @returns Loaded workflow with `definition` and `runtimeHandlers`.
- * @throws For `'definition'` kind or when the module shape is invalid.
+ * @throws For `'definition'` kind, when the module shape is invalid, or when
+ *   the module exports a bundle containing more than one workflow.
  */
 export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<RuntimeLoadedWorkflow> {
-  if (source.kind === 'path') {
-    const mod = (await import(/* @vite-ignore */ pathToFileURL(source.path).href)) as { default?: unknown };
-    return normalizeWorkflowDefaultExport(mod.default);
+  if (source.kind === 'definition') {
+    throw new Error(
+      `Definition-sourced workers are handled by the workflow executor, not the file loader. ` +
+        `Received source: ${JSON.stringify(source)}`,
+    );
   }
 
-  if (source.kind === 'source') {
-    const { tempDir, tempPath } = await writeWorkflowSourceToTempFile(source.filename, source.source);
-    try {
-      const mod = (await import(/* @vite-ignore */ pathToFileURL(tempPath).href)) as { default?: unknown };
-      return normalizeWorkflowDefaultExport(mod.default);
-    } finally {
-      await rm(tempDir, { recursive: true, force: true });
-    }
+  const workflows = await loadWorkflowModules(source);
+
+  if (workflows.length !== 1) {
+    throw new Error(
+      `loadWorkflowModule expects a single workflow export, but the module exported ` +
+        `${String(workflows.length)} workflows. Use loadWorkflowModules for bundle exports.`,
+    );
   }
 
-  // source.kind === 'definition'
-  throw new Error(
-    `Definition-sourced workers are handled by the workflow executor, not the file loader. ` +
-      `Received source: ${JSON.stringify(source)}`,
-  );
+  return workflows[0];
 }
