@@ -51,10 +51,7 @@ export const TokenUsageSchema = z.object({
 
 export type TokenUsage = z.infer<typeof TokenUsageSchema>;
 
-/**
- * Operational telemetry collected by the {@link StepTelemetryCollector}
- * running on the step worker's local bus.
- */
+/** Operational telemetry reported by workflow step executors. */
 export const StepTelemetrySchema = z.object({
   /** Wall-clock duration in milliseconds. */
   duration: z.number().nonnegative(),
@@ -196,11 +193,12 @@ export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancel
 }
 
 // ─────────────────────────────────────────────────────────────
-// Step Run Config (input to a StepRunner)
+// Step Run Config (input to the scheduler runStep callback)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Configuration passed to a {@link IStepRunner} to execute a single step.
+ * Configuration passed through the scheduler runStep callback to execute a
+ * single runner-serializable step.
  *
  * Internal API — only the Executor/Bridge creates these from a resolved,
  * runner-executable WorkflowStep. Runtime `gate` and `for-each` scheduler
@@ -261,11 +259,11 @@ export type StepRunConfig = z.infer<typeof StepRunConfigSchema>;
 export const WORKFLOW_CANCELLED_REASON = 'Workflow cancelled';
 
 // ─────────────────────────────────────────────────────────────
-// Step Run Result (output from a StepRunner)
+// Step Run Result (output from a workflow step executor)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Result produced by a {@link StepRunner} after executing a step.
+ * Result produced after executing a workflow step.
  * Contains both the functional output and operational telemetry.
  *
  * No cross-field refinement between status and error: a failed step
@@ -290,13 +288,11 @@ export type StepRunResult = z.infer<typeof StepRunResultSchema>;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Pluggable execution environment for workflow steps.
+ * Internal execution environment for runner-serializable workflow steps.
  *
- * Each implementation determines WHERE and HOW a step process runs:
- * - {@link PiscinaStepRunner}: local worker thread via Piscina
- * - {@link ContainerStepRunner}: Docker container (future)
- * - {@link LambdaStepRunner}: AWS Lambda function (future)
- * @see The memo `docs/memos/2026-05-22-workflow-abstraction-layer.md` for design rationale.
+ * Workflow-level isolation uses {@link IWorkflowRunner}. This interface remains
+ * for the in-process scheduler path, where agent and shell steps still share a
+ * uniform run/force-kill contract.
  */
 export interface IStepRunner {
   /**

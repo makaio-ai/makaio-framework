@@ -1,8 +1,7 @@
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AdapterContribution } from '@makaio/contracts';
+import type { AdapterContribution, WorkerContributionManifest, WorkerContributionPackageRef } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
-import type { WorkerContributionManifest, WorkerContributionPackageRef } from './types.js';
 
 /**
  * Collected contributions from worker-local extension packages.

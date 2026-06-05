@@ -7,13 +7,20 @@ import {
   FrameworkStorageNamespaces,
   ToolSubjects,
   type AdapterContribution,
-  type StepRunConfig,
-  type StepRunnerPlatformDefaults,
+  type WorkflowWorkerBusAuth,
 } from '@makaio/contracts';
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import type { Toolset } from '@makaio/tools-core';
 import type { WorkerContributions } from './worker-contributions.js';
+
+/** Platform defaults supplied to worker-local adapter factories. */
+export interface WorkerRuntimePlatformDefaults {
+  /** Working directory for worker-local shell and tool execution. */
+  readonly cwd: string;
+  /** Optional environment variables visible to worker-local adapters. */
+  readonly env?: Record<string, string>;
+}
 
 /**
  * Handle returned by {@link bootWorkerBus} representing an active
@@ -50,8 +57,8 @@ interface WorkerAdapterInitOptions {
   adapterId: string;
   /** Worker-local bus instance. */
   globalBus: IMakaioBus;
-  /** Worker platform defaults from the step runner config. */
-  platformDefaults: StepRunnerPlatformDefaults;
+  /** Worker platform defaults from the workflow worker config. */
+  platformDefaults: WorkerRuntimePlatformDefaults;
   /** Subject tokens exposed for structural worker test adapters and lightweight adapters. */
   adapterSubjects: typeof AdapterSubjects;
   /** Subject tokens exposed for structural worker test adapters and lightweight adapters. */
@@ -78,7 +85,7 @@ function getWorkerAdapterDefinition(contribution: AdapterContribution): WorkerAd
 }
 
 /**
- * Boot an isolated bus instance for a step runner worker.
+ * Boot an isolated bus instance for a workflow worker.
  *
  * Creates a fresh bus, registers framework contract namespaces, and
  * optionally connects a WebSocket client transport when `busUrl` is
@@ -86,10 +93,13 @@ function getWorkerAdapterDefinition(contribution: AdapterContribution): WorkerAd
  *
  * If `busAuth.kind === 'hmac'`, the HMAC secret is passed to the
  * transport for challenge/response authentication.
- * @param config - Bus connection configuration (busUrl and busAuth fields from StepRunConfig).
+ * @param config - Bus connection configuration from the workflow worker config.
  * @returns A handle with the bus instance and a close method.
  */
-export async function bootWorkerBus(config: Pick<StepRunConfig, 'busUrl' | 'busAuth'>): Promise<WorkerBusHandle> {
+export async function bootWorkerBus(config: {
+  readonly busUrl?: string;
+  readonly busAuth: WorkflowWorkerBusAuth;
+}): Promise<WorkerBusHandle> {
   const bus = createBusInstance();
   bus.registerNamespaces(FrameworkContractNamespaces);
   bus.registerNamespaces(FrameworkStorageNamespaces);
@@ -131,13 +141,13 @@ export async function bootWorkerBus(config: Pick<StepRunConfig, 'busUrl' | 'busA
  * routing them back through host subagent orchestration.
  * @param handle - Active worker bus handle.
  * @param contributions - Toolset and adapter contributions loaded from the manifest.
- * @param platformDefaults - Step platform defaults supplied by the scheduler.
+ * @param platformDefaults - Platform defaults supplied by the workflow worker config.
  * @returns Runtime handle that closes all worker-local resources.
  */
 export async function bootWorkerRuntime(
   handle: WorkerBusHandle,
   contributions: WorkerContributions,
-  platformDefaults: StepRunnerPlatformDefaults,
+  platformDefaults: WorkerRuntimePlatformDefaults,
 ): Promise<WorkerRuntimeHandle> {
   const toolRegistry = new ToolRegistry({ bus: handle.bus });
   const mcpBridge = new McpServerBridgeService(handle.bus);

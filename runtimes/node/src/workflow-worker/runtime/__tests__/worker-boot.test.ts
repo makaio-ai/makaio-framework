@@ -2,10 +2,9 @@ import { createServer } from 'node:http';
 import { describe, it, expect } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { AgentSubjects, FrameworkContractNamespaces, McpSubjects, WorkflowSubjects } from '@makaio/contracts';
-import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
-import { BusServerTransportProvider } from '../../bus-server-transport.js';
+import { closeHttpServer, listenOnLoopback } from '../../../__tests__/http-test-helpers.js';
+import { BusServerTransportProvider } from '../../../bus-server-transport.js';
 import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
-import { StepTelemetryCollector } from '../step-telemetry-collector.js';
 
 describe('bootWorkerBus', () => {
   it('creates a bus instance without transport when busUrl is absent', async () => {
@@ -29,48 +28,6 @@ describe('bootWorkerBus', () => {
       });
       unsubscribe();
     } finally {
-      await handle.close();
-    }
-  });
-
-  it('integrates with StepTelemetryCollector on a local bus', async () => {
-    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
-    const collector = new StepTelemetryCollector(handle.bus);
-
-    try {
-      await handle.bus.emit(AgentSubjects.usage, {
-        agentId: 'agent-1',
-        adapterId: 'adapter-1',
-        adapterName: 'test',
-        adapterSessionId: 'session-1',
-        provider: 'test-provider',
-        model: 'test-model',
-        inputTokens: 500,
-        inputCachedTokens: 50,
-        outputTokens: 200,
-        reasoningTokens: 0,
-        totalTokens: 700,
-        costUnits: 1,
-        costUnitType: 'tokens',
-      });
-
-      await handle.bus.emit(AgentSubjects.tool.use, {
-        agentId: 'agent-1',
-        adapterId: 'adapter-1',
-        adapterName: 'test',
-        adapterSessionId: 'session-1',
-        toolName: 'bash',
-        toolCallId: 'call-1',
-      });
-
-      const telemetry = collector.collect();
-
-      expect(telemetry.tokenUsage.input).toBe(500);
-      expect(telemetry.tokenUsage.output).toBe(200);
-      expect(telemetry.tokenUsage.cached).toBe(50);
-      expect(telemetry.toolCalls).toBe(1);
-    } finally {
-      collector.dispose();
       await handle.close();
     }
   });

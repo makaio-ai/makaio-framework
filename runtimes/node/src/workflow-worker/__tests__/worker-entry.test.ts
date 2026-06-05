@@ -18,12 +18,12 @@ vi.mock('node:worker_threads', () => ({
   parentPort: { postMessage: mockParentPortPostMessage },
 }));
 
-vi.mock('../../workflow-step-runner/worker-boot.js', () => ({
+vi.mock('../runtime/worker-boot.js', () => ({
   bootWorkerBus: mockBootWorkerBus,
   bootWorkerRuntime: mockBootWorkerRuntime,
 }));
 
-vi.mock('../../workflow-step-runner/worker-contributions.js', () => ({
+vi.mock('../runtime/worker-contributions.js', () => ({
   loadWorkerContributions: mockLoadWorkerContributions,
 }));
 

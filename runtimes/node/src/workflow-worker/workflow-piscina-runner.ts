@@ -1,7 +1,7 @@
 import type { WorkflowWorkerConfig, WorkerContributionManifest } from '@makaio/contracts';
 import type { IWorkflowRunner, WorkflowPiscinaRunnerOptions, WorkflowRunResult } from './types.js';
 import { isWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from './worker-ready-message.js';
-import { PiscinaPoolRunner } from '../workflow-step-runner/piscina-pool-runner.js';
+import { PiscinaPoolRunner } from './runtime/piscina-pool-runner.js';
 
 interface WorkflowPiscinaRunnerTask {
   /** Workflow worker configuration with source, inputs, and bus info. */

@@ -16,8 +16,8 @@ export type SpanStatus = z.infer<typeof SpanStatusSchema>;
  * A single step execution record in the OTel-style span model.
  *
  * Maps to the `workflow_step_spans` table. One row per step per execution.
- * Telemetry fields are populated from the {@link StepTelemetryCollector}
- * when the step completes.
+ * Telemetry fields are populated from the terminal step result when the step
+ * completes.
  */
 export const SpanRecordSchema = z.object({
   /** Workflow execution this span belongs to. */
