@@ -1,34 +1,31 @@
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AdapterContribution, WorkerContributionManifest, WorkerContributionPackageRef } from '@makaio/contracts';
+import type { WorkerContributionManifest, WorkerContributionPackageRef } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
 
 /**
  * Collected contributions from worker-local extension packages.
  *
  * Contains the subset of extension contributions relevant to isolated worker
- * processes: toolsets for tool execution and adapter definitions for model
- * routing.
+ * processes: toolsets for tool execution. Agent steps spawn subagents to the
+ * host, so adapter contributions are not harvested for workers.
  */
 export interface WorkerContributions {
   /** Toolsets extracted from loaded packages. */
   readonly toolsets: Toolset[];
-  /** Adapter contributions extracted from loaded packages. */
-  readonly adapters: AdapterContribution[];
 }
 
 /**
- * Shape of a loaded extension module that may contribute tools and adapters.
+ * Shape of a loaded extension module that may contribute tools.
  *
- * This is a structural subset of `MakaioExtension` -- we only inspect the
- * fields relevant to worker-local contributions without depending on the full
- * extension lifecycle surface.
+ * This is a structural subset of `MakaioExtension` -- workers only harvest
+ * toolsets, so we inspect just the `tools` surface without depending on the
+ * full extension lifecycle surface.
  */
 interface ExtensionModuleShape {
   readonly tools?: {
     readonly createToolsets: (ctx: unknown) => Toolset[];
   };
-  readonly adapters?: readonly AdapterContribution[];
 }
 
 /** Runtime context available while extracting worker-local contributions. */
@@ -54,7 +51,8 @@ export interface WorkerContributionLoadOptions {
  *
  * Checks for an object with at least one contribution surface (`tools` or
  * `adapters`) plus the required `name` field that all MakaioExtension manifests
- * carry.
+ * carry. An adapters-only package is still recognized as a valid extension (so
+ * it is not warned about), but workers harvest only its toolsets.
  * @param value - Candidate value from a dynamic import.
  * @returns `true` when the value structurally matches an extension module.
  */
@@ -135,14 +133,13 @@ function createWorkerToolsetContext(options?: WorkerContributionLoadOptions): Re
  * 2. Dynamic-imports the resolved path
  * 3. Resolves the extension export (default or first matching named export)
  * 4. Extracts toolsets via `pkg.tools.createToolsets()` when available
- * 5. Collects adapter contributions from `pkg.adapters` when available
  *
  * Packages that fail to import or whose exports are unrecognizable emit a
  * diagnostic warning and are skipped -- the loader does not throw for
  * individual package failures.
  * @param manifest - Serializable manifest declaring which packages to load.
  * @param options - Worker-local runtime surfaces exposed during extraction.
- * @returns Combined toolsets and adapter contributions from all loaded packages.
+ * @returns Combined toolsets from all loaded packages.
  */
 export async function loadWorkerContributions(
   manifest: WorkerContributionManifest,
@@ -151,16 +148,14 @@ export async function loadWorkerContributions(
   const results = await Promise.all(manifest.packages.map((pkgRef) => loadSinglePackage(pkgRef, options)));
 
   const toolsets: Toolset[] = [];
-  const adapters: AdapterContribution[] = [];
 
   for (const result of results) {
     if (result) {
       toolsets.push(...result.toolsets);
-      adapters.push(...result.adapters);
     }
   }
 
-  return { toolsets, adapters };
+  return { toolsets };
 }
 
 /**
@@ -214,7 +209,7 @@ function isPathWithin(root: string, candidate: string): boolean {
 async function loadSinglePackage(
   pkgRef: WorkerContributionPackageRef,
   options?: WorkerContributionLoadOptions,
-): Promise<{ toolsets: Toolset[]; adapters: AdapterContribution[] } | undefined> {
+): Promise<{ toolsets: Toolset[] } | undefined> {
   let resolvedPath = pkgRef.importPath;
   let mod: Record<string, unknown>;
   try {
@@ -233,7 +228,6 @@ async function loadSinglePackage(
   }
 
   const packageToolsets: Toolset[] = [];
-  const packageAdapters: AdapterContribution[] = [];
 
   // Extract toolsets
   if (ext.tools?.createToolsets) {
@@ -246,10 +240,5 @@ async function loadSinglePackage(
     }
   }
 
-  // Extract adapters
-  if (ext.adapters) {
-    packageAdapters.push(...ext.adapters);
-  }
-
-  return { toolsets: packageToolsets, adapters: packageAdapters };
+  return { toolsets: packageToolsets };
 }

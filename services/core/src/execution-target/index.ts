@@ -18,6 +18,7 @@ export type {
 } from './schemas.js';
 export { ExecutionTargetNamespace, ExecutionTargetSubjects } from './namespace.js';
 export {
+  ContainerBootstrapConfigSchema,
   ContainerCreatedSchema,
   ContainerDestroyedSchema,
   ContainerIsolatedSpawnRequestSchema,
@@ -34,6 +35,7 @@ export {
   StopResponseSchema,
 } from './container-schemas.js';
 export type {
+  ContainerBootstrapConfig,
   ContainerCreated,
   ContainerDestroyed,
   ContainerIsolatedSpawnRequest,

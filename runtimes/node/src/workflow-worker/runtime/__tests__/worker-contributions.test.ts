@@ -152,10 +152,9 @@ describe('loadWorkerContributions', () => {
 
     expect(result.toolsets).toHaveLength(1);
     expect(result.toolsets[0]!.metadata.name).toBe('test-tools');
-    expect(result.adapters).toHaveLength(0);
   });
 
-  it('extracts adapters from a package with adapter contributions', async () => {
+  it('recognizes an adapters-only package but harvests no toolsets', async () => {
     const manifest: WorkerContributionManifest = {
       packages: [{ name: 'adapters-only-pkg', importPath: ADAPTERS_ONLY_MODULE }],
     };
@@ -163,11 +162,9 @@ describe('loadWorkerContributions', () => {
     const result = await loadWorkerContributions(manifest);
 
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(1);
-    expect(result.adapters[0]!.manifest.name).toBe('test-adapter');
   });
 
-  it('extracts both tools and adapters from a combined package', async () => {
+  it('extracts tools from a combined package and ignores adapter contributions', async () => {
     const manifest: WorkerContributionManifest = {
       packages: [{ name: 'combined-pkg', importPath: COMBINED_MODULE }],
     };
@@ -176,8 +173,6 @@ describe('loadWorkerContributions', () => {
 
     expect(result.toolsets).toHaveLength(1);
     expect(result.toolsets[0]!.metadata.name).toBe('combined-tools');
-    expect(result.adapters).toHaveLength(1);
-    expect(result.adapters[0]!.manifest.name).toBe('combined-adapter');
   });
 
   it('loads contributions from multiple packages', async () => {
@@ -191,7 +186,6 @@ describe('loadWorkerContributions', () => {
     const result = await loadWorkerContributions(manifest);
 
     expect(result.toolsets).toHaveLength(1);
-    expect(result.adapters).toHaveLength(1);
   });
 
   it('finds a named export when no default is present', async () => {
@@ -228,7 +222,6 @@ describe('loadWorkerContributions', () => {
     const result = await loadWorkerContributions(manifest);
 
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(0);
   });
 
   it('skips toolset extraction when createToolsets throws', async () => {
@@ -240,7 +233,6 @@ describe('loadWorkerContributions', () => {
 
     // The toolset creation failure is caught, so no toolsets are returned
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(0);
   });
 
   it('returns empty contributions for an empty manifest', async () => {
@@ -249,7 +241,6 @@ describe('loadWorkerContributions', () => {
     const result = await loadWorkerContributions(manifest);
 
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(0);
   });
 
   it('passes worker-local bus and signal into toolset factories', async () => {
@@ -272,7 +263,6 @@ describe('loadWorkerContributions', () => {
     const result = await loadWorkerContributions(manifest);
 
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(0);
   });
 
   it('resolves a relative importPath against makaioHome when provided', async () => {
@@ -289,7 +279,6 @@ describe('loadWorkerContributions', () => {
 
     // The resolved absolute path does not exist — loader skips with a warning.
     expect(result.toolsets).toHaveLength(0);
-    expect(result.adapters).toHaveLength(0);
   });
 
   it('preserves URL import specifiers when makaioHome is provided', async () => {
@@ -317,7 +306,6 @@ describe('loadWorkerContributions', () => {
       });
 
       expect(result.toolsets).toHaveLength(0);
-      expect(result.adapters).toHaveLength(0);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('from "@makaio/nonexistent-package-xyz"'));
       expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('/nonexistent-makaio-home-xyz'));
     } finally {
@@ -337,7 +325,6 @@ describe('loadWorkerContributions', () => {
       });
 
       expect(result.toolsets).toHaveLength(0);
-      expect(result.adapters).toHaveLength(0);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('importPath escapes makaioHome: ../escape.mjs'));
     } finally {
       warn.mockRestore();

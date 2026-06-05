@@ -1,5 +1,5 @@
 export {
-  BUILT_IN_PISCINA_WORKER_NODE_PROVIDER_ID,
+  BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
   WORKER_NODE_CAPABILITY_ID,
   WorkerNodeCapabilitiesSchema,
   WorkerNodeRequirementsSchema,

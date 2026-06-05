@@ -22,11 +22,12 @@ export interface RuntimeLoadedWorkflow {
 }
 
 /**
- * Configuration options for the Piscina-backed workflow runner.
+ * Configuration options for the thin Piscina-backed workflow runner.
  *
- * Controls the worker-thread pool that executes full workflow runs in isolation.
+ * Controls the worker-thread pool that executes workflow orchestration in isolation
+ * while delegating agent/subagent execution to the host runtime.
  */
-export interface WorkflowPiscinaRunnerOptions {
+export interface ThinWorkflowPiscinaRunnerOptions {
   /** Absolute path to the workflow worker entrypoint file. */
   readonly workerEntry: string;
   /** Contribution manifest declaring which extension packages to load in workers. */

@@ -1,9 +1,9 @@
 import type { WorkflowWorkerConfig, WorkerContributionManifest } from '@makaio/contracts';
-import type { IWorkflowRunner, WorkflowPiscinaRunnerOptions, WorkflowRunResult } from './types.js';
+import type { IWorkflowRunner, ThinWorkflowPiscinaRunnerOptions, WorkflowRunResult } from './types.js';
 import { isWorkflowWorkerReadyMessage, type WorkflowWorkerReadyMessage } from './worker-ready-message.js';
 import { PiscinaPoolRunner } from './runtime/piscina-pool-runner.js';
 
-interface WorkflowPiscinaRunnerTask {
+interface ThinWorkflowPiscinaRunnerTask {
   /** Workflow worker configuration with source, inputs, and bus info. */
   readonly config: WorkflowWorkerConfig;
   /** Contribution manifest declaring which extension packages to load in workers. */
@@ -11,7 +11,7 @@ interface WorkflowPiscinaRunnerTask {
 }
 
 /** Result and readiness promises for one workflow worker dispatch. */
-export interface WorkflowPiscinaRunWithReadiness {
+export interface ThinWorkflowPiscinaRunWithReadiness {
   /** Terminal workflow result returned by the worker. */
   readonly result: Promise<WorkflowRunResult>;
   /** Resolves when the worker bus is connected and cancellation routing is subscribed. */
@@ -19,22 +19,24 @@ export interface WorkflowPiscinaRunWithReadiness {
 }
 
 /**
- * Workflow runner that dispatches full workflow executions to a Piscina
+ * Thin workflow runner that dispatches workflow orchestration to a Piscina
  * worker-thread pool.
  *
  * Each workflow invocation is handed off to a pooled worker thread running the
- * `workflow-worker/worker-entry.ts` entrypoint. The pool manages concurrency
- * limits and idle thread reaping automatically.
+ * `workflow-worker/worker-entry.ts` entrypoint. The worker isolates DAG control
+ * flow and worker-local toolsets, while agent/subagent execution is delegated to
+ * the host runtime. The pool manages concurrency limits and idle thread reaping
+ * automatically.
  */
-export class WorkflowPiscinaRunner implements IWorkflowRunner {
+export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
   private readonly manifest: WorkerContributionManifest;
-  private pool: PiscinaPoolRunner<WorkflowPiscinaRunnerTask, WorkflowRunResult> | undefined;
+  private pool: PiscinaPoolRunner<ThinWorkflowPiscinaRunnerTask, WorkflowRunResult> | undefined;
 
   /**
    * @param options - Piscina runner configuration including worker entry path
    *   and concurrency settings.
    */
-  public constructor(private readonly options: WorkflowPiscinaRunnerOptions) {
+  public constructor(private readonly options: ThinWorkflowPiscinaRunnerOptions) {
     this.manifest = options.manifest;
   }
 
@@ -62,7 +64,7 @@ export class WorkflowPiscinaRunner implements IWorkflowRunner {
    * Execute a workflow and expose the worker bus readiness signal separately.
    *
    * The terminal result remains the {@link IWorkflowRunner} contract. The ready
-   * promise is used by {@link PiscinaWorkerNodeProvider} so pool lifecycle
+   * promise is used by {@link PiscinaThinWorkflowProvider} so pool lifecycle
    * `ready` is not emitted before the worker has connected its bus and subscribed
    * to cancellation routing.
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
@@ -74,7 +76,7 @@ export class WorkflowPiscinaRunner implements IWorkflowRunner {
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
-  ): WorkflowPiscinaRunWithReadiness {
+  ): ThinWorkflowPiscinaRunWithReadiness {
     this.pool ??= new PiscinaPoolRunner(this.options);
     const pool = this.pool;
 

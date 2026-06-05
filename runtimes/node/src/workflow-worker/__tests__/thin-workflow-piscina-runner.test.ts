@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkflowWorkerConfig } from '@makaio/contracts';
-import type { WorkflowPiscinaRunnerOptions } from '../types.js';
+import type { ThinWorkflowPiscinaRunnerOptions } from '../types.js';
 import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 
 // Mock PiscinaPoolRunner before importing the class under test.
@@ -9,7 +9,7 @@ const mockMessageListeners = new Set<(message: unknown) => void>();
 
 vi.mock('../runtime/piscina-pool-runner.js', () => ({
   PiscinaPoolRunner: class MockPiscinaPoolRunner {
-    public constructor(_options: WorkflowPiscinaRunnerOptions) {}
+    public constructor(_options: ThinWorkflowPiscinaRunnerOptions) {}
 
     public run = mockPoolRun;
     public onMessage(listener: (message: unknown) => void): () => void {
@@ -21,7 +21,7 @@ vi.mock('../runtime/piscina-pool-runner.js', () => ({
 }));
 
 // Import after mocking
-const { WorkflowPiscinaRunner } = await import('../workflow-piscina-runner.js');
+const { ThinWorkflowPiscinaRunner } = await import('../thin-workflow-piscina-runner.js');
 
 /**
  * Create a minimal WorkflowWorkerConfig for testing.
@@ -50,9 +50,9 @@ function makeConfig(): WorkflowWorkerConfig {
 
 /**
  * Create default runner options for testing.
- * @returns WorkflowPiscinaRunnerOptions with test values.
+ * @returns ThinWorkflowPiscinaRunnerOptions with test values.
  */
-function makeOptions(): WorkflowPiscinaRunnerOptions {
+function makeOptions(): ThinWorkflowPiscinaRunnerOptions {
   return {
     workerEntry: '/path/to/workflow-worker-entry.mjs',
     manifest: { packages: [] },
@@ -89,7 +89,7 @@ function emitPoolMessage(message: unknown): void {
   }
 }
 
-describe('WorkflowPiscinaRunner', () => {
+describe('ThinWorkflowPiscinaRunner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockMessageListeners.clear();
@@ -104,7 +104,7 @@ describe('WorkflowPiscinaRunner', () => {
     mockPoolRun.mockResolvedValueOnce(expectedResult);
 
     const options = makeOptions();
-    const runner = new WorkflowPiscinaRunner(options);
+    const runner = new ThinWorkflowPiscinaRunner(options);
     const config = makeConfig();
     const signal = new AbortController().signal;
 
@@ -123,7 +123,7 @@ describe('WorkflowPiscinaRunner', () => {
     };
     mockPoolRun.mockResolvedValueOnce(expectedResult);
 
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     const config = makeConfig();
     const signal = new AbortController().signal;
     const perCallManifest = { packages: [{ name: 'pkg-a', importPath: './pkg-a.js' }] };
@@ -139,7 +139,7 @@ describe('WorkflowPiscinaRunner', () => {
     const controller = new AbortController();
     mockPoolRun.mockRejectedValueOnce(new Error('The task was aborted'));
 
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     controller.abort();
 
     await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
@@ -150,7 +150,7 @@ describe('WorkflowPiscinaRunner', () => {
     const error = new Error('Worker thread crashed');
     mockPoolRun.mockRejectedValueOnce(error);
 
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
     await expect(runner.run(makeConfig(), new AbortController().signal)).rejects.toThrow('Worker thread crashed');
   });
@@ -158,7 +158,7 @@ describe('WorkflowPiscinaRunner', () => {
   it('resolves readiness from the matching worker ready message', async () => {
     const result = createDeferred<{ executionId: string; workflowId: string; status: 'completed' }>();
     mockPoolRun.mockReturnValueOnce(result.promise);
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     const config = makeConfig();
 
     const run = runner.runWithReadiness(config, new AbortController().signal);
@@ -175,7 +175,7 @@ describe('WorkflowPiscinaRunner', () => {
   it('rejects readiness when the worker result rejects before ready', async () => {
     const error = new Error('worker crashed');
     mockPoolRun.mockRejectedValueOnce(error);
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
     const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
 
@@ -185,7 +185,7 @@ describe('WorkflowPiscinaRunner', () => {
 
   it('rejects readiness when the worker completes before ready', async () => {
     mockPoolRun.mockResolvedValueOnce({ executionId: 'test-exec', workflowId: 'test-workflow', status: 'completed' });
-    const runner = new WorkflowPiscinaRunner(makeOptions());
+    const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
     const run = runner.runWithReadiness(makeConfig(), new AbortController().signal);
 
