@@ -15,6 +15,7 @@ import { ToolApprovalService } from './tool-approval/tool-approval-service.js';
 import { ToolRegistry } from './tools/tool-registry.js';
 import { TrayMenuService } from './tray-menu/tray-menu-service.js';
 import { WorkflowBlockRegistry } from './workflow-blocks/workflow-block-registry.js';
+import { TransitionPipelineService } from './workflow-transitions/transition-pipeline-service.js';
 import { registerDrizzleSessionStorage } from './session/storage/drizzle-handler.js';
 import { registerDrizzleAgentStorage } from './session/storage/agent-drizzle-handler.js';
 import { registerFtsSearchHandler } from './session/storage/fts-search-handler.js';
@@ -56,6 +57,8 @@ export const CapabilityToken = extensionToken<CapabilityService>('capability');
 export const ModelRegistryToken = extensionToken<ModelRegistryService>('model-registry');
 /** Token for the workflow block registry service. */
 export const WorkflowBlockRegistryToken = extensionToken<WorkflowBlockRegistry>('workflow-block-registry');
+/** Token for the transition pipeline service. */
+export const TransitionPipelineToken = extensionToken<TransitionPipelineService>('transition-pipeline');
 /** Token for the product filesystem service. */
 export const FileSystemToken = extensionToken<FileSystemService>('filesystem');
 /** Token for the product git service. */
@@ -200,6 +203,15 @@ export const workflowBlockRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   create: (ctx) => new WorkflowBlockRegistry(ctx.bus),
 };
 
+/** Package that starts the transition pipeline service. */
+export const transitionPipelinePackage: MakaioNodeExtension<IMakaioBus> = {
+  name: TransitionPipelineToken.name,
+  displayName: 'Transition Pipeline',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new TransitionPipelineService(ctx.bus),
+};
+
 /** Filesystem service package. */
 export const fileSystemPackage: MakaioNodeExtension<IMakaioBus> = {
   name: FileSystemToken.name,
@@ -251,6 +263,7 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   canonicalModelPackage,
   frameworkShellWindowPackage,
   workflowBlockRegistryPackage,
+  transitionPipelinePackage,
   gitPackage,
   fileSystemPackage,
 ];

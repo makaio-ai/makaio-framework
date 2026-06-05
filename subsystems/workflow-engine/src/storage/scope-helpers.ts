@@ -1,3 +1,5 @@
+import { eq } from 'drizzle-orm';
+import type { Column } from 'drizzle-orm';
 import type { WorkflowExecutionScope } from '@makaio/contracts';
 
 // ─────────────────────────────────────────────────────────────
@@ -53,4 +55,22 @@ export function fromScopeColumns(row: ScopeColumns): WorkflowExecutionScope {
       throw new Error(`Unknown scope type: ${String(_exhaustive)}`);
     }
   }
+}
+
+/**
+ * Build Drizzle equality predicates for the three scope columns on any table
+ * that declares `scopeType`, `scopeKind`, and `scopeId` columns.
+ *
+ * Shared by `definition-handler.ts`, `handler.ts`, and any future handler that
+ * needs to filter rows by execution scope.
+ * @param table - Table reference with the three scope columns.
+ * @param scope - Scope to match against.
+ * @returns Array of three equality predicates for use with Drizzle `and()`.
+ */
+export function buildScopePredicates(
+  table: { scopeType: Column; scopeKind: Column; scopeId: Column },
+  scope: WorkflowExecutionScope,
+) {
+  const { scopeType, scopeKind, scopeId } = toScopeColumns(scope);
+  return [eq(table.scopeType, scopeType), eq(table.scopeKind, scopeKind), eq(table.scopeId, scopeId)];
 }

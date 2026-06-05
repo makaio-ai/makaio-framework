@@ -7,7 +7,9 @@ import {
   WorkflowSubjects,
   createWorkflowCancelSubject,
   type WorkflowExecution,
+  type WorkflowGateNode,
   type WorkflowWorkerConfig,
+  type JsonValue,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
@@ -51,7 +53,7 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
   });
 
   const offUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
-    const { executionId, status, error, completedAt, stepUpdates } = ctx.payload;
+    const { executionId, status, error, completedAt } = ctx.payload;
     const execution = executions.get(executionId);
     if (!execution) {
       ctx.setResult({ success: false });
@@ -60,9 +62,6 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
     if (status !== undefined) execution.status = status;
     if (error !== undefined) execution.error = error ?? undefined;
     if (completedAt !== undefined) execution.completedAt = completedAt ?? undefined;
-    if (stepUpdates) {
-      Object.assign(execution.steps, stepUpdates);
-    }
     ctx.setResult({ success: true });
   });
 
@@ -110,11 +109,9 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
     definition: {
       id: 'wf-entry-integration',
       name: 'Worker Entry Integration',
-      steps: [],
+      root: { id: 'wf-entry-integration__root', type: 'sequence' as const, nodes: [] },
       triggers: [],
-      scope: { type: 'global' },
-      createdAt: 1_700_000_000_000,
-      updatedAt: 1_700_000_000_000,
+      scope: { type: 'global' as const },
     },
     executionId: 'exec-entry-integration',
     workflowId: 'wf-entry-integration',
@@ -138,9 +135,10 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
 /**
  * Build a definition-sourced worker config with a single gate step.
  *
- * Used by gate approval and cancellation integration tests. The gate step
- * sends a {@link WorkflowSubjects.gate.awaitApproval} RPC to the host bus
- * over WebSocket, so the test can control approval from the host side.
+ * Used by gate approval and cancellation integration tests. The gate node
+ * emits {@link WorkflowSubjects.gate.suspended} when it opens and waits for
+ * a {@link WorkflowSubjects.gate.respond} request from the host bus before
+ * continuing.
  * @param busUrl - Host bus URL for storage and gate requests.
  * @returns Workflow worker configuration with one gate step.
  */
@@ -153,19 +151,21 @@ function makeGateConfig(busUrl: string): WorkflowWorkerConfig {
     definition: {
       id: 'wf-entry-gate',
       name: 'Worker Entry Gate',
-      steps: [
-        {
-          id: 'approval',
-          type: 'gate',
-          prompt: 'Approve worker execution?',
-          autoAction: 'reject',
-          timeoutMs: 120_000,
-        },
-      ],
+      root: {
+        id: 'wf-entry-gate__root',
+        type: 'sequence' as const,
+        nodes: [
+          {
+            id: 'approval',
+            type: 'gate' as const,
+            prompt: 'Approve worker execution?',
+            autoAction: 'reject' as const,
+            timeoutMs: 120_000,
+          } as WorkflowGateNode,
+        ],
+      },
       triggers: [],
-      scope: { type: 'global' },
-      createdAt: 1_700_000_000_000,
-      updatedAt: 1_700_000_000_000,
+      scope: { type: 'global' as const },
     },
   };
 }
@@ -189,7 +189,6 @@ describe('runWorkflowInWorker integration', () => {
         id: 'exec-entry-integration',
         workflowId: 'wf-entry-integration',
         status: 'completed',
-        steps: {},
       });
     } finally {
       await host.close();
@@ -200,15 +199,28 @@ describe('runWorkflowInWorker integration', () => {
     const host = await startHostWorkflowBus();
 
     try {
-      const gateRequests: Array<{ executionId: string; stepId: string; message: string }> = [];
+      const gateEvents: Array<{ executionId: string; nodeId: string; prompt: string | undefined }> = [];
 
-      const offGate = host.bus.on(WorkflowSubjects.gate.awaitApproval, (ctx) => {
-        gateRequests.push({
+      // Listen for gate.suspended and respond immediately via gate.respond.
+      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
+        gateEvents.push({
           executionId: ctx.payload.executionId,
-          stepId: ctx.payload.stepId,
-          message: ctx.payload.message,
+          nodeId: ctx.payload.nodeId,
+          prompt: ctx.payload.prompt,
         });
-        ctx.setResult({ action: 'approve', source: 'user' });
+        // Respond asynchronously on the next tick so the worker's gate.respond
+        // subscription is established before the response arrives.
+        setTimeout(() => {
+          void host.bus
+            .request(WorkflowSubjects.gate.respond, {
+              executionId: ctx.payload.executionId,
+              gateId: ctx.payload.nodeId,
+              frameId: ctx.payload.frameId,
+              action: 'approve',
+              resumeData: null as JsonValue,
+            })
+            .catch(() => {});
+        }, 0);
       });
 
       try {
@@ -222,11 +234,11 @@ describe('runWorkflowInWorker integration', () => {
           workflowId: 'wf-entry-gate',
           status: 'completed',
         });
-        expect(gateRequests).toEqual([
+        expect(gateEvents).toEqual([
           {
             executionId: 'exec-entry-gate',
-            stepId: 'approval',
-            message: 'Approve worker execution?',
+            nodeId: 'approval',
+            prompt: 'Approve worker execution?',
           },
         ]);
       } finally {
@@ -246,10 +258,10 @@ describe('runWorkflowInWorker integration', () => {
         gateOpened = resolve;
       });
 
-      const offGate = host.bus.on(WorkflowSubjects.gate.awaitApproval, async () => {
+      // Listen for gate.suspended: this tells us the gate is open and waiting.
+      // Do NOT respond — the gate should remain suspended until the cancel fires.
+      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, () => {
         gateOpened();
-        // Hold the gate open indefinitely — the cancel event must terminate the worker.
-        return await new Promise<never>(() => undefined);
       });
 
       try {

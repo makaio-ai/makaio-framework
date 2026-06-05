@@ -208,6 +208,7 @@ async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector
       const startResult = await agent.start(normalizedMessage, {
         systemPrompt: payload.systemPrompt,
         sessionContext,
+        responseSchema: payload.responseSchema,
       });
       return {
         adapterSessionId: startResult.adapterSessionId,
@@ -219,6 +220,7 @@ async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector
     await agent.initialize({
       systemPrompt: payload.systemPrompt,
       sessionContext,
+      responseSchema: payload.responseSchema,
     });
     return { adapterSessionId: await agent.getAdapterSessionId() };
   } catch (error) {

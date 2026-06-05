@@ -4,7 +4,8 @@ import {
   DEFAULT_CONSTRAINTS,
   SubagentConfigSchema,
   SubagentSubjects,
-  type WorkflowStep,
+  type IWorkflowRunner,
+  type WorkflowGateNode,
 } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -124,7 +125,14 @@ function registerCommonMockHandlers(cleanupFns: Array<() => void>): void {
   );
 }
 
-export async function setupWorkflowExecutorTest(): Promise<WorkflowExecutorTestSetup> {
+/**
+ * Set up the workflow executor with lightweight test doubles.
+ * @param options - Optional runtime seams to inject into the executor.
+ * @returns Initialized workflow executor test setup.
+ */
+export async function setupWorkflowExecutorTest(
+  options: { readonly workflowRunner?: IWorkflowRunner } = {},
+): Promise<WorkflowExecutorTestSetup> {
   MakaioBus.__resetHandlers?.();
 
   const cleanupFns: Array<() => void> = [];
@@ -138,10 +146,14 @@ export async function setupWorkflowExecutorTest(): Promise<WorkflowExecutorTestS
 
   cleanupFns.push(...registerSubagentStubHandlers(MakaioBus));
 
-  const workflowExecutor = new WorkflowExecutor(MakaioBus, {
-    stepCooldownMs: 0,
-    stepTimeoutMs: 10_000,
-  });
+  const workflowExecutor = new WorkflowExecutor(
+    MakaioBus,
+    {
+      stepCooldownMs: 0,
+      stepTimeoutMs: 10_000,
+    },
+    options.workflowRunner,
+  );
   await workflowExecutor.init();
 
   cleanupFns.push(registerAdapterStartHandler());
@@ -298,4 +310,4 @@ export async function teardownWorkflowExecutorWithSubagentServiceTest(
   setup.dbContext.cleanup();
 }
 
-export type GateStepInput = Extract<WorkflowStep, { type: 'gate' }>;
+export type GateStepInput = WorkflowGateNode;

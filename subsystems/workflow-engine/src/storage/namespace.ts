@@ -2,25 +2,29 @@ import { z } from 'zod';
 import { localSubject } from '@makaio/core';
 import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import {
-  WorkflowDefinitionSchemaTyped,
-  PersistedWorkflowDefinitionInputSchemaTyped,
+  WorkflowDefinitionSchema,
   WorkflowExecutionSchema,
-  WorkflowExecutionSchemaTyped,
   ExecutionStatusSchema,
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
   ExecutionLinkSchema,
   SpanRecordSchema,
-  StepStateSchemaTyped,
+  WorkflowFrameStateSchema,
+  WorkflowGateInstanceSchema,
   WorkflowRunContextSchema,
 } from '@makaio/contracts';
 import {
   workflowDefinitions,
   workflowExecutions,
-  workflowExecutionLinks,
-  workflowExecutionSteps,
+  workflowExecutionFrames,
+  workflowGateInstances,
   workflowStepSpans,
+  workflowExecutionLinks,
   workflowRunContexts,
+  worklogSummaries,
+  worklogFrameEntries,
+  worklogArtifactWrites,
+  worklogGateEvents,
 } from './schema.js';
 
 const ExecutionLinkListQuerySchema = z
@@ -35,10 +39,8 @@ const ExecutionLinkListQuerySchema = z
 const ExecutionUpdateSchema = z.object({
   executionId: z.string().min(1),
   status: ExecutionStatusSchema.optional(),
-  currentStepId: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
   completedAt: z.number().nullable().optional(),
-  stepUpdates: z.record(z.string().min(1), StepStateSchemaTyped).optional(),
 });
 
 /**
@@ -46,7 +48,9 @@ const ExecutionUpdateSchema = z.object({
  *
  * Provides internal storage operations for workflows:
  * - Definition CRUD (get, set, delete, list)
- * - Execution CRUD (getExecution, setExecution, listExecutions)
+ * - Execution CRUD (getExecution, setExecution, updateExecution, listExecutions)
+ * - Frame CRUD (setFrame, getFrame, listFrames)
+ * - Gate instance CRUD (setGateInstance, getGateInstance, listGateInstances)
  *
  * Subject prefix: `storage:workflow.*`
  *
@@ -66,11 +70,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     get: {
       request: z.object({ id: z.string() }),
-      response: z.object({ workflow: WorkflowDefinitionSchemaTyped.nullable() }),
+      response: z.object({ workflow: WorkflowDefinitionSchema.nullable() }),
     },
 
     set: {
-      request: z.object({ workflow: PersistedWorkflowDefinitionInputSchemaTyped }),
+      request: z.object({ workflow: WorkflowDefinitionSchema }),
       response: z.object({ id: z.string() }),
     },
 
@@ -81,7 +85,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     list: {
       request: WorkflowListQuerySchema,
-      response: z.object({ workflows: z.array(WorkflowDefinitionSchemaTyped) }),
+      response: z.object({ workflows: z.array(WorkflowDefinitionSchema) }),
     },
 
     // ─────────────────────────────────────────────────────────────
@@ -90,11 +94,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     getExecution: {
       request: z.object({ executionId: z.string() }),
-      response: z.object({ execution: WorkflowExecutionSchemaTyped.nullable() }),
+      response: z.object({ execution: WorkflowExecutionSchema.nullable() }),
     },
 
     setExecution: {
-      request: z.object({ execution: WorkflowExecutionSchemaTyped }),
+      request: z.object({ execution: WorkflowExecutionSchema }),
       response: z.object({ id: z.string() }),
     },
 
@@ -103,7 +107,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      * one storage transaction.
      */
     setExecutionStart: {
-      request: z.object({ execution: WorkflowExecutionSchemaTyped, runContext: WorkflowRunContextSchema }),
+      request: z.object({ execution: WorkflowExecutionSchema, runContext: WorkflowRunContextSchema }),
       response: z.object({ id: z.string(), executionId: z.string() }),
     },
 
@@ -120,7 +124,72 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      */
     listExecutions: {
       request: ExecutionListQuerySchema,
-      response: z.object({ executions: z.array(WorkflowExecutionSchemaTyped) }),
+      response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
+    },
+
+    // ─────────────────────────────────────────────────────────────
+    // Frame CRUD
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Upsert a single execution frame by `frameId`.
+     * Called by the runtime when a frame is created or transitions state.
+     * The `executionId` is required for insert; on conflict the full row is
+     * replaced so both creation and state-update use the same subject.
+     */
+    setFrame: {
+      request: z.object({ executionId: z.string().min(1), frame: WorkflowFrameStateSchema }),
+      response: z.object({ frameId: z.string() }),
+    },
+
+    /**
+     * Retrieve a single execution frame by `frameId`.
+     */
+    getFrame: {
+      request: z.object({ frameId: z.string().min(1) }),
+      response: z.object({ frame: WorkflowFrameStateSchema.nullable() }),
+    },
+
+    /**
+     * List all frames for a given execution.
+     */
+    listFrames: {
+      request: z.object({ executionId: z.string().min(1) }),
+      response: z.object({ frames: z.array(WorkflowFrameStateSchema) }),
+    },
+
+    // ─────────────────────────────────────────────────────────────
+    // Gate Instance CRUD
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Upsert a gate instance record.
+     * Called when a gate node is entered and when it is resolved.
+     */
+    setGateInstance: {
+      request: z.object({ gate: WorkflowGateInstanceSchema }),
+      response: z.object({ id: z.string() }),
+    },
+
+    /**
+     * Retrieve a gate instance by execution ID, node ID, and optional frame ID.
+     * Provide `frameId` when the gate lives inside an `iterate` expansion.
+     */
+    getGateInstance: {
+      request: z.object({
+        executionId: z.string().min(1),
+        nodeId: z.string().min(1),
+        frameId: z.string().min(1).optional(),
+      }),
+      response: z.object({ gate: WorkflowGateInstanceSchema.nullable() }),
+    },
+
+    /**
+     * List all gate instances for a given execution.
+     */
+    listGateInstances: {
+      request: z.object({ executionId: z.string().min(1) }),
+      response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
     },
 
     // ─────────────────────────────────────────────────────────────
@@ -177,17 +246,22 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     drizzle: {
       workflowDefinitions,
       workflowExecutions,
-      workflowExecutionSteps,
+      workflowExecutionFrames,
+      workflowGateInstances,
       workflowStepSpans,
       workflowExecutionLinks,
       workflowRunContexts,
+      worklogSummaries,
+      worklogFrameEntries,
+      worklogArtifactWrites,
+      worklogGateEvents,
     },
   },
 });
 
 export const WorkflowStorageSubjects = WorkflowStorageNamespace.subjects;
 
-export type { WorkflowDefinition, WorkflowDefinitionInput } from '@makaio/contracts';
+export type { WorkflowDefinition } from '@makaio/contracts';
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
 export type WorkflowListQuery = z.infer<typeof WorkflowListQuerySchema>;
 export type { ExecutionListQuery } from '@makaio/contracts';

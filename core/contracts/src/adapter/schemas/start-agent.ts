@@ -31,6 +31,12 @@ const StartAgentBaseSchema = z
     /** Initial message to send to the agent. Omit for idle agent creation. */
     initialMessage: MessageInputSchema.optional(),
 
+    /**
+     * JSON Schema for structured output from the initial turn.
+     * Forwarded to adapters that support model-level structured output.
+     */
+    responseSchema: z.record(z.string(), z.unknown()).optional(),
+
     /** Model to use (adapter-specific, e.g., 'sonnet', 'opus') */
     model: z.string().optional(),
 

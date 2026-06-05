@@ -2,29 +2,61 @@ import { z } from 'zod';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import {
   ExecutionListQuerySchema,
-  PersistedWorkflowDefinitionInputSchemaTyped,
-  WorkflowDefinitionSchemaTyped,
+  ExecutionStatusSchema,
+  WorkflowDefinitionSchema,
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
+  WorkflowGateInstanceSchema,
   WorkflowListQuerySchema,
+  WorkflowNodeTypeSchema,
+  WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
 } from './schemas.js';
-import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
 import { SpanRecordSchema } from './span.js';
+import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowRunContextSchema } from './run-context.js';
+import { WorkLogExecutionSummarySchema } from './worklog.js';
+import { ExecutionHintsSchema } from './execution-hints.js';
 
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
+  /** Node identifier within the workflow definition. */
   stepId: z.string(),
-  // Composite `for-each` steps are runtime scheduler coordination nodes, not
-  // executor targets — they are excluded. Function steps run in the worker
-  // orchestrator and are included so their lifecycle is observable on the bus.
-  stepType: z.enum(['agent', 'shell', 'gate', 'function', 'bus-request']),
+  /**
+   * Observable node types emitting lifecycle events.
+   * `station`, `delegate-agent`, `delegate-role`, and `gate` emit bus events.
+   * Structural nodes (`sequence`, `parallel`, `iterate`, `iterate-chain`) do not.
+   */
+  stepType: z.enum(['station', 'delegate-agent', 'delegate-role', 'gate']),
 });
 
 const GateLifecycleBaseSchema = StepLifecycleBaseSchema.extend({
   stepType: z.literal('gate'),
 });
+
+const GateResolvedPayloadSchema = z.discriminatedUnion('source', [
+  GateLifecycleBaseSchema.extend({
+    /**
+     * Runtime frame ID of the resolved gate instance.
+     * Gate node IDs are not unique across dynamic/iterated frames.
+     */
+    frameId: z.string(),
+    /** Approval action recorded for user and timeout settlements. */
+    action: z.enum(['approve', 'reject']),
+    /** Source that produced the approval action. */
+    source: z.enum(['user', 'timeout']),
+  }),
+  GateLifecycleBaseSchema.extend({
+    /**
+     * Runtime frame ID of the cancelled gate instance.
+     * Gate node IDs are not unique across dynamic/iterated frames.
+     */
+    frameId: z.string(),
+    /** Workflow cancellation settled the gate without resume data. */
+    source: z.literal('cancelled'),
+  }),
+]);
 
 /**
  * Payload emitted when a gate step requests human approval.
@@ -44,10 +76,10 @@ const GateRequestedPayloadSchema = GateLifecycleBaseSchema.extend({
 export const WorkflowSchemas = {
   getDefinition: {
     request: z.object({ id: z.string() }),
-    response: z.object({ workflow: WorkflowDefinitionSchemaTyped.nullable() }),
+    response: z.object({ workflow: WorkflowDefinitionSchema.nullable() }),
   },
   setDefinition: {
-    request: z.object({ workflow: PersistedWorkflowDefinitionInputSchemaTyped }),
+    request: z.object({ workflow: WorkflowDefinitionSchema }),
     response: z.object({ id: z.string() }),
   },
   deleteDefinition: {
@@ -56,24 +88,43 @@ export const WorkflowSchemas = {
   },
   listDefinitions: {
     request: WorkflowListQuerySchema,
-    response: z.object({ workflows: z.array(WorkflowDefinitionSchemaTyped) }),
+    response: z.object({ workflows: z.array(WorkflowDefinitionSchema) }),
   },
-  'definition.created': WorkflowDefinitionSchemaTyped,
-  'definition.updated': WorkflowDefinitionSchemaTyped,
+  'definition.created': WorkflowDefinitionSchema,
+  'definition.updated': WorkflowDefinitionSchema,
   'definition.deleted': z.object({ id: z.string() }),
 
   start: {
     request: z.object({
       workflowId: z.string(),
-      inputs: JsonObjectContractSchema.optional(),
-      parentSessionId: z.string().optional(),
-      triggerPayload: JsonObjectContractSchema.optional(),
+      /**
+       * Typed workflow input validated against the definition's `inputSchema`.
+       * Replaces the old `inputs` (object-only) field to accept any JSON value.
+       */
+      input: JsonValueSchema.optional(),
+      /**
+       * Workflow configuration overrides applied on top of the definition's defaults.
+       * Validated against `configSchema` when present.
+       */
+      config: JsonValueSchema.optional(),
+      /**
+       * Bind this execution to an existing artifact.
+       * When provided the runtime associates produced outputs with this artifact ref.
+       */
+      artifactRef: WorkflowArtifactRefSchema.optional(),
       /**
        * Scope override for this execution.
        * When provided, supersedes the scope declared on the workflow definition.
        * When omitted, the executor uses the workflow definition's required scope.
        */
       scope: WorkflowExecutionScopeSchema.optional(),
+      /**
+       * Advisory hints for worker provisioning.
+       * Passed opaquely to the execution host after JSON-safety validation.
+       */
+      executionHints: ExecutionHintsSchema.optional(),
+      parentSessionId: z.string().optional(),
+      triggerPayload: JsonObjectContractSchema.optional(),
     }),
     response: z.object({ executionId: z.string() }),
   },
@@ -105,6 +156,16 @@ export const WorkflowSchemas = {
     request: z.object({ executionId: z.string() }),
     response: z.object({ spans: z.array(SpanRecordSchema) }),
   },
+  /**
+   * List persisted gate instances for a workflow execution.
+   *
+   * This is the public read surface for pending and resolved gate state.
+   * Storage subjects remain internal to the workflow subsystem.
+   */
+  listGateInstances: {
+    request: z.object({ executionId: z.string() }),
+    response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
+  },
   listTriggerTypes: {
     request: z.object({}),
     response: z.object({
@@ -115,8 +176,8 @@ export const WorkflowSchemas = {
           icon: z.string(),
           category: z.string(),
           description: z.string().optional(),
-          configJsonSchema: z.record(z.string(), z.unknown()),
-          outputJsonSchema: z.record(z.string(), z.unknown()),
+          configJsonSchema: JsonSchemaRecordSchema,
+          outputJsonSchema: JsonSchemaRecordSchema,
           source: z.string(),
         }),
       ),
@@ -162,6 +223,15 @@ export const WorkflowSchemas = {
   resolveRole: {
     request: z.object({ roleId: z.string().min(1) }),
     response: WorkflowResolvedRoleSchema,
+  },
+
+  /**
+   * Resolve an explicit agent definition to its adapter configuration.
+   * Called by the workflow executor when an agent step specifies `agentId`.
+   */
+  resolveAgent: {
+    request: z.object({ agentId: z.string().min(1) }),
+    response: WorkflowResolvedAgentSchema,
   },
 
   /**
@@ -222,15 +292,263 @@ export const WorkflowSchemas = {
   'gate.respond': {
     request: z.object({
       executionId: z.string(),
-      stepId: z.string(),
+      /**
+       * Node ID of the gate within the workflow definition.
+       * Maps to `WorkflowGateNode.id` in the definition tree.
+       */
+      gateId: z.string(),
+      /**
+       * Approval-surface action recorded for lifecycle/audit views.
+       *
+       * This is separate from `resumeData` so domain payloads can carry their
+       * own decision fields while the workflow still resumes through the typed
+       * gate output.
+       */
       action: z.enum(['approve', 'reject']),
+      /**
+       * Specific frame for this gate response.
+       * Required when the gate lives inside an `iterate` expansion
+       * where multiple frames may be waiting for the same node.
+       */
+      frameId: z.string().optional(),
+      /**
+       * Typed resume data validated against the gate node's `resumeSchema`.
+       * The runtime validates this value before unblocking the frame.
+       */
+      resumeData: JsonValueSchema,
+      /** Human-readable rationale for the gate response. */
       reason: z.string().optional(),
     }),
     response: z.object({ accepted: z.boolean() }),
   },
-  'gate.resolved': GateLifecycleBaseSchema.extend({
-    action: z.enum(['approve', 'reject']),
-    source: z.enum(['user', 'timeout']),
+  'gate.resolved': GateResolvedPayloadSchema,
+
+  // ─────────────────────────────────────────────────────────────
+  // Frame lifecycle events
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Emitted by the runtime when a node's execution frame starts.
+   *
+   * One event per frame entry. For structural nodes (`parallel`, `iterate`)
+   * this fires when the container frame starts, before child frames are created.
+   */
+  'frame.started': z.object({
+    /** Execution this frame belongs to. */
+    executionId: z.string(),
+    /** Unique frame identifier within the execution. */
+    frameId: z.string(),
+    /** Node ID from the workflow definition. */
+    nodeId: z.string(),
+    /** Node type discriminant for routing and display. */
+    nodeType: WorkflowNodeTypeSchema,
+    /**
+     * Ordered path of frame IDs from the root frame to this frame (inclusive).
+     * Mirrors `WorkflowFrameState.path`.
+     */
+    path: z.array(z.string()),
+    /** Parent frame ID. Absent for the root frame. */
+    parentFrameId: z.string().optional(),
+  }),
+
+  /**
+   * Emitted by the runtime when a node's execution frame reaches a terminal
+   * `completed` status.
+   */
+  'frame.completed': z.object({
+    /** Execution this frame belongs to. */
+    executionId: z.string(),
+    /** Unique frame identifier within the execution. */
+    frameId: z.string(),
+    /** Node ID from the workflow definition. */
+    nodeId: z.string(),
+    /** JSON-serializable output produced by the node, if any. */
+    output: JsonValueSchema.optional(),
+    /** Wall-clock duration in milliseconds from frame start to completion. */
+    duration: z.number().nonnegative().optional(),
+  }),
+
+  /**
+   * Emitted by the runtime when a node's execution frame reaches a terminal
+   * `failed` status.
+   */
+  'frame.failed': z.object({
+    /** Execution this frame belongs to. */
+    executionId: z.string(),
+    /** Unique frame identifier within the execution. */
+    frameId: z.string(),
+    /** Node ID from the workflow definition. */
+    nodeId: z.string(),
+    /** Human-readable error message. */
+    error: z.string(),
+    /** Wall-clock duration in milliseconds from frame start to failure. */
+    duration: z.number().nonnegative().optional(),
+  }),
+
+  // ─────────────────────────────────────────────────────────────
+  // Gate suspension / resumption events
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Emitted when a gate node suspends execution awaiting a response.
+   *
+   * The `schema` field carries the JSON Schema for the expected `resumeData`,
+   * serialized as an opaque record for display in approval UIs.
+   */
+  'gate.suspended': z.object({
+    /** Execution this gate belongs to. */
+    executionId: z.string(),
+    /** Frame ID of the suspended gate frame. */
+    frameId: z.string(),
+    /** Node ID of the gate in the workflow definition. */
+    nodeId: z.string(),
+    /**
+     * JSON Schema for the resume data payload, serialized as a record.
+     * Callers must satisfy this schema when submitting a `gate.respond` request.
+     */
+    schema: JsonSchemaRecordSchema,
+    /** Optional prompt shown to the reviewer after template interpolation. */
+    prompt: z.string().optional(),
+    /** Optional title shown to the reviewer. */
+    title: z.string().optional(),
+    /** Action taken when the gate timeout expires. */
+    autoAction: z.enum(['approve', 'reject']),
+    /** Timeout in milliseconds, or `null` when the gate waits indefinitely. */
+    timeoutMs: z.number().nullable(),
+    /** Epoch milliseconds when the gate opened. */
+    openedAt: z.number(),
+  }),
+
+  /**
+   * Emitted when a gate node resumes execution after receiving a valid response.
+   *
+   * The `resumeData` matches the gate's declared `resumeSchema`.
+   */
+  'gate.resumed': z.object({
+    /** Execution this gate belongs to. */
+    executionId: z.string(),
+    /** Frame ID of the resumed gate frame. */
+    frameId: z.string(),
+    /** Node ID of the gate in the workflow definition. */
+    nodeId: z.string(),
+    /**
+     * Typed resume data submitted by the approver and validated
+     * against the gate's `resumeSchema` before unblocking.
+     */
+    resumeData: JsonValueSchema,
+  }),
+
+  // ─────────────────────────────────────────────────────────────
+  // Dynamic topology event
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Emitted when a dynamic region's factory is invoked and produces nodes.
+   *
+   * Enables tooling to trace which factory produced which nodes in a given
+   * execution without scanning the full frame tree.
+   */
+  'dynamic.materialized': z.object({
+    /** Execution where the dynamic region was materialized. */
+    executionId: z.string(),
+    /** Frame where materialization occurred. */
+    frameId: z.string(),
+    /** Factory identifier from the `WorkflowDynamicRegion` descriptor. */
+    factoryId: z.string().min(1),
+    /** Number of top-level nodes produced by the factory. */
+    materializedNodes: z.number().int().nonnegative(),
+  }),
+
+  // ─────────────────────────────────────────────────────────────
+  // Artifact update event
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Emitted when a workflow frame produces an artifact update.
+   *
+   * Enables "show me all artifact writes produced by this execution" queries
+   * without scanning the artifact store.
+   */
+  'artifact.updated': z.object({
+    /** Execution that triggered the artifact update. */
+    executionId: z.string(),
+    /** Frame that produced the update. */
+    frameId: z.string(),
+    /**
+     * Reference to the artifact that was updated.
+     */
+    artifactRef: z.object({
+      /** Artifact kind string (e.g. `'implementation-plan'`). */
+      kind: z.string().min(1),
+      /** Artifact identifier within its kind. */
+      id: z.string().min(1),
+    }),
+    /**
+     * JSON Pointer paths to the artifact fields that changed.
+     * Empty array indicates the full artifact was replaced.
+     */
+    paths: z.array(z.string()),
+    /** Operation that produced the update (e.g. `'create'`, `'revise'`). */
+    operation: z.string().min(1),
+    /** Revision identifier assigned by the artifact service on write. */
+    revision: z.string().min(1).optional(),
+  }),
+
+  // ─────────────────────────────────────────────────────────────
+  // WorkLog RPC subjects
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Retrieve the WorkLog execution summary for a single execution (RPC).
+   *
+   * Returns the denormalized summary record used in list views and dashboards.
+   * The summary is updated as execution events arrive.
+   */
+  'worklog.get': {
+    request: z.object({
+      /** Execution identifier to retrieve the summary for. */
+      executionId: z.string().min(1),
+    }),
+    response: z.object({
+      /** The WorkLog execution summary, or `null` when the execution is not found. */
+      summary: WorkLogExecutionSummarySchema.nullable(),
+    }),
+  },
+
+  /**
+   * List WorkLog execution summaries with optional filtering (RPC).
+   *
+   * At least one of `workflowId` or `status` is recommended to avoid
+   * unbounded scans; both are optional to support dashboard-level queries.
+   */
+  'worklog.list': {
+    request: z.object({
+      /** Filter by workflow definition ID. */
+      workflowId: z.string().min(1).optional(),
+      /** Filter by execution status. */
+      status: ExecutionStatusSchema.optional(),
+      /** Maximum number of records to return. */
+      limit: z.number().int().positive().optional(),
+      /** Zero-based offset for pagination. */
+      offset: z.number().int().nonnegative().optional(),
+    }),
+    response: z.object({
+      /** Matching execution summaries ordered by `startedAt` descending. */
+      items: z.array(WorkLogExecutionSummarySchema),
+      /** Total number of matching records (before limit/offset). */
+      total: z.number().int().nonnegative(),
+    }),
+  },
+
+  /**
+   * Emitted when a WorkLog record for an execution is created or updated.
+   *
+   * Subscribers can use this as a lightweight push notification to
+   * invalidate cached summaries without polling.
+   */
+  'worklog.changed': z.object({
+    /** Execution whose WorkLog record changed. */
+    executionId: z.string().min(1),
   }),
 } satisfies SchemaRecord;
 

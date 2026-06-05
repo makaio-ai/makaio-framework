@@ -19,11 +19,9 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     definition: {
       id: 'wf-runner-001',
       name: 'In-Process Runner Test',
-      steps: [],
+      root: { id: 'wf-runner-001__root', type: 'sequence', nodes: [] },
       triggers: [],
       scope: { type: 'global' },
-      createdAt: 1_700_000_000_000,
-      updatedAt: 1_700_000_000_000,
     },
     triggerPayload: { event: 'manual' },
     inputs: {},
@@ -62,7 +60,7 @@ function registerInMemoryStorage(
   });
 
   const offUpdate = bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
-    const { executionId, status, error, completedAt, stepUpdates } = ctx.payload;
+    const { executionId, status, error, completedAt } = ctx.payload;
     const execution = executions.get(executionId);
     if (!execution) {
       ctx.setResult({ success: false });
@@ -71,9 +69,6 @@ function registerInMemoryStorage(
     if (status !== undefined) execution.status = status;
     if (error !== undefined) execution.error = error ?? undefined;
     if (completedAt !== undefined) execution.completedAt = completedAt ?? undefined;
-    if (stepUpdates) {
-      Object.assign(execution.steps, stepUpdates);
-    }
     ctx.setResult({ success: true });
   });
 

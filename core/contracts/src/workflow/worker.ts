@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema, type JsonValue } from '../shared/json-value.js';
+import { WorkflowArtifactRefSchema } from './artifact-ref.js';
+import { ExecutionHintsSchema } from './execution-hints.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -71,10 +73,22 @@ export const WorkflowWorkerConfigSchema = z.object({
    */
   triggerPayload: JsonObjectContractSchema.default({}),
   /**
-   * Bound workflow input values for this execution.
-   * Available to workflow expressions as `inputs.*`.
+   * Bound workflow input value for this execution.
+   * Available to workflow expressions as `inputs`.
    */
-  inputs: JsonObjectContractSchema.default({}),
+  inputs: JsonValueSchema.default({}),
+  /**
+   * Bound workflow configuration values for this execution.
+   * Available to workflow expressions as `config.*`.
+   */
+  config: JsonObjectContractSchema.optional(),
+  /**
+   * Explicit artifact reference supplied by the execution starter.
+   *
+   * Isolated workers include this in their reconstructed run context so
+   * artifact binding observes the same precedence as in-process execution.
+   */
+  artifactRef: WorkflowArtifactRefSchema.optional(),
   /**
    * Resolved execution scope. Caller overrides are resolved in the main
    * process before worker dispatch so isolated execution persists the same
@@ -105,6 +119,11 @@ export const WorkflowWorkerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   /** Coordinator session ID that owns this execution. */
   coordinatorSessionId: z.string().min(1),
+  /**
+   * Advisory worker provisioning hints supplied by the start request.
+   * Runners may inspect these values before selecting a concrete execution host.
+   */
+  executionHints: ExecutionHintsSchema.optional(),
   /** Bus subject the worker subscribes to for cancellation signals. */
   cancelSubject: z.string().min(1),
 });

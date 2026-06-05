@@ -20,6 +20,10 @@ import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
 import type { AnyArtifactKindDefinition } from '../artifact/index.js';
+import type {
+  ExtensionTransitionActionsContribution,
+  ExtensionTransitionRulesContribution,
+} from '../workflow/transition.js';
 
 /**
  * Awaited contribution processor registered with the runtime coordinator.
@@ -378,6 +382,37 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * declares artifact kinds.
    */
   readonly artifactKinds?: ExtensionArtifactKindsContribution;
+
+  // ---------------------------------------------------------------------------
+  // Transition Pipeline contribution surfaces
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Declarative transition rules contributed by this extension.
+   *
+   * Rules are purely serializable — no functions. The transition contribution
+   * processor reads `transitionRules.rules` during extension activation and
+   * registers each rule with {@link TransitionRuleRegistry}.
+   *
+   * All rule IDs must be prefixed with `'<extensionName>.'`. Duplicate IDs
+   * across all sources hard-fail activation.
+   *
+   * The `transition-pipeline` service must be started before any extension
+   * that declares transition rules.
+   */
+  readonly transitionRules?: ExtensionTransitionRulesContribution;
+
+  /**
+   * Executable transition action factories contributed by this extension.
+   *
+   * Factories provide custom action semantics beyond the built-in
+   * `workflow.start` action. The transition contribution processor registers
+   * each factory with {@link TransitionActionRegistry} during extension activation.
+   *
+   * All action type keys must be prefixed with `'<extensionName>.'`. Duplicate
+   * type keys across all sources hard-fail activation.
+   */
+  readonly transitionActions?: ExtensionTransitionActionsContribution;
 
   /**
    * Bus namespace introspection for this extension.

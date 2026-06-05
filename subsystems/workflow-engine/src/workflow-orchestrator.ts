@@ -1,37 +1,22 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
 import type {
-  AgentWorkflowStep,
-  GateWorkflowStep,
-  JsonValue,
-  PreviousStepOutput,
-  ShellWorkflowStep,
-  StepContext,
-  StepRunConfig,
-  StepRunResult,
+  StationHandler,
+  WorkflowZodSchemas,
   WorkflowDefinition,
-  WorkflowDefinitionInput,
   WorkflowExecution,
+  WorkflowRunContext,
   WorkflowRunResult,
-  WorkflowStep,
-  WorkflowStepFunction,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import { resolveTemplate, type WorkflowExpressionContext } from '@makaio/expression';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution, ActiveRunnerStep } from './types.js';
 import { DEFAULT_EXECUTOR_CONFIG } from './types.js';
-import {
-  executeFunctionStep,
-  executeShellStepInWorker,
-  executeAgentStepInWorker,
-  executeGateStepInWorker,
-} from './workflow-step-execution.js';
-import { WorkflowScheduler } from './workflow-scheduler.js';
-import { WorkflowGateCoordinator } from './workflow-gate-coordinator.js';
 import { WorkflowSubjects } from './namespace.js';
 import { cancelExecution } from './workflow-execution-finalizer.js';
-import { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-expression-context.js';
+import { RuntimeContext } from './runtime/runtime-context.js';
+import { executeSequence } from './runtime/primitive-runtime.js';
+import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
@@ -40,20 +25,19 @@ import { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-exp
 /**
  * The resolved workflow module produced by a workflow file loader.
  *
- * Contains the serializable workflow definition and the runtime step map
- * that the worker executor uses to dispatch function steps.
+ * Contains the serializable workflow definition and the runtime handler map
+ * that the worker executor uses to dispatch station nodes.
  */
 export interface LoadedWorkflow {
   /** Serializable workflow definition (safe to persist or display in the UI). */
-  readonly definition: WorkflowDefinitionInput;
+  readonly definition: WorkflowDefinition;
+  /** Optional Zod schemas retained from file-loaded workflow builders. */
+  readonly zodSchemas?: WorkflowZodSchemas;
   /**
-   * Runtime step functions keyed by step ID.
-   * Used by the orchestrator to dispatch `function`-type steps.
+   * Runtime station handler functions keyed by node ID.
+   * Used by the orchestrator to dispatch `station`-type nodes.
    */
-  readonly runtimeSteps: ReadonlyMap<
-    string,
-    WorkflowStepFunction<unknown, Record<string, PreviousStepOutput<JsonValue>>, JsonValue>
-  >;
+  readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
 }
 
 /**
@@ -62,7 +46,7 @@ export interface LoadedWorkflow {
 interface WorkflowOrchestratorParams {
   /** Parsed and validated worker configuration. */
   readonly config: WorkflowWorkerConfig;
-  /** Loaded workflow with definition and runtime step functions. */
+  /** Loaded workflow with definition and runtime handler map. */
   readonly loaded: LoadedWorkflow;
   /** Worker-local bus instance for emitting and subscribing to events. */
   readonly bus: IMakaioBus;
@@ -75,258 +59,99 @@ interface WorkflowOrchestratorParams {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Build the step context base from the worker config.
+ * Persist the initial execution row and emit the terminal lifecycle event.
  *
- * The base is passed to function step executors so they can access workspace
- * metadata, trigger payloads, and resolved inputs.
- * @param config - Validated worker configuration for this execution.
- * @returns Step context base without `previousSteps`.
+ * Used for the fast-path cases (pre-scheduler abort, zero-node workflow)
+ * so an immediately terminal execution still appears in storage.
+ * @param bus - Worker-local bus.
+ * @param config - Worker configuration for execution identifiers.
+ * @param status - Terminal status to write.
+ * @param reason - Optional cancellation reason.
+ * @returns Terminal workflow run result.
  */
-function buildStepContextBase(
+async function persistPreRuntimeTerminalExecution(
+  bus: IMakaioBus,
   config: WorkflowWorkerConfig,
-): Omit<StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>, 'previousSteps' | 'signal'> {
-  return {
-    repoPath: config.context.repoPath,
-    makaioHome: config.context.makaioHome,
-    os: config.context.os,
-    arch: config.context.arch,
-    worktree: config.context.worktree,
+  status: 'completed' | 'cancelled',
+  reason?: string,
+): Promise<WorkflowRunResult> {
+  const execution = {
+    id: config.executionId,
+    workflowId: config.workflowId,
+    coordinatorSessionId: config.coordinatorSessionId,
+    status,
     inputs: config.inputs,
-    env: config.env,
+    config: config.config ?? {},
+    startedAt: Date.now(),
+    completedAt: Date.now(),
+    triggerPayload: config.triggerPayload,
+    scope: config.scope,
+  };
+
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+  if (status === 'completed') {
+    await bus.emit(WorkflowSubjects.execution.completed, {
+      executionId: config.executionId,
+      totalDuration: 0,
+    });
+  } else {
+    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId: config.executionId, reason });
+  }
+
+  return { executionId: config.executionId, workflowId: config.workflowId, status };
+}
+
+/**
+ * Convert the settled execution state into the worker runner result.
+ * @param config - Worker configuration carrying stable execution identifiers.
+ * @param status - Terminal execution status.
+ * @param error - Error message for failed executions.
+ * @returns Terminal workflow runner result.
+ */
+function buildWorkflowRunResult(
+  config: WorkflowWorkerConfig,
+  status: 'completed' | 'failed' | 'cancelled',
+  error?: string,
+): WorkflowRunResult {
+  if (status === 'completed') {
+    return { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' };
+  }
+  if (status === 'cancelled') {
+    return { executionId: config.executionId, workflowId: config.workflowId, status: 'cancelled' };
+  }
+  return {
     executionId: config.executionId,
     workflowId: config.workflowId,
-    trigger: config.triggerPayload,
+    status: 'failed',
+    output: error ?? 'Workflow execution failed',
   };
-}
-
-/**
- * Initialise the step state map for a fresh execution.
- *
- * For-each steps receive composite state; all other step types receive
- * executable state, both with `'pending'` status.
- * @param steps - Authored workflow steps from the definition.
- * @returns Step state map keyed by step ID.
- */
-function buildInitialStepStates(steps: WorkflowStep[]): WorkflowExecution['steps'] {
-  const result: WorkflowExecution['steps'] = {};
-  for (const step of steps) {
-    result[step.id] =
-      step.type === 'for-each' ? { kind: 'composite', status: 'pending' } : { kind: 'executable', status: 'pending' };
-  }
-  return result;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Step dispatch callbacks
+// Signal cancellation binding
 // ─────────────────────────────────────────────────────────────
-
-/**
- * Build the `runStep` callback for `agent` and `shell` step types.
- *
- * Gate steps are handled by the scheduler's `runGateStep` callback, and
- * function steps by `runFunctionStep`. The `runStep` contract only covers
- * runner-serializable step types (`agent | shell`).
- * @param bus - Worker-local bus instance.
- * @param config - Worker configuration for coordinator session and defaults.
- * @param loaded - Loaded workflow providing the definition metadata.
- * @returns Callback satisfying the `WorkflowSchedulerDeps.runStep` signature.
- */
-function buildRunStep(
-  bus: IMakaioBus,
-  config: WorkflowWorkerConfig,
-  loaded: LoadedWorkflow,
-): (runConfig: StepRunConfig, signal: AbortSignal) => Promise<StepRunResult> {
-  return async (runConfig: StepRunConfig, signal: AbortSignal): Promise<StepRunResult> => {
-    const expressionContext = buildWorkflowExpressionContextFromResolvedInputs(runConfig.resolvedInputs);
-
-    if (runConfig.stepType === 'shell') {
-      return executeShellStepInWorker({
-        step: runConfig.stepDefinition as ShellWorkflowStep,
-        workspaceRoot: config.context.repoPath,
-        expressionContext,
-        signal,
-      });
-    }
-
-    if (runConfig.stepType === 'agent') {
-      const agentStep = runConfig.stepDefinition as AgentWorkflowStep;
-      return executeAgentStepInWorker({
-        step: agentStep,
-        bus,
-        coordinatorSessionId: config.coordinatorSessionId,
-        defaultExecutionTargetId: loaded.definition.defaultExecutionTargetId,
-        signal,
-        timeoutMs: DEFAULT_EXECUTOR_CONFIG.stepTimeoutMs,
-        resolvedPrompt: resolveTemplate(agentStep.prompt, expressionContext),
-      });
-    }
-
-    return {
-      status: 'failed',
-      error: `Unsupported step type in worker runStep: ${runConfig.stepType}`,
-      telemetry: { duration: 0 },
-    };
-  };
-}
-
-/**
- * Build the `runFunctionStep` callback for the scheduler deps.
- *
- * Looks up the function step's runtime function from `loaded.runtimeSteps`,
- * builds a {@link StepContext} with `previousSteps` derived from completed
- * step results in the active execution, and invokes the function.
- * @param loaded - Loaded workflow providing the runtime step functions.
- * @param stepContextBase - Shared workspace context fields.
- * @param activeExecutions - Active execution registry for resolved step results.
- * @returns Callback satisfying the `WorkflowSchedulerDeps.runFunctionStep` signature.
- */
-function buildRunFunctionStep(
-  loaded: LoadedWorkflow,
-  stepContextBase: Omit<
-    StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>,
-    'previousSteps' | 'signal'
-  >,
-  activeExecutions: Map<string, ActiveExecution>,
-): (
-  executionId: string,
-  stepId: string,
-  resolvedInputs: WorkflowExpressionContext,
-  signal: AbortSignal,
-) => Promise<StepRunResult> {
-  return async (
-    executionId: string,
-    stepId: string,
-    _resolvedInputs: WorkflowExpressionContext,
-    signal: AbortSignal,
-  ): Promise<StepRunResult> => {
-    if (signal.aborted) {
-      return { status: 'failed', error: 'Cancelled', telemetry: { duration: 0 } };
-    }
-
-    const active = activeExecutions.get(executionId);
-    const step = active?.stepMap.get(stepId);
-    if (!step || step.type !== 'function') {
-      return {
-        status: 'failed',
-        error: `Function step not found: ${stepId}`,
-        telemetry: { duration: 0 },
-      };
-    }
-
-    // Build previousSteps from terminal dependency states. Only steps declared
-    // in `needs` are included so functions cannot access results from steps
-    // they did not explicitly depend on.
-    const previousSteps: Record<string, PreviousStepOutput<JsonValue>> = {};
-    if (active) {
-      for (const needsId of step.needs ?? []) {
-        const state = active.execution.steps[needsId];
-        if (state?.kind === 'executable' && state.status === 'completed') {
-          previousSteps[needsId] = { output: state.result as JsonValue, status: 'completed' };
-        } else if (state?.kind === 'executable' && state.status === 'skipped') {
-          previousSteps[needsId] = { status: 'skipped' };
-        }
-      }
-    }
-
-    const context: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>> = {
-      ...stepContextBase,
-      previousSteps,
-      signal,
-    };
-
-    return executeFunctionStep({ loaded, stepId, context, signal });
-  };
-}
-
-/**
- * Build the `runGateStep` callback for the scheduler deps.
- *
- * In the worker context, gate coordination is handled by the main-process
- * executor via the `gate.awaitApproval` bus RPC. This keeps all gate state
- * management (registering pending resolutions, emitting `gate.requested`,
- * awaiting `gate.respond`) on the main-process bus where the gate coordinator
- * lives. The transport forwards the resolved result back to the worker.
- *
- * The scheduler's `runGateStep` path manages step lifecycle (state
- * initialisation, persistence, `step.started`/`step.completed`/`step.failed`)
- * via `prepareRunnerManagedStep` and `applyStepRunResult`, matching the
- * shell and agent step lifecycle.
- * @param bus - Worker-local bus for the `gate.awaitApproval` RPC.
- * @param config - Worker configuration for execution and workflow IDs.
- * @param loaded - Loaded workflow providing the definition name.
- * @param activeExecutions - Active execution registry for step definition lookup.
- * @returns Callback satisfying the `WorkflowSchedulerDeps.runGateStep` signature.
- */
-function buildRunGateStep(
-  bus: IMakaioBus,
-  config: WorkflowWorkerConfig,
-  loaded: LoadedWorkflow,
-  activeExecutions: Map<string, ActiveExecution>,
-): (
-  executionId: string,
-  stepId: string,
-  resolvedInputs: WorkflowExpressionContext,
-  signal: AbortSignal,
-) => Promise<StepRunResult> {
-  return async (
-    executionId: string,
-    stepId: string,
-    resolvedInputs: WorkflowExpressionContext,
-    signal: AbortSignal,
-  ): Promise<StepRunResult> => {
-    const active = activeExecutions.get(executionId);
-    const step = active?.stepMap.get(stepId);
-    if (!step || step.type !== 'gate') {
-      return {
-        status: 'failed',
-        error: `Gate step not found: ${stepId}`,
-        telemetry: { duration: 0 },
-      };
-    }
-
-    const gateStep = step as GateWorkflowStep;
-    const resolvedPrompt = resolveTemplate(gateStep.prompt, resolvedInputs);
-    const resolvedTitle = gateStep.title
-      ? resolveTemplate(gateStep.title, resolvedInputs)
-      : 'Workflow Approval Required';
-
-    return executeGateStepInWorker({
-      step: gateStep,
-      bus,
-      executionId: config.executionId,
-      workflowId: config.workflowId,
-      workflowName: loaded.definition.name,
-      resolvedPrompt,
-      resolvedTitle,
-      signal,
-    });
-  };
-}
 
 interface SignalCancellationBindingParams {
-  /** Worker execution cancellation signal. */
   readonly signal: AbortSignal;
-  /** Execution ID to cancel when the signal aborts. */
   readonly executionId: string;
-  /** Worker-local bus for persistence and lifecycle events. */
   readonly bus: IMakaioBus;
-  /** Active execution registry owned by the worker orchestrator. */
   readonly activeExecutions: Map<string, ActiveExecution>;
-  /** Inline shell/function/gate abort controllers keyed by execution and step ID. */
   readonly shellAbortControllers: Map<string, AbortController>;
-  /** Active runner steps keyed by execution and step ID. */
   readonly activeRunnerSteps: Map<string, ActiveRunnerStep>;
-  /** Gate coordinator used to release pending gate waits. */
-  readonly gateCoordinator: WorkflowGateCoordinator;
 }
 
 /**
- * Bind the worker-level cancellation signal to the scheduler finalizer.
- * @param params - Runtime state needed to terminalize the active worker execution.
- * @returns Cleanup callback that removes the listener and awaits any in-flight cancellation.
+ * Bind the worker-level cancellation signal to the finalizer.
+ *
+ * When `signal` fires, triggers `cancelExecution` to persist the cancelled
+ * status and emit `execution.cancelled`.
+ * @param params - Runtime state needed to terminalize the active execution.
+ * @returns Async cleanup that removes the listener and reports whether signal cancellation finalized the execution.
  */
-function bindSignalCancellation(params: SignalCancellationBindingParams): () => Promise<void> {
+function bindSignalCancellation(params: SignalCancellationBindingParams): () => Promise<boolean> {
   let cancellationTask: Promise<boolean> | undefined;
+
   const cancelFromSignal = (): void => {
     cancellationTask = cancelExecution(
       {
@@ -335,7 +160,6 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
         shellAbortControllers: params.shellAbortControllers,
         activeRunnerSteps: params.activeRunnerSteps,
         cancelTimeoutMs: DEFAULT_EXECUTOR_CONFIG.cancelTimeoutMs,
-        gateCoordinator: params.gateCoordinator,
       },
       params.executionId,
       WORKFLOW_CANCELLED_REASON,
@@ -350,80 +174,138 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
     cancelFromSignal();
   }
 
-  return async (): Promise<void> => {
+  return async (): Promise<boolean> => {
     params.signal.removeEventListener('abort', cancelFromSignal);
-    await cancellationTask;
+    return cancellationTask ?? false;
   };
 }
 
+// ─────────────────────────────────────────────────────────────
+// Internal runtime helpers
+// ─────────────────────────────────────────────────────────────
+
 /**
- * Convert the settled execution state into the worker runner result.
- * @param config - Worker configuration carrying stable execution identifiers.
- * @param execution - Mutable execution record settled by the scheduler/finalizer.
- * @returns Terminal workflow runner result.
+ * Result type from {@link runRuntimeSequence}.
  */
-function buildWorkflowRunResult(config: WorkflowWorkerConfig, execution: WorkflowExecution): WorkflowRunResult {
-  if (execution.status === 'completed') {
-    return { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' };
-  }
+interface RuntimeSequenceResult {
+  readonly status: 'completed' | 'failed' | 'cancelled';
+  readonly error?: string;
+}
 
-  if (execution.status === 'cancelled') {
-    return { executionId: config.executionId, workflowId: config.workflowId, status: 'cancelled' };
-  }
+/**
+ * Run the primitive runtime sequence and return the terminal status.
+ *
+ * Isolates the RuntimeContext construction, sequence execution, and outcome
+ * mapping so {@link runWorkflowOrchestrator} can delegate the runtime body
+ * without exceeding the per-function line limit.
+ * @param config - Worker configuration carrying execution identifiers.
+ * @param definition - Workflow definition to execute.
+ * @param liveExecution - The live execution record.
+ * @param runContext - Durable run-context snapshot for this execution.
+ * @param runtimeHandlers - Station handler map for dispatch.
+ * @param bus - Worker-local bus.
+ * @param signal - Cancellation signal.
+ * @param zodSchemas - Optional file-loaded workflow schemas for artifact validation.
+ * @returns Terminal status and optional error message.
+ */
+async function runRuntimeSequence(
+  config: WorkflowWorkerConfig,
+  definition: WorkflowDefinition,
+  liveExecution: WorkflowExecution,
+  runContext: WorkflowRunContext,
+  runtimeHandlers: Map<string, StationHandler>,
+  bus: IMakaioBus,
+  signal: AbortSignal,
+  zodSchemas?: WorkflowZodSchemas,
+): Promise<RuntimeSequenceResult> {
+  const artifactBinding = await resolveWorkflowArtifactBinding({
+    definition,
+    execution: liveExecution,
+    runContext,
+    zodSchema: zodSchemas?.artifact,
+    bus,
+  });
+  const runtimeCtx = new RuntimeContext(
+    config.executionId,
+    config.workflowId,
+    definition,
+    liveExecution,
+    runtimeHandlers,
+    bus,
+    signal,
+    undefined,
+    artifactBinding,
+    { context: config.context, env: config.env },
+  );
+  const expressionCtx = runtimeCtx.buildExpressionContext();
+  const outcome = await executeSequence(definition.root, runtimeCtx, expressionCtx);
 
+  if (outcome.status === 'failed') {
+    return { status: 'failed', error: outcome.error };
+  }
+  if (outcome.status === 'cancelled' || signal.aborted) {
+    return { status: 'cancelled' };
+  }
+  return { status: 'completed' };
+}
+
+/**
+ * Build the active-execution run-context snapshot from worker configuration.
+ * @param config - Worker configuration passed to the isolated orchestrator.
+ * @param definition - Loaded definition snapshot for definition-sourced runs.
+ * @returns Durable run-context shape used by shared finalizer state.
+ */
+function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: WorkflowDefinition): WorkflowRunContext {
   return {
     executionId: config.executionId,
     workflowId: config.workflowId,
-    status: 'failed',
-    output: execution.error ?? 'Workflow execution failed',
+    source: config.source,
+    ...(config.source.kind === 'definition' ? { definitionSnapshot: config.definition ?? definition } : {}),
+    workerManifest: { packages: [] },
+    inputs: config.inputs,
+    config: config.config ?? {},
+    scope: config.scope,
+    triggerPayload: config.triggerPayload,
+    ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
+    ...(config.executionHints !== undefined ? { executionHints: config.executionHints } : {}),
+    coordinatorSessionId: config.coordinatorSessionId,
+    cancelSubject: config.cancelSubject,
+    context: config.context,
+    env: config.env,
+    createdAt: Date.now(),
   };
 }
 
 /**
- * Persist and emit a terminal execution state before the scheduler starts.
- * @param bus - Worker-local bus with workflow storage handlers.
- * @param config - Worker configuration for execution identifiers.
- * @param execution - Mutable execution record to terminalize.
- * @param status - Terminal status to persist.
- * @param reason - Optional cancellation reason.
- * @returns Terminal workflow run result.
+ * Emit the terminal lifecycle event for a completed execution.
+ * @param bus - Worker-local bus.
+ * @param config - Worker configuration carrying execution identifiers.
+ * @param status - Terminal status.
+ * @param liveExecution - The settled execution record (startedAt used for duration).
+ * @param completedAt - Unix timestamp when the execution ended.
+ * @param error - Error message for failed executions.
  */
-async function persistPreSchedulerTerminalExecution(
+async function emitTerminalExecutionEvent(
   bus: IMakaioBus,
   config: WorkflowWorkerConfig,
-  execution: WorkflowExecution,
-  status: 'completed' | 'cancelled',
-  reason?: string,
-): Promise<WorkflowRunResult> {
-  execution.status = status;
-  execution.completedAt = Date.now();
-
-  if (status === 'cancelled') {
-    for (const [stepId, stepState] of Object.entries(execution.steps)) {
-      if (stepState.kind === 'composite') {
-        execution.steps[stepId] = { ...stepState, status: 'cancelled' };
-      } else {
-        execution.steps[stepId] = {
-          ...stepState,
-          status: 'failed',
-          error: reason ?? WORKFLOW_CANCELLED_REASON,
-          completedAt: execution.completedAt,
-        };
-      }
-    }
-  }
-
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+  status: 'completed' | 'failed' | 'cancelled',
+  liveExecution: WorkflowExecution,
+  completedAt: number,
+  error?: string,
+): Promise<void> {
   if (status === 'completed') {
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: config.executionId,
-      totalDuration: execution.completedAt - execution.startedAt,
+      totalDuration: completedAt - liveExecution.startedAt,
     });
+  } else if (status === 'cancelled') {
+    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId: config.executionId });
   } else {
-    await bus.emit(WorkflowSubjects.execution.cancelled, { executionId: config.executionId, reason });
+    await bus.emit(WorkflowSubjects.execution.failed, {
+      executionId: config.executionId,
+      error: error ?? 'Workflow execution failed',
+    });
   }
-
-  return { executionId: config.executionId, workflowId: config.workflowId, status };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -434,89 +316,66 @@ async function persistPreSchedulerTerminalExecution(
  * Orchestrate a full workflow execution inside an isolated worker.
  *
  * Builds an {@link ActiveExecution} from the worker config, persists the
- * initial execution state, and delegates all scheduling to
- * {@link WorkflowScheduler}, which handles:
- * - DAG scheduling with for-each runtime expansion
- * - `if`-condition evaluation and step skipping
- * - Lifecycle event emission (`step.started`, `step.completed`, etc.)
- * - Persistent state writes via {@link WorkflowStorageSubjects}
- *
- * Step types are dispatched as follows:
- * - `function`: invokes the runtime step function directly via `runFunctionStep`
- * - `shell`: spawns an external process via {@link executeShellStepInWorker}
- * - `agent`: spawns a subagent via the bus and awaits completion
- * - `gate`: forwards to the main-process gate coordinator via `gate.awaitApproval`
- *   RPC; the main process registers the pending gate, emits `gate.requested`,
- *   and awaits the user's `gate.respond` response
+ * initial execution state, and delegates all scheduling to the
+ * primitive runtime ({@link executeSequence}), which handles:
+ * - Sequential node execution with `when`/`skip` condition evaluation
+ * - Parallel branch execution via `parallel` nodes
+ * - Iterate/iterate-chain for collection processing
+ * - Gate nodes with suspend/resume lifecycle
+ * - Station nodes dispatched via `runtimeHandlers`
  *
  * ### Cancellation
  * When `signal` is already aborted before execution begins, returns a
- * `cancelled` result immediately without touching any steps. In-flight steps
- * are cancelled cooperatively via the scheduler's abort handling.
+ * `cancelled` result immediately. In-flight nodes are cancelled cooperatively
+ * via the abort signal propagated through the `RuntimeContext`.
  *
  * ### Persistence contract
  * The caller MUST ensure a {@link WorkflowStorageSubjects} handler is registered
  * on the bus before calling this function. The orchestrator writes the initial
- * execution record; the scheduler writes step state changes on each transition.
+ * execution record; the runtime writes frame state on each transition.
  * @param params - Orchestrator parameters including config, loaded workflow, bus, and signal.
  * @returns Terminal workflow run result with status `completed`, `failed`, or `cancelled`.
  */
 export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams): Promise<WorkflowRunResult> {
   const { config, loaded, bus, signal } = params;
-
   const { definition } = loaded;
 
-  // Construct a WorkflowDefinition from WorkflowDefinitionInput by supplying
-  // the storage-managed timestamp fields. The scheduler only uses the structural
-  // definition fields so the placeholder values do not affect behaviour.
-  const workflow: WorkflowDefinition = { ...definition, createdAt: 0, updatedAt: 0 };
+  if (signal.aborted) {
+    return persistPreRuntimeTerminalExecution(bus, config, 'cancelled', WORKFLOW_CANCELLED_REASON);
+  }
 
-  // Build the initial execution state with all authored steps in `pending`.
-  const execution: WorkflowExecution = {
+  if (definition.root.nodes.length === 0) {
+    return persistPreRuntimeTerminalExecution(bus, config, 'completed');
+  }
+
+  const liveExecution: WorkflowExecution = {
     id: config.executionId,
     workflowId: config.workflowId,
     coordinatorSessionId: config.coordinatorSessionId,
     status: 'running',
     inputs: config.inputs,
-    steps: buildInitialStepStates(definition.steps),
+    config: config.config ?? {},
     startedAt: Date.now(),
     triggerPayload: config.triggerPayload,
     scope: config.scope,
   };
 
-  // Fast path: abort before scheduling any steps, while still terminalizing the
-  // execution row that the main process created before dispatching the worker.
-  if (signal.aborted) {
-    return persistPreSchedulerTerminalExecution(bus, config, execution, 'cancelled', WORKFLOW_CANCELLED_REASON);
-  }
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
 
-  // Zero-step workflows complete immediately, but still persist and emit the
-  // terminal lifecycle so observers do not see a permanently running execution.
-  if (definition.steps.length === 0) {
-    return persistPreSchedulerTerminalExecution(bus, config, execution, 'completed');
-  }
-
-  // Persist the initial execution record so the main process can observe it.
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-  const stepMap = new Map<string, WorkflowStep>(definition.steps.map((step) => [step.id, step]));
+  const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
 
+  const runContext = buildWorkerRunContext(config, definition);
+
   activeExecutions.set(config.executionId, {
-    execution,
-    workflow,
-    stepMap,
-    stepContext: new Map(),
+    execution: liveExecution,
+    workflow: definition,
+    runContext,
+    runtimeHandlers,
   });
 
-  // The worker gate coordinator is a no-op placeholder — gate steps are handled
-  // by the `runGateStep` callback via the `gate.awaitApproval` bus RPC instead
-  // of the local gate coordinator path.
-  const gateCoordinator = new WorkflowGateCoordinator(bus);
-
-  const stepContextBase = buildStepContextBase(config);
   const releaseSignalCancellation = bindSignalCancellation({
     signal,
     executionId: config.executionId,
@@ -524,42 +383,45 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     activeExecutions,
     shellAbortControllers,
     activeRunnerSteps,
-    gateCoordinator,
   });
 
-  const scheduler = new WorkflowScheduler(
-    {
-      bus,
-      activeExecutions,
-      shellAbortControllers,
-      activeRunnerSteps,
-      gateCoordinator,
-      runStep: buildRunStep(bus, config, loaded),
-      runnerManagesLifecycle: false,
-      runFunctionStep: buildRunFunctionStep(loaded, stepContextBase, activeExecutions),
-      runGateStep: buildRunGateStep(bus, config, loaded, activeExecutions),
-      forceKillStep: undefined,
-      onAbortSubagent: undefined,
-      config: {
-        ...DEFAULT_EXECUTOR_CONFIG,
-        stepCooldownMs: 0,
-        busAuth: config.busAuth,
-        platformDefaults: { cwd: config.context.repoPath },
-      },
-    },
-    config.executionId,
-  );
+  let result: RuntimeSequenceResult = { status: 'completed' };
+
+  let signalCancellationFinalized = false;
 
   try {
-    await scheduler.run(definition.steps);
+    result = await runRuntimeSequence(
+      config,
+      definition,
+      liveExecution,
+      runContext,
+      runtimeHandlers,
+      bus,
+      signal,
+      loaded.zodSchemas,
+    );
+  } catch (error) {
+    result = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
   } finally {
-    await releaseSignalCancellation();
-    gateCoordinator.dispose();
+    signalCancellationFinalized = await releaseSignalCancellation();
     activeExecutions.clear();
   }
 
-  // Derive the terminal result from the settled execution state.
-  // The scheduler removes the execution from activeExecutions on completion,
-  // so we must read the local execution reference directly.
-  return buildWorkflowRunResult(config, execution);
+  if (signalCancellationFinalized) {
+    // Signal cancellation owns the terminal write and lifecycle event once
+    // cancelExecution() transitions the active run to cancelled.
+    return buildWorkflowRunResult(config, 'cancelled');
+  }
+
+  if (signal.aborted || liveExecution.status === 'cancelled') {
+    result = { status: 'cancelled' };
+  }
+
+  const completedAt = Date.now();
+  liveExecution.status = result.status;
+  liveExecution.completedAt = completedAt;
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
+  await emitTerminalExecutionEvent(bus, config, result.status, liveExecution, completedAt, result.error);
+
+  return buildWorkflowRunResult(config, result.status, result.error);
 }

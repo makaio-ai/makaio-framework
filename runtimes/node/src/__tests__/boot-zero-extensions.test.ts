@@ -242,6 +242,69 @@ export default [bootPackage, targetPackage];
     expect(listed.kinds.map((kind) => kind.kind)).toEqual(['boot-note']);
   });
 
+  it('registers extension transition rules and actions during boot', async () => {
+    const transport = new FakeTransportProvider();
+    let transitionActionCount = 0;
+    const pkg: KernelMakaioExtension = {
+      name: 'transition-fixture',
+      displayName: 'Transition Fixture',
+      version: '1.0.0',
+      transitionRules: {
+        rules: [
+          {
+            id: 'transition-fixture.capture-created',
+            on: 'artifact.created',
+            action: { type: 'transition-fixture.capture' },
+            enabled: true,
+          },
+        ],
+      },
+      transitionActions: {
+        actions: {
+          'transition-fixture.capture': () => ({
+            async execute() {
+              transitionActionCount += 1;
+            },
+          }),
+        },
+      },
+    };
+    const descriptor: DiscoveredExtension = {
+      descriptor: {
+        name: 'transition-fixture',
+        displayName: 'Transition Fixture',
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { server: true },
+      },
+      extensionPath: tempHome,
+      source: 'local',
+      preloadedModule: { default: pkg },
+    };
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      discovery: new ExplicitDescriptorDiscovery([descriptor]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    await MakaioBus.emit(ArtifactSubjects.created, {
+      artifact: {
+        kind: 'implementation-plan',
+        id: 'artifact-1',
+        revision: 'rev-1',
+        schemaVersion: '1',
+        scope: { level: 'global' },
+        data: { status: 'draft' },
+        relations: [],
+        actor: { kind: 'agent', id: 'agent-1' },
+        timestamp: 1000,
+      },
+    });
+
+    expect(transitionActionCount).toBe(1);
+  });
+
   it('ignores persisted-disabled runtime owners before framework package selection and runtime boot', async () => {
     const transport = new FakeTransportProvider();
     const disabledOwnerPackageName = 'disabled-runtime-owner';

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
-import { JsonObjectContractSchema } from '../shared/json-value.js';
+import { JsonSchemaRecordSchema } from '../shared/json-value.js';
 
 /**
  * Shared metadata schema for registered workflow blocks (trigger or step).
@@ -22,25 +22,82 @@ const RegisteredTriggerBlockSchema = z.object({
   outputSchema: z.record(z.string(), z.unknown()),
 });
 
+// ─────────────────────────────────────────────────────────────
+// Step Block Run Mapping Schemas
+// ─────────────────────────────────────────────────────────────
+
 /**
- * Zod schema for the bus-request run mapping on a registered step block.
+ * Zod schema for the `station` node run mapping on a registered step block.
  *
- * Mirrors {@link BusRequestWorkflowStepBlockRun} for bus transport validation.
+ * Mirrors {@link StationNodeBlockRun} for bus transport validation.
+ * Validates that `prompt` is non-empty and `outputSchema` is a JSON Schema
+ * document when present.
  */
-const BusRequestWorkflowStepBlockRunSchema = z.object({
-  type: z.literal('bus-request'),
-  subject: z.string().min(1),
-  payload: JsonObjectContractSchema.optional(),
-  timeoutMs: z.number().int().nonnegative().optional(),
+const StationNodeBlockRunSchema = z.object({
+  type: z.literal('station'),
+  /** Task prompt template compiled into the station node. */
+  prompt: z.string().min(1),
+  /** Named role reference forwarded to the station node. */
+  role: z.string().min(1).optional(),
+  /**
+   * JSON Schema document for the expected station output.
+   * Validated as a JSON-safe record when present.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+  /** Timeout in milliseconds forwarded to the station node. */
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+/**
+ * Zod schema for the `delegate-agent` node run mapping on a registered step block.
+ *
+ * Mirrors {@link DelegateAgentNodeBlockRun} for bus transport validation.
+ */
+const DelegateAgentNodeBlockRunSchema = z.object({
+  type: z.literal('delegate-agent'),
+  /** Identifier of the registered agent definition to invoke. */
+  agentId: z.string().min(1),
+  /** jexl expression template resolving to the agent input payload. */
+  inputExpression: z.string().optional(),
+  /**
+   * JSON Schema document for the expected agent output.
+   * Validated as a JSON-safe record when present.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+});
+
+/**
+ * Zod schema for the `delegate-role` node run mapping on a registered step block.
+ *
+ * Mirrors {@link DelegateRoleNodeBlockRun} for bus transport validation.
+ */
+const DelegateRoleNodeBlockRunSchema = z.object({
+  type: z.literal('delegate-role'),
+  /** Named role reference resolved at execution time. */
+  role: z.string().min(1),
+  /** Task prompt template forwarded to the delegate-role node. */
+  prompt: z.string().min(1),
+  /**
+   * JSON Schema document for the expected delegation output.
+   * Validated as a JSON-safe record when present.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+  /** Timeout in milliseconds forwarded to the delegate-role node. */
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 /**
  * Discriminated union schema for all supported step block run mappings.
  *
- * Extend by adding additional variants to this union as new execution
- * strategies are introduced.
+ * Each variant corresponds to a primitive node type the builder can compile the
+ * step into. Extend by adding additional variants as new execution strategies
+ * are introduced.
  */
-const WorkflowStepBlockRunSchema = BusRequestWorkflowStepBlockRunSchema;
+const WorkflowStepBlockRunSchema = z.discriminatedUnion('type', [
+  StationNodeBlockRunSchema,
+  DelegateAgentNodeBlockRunSchema,
+  DelegateRoleNodeBlockRunSchema,
+]);
 
 /**
  * Zod schema for registered step block metadata (including owning extension).

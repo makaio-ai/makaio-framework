@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
   type IWorkflowRunner,
+  type JsonValue,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowExecutionScope,
@@ -13,9 +14,10 @@ import { type ExecutorConfig, type ActiveExecution } from './types.js';
 import { generateId } from './executor-helpers.js';
 import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import { type FinalizerDeps } from './workflow-execution-finalizer.js';
-import { buildInitialStepStates, validateAuthoredWorkflowSteps } from './dag-utils.js';
+// dag-utils import removed: step DAG replaced by primitive runtime frame model
 import {
   bindWorkflowInputs,
+  bindWorkflowConfig,
   buildExecutionTask,
   buildFileExecutionTask,
   type RunnerTaskDeps,
@@ -50,8 +52,11 @@ export interface StartExecutionDeps {
     source: WorkflowRunContext['source'];
     definitionSnapshot?: WorkflowRunContext['definitionSnapshot'];
     inputs: WorkflowRunContext['inputs'];
+    config: WorkflowRunContext['config'];
     scope: WorkflowRunContext['scope'];
     triggerPayload: WorkflowRunContext['triggerPayload'];
+    artifactRef?: WorkflowRunContext['artifactRef'];
+    executionHints?: WorkflowRunContext['executionHints'];
     workspaceRoot: string;
   }): WorkflowRunContext;
   /**
@@ -107,9 +112,11 @@ async function closeCoordinatorSession(bus: IMakaioBus, sessionId: string): Prom
  * @param executionId - Unique execution identifier.
  * @param workflow - Workflow definition being executed.
  * @param coordinatorSessionId - Coordinator session owning this execution.
- * @param boundInputs - Resolved input values.
+ * @param boundInputs - Resolved input value.
+ * @param boundConfig - Resolved workflow configuration values.
  * @param sanitizedTriggerPayload - Sanitized trigger payload (may be null).
  * @param resolvedScope - Resolved execution scope.
+ * @param runContext - Durable run-context snapshot for this execution.
  * @returns The newly constructed execution record.
  */
 function seedDefinitionExecution(
@@ -117,9 +124,11 @@ function seedDefinitionExecution(
   executionId: string,
   workflow: WorkflowDefinition,
   coordinatorSessionId: string,
-  boundInputs: Record<string, unknown>,
+  boundInputs: JsonValue,
+  boundConfig: Record<string, unknown>,
   sanitizedTriggerPayload: Record<string, unknown> | undefined,
   resolvedScope: WorkflowExecutionScope,
+  runContext: WorkflowRunContext,
 ): WorkflowExecution {
   const execution: WorkflowExecution = {
     id: executionId,
@@ -127,13 +136,19 @@ function seedDefinitionExecution(
     coordinatorSessionId,
     status: 'running',
     inputs: boundInputs,
-    steps: buildInitialStepStates(workflow.steps),
+    config: boundConfig,
     startedAt: Date.now(),
     triggerPayload: sanitizedTriggerPayload,
     scope: resolvedScope,
   };
-  const stepMap = new Map(workflow.steps.map((step) => [step.id, step]));
-  activeExecutions.set(executionId, { execution, workflow, stepMap, stepContext: new Map() });
+  // Definition-backed executions have no in-process station handlers.
+  // Handler-bearing executions (e.g. runFile) supply runtimeHandlers separately.
+  activeExecutions.set(executionId, {
+    execution,
+    workflow,
+    runContext,
+    runtimeHandlers: new Map(),
+  });
   return execution;
 }
 
@@ -188,8 +203,78 @@ async function loadAndValidateWorkflow(bus: IMakaioBus, workflowId: string): Pro
   if (!workflow) {
     throw new Error(`Workflow not found: ${workflowId}`);
   }
-  validateAuthoredWorkflowSteps(workflow.steps);
+  // Step DAG validation removed: pipeline-primitive model validates at authoring time
   return workflow;
+}
+
+/**
+ * Dispatch a definition-backed execution through the configured runner, or run
+ * it in-process when no isolated runner is configured.
+ * @param deps - Shared executor state and callbacks.
+ * @param params - Bound execution data needed by the runner task.
+ * @returns Settled execution task promise.
+ */
+function launchDefinitionExecutionTask(
+  deps: StartExecutionDeps,
+  params: {
+    executionId: string;
+    workflowId: string;
+    workflow: WorkflowDefinition;
+    coordinatorSessionId: string;
+    sanitizedTriggerPayload: Record<string, unknown>;
+    boundInputs: JsonValue;
+    boundConfig: Record<string, unknown>;
+    artifactRef?: WorkflowRunContext['artifactRef'];
+    executionHints?: WorkflowRunContext['executionHints'];
+    scope: WorkflowExecutionScope;
+    workspaceRoot: string;
+  },
+): Promise<void> {
+  if (deps.workflowRunner !== undefined) {
+    return buildExecutionTask(deps.buildRunnerTaskDeps(deps.workflowRunner), params);
+  }
+  return deps.runExecution(params.executionId).finally(() => {
+    deps.executionTasks.delete(params.executionId);
+  });
+}
+
+/** Options accepted by {@link startExecution}. */
+interface DefinitionStartOptions {
+  /** Caller-supplied JSON input value. */
+  readonly input?: JsonValue;
+  /** Workflow configuration overrides. */
+  readonly config?: Record<string, unknown>;
+  /** Optional parent coordinator session. */
+  readonly parentSessionId?: string;
+  /** Optional trigger payload. */
+  readonly triggerPayload?: Record<string, unknown>;
+  /** Optional artifact binding reference. */
+  readonly artifactRef?: WorkflowRunContext['artifactRef'];
+  /** Optional worker provisioning hints. */
+  readonly executionHints?: WorkflowRunContext['executionHints'];
+  /** Optional execution scope override. */
+  readonly scopeOverride?: WorkflowExecutionScope;
+}
+
+/** Normalized definition execution start options. */
+interface NormalizedDefinitionStartOptions extends Omit<DefinitionStartOptions, 'config' | 'input'> {
+  /** Caller-supplied JSON input value. */
+  readonly input: JsonValue;
+  /** Workflow configuration overrides. */
+  readonly config: Record<string, unknown>;
+}
+
+/**
+ * Normalize start options while preserving scalar and array workflow inputs.
+ * @param options - Raw start options.
+ * @returns Options with defaults applied.
+ */
+function normalizeDefinitionStartOptions(options: DefinitionStartOptions): NormalizedDefinitionStartOptions {
+  return {
+    ...options,
+    input: options.input === undefined ? {} : options.input,
+    config: options.config ?? {},
+  };
 }
 
 /**
@@ -206,20 +291,17 @@ async function loadAndValidateWorkflow(bus: IMakaioBus, workflowId: string): Pro
 export async function startExecution(
   deps: StartExecutionDeps,
   workflowId: string,
-  options: {
-    inputs?: Record<string, unknown>;
-    parentSessionId?: string;
-    triggerPayload?: Record<string, unknown>;
-    scopeOverride?: WorkflowExecutionScope;
-  } = {},
+  options: DefinitionStartOptions = {},
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
-  const { inputs = {}, parentSessionId, triggerPayload, scopeOverride } = options;
+  const { input, config, parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } =
+    normalizeDefinitionStartOptions(options);
 
   const workflow = await loadAndValidateWorkflow(bus, workflowId);
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
-  const boundInputs = bindWorkflowInputs(workflow.inputs, inputs);
+  const boundInputs = bindWorkflowInputs(workflow, input);
+  const boundConfig = bindWorkflowConfig(workflow, config);
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
 
@@ -232,47 +314,47 @@ export async function startExecution(
 
   let launched = false;
   try {
+    const runContext = deps.buildRunContext({
+      executionId,
+      workflowId,
+      coordinatorSessionId,
+      source: { kind: 'definition', workflowId },
+      definitionSnapshot: workflow,
+      inputs: boundInputs,
+      config: boundConfig,
+      scope: resolvedScope,
+      triggerPayload: sanitizedTriggerPayload ?? {},
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+      ...(executionHints !== undefined ? { executionHints } : {}),
+      workspaceRoot,
+    });
     const execution = seedDefinitionExecution(
       activeExecutions,
       executionId,
       workflow,
       coordinatorSessionId,
       boundInputs,
+      boundConfig,
       sanitizedTriggerPayload,
       resolvedScope,
+      runContext,
     );
-    await persistExecutionStart(
-      bus,
-      execution,
-      deps.buildRunContext({
-        executionId,
-        workflowId,
-        coordinatorSessionId,
-        source: { kind: 'definition', workflowId },
-        definitionSnapshot: workflow,
-        inputs: boundInputs,
-        scope: resolvedScope,
-        triggerPayload: sanitizedTriggerPayload ?? {},
-        workspaceRoot,
-      }),
-    );
+    await persistExecutionStart(bus, execution, runContext);
 
     const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId });
-    const executionTask =
-      deps.workflowRunner !== undefined
-        ? buildExecutionTask(deps.buildRunnerTaskDeps(deps.workflowRunner), {
-            executionId,
-            workflowId,
-            workflow,
-            coordinatorSessionId,
-            sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
-            boundInputs,
-            scope: resolvedScope,
-            workspaceRoot,
-          })
-        : deps.runExecution(executionId).finally(() => {
-            executionTasks.delete(executionId);
-          });
+    const executionTask = launchDefinitionExecutionTask(deps, {
+      executionId,
+      workflowId,
+      workflow,
+      coordinatorSessionId,
+      sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
+      boundInputs,
+      boundConfig,
+      scope: resolvedScope,
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+      ...(executionHints !== undefined ? { executionHints } : {}),
+      workspaceRoot,
+    });
 
     launched = true;
     return dispatchAndAwait(executionTasks, executionId, executionTask, startedEventTask);
@@ -284,6 +366,37 @@ export async function startExecution(
     }
     throw error;
   }
+}
+
+/**
+ * Seed the active-executions registry for an ephemeral file-backed execution.
+ *
+ * File-backed executions use a minimal stub workflow definition (empty root
+ * sequence) because the actual definition is loaded inside the runner process.
+ * @param activeExecutions - Live execution registry.
+ * @param execution - The new `WorkflowExecution` record.
+ * @param filePath - Source file path used as the workflow name fallback.
+ * @param resolvedScope - Resolved execution scope for the stub definition.
+ * @param runContext - Durable run-context snapshot for this execution.
+ */
+function seedFileExecution(
+  activeExecutions: Map<string, ActiveExecution>,
+  execution: WorkflowExecution,
+  filePath: string,
+  resolvedScope: WorkflowExecutionScope,
+  runContext: WorkflowRunContext,
+): void {
+  activeExecutions.set(execution.id, {
+    execution,
+    workflow: {
+      id: execution.workflowId,
+      name: filePath,
+      scope: resolvedScope,
+      root: { id: `${execution.workflowId}-root`, type: 'sequence', nodes: [] },
+    },
+    runContext,
+    runtimeHandlers: new Map(),
+  });
 }
 
 /**
@@ -331,7 +444,7 @@ export async function startFileExecution(
     coordinatorSessionId,
     status: 'running',
     inputs: {},
-    steps: {},
+    config: {},
     startedAt: Date.now(),
     triggerPayload: sanitizedTriggerPayload,
     scope: resolvedScope,
@@ -339,30 +452,20 @@ export async function startFileExecution(
 
   let launched = false;
   try {
-    await persistExecutionStart(
-      bus,
-      execution,
-      deps.buildRunContext({
-        executionId,
-        workflowId,
-        coordinatorSessionId,
-        source: { kind: 'path', path: filePath },
-        inputs: {},
-        scope: resolvedScope,
-        triggerPayload: sanitizedTriggerPayload ?? {},
-        workspaceRoot,
-      }),
-    );
-
-    // The runner manages the full execution lifecycle (step events, completion).
-    // Register a minimal ActiveExecution entry so cancellation and shutdown
-    // can abort the runner via workflowAbortControllers.
-    activeExecutions.set(executionId, {
-      execution,
-      workflow: { id: workflowId, name: filePath, scope: resolvedScope, steps: [], createdAt: 0, updatedAt: 0 },
-      stepMap: new Map(),
-      stepContext: new Map(),
+    const runContext = deps.buildRunContext({
+      executionId,
+      workflowId,
+      coordinatorSessionId,
+      source: { kind: 'path', path: filePath },
+      inputs: {},
+      config: {},
+      scope: resolvedScope,
+      triggerPayload: sanitizedTriggerPayload ?? {},
+      workspaceRoot,
     });
+    await persistExecutionStart(bus, execution, runContext);
+
+    seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
     const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId });
     // workflowRunner presence is enforced by the runFile handler before

@@ -220,10 +220,12 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `action` | `"reject" \| "approve"` | yes |
+| `action` | `"approve" \| "reject"` | yes |
 | `executionId` | `string` | yes |
+| `frameId` | `string \| undefined` | no |
+| `gateId` | `string` | yes |
 | `reason` | `string \| undefined` | no |
-| `stepId` | `string` | yes |
+| `resumeData` | `JsonValue` | yes |
 
 **Response:**
 

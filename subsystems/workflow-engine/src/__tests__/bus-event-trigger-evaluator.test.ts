@@ -247,12 +247,7 @@ describe('BusEventTriggerEvaluator', () => {
 
     // Simulate the storage emitting a definition.created event so the evaluator
     // picks up the new trigger without restarting.
-    await MakaioBus.emit(WorkflowSubjects.definition.created, {
-      ...workflow,
-      steps: [{ id: 'step', type: 'agent', prompt: 'Do work' }],
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    });
+    await MakaioBus.emit(WorkflowSubjects.definition.created, { ...workflow });
 
     // Retry: the evaluator processes events asynchronously.
     await vi.waitFor(async () => {

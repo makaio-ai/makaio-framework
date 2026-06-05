@@ -85,6 +85,32 @@ describe('WorkflowRunContext storage round-trip', () => {
     expect(fetched?.scope).toEqual({ type: 'global' });
   });
 
+  it('persists non-object inputs and execution hints', async () => {
+    const workflow = createWorkflowDefinition({ id: 'wf-test' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const executionId = 'exec-rc-scalar-input';
+    const runContext = WorkflowRunContextSchema.parse({
+      ...buildRunContext(executionId),
+      inputs: null,
+      executionHints: {
+        priority: 'high',
+        requirements: { capabilities: ['docker'] },
+        providers: { 'github-actions': { pool: 'expensive-runner' } },
+      },
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.inputs).toBeNull();
+    expect(fetched?.executionHints).toEqual({
+      priority: 'high',
+      requirements: { capabilities: ['docker'] },
+      providers: { 'github-actions': { pool: 'expensive-runner' } },
+    });
+  });
+
   it('persists and retrieves a path-sourced run context', async () => {
     const executionId = 'exec-rc-path';
     const runContext = buildRunContext(executionId, { source: 'path' });
@@ -126,7 +152,7 @@ describe('WorkflowRunContext storage round-trip', () => {
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.definitionSnapshot).toBeDefined();
     expect(fetched?.definitionSnapshot?.id).toBe('wf-test');
-    expect(fetched?.definitionSnapshot?.steps).toHaveLength(workflow.steps.length);
+    expect(fetched?.definitionSnapshot?.root.nodes).toHaveLength(workflow.root.nodes.length);
   });
 
   it('rejects definition-sourced run contexts without a definition snapshot', () => {
@@ -150,6 +176,19 @@ describe('WorkflowRunContext storage round-trip', () => {
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.scope).toEqual({ type: 'external', kind: 'project', id: 'proj-1' });
+  });
+
+  it('persists a start-supplied artifact reference', async () => {
+    const executionId = 'exec-rc-artifact-ref';
+    const runContext = WorkflowRunContextSchema.parse({
+      ...buildRunContext(executionId),
+      artifactRef: { kind: 'implementation-plan', id: 'artifact-42' },
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.artifactRef).toEqual({ kind: 'implementation-plan', id: 'artifact-42' });
   });
 
   it('returns null for a non-existent execution ID', async () => {

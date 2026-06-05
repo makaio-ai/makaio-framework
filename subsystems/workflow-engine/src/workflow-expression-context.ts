@@ -1,10 +1,12 @@
-import { CompositeStepStateSchema, JsonValueSchema, StepStatusSchema } from '@makaio/contracts';
+import { JsonValueSchema, WorkflowFrameStateSchema } from '@makaio/contracts';
+import type { JsonValue } from '@makaio/contracts';
 import type { WorkflowExpressionContext } from '@makaio/expression';
 
-const WORKFLOW_EXPRESSION_STEP_STATUSES = new Set<string>([
-  ...StepStatusSchema.options,
-  ...CompositeStepStateSchema.shape.status.options,
-]);
+/**
+ * All valid frame execution statuses that may appear in expression contexts.
+ * Derived from `WorkflowFrameStateSchema` to stay in sync with the schema.
+ */
+const WORKFLOW_EXPRESSION_STEP_STATUSES = new Set<string>([...WorkflowFrameStateSchema.shape.status.options]);
 
 /**
  * Check whether a value is a non-array object record.
@@ -54,7 +56,7 @@ export function buildWorkflowExpressionContextFromResolvedInputs(
   const context: WorkflowExpressionContext = {
     trigger: isRecord(resolvedInputs['trigger']) ? resolvedInputs['trigger'] : {},
     steps: isWorkflowExpressionSteps(resolvedInputs['steps']) ? resolvedInputs['steps'] : {},
-    inputs: isRecord(resolvedInputs['inputs']) ? resolvedInputs['inputs'] : {},
+    inputs: JsonValueSchema.safeParse(resolvedInputs['inputs']).success ? (resolvedInputs['inputs'] as JsonValue) : {},
   };
 
   if ('item' in resolvedInputs) {

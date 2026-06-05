@@ -5,19 +5,8 @@ import type {
   WorkflowBlockCollection,
   WorkflowBlockMetadata,
 } from '@makaio/contracts';
-import { WorkflowBlocksSubjects } from '@makaio/contracts';
+import { WorkflowBlocksSubjects, zodSchemaToJsonRecord } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
-import { z } from 'zod';
-
-/**
- * Strip the `$schema` dialect key from a Zod-generated JSON Schema.
- * @param zodSchema - Zod schema to convert and strip.
- * @returns JSON Schema object without the `$schema` key.
- */
-function stripMetaSchema(zodSchema: z.ZodType): Record<string, unknown> {
-  const { $schema: _, ...schema } = z.toJSONSchema(zodSchema) as Record<string, unknown>;
-  return schema;
-}
 
 /**
  * Registry for workflow blocks contributed by extensions.
@@ -81,8 +70,8 @@ export class WorkflowBlockRegistry extends BaseService {
         existingNames.add(trigger.metadata.name);
         triggers.push({
           metadata: { ...trigger.metadata, extensionName },
-          configSchema: stripMetaSchema(trigger.configSchema),
-          outputSchema: stripMetaSchema(trigger.outputSchema),
+          configSchema: zodSchemaToJsonRecord(trigger.configSchema),
+          outputSchema: zodSchemaToJsonRecord(trigger.outputSchema),
         });
       }
     }
@@ -94,9 +83,9 @@ export class WorkflowBlockRegistry extends BaseService {
         existingNames.add(step.metadata.name);
         steps.push({
           metadata: { ...step.metadata, extensionName },
-          configSchema: stripMetaSchema(step.configSchema),
-          inputSchema: stripMetaSchema(step.inputSchema),
-          outputSchema: stripMetaSchema(step.outputSchema),
+          configSchema: zodSchemaToJsonRecord(step.configSchema),
+          inputSchema: zodSchemaToJsonRecord(step.inputSchema),
+          outputSchema: zodSchemaToJsonRecord(step.outputSchema),
           runs: structuredClone(step.runs),
         });
       }

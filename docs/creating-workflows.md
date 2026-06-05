@@ -1,50 +1,46 @@
 ---
 title: Creating Workflows
-description: Build typed, event-driven workflows that automate multi-step tasks with shell commands, agent steps, and approval gates.
+description: Build typed, event-driven workflows using the factory pipeline API with stations, parallel delegates, gates, and iterators.
 ---
 
-Workflows are multi-step automations that combine shell commands, agent steps, approval
-gates, and typed function steps into a DAG. Each workflow declares triggers (bus events,
-cron, manual) and steps that the workflow engine schedules and executes.
+Workflows are multi-step automations that combine typed handler functions, agent delegations,
+approval gates, and collection iterators into a linear pipeline. Each workflow declares
+triggers (bus events, cron, manual) and a sequence of nodes that the workflow engine executes
+in order.
 
-Workflows can be authored in two ways:
+Workflows are authored as TypeScript files using the `defineWorkflow()` builder API. The
+builder produces two outputs:
 
-- **TypeScript files** — using the `defineWorkflow()` builder API with typed triggers
-  and function steps. This is the primary authoring surface covered in this guide.
-- **JSON definitions** — stored in the database via `WorkflowSubjects.setDefinition`,
-  typically created through the workflow editor UI. These use string-template expressions
-  (`{{ steps.id.result }}`) for inter-step data flow instead of typed function references.
+- **`definition`** — a fully serializable JSON structure safe to store and display in the UI.
+- **`runtimeHandlers`** — an in-memory map of handler functions consumed by the executor.
 
-Both formats share the `WorkflowDefinitionInput` shape, but persisted JSON definitions
-use the stricter persisted schema and cannot contain runtime-only function steps.
-TypeScript file workflows keep those functions in `workflow.runtimeSteps` and execute
-through the file workflow runner.
+Multiple related workflows can be packaged together using `defineWorkflowBundle()`.
 
-**Execution environments:** The workflow engine dispatches execution through pluggable
-runners at two levels. `IWorkflowRunner` dispatches a whole workflow execution; CLI-served
-runtimes default this to Piscina worker threads with bus access. If no workflow runner is
-configured, the engine falls back to the in-process DAG scheduler. `IStepRunner` remains
-the lower-level step execution seam used by the in-process scheduler for executable steps.
+**Execution environment:** The workflow engine dispatches each workflow execution to a Piscina
+worker thread. The worker `import()`s the workflow file, builds the runtime context, and
+executes the node pipeline in-process.
 
 ---
 
 ## Quick Start
 
-Create a workflow file anywhere — `.makaio/personal/workflows/` is the convention for
-developer-local workflows (gitignored), `.makaio/workflows/` for shared team workflows.
+Create a workflow file anywhere in your project. `.makaio/personal/workflows/` is the
+convention for developer-local workflows (gitignored); `.makaio/workflows/` is for shared
+team workflows.
 
 ```typescript
 // .makaio/personal/workflows/hello.ts
 import { defineWorkflow, ManualWorkflowTrigger } from '@makaio/contracts';
+import { z } from 'zod';
 
 const workflow = defineWorkflow('hello', {
   name: 'Hello World',
   triggers: [ManualWorkflowTrigger()],
 });
 
-workflow.addStep('greet', async () => {
-  return { message: 'Hello from a workflow!' };
-}, { needs: [] });
+workflow.station('greet', async (ctx) => {
+  return { message: `Hello from workflow ${ctx.workflowId}!` };
+});
 
 export default workflow;
 ```
@@ -59,9 +55,26 @@ makaio workflow run .makaio/personal/workflows/hello.ts --payload '{}'
 echo '{}' | makaio workflow run .makaio/personal/workflows/hello.ts
 ```
 
-The `workflow run` command connects to a running Makaio server. Installed builds expose
-the command as `makaio`; source checkouts can run the same CLI entrypoint through their
-host surface.
+---
+
+## The Seven Primitives
+
+Every workflow is composed from seven building blocks, each expressed as a method on the
+fluent builder or as a standalone factory function.
+
+| Primitive | Method / Factory | Purpose |
+|-----------|-----------------|---------|
+| Station | `.station()` / `station()` | Sequential handler step |
+| Delegate (agent) | `.delegateToAgent()` / `delegateToAgent()` | Explicit agent invocation |
+| Delegate (role) | `.delegateToRole()` / `delegateToRole()` | Role-resolved agent invocation |
+| Parallel | `.parallel()` | Fan-out; runs N branches concurrently |
+| Gate | `.gate()` / `gate()` | Human-in-the-loop suspend/resume |
+| Iterate | `.iterate()` / `iterate()` | Single handler mapped over a collection |
+| Iterate chain | `.iterateChain()` / `iterateChain()` | Static sub-chain mapped over a collection |
+
+Standalone factory functions (`station`, `delegateToAgent`, `delegateToRole`, `gate`,
+`iterate`, `iterateChain`) create nodes for embedding inside `.parallel()` or
+`.iterateChain()` calls. They carry the same options as their builder-method counterparts.
 
 ---
 
@@ -69,7 +82,8 @@ host surface.
 
 ### `defineWorkflow(id, options?)`
 
-Creates a workflow builder. The `id` is a stable identifier; `name` is the display name.
+Creates a workflow builder. The `id` is a stable identifier used in bus events, storage, and
+chain rules. `name` is the display name; `description` is shown in the UI.
 
 ```typescript
 import { defineWorkflow, BusEventWorkflowTrigger } from '@makaio/contracts';
@@ -83,121 +97,442 @@ const workflow = defineWorkflow('my-workflow', {
 export default workflow;
 ```
 
-The default export is what the runtime `import()`s. The builder produces two outputs:
-`workflow.definition` (serializable JSON for storage/UI) and `workflow.runtimeSteps`
-(in-memory function map for the worker executor).
+### `.input(schema)` / `.config(schema)` / `.output(schema)`
 
-### `workflow.addStep(id, fn, options)`
-
-Registers a typed function step. Returns a `StepRef` that carries the inferred output
-type — downstream steps receive it via `ctx.previousSteps`.
+Declare Zod schemas for the workflow's input parameters, static configuration, and primary
+output. JSON Schema equivalents are written into the serializable definition.
 
 ```typescript
-const fetchStep = workflow.addStep('fetch-data', async (ctx) => {
-  const data = await loadSomething(ctx.repoPath);
-  return { items: data, count: data.length };
-}, { needs: [] });
+import { z } from 'zod';
 
-workflow.addStep('process', (ctx) => {
-  // ctx.previousSteps['fetch-data'] is fully typed:
-  //   { status: 'completed', output: { items: ..., count: number } }
-  //   | { status: 'skipped' }
-  const prev = ctx.previousSteps['fetch-data'];
-  if (prev.status !== 'completed') return { processed: 0 };
-  return { processed: prev.output.count };
-}, { needs: [fetchStep] });
+workflow
+  .input(z.object({
+    repository: z.string(),
+    branch: z.string(),
+  }))
+  .config(z.object({
+    reviewerRole: z.string().default('code-reviewer'),
+  }))
+  .output(z.object({
+    verdict: z.enum(['approved', 'blocked']),
+  }));
 ```
 
-**Constraints:**
-- Step return types must satisfy `JsonValue` (serializable for persistence and bus events).
-- Step IDs must be unique within a workflow.
-- `needs` declares the DAG — steps run as soon as their dependencies complete.
+### `.artifact(options)`
 
-**Step options:**
+Binds a primary artifact to the workflow. The artifact is loaded before the first station
+runs and available as `ctx.artifact` throughout execution. Handlers may update it via
+`ctx.artifact.updateArtifact()` and `ctx.artifact.updateStatus()`.
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `needs` | `StepRef[]` | Predecessor steps (empty array for root steps) |
-| `if` | `string` | Optional jexl expression; falsy skips the step |
+```typescript
+workflow.artifact({
+  kind: 'implementation-review',
+  schemaVersion: '1',
+  scope: { level: 'global' },
+  statusPath: 'status',
+});
+```
 
-### `workflow.addBusRequestStep(id, config, options)`
+### `.station(id, handler, options?)`
 
-Registers a typed bus RPC step. Unlike `addStep`, there is no function to register —
-the step is entirely schema-driven and executed inline by the scheduler. Returns a
-`StepRef` that carries the inferred response type from the subject definition.
-See [Bus Request Steps](#bus-request-steps) for a full example and runtime semantics.
+Appends a sequential work step. The handler receives a `StationContext` and must return a
+JSON-serializable value. The return value is available as `ctx.previousSteps[id]` in
+subsequent stations.
+
+```typescript
+workflow.station('aggregate', async (ctx) => {
+  const prev = ctx.previousSteps['reviews'];
+  if (prev.status !== 'completed') return { findings: [] };
+  return { findings: prev.output.flat() };
+});
+```
+
+Optional `when` and `skip` jexl expressions control conditional execution:
+
+```typescript
+workflow.station('escalate', escalateHandler, {
+  when: 'output.blockers.length > 0',
+});
+```
+
+### `.delegateToAgent(id, agentConfig, options?)`
+
+Appends an explicit agent invocation with fully declared metadata. The GUI can display adapter,
+model, and profile without executing the workflow.
+
+```typescript
+workflow.delegateToAgent('implement', {
+  agentId: 'claude-code-implementer',
+  inputExpression: '{ task: input.description, branch: input.branch }',
+});
+```
+
+### `.delegateToRole(id, role, options?)`
+
+Appends a role-resolved agent invocation. The role name is looked up in the persona registry
+at runtime to determine the concrete agent configuration.
+
+```typescript
+workflow.delegateToRole('implement', 'implementer', {
+  prompt: 'Implement the plan described in {{ input.description }}',
+});
+```
+
+### `.parallel(id, options, branches)`
+
+Appends a fan-out node. All branches run concurrently; the parallel node completes when all
+branches settle. Use the standalone `station()`, `delegateToAgent()`, or `delegateToRole()`
+factories to build branch nodes.
+
+```typescript
+import { station, delegateToRole } from '@makaio/contracts';
+
+workflow.parallel('reviews', {}, [
+  station('spec-review', specReviewHandler),
+  delegateToRole('quality-review', 'code-reviewer'),
+  station('test-coverage', coverageHandler),
+]);
+```
+
+Execution mode is controlled by `options.mode`:
+
+- `'all-settled'` (default) — wait for all branches; individual failures captured in results.
+- `'fail-fast'` — fail the parallel node as soon as any branch fails.
+
+```typescript
+workflow.parallel('providers', { mode: 'fail-fast' }, [
+  station('try-primary', primaryHandler),
+  station('try-secondary', secondaryHandler),
+]);
+```
+
+### `.gate(id, options)`
+
+Appends a human-in-the-loop suspend point. The workflow pauses until an external signal
+(`workflow.gate.respond`) arrives. The `resume` Zod schema validates the resume payload;
+resume data is available in subsequent stations through that gate node's `previousSteps` entry.
+
+```typescript
+workflow.gate('approve', {
+  prompt: 'Review findings: {{ output.findings.length }} items need attention',
+  title: 'Approval Gate',
+  autoAction: 'reject',   // action taken on timeout
+  timeoutMs: 7 * 24 * 60 * 60 * 1000, // 7 days; null to block indefinitely
+  resume: z.object({
+    decision: z.enum(['approved', 'rejected']),
+    note: z.string().optional(),
+  }),
+});
+
+workflow.station('post-approval', async (ctx) => {
+  const gate = ctx.previousSteps['approve'];
+  if (gate?.status !== 'completed') return { verdict: 'rejected' };
+  const resume = gate.output as { resumeData?: { decision?: string } };
+  return { verdict: resume.resumeData?.decision ?? 'rejected' };
+});
+```
+
+**Resuming a gate** from outside the workflow:
+
+```typescript
+bus.request('workflow.gate.respond', {
+  executionId,
+  gateId: 'approve',
+  action: 'approve',
+  resumeData: { decision: 'approved', note: 'LGTM' },
+});
+```
+
+### `.iterate(id, handler, options)`
+
+Appends a node that maps a single handler over a collection expression. The `collection` jexl
+expression is evaluated at runtime to produce an array. The handler is invoked once per item;
+`ctx.item` carries the current element.
+
+```typescript
+workflow.iterate('apply-findings', async (ctx) => {
+  const finding = ctx.item as ReviewFinding;
+  await applyFix(finding);
+  return { id: finding.id, applied: true };
+}, {
+  collection: 'output.findings',
+  concurrency: 3,
+});
+```
+
+`ctx.index` carries the zero-based item index. `concurrency` controls parallel item
+execution (default: sequential).
+
+### `.iterateChain(id, chain, options)`
+
+Appends a node that maps a static sub-chain over a collection expression. Use when each item
+requires multiple sequential steps. The sub-chain is a list of nodes built with standalone
+factory functions; all nodes see `ctx.item` bound to the current collection element.
+
+```typescript
+import { station, delegateToRole } from '@makaio/contracts';
+
+workflow.iterateChain('process-findings', [
+  delegateToRole('analyze-finding', 'code-reviewer', {
+    prompt: 'Analyze this finding: {{ item.description }}',
+  }),
+  station('validate-analysis', validateAnalysisHandler),
+  station('apply-finding', applyFindingHandler),
+], {
+  collection: 'output.findings',
+});
+```
+
+Unlike `.iterate()`, the sub-chain topology is fully visible to the GUI and static
+introspection without running the workflow.
 
 ---
 
-## Bus Request Steps
+## Real-World Example: Review Workflow
 
-Use `bus-request` when a workflow step should call an existing typed bus RPC.
-The TypeScript authoring helper accepts a typed `SubjectDefinition`, while the
-stored workflow definition contains the full subject string.
+This example shows a review workflow with three parallel delegates (spec, quality, test
+coverage), an `apply-findings` station that writes agent output back to the workflow Artifact,
+a typed gate for human approval, and an `iterateChain` that processes each finding through a
+multi-step sub-pipeline.
 
-```ts
-import { ArtifactSubjects, BusEventWorkflowTrigger, BusRequestStep, defineWorkflow } from '@makaio/contracts';
+```typescript
+// .makaio/workflows/review.ts
+import {
+  BusEventWorkflowTrigger,
+  defineWorkflow,
+  station,
+  delegateToRole,
+} from '@makaio/contracts';
+import { ArtifactSubjects } from '@makaio/contracts';
+import { z } from 'zod';
 
-const workflow = defineWorkflow('publish-plan-artifact', {
-  name: 'Publish plan artifact',
-  triggers: [
-    BusEventWorkflowTrigger({
-      subject: ArtifactSubjects.created,
-      filter: { 'artifact.kind': 'implementation-plan' },
-    }),
-  ],
+// ── Schemas ────────────────────────────────────────────────────
+
+const ReviewInputSchema = z.object({
+  repository: z.string(),
+  branch: z.string(),
+  planArtifactId: z.string(),
 });
 
-workflow.addBusRequestStep(
-  'publish-plan',
-  BusRequestStep({
-    subject: ArtifactSubjects.create,
-    payload: {
-      kind: 'published-plan',
-      schemaVersion: '1',
-      scope: { level: 'global' },
-      data: { content: '{{ trigger.artifact.data.content }}' },
-      relations: [],
-      actor: { kind: 'system', id: 'workflow' },
-    },
-    timeoutMs: 10_000,
-  }),
-  { needs: [] },
-);
+const ReviewConfigSchema = z.object({
+  reviewerRole: z.string().default('code-reviewer'),
+  autoApprove: z.boolean().default(false),
+});
 
-export default workflow;
+const ReviewFindingSchema = z.object({
+  id: z.string(),
+  category: z.enum(['spec', 'quality', 'test-coverage']),
+  severity: z.enum(['blocker', 'warning', 'info']),
+  description: z.string(),
+});
+type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+const ReviewOutputSchema = z.object({
+  verdict: z.enum(['approved', 'blocked']),
+  findingsApplied: z.number(),
+});
+
+// ── Handlers ───────────────────────────────────────────────────
+
+async function aggregateFindingsHandler(ctx) {
+  const branches = ctx.previousSteps['delegate-reviews'];
+  if (branches?.status !== 'completed') return { findings: [], hasBlockers: false };
+
+  const allFindings: ReviewFinding[] = (branches.output as Array<PromiseSettledResult<{ findings: ReviewFinding[] }>>).flatMap(
+    (r) => r.status === 'fulfilled' ? r.value.findings : [],
+  );
+  return {
+    findings: allFindings,
+    hasBlockers: allFindings.some((f) => f.severity === 'blocker'),
+  };
+}
+
+async function applyFindingsHandler(ctx) {
+  // Write agent output back to the bound Artifact
+  const finding = ctx.item as ReviewFinding;
+  await ctx.artifact?.updateArtifact((current) => {
+    const findings = Array.isArray(current.findings) ? current.findings : [];
+    return {
+      ...current,
+      findings: [...findings, { ...finding, appliedAt: Date.now() }],
+    };
+  });
+  return { id: finding.id, applied: true };
+}
+
+async function postApprovalHandler(ctx) {
+  const gate = ctx.previousSteps['approve'];
+  const resume = gate?.status === 'completed'
+    ? (gate.output as { resumeData?: { decision?: string } }).resumeData
+    : undefined;
+  const decision = resume?.decision ?? 'rejected';
+  // Promote domain status through the artifact
+  await ctx.artifact?.updateStatus(decision === 'approved' ? 'approved' : 'blocked');
+  return {
+    verdict: decision,
+    findingsApplied: ctx.previousSteps['apply-findings']?.output?.length ?? 0,
+  };
+}
+
+// ── Workflow definition ────────────────────────────────────────
+
+const reviewWorkflow = defineWorkflow('review', {
+  name: 'Implementation Review',
+  triggers: [
+    BusEventWorkflowTrigger({
+      subject: ArtifactSubjects['status.changed'],
+      filter: { 'artifact.kind': 'implementation-plan', 'event.current': 'ready-for-review' },
+    }),
+  ],
+})
+  .input(ReviewInputSchema)
+  .config(ReviewConfigSchema)
+  .output(ReviewOutputSchema)
+  .artifact({
+    kind: 'implementation-review',
+    schemaVersion: '1',
+    scope: { level: 'global' },
+    statusPath: 'status',
+  })
+
+  // Fan out to three parallel reviewer delegates
+  .parallel('delegate-reviews', {}, [
+    delegateToRole('spec-review', 'spec-reviewer', {
+      prompt: 'Review spec compliance for branch {{ input.branch }}',
+    }),
+    delegateToRole('quality-review', 'code-reviewer', {
+      prompt: 'Review code quality for branch {{ input.branch }}',
+    }),
+    station('test-coverage', async (ctx) => {
+      // Automated coverage check — no agent needed
+      const coverage = await checkTestCoverage(String(ctx.inputs.branch));
+      return { findings: coverage.violations };
+    }),
+  ])
+
+  // Aggregate parallel results into a flat findings list
+  .station('aggregate-findings', aggregateFindingsHandler)
+
+  // Write each finding to the Artifact via a multi-step sub-chain
+  .iterateChain('apply-findings', [
+    delegateToRole('enrich-finding', 'code-reviewer', {
+      prompt: 'Enrich this finding with a suggested fix: {{ item.description }}',
+    }),
+    station('persist-finding', applyFindingsHandler),
+  ], {
+    collection: 'output.findings',
+  })
+
+  // Human approval gate — auto-rejects after 7 days
+  // Gate is skipped when autoApprove is true and there are no blockers
+  .gate('approve', {
+    prompt: 'Review complete: {{ output.findings.length }} findings, blockers: {{ output.hasBlockers }}',
+    title: 'Review Approval',
+    autoAction: 'reject',
+    timeoutMs: 7 * 24 * 60 * 60 * 1000,
+    resume: z.object({
+      decision: z.enum(['approved', 'rejected']),
+      note: z.string().optional(),
+    }),
+  })
+
+  // Apply the gate decision to the Artifact status
+  .station('finalize', postApprovalHandler);
+
+export default reviewWorkflow;
 ```
 
-**How it works:**
+### Running It
 
-- `BusRequestStep()` accepts a typed `SubjectDefinition` for compile-time payload and
-  response type checking. It serializes the subject to its full string form
-  (e.g. `'github:app.issue.create'`) in the stored definition, keeping persisted
-  workflow definitions serializable.
-- String payload values support `{{ }}` template expressions. A lone expression
-  (`'{{ inputs.count }}'`) returns the native type (number, boolean, etc.); mixed
-  strings (`'count: {{ inputs.count }}'`) remain strings.
-- `timeoutMs` is configured on `BusRequestStep({ ... })`, alongside the request
-  subject and payload. It is forwarded to the bus RPC as the request timeout.
-- At runtime, the subject must be registered and must be a request subject. If the
-  subject is missing or not a request, the step fails with a descriptive error.
-- `bus-request` steps are compatible with persisted workflow definitions (unlike
-  `function` steps, which are file-workflow-only).
+**One-shot test:**
 
-**Step options:**
+```bash
+makaio workflow run .makaio/workflows/review.ts \
+  --payload '{"repository":"my-repo","branch":"feature/x","planArtifactId":"art-123"}'
+```
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `needs` | `StepRef[]` | Predecessor steps (empty array for root steps) |
-| `if` | `string` | Optional jexl expression; falsy skips the step |
+**Automatic — wait for a matching artifact status event:**
+
+```bash
+makaio workflow run .makaio/workflows/review.ts
+# -> "Awaiting trigger for workflow..."
+# Set an implementation-plan artifact status to 'ready-for-review':
+# -> Workflow fires, runs reviews, waits at gate
+```
+
+---
+
+## Workflow Bundles
+
+Group related workflows together using `defineWorkflowBundle()`.
+
+```typescript
+// .makaio/workflows/review-bundle.ts
+import { defineWorkflowBundle } from '@makaio/contracts';
+import reviewWorkflow from './review.js';
+import applyFindingsWorkflow from './apply-findings.js';
+
+export const bundle = defineWorkflowBundle({
+  workflows: [reviewWorkflow, applyFindingsWorkflow],
+});
+```
+
+For workflow-to-workflow coordination driven by Artifact status events, use the Transition
+Pipeline.
+
+### Transition Rules
+
+Transition Rules react to `artifact.status.changed` (and other artifact events) to start
+workflows or trigger other actions. They are purely serializable — no functions. Rules are
+contributed via extension manifests and registered by the Transition Pipeline service.
+
+Co-locate Transition Rules with their related workflow exports in the same file:
+
+```typescript
+// .makaio/workflows/review-transitions.ts
+import type { TransitionRuleDefinition } from '@makaio/contracts';
+
+export const startReviewOnPlanReady: TransitionRuleDefinition = {
+  id: 'review.start-on-plan-ready',
+  description: 'Start the review workflow when an implementation plan is ready for review',
+  on: 'artifact.status.changed',
+  when: {
+    '$expr': 'artifact.kind === "implementation-plan" && current === "ready-for-review"',
+  },
+  action: {
+    type: 'workflow.start',
+    input: {
+      workflowId: 'review',
+      inputExpression: '{ planArtifactId: artifact.id, repository: artifact.scope.ids.projectId, branch: artifact.data.branch }',
+    },
+  },
+  enabled: true,
+};
+
+export const blockPlanOnRejection: TransitionRuleDefinition = {
+  id: 'review.block-plan-on-rejection',
+  description: 'Block the parent implementation plan when a review is rejected',
+  on: 'artifact.status.changed',
+  when: {
+    '$expr': 'artifact.kind === "implementation-review" && current === "blocked"',
+  },
+  action: {
+    type: 'workflow.start',
+    input: {
+      workflowId: 'apply-plan-block',
+      inputExpression: '{ reviewArtifactId: artifact.id }',
+    },
+  },
+  enabled: true,
+};
+```
 
 ---
 
 ## Triggers
 
-Triggers determine when the workflow executes. A workflow can declare multiple triggers —
-any one of them can start an execution. The trigger payload is available as `ctx.trigger`
-in every step.
+Triggers determine when a workflow executes. A workflow can declare multiple triggers — any
+one of them can start an execution.
 
 ### Bus Event Trigger
 
@@ -210,57 +545,52 @@ import { GitSubjects } from '@makaio/services-core/git/namespace';
 BusEventWorkflowTrigger({
   subject: GitSubjects.checkout,
   filter: { /* optional structural filter */ },
-  filterExpression: '...', // optional jexl expression
 })
 ```
 
-The trigger payload type is inferred from the subject's Zod schema — `ctx.trigger` is
-fully typed in step functions.
-
-For persisted workflows, bus-event trigger evaluation honors the subject, structural
-`filter`, and `filterExpression`. For ad-hoc file workflows run with
-`makaio workflow run <file>` and no payload, await-trigger mode currently waits on
-bus-event triggers using the subject and structural `filter`.
+The trigger payload type is inferred from the subject's Zod schema — `ctx.trigger` is fully
+typed in station handlers.
 
 ### Other Triggers
 
-| Trigger | Factory | Payload |
-|---------|---------|---------|
-| Manual | `ManualWorkflowTrigger()` | `void` |
-| Cron | `CronWorkflowTrigger({ schedule: '0 9 * * 1' })` | `{ firedAt, triggerIndex }` |
-| Webhook | `WebhookWorkflowTrigger({ event: 'push' })` | `{ event, branch?, repo?, body }` |
-| Extension | `ExtensionWorkflowTrigger({ extensionType: 'ext:event' })` | `Record<string, unknown>` |
+| Trigger | Factory | Notes |
+|---------|---------|-------|
+| Manual | `ManualWorkflowTrigger()` | Used for `makaio workflow run` without `--payload` |
+| Cron | `CronWorkflowTrigger({ schedule: '0 9 * * 1' })` | Standard cron syntax |
+| Webhook | `WebhookWorkflowTrigger({ event: 'push' })` | HTTP webhook events |
+| Extension | `ExtensionWorkflowTrigger({ extensionType: 'ext:event' })` | Extension-emitted events |
 
 ---
 
-## Step Context
+## Station Context
 
-Every step function receives a `StepContext` with platform info, trigger data, and
-predecessor outputs:
+Every station handler receives a `StepContext`:
 
 ```typescript
-interface StepContext<TTrigger, TPreviousSteps> {
-  // Platform
+interface StepContext {
+  readonly workflowId: string;
+  readonly executionId: string;
+  readonly signal: AbortSignal;
+
+  readonly trigger: TTrigger;
+  readonly inputs: Record<string, unknown>;
+  readonly env: Record<string, string>;
   readonly repoPath: string;
   readonly makaioHome: string;
   readonly os: 'darwin' | 'linux' | 'win32';
   readonly arch: string;
   readonly worktree?: string;
 
-  // Execution
-  readonly executionId: string;
-  readonly workflowId: string;
-  readonly inputs: Record<string, unknown>;
-  readonly env: Record<string, string>;
-  readonly signal: AbortSignal;
-
-  // Typed from triggers and needs
-  readonly trigger: TTrigger;
+  // Earlier node outputs keyed by node ID
   readonly previousSteps: TPreviousSteps;
 
-  // For-each context (when inside a for-each expansion)
+  // Set inside `.iterate()` / `.iterateChain()`
   readonly item?: unknown;
   readonly index?: number;
+  readonly previous?: JsonValue;
+
+  // Present when `.artifact()` is declared and initialized
+  readonly artifact?: ArtifactContext<TArtifactData>;
 }
 ```
 
@@ -268,13 +598,9 @@ interface StepContext<TTrigger, TPreviousSteps> {
 
 ## Real-World Example: Worktree Bootstrap
 
-This workflow copies `.env` files from the main worktree into secondary worktrees
-when a checkout event arrives from that worktree. It intentionally listens to
-`git.checkout`: creating a new worktree checks out its branch, so the event payload's
-`repoPath` is the new worktree path. The workflow then compares that path with
-`git worktree list` to decide whether it is running in the main worktree or a
-secondary one. Later branch checkouts in a secondary worktree can also re-run it;
-the copy step is idempotent.
+This workflow copies `.env` files from the main worktree into secondary worktrees when a
+checkout event arrives. It fires on `git.checkout`: creating a new worktree checks out its
+branch, so the trigger payload's `repoPath` is the new worktree path.
 
 ```typescript
 // .makaio/personal/workflows/worktree-bootstrap.ts
@@ -292,93 +618,57 @@ const workflow = defineWorkflow('worktree-bootstrap', {
   triggers: [BusEventWorkflowTrigger({ subject: GitSubjects.checkout })],
 });
 
-const resolveWorktrees = workflow.addStep(
-  'resolve-worktrees',
-  async (ctx) => {
-    const { repoPath } = ctx.trigger;
+workflow.station('resolve-worktrees', async (ctx) => {
+  const { repoPath } = ctx.trigger as { repoPath: string };
+  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: repoPath });
+  const worktrees = stdout
+    .split('\n\n')
+    .map((block) => block.match(/^worktree (.+)$/m)?.[1])
+    .filter((p): p is string => p !== undefined);
 
-    const { stdout } = await execFileAsync(
-      'git', ['worktree', 'list', '--porcelain'], { cwd: repoPath },
-    );
-    const worktrees = stdout
-      .split('\n\n')
-      .map((block) => block.match(/^worktree (.+)$/m)?.[1])
-      .filter((p): p is string => p !== undefined);
+  const mainWorktree = worktrees[0];
+  if (!mainWorktree || mainWorktree === repoPath) {
+    return { mainWorktree: mainWorktree ?? repoPath, targetWorktree: repoPath, isNewWorktree: false };
+  }
+  return { mainWorktree, targetWorktree: repoPath, isNewWorktree: true };
+});
 
-    const mainWorktree = worktrees[0];
-    if (!mainWorktree || mainWorktree === repoPath) {
-      return { mainWorktree: mainWorktree ?? repoPath, targetWorktree: repoPath, isNewWorktree: false };
+workflow.station('copy-files', async (ctx) => {
+  const resolved = ctx.previousSteps['resolve-worktrees'];
+  if (resolved.status !== 'completed') return { copied: [], skipped: 'resolve step was skipped' };
+
+  const { mainWorktree, targetWorktree, isNewWorktree } = resolved.output as {
+    mainWorktree: string;
+    targetWorktree: string;
+    isNewWorktree: boolean;
+  };
+  if (!isNewWorktree) return { copied: [], skipped: 'not a secondary worktree' };
+
+  const filesToCopy = ['.env', '.env.local'];
+  const copied: string[] = [];
+  for (const file of filesToCopy) {
+    const src = join(mainWorktree, file);
+    const dst = join(targetWorktree, file);
+    try {
+      await access(src);
+      await copyFile(src, dst);
+      copied.push(file);
+    } catch {
+      // Source does not exist — skip silently
     }
-
-    return { mainWorktree, targetWorktree: repoPath, isNewWorktree: true };
-  },
-  { needs: [] },
-);
-
-workflow.addStep(
-  'copy-files',
-  async (ctx) => {
-    const resolved = ctx.previousSteps['resolve-worktrees'];
-    if (resolved.status !== 'completed') return { copied: [], skipped: 'resolve step was skipped' };
-
-    const { mainWorktree, targetWorktree, isNewWorktree } = resolved.output;
-    if (!isNewWorktree) return { copied: [], skipped: 'not a secondary worktree' };
-
-    const filesToCopy = ['.env', '.env.local'];
-    const copied: string[] = [];
-
-    for (const file of filesToCopy) {
-      const src = join(mainWorktree, file);
-      const dst = join(targetWorktree, file);
-      try {
-        await access(src);
-        await copyFile(src, dst);
-        copied.push(file);
-      } catch {
-        // Source doesn't exist — skip silently
-      }
-    }
-
-    return { copied };
-  },
-  { needs: [resolveWorktrees] },
-);
+  }
+  return { copied };
+});
 
 export default workflow;
 ```
-
-### Running It
 
 **Prerequisites:** Install native git hooks so checkout events reach the bus:
 
 ```bash
 makaio git-hooks install
 makaio git-hooks status
-# -> { "covered": true, "reason": "covered", "coveredOperations": ["commit", "checkout"] }
-```
-
-**One-shot test with inline payload:**
-
-```bash
-makaio workflow run .makaio/personal/workflows/worktree-bootstrap.ts \
-  --payload '{"repoPath":"/path/to/worktree","currentBranch":"feature","timestamp":"2026-01-01T00:00:00Z"}'
-```
-
-**Automatic — await a single trigger, then exit:**
-
-```bash
-makaio workflow run .makaio/personal/workflows/worktree-bootstrap.ts
-# -> "Awaiting trigger for workflow..."
-# Create a worktree in another terminal:
-#   git worktree add ../my-feature -b my-feature develop
-# -> Workflow fires, copies .env, exits
-```
-
-**Continuous watch — re-await after each execution:**
-
-```bash
-makaio workflow run .makaio/personal/workflows/worktree-bootstrap.ts --watch
-# -> Re-runs on matching checkout events, keeps running until Ctrl-C
+# -> { "covered": true, "coveredOperations": ["commit", "checkout"] }
 ```
 
 ---
@@ -403,11 +693,8 @@ Options:
 
 1. `--payload` flag → run immediately with provided payload
 2. Piped stdin (non-TTY) → parse as JSON, run immediately
-3. Neither → await bus-event triggers when the file declares them; otherwise run
-   with an empty trigger payload
-
-The CLI writes human-readable status lines to stdout. Lifecycle events go to stderr
-with `--verbose`.
+3. Neither → await bus-event triggers when the file declares them; otherwise run with an
+   empty trigger payload
 
 ---
 
@@ -419,8 +706,7 @@ with `--verbose`.
 | `{repoPath}/.makaio/personal/workflows/` | Personal workflows | No (gitignored) |
 | `{makaioHome}/workflows/` | Global user workflows | N/A (outside repo) |
 
-Personal workflows live in `.makaio/personal/` which is gitignored. Add this to your
-repo's `.gitignore`:
+Add this to your repo's `.gitignore`:
 
 ```gitignore
 .makaio/personal/
@@ -430,39 +716,30 @@ repo's `.gitignore`:
 
 ## Execution Model
 
-The workflow engine separates scheduling from execution through pluggable runners:
-
-| Runner | Interface | Isolation | Use case |
-|--------|-----------|-----------|----------|
-| Piscina (CLI serve default) | `IWorkflowRunner` | Worker thread | File workflows and storage-backed workflows when configured |
-| In-process scheduler | internal | None | Embedded/test runtimes or boot configs without a workflow runner |
-| Step runner seam | `IStepRunner` | Runner-defined | Executable steps inside the in-process scheduler |
-
-For TypeScript file workflows (`workflow.runFile`), the configured workflow runner dispatches
-the entire workflow to a worker thread in the default CLI-served runtime. The worker
-`import()`s the file, runs the DAG scheduler, and executes function steps in-process
-within the worker — no serialization boundary between those functions.
+Workflow execution runs in a Piscina worker thread. The worker imports the workflow file,
+builds the runtime context, and executes the node pipeline sequentially:
 
 ```
 Main Process                          Piscina Worker
 ─────────────                         ──────────────
 WorkflowExecutor                      import(workflowFile)
   │                                     │
-  ├─ runFile(file, payload)            ├─ Scheduler: DAG resolution
-  │    → spawn worker ─────────────►   ├─ Orchestrator: Promise mgmt
-  │                                     │   ├─ Step A: in-process fn()
-  ├─ lifecycle events ◄──── bus ◄──────│   ├─ Step B: fs/shell calls
-  │                                     │   └─ Step C: bus RPC
-  └─ result ◄──────────────────────────└─ return result
+  ├─ runFile(file, payload)            ├─ Pipeline: sequential nodes
+  │    → spawn worker ─────────────►   ├─ Parallel: Promise.allSettled branches
+  │                                     ├─ Gate: checkpoint + bus event
+  ├─ lifecycle events ◄──── bus ◄──────├─ Iterate: per-item handler
+  │                                     └─ return result
+  └─ result ◄───────────────────────────
 ```
 
-For storage-backed workflows (`workflow.start`), the engine uses the configured
-`IWorkflowRunner` when one is present. Without one, it runs the DAG scheduler in the
-host process with the in-process step runner.
+**Lifecycle events** are emitted over the bus for each node and for the execution as a whole
+(`workflow.node.started`, `workflow.node.completed`, `workflow.execution.completed`, etc.).
+The `--verbose` CLI flag subscribes to these in real time.
 
-**Lifecycle events** are emitted over the bus for each step and for the execution as a
-whole (`workflow.step.started`, `workflow.step.completed`, `workflow.execution.completed`,
-etc.). The `--verbose` CLI flag subscribes to these in real time.
+**WorkLog projection:** A subscriber-side service listens to lifecycle events and builds
+denormalized read models (`WorkLogExecutionSummary`, `WorkLogFrameEntry`, etc.) for dashboards
+and billing. WorkLog is an observability cache — it is never required for the runtime to make
+progress.
 
 ---
 
@@ -470,11 +747,15 @@ etc.). The `--verbose` CLI flag subscribes to these in real time.
 
 | Concept | File |
 |---------|------|
-| Authoring API (`defineWorkflow`, triggers, step types) | `framework/core/contracts/src/workflow/authoring.ts` |
-| Workflow schemas (`WorkflowDefinitionInput`, step types) | `framework/core/contracts/src/workflow/schemas.ts` |
+| `defineWorkflow`, standalone factories, trigger helpers | `framework/core/contracts/src/workflow/authoring.ts` |
+| Builder interface, `GateOptions`, `IterateOptions`, `ParallelOptions` | `framework/core/contracts/src/workflow/authoring-builder.ts` |
+| `StationContext`, `ArtifactContext`, `WorkflowContext` | `framework/core/contracts/src/workflow/authoring-context.ts` |
+| `defineWorkflowBundle` | `framework/core/contracts/src/workflow/bundle.ts` |
+| `defineTransitionRule`, `TransitionEventType` | `framework/core/contracts/src/workflow/transition.ts` |
+| WorkLog projection schemas | `framework/core/contracts/src/workflow/worklog.ts` |
 | Bus namespace (`WorkflowSubjects`) | `framework/core/contracts/src/workflow/namespace.ts` |
+| Workflow definition schemas | `framework/core/contracts/src/workflow/schemas.ts` |
 | Workflow executor | `framework/subsystems/workflow-engine/src/workflow-executor.ts` |
 | CLI run command | `framework/extensions/workflow/src/run-command.ts` |
-| Worker entry point | `framework/runtimes/node/src/workflow-worker/` |
 | Git event schemas | `framework/services/core/src/git/schemas/event.ts` |
 | Git hooks extension | `framework/extensions/git-hooks/` |

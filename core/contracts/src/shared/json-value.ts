@@ -51,3 +51,21 @@ export const JsonObjectSchema: z.ZodType<Record<string, unknown>> = z.record(z.s
  * represented as JSON Schema.
  */
 export const JsonObjectContractSchema = JsonObjectSchema as z.ZodType<Record<string, unknown>, Record<string, unknown>>;
+
+/**
+ * Serializable JSON Schema record used for `inputSchema`, `outputSchema`, and
+ * `configSchema` fields on persisted workflow definitions and node primitives.
+ *
+ * A JSON Schema document is itself a JSON object, so this is a
+ * `Record<string, JsonValue>` — identical at runtime to {@link JsonObjectContractSchema}
+ * but carries a semantically narrower name to distinguish "a JSON Schema document"
+ * from "an arbitrary JSON payload".
+ *
+ * The underlying `z.record(z.string(), JsonValueSchema)` validator rejects
+ * functions, `undefined`, and other non-serializable values, keeping persisted
+ * workflow definitions purely JSON-safe.
+ */
+export const JsonSchemaRecordSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = z.record(
+  z.string(),
+  JsonValueSchema,
+) as z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>>;

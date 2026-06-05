@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { ContextModeSchema } from '../subagent/schemas.js';
+import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
+import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
-import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
+import { ContextModeSchema } from '../subagent/schemas.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -117,293 +118,6 @@ export const WorkflowTriggerSchema = z.discriminatedUnion('type', [
 export type WorkflowTrigger = z.infer<typeof WorkflowTriggerSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Workflow Input (parameterization)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Input parameter definition for workflow parameterization.
- */
-export const WorkflowInputSchema = z.object({
-  /** Input parameter name. */
-  name: z.string(),
-  /** Human-readable description of the input. */
-  description: z.string().optional(),
-  /** Type of the input value. */
-  type: z.enum(['string', 'boolean', 'choice']),
-  /** Whether this input is required. */
-  required: z.boolean().optional(),
-  /** Default value for the input. */
-  default: z.union([z.string(), z.boolean()]).optional(),
-  /** Available options for choice type. */
-  options: z.array(z.string()).optional(),
-});
-
-export type WorkflowInput = z.infer<typeof WorkflowInputSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Workflow Step (DAG node)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Shared base fields present on every step variant.
- * Extend this schema when defining new step types.
- */
-export const WorkflowStepBaseSchema = z.object({
-  /** Unique step identifier within the workflow. */
-  id: z.string(),
-  /** Step IDs this step depends on (must complete first). */
-  needs: z.array(z.string()).optional(),
-  /** jexl expression evaluated at runtime; falsy skips the step. */
-  if: z.string().optional(),
-});
-
-export type WorkflowStepBase = z.infer<typeof WorkflowStepBaseSchema>;
-
-/**
- * Resolved role configuration returned by the `workflow.resolveRole` RPC.
- *
- * When a workflow step specifies `role` instead of explicit adapter/model fields,
- * the executor resolves the role via the bus before spawning the subagent.
- * The resolved payload provides the full adapter configuration for execution.
- */
-export const WorkflowResolvedRoleSchema = z.object({
-  /** Adapter name to use for execution (e.g., 'claudeCode', 'openai'). */
-  adapterName: z.string().min(1),
-  /** Model override for the resolved role. */
-  model: z.string().optional(),
-  /** Harness ID for per-role tool governance. */
-  harnessId: z.string().optional(),
-  /** System prompt to prepend for this role. */
-  systemPrompt: z.string().optional(),
-  /** Context mode for the subagent session. */
-  contextMode: ContextModeSchema.optional(),
-  /** Provider context for credential and endpoint resolution. */
-  providerContext: ProviderContextSchema.optional(),
-});
-
-export type WorkflowResolvedRole = z.infer<typeof WorkflowResolvedRoleSchema>;
-
-/**
- * Agent step variant — spawns a subagent to fulfil the prompt.
- * This is the default step type.
- */
-export const AgentWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('agent'),
-  /** Task prompt for the agent. Supports `{{ }}` template interpolation. */
-  prompt: z.string(),
-  /**
-   * Named role reference. Resolved via `workflow.resolveRole` before execution.
-   * When set, the executor calls the bus RPC to obtain adapter, model, and
-   * other configuration instead of using inline fields.
-   */
-  role: z.string().min(1).optional(),
-  /** Adapter override for this step (e.g., 'claudeCode', 'openai'). */
-  adapter: z.string().optional(),
-  /** Model override for this step (e.g., 'sonnet', 'gpt-4'). */
-  model: z.string().optional(),
-  /** Execution target override for this step. */
-  executionTargetId: z.string().optional(),
-  /** Step lifecycle hooks. */
-  onComplete: z
-    .object({
-      /** Extract mode for step result. */
-      extract: z.enum(['summary', 'none']).optional(),
-    })
-    .optional(),
-  /**
-   * JSON Schema for the expected step output.
-   * When set and the adapter supports `structuredOutput`, the executor
-   * requests structured output from the model.
-   * When set but the adapter lacks the capability, the schema is appended
-   * to the prompt as a JSON constraint instruction.
-   */
-  outputSchema: JsonObjectContractSchema.optional(),
-  /** Harness ID for per-role tool governance. */
-  harnessId: z.string().optional(),
-  /** Subagent context mode. Workflow steps default to fresh at execution time. */
-  contextMode: ContextModeSchema.optional(),
-});
-
-export type AgentWorkflowStep = z.infer<typeof AgentWorkflowStepSchema>;
-
-/**
- * Shell step — runs an external process directly via execFile.
- * Args are passed to the OS without shell interpretation, preventing injection.
- */
-export const ShellWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('shell'),
-  /**
-   * Command as an array: [binary, ...args].
-   * Each element supports `{{ }}` template interpolation.
-   * Array format prevents shell injection — args are passed directly
-   * to execFile, never interpreted by a shell.
-   * @example ['coderabbit', 'review', '--format', 'json']
-   */
-  command: z.array(z.string()).min(1),
-  /**
-   * Working directory override. Supports `{{ }}` interpolation.
-   * Resolved relative to workspace root if a relative path.
-   * Defaults to the coordinator session's workingDirectory.
-   */
-  cwd: z.string().optional(),
-  /**
-   * Extra environment variables injected into the process.
-   * Merged with (but does not replace) the runtime's environment.
-   * Values support `{{ }}` template interpolation.
-   */
-  env: z.record(z.string(), z.string()).optional(),
-  /**
-   * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) at execution time when omitted.
-   * On timeout: SIGTERM → 5 s grace → SIGKILL → step fails.
-   */
-  timeoutMs: z.number().optional(),
-});
-
-export type ShellWorkflowStep = z.infer<typeof ShellWorkflowStepSchema>;
-
-/**
- * Gate step variant — pauses workflow for human approval.
- * Emits a gate request event, waits for user response or timeout,
- * then continues or fails the workflow.
- */
-export const GateWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('gate'),
-  /**
-   * Message shown to the user in the approval dialog.
-   * Supports `{{ }}` template interpolation for dynamic content.
-   * @example
-   * ```
-   * 'Delete worktree at \{{ trigger.path \}} and branch \{{ trigger.branch \}}?'
-   * ```
-   */
-  prompt: z.string(),
-  /**
-   * Title for the approval dialog.
-   * Defaults to 'Workflow Approval Required' when omitted.
-   */
-  title: z.string().optional(),
-  /**
-   * Action to take when the timeout expires.
-   * - `'approve'`: auto-approve and continue the workflow
-   * - `'reject'`: auto-reject and fail the workflow
-   */
-  autoAction: z.enum(['approve', 'reject']),
-  /**
-   * Timeout in milliseconds before autoAction fires.
-   * `null` = block indefinitely (no timeout).
-   */
-  timeoutMs: z.number().nullable(),
-});
-
-export type GateWorkflowStep = z.infer<typeof GateWorkflowStepSchema>;
-
-/**
- * Function step variant — executes a typed TypeScript function registered
- * in the workflow builder's runtime step map.
- *
- * The `runtime: true` flag signals that the actual handler lives outside
- * the serialized definition and must be retrieved from the worker executor's
- * step registry.
- */
-export const FunctionWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('function'),
-  /** Marks this step as runtime-only; the function body is not serialized. */
-  runtime: z.literal(true),
-}).strict();
-
-export type FunctionWorkflowStep = z.infer<typeof FunctionWorkflowStepSchema>;
-
-/**
- * Bus request step variant — performs a typed bus RPC from the scheduler.
- *
- * The serialized step stores the full subject string (`namespace.subject`) so
- * persisted workflow definitions remain pure JSON. Type-safe authoring helpers
- * accept `SubjectDefinition` values and serialize them into this shape.
- */
-export const BusRequestWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('bus-request'),
-  /** Fully qualified request subject, e.g. `github:app.issue.create`. */
-  subject: z.string().min(1),
-  /** JSON object payload template resolved against the workflow expression context. */
-  payload: JsonObjectContractSchema.optional(),
-  /**
-   * Request timeout in milliseconds. `0` disables automatic timeout and leaves
-   * cancellation to the workflow abort signal.
-   */
-  timeoutMs: z.number().int().nonnegative().optional(),
-});
-
-export type BusRequestWorkflowStep = z.infer<typeof BusRequestWorkflowStepSchema>;
-
-/**
- * For-each step variant type.
- * Declared manually ahead of its schema to break the z.lazy circular reference.
- */
-export interface ForEachWorkflowStep extends WorkflowStepBase {
-  /** Step type discriminant. */
-  type: 'for-each';
-  /** jexl expression that resolves to an array. */
-  collection: string;
-  /** Steps to execute per item. Forms an inner DAG (needs references are local). */
-  steps: WorkflowStep[];
-  /** Max concurrent iterations. Omit or 0 for unlimited. */
-  concurrency?: number;
-}
-
-/** Discriminated union of all workflow step variants. */
-export type WorkflowStep =
-  | AgentWorkflowStep
-  | ShellWorkflowStep
-  | GateWorkflowStep
-  | FunctionWorkflowStep
-  | BusRequestWorkflowStep
-  | ForEachWorkflowStep;
-
-/**
- * For-each step variant — iterates over a collection, expanding inner steps per item.
- * Forms an inner DAG that is expanded by the runtime scheduler after its needs settle.
- *
- * NOTE: The `steps` field uses `z.lazy()` to reference `WorkflowStepSchema`, creating
- * a circular schema reference. The schema output type is cast to `ForEachWorkflowStep`
- * on the containing union.
- */
-export const ForEachWorkflowStepSchema = WorkflowStepBaseSchema.extend({
-  /** Step type discriminant. */
-  type: z.literal('for-each'),
-  /** jexl expression that resolves to an array. */
-  collection: z.string(),
-  /** Steps to execute per item. Forms an inner DAG (needs references are local). */
-  steps: z.lazy(() => z.array(WorkflowStepSchema)),
-  /** Max concurrent iterations. Omit or 0 for unlimited. */
-  concurrency: z.number().int().min(0).optional(),
-});
-
-/**
- * Discriminated union of all workflow step variants.
- * Wrapped in z.lazy() to support ForEachWorkflowStep's circular reference.
- *
- * NOTE: Zod v4 `discriminatedUnion` requires concrete `propValues` on each member.
- * `ForEachWorkflowStepSchema` has a `z.lazy()` field which prevents it from satisfying
- * `$ZodTypeDiscriminable`, so we use `z.union` here. Structural validation is identical;
- * only the fast-path discriminant routing is absent.
- */
-export const WorkflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
-  z.union([
-    AgentWorkflowStepSchema,
-    ShellWorkflowStepSchema,
-    GateWorkflowStepSchema,
-    FunctionWorkflowStepSchema,
-    BusRequestWorkflowStepSchema,
-    ForEachWorkflowStepSchema,
-  ]),
-);
-
-// ─────────────────────────────────────────────────────────────
 // Workflow Execution Scope
 // ─────────────────────────────────────────────────────────────
 
@@ -438,285 +152,596 @@ export const WorkflowExecutionScopeSchema = z.discriminatedUnion('type', [
 export type WorkflowExecutionScope = z.infer<typeof WorkflowExecutionScopeSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Workflow Condition
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * A jexl expression string evaluated at runtime against the execution context.
+ *
+ * Used for `when` (conditional execution) and `skip` (skip this node and its
+ * descendants) on workflow node primitives.
+ * @example `"ctx.inputs.env == 'production'"`
+ */
+export const WorkflowConditionSchema = z.string().min(1);
+
+export type WorkflowCondition = z.infer<typeof WorkflowConditionSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Artifact Binding and Write Declaration
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Declares a named artifact binding for the workflow as a whole.
+ *
+ * When a workflow produces a primary artifact, the binding identifies
+ * the artifact kind and scope so the runtime can associate execution
+ * outputs with the artifact store.
+ */
+export const WorkflowArtifactBindingSchema = z.object({
+  /** Artifact kind string (e.g. `'implementation-plan'`). */
+  kind: z.string().min(1),
+  /** Schema version used by the artifact service to validate the `data` payload. */
+  schemaVersion: z.string().min(1),
+  /** Scope at which the artifact is stored. */
+  scope: ArtifactScopeSchema,
+  /**
+   * Optional jexl expression used by the runtime to resolve an existing artifact.
+   */
+  resolve: z.string().min(1).optional(),
+  /**
+   * Optional jexl expression used by the runtime to create initial artifact data.
+   */
+  create: z.string().min(1).optional(),
+  /**
+   * Optional dot path to the status field used by `ctx.artifact.updateStatus()`.
+   */
+  statusPath: z.string().min(1).optional(),
+});
+
+export type WorkflowArtifactBinding = z.infer<typeof WorkflowArtifactBindingSchema>;
+
+/**
+ * Declares an artifact write that a node is expected to produce.
+ *
+ * Write declarations are hints for the runtime and UI; the actual write is
+ * performed by the node's execution logic. They do not carry functions —
+ * only serializable configuration consumed at execution time.
+ */
+export const WorkflowArtifactWriteDeclarationSchema = z.object({
+  /** Artifact kind string (e.g. `'station-output'`). */
+  kind: z.string().min(1),
+  /** Schema version validated by the artifact service. */
+  schemaVersion: z.string().min(1),
+  /** Scope at which the artifact revision is written. */
+  scope: ArtifactScopeSchema,
+  /**
+   * Optional jexl expression evaluated at runtime to produce the artifact `data`.
+   * When omitted the node's primary output is used verbatim.
+   */
+  dataExpression: z.string().optional(),
+});
+
+export type WorkflowArtifactWriteDeclaration = z.infer<typeof WorkflowArtifactWriteDeclarationSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Source Location
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Authoring-time source location attached to dynamically generated nodes.
+ *
+ * Stored in persisted definitions so the UI and diagnostic tools can report
+ * where a dynamic region was authored, without carrying runtime state.
+ */
+export const WorkflowSourceLocationSchema = z.object({
+  /**
+   * Source file path, relative to the workflow project root.
+   * Absolute paths are accepted but relative paths are portable across machines.
+   */
+  file: z.string().min(1),
+  /**
+   * One-based line number in `file` where the factory or dynamic region begins.
+   */
+  line: z.number().int().positive().optional(),
+  /**
+   * One-based column number on `line` where the factory or dynamic region begins.
+   */
+  column: z.number().int().positive().optional(),
+});
+
+export type WorkflowSourceLocation = z.infer<typeof WorkflowSourceLocationSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Node Type Discriminant
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Discriminant enum for all primitive workflow node types.
+ *
+ * - `station`        — atomic work unit (agent, shell, or bus-request task)
+ * - `delegate-agent` — delegates to a named agent role for a subtask
+ * - `delegate-role`  — delegates to a resolved product role
+ * - `parallel`       — runs child branches concurrently
+ * - `gate`           — pauses execution awaiting human or automated approval
+ * - `iterate`        — expands over a collection (fan-out then fan-in)
+ * - `iterate-chain`  — sequential pipeline iteration over a collection
+ * - `sequence`       — ordered list of child nodes (the structural container)
+ */
+export const WorkflowNodeTypeSchema = z.enum([
+  'station',
+  'delegate-agent',
+  'delegate-role',
+  'parallel',
+  'gate',
+  'iterate',
+  'iterate-chain',
+  'sequence',
+]);
+
+export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
+
+/**
+ * Execution mode for `parallel` nodes.
+ *
+ * - `all-settled` waits for every branch and captures branch failures.
+ * - `fail-fast` fails the parallel node on the first branch failure.
+ */
+export const WorkflowParallelModeSchema = z.enum(['all-settled', 'fail-fast']);
+
+export type WorkflowParallelMode = z.infer<typeof WorkflowParallelModeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Node Base and Discriminated Union
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Shared base fields present on every workflow node variant.
+ *
+ * All node types extend this base. The `when` and `skip` fields carry
+ * jexl expressions evaluated at runtime; schemas must not contain functions.
+ */
+export const WorkflowNodeBaseSchema = z.object({
+  /**
+   * Unique node identifier within the workflow definition.
+   * Must be a non-empty string; uniqueness is enforced at authoring time.
+   */
+  id: z.string().min(1),
+  /**
+   * jexl expression evaluated at runtime.
+   * When present and falsy, the node and its subtree are skipped.
+   */
+  when: WorkflowConditionSchema.optional(),
+  /**
+   * jexl expression evaluated at runtime.
+   * When present and truthy, the node is skipped without propagating failure.
+   */
+  skip: WorkflowConditionSchema.optional(),
+  /**
+   * Artifact write declarations for this node.
+   * Hints for the runtime and UI; no functions, purely serializable config.
+   */
+  writes: z.array(WorkflowArtifactWriteDeclarationSchema).optional(),
+});
+
+export type WorkflowNodeBase = z.infer<typeof WorkflowNodeBaseSchema>;
+
+/**
+ * TypeScript interface for the recursive `WorkflowNode` union.
+ * Declared manually to break the circular reference introduced by
+ * `sequence` and `parallel` containing child nodes.
+ */
+export interface WorkflowNode extends WorkflowNodeBase {
+  type: WorkflowNodeType;
+}
+
+/**
+ * Discriminated union of all workflow node variants.
+ *
+ * Uses `z.lazy()` to support recursive `sequence` and `parallel` node structures.
+ * All variant schemas reference this schema via their own `z.lazy()` wrappers for
+ * child arrays (`nodes`, `branches`, `body`), so the top-level schema can be
+ * declared as a `const` with a single `z.lazy()` call.
+ *
+ * NOTE: Zod v4 `discriminatedUnion` requires each member to have a concrete
+ * `type` literal. The lazy-wrapped child arrays are internal to each variant
+ * and do not affect discriminant routing.
+ */
+export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(
+  (): z.ZodType<WorkflowNode> =>
+    z.discriminatedUnion('type', [
+      WorkflowStationNodeSchema,
+      WorkflowDelegateAgentNodeSchema,
+      WorkflowDelegateRoleNodeSchema,
+      WorkflowParallelNodeSchema,
+      WorkflowGateNodeSchema,
+      WorkflowIterateNodeSchema,
+      WorkflowIterateChainNodeSchema,
+      WorkflowSequenceNodeSchema,
+    ]) as z.ZodType<WorkflowNode>,
+);
+
+// ─────────────────────────────────────────────────────────────
+// Sequence Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Sequence node — the structural container for an ordered list of child nodes.
+ *
+ * This is the only composite node that may appear as the `root` of a
+ * `WorkflowDefinition`. Sequences may be nested inside `parallel` branches
+ * and `iterate`/`iterate-chain` bodies.
+ */
+export const WorkflowSequenceNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('sequence'),
+  /** Ordered list of child nodes executed sequentially. */
+  nodes: z.lazy((): z.ZodType<WorkflowNode[]> => z.array(WorkflowNodeSchema)),
+});
+
+export type WorkflowSequenceNode = z.infer<typeof WorkflowSequenceNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Station Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Station node — an atomic unit of work.
+ *
+ * A station encapsulates a task prompt, an optional named role, optional
+ * input/output schemas for structured data exchange, and an optional
+ * timeout. It does not contain child nodes or functions.
+ *
+ * Runtime handlers are registered outside the persisted definition
+ * (in the authoring object's step map); this schema is function-free.
+ */
+export const WorkflowStationNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('station'),
+  /**
+   * Task prompt for the station. Supports `{{ }}` template interpolation
+   * against the execution context at runtime.
+   */
+  prompt: z.string().min(1),
+  /**
+   * Named role reference. Resolved via the bus `resolveRole` RPC before
+   * execution so the executor obtains adapter, model, and harness configuration.
+   */
+  role: z.string().min(1).optional(),
+  /**
+   * JSON Schema for the expected station output.
+   * When set and the adapter supports `structuredOutput`, the executor
+   * requests structured output from the model.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) at execution
+   * time when omitted.
+   */
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export type WorkflowStationNode = z.infer<typeof WorkflowStationNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Delegate-Agent Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Delegate-agent node — spawns a named agent for a sub-task.
+ *
+ * The `agentId` references a registered agent definition. The agent
+ * receives the `input` expression result as its invocation payload.
+ */
+export const WorkflowDelegateAgentNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('delegate-agent'),
+  /**
+   * Identifier of the registered agent definition to invoke.
+   */
+  agentId: z.string().min(1),
+  /**
+   * jexl expression resolving to the agent input payload.
+   * Evaluated against the execution context at runtime.
+   * When omitted, the agent receives the full execution context as input.
+   */
+  inputExpression: z.string().optional(),
+  /**
+   * JSON Schema for the expected agent output.
+   * Used for structured output requests and UI contract display.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+});
+
+export type WorkflowDelegateAgentNode = z.infer<typeof WorkflowDelegateAgentNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Delegate-Role Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Delegate-role node — delegates a task to a product-resolved role.
+ *
+ * Similar to `delegate-agent` but resolves the executor via a named product
+ * role rather than a fixed agent ID. The role is resolved via the bus
+ * `resolveRole` RPC before the node runs.
+ */
+export const WorkflowDelegateRoleNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('delegate-role'),
+  /**
+   * Named role reference. Resolved at execution time via the bus RPC.
+   */
+  role: z.string().min(1),
+  /**
+   * Task prompt forwarded to the resolved role executor.
+   * Supports `{{ }}` template interpolation.
+   */
+  prompt: z.string().min(1),
+  /**
+   * JSON Schema for the expected output of this delegation.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) when omitted.
+   */
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export type WorkflowDelegateRoleNode = z.infer<typeof WorkflowDelegateRoleNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Parallel Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Parallel node — runs a set of named branches concurrently.
+ *
+ * All branches start simultaneously when the node is entered. The parallel
+ * node completes when all branches complete. Each branch is a `sequence`
+ * node with its own ordered child list.
+ *
+ * Branches are keyed by a stable string name so the runtime and UI can
+ * track per-branch frame state independently.
+ */
+export const WorkflowParallelNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('parallel'),
+  /**
+   * Branch execution mode. Hand-authored definitions may omit this field; the
+   * authoring builder serializes the default `all-settled` mode explicitly.
+   */
+  mode: WorkflowParallelModeSchema.optional(),
+  /**
+   * Named concurrent branches. Keys are stable branch identifiers;
+   * values are sequence nodes that run in parallel.
+   */
+  branches: z.record(
+    z.string().min(1),
+    z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
+  ),
+});
+
+export type WorkflowParallelNode = z.infer<typeof WorkflowParallelNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Gate Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Gate node — pauses workflow execution awaiting human or automated approval.
+ *
+ * When the gate opens, the runtime emits a `gate.suspended` event and blocks
+ * until the gate is resolved (approved or rejected) or the timeout fires.
+ */
+export const WorkflowGateNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('gate'),
+  /**
+   * Message shown to the reviewer in the approval dialog.
+   * Supports `{{ }}` template interpolation for dynamic content.
+   */
+  prompt: z.string().min(1),
+  /**
+   * Optional title for the approval dialog.
+   * Defaults to 'Workflow Approval Required' when omitted.
+   */
+  title: z.string().optional(),
+  /**
+   * Action to take when the timeout expires.
+   * - `'approve'`: auto-approve and continue the workflow
+   * - `'reject'`: auto-reject and fail the workflow
+   */
+  autoAction: z.enum(['approve', 'reject']),
+  /**
+   * Timeout in milliseconds before `autoAction` fires.
+   * `null` blocks indefinitely (no timeout).
+   */
+  timeoutMs: z.number().int().positive().nullable(),
+  /**
+   * JSON Schema for the resume data payload submitted when the gate is approved.
+   * Validated against the schema before the workflow continues.
+   */
+  resumeSchema: JsonSchemaRecordSchema.optional(),
+});
+
+export type WorkflowGateNode = z.infer<typeof WorkflowGateNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Iterate Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Iterate node — fan-out execution over a collection, then fan-in.
+ *
+ * The `collection` expression resolves to an array at runtime. The `body`
+ * sequence is instantiated once per item and all instances run concurrently
+ * (up to `concurrency` in parallel at any time).
+ *
+ * Fan-in occurs when all item executions settle; downstream nodes receive
+ * an array of outputs in collection order.
+ */
+export const WorkflowIterateNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('iterate'),
+  /**
+   * jexl expression that resolves to an array at runtime.
+   * Each element becomes the `item` context for one body execution.
+   */
+  collection: z.string().min(1),
+  /**
+   * The sequence node executed once per collection item.
+   * Item context is available as `ctx.item` and `ctx.index`.
+   */
+  body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
+  /**
+   * Maximum number of concurrent item executions.
+   * `0` or absent means unlimited concurrency.
+   */
+  concurrency: z.number().int().nonnegative().optional(),
+});
+
+export type WorkflowIterateNode = z.infer<typeof WorkflowIterateNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Iterate-Chain Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Iterate-chain node — sequential pipeline iteration over a collection.
+ *
+ * Similar to `iterate` but items are processed one at a time in order.
+ * Each item execution receives the previous item's output as `ctx.previous`,
+ * enabling accumulator/pipeline patterns.
+ */
+export const WorkflowIterateChainNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('iterate-chain'),
+  /**
+   * jexl expression that resolves to an array at runtime.
+   */
+  collection: z.string().min(1),
+  /**
+   * The sequence node executed once per collection item in order.
+   * Context provides `ctx.item`, `ctx.index`, and `ctx.previous`
+   * (the previous item's frame output, if any).
+   */
+  body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
+});
+
+export type WorkflowIterateChainNode = z.infer<typeof WorkflowIterateChainNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Dynamic Region
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Dynamic region descriptor — marks a subtree as factory-generated.
+ *
+ * When a workflow author uses a factory function to produce nodes at
+ * authoring time, the factory result is materialized into the definition
+ * as a concrete subtree. The `factoryId` links the materialized nodes
+ * back to the factory registration for re-generation and UI tooling.
+ *
+ * `preview` is an optional snapshot of the expected node structure for
+ * display in the visual editor before execution-time materialization.
+ * It must not contain functions — the preview is purely for inspection.
+ */
+export const WorkflowDynamicRegionSchema = z.object({
+  /**
+   * Stable factory identifier registered in the workflow builder.
+   * Used by the runtime to look up the factory and re-materialize nodes
+   * when the definition is re-evaluated.
+   */
+  factoryId: z.string().min(1),
+  /**
+   * Optional preview of the expected node structure for UI display.
+   * Must be JSON-safe; no functions or runtime-only values.
+   */
+  preview: z.array(z.lazy((): z.ZodType<WorkflowNode> => WorkflowNodeSchema)).optional(),
+  /**
+   * Authoring-time source location of the factory call.
+   * Used for diagnostic messages and editor navigation.
+   */
+  sourceLocation: WorkflowSourceLocationSchema.optional(),
+});
+
+export type WorkflowDynamicRegion = z.infer<typeof WorkflowDynamicRegionSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // Workflow Definition (stored entity)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Zod schema for workflow definitions.
- * No `z.ZodType<>` annotation — kept as a concrete `z.ZodObject` so callers
- * (e.g. storage CRUD handlers) can use `.omit()`, `.pick()`, and other object methods.
- * `steps` uses `z.array(WorkflowStepSchema)` directly; `z.infer` produces `unknown[]`
- * through the `z.lazy` boundary, so the exported `WorkflowDefinition` type is declared
- * manually below to restore `steps: WorkflowStep[]`.
+ * Persisted workflow definition in the pipeline-primitive model.
+ *
+ * The `root` field replaces the old flat `steps` DAG with a structured
+ * `WorkflowSequenceNode` tree. All node schemas are function-free and
+ * JSON-serializable so definitions can be stored, transferred over the bus,
+ * and displayed in the visual editor without runtime coupling.
+ *
+ * `inputSchema`, `configSchema`, and `outputSchema` are JSON Schema documents
+ * (validated by {@link JsonSchemaRecordSchema}) for type-safe parameterization
+ * and output contracts.
  */
 export const WorkflowDefinitionSchema = z.object({
   /** Unique workflow identifier. */
-  id: z.string(),
-  /** Workflow name. */
-  name: z.string(),
-  /** Human-readable description. */
+  id: z.string().min(1),
+  /** Human-readable workflow name. */
+  name: z.string().optional(),
+  /** Human-readable description of what this workflow does. */
   description: z.string().optional(),
-  /** Input parameter definitions. */
-  inputs: z.array(WorkflowInputSchema).optional(),
-  /** Workflow steps (DAG nodes). */
-  steps: z.array(WorkflowStepSchema),
   /**
-   * Scope this workflow definition is bound to.
-   * Use `{ type: 'global' }` for framework-wide workflow definitions.
+   * JSON Schema for the workflow's input parameters.
+   * Validated at execution start; available as `ctx.inputs` during execution.
    */
-  scope: WorkflowExecutionScopeSchema,
-  /** Creation timestamp. */
-  createdAt: z.number(),
-  /** Last update timestamp. */
-  updatedAt: z.number(),
-  /** Default execution target for all steps (overridable per step). */
-  defaultExecutionTargetId: z.string().optional(),
+  inputSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * JSON Schema for static workflow configuration.
+   * Configuration values are resolved once at workflow load time.
+   */
+  configSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * JSON Schema for the workflow's primary output.
+   * Validated when the root sequence completes.
+   */
+  outputSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * Primary artifact binding for this workflow.
+   * When set, the workflow's output is associated with an artifact kind and scope.
+   */
+  artifact: WorkflowArtifactBindingSchema.optional(),
+  /**
+   * Root sequence node containing the full pipeline topology.
+   * Replaces the old flat `steps` DAG with a structured node tree.
+   */
+  root: WorkflowSequenceNodeSchema,
   /**
    * Trigger configurations for this workflow.
-   * Multiple triggers may fire independently; the workflow runs once per firing trigger.
+   * Multiple triggers may fire independently; one execution is created per firing trigger.
    * Defaults to manual-only when omitted.
    */
   triggers: z.array(WorkflowTriggerSchema).optional(),
   /**
-   * Canvas layout hints for the visual editor.
-   * Stored as opaque JSON; ignored by the executor.
+   * Scope this workflow definition is bound to.
+   * Use `{ type: 'global' }` for framework-wide workflow definitions.
    */
-  canvasLayout: JsonObjectContractSchema.optional(),
+  scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
+  /**
+   * Canvas layout hints for the visual editor.
+   * Stored as an opaque JSON record; ignored by the executor.
+   */
+  canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
 });
-
-/**
- * Input schema for creating/updating workflow definitions.
- * Omits timestamps which are managed by the storage layer.
- */
-export const WorkflowDefinitionInputSchema = WorkflowDefinitionSchema.omit({
-  createdAt: true,
-  updatedAt: true,
-});
-
-/**
- * Collect persisted-definition validation issues for runtime-only function steps.
- * @param steps - Workflow steps to scan recursively.
- * @param path - Zod issue path prefix for the current step array.
- * @returns Validation issue paths pointing at every function step discriminant.
- */
-function collectFunctionStepIssues(
-  steps: readonly WorkflowStep[],
-  path: (string | number)[] = ['steps'],
-): { path: (string | number)[] }[] {
-  const issues: { path: (string | number)[] }[] = [];
-
-  for (const [index, step] of steps.entries()) {
-    const stepPath = [...path, index];
-    if (step.type === 'function') {
-      issues.push({ path: [...stepPath, 'type'] });
-      continue;
-    }
-    if (step.type === 'for-each') {
-      issues.push(...collectFunctionStepIssues(step.steps, [...stepPath, 'steps']));
-    }
-  }
-
-  return issues;
-}
-
-/**
- * Definition input accepted by storage and bus registration.
- *
- * Function steps require a runtime function map and are therefore valid only
- * for file/source-authored workflow workers, not persisted JSON definitions.
- */
-export const PersistedWorkflowDefinitionInputSchema = WorkflowDefinitionInputSchema.superRefine((workflow, ctx) => {
-  for (const issue of collectFunctionStepIssues(workflow.steps)) {
-    ctx.addIssue({
-      code: 'custom',
-      path: issue.path,
-      message: 'Function workflow steps are only valid in file/source-authored workflows',
-    });
-  }
-});
-
-/**
- * Typed persisted definition schema for bus/storage namespace registration.
- * @see {@link WorkflowDefinitionInputSchemaTyped} for why this cast is needed.
- */
-export const PersistedWorkflowDefinitionInputSchemaTyped = PersistedWorkflowDefinitionInputSchema as z.ZodType<
-  WorkflowDefinitionInput,
-  WorkflowDefinitionInput
->;
 
 /**
  * Workflow definition stored in the database.
- * Declared manually to preserve `steps: WorkflowStep[]` through the z.lazy boundary
- * (z.infer produces `unknown[]` for lazy-wrapped schemas).
+ * `root` is typed via `z.infer` which resolves `WorkflowSequenceNode` correctly
+ * through the `z.lazy` boundary using the declared interface.
  */
-export type WorkflowDefinition = Omit<z.infer<typeof WorkflowDefinitionSchema>, 'steps'> & {
-  steps: WorkflowStep[];
-};
-
-/**
- * Input schema for creating/updating workflow definitions.
- * Omits timestamps which are managed by storage layer.
- */
-export type WorkflowDefinitionInput = Omit<z.infer<typeof WorkflowDefinitionInputSchema>, 'steps'> & {
-  steps: WorkflowStep[];
-};
-
-/**
- * Schema typed as `z.ZodType<WorkflowDefinition, WorkflowDefinition>` for bus namespace registration.
- * Required because `z.lazy` erases the `Input` type parameter that `InferSchemaPayload` needs.
- */
-export const WorkflowDefinitionSchemaTyped = WorkflowDefinitionSchema as z.ZodType<
-  WorkflowDefinition,
-  WorkflowDefinition
->;
-
-/**
- * Schema typed as `z.ZodType<WorkflowDefinitionInput, WorkflowDefinitionInput>` for bus namespace registration.
- * @see {@link WorkflowDefinitionSchemaTyped} for explanation.
- */
-export const WorkflowDefinitionInputSchemaTyped = WorkflowDefinitionInputSchema as z.ZodType<
-  WorkflowDefinitionInput,
-  WorkflowDefinitionInput
->;
+export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Step State (runtime)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Execution status of a workflow step.
- */
-export const StepStatusSchema = z.enum(['pending', 'running', 'waiting', 'completed', 'failed', 'skipped']);
-
-export type StepStatus = z.infer<typeof StepStatusSchema>;
-
-/**
- * Runtime state of a single executable step (agent / shell / gate).
- * The `kind` discriminant separates executable state from composite state.
- */
-export const ExecutableStepStateSchema = z.object({
-  /** Discriminant: always `'executable'` for agent, shell, and gate steps. */
-  kind: z.literal('executable'),
-  /** Current execution status. */
-  status: StepStatusSchema,
-  /** Worker session ID executing this step. */
-  sessionId: z.string().optional(),
-  /** Subagent ID for this step execution. */
-  subagentId: z.string().optional(),
-  /** Step output/result. JSON-serializable value produced by the step. */
-  result: JsonValueSchema.optional(),
-  /** Error message if step failed. */
-  error: z.string().optional(),
-  /** Step start timestamp. */
-  startedAt: z.number().optional(),
-  /** Step completion timestamp. */
-  completedAt: z.number().optional(),
-});
-
-export type ExecutableStepState = z.infer<typeof ExecutableStepStateSchema>;
-
-/**
- * Persisted snapshot of a single `for-each` expansion.
- *
- * Captures everything needed to rebuild the scheduler graph for the expanded
- * iterations without re-evaluating the collection expression at resume time.
- */
-export const ForEachExpansionSnapshotSchema = z.object({
-  /** ID of the for-each step that owns this expansion. */
-  parentStepId: z.string(),
-  /**
-   * Fully expanded child steps with namespaced IDs and rewired `needs` edges.
-   * These are the flat WorkflowStep nodes inserted into the scheduler graph.
-   */
-  childSteps: z.array(WorkflowStepSchema),
-  /**
-   * Per-child-step item/index context keyed by expanded step ID.
-   * Used for expression resolution when running a child step.
-   */
-  stepContext: z.record(
-    z.string(),
-    z.object({
-      /** Collection item for this child step's iteration. */
-      item: JsonValueSchema,
-      /** Zero-based iteration index. */
-      index: z.number(),
-    }),
-  ),
-  /**
-   * IDs of the expanded child steps that are leaves of the iteration DAG.
-   * Downstream steps that depend on the for-each step are rewired to wait for
-   * all leaf steps before starting.
-   */
-  leafStepIds: z.array(z.string()),
-});
-
-export type ForEachExpansionSnapshot = z.infer<typeof ForEachExpansionSnapshotSchema>;
-
-/**
- * Runtime state of a composite `for-each` step.
- *
- * Composite steps are not executed directly; they orchestrate a set of
- * dynamically expanded child steps. Lifecycle events for individual
- * child steps are emitted only when those children (executable steps) run.
- */
-export const CompositeStepStateSchema = z.object({
-  /** Discriminant: always `'composite'` for for-each steps. */
-  kind: z.literal('composite'),
-  /**
-   * Composite step execution status.
-   * - `pending`   – not yet started
-   * - `expanding` – scheduler has started expansion and generated children are active
-   * - `completed` – all child steps have completed or been skipped
-   * - `skipped`   – the for-each `if` condition was falsy
-   * - `failed`    – at least one child step failed
-   * - `cancelled` – the execution was cancelled while this step was active
-   */
-  status: z.enum(['pending', 'expanding', 'completed', 'skipped', 'failed', 'cancelled']),
-  /** Epoch ms when expansion or first child execution began. */
-  startedAt: z.number().optional(),
-  /** Epoch ms when all child steps settled. */
-  completedAt: z.number().optional(),
-  /** Human-readable error message when `status` is `'failed'`. */
-  error: z.string().optional(),
-  /**
-   * Persisted expansion snapshot.
-   * Present after the scheduler has evaluated the collection expression and
-   * produced child steps. Absent while still in `pending` state.
-   */
-  expansion: ForEachExpansionSnapshotSchema.optional(),
-});
-
-export type CompositeStepState = z.infer<typeof CompositeStepStateSchema>;
-
-/**
- * Runtime state of a single workflow step.
- *
- * Discriminated union of executable (agent / shell / gate) and composite
- * (for-each) step states. Use the `kind` field to narrow.
- * @example
- * ```typescript
- * if (state.kind === 'executable') {
- *   // state.subagentId is available here
- * }
- * ```
- */
-export const StepStateSchema = z.discriminatedUnion('kind', [ExecutableStepStateSchema, CompositeStepStateSchema]);
-
-export type StepState = ExecutableStepState | CompositeStepState;
-
-/**
- * Schema typed as `z.ZodType<StepState, StepState>` for bus namespace registration.
- *
- * Required because `CompositeStepState.expansion.childSteps` references
- * `WorkflowStepSchema` which is annotated as `z.ZodType<WorkflowStep>` (Input = unknown)
- * to support the `z.lazy` circular reference. Without this cast, `z.input` resolves
- * `childSteps` to `unknown[]`, causing assignability errors at bus handler callsites.
- * @see {@link WorkflowDefinitionSchemaTyped} for the same pattern applied to definitions.
- */
-export const StepStateSchemaTyped = StepStateSchema as z.ZodType<StepState, StepState>;
-
-// ─────────────────────────────────────────────────────────────
-// Workflow Execution (runtime state)
+// Execution State (runtime)
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -738,12 +763,10 @@ export const WorkflowExecutionSchema = z.object({
   coordinatorSessionId: z.string().optional(),
   /** Current execution status. */
   status: ExecutionStatusSchema,
-  /** Bound input values for this execution. */
-  inputs: JsonObjectContractSchema,
-  /** Step execution states keyed by step ID. */
-  steps: z.record(z.string(), StepStateSchema),
-  /** Currently executing step ID. */
-  currentStepId: z.string().optional(),
+  /** Bound input value for this execution. */
+  inputs: JsonValueSchema,
+  /** Bound workflow configuration values for this execution. */
+  config: JsonObjectContractSchema.optional(),
   /** Execution start timestamp. */
   startedAt: z.number(),
   /** Execution completion timestamp. */
@@ -759,25 +782,147 @@ export const WorkflowExecutionSchema = z.object({
   /**
    * Scope this execution is bound to.
    * Inherited from the workflow definition at start time, or overridden
-   * by the caller via {@link WorkflowSubjects.start}.
+   * by the caller via the `start` bus subject.
    */
   scope: WorkflowExecutionScopeSchema,
 });
 
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
 
+// ─────────────────────────────────────────────────────────────
+// Frame State (execution frame per node)
+// ─────────────────────────────────────────────────────────────
+
 /**
- * Schema typed as `z.ZodType<WorkflowExecution, WorkflowExecution>` for bus
- * namespace registration.
+ * Runtime state of a single execution frame.
  *
- * Required because `WorkflowExecution.steps` transitively contains
- * `CompositeStepState.expansion.childSteps` which references `WorkflowStepSchema`
- * annotated as `z.ZodType<WorkflowStep>` (Input = unknown) to break the `z.lazy`
- * circular reference. Without this cast, `z.input` resolves `childSteps` to
- * `unknown[]`, causing assignability errors at bus handler callsites.
- * @see {@link WorkflowDefinitionSchemaTyped} for the same pattern.
+ * Each node in the pipeline tree gets a frame per execution pass. Nested
+ * nodes (sequence, parallel, iterate) create child frames. The `path` field
+ * encodes the frame's position in the tree for log correlation and UI display.
  */
-export const WorkflowExecutionSchemaTyped = WorkflowExecutionSchema as z.ZodType<WorkflowExecution, WorkflowExecution>;
+export const WorkflowFrameStateSchema = z.object({
+  /** Unique frame identifier within the execution. */
+  frameId: z.string(),
+  /** Node identifier this frame corresponds to. */
+  nodeId: z.string(),
+  /** Node type discriminant for routing and display. */
+  nodeType: WorkflowNodeTypeSchema,
+  /**
+   * Ordered path of frame IDs from the root frame to this frame (inclusive).
+   * Used for tree traversal, log correlation, and UI breadcrumb display.
+   */
+  path: z.array(z.string()),
+  /** Parent frame ID. Absent for the root frame. */
+  parentFrameId: z.string().optional(),
+  /** Current frame execution status. */
+  status: z.enum(['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled']),
+  /**
+   * Number of execution attempts for this frame (zero-based).
+   * Incremented each time the frame is retried after failure.
+   */
+  attempt: z.number().int().nonnegative().default(0),
+  /**
+   * Zero-based iteration index when this frame belongs to an `iterate` or
+   * `iterate-chain` expansion. Absent for non-iteration frames.
+   */
+  iteration: z.number().int().nonnegative().optional(),
+  /**
+   * Branch key when this frame is a child of a `parallel` node.
+   * Matches a key in `WorkflowParallelNode.branches`.
+   */
+  branchKey: z.string().optional(),
+  /** JSON-serializable output produced by the node on completion. */
+  output: JsonValueSchema.optional(),
+  /** Human-readable error message when `status` is `'failed'`. */
+  error: z.string().optional(),
+  /** Epoch milliseconds when the frame started executing. */
+  startedAt: z.number().optional(),
+  /** Epoch milliseconds when the frame reached a terminal status. */
+  completedAt: z.number().optional(),
+});
+
+export type WorkflowFrameState = z.infer<typeof WorkflowFrameStateSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Gate Instance State
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Persisted state of a gate node instance.
+ *
+ * Created when a gate node is entered, updated when the gate is resolved,
+ * timed out, or cancelled. Stored independently of frame state so the
+ * gate service can query open gates without scanning the full frame tree.
+ */
+export const WorkflowGateInstanceSchema = z.object({
+  /** Execution this gate belongs to. */
+  executionId: z.string(),
+  /** Node ID of the gate in the workflow definition. */
+  nodeId: z.string(),
+  /** Frame ID of the gate's execution frame. */
+  frameId: z.string(),
+  /**
+   * JSON Schema describing the expected resume data payload.
+   * Callers must satisfy this schema when responding to the gate.
+   */
+  schema: JsonSchemaRecordSchema,
+  /**
+   * Optional prompt shown to the reviewer in the approval UI.
+   * Populated from the gate node's `prompt` field after template interpolation.
+   */
+  prompt: z.string().optional(),
+  /** Current gate status. */
+  status: z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']),
+  /** JSON-serializable resume data submitted by the approver. */
+  resumeData: JsonValueSchema.optional(),
+  /** Epoch milliseconds when the gate was created (node entered). */
+  createdAt: z.number(),
+  /** Epoch milliseconds when the gate left the `waiting` status. */
+  resolvedAt: z.number().optional(),
+});
+
+export type WorkflowGateInstance = z.infer<typeof WorkflowGateInstanceSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Resolved Role (for delegate nodes)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Resolved role configuration returned by the `workflow.resolveRole` RPC.
+ *
+ * When a workflow node specifies a `role` instead of explicit adapter/model
+ * fields, the executor resolves the role via the bus before spawning the
+ * subagent. The resolved payload provides the full adapter configuration
+ * for execution.
+ */
+export const WorkflowResolvedRoleSchema = z.object({
+  /** Adapter name to use for execution (e.g., 'claudeCode', 'openai'). */
+  adapterName: z.string().min(1),
+  /** Model override for the resolved role. */
+  model: z.string().optional(),
+  /** Harness ID for per-role tool governance. */
+  harnessId: z.string().optional(),
+  /** System prompt to prepend for this role. */
+  systemPrompt: z.string().optional(),
+  /** Context mode for the subagent session. */
+  contextMode: ContextModeSchema.optional(),
+  /** Provider context for credential and endpoint resolution. */
+  providerContext: ProviderContextSchema.optional(),
+});
+
+export type WorkflowResolvedRole = z.infer<typeof WorkflowResolvedRoleSchema>;
+
+/**
+ * Resolved explicit agent configuration returned by the `workflow.resolveAgent`
+ * RPC.
+ *
+ * The payload intentionally matches {@link WorkflowResolvedRoleSchema}: explicit
+ * agent and role references both resolve to the adapter/subagent configuration
+ * the workflow runtime needs, while preserving distinct registry seams.
+ */
+export const WorkflowResolvedAgentSchema = WorkflowResolvedRoleSchema;
+
+export type WorkflowResolvedAgent = WorkflowResolvedRole;
 
 // ─────────────────────────────────────────────────────────────
 // List Query

@@ -8,14 +8,14 @@ describe('buildWorkflowExpressionContextFromResolvedInputs', () => {
       inputs: {},
       steps: {
         lint: { status: 'completed', result: 'ok' },
-        fanout: { status: 'expanding' },
+        fanout: { status: 'running' },
         cleanup: { status: 'cancelled' },
       },
     });
 
     expect(context.steps).toEqual({
       lint: { status: 'completed', result: 'ok' },
-      fanout: { status: 'expanding' },
+      fanout: { status: 'running' },
       cleanup: { status: 'cancelled' },
     });
   });

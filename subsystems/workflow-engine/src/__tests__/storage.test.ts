@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { eq, sql } from 'drizzle-orm';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
-import { workflowExecutions, workflowExecutionSteps } from '../storage/schema.js';
 import {
   EXECUTION_LIST_DEFAULT_LIMIT,
   EXECUTION_LIST_MAX_LIMIT,
@@ -92,7 +90,15 @@ describe('workflow storage handlers', () => {
   });
 
   it('stores and retrieves workflow definitions', async () => {
-    const workflow = createWorkflowDefinition();
+    const workflow = {
+      ...createWorkflowDefinition(),
+      artifact: {
+        kind: 'workflow-report',
+        schemaVersion: '1',
+        scope: { level: 'global' },
+        statusPath: 'status',
+      },
+    };
 
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
@@ -102,27 +108,22 @@ describe('workflow storage handlers', () => {
       id: workflow.id,
       name: workflow.name,
       scope: workflow.scope,
+      artifact: workflow.artifact,
     });
-    expect(fetched?.createdAt).toEqual(expect.any(Number));
-    expect(fetched?.updatedAt).toEqual(expect.any(Number));
-    expect(fetched?.updatedAt).toBeGreaterThanOrEqual(fetched?.createdAt ?? 0);
   });
 
   it('preserves optional definition fields when omitted from an update payload', async () => {
     const workflow = createWorkflowDefinition({
       id: 'workflow-preserve-optionals',
       description: 'Initial description',
-      inputs: [{ name: 'summary', type: 'string' }],
-      defaultExecutionTargetId: 'target-1',
       triggers: [{ type: 'manual' }],
-      canvasLayout: { nodePositions: { 'step-1': { x: 120, y: 80 } } },
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
 
-    const updated = {
+    const updated: typeof workflow = {
       id: workflow.id,
       name: 'Updated name',
-      steps: workflow.steps,
+      root: workflow.root,
       scope: workflow.scope,
     };
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: updated });
@@ -132,10 +133,7 @@ describe('workflow storage handlers', () => {
       id: workflow.id,
       name: 'Updated name',
       description: 'Initial description',
-      inputs: [{ name: 'summary', type: 'string' }],
-      defaultExecutionTargetId: 'target-1',
       triggers: [{ type: 'manual' }],
-      canvasLayout: { nodePositions: { 'step-1': { x: 120, y: 80 } } },
     });
   });
 
@@ -276,165 +274,6 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
     });
     expect(fetched).toBeNull();
-  });
-
-  it('persists step state changes without rewriting the execution steps snapshot', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-step-state-rows' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({
-      id: 'execution-step-state-rows',
-      workflowId: workflow.id,
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-    await dbContext.db.delete(workflowExecutionSteps).where(eq(workflowExecutionSteps.executionId, execution.id));
-    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, {
-      executionId: execution.id,
-      stepUpdates: {
-        plan: {
-          kind: 'executable',
-          status: 'completed',
-          result: 'planned',
-          startedAt: 10,
-          completedAt: 20,
-        },
-      },
-    });
-
-    const executionRows = await dbContext.db
-      .select({ steps: workflowExecutions.steps })
-      .from(workflowExecutions)
-      .where(eq(workflowExecutions.id, execution.id));
-    expect(executionRows[0]?.steps.plan?.status).toBe('pending');
-
-    const stepRows = await dbContext.db
-      .select()
-      .from(workflowExecutionSteps)
-      .where(eq(workflowExecutionSteps.executionId, execution.id));
-    expect(stepRows.find((row) => row.stepId === 'plan')?.state).toMatchObject({
-      kind: 'executable',
-      status: 'completed',
-      result: 'planned',
-    });
-
-    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: execution.id,
-    });
-    expect(fetched?.steps.plan).toMatchObject({
-      kind: 'executable',
-      status: 'completed',
-      result: 'planned',
-    });
-    expect(fetched?.steps.implement?.status).toBe('pending');
-  });
-
-  it('persists and retrieves an object step result without stringification', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-object-result' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({
-      id: 'execution-object-result',
-      workflowId: workflow.id,
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, {
-      executionId: execution.id,
-      stepUpdates: {
-        plan: {
-          kind: 'executable',
-          status: 'completed',
-          result: { copied: ['.env', '.gitignore'], count: 2 },
-          startedAt: 100,
-          completedAt: 200,
-        },
-      },
-    });
-
-    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: execution.id,
-    });
-    expect(fetched?.steps.plan).toMatchObject({
-      kind: 'executable',
-      status: 'completed',
-      result: { copied: ['.env', '.gitignore'], count: 2 },
-    });
-  });
-
-  it('normalizes legacy persisted executable step states without a kind discriminant', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-legacy-step-kind' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({
-      id: 'execution-legacy-step-kind',
-      workflowId: workflow.id,
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-    await dbContext.db.run(sql`
-      UPDATE workflow_executions
-      SET steps = ${JSON.stringify({
-        plan: { status: 'completed', result: 'legacy snapshot' },
-        implement: { status: 'pending' },
-      })}
-      WHERE id = ${execution.id}
-    `);
-    await dbContext.db.run(sql`
-      UPDATE workflow_execution_steps
-      SET state = ${JSON.stringify({ status: 'completed', result: 'legacy row' })}
-      WHERE execution_id = ${execution.id} AND step_id = 'plan'
-    `);
-
-    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: execution.id,
-    });
-    expect(fetched?.steps.plan).toMatchObject({
-      kind: 'executable',
-      status: 'completed',
-      result: 'legacy row',
-    });
-    expect(fetched?.steps.implement).toMatchObject({
-      kind: 'executable',
-      status: 'pending',
-    });
-
-    const { executions } = await MakaioBus.request(WorkflowStorageSubjects.listExecutions, {
-      workflowId: workflow.id,
-    });
-    expect(executions[0]?.steps.plan).toMatchObject({
-      kind: 'executable',
-      status: 'completed',
-      result: 'legacy row',
-    });
-  });
-
-  it('applies partial execution updates in a transaction', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-update-transaction' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({
-      id: 'execution-update-transaction',
-      workflowId: workflow.id,
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-    const transactionSpy = vi.spyOn(dbContext.db, 'transaction');
-    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, {
-      executionId: execution.id,
-      status: 'completed',
-      stepUpdates: {
-        plan: {
-          kind: 'executable',
-          status: 'completed',
-          result: 'planned',
-        },
-      },
-    });
-
-    expect(transactionSpy).toHaveBeenCalled();
-
-    const { execution: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: execution.id,
-    });
-    expect(fetched?.status).toBe('completed');
-    expect(fetched?.steps.plan).toMatchObject({ status: 'completed', result: 'planned' });
   });
 
   it('orders executions by startedAt desc and enforces the limit', async () => {
@@ -606,8 +445,9 @@ describe('workflow storage handlers', () => {
     await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
       span: {
         executionId: execution.id,
+        frameId: 'frame-plan',
         stepId: 'plan',
-        stepType: 'agent',
+        stepType: 'station',
         status: 'completed',
         startedAt: 10,
         completedAt: 20,
@@ -623,8 +463,9 @@ describe('workflow storage handlers', () => {
     await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
       span: {
         executionId: execution.id,
+        frameId: 'frame-review',
         stepId: 'review',
-        stepType: 'agent',
+        stepType: 'station',
         status: 'completed',
         startedAt: 30,
       },
@@ -632,8 +473,9 @@ describe('workflow storage handlers', () => {
     await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
       span: {
         executionId: execution.id,
+        frameId: 'frame-implement',
         stepId: 'implement',
-        stepType: 'shell',
+        stepType: 'station',
         status: 'completed',
         startedAt: 20,
       },
@@ -660,6 +502,35 @@ describe('workflow storage handlers', () => {
     expect(spans[0]?.stepId).toBe('plan');
     expect(spans[0]?.estimatedCost).toBe(0.01);
 
+    await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
+      span: {
+        executionId: execution.id,
+        frameId: 'frame-review-1',
+        stepId: 'repeat-review',
+        stepType: 'station',
+        status: 'completed',
+        startedAt: 40,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setSpan, {
+      span: {
+        executionId: execution.id,
+        frameId: 'frame-review-2',
+        stepId: 'repeat-review',
+        stepType: 'station',
+        status: 'completed',
+        startedAt: 50,
+      },
+    });
+
+    const { spans: repeatedFrameSpans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, {
+      executionId: execution.id,
+    });
+    expect(repeatedFrameSpans.filter((span) => span.stepId === 'repeat-review').map((span) => span.frameId)).toEqual([
+      'frame-review-1',
+      'frame-review-2',
+    ]);
+
     const { links } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {
       sourceExecutionId: execution.id,
     });
@@ -682,6 +553,99 @@ describe('workflow storage handlers', () => {
         linkType: 'triggered-by',
       },
     ]);
+  });
+
+  it('round-trips explicit null frame output separately from absent output', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-frame-null-output' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-frame-null-output', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setFrame, {
+      executionId: execution.id,
+      frame: {
+        frameId: 'frame-without-output',
+        nodeId: 'pending-node',
+        nodeType: 'station',
+        path: ['frame-without-output'],
+        status: 'running',
+        attempt: 0,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setFrame, {
+      executionId: execution.id,
+      frame: {
+        frameId: 'frame-null-output',
+        nodeId: 'null-node',
+        nodeType: 'station',
+        path: ['frame-null-output'],
+        status: 'completed',
+        attempt: 0,
+        output: null,
+      },
+    });
+
+    const { frame: absentOutputFrame } = await MakaioBus.request(WorkflowStorageSubjects.getFrame, {
+      frameId: 'frame-without-output',
+    });
+    const { frame: nullOutputFrame } = await MakaioBus.request(WorkflowStorageSubjects.getFrame, {
+      frameId: 'frame-null-output',
+    });
+    const { frames } = await MakaioBus.request(WorkflowStorageSubjects.listFrames, { executionId: execution.id });
+
+    expect(absentOutputFrame).not.toBeNull();
+    expect(Object.hasOwn(absentOutputFrame!, 'output')).toBe(false);
+    expect(nullOutputFrame?.output).toBeNull();
+    expect(frames.find((frame) => frame.frameId === 'frame-without-output')).not.toHaveProperty('output');
+    expect(frames.find((frame) => frame.frameId === 'frame-null-output')?.output).toBeNull();
+  });
+
+  it('round-trips explicit null gate resumeData separately from absent resumeData', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-gate-null-resume' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-gate-null-resume', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        executionId: execution.id,
+        nodeId: 'waiting-gate',
+        frameId: 'frame-waiting-gate',
+        schema: {},
+        status: 'waiting',
+        createdAt: 1000,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        executionId: execution.id,
+        nodeId: 'null-gate',
+        frameId: 'frame-null-gate',
+        schema: {},
+        status: 'resumed',
+        resumeData: null,
+        createdAt: 1000,
+        resolvedAt: 2000,
+      },
+    });
+
+    const { gate: absentResumeGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: execution.id,
+      nodeId: 'waiting-gate',
+      frameId: 'frame-waiting-gate',
+    });
+    const { gate: nullResumeGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: execution.id,
+      nodeId: 'null-gate',
+      frameId: 'frame-null-gate',
+    });
+    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listGateInstances, { executionId: execution.id });
+
+    expect(absentResumeGate).not.toBeNull();
+    expect(Object.hasOwn(absentResumeGate!, 'resumeData')).toBe(false);
+    expect(nullResumeGate?.resumeData).toBeNull();
+    expect(gates.find((gate) => gate.nodeId === 'waiting-gate')).not.toHaveProperty('resumeData');
+    expect(gates.find((gate) => gate.nodeId === 'null-gate')?.resumeData).toBeNull();
   });
 
   it('rejects execution links without existing source and target executions', async () => {

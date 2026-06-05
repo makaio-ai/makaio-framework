@@ -3,7 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { WorkflowDefinitionInputSchema, type WorkflowWorkerSource } from '@makaio/contracts';
+import { WorkflowDefinitionSchema, type WorkflowWorkerSource, type WorkflowZodSchemas } from '@makaio/contracts';
 import type { RuntimeLoadedWorkflow } from './types.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ import type { RuntimeLoadedWorkflow } from './types.js';
  *
  * Guards against incorrectly structured default exports — anything that
  * looks like a `defineWorkflow()` result (has a `definition` object and a
- * `runtimeSteps` Map) passes.
+ * `runtimeHandlers` Map) passes.
  * @param value - Candidate value from the module's default export.
  * @returns The value narrowed to {@link RuntimeLoadedWorkflow}.
  * @throws When the value does not match the expected shape.
@@ -23,31 +23,42 @@ import type { RuntimeLoadedWorkflow } from './types.js';
 function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   if (typeof value !== 'object' || value === null) {
     throw new Error(
-      `Invalid workflow module default export: expected an object with 'definition' and 'runtimeSteps', got ${typeof value}.`,
+      `Invalid workflow module default export: expected an object with 'definition' and 'runtimeHandlers', got ${typeof value}.`,
     );
   }
 
   const obj = value as Record<string, unknown>;
 
-  if (!(obj['runtimeSteps'] instanceof Map)) {
-    throw new Error(`Invalid workflow module default export: 'runtimeSteps' must be a Map instance.`);
+  if (!(obj['runtimeHandlers'] instanceof Map)) {
+    throw new Error(`Invalid workflow module default export: 'runtimeHandlers' must be a Map instance.`);
   }
 
   // Workflow files export defineWorkflow() builders, whose definition is the
-  // creation/update input contract. Persisted DB-sourced workers are validated
-  // separately by WorkflowWorkerConfigSchema.definition.
-  const definitionResult = WorkflowDefinitionInputSchema.safeParse(obj['definition']);
+  // persisted pipeline-primitive definition contract.
+  const definitionResult = WorkflowDefinitionSchema.safeParse(obj['definition']);
   if (!definitionResult.success) {
     throw new Error(
-      `Invalid workflow module default export: 'definition' must satisfy WorkflowDefinitionInputSchema. ` +
+      `Invalid workflow module default export: 'definition' must satisfy WorkflowDefinitionSchema. ` +
         definitionResult.error.message,
     );
   }
 
+  const zodSchemas = isWorkflowZodSchemas(obj['zodSchemas']) ? obj['zodSchemas'] : undefined;
+
   return {
     definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
-    runtimeSteps: obj['runtimeSteps'] as RuntimeLoadedWorkflow['runtimeSteps'],
+    runtimeHandlers: obj['runtimeHandlers'] as RuntimeLoadedWorkflow['runtimeHandlers'],
+    ...(zodSchemas !== undefined ? { zodSchemas } : {}),
   };
+}
+
+/**
+ * Check whether a module export carries the workflow builder schema container.
+ * @param value - Candidate `zodSchemas` export value.
+ * @returns Whether the value has the builder schema container shape.
+ */
+function isWorkflowZodSchemas(value: unknown): value is WorkflowZodSchemas {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && 'gates' in value;
 }
 
 /**
@@ -101,7 +112,7 @@ async function writeWorkflowSourceToTempFile(
  * definition registry. Calling this function with `kind === 'definition'`
  * always throws.
  * @param source - Workflow source descriptor from `WorkflowWorkerConfig.source`.
- * @returns Loaded workflow with `definition` and `runtimeSteps`.
+ * @returns Loaded workflow with `definition` and `runtimeHandlers`.
  * @throws For `'definition'` kind or when the module shape is invalid.
  */
 export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<RuntimeLoadedWorkflow> {
