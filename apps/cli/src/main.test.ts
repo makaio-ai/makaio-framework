@@ -209,7 +209,7 @@ describe('main — remote manifest behavior', () => {
     }
   });
 
-  it('passes config-derived discovery, launcher command, and package defaults to serve', async () => {
+  it('passes config-derived discovery, base runner default, launcher command, and package defaults to serve', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-config-'));
     const extensionRoot = path.join(tempRoot, 'extensions', 'config-cli-extension');
     const configPath = path.join(tempRoot, 'makaio.config.json');
@@ -261,6 +261,7 @@ describe('main — remote manifest behavior', () => {
           source: 'local',
         },
       ]);
+      expect(serveOptions.boot?.workflowRunner).toEqual({ mode: 'piscina' });
       expect(serveOptions.boot?.launcherCommand).toBe('makaio-from-config');
       expect(serveOptions.boot?.packageConfigDefaults?.get('account-manager')).toEqual({
         makaioCommand: 'makaio-from-config',

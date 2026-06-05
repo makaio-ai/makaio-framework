@@ -94,14 +94,17 @@ export type WorkflowRunnerBootOptions =
        * WorkerNode dispatch function injected by the host composition root.
        *
        * Called once per workflow execution with the full worker config and
-       * manifest. Product hosts wire this to `workerPool.dispatch`.
+       * manifest. Product hosts may wire this to `workerPool.dispatch`.
+       * When omitted, the Node runtime dispatches through the framework
+       * `worker-node.dispatch` bus subject and requires a bus instance.
        */
-      readonly dispatch: WorkerNodeDispatch;
+      readonly dispatch?: WorkerNodeDispatch;
       /**
        * Contribution manifest forwarded to each dispatch call.
        *
-       * When omitted, an empty manifest is used. Product hosts that resolve
-       * project-level manifests in the dispatch function can leave this empty.
+       * When omitted, no explicit manifest is forwarded. Product hosts that
+       * resolve project-level manifests in the dispatch function can leave this
+       * empty so the dispatch layer can perform resolution.
        */
       readonly manifest?: WorkerContributionManifest;
       /**

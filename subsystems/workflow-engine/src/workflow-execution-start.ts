@@ -1,3 +1,4 @@
+/* eslint max-lines-per-function: ["error", { "max": 90 }] */
 import { isAbsolute, resolve } from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
@@ -22,10 +23,10 @@ import { type FinalizerDeps } from './workflow-execution-finalizer.js';
 import {
   bindWorkflowInputs,
   bindWorkflowConfig,
-  buildExecutionTask,
   buildFileExecutionTask,
   type RunnerTaskDeps,
 } from './workflow-runner-tasks.js';
+import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -240,38 +241,6 @@ async function loadAndValidateWorkflow(bus: IMakaioBus, workflowId: string): Pro
 }
 
 /**
- * Dispatch a definition-backed execution through the configured runner, or run
- * it in-process when no isolated runner is configured.
- * @param deps - Shared executor state and callbacks.
- * @param params - Bound execution data needed by the runner task.
- * @returns Settled execution task promise.
- */
-function launchDefinitionExecutionTask(
-  deps: StartExecutionDeps,
-  params: {
-    executionId: string;
-    workflowId: string;
-    workflow: WorkflowDefinition;
-    source: WorkflowWorkerSource;
-    coordinatorSessionId: string;
-    sanitizedTriggerPayload: Record<string, unknown>;
-    boundInputs: JsonValue;
-    boundConfig: Record<string, unknown>;
-    artifactRef?: WorkflowRunContext['artifactRef'];
-    executionHints?: WorkflowRunContext['executionHints'];
-    scope: WorkflowExecutionScope;
-    workspaceRoot: string;
-  },
-): Promise<void> {
-  if (deps.workflowRunner !== undefined) {
-    return buildExecutionTask(deps.buildRunnerTaskDeps(deps.workflowRunner), params);
-  }
-  return deps.runExecution(params.executionId).finally(() => {
-    deps.executionTasks.delete(params.executionId);
-  });
-}
-
-/**
  * Merge requirements from two hint sources, unioning capabilities.
  *
  * Capabilities from both sources are deduplicated so no tag is required twice.
@@ -369,6 +338,29 @@ function normalizeDefinitionStartOptions(options: DefinitionStartOptions): Norma
 }
 
 /**
+ * Create the coordinator session that owns a definition-backed execution.
+ * @param bus - Bus used for session creation.
+ * @param parentSessionId - Optional parent coordinator session.
+ * @param workflowName - Human-readable workflow name for the session title.
+ * @param workspaceRoot - Working directory assigned to the coordinator session.
+ * @returns Created coordinator session ID.
+ */
+async function createDefinitionCoordinatorSession(
+  bus: IMakaioBus,
+  parentSessionId: string | undefined,
+  workflowName: string | undefined,
+  workspaceRoot: string,
+): Promise<string> {
+  const { sessionId } = await bus.request(SessionSubjects.create, {
+    parentSessionId,
+    branchKind: 'coordinator',
+    title: `Workflow: ${workflowName}`,
+    targetWorkingDirectory: workspaceRoot,
+  });
+  return sessionId;
+}
+
+/**
  * Start a new definition-backed workflow execution.
  *
  * Looks up the workflow from storage, seeds the execution record and
@@ -401,12 +393,12 @@ export async function startExecution(
     workflowId,
   };
 
-  const { sessionId: coordinatorSessionId } = await bus.request(SessionSubjects.create, {
+  const coordinatorSessionId = await createDefinitionCoordinatorSession(
+    bus,
     parentSessionId,
-    branchKind: 'coordinator',
-    title: `Workflow: ${workflow.name}`,
-    targetWorkingDirectory: workspaceRoot,
-  });
+    workflow.name,
+    workspaceRoot,
+  );
 
   let launched = false;
   try {

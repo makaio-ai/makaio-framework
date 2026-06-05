@@ -5,6 +5,7 @@ import type {
   StepRunnerPlatformDefaults,
   WorkerContributionManifest,
 } from '@makaio/contracts';
+import { WorkerNodeSubjects } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { WorkflowWorkerEntryMode } from './worker-entry-resolver.js';
@@ -29,7 +30,8 @@ export interface CreateNodeWorkflowRunnerPackageOptionsParams {
    * Host-owned bus instance forwarded to in-process runner construction.
    *
    * Required when `workflowRunner.mode` is `'in-process'` or omitted on an
-   * explicit runner object. Ignored for Piscina and WorkerNode modes.
+   * explicit runner object. Also used by WorkerNode mode when no explicit
+   * dispatch function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
 }
@@ -104,7 +106,8 @@ interface CreateNodeWorkflowRunnerParams {
    * Host-owned bus instance forwarded to {@link InProcessWorkflowRunner}.
    *
    * Required when `runner` is present and its `mode` is `'in-process'` or
-   * omitted. Ignored for Piscina and WorkerNode modes.
+   * omitted. Also required for `'worker-node'` mode when no explicit dispatch
+   * function is supplied. Ignored for Piscina mode.
    */
   readonly bus?: IMakaioBus;
 }
@@ -136,12 +139,35 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       return new InProcessWorkflowRunner({ bus: params.bus });
     }
 
-    case 'worker-node':
+    case 'worker-node': {
+      const bus = params.bus;
+      const dispatch =
+        runner.dispatch ??
+        (bus === undefined
+          ? undefined
+          : (request, signal) =>
+              bus.request(
+                WorkerNodeSubjects.dispatch,
+                {
+                  config: request.config,
+                  manifest: request.manifest,
+                  requirements: request.requirements,
+                  metadata: request.metadata,
+                },
+                { signal },
+              ));
+      if (dispatch === undefined) {
+        throw new Error(
+          `WorkerNodeRunner requires either a dispatch function or a bus instance. ` +
+            `Pass 'bus' to createNodeWorkflowRunner when runner.mode is 'worker-node'.`,
+        );
+      }
       return new WorkerNodeRunner({
-        dispatch: runner.dispatch,
+        dispatch,
         ...(runner.manifest !== undefined && { manifest: runner.manifest }),
         ...(runner.requirements !== undefined && { requirements: runner.requirements }),
       });
+    }
 
     case 'piscina': {
       const workerEntry =

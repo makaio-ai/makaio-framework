@@ -17,7 +17,13 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
-import { ToolSubjects, type WorkerNodeDispatch, type WorkflowWorkerConfig } from '@makaio/contracts';
+import {
+  ToolSubjects,
+  WorkerNodeNamespace,
+  WorkerNodeSubjects,
+  type WorkerNodeDispatch,
+  type WorkflowWorkerConfig,
+} from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -513,6 +519,40 @@ describe('workflow-level runner boot composition', () => {
     });
 
     expect(runner).toBeInstanceOf(WorkerNodeRunner);
+  });
+
+  it('creates a bus-backed WorkerNodeRunner when worker-node mode omits dispatch', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkerNodeNamespace);
+    let capturedConfig: unknown;
+    const cleanup = bus.on(WorkerNodeSubjects.dispatch, (ctx) => {
+      capturedConfig = ctx.payload.config;
+      ctx.setResult({
+        executionId: ctx.payload.config.executionId,
+        workflowId: ctx.payload.config.workflowId,
+        status: 'completed',
+      });
+    });
+    const runner = createNodeWorkflowRunner({
+      packageRoot: '/runtime',
+      defaultWorkerEntryMode: 'source',
+      runner: { mode: 'worker-node' },
+      bus,
+    });
+
+    try {
+      if (runner === undefined) {
+        throw new Error('Expected worker-node runner');
+      }
+      const config = makeWorkerConfig();
+      const result = await runner.run(config, new AbortController().signal);
+
+      expect(runner).toBeInstanceOf(WorkerNodeRunner);
+      expect(result.status).toBe('completed');
+      expect(capturedConfig).toEqual(config);
+    } finally {
+      cleanup();
+    }
   });
 
   it('preserves omitted manifests for worker-node mode', async () => {

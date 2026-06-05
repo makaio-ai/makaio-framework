@@ -5,6 +5,7 @@ import {
   ArtifactNamespace,
   ArtifactSubjects,
   SubagentSubjects,
+  WorkerNodeSubjects,
   type ArtifactRevision,
   type IWorkflowRunner,
   type WorkflowExecutionScope,
@@ -239,10 +240,10 @@ describe('workflow public subjects', () => {
       setup = undefined;
     }
 
-    const capturedConfigs: WorkflowWorkerConfig[] = [];
+    const workflowRunnerCalls: WorkflowWorkerConfig[] = [];
     const workflowRunner: IWorkflowRunner = {
       async run(config): Promise<WorkflowRunResult> {
-        capturedConfigs.push(config);
+        workflowRunnerCalls.push(config);
         return {
           executionId: config.executionId,
           workflowId: config.workflowId,
@@ -252,6 +253,20 @@ describe('workflow public subjects', () => {
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner });
+    const capturedDispatchConfigs: Array<{ source: unknown; executionHints: unknown; requirements: unknown }> = [];
+    const cleanupWorkerNodeDispatch = MakaioBus.on(WorkerNodeSubjects.dispatch, (ctx) => {
+      capturedDispatchConfigs.push({
+        source: ctx.payload.config.source,
+        executionHints: ctx.payload.config.executionHints,
+        requirements: ctx.payload.requirements,
+      });
+      ctx.setResult({
+        executionId: ctx.payload.config.executionId,
+        workflowId: ctx.payload.config.workflowId,
+        status: 'completed',
+      });
+    });
+    setup.cleanupFns.push(cleanupWorkerNodeDispatch);
 
     const workflow = {
       ...createWorkflowDefinition({
@@ -288,8 +303,12 @@ describe('workflow public subjects', () => {
         'github-actions': { pool: 'remote' },
       },
     });
-    expect(capturedConfigs[0]?.source).toEqual(expectedSource);
-    expect(capturedConfigs[0]?.executionHints).toEqual(runContext?.executionHints);
+    expect(workflowRunnerCalls).toHaveLength(0);
+    expect(capturedDispatchConfigs[0]?.source).toEqual(expectedSource);
+    expect(capturedDispatchConfigs[0]?.executionHints).toEqual(runContext?.executionHints);
+    expect(capturedDispatchConfigs[0]?.requirements).toEqual({
+      customCapabilities: ['workflow.local-runtime', 'gpu'],
+    });
   });
 
   it.each([
