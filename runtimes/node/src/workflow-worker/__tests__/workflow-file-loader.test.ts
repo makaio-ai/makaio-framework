@@ -3,7 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { loadWorkflowModule } from '../workflow-file-loader.js';
+import { loadWorkflowModule, loadWorkflowModules } from '../workflow-file-loader.js';
 
 /**
  * Create an isolated temp directory for each test.
@@ -233,6 +233,124 @@ export default { definition, runtimeHandlers: new Map() };
       await expect(loadWorkflowModule({ kind: 'definition', workflowId: 'some-id' })).rejects.toThrow(
         /definition-sourced/i,
       );
+    });
+  });
+});
+
+/**
+ * Build a bundle module source exporting `{ workflows: [...] }` as the
+ * default export. Mirrors the output of a multi-workflow file that uses a
+ * `workflows` array property instead of a single workflow export.
+ * @param entries - Array of `{ id, stepIds }` describing each workflow in the bundle.
+ * @returns ESM module source string with a bundle default export.
+ */
+function makeBundleModuleSource(entries: Array<{ id: string; stepIds: string[] }>): string {
+  const workflowLiterals = entries
+    .map(({ id, stepIds }) => {
+      const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
+      const stationNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'station', prompt: '${sid}' }`).join(', ');
+      return (
+        `{ definition: { id: '${id}', name: '${id}', ` +
+        `root: { id: '${id}__root', type: 'sequence', nodes: [${stationNodes}] }, ` +
+        `triggers: [], scope: { type: 'global' } }, ` +
+        `runtimeHandlers: new Map([${stepEntries}]) }`
+      );
+    })
+    .join(', ');
+
+  return `export default { workflows: [${workflowLiterals}] };`;
+}
+
+describe('loadWorkflowModules', () => {
+  describe('kind: path — single workflow', () => {
+    it('returns a one-element array for a single workflow default export', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const content = makeWorkflowModuleSource('single-wf', ['step1']);
+      const filePath = join(dir, 'single-workflow.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const loaded = await loadWorkflowModules({ kind: 'path', path: filePath });
+
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].definition.id).toBe('single-wf');
+      expect(loaded[0].runtimeHandlers.has('step1')).toBe(true);
+    });
+  });
+
+  describe('kind: path — bundle export', () => {
+    it('returns a normalized array from a bundle ({ workflows: [...] }) export', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const content = makeBundleModuleSource([
+        { id: 'review', stepIds: ['analyse'] },
+        { id: 'apply-findings', stepIds: ['patch', 'commit'] },
+      ]);
+      const filePath = join(dir, 'bundle-workflow.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const loaded = await loadWorkflowModules({ kind: 'path', path: filePath });
+
+      expect(loaded.map((w) => w.definition.id)).toEqual(['review', 'apply-findings']);
+      expect(loaded[0].runtimeHandlers.has('analyse')).toBe(true);
+      expect(loaded[1].runtimeHandlers.has('patch')).toBe(true);
+      expect(loaded[1].runtimeHandlers.has('commit')).toBe(true);
+    });
+
+    it('propagates validation errors for invalid workflows inside a bundle', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      // Second entry is invalid: runtimeHandlers is a plain object, not a Map.
+      const content = `
+export default {
+  workflows: [
+    {
+      definition: {
+        id: 'valid-wf', name: 'valid-wf',
+        root: { id: 'valid-wf__root', type: 'sequence', nodes: [] },
+        triggers: [], scope: { type: 'global' },
+      },
+      runtimeHandlers: new Map(),
+    },
+    {
+      definition: {
+        id: 'bad-wf', name: 'bad-wf',
+        root: { id: 'bad-wf__root', type: 'sequence', nodes: [] },
+        triggers: [], scope: { type: 'global' },
+      },
+      runtimeHandlers: { step1: () => {} },
+    },
+  ],
+};
+`;
+      const filePath = join(dir, 'bad-bundle.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      await expect(loadWorkflowModules({ kind: 'path', path: filePath })).rejects.toThrow(/invalid workflow module/i);
+    });
+  });
+
+  describe('kind: source — bundle export', () => {
+    it('returns a normalized array from an inline bundle source', async () => {
+      const source = makeBundleModuleSource([
+        { id: 'wf-a', stepIds: ['x'] },
+        { id: 'wf-b', stepIds: ['y', 'z'] },
+      ]);
+
+      const loaded = await loadWorkflowModules({
+        kind: 'source',
+        filename: 'inline-bundle.mjs',
+        source,
+      });
+
+      expect(loaded.map((w) => w.definition.id)).toEqual(['wf-a', 'wf-b']);
+      expect(loaded[1].runtimeHandlers.size).toBe(2);
     });
   });
 });

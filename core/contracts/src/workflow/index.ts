@@ -10,6 +10,7 @@ export {
   WorkflowArtifactBindingSchema,
   WorkflowArtifactWriteDeclarationSchema,
   WorkflowConditionSchema,
+  WorkflowDefinitionProvenanceSchema,
   WorkflowDefinitionSchema,
   WorkflowDelegateAgentNodeSchema,
   WorkflowDelegateRoleNodeSchema,
@@ -44,6 +45,7 @@ export type {
   WorkflowArtifactWriteDeclaration,
   WorkflowCondition,
   WorkflowDefinition,
+  WorkflowDefinitionProvenance,
   WorkflowDelegateAgentNode,
   WorkflowDelegateRoleNode,
   WorkflowDynamicRegion,
@@ -213,7 +215,7 @@ export type {
 } from './authoring.js';
 export { defineWorkflowBundle } from './bundle.js';
 export type { WorkflowBundle } from './bundle.js';
-export { ExecutionHintsSchema } from './execution-hints.js';
+export { ExecutionHintsSchema, ExecutionSourceHintSchema } from './execution-hints.js';
 export {
   TransitionActionInvocationSchema,
   TransitionConditionSchema,

@@ -50,6 +50,13 @@
       "when": 1780189908132,
       "tag": "0006_free_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1780345899769,
+      "tag": "0007_sparkling_terror",
+      "breakpoints": true
     }
   ]
 }

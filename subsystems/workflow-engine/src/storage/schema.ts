@@ -14,6 +14,8 @@ import type {
   WorkflowArtifactBinding,
   WorkflowRunContext,
   WorkLogGateEvent,
+  ExecutionHints,
+  WorkflowDefinitionProvenance,
 } from '@makaio/contracts';
 
 /**
@@ -67,6 +69,16 @@ export const workflowDefinitions = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
     /** Canvas layout hints for the visual editor (JSON object). */
     canvasLayout: text('canvas_layout', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    /**
+     * Provenance record for extension-synced definitions (JSON).
+     * Absent on locally-authored definitions.
+     */
+    source: text('source', { mode: 'json' }).$type<WorkflowDefinitionProvenance>(),
+    /**
+     * Advisory execution hints for worker provisioning (JSON).
+     * Merged with per-call hints at execution start.
+     */
+    executionHints: text('execution_hints', { mode: 'json' }).$type<ExecutionHints>(),
   },
   (table) => [
     // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.

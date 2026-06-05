@@ -3,11 +3,16 @@ import {
   type IWorkflowRunner,
   type JsonValue,
   type WorkflowDefinition,
+  type WorkflowRunResult,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { FinalizerDeps } from './workflow-execution-finalizer.js';
-import { cancelExecution, completeExecutionWithFailure } from './workflow-execution-finalizer.js';
+import {
+  cancelExecution,
+  completeExecutionWithFailure,
+  completeExecutionWithSuccess,
+} from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
@@ -111,6 +116,59 @@ async function cancelRunningExecutionAfterRunnerAbort(
 }
 
 /**
+ * Persist terminal state from a resolved workflow runner result when the local
+ * executor still owns the execution.
+ *
+ * Remote runners that write durable lifecycle state themselves remove the
+ * active execution through the finalizer before this fallback observes it.
+ * Providers that only return a terminal result, such as externally observed
+ * GitHub Actions runs, still need the host executor to persist that result.
+ * @param deps - Runner task dependencies.
+ * @param result - Terminal result returned by the workflow runner.
+ */
+async function finalizeResolvedRunnerResult(deps: RunnerTaskDeps, result: WorkflowRunResult): Promise<void> {
+  const active = deps.activeExecutions.get(result.executionId);
+  if (!active || active.execution.status !== 'running') return;
+
+  const finalizerDeps = deps.buildFinalizerDeps();
+  const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
+    executionId: result.executionId,
+  });
+  if (execution?.status !== 'running') return;
+
+  active.execution = execution;
+  if (result.status === 'completed') {
+    await completeExecutionWithSuccess(finalizerDeps, active.execution, result.executionId, active.execution.startedAt);
+    return;
+  }
+  if (result.status === 'cancelled') {
+    await cancelExecution(finalizerDeps, result.executionId, extractRunnerResultReason(result));
+    return;
+  }
+  await completeExecutionWithFailure(
+    finalizerDeps,
+    active.execution,
+    result.executionId,
+    extractRunnerResultReason(result) ?? 'Workflow runner reported failure',
+  );
+}
+
+/**
+ * Extract a human-readable reason from a runner result output.
+ * @param result - Terminal runner result.
+ * @returns Reason string when one is present.
+ */
+function extractRunnerResultReason(result: WorkflowRunResult): string | undefined {
+  const output = result.output;
+  if (typeof output === 'string') return output;
+  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
+    const reason = (output as Record<string, unknown>)['reason'];
+    if (typeof reason === 'string') return reason;
+  }
+  return undefined;
+}
+
+/**
  * Dependencies injected into runner task builders.
  *
  * Bundles the executor state and callbacks needed by
@@ -137,12 +195,29 @@ export interface RunnerTaskDeps {
   config: ExecutorConfig;
 }
 
+interface DefinitionRunnerTaskParams {
+  executionId: string;
+  workflowId: string;
+  workflow: WorkflowDefinition;
+  source: WorkflowWorkerConfig['source'];
+  coordinatorSessionId: string;
+  sanitizedTriggerPayload: Record<string, unknown>;
+  boundInputs: JsonValue;
+  boundConfig: Record<string, unknown>;
+  artifactRef?: WorkflowWorkerConfig['artifactRef'];
+  executionHints?: WorkflowWorkerConfig['executionHints'];
+  scope: WorkflowDefinition['scope'];
+  workspaceRoot: string;
+}
+
 /**
  * Build the async task for a file-based workflow execution.
  *
  * Delegates to the configured {@link IWorkflowRunner} with a `path`-sourced
  * {@link WorkflowWorkerConfig}. The runner is responsible for loading the file
- * and managing the full execution lifecycle.
+ * and managing the full execution lifecycle. If the runner returns a terminal
+ * result without having already finalized durable state, the host executor
+ * persists that result as a fallback.
  * @param deps - Runner task dependencies.
  * @param params - Identifiers and pre-computed execution data.
  * @returns Settled Promise tracked in `executionTasks`.
@@ -184,12 +259,8 @@ export function buildFileExecutionTask(
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal))
-    .then(() => {
-      // A resolved workflow runner owns the durable execution lifecycle. The
-      // executor only finalizes here when dispatch rejects before the worker can
-      // persist terminal state; re-finalizing resolved results would duplicate
-      // worker-emitted lifecycle events.
-      return undefined;
+    .then(async (result) => {
+      await finalizeResolvedRunnerResult(deps, result);
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {
@@ -224,78 +295,60 @@ export function buildFileExecutionTask(
 }
 
 /**
+ * Build the worker config for a storage-backed workflow runner task.
+ * @param deps - Runner task dependencies.
+ * @param params - Bound execution data for this task.
+ * @returns Fully populated worker configuration.
+ */
+function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): WorkflowWorkerConfig {
+  const { config } = deps;
+  return {
+    source: params.source,
+    ...(params.source.kind === 'definition' ? { definition: params.workflow } : {}),
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    triggerPayload: params.sanitizedTriggerPayload,
+    inputs: params.boundInputs,
+    config: params.boundConfig,
+    ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
+    ...(params.executionHints !== undefined ? { executionHints: params.executionHints } : {}),
+    scope: params.scope,
+    busUrl: config.busUrl,
+    busAuth: config.busAuth,
+    context: deps.resolveWorkflowContext(params.workspaceRoot),
+    env: config.platformDefaults.env ?? {},
+    coordinatorSessionId: params.coordinatorSessionId,
+    cancelSubject: `workflow.${params.executionId}.cancel`,
+  };
+}
+
+/**
  * Build the async task that drives a storage-backed workflow execution via a
  * workflow-level runner.
  *
  * Delegates to the configured {@link IWorkflowRunner} with a newly minted
  * AbortController (tracked in `workflowAbortControllers` for cancellation).
+ * If the runner returns a terminal result without having already finalized
+ * durable state, the host executor persists that result as a fallback.
  * The caller is responsible for ensuring a runner is present before invoking
  * this function (i.e. use the in-process path when `workflowRunner` is absent).
  * @param deps - Runner task dependencies.
  * @param params - Identifiers, pre-computed execution data, and the workflow definition.
  * @returns Settled Promise tracked in `executionTasks`.
  */
-export function buildExecutionTask(
-  deps: RunnerTaskDeps,
-  params: {
-    executionId: string;
-    workflowId: string;
-    workflow: WorkflowDefinition;
-    coordinatorSessionId: string;
-    sanitizedTriggerPayload: Record<string, unknown>;
-    boundInputs: JsonValue;
-    boundConfig: Record<string, unknown>;
-    artifactRef?: WorkflowWorkerConfig['artifactRef'];
-    executionHints?: WorkflowWorkerConfig['executionHints'];
-    scope: WorkflowDefinition['scope'];
-    workspaceRoot: string;
-  },
-): Promise<void> {
-  const {
-    executionId,
-    workflowId,
-    workflow,
-    coordinatorSessionId,
-    sanitizedTriggerPayload,
-    boundInputs,
-    boundConfig,
-    artifactRef,
-    executionHints,
-    scope,
-    workspaceRoot,
-  } = params;
-  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions, config } = deps;
+export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): Promise<void> {
+  const { executionId } = params;
+  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions } = deps;
 
   const controller = new AbortController();
   workflowAbortControllers.set(executionId, controller);
 
-  const workerConfig: WorkflowWorkerConfig = {
-    source: { kind: 'definition', workflowId },
-    definition: workflow,
-    executionId,
-    workflowId,
-    triggerPayload: sanitizedTriggerPayload,
-    inputs: boundInputs,
-    config: boundConfig,
-    ...(artifactRef !== undefined ? { artifactRef } : {}),
-    ...(executionHints !== undefined ? { executionHints } : {}),
-    scope,
-    busUrl: config.busUrl,
-    busAuth: config.busAuth,
-    context: deps.resolveWorkflowContext(workspaceRoot),
-    env: config.platformDefaults.env ?? {},
-    coordinatorSessionId,
-    cancelSubject: `workflow.${executionId}.cancel`,
-  };
+  const workerConfig = buildDefinitionWorkerConfig(deps, params);
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal))
-    .then(() => {
-      // A resolved workflow runner owns the durable execution lifecycle. The
-      // executor only finalizes here when dispatch rejects before the worker can
-      // persist terminal state; re-finalizing resolved results would duplicate
-      // worker-emitted lifecycle events.
-      return undefined;
+    .then(async (result) => {
+      await finalizeResolvedRunnerResult(deps, result);
     })
     .catch(async (error: unknown) => {
       if (controller.signal.aborted) {

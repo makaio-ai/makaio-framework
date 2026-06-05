@@ -3,6 +3,7 @@ import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } fro
 import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { ContextModeSchema } from '../subagent/schemas.js';
+import { ExecutionHintsSchema } from './execution-hints.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -668,6 +669,53 @@ export const WorkflowDynamicRegionSchema = z.object({
 export type WorkflowDynamicRegion = z.infer<typeof WorkflowDynamicRegionSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Workflow Definition Provenance
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Provenance descriptor tracking how and where a workflow definition originated.
+ *
+ * Discriminated on `kind`:
+ * - `editor`:    created or last modified in the local workflow editor
+ * - `extension`: synced from an extension-managed external source (e.g. a git
+ *   repository managed by a product extension)
+ *
+ * Framework code must not inspect extension-specific `metadata` keys; those
+ * are opaque to the engine and are consumed only by the originating extension.
+ */
+export const WorkflowDefinitionProvenanceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('editor') }).strict(),
+  z
+    .object({
+      kind: z.literal('extension'),
+      /**
+       * Identifier of the extension that owns this definition.
+       * Matches the extension's registered `id` in the manifest.
+       */
+      extension: z.string().min(1),
+      /**
+       * Opaque external identifier assigned by the extension.
+       * Typically encodes enough context to re-locate the source (e.g. a
+       * `owner/repo:path` string for a VCS-backed extension).
+       */
+      externalId: z.string().min(1).optional(),
+      /**
+       * ISO-8601 timestamp of the last successful sync from the external source.
+       */
+      syncedAt: z.string().datetime().optional(),
+      /**
+       * Extension-specific metadata forwarded verbatim during sync.
+       * The engine stores and retrieves this opaquely; only the originating
+       * extension interprets its contents.
+       */
+      metadata: JsonObjectContractSchema.default({}),
+    })
+    .strict(),
+]);
+
+export type WorkflowDefinitionProvenance = z.infer<typeof WorkflowDefinitionProvenanceSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // Workflow Definition (stored entity)
 // ─────────────────────────────────────────────────────────────
 
@@ -731,6 +779,24 @@ export const WorkflowDefinitionSchema = z.object({
    * Stored as an opaque JSON record; ignored by the executor.
    */
   canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
+  /**
+   * Provenance record tracking how and where this workflow definition originated.
+   *
+   * When `source.kind === 'extension'`, the workflow was synced by an extension
+   * and must be treated as read-only by the editor. The runtime executes the
+   * materialized definition regardless of its provenance.
+   *
+   * Absent on locally-authored definitions.
+   */
+  source: WorkflowDefinitionProvenanceSchema.optional(),
+  /**
+   * Advisory execution hints that constrain worker provisioning and routing.
+   *
+   * Merged at execution start with any per-call hints supplied by the caller
+   * (caller wins on overlap; capabilities are deduplicated).
+   * The runner may inspect these to select a compatible provider.
+   */
+  executionHints: ExecutionHintsSchema.optional(),
 });
 
 /**
