@@ -14,8 +14,8 @@ import {
   bootWorkerRuntime,
   type WorkerBusHandle,
   type WorkerRuntimeHandle,
-} from '../workflow-step-runner/worker-boot.js';
-import { loadWorkerContributions } from '../workflow-step-runner/worker-contributions.js';
+} from './runtime/worker-boot.js';
+import { loadWorkerContributions } from './runtime/worker-contributions.js';
 import { resolveAwaitTriggerConfig } from './await-trigger.js';
 
 // ─────────────────────────────────────────────────────────────

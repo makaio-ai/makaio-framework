@@ -15,8 +15,8 @@ export interface PiscinaPoolRunnerOptions {
 /**
  * Internal typed wrapper around a Piscina worker-thread pool.
  *
- * Centralizes the pool defaults and abort wiring shared by step-level and
- * workflow-level Piscina runners.
+ * Centralizes the pool defaults and abort wiring for workflow-level Piscina
+ * runners.
  * @typeParam TTask - Serializable task payload sent to the worker entrypoint.
  * @typeParam TResult - Serializable result returned by the worker entrypoint.
  */

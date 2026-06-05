@@ -97,11 +97,11 @@ import {
   registerWorkerNodeProvider,
   unregisterWorkerNodeProvider,
 } from '@makaio/contracts';
-import { createNodeWorkflowRunnerPackageOptions } from './workflow-step-runner/index.js';
 import {
   WorkflowPiscinaRunner,
   PiscinaWorkerNodeProvider,
   resolveWorkflowWorkerEntry,
+  createNodeWorkflowRunnerPackageOptions,
 } from './workflow-worker/index.js';
 import type {
   BootMakaioRuntimeOptions,
@@ -517,7 +517,7 @@ export async function bootMakaioRuntimeCore(
     // Registration happens after coordinator.startAll() so that
     // CapabilityService has registered its capability.register handler.
     // The provider uses the same worker-entry resolution logic as the
-    // workflow engine step runner.
+    // workflow-level runner.
     // -----------------------------------------------------------------------
     const piscinaWorkerEntry = resolveWorkflowWorkerEntry({
       packageRoot: path.resolve(srcDir, '..'),

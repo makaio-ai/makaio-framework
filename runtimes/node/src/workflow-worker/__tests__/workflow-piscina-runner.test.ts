@@ -7,7 +7,7 @@ import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 const mockPoolRun = vi.fn();
 const mockMessageListeners = new Set<(message: unknown) => void>();
 
-vi.mock('../../workflow-step-runner/piscina-pool-runner.js', () => ({
+vi.mock('../runtime/piscina-pool-runner.js', () => ({
   PiscinaPoolRunner: class MockPiscinaPoolRunner {
     public constructor(_options: WorkflowPiscinaRunnerOptions) {}
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import type { WorkerContributionManifest } from '@makaio/contracts';
 import { loadWorkerContributions } from '../worker-contributions.js';
-import type { WorkerContributionManifest } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Inline test modules exposed via data: URLs

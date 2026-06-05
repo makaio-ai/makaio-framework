@@ -1,10 +1,18 @@
 export { WorkflowPiscinaRunner } from './workflow-piscina-runner.js';
 export { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
+export {
+  createNodeWorkflowRunner,
+  createNodeWorkflowRunnerPackageOptions,
+} from './node-workflow-runner-factory.js';
 export type {
   IWorkflowRunner,
   WorkflowRunResult,
   WorkflowPiscinaRunnerOptions,
 } from './types.js';
+export type {
+  CreateNodeWorkflowRunnerPackageOptionsParams,
+  NodeWorkflowRunnerPackageOptions,
+} from './node-workflow-runner-factory.js';
 export type {
   WorkflowWorkerEntryMode,
   WorkflowWorkerEntryResolverOptions,
