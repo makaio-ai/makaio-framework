@@ -1,8 +1,9 @@
-import type { RequestOptions, MakaioBusContext } from '../types/index.js';
+import type { RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
 import { NoHandlerError, TimeoutError } from '../errors/index.js';
 import type { OptionalResult, SubjectDefinition } from '@makaio/core';
 import { nanoid } from 'nanoid';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
+import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import {
   resolveRequestValidation,
@@ -14,6 +15,7 @@ import { TimeoutError as pTimeoutError } from 'p-timeout';
 import { dispatch } from './request/dispatch.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import { warnIfUnregistered } from '../utils/warn-unregistered.js';
+import { isExplicitLocalOnlyTransportSpec } from './request/normalizeTransportTargets.js';
 
 /**
  * Determine whether a request should be dispatched locally only.
@@ -28,9 +30,7 @@ import { warnIfUnregistered } from '../utils/warn-unregistered.js';
  */
 function resolveLocalOnly(subjectDefinition: SubjectDefinition, transports: RequestOptions['transports']): boolean {
   if (subjectDefinition.$meta.local) return true;
-  if (transports === undefined) return false;
-
-  return Array.isArray(transports) ? transports.length === 0 : transports.size === 0;
+  return isExplicitLocalOnlyTransportSpec(transports);
 }
 
 /**
@@ -51,6 +51,8 @@ function resolveAllowedTransports(transports: RequestOptions['transports']): Arr
   return names.length > 0 ? names.map(String) : undefined;
 }
 
+type InternalRequestOptions = RequestOptions & WithReceiveContext;
+
 /**
  * Execute a request and wait for a response.
  * @param context - Makaio bus context
@@ -64,7 +66,12 @@ export async function request<
   T extends SubjectDefinition,
   Request extends T['$meta']['payload']['request'],
   Response extends T['$meta']['payload']['response'],
->(context: MakaioBusContext, subjectDefinition: T, payload: Request, options?: RequestOptions): Promise<Response> {
+>(
+  context: MakaioBusContext,
+  subjectDefinition: T,
+  payload: Request,
+  options?: InternalRequestOptions,
+): Promise<Response> {
   const subjectKey = subjectDefinition.subject;
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
 
@@ -74,6 +81,7 @@ export async function request<
   const correlationId = options?.correlationId ?? nanoid();
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const signal = options?.signal;
+  const localOnly = resolveLocalOnly(subjectDefinition, options?.transports);
 
   const validationCtx = resolveRequestValidation(context, fullSubjectKey);
   validateRequestPayload(fullSubjectKey, payload, validationCtx);
@@ -89,7 +97,18 @@ export async function request<
     correlationId,
   );
 
-  const localOnly = resolveLocalOnly(subjectDefinition, options?.transports);
+  // Notify production-capable message observers (fire-and-forget)
+  notifyMessageObservers(context, {
+    type: 'request',
+    namespace: subjectDefinition.$meta.namespace,
+    subject: subjectKey,
+    payload,
+    messageId,
+    correlationId,
+    transport: options?.transport,
+    localOnly,
+  });
+
   const allowedTransports = resolveAllowedTransports(options?.transports);
 
   let outcome: Awaited<ReturnType<typeof dispatch>>;

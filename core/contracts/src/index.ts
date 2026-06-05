@@ -949,3 +949,16 @@ export {
 // — the root barrel already pulls in some (config, session) but we
 // are not making that worse.
 export { FrameworkContractNamespaces, FrameworkStorageNamespaces } from './namespace-catalog.js';
+export {
+  SubjectTelemetryAttributeValueSchema,
+  SubjectTelemetryDirectionSchema,
+  SubjectTelemetryFactSchema,
+  SubjectTelemetryMessageTypeSchema,
+  SubjectTelemetryNamespace,
+  SubjectTelemetrySchemas,
+  SubjectTelemetrySubjects,
+} from './telemetry/index.js';
+export type {
+  SubjectTelemetryAttributeValue,
+  SubjectTelemetryFact,
+} from './telemetry/index.js';

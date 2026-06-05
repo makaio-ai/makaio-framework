@@ -1,5 +1,5 @@
 import { MakaioBus } from '@makaio/bus-core';
-import { isChannelSchema, isLocalSchema, isRequestSchema, unwrapSchema } from '@makaio/core';
+import { isChannelSchema, isCollectorOnlySchema, isLocalSchema, isRequestSchema, unwrapSchema } from '@makaio/core';
 import type {
   MakaioProtocolEventSubject,
   MakaioProtocolManifest,
@@ -106,6 +106,7 @@ function resolveCatalogSubject(catalogEntry: ProtocolNamespaceCatalogEntry, subj
     fullSubject,
     schema: unwrapSchema(schema),
     local: isLocalSchema(schema),
+    collectorOnly: isCollectorOnlySchema(schema),
     channel: isChannelSchema(schema),
   };
 }

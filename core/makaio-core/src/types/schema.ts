@@ -36,6 +36,18 @@ export type LocalSubjectSchema<T extends EventSchema | RequestSchema = EventSche
 };
 
 /**
+ * Wrapper to mark an event subject as collector-only.
+ *
+ * Collector-only events may be received from a transport and delivered to local
+ * handlers, but the receiving bus must not relay them onward to other
+ * transports. Local emits are also kept local.
+ */
+export type CollectorOnlySubjectSchema<T extends EventSchema = EventSchema> = {
+  readonly __collectorOnly: true;
+  readonly schema: T;
+};
+
+/**
  * Wrapper to mark a subject as channel-only (encrypted point-to-point).
  *
  * Channel subjects are rejected by public bus methods and are only
@@ -67,6 +79,6 @@ export type BaseSubjectSchema = EventSchema | RequestSchema;
 /**
  * Union of all subject schema types (including local and channel wrappers).
  */
-export type SubjectSchema = BaseSubjectSchema | LocalSubjectSchema | ChannelSubjectSchema;
+export type SubjectSchema = BaseSubjectSchema | LocalSubjectSchema | CollectorOnlySubjectSchema | ChannelSubjectSchema;
 
 export type SchemaRecord = Record<string, SubjectSchema>;

@@ -1,5 +1,5 @@
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines: ["error", { "max": 630 }] */ // Bumped for registerNamespaces() + registerNamespace(BusNamespaceDefinition)
+/* eslint max-lines: ["error", { "max": 680 }] */ // Bumped for registerNamespaces() + registerNamespace(BusNamespaceDefinition) + observeMessages()
 
 import type { TransportRegistry, NamespaceRegistry } from '../registries/index.js';
 import type {
@@ -16,6 +16,7 @@ import type {
   SubjectRecord,
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
+  TransportReceiveContext,
   TypedPayloadFilter,
   WildcardSubject,
 } from '@makaio/core';
@@ -32,6 +33,30 @@ import type { HandlerEntry } from './handler-entry.js';
 import type { InterceptOptions, InterceptorEntry, InterceptorHandler } from './interceptor.js';
 
 /**
+ * Production-capable observation record for local bus API entrypoints.
+ *
+ * Unlike `AnyMessageContext`, this is not debug-only and is safe for runtime
+ * services that need to derive sanitized telemetry.
+ */
+export interface ObservedBusMessage {
+  readonly type: 'event' | 'request' | 'broadcast';
+  readonly subject: string;
+  readonly namespace: string;
+  readonly payload: unknown;
+  readonly messageId: string;
+  readonly correlationId?: string;
+  readonly transport?: TransportReceiveContext;
+  /** True when the originating bus call was explicitly or inherently local-only. */
+  readonly localOnly?: boolean;
+}
+
+/**
+ * Observer callback invoked for each local bus API message after validation
+ * has succeeded. Observers must not mutate the payload.
+ */
+export type BusMessageObserver = (message: ObservedBusMessage) => void | Promise<void>;
+
+/**
  * Internal bus context containing handler registries and shared state.
  *
  * Enables creation of isolated bus instances (e.g., for testing) by providing
@@ -45,6 +70,8 @@ export interface MakaioBusContext {
   requestHandlers: Map<string, Array<HandlerEntry<RequestHandler<unknown, unknown>>>>;
   interceptorHandlers: Map<string, Array<InterceptorEntry<InterceptorHandler<unknown>>>>;
   anyHandlers: Set<AnyHandler>;
+  /** Production-capable message observers registered via {@link IMakaioBus.observeMessages}. */
+  messageObservers: Set<BusMessageObserver>;
   transportRegistry: TransportRegistry;
   namespaceRegistry: NamespaceRegistry;
   /** Remote handler priorities from subscribe messages; keyed by subject pattern. */
@@ -481,6 +508,23 @@ export type IMakaioBus<
   withFilter: <Payload = unknown>(
     filter: [unknown] extends [Payload] ? PayloadFilter : TypedPayloadFilter<Payload>,
   ) => IFilteredBus<NamespaceDomain extends string ? NamespaceDomain : string>;
+
+  /**
+   * Register a production-capable local message observer.
+   *
+   * Observers receive local `emit`, `request`, and `broadcast` API calls after
+   * message validation has succeeded. Observers must not mutate the payload.
+   * Unlike `__onAny`, this is not debug-only and is safe for runtime telemetry services.
+   * @param observer - Observer callback.
+   * @returns Cleanup function that unregisters the observer.
+   * @example
+   * ```typescript
+   * const dispose = bus.observeMessages((message) => {
+   *   console.debug(`[${message.type}] ${message.namespace}.${message.subject}`);
+   * });
+   * ```
+   */
+  observeMessages(observer: BusMessageObserver): () => void;
 
   /**
    * Register a handler that receives ALL messages (events and requests) across all namespaces.

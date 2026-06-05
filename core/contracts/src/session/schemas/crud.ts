@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { observability } from '@makaio/core';
 import { BranchKindSchema, SessionContextInheritanceSchema } from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionSchema, SessionWithPreviewSchema } from './session.js';
@@ -37,18 +38,21 @@ export const CrudSchemas = {
     // runtime via MakaioBus.extendSubject() (adds projectId, worktreeId, etc.).
     // The bus validates against the extended schema; TypeScript enforces scope
     // field usage through the extended subject types.
-    request: z.object({
-      /** Filter by session status. Defaults to 'all' if not specified. */
-      status: z.enum(['active', 'closed', 'archived', 'discovered', 'all']).optional(),
-      /** Maximum number of sessions to return */
-      limit: z.number().int().min(1).optional(),
-      /** Number of sessions to skip (for pagination) */
-      offset: z.number().int().min(0).optional(),
-      /** Include preview data (messageCount, firstUserMessage) */
-      includePreview: z.boolean().optional(),
-      /** Filter by execution target ID (only sessions stamped with this target) */
-      executionTargetId: z.string().optional(),
-    }),
+    request: observability.schema(
+      z.object({
+        /** Filter by session status. Defaults to 'all' if not specified. */
+        status: z.enum(['active', 'closed', 'archived', 'discovered', 'all']).optional(),
+        /** Maximum number of sessions to return */
+        limit: z.number().int().min(1).optional(),
+        /** Number of sessions to skip (for pagination) */
+        offset: observability.hidden(z.number().int().min(0).optional()),
+        /** Include preview data (messageCount, firstUserMessage) */
+        includePreview: z.boolean().optional(),
+        /** Filter by execution target ID (only sessions stamped with this target) */
+        executionTargetId: z.string().optional(),
+      }),
+      { traceAll: true },
+    ),
     response: z.object({
       /** Array of matching sessions (with optional preview data) */
       sessions: z.array(SessionWithPreviewSchema),

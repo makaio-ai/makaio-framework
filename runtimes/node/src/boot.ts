@@ -89,6 +89,7 @@ import { loadBootExtensions } from './boot-extension-loading.js';
 import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
+import { attachUpstreamTelemetry } from './upstream-telemetry.js';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
@@ -219,6 +220,11 @@ export async function bootMakaioRuntimeCore(
       });
       shutdownSteps.push(disposeDebugHook);
     }
+    if (options.upstreamTelemetry) {
+      const attachedTelemetry = await attachUpstreamTelemetry(bus, machineId, options.upstreamTelemetry);
+      shutdownSteps.push(attachedTelemetry.shutdown);
+    }
+
     await bus.emit(KernelSubjects.phase.busCreated, { machineId });
 
     // -----------------------------------------------------------------------

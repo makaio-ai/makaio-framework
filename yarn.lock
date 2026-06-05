@@ -4272,6 +4272,7 @@ __metadata:
   resolution: "@makaio/bus-core@workspace:core/bus-core"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
+    "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@types/node": "npm:^24.3.0"
     nanoid: "npm:5.1.11"

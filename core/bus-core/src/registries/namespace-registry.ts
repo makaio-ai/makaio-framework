@@ -4,6 +4,7 @@ import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformat
 
 import type { BusNamespace } from '../types/namespace.js';
 import { isChannelSchema } from '../utils/channel-schema.js';
+import { isCollectorOnlySchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 import { isLocalSchema } from '../utils/local-schema.js';
 import { unwrapSchema } from '../utils/unwrap-schema.js';
@@ -35,6 +36,25 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
     const typeName = (schema as { constructor?: { name?: string } })?.constructor?.name ?? typeof schema;
     throw new Error(`[MakaioBus] Cannot extend ${label}: schema is not a ZodObject (got ${typeName})`);
   }
+}
+
+/**
+ * Extend a Zod object without dropping metadata attached to the original schema.
+ *
+ * Zod `.extend()` returns a new object schema. Any policy stored through
+ * `.meta()` belongs to the original instance, so the bus must copy it when
+ * host packages add fields to a registered subject.
+ * @param schema - Original registered object schema.
+ * @param extension - Additional fields to merge into the schema.
+ * @returns Extended schema carrying the original schema metadata.
+ */
+function extendZodObjectPreservingMetadata(
+  schema: z.ZodObject<z.ZodRawShape>,
+  extension: z.ZodRawShape,
+): z.ZodObject<z.ZodRawShape> {
+  const extended = schema.extend(extension);
+  const metadata = schema.meta();
+  return metadata ? (extended.meta(metadata) as z.ZodObject<z.ZodRawShape>) : extended;
 }
 
 /**
@@ -121,6 +141,8 @@ export interface RegisteredSubjectSchema {
   schema: BaseSubjectSchema;
   /** Whether the subject was registered through `localSubject()`. */
   local: boolean;
+  /** Whether the subject was registered through `collectorOnlySubject()`. */
+  collectorOnly: boolean;
   /** Whether the subject was registered through `channelSubject()`. */
   channel: boolean;
 }
@@ -271,9 +293,10 @@ export const createNamespaceRegistry = () => {
   // Internal registry for subject schemas (always unwrapped)
   const subjectSchemas = new Map<string, BaseSubjectSchema>();
   const registeredSubjects = new Map<string, RegisteredSubjectSchema>();
-  // Full subject keys registered with localSubject() — the __local flag is
-  // stripped by unwrapSchema, so we track locality separately.
+  // Full subject keys registered with subject wrappers. Wrapper flags are
+  // stripped by unwrapSchema, so routing metadata is tracked separately.
   const localSubjects = new Set<string>();
+  const collectorOnlySubjects = new Set<string>();
   // Validation configuration per namespace domain
   const validationConfig = new Map<string, ValidationConfig>();
 
@@ -321,6 +344,7 @@ export const createNamespaceRegistry = () => {
       for (const [subject, schema] of Object.entries(schemas)) {
         const fullSubjectKey = `${domain}.${subject}`;
         const local = isLocalSchema(schema);
+        const collectorOnly = isCollectorOnlySchema(schema);
         const channel = isChannelSchema(schema);
         const unwrappedSchema = incomingSubjectSchemas.get(subject) ?? unwrapSchema(schema);
         // Store unwrapped schema so getSchema/isRequestSubject work correctly
@@ -331,12 +355,16 @@ export const createNamespaceRegistry = () => {
           fullSubject: fullSubjectKey,
           schema: unwrappedSchema,
           local,
+          collectorOnly,
           channel,
         });
         // Track locality before unwrapping — isLocalSchema checks __local which
         // is stripped by unwrapSchema.
         if (local) {
           localSubjects.add(fullSubjectKey);
+        }
+        if (collectorOnly) {
+          collectorOnlySubjects.add(fullSubjectKey);
         }
       }
 
@@ -424,6 +452,17 @@ export const createNamespaceRegistry = () => {
       return localSubjects.has(subject);
     },
     /**
+     * Check if a subject is collector-only.
+     *
+     * Collector-only events may enter from a transport and run local handlers,
+     * but must not be relayed onward to other transports.
+     * @param subject - Full subject identifier (e.g., "subject-telemetry.fact")
+     * @returns True if the subject was wrapped with `collectorOnlySubject()`
+     */
+    isCollectorOnlySubject(subject: string): boolean {
+      return collectorOnlySubjects.has(subject);
+    },
+    /**
      * Get the validation configuration for a subject.
      *
      * Looks up the namespace from the subject's prefix and returns
@@ -470,9 +509,11 @@ export const createNamespaceRegistry = () => {
         if (ext.request) assertZodObject(current.request, `'${fullSubjectKey}' request`);
         if (ext.response) assertZodObject(current.response, `'${fullSubjectKey}' response`);
         const extended = {
-          request: ext.request ? (current.request as z.ZodObject<z.ZodRawShape>).extend(ext.request) : current.request,
+          request: ext.request
+            ? extendZodObjectPreservingMetadata(current.request as z.ZodObject<z.ZodRawShape>, ext.request)
+            : current.request,
           response: ext.response
-            ? (current.response as z.ZodObject<z.ZodRawShape>).extend(ext.response)
+            ? extendZodObjectPreservingMetadata(current.response as z.ZodObject<z.ZodRawShape>, ext.response)
             : current.response,
         };
         subjectSchemas.set(fullSubjectKey, extended);
@@ -480,7 +521,7 @@ export const createNamespaceRegistry = () => {
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
       } else {
         assertZodObject(current, `'${fullSubjectKey}'`);
-        const extended = current.extend(additionalFields as z.ZodRawShape);
+        const extended = extendZodObjectPreservingMetadata(current, additionalFields as z.ZodRawShape);
         subjectSchemas.set(fullSubjectKey, extended);
         const entry = registeredSubjects.get(fullSubjectKey);
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
@@ -498,6 +539,7 @@ export const createNamespaceRegistry = () => {
             subjectSchemas.clear();
             registeredSubjects.clear();
             localSubjects.clear();
+            collectorOnlySubjects.clear();
             validationConfig.clear();
           }
         : undefined,

@@ -14,6 +14,8 @@ export {
   isRequestSchema,
   localSubject,
   isLocalSchema,
+  collectorOnlySubject,
+  isCollectorOnlySchema,
   channelSubject,
   isChannelSchema,
   unwrapSchema,
@@ -36,6 +38,19 @@ export {
   QuotaExceededError,
 } from './errors/index.js';
 
+// Observability
+export {
+  OBSERVABILITY_META_KEY,
+  getObservabilityFieldPolicy,
+  getObservabilitySchemaPolicy,
+  observability,
+} from './observability/index.js';
+export type {
+  ObservabilityFieldPolicy,
+  ObservabilityFieldVisibility,
+  ObservabilitySchemaPolicy,
+} from './observability/index.js';
+
 // Types
 export { isOperatorObject, WildcardSubjectKey } from './types/index.js';
 export type {
@@ -43,6 +58,7 @@ export type {
   AnyMessageContext,
   BaseSubjectSchema,
   ChannelSubjectSchema,
+  CollectorOnlySubjectSchema,
   ContextForSubjectDefinition,
   EventContext,
   EventHandler,

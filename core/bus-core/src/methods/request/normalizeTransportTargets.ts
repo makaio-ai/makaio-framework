@@ -5,6 +5,18 @@ import { getReadyTransports } from '../../utils/transport.js';
 import type { SubjectDefinition } from '@makaio/core';
 
 /**
+ * Check whether a caller supplied an explicit local-only transport spec.
+ * @param transports - Optional transport allowlist from bus call options.
+ * @returns True for `[]` or an empty Set.
+ */
+export function isExplicitLocalOnlyTransportSpec(
+  transports: Set<keyof BusTransportRegistry> | Array<keyof BusTransportRegistry> | undefined,
+): boolean {
+  if (transports === undefined) return false;
+  return Array.isArray(transports) ? transports.length === 0 : transports.size === 0;
+}
+
+/**
  * Resolve which transports a message should be sent to.
  *
  * Outbound routing semantics:
@@ -18,8 +30,9 @@ import type { SubjectDefinition } from '@makaio/core';
  * - `[]` / empty Set — local-only (no transport dispatch)
  * - named transports — exact lookup, no subscription filtering
  *
- * Local subjects (marked with `localSubject()` at schema definition) always
- * return an empty array, regardless of the `transports` option.
+ * Local subjects (marked with `localSubject()` at schema definition) and
+ * collector-only subjects always return an empty array, regardless of the
+ * `transports` option.
  * @param context - Bus context containing the transport registry
  * @param transports - Explicit transport specification from options
  * @param subjectDefinition - Subject definition, used for local-subject guard
@@ -36,6 +49,11 @@ export function normalizeTransportTargets(
     return [];
   }
 
+  const subject = getFullSubjectForSubjectDefinition(subjectDefinition);
+  if (context.namespaceRegistry.isCollectorOnlySubject(subject)) {
+    return [];
+  }
+
   // undefined: send to all ready transports (no subscription filtering).
   // Readiness filtering skips transports that haven't established connectivity
   // (e.g., E2E relay before session key exchange). This matches how request()
@@ -47,12 +65,11 @@ export function normalizeTransportTargets(
   // Empty array/set: don't send to any transports (local only)
   const transportNames = Array.isArray(transports) ? transports : Array.from(transports);
 
-  if (transportNames.length === 0) {
+  if (isExplicitLocalOnlyTransportSpec(transports)) {
     return [];
   }
 
   // Specific transports: get instances (no subscription filtering)
-  const subject = getFullSubjectForSubjectDefinition(subjectDefinition);
   const result: BusTransport[] = [];
   for (const name of transportNames) {
     const transport = context.transportRegistry.getTransport(name);

@@ -1,9 +1,15 @@
-/* eslint max-lines: ["error", { "max": 620 }] */
+/* eslint max-lines: ["error", { "max": 640 }] */
 import * as methods from './methods/index.js';
 import { resetSeenCorrelationIds } from './utils/invoke-any-handlers.js';
 import { createScopedBus, type ScopedBus } from './scoped-bus.js';
 import { createFilteredBus } from './filtered-bus.js';
-import type { ConnectOptions, IMakaioBus, MakaioBusContext, TransportRegistration } from './types/bus.js';
+import type {
+  BusMessageObserver,
+  ConnectOptions,
+  IMakaioBus,
+  MakaioBusContext,
+  TransportRegistration,
+} from './types/bus.js';
 import type { BusTransport } from './types/transports.js';
 import type { HandlerEntry } from './types/handler-entry.js';
 import type { InterceptorEntry, InterceptorHandler } from './types/interceptor.js';
@@ -36,6 +42,9 @@ export const createBusContext = (): MakaioBusContext => {
   // Storage for __onAny handlers (debugging/testing)
   const anyHandlers = new Set<(ctx: unknown) => void | Promise<void>>();
 
+  // Storage for production-capable message observers
+  const messageObservers = new Set<BusMessageObserver>();
+
   const namespaceRegistry = createNamespaceRegistry();
 
   const context: MakaioBusContext = {
@@ -43,7 +52,8 @@ export const createBusContext = (): MakaioBusContext => {
     requestHandlers,
     interceptorHandlers,
     anyHandlers,
-    // Temporary placeholder, replaced immediately below
+    messageObservers,
+    // The registry needs the context object, so it is assigned immediately after construction.
     transportRegistry: undefined as never,
     namespaceRegistry,
     remoteRequestHandlers: new Map(),
@@ -441,6 +451,7 @@ function resetAllHandlers(context: MakaioBusContext): void {
   context.requestHandlers.clear();
   context.interceptorHandlers.clear();
   context.anyHandlers.clear();
+  context.messageObservers.clear();
   context.remoteRequestHandlers.clear();
   context.remoteEventHandlers.clear();
   resetSeenCorrelationIds();
@@ -513,6 +524,12 @@ export function createBusInstance<Namespace extends string | undefined = undefin
           `Subject namespace ${subject.$meta.namespace} does not match scoped bus namespace ${namespace}`,
         );
       return extendSubjectImpl(context, subject, extensions);
+    },
+    observeMessages: (observer) => {
+      context.messageObservers.add(observer);
+      return () => {
+        context.messageObservers.delete(observer);
+      };
     },
     // Debugging/testing utilities
     __onAny: (handler) => {

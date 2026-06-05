@@ -19,6 +19,7 @@
     "tsx": "^4.22.3"
   },
   "dependencies": {
+    "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "nanoid": "5.1.11",
     "p-timeout": "6.1.2",

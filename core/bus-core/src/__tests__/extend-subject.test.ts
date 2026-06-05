@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
-import { createBusNamespace } from '@makaio/core';
+import { createBusNamespace, observability } from '@makaio/core';
+import { projectSubjectTelemetryFacts } from '../observability/index.js';
 
 describe('MakaioBus.extendSubject()', () => {
   beforeEach(() => {
@@ -57,6 +58,43 @@ describe('MakaioBus.extendSubject()', () => {
       // Should not throw validation error
       const result = await MakaioBus.request(extended, { id: '1', includeArchived: true });
       expect(result).toEqual({ name: 'test' });
+    });
+
+    it('preserves request schema metadata when extending fields', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubObs', {
+          list: {
+            request: observability.schema(
+              z.object({
+                status: z.string(),
+                offset: observability.hidden(z.number().optional()),
+              }),
+              { traceAll: true },
+            ),
+            response: z.object({ items: z.array(z.string()) }),
+          },
+        }),
+      );
+
+      MakaioBus.extendSubject(subjects.list, {
+        request: { projectId: z.string().optional() },
+      });
+
+      const [fact] = projectSubjectTelemetryFacts({
+        message: {
+          type: 'request',
+          namespace: 'extSubObs',
+          subject: 'list',
+          payload: { status: 'active', offset: 10, projectId: 'proj-1' },
+          messageId: 'msg-observable-extension',
+          correlationId: 'corr-observable-extension',
+        },
+        direction: 'local',
+        observedAt: 1000,
+        namespaceRegistry: MakaioBus.getContext().namespaceRegistry,
+      });
+
+      expect(fact.attributes).toEqual({ status: 'active', projectId: 'proj-1' });
     });
 
     it('original subject still works without extended fields', async () => {

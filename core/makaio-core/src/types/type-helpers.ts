@@ -10,18 +10,20 @@ import { Simplify } from 'type-fest';
 import type { ChannelSubjectSchema, LocalSubjectSchema, SubjectSchema } from './schema.js';
 
 /**
- * Unwrap LocalSubjectSchema or ChannelSubjectSchema wrappers if present.
+ * Unwrap LocalSubjectSchema, CollectorOnlySubjectSchema, or ChannelSubjectSchema wrappers if present.
  * Returns the inner schema for wrapped subjects, or the schema as-is otherwise.
  */
 type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infer Inner }
   ? Inner
-  : S extends { readonly __channel: true; readonly schema: infer Inner }
+  : S extends { readonly __collectorOnly: true; readonly schema: infer Inner }
     ? Inner
-    : S;
+    : S extends { readonly __channel: true; readonly schema: infer Inner }
+      ? Inner
+      : S;
 
 /**
  * Infer payload type from schema (handles EventSchema, RequestSchema,
- * LocalSubjectSchema, and ChannelSubjectSchema).
+ * LocalSubjectSchema, CollectorOnlySubjectSchema, and ChannelSubjectSchema).
  *
  * For requests:
  * - Uses z.input for request (what callers pass before validation/defaults)
@@ -30,7 +32,7 @@ type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infe
  * This allows schemas with .default() to have optional fields in the caller API
  * while the response type reflects the validated output.
  *
- * LocalSubjectSchema and ChannelSubjectSchema wrappers are automatically
+ * LocalSubjectSchema, CollectorOnlySubjectSchema, and ChannelSubjectSchema wrappers are automatically
  * unwrapped before inference.
  *
  * Idempotent: Returns already-inferred types as-is.

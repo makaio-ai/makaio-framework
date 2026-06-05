@@ -2,9 +2,10 @@ import type { EmitOptions, HandlerEntry, MakaioBusContext, WithReceiveContext } 
 import { nanoid } from 'nanoid';
 
 import { matchesSubscription } from '../utils/subscription-matching.js';
-import { normalizeTransportTargets } from './request/normalizeTransportTargets.js';
+import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
+import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { validateEventPayload } from '../utils/validate-event-payload.js';
 import { mergeSortedHandlerArrays } from '../utils/handler-merging.js';
 import { executeInterceptors } from './intercept/index.js';
@@ -98,6 +99,10 @@ export async function emit<T extends SubjectDefinition>(
 
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId;
+  const localOnly =
+    subjectDefinition.$meta.local ||
+    context.namespaceRegistry.isCollectorOnlySubject(fullSubjectKey) ||
+    isExplicitLocalOnlyTransportSpec(options?.transports);
 
   // Validate payload in development (skip for namespaces with Zod version conflicts)
   validateEventPayload(context, fullSubjectKey, payload);
@@ -130,6 +135,18 @@ export async function emit<T extends SubjectDefinition>(
     messageId,
     correlationId,
   );
+
+  // Notify production-capable message observers (fire-and-forget)
+  notifyMessageObservers(context, {
+    type: 'event',
+    namespace: subjectDefinition.$meta.namespace,
+    subject: subject,
+    payload: finalPayload,
+    messageId,
+    correlationId,
+    transport: options?.transport,
+    localOnly,
+  });
 
   // Execute local handlers in parallel
   if (handlers.length > 0) {

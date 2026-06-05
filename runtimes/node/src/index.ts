@@ -27,7 +27,9 @@ export {
   type MakaioRuntime,
   type TransportReadyInfo,
 } from './boot.js';
-export type { WorkflowRunnerBootOptions } from './boot-types.js';
+export type { UpstreamTelemetryBootOptions, WorkflowRunnerBootOptions } from './boot-types.js';
+export { attachUpstreamTelemetry } from './upstream-telemetry.js';
+export type { AttachedUpstreamTelemetry } from './upstream-telemetry.js';
 export { buildNodeRuntimeOptions, type NodeRuntimeOptions } from './node-runtime-options.js';
 export {
   MAKAIO_CONFIG_FILE_ENV,
