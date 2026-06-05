@@ -1,9 +1,13 @@
 /**
- * In-memory registry of active agents with session info and usage totals.
+ * In-memory registry of active (running) agent instances.
  *
  * Consolidates agent tracking, eviction, disposal, and usage accumulation
  * into a single collaborator, eliminating shotgun surgery from parallel
  * Map updates across adapter operations.
+ *
+ * Named "Active" to distinguish from a future definition/configuration
+ * registry (`AgentRegistry`) that catalogs agent definitions rather than
+ * live instances.
  */
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
@@ -17,7 +21,7 @@ import { AgentStorageSubjects } from '@makaio/services-core/session';
  * @typeParam TConnector - Connector type bridging to the AI SDK
  * @typeParam TAgent - Agent implementation type (must extend AIAgent)
  */
-export interface AgentRegistryEntry<
+export interface ActiveAgentEntry<
   TBus extends ScopedBus<string> = ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
@@ -33,9 +37,9 @@ export interface AgentRegistryEntry<
 }
 
 /**
- * Configuration for AgentRegistry construction.
+ * Configuration for ActiveAgentRegistry construction.
  */
-export interface AgentRegistryConfig {
+export interface ActiveAgentRegistryConfig {
   /** Global bus for storage status updates during evict/dispose. */
   globalBus: IMakaioBus;
   /** Adapter name for error-log context. */
@@ -43,7 +47,7 @@ export interface AgentRegistryConfig {
 }
 
 /**
- * In-memory registry of active agents.
+ * In-memory registry of active (running) agent instances.
  *
  * Owns the Map, entry manipulation, eviction (close + mark dead),
  * disposal (close + mark disposed), and usage accumulation.
@@ -52,16 +56,16 @@ export interface AgentRegistryConfig {
  * @typeParam TConnector - Connector type bridging to the AI SDK
  * @typeParam TAgent - Agent implementation type (must extend AIAgent)
  */
-export class AgentRegistry<
+export class ActiveAgentRegistry<
   TBus extends ScopedBus<string> = ScopedBus<string>,
   TConnector extends AIAgentConnector<TBus> = AIAgentConnector<TBus>,
   TAgent extends AIAgent<TBus, TConnector> = AIAgent<TBus, TConnector>,
 > {
-  private readonly entries = new Map<string, AgentRegistryEntry<TBus, TConnector, TAgent>>();
+  private readonly entries = new Map<string, ActiveAgentEntry<TBus, TConnector, TAgent>>();
   private readonly globalBus: IMakaioBus;
   private readonly adapterName: string;
 
-  public constructor(config: AgentRegistryConfig) {
+  public constructor(config: ActiveAgentRegistryConfig) {
     this.globalBus = config.globalBus;
     this.adapterName = config.adapterName;
   }
@@ -71,7 +75,7 @@ export class AgentRegistry<
    * @param agentId - Agent identifier
    * @param entry - Registry entry to store
    */
-  public set(agentId: string, entry: AgentRegistryEntry<TBus, TConnector, TAgent>): void {
+  public set(agentId: string, entry: ActiveAgentEntry<TBus, TConnector, TAgent>): void {
     this.entries.set(agentId, entry);
   }
 
@@ -80,7 +84,7 @@ export class AgentRegistry<
    * @param agentId - Agent identifier
    * @returns Registry entry or undefined
    */
-  public get(agentId: string): AgentRegistryEntry<TBus, TConnector, TAgent> | undefined {
+  public get(agentId: string): ActiveAgentEntry<TBus, TConnector, TAgent> | undefined {
     return this.entries.get(agentId);
   }
 
@@ -88,7 +92,7 @@ export class AgentRegistry<
    * Return all entries as an iterable (for closeAsync iteration).
    * @returns Iterable of registry entries
    */
-  public values(): IterableIterator<AgentRegistryEntry<TBus, TConnector, TAgent>> {
+  public values(): IterableIterator<ActiveAgentEntry<TBus, TConnector, TAgent>> {
     return this.entries.values();
   }
 
@@ -121,7 +125,7 @@ export class AgentRegistry<
       if (closeError === undefined) {
         throw error;
       }
-      console.warn(`[AgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
+      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as dead:`, error);
     }
     if (closeError !== undefined) {
       throw closeError;
@@ -140,7 +144,10 @@ export class AgentRegistry<
     try {
       await entry.agent.close({ emitSessionClosed: false });
     } catch (error) {
-      console.warn(`[AgentRegistry:${this.adapterName}] Agent ${agentId} close error during silent eviction:`, error);
+      console.warn(
+        `[ActiveAgentRegistry:${this.adapterName}] Agent ${agentId} close error during silent eviction:`,
+        error,
+      );
     }
   }
 
@@ -153,13 +160,13 @@ export class AgentRegistry<
     const entry = this.entries.get(agentId);
     if (!entry) return false;
     void entry.agent.close().catch((error) => {
-      console.warn(`[AgentRegistry:${this.adapterName}] Agent ${agentId} close error during dispose:`, error);
+      console.warn(`[ActiveAgentRegistry:${this.adapterName}] Agent ${agentId} close error during dispose:`, error);
     });
     this.entries.delete(agentId);
     void this.globalBus
       .requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'disposed' })
       .catch((error) => {
-        console.warn(`[AgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
+        console.warn(`[ActiveAgentRegistry:${this.adapterName}] Failed to mark agent ${agentId} as disposed:`, error);
       });
     return true;
   }
@@ -178,7 +185,7 @@ export class AgentRegistry<
     agentId: string,
     delta: { inputTokens: number; outputTokens: number },
     newAdapterSessionId?: string,
-  ): AgentRegistryEntry<TBus, TConnector, TAgent> | undefined {
+  ): ActiveAgentEntry<TBus, TConnector, TAgent> | undefined {
     const entry = this.entries.get(agentId);
     if (!entry) return undefined;
 

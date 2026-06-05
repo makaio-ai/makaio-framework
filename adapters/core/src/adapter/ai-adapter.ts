@@ -8,7 +8,7 @@ import type { ConfigFactoryInput } from './ai-adapter-config.js';
 import type { AdapterProviderDefinition, PlatformDefaults } from '../types/index.js';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { AgentCreationOptions, AIAdapterConstructorConfig } from './types.js';
-import { AgentRegistry } from './agent-registry.js';
+import { ActiveAgentRegistry } from './agent-registry.js';
 import { AgentRehydrationManager } from './ai-adapter-rehydration.js';
 import { handleInfer } from './ai-adapter-infer.js';
 import { buildOptionalAgentConfig, resolveExecutionModels } from './ai-adapter-create-utils.js';
@@ -55,7 +55,7 @@ export abstract class AIAdapter<
   /** Scoped bus for adapter-specific communication. Created in init(). */
   protected adapterBus: TBus;
   /** Registry of active agents with session info and usage totals. */
-  private readonly registry: AgentRegistry<TBus, TConnector, TAgent>;
+  private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
   /** Cleanup functions for bus subscriptions. */
   private cleanupFns: Array<() => void> = [];
   /** Manages agent rehydration with single-flight deduplication. */
@@ -97,7 +97,7 @@ export abstract class AIAdapter<
     this.clientId = config.clientId;
     this.platformDefaults = config.platformDefaults;
     this.definitionProviders = config.definitionProviders ?? [];
-    this.registry = new AgentRegistry({ globalBus: this.globalBus, adapterName: this.name });
+    this.registry = new ActiveAgentRegistry({ globalBus: this.globalBus, adapterName: this.name });
     this.rehydrationManager = new AgentRehydrationManager({
       globalBus: this.globalBus,
       registry: this.registry,
