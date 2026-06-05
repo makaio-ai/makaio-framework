@@ -34,7 +34,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "ws": "^8.21.0"
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "tsdown": "0.22.0",
