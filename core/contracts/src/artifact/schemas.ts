@@ -163,6 +163,66 @@ export const ArtifactRelationTargetSchema = z.preprocess(
 );
 
 /**
+ * Discriminated union for relation target references used in query filters.
+ *
+ * Unlike {@link ArtifactRelationTargetDiscriminatedSchema}, the `artifact`
+ * variant makes `revision` optional so callers can query by artifact identity
+ * alone (kind + id) without knowing a specific revision.
+ */
+const ArtifactRelationQueryTargetDiscriminatedSchema = z.discriminatedUnion('refClass', [
+  ArtifactRefSchema.extend({
+    /** Revision identifier — optional in query context to allow identity-only lookups. */
+    revision: z.string().min(1).optional(),
+  }),
+  LocalRefSchema,
+  EvidenceRefSchema,
+]);
+
+/**
+ * Infer the default `refClass` for query-context relation targets before the
+ * discriminated union routes the target to a concrete schema.
+ *
+ * Unlike {@link inferArtifactRelationTargetRefClass}, this function defaults to
+ * `'artifact'` when no discriminating fields are present, because query targets
+ * are valid without a `revision` (identity-only lookups: `{kind, id}`). Only
+ * the presence of `locator` signals an evidence reference.
+ * @param value - Raw relation query target candidate.
+ * @returns Relation target candidate with an explicit discriminator when it can be inferred.
+ */
+function inferArtifactRelationQueryTargetRefClass(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || 'refClass' in value) {
+    return value;
+  }
+
+  if ('artifact' in value && 'localId' in value) {
+    return { ...value, refClass: 'local' };
+  }
+
+  if ('locator' in value) {
+    return { ...value, refClass: 'evidence' };
+  }
+
+  return { ...value, refClass: 'artifact' };
+}
+
+/**
+ * Relation target schema for use in {@link ArtifactQueryRequestSchema}.
+ *
+ * Relaxes the `artifact` variant to allow identity-only lookups (kind + id)
+ * without a specific revision. Storage relations must still use the exact
+ * {@link ArtifactRelationTargetSchema} which requires revision.
+ *
+ * Supports `refClass` inference via {@link inferArtifactRelationQueryTargetRefClass}
+ * for wire payloads that omit the discriminant. Defaults to `'artifact'` when
+ * neither local-ref nor evidence fields are present, unlike storage inference
+ * which requires `revision` to distinguish artifact from evidence refs.
+ */
+export const ArtifactRelationQueryTargetSchema = z.preprocess(
+  inferArtifactRelationQueryTargetRefClass,
+  ArtifactRelationQueryTargetDiscriminatedSchema,
+);
+
+/**
  * A typed directional link from one artifact to a relation target.
  *
  * `type` is an open string registered via {@link RelationTypeRegistrationSchema}.
@@ -408,7 +468,7 @@ export const ArtifactQueryRequestSchema = z.object({
       /** Relation type to filter on. Omit to match any relation type. */
       type: z.string().min(1).optional(),
       /** Target the relation must point at. Omit to match any target. */
-      target: ArtifactRelationTargetSchema.optional(),
+      target: ArtifactRelationQueryTargetSchema.optional(),
     })
     .optional(),
   /** Filter by confidence level bounds. */
@@ -475,6 +535,9 @@ export type EvidenceRef = z.infer<typeof EvidenceRefSchema>;
 
 /** Union of all valid relation-target reference classes. */
 export type ArtifactRelationTarget = z.infer<typeof ArtifactRelationTargetSchema>;
+
+/** Union of all valid relation-target reference classes for query filters. Artifact refs may omit revision. */
+export type ArtifactRelationQueryTarget = z.infer<typeof ArtifactRelationQueryTargetSchema>;
 
 /** A typed directional link from an artifact to a relation target. */
 export type ArtifactRelation = z.infer<typeof ArtifactRelationSchema>;
