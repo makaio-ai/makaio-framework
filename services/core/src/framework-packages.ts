@@ -3,6 +3,8 @@ import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ArtifactSchemaRegistry } from './artifact/artifact-schema-registry.js';
+import { FacetNamespaceRegistry } from './facet/facet-namespace-registry.js';
+import { SurfaceBindingRegistry } from './materialization/surface-binding-registry.js';
 import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
@@ -67,6 +69,10 @@ export const GitToken = extensionToken<GitService>('git');
 export { SubagentServiceToken };
 /** Token for the artifact schema registry service. */
 export const ArtifactSchemaRegistryToken = extensionToken<ArtifactSchemaRegistry>('artifact-schema-registry');
+/** Token for the facet namespace registry service. */
+export const FacetNamespaceRegistryToken = extensionToken<FacetNamespaceRegistry>('facet-namespace-registry');
+/** Token for the surface binding registry service. */
+export const SurfaceBindingRegistryToken = extensionToken<SurfaceBindingRegistry>('surface-binding-registry');
 
 /** Package that starts the framework artifact schema registry. */
 export const artifactSchemaRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
@@ -75,6 +81,24 @@ export const artifactSchemaRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   version: '0.1.0',
   critical: true,
   create: (ctx) => new ArtifactSchemaRegistry(ctx.bus),
+};
+
+/** Package that starts the framework facet namespace registry. */
+export const facetNamespaceRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: FacetNamespaceRegistryToken.name,
+  displayName: 'Facet Namespace Registry',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new FacetNamespaceRegistry(ctx.bus),
+};
+
+/** Package that starts the framework surface binding registry. */
+export const surfaceBindingRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: SurfaceBindingRegistryToken.name,
+  displayName: 'Surface Binding Registry',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new SurfaceBindingRegistry(ctx.bus),
 };
 
 /** Package that registers framework session storage handlers. */
@@ -249,6 +273,8 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
 /** Framework packages that are independent of host-specific factories. */
 export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
   artifactSchemaRegistryPackage,
+  facetNamespaceRegistryPackage,
+  surfaceBindingRegistryPackage,
   sessionStoragePackage,
   sessionBridgePackage,
   sessionClientAccountLinkingPackage,

@@ -20,6 +20,8 @@ import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
 import type { AnyArtifactKindDefinition } from '../artifact/index.js';
+import type { FacetNamespaceDefinition } from '../facet/index.js';
+import type { SurfaceBindingDefinition } from '../materialization/definition.js';
 import type {
   ExtensionTransitionActionsContribution,
   ExtensionTransitionRulesContribution,
@@ -106,6 +108,26 @@ export interface ExtensionArtifactKindsContribution {
    * Artifact kind definitions to register during extension activation.
    */
   readonly kinds?: readonly AnyArtifactKindDefinition[];
+}
+
+/**
+ * Executable facet namespace contribution declared by an extension package.
+ */
+export interface ExtensionFacetNamespacesContribution {
+  /**
+   * Facet namespace definitions to register during extension activation.
+   */
+  readonly namespaces?: readonly FacetNamespaceDefinition[];
+}
+
+/**
+ * Executable surface bindings contribution declared by an extension package.
+ */
+export interface ExtensionSurfaceBindingsContribution {
+  /**
+   * Surface binding definitions to register during extension activation.
+   */
+  readonly bindings?: readonly SurfaceBindingDefinition[];
 }
 
 /**
@@ -382,6 +404,36 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * declares artifact kinds.
    */
   readonly artifactKinds?: ExtensionArtifactKindsContribution;
+
+  /**
+   * Facet namespace definitions contributed by this extension.
+   *
+   * Each entry is an executable {@link FacetNamespaceDefinition} produced by
+   * {@link defineFacetNamespace}. The facet namespace contribution processor reads
+   * this field during extension activation and registers each namespace directly
+   * with the {@link FacetNamespaceRegistry} service.
+   *
+   * Facet namespace registrations are permanent — there is no deregister
+   * operation. This is runtime registration data, not descriptor metadata. The
+   * `FacetNamespaceRegistry` package must be started before any extension that
+   * declares facet namespaces.
+   */
+  readonly facetNamespaces?: ExtensionFacetNamespacesContribution;
+
+  /**
+   * Surface binding definitions contributed by this extension.
+   *
+   * Each entry is an executable {@link SurfaceBindingDefinition} produced by
+   * {@link defineSurfaceBinding}. The surface binding contribution processor reads
+   * this field during extension activation and registers each binding directly
+   * with the {@link SurfaceBindingRegistry} service.
+   *
+   * Surface binding registrations are permanent — there is no deregister
+   * operation. This is runtime registration data, not descriptor metadata. The
+   * `SurfaceBindingRegistry` package must be started before any extension that
+   * declares surface bindings.
+   */
+  readonly surfaceBindings?: ExtensionSurfaceBindingsContribution;
 
   // ---------------------------------------------------------------------------
   // Transition Pipeline contribution surfaces

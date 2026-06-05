@@ -51,6 +51,10 @@
       "types": "./dist/contracts/adapter/index.d.mts",
       "default": "./dist/contracts/adapter/index.mjs"
     },
+    "./contracts/artifact": {
+      "types": "./dist/contracts/artifact/index.d.mts",
+      "default": "./dist/contracts/artifact/index.mjs"
+    },
     "./contracts/adapter/schemas/session-lineage": {
       "types": "./dist/contracts/adapter/schemas/session-lineage.d.mts",
       "default": "./dist/contracts/adapter/schemas/session-lineage.mjs"
@@ -70,6 +74,14 @@
     "./contracts/extension": {
       "types": "./dist/contracts/extension/index.d.mts",
       "default": "./dist/contracts/extension/index.mjs"
+    },
+    "./contracts/facet": {
+      "types": "./dist/contracts/facet/index.d.mts",
+      "default": "./dist/contracts/facet/index.mjs"
+    },
+    "./contracts/materialization": {
+      "types": "./dist/contracts/materialization/index.d.mts",
+      "default": "./dist/contracts/materialization/index.mjs"
     },
     "./contracts/model-registry": {
       "types": "./dist/contracts/model-registry/index.d.mts",
