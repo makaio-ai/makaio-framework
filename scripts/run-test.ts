@@ -12,7 +12,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { frameworkShards, inferCategory, resolveShardForFile, type TestCategory } from './lib/vitest-categories.js';
+import {
+  FORKS_REQUIRED_FILES,
+  frameworkShards,
+  inferCategory,
+  resolveShardForFile,
+  type TestCategory,
+} from './lib/vitest-categories.js';
 
 const SCRIPT_DIR = import.meta.dirname;
 const FRAMEWORK_ROOT = resolve(SCRIPT_DIR, '..');
@@ -50,6 +56,9 @@ interface ResolvedTest {
 function resolveTest(inputPath: string): ResolvedTest | null {
   const relativePath = normalizeFilePath(inputPath);
   const category = inferCategory(relativePath);
+  if (FORKS_REQUIRED_FILES.includes(relativePath)) {
+    return { category, shard: 'forks-required', relativePath };
+  }
   const shard = resolveShardForFile(relativePath, frameworkShards);
   if (!shard) return null;
   return { category, shard, relativePath };

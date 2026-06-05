@@ -203,6 +203,21 @@ function resolveExecutionHintSource(
 }
 
 /**
+ * Resolve the worker source for a definition-backed execution.
+ * @param workflowId - The workflow definition ID.
+ * @param executionHints - Merged definition/request execution hints.
+ * @param workspaceRoot - Workspace root used to resolve relative path sources.
+ * @returns The explicit hint source or the default definition source.
+ */
+function resolveDefinitionExecutionSource(
+  workflowId: string,
+  executionHints: WorkflowRunContext['executionHints'],
+  workspaceRoot: string,
+): WorkflowWorkerSource {
+  return resolveExecutionHintSource(executionHints, workspaceRoot) ?? { kind: 'definition', workflowId };
+}
+
+/**
  * Register the execution task, fire-and-forget it, then await the started event.
  *
  * Shared by {@link startExecution} and {@link startFileExecution} to avoid
@@ -388,10 +403,7 @@ export async function startExecution(
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
   const mergedExecutionHints = mergeExecutionHints(workflow.executionHints, executionHints);
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
-  const executionSource = resolveExecutionHintSource(mergedExecutionHints, workspaceRoot) ?? {
-    kind: 'definition' as const,
-    workflowId,
-  };
+  const executionSource = resolveDefinitionExecutionSource(workflowId, mergedExecutionHints, workspaceRoot);
 
   const coordinatorSessionId = await createDefinitionCoordinatorSession(
     bus,
@@ -429,12 +441,8 @@ export async function startExecution(
     );
     await persistExecutionStart(bus, execution, runContext);
 
-    const startedEventTask = emitExecutionStarted(bus, {
-      executionId,
-      workflowId,
-      coordinatorSessionId,
-      startedAt: execution.startedAt,
-    });
+    const startedAt = execution.startedAt;
+    const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId, startedAt });
     const executionTask = launchDefinitionExecutionTask(deps, {
       executionId,
       workflowId,
