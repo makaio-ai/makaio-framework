@@ -17,6 +17,15 @@ import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { MigrationMeta } from './read-migrations.js';
 
 /**
+ * Strip SQL line comments and whitespace to detect comment-only segments.
+ * @param stmt - Raw SQL statement text (may include `--` comments).
+ * @returns The statement with all line comments and surrounding whitespace removed.
+ */
+function stripComments(stmt: string): string {
+  return stmt.replace(/--.*$/gm, '').trim();
+}
+
+/**
  * Walk the error cause chain looking for an "already exists" SQLite error.
  * @param error - Error thrown by a DDL statement.
  * @returns `true` when the root cause is a schema-object-already-exists conflict.
@@ -85,6 +94,7 @@ export async function applyMigrations(
       await db.run(sql.raw('BEGIN'));
       try {
         for (const [statementIndex, stmt] of migration.sql.entries()) {
+          if (!stripComments(stmt)) continue;
           try {
             await db.run(sql.raw(stmt));
           } catch (error) {
