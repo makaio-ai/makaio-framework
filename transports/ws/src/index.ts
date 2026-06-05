@@ -74,6 +74,11 @@ export { extractSocketErrorMessage } from './transport-helpers.js';
 
 // Export authentication implementations
 export { HmacAuth } from './auth/index.js';
+export {
+  clearHmacIdentitySecretsForTesting,
+  registerHmacIdentitySecret,
+  resolveHmacIdentitySecret,
+} from './auth/index.js';
 export { E2EAuth } from './auth/index.js';
 export { E2ERelayAuth } from './auth/index.js';
 export type { E2ERelayAuthOptions } from './auth/index.js';

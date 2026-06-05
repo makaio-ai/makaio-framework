@@ -14,6 +14,12 @@ describe('ContainerBootstrapConfigSchema', () => {
     it('accepts a full payload with all fields', () => {
       const result = ContainerBootstrapConfigSchema.safeParse({
         busAuthSecret: 'hmac-secret-abc',
+        relayPeer: { id: 'host-machine-1', signingPublicKey: 'host-signing-public-key' },
+        relayIdentity: {
+          id: 'wfx-1',
+          signingPublicKey: 'worker-signing-public-key',
+          signingPrivateKeyPem: 'worker-signing-private-key',
+        },
         gitToken: 'ghp_token123',
         credentialEnv: { apiKey: 'sk-abc' },
         providerEnv: { ANTHROPIC_API_KEY: 'sk-abc' },
@@ -21,6 +27,12 @@ describe('ContainerBootstrapConfigSchema', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.busAuthSecret).toBe('hmac-secret-abc');
+        expect(result.data.relayPeer).toEqual({ id: 'host-machine-1', signingPublicKey: 'host-signing-public-key' });
+        expect(result.data.relayIdentity).toEqual({
+          id: 'wfx-1',
+          signingPublicKey: 'worker-signing-public-key',
+          signingPrivateKeyPem: 'worker-signing-private-key',
+        });
         expect(result.data.gitToken).toBe('ghp_token123');
         expect(result.data.credentialEnv).toEqual({ apiKey: 'sk-abc' });
         expect(result.data.providerEnv).toEqual({ ANTHROPIC_API_KEY: 'sk-abc' });

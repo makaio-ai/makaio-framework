@@ -23,10 +23,10 @@ import { AgentStorageNamespace } from './session/storage/agent-namespace.js';
 import { ExtensionConfigStorageNamespace } from './settings/storage/extension-configs/namespace.js';
 import { ClientStorageNamespace } from './settings/storage/clients-namespace.js';
 import { ProviderStorageNamespace } from './settings/storage/providers-namespace.js';
-import { SettingsNamespace, WorkerSettingsNamespace } from './settings/namespace.js';
+import { SettingsNamespace, SubagentTemplateSettingsNamespace } from './settings/namespace.js';
 import { TrayMenuNamespace } from './tray-menu/namespace.js';
 import { TurnStorageNamespace } from './turn/namespace.js';
-import { WorkerKernelNamespace } from './worker/namespace.js';
+import { SubagentTemplateKernelNamespace } from './subagent-template/namespace.js';
 import { ImportCursorStorageNamespace } from '@makaio/ai-adapters-core';
 
 /**
@@ -62,6 +62,6 @@ export const FrameworkServicesCoreNamespaces = [
   SettingsNamespace,
   TrayMenuNamespace,
   TurnStorageNamespace,
-  WorkerKernelNamespace,
-  WorkerSettingsNamespace,
+  SubagentTemplateKernelNamespace,
+  SubagentTemplateSettingsNamespace,
 ] as const;

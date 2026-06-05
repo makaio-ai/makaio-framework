@@ -19,6 +19,37 @@ export const ContainerBootstrapConfigSchema = z.object({
    */
   busAuthSecret: z.string().optional(),
   /**
+   * Expected relay peer for E2E workflow-container connections.
+   *
+   * Relay containers use this public signing key to verify the host-side E2E
+   * peer before sending the encrypted `workflow.getRunContext` request.
+   */
+  relayPeer: z
+    .object({
+      /** Expected peer identity id. */
+      id: z.string().min(1),
+      /** Base64URL raw ECDSA P-256 signing public key. */
+      signingPublicKey: z.string().min(1),
+    })
+    .optional(),
+  /**
+   * E2E relay identity this container must claim.
+   *
+   * Workflow relay containers receive a per-execution signing key from the
+   * host over stdin so the host can verify the `executionId` peer during the
+   * encrypted relay handshake. Absent for direct-HMAC and session containers.
+   */
+  relayIdentity: z
+    .object({
+      /** Relay identity id the container must claim. */
+      id: z.string().min(1),
+      /** Base64URL raw ECDSA P-256 signing public key. */
+      signingPublicKey: z.string().min(1),
+      /** PKCS8 PEM ECDSA P-256 private key used by the container. */
+      signingPrivateKeyPem: z.string().min(1),
+    })
+    .optional(),
+  /**
    * Git access token for cloning private repositories inside the container.
    * Replaces the `MAKAIO_GIT_TOKEN` environment variable.
    */
@@ -52,6 +83,15 @@ export type ContainerState = z.infer<typeof ContainerStateSchema>;
 const SpawnRequestBase = z.object({
   /** Unique session identifier */
   sessionId: z.string(),
+  /**
+   * Workflow execution identifier for workflow-execution containers.
+   *
+   * When provided the Docker service mints a per-execution HMAC secret and
+   * injects it into `bootstrapConfig.busAuthSecret` so the container can
+   * authenticate as `peer = { kind: 'workflow-execution', id: executionId }`.
+   * Session-based subagent containers omit this field.
+   */
+  executionId: z.string().optional(),
   /** Adapter to load in container */
   adapter: z.string(),
   /** Container runtime type */

@@ -12,6 +12,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   type BusBroadcastMessage,
   type BusMessage,
+  type BusReceiveHandler,
   type BusRequestMessage,
   type BusTransport,
 } from '@makaio/bus-core';
@@ -63,7 +64,7 @@ export class WebSocketClientTransport implements BusTransport {
   private authComplete = false;
 
   private readonly correlations = new CorrelationTracker();
-  private readonly handlers = new Set<(message: BusMessage) => Promise<void>>();
+  private readonly handlers = new Set<BusReceiveHandler>();
   private readonly localSubscriptions = new Map<string, SubscriptionEntry>();
   private readonly pendingSubscriptionAcks = new Map<string, { resolve(): void; reject(error: unknown): void }>();
   private subscriptionAckSeq = 0;
@@ -211,10 +212,10 @@ export class WebSocketClientTransport implements BusTransport {
 
   /**
    * Register a handler for all inbound messages.
-   * @param handler - Invoked for each decoded inbound message
+   * @param handler - Invoked for each decoded inbound message with optional receive context
    * @returns Unsubscribe function
    */
-  public onReceive(handler: (message: BusMessage) => Promise<void>): () => void {
+  public onReceive(handler: BusReceiveHandler): () => void {
     this.handlers.add(handler);
     return () => {
       this.handlers.delete(handler);

@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, uniqueIndex, index, primaryKey, real } from 'drizzle-orm/sqlite-core';
 import type {
+  WorkflowDefinition,
   WorkflowExecutionScope,
   WorkflowInput,
   WorkflowStep,
@@ -8,6 +9,7 @@ import type {
   ExecutionLinkType,
   SpanStatus,
   WorkflowStepType,
+  WorkerContributionManifest,
   JsonValue,
 } from '@makaio/contracts';
 
@@ -208,3 +210,78 @@ export type InsertWorkflowStepSpan = typeof workflowStepSpans.$inferInsert;
 export type SelectWorkflowStepSpan = typeof workflowStepSpans.$inferSelect;
 export type InsertWorkflowExecutionLink = typeof workflowExecutionLinks.$inferInsert;
 export type SelectWorkflowExecutionLink = typeof workflowExecutionLinks.$inferSelect;
+
+/**
+ * Workflow run-context snapshots table.
+ *
+ * Stores a complete, immutable snapshot of the configuration needed to run a
+ * workflow execution. Keyed by `executionId` (1:1 with `workflow_executions`).
+ *
+ * The `source.kind` discriminant is stored flat (`sourceKind` + optional
+ * `sourcePath`/`sourceFilename`/`sourceCode`) for efficient querying.
+ * Large blobs (`definitionSnapshot`, `workerManifest`, `context`, `env`, etc.)
+ * are stored as JSON columns.
+ *
+ * CENTRAL tier — migrated alongside `workflow_executions`.
+ */
+export const workflowRunContexts = sqliteTable(
+  'workflow_run_contexts',
+  {
+    /** Unique execution identifier (1:1 with workflow_executions.id). */
+    executionId: text('execution_id').primaryKey(),
+    /** Workflow definition identifier. */
+    workflowId: text('workflow_id').notNull(),
+    /** Coordinator session that owns this execution. */
+    coordinatorSessionId: text('coordinator_session_id').notNull(),
+    /** Workflow source kind discriminant (`path`, `source`, `definition`). */
+    sourceKind: text('source_kind').notNull(),
+    /** Absolute file path (for `kind === 'path'`). */
+    sourcePath: text('source_path'),
+    /** Virtual filename (for `kind === 'source'`). */
+    sourceFilename: text('source_filename'),
+    /** Inline source code (for `kind === 'source'`). */
+    sourceCode: text('source_code'),
+    /** Serialized definition snapshot (JSON). Present for `kind === 'definition'`. */
+    definitionSnapshot: text('definition_snapshot', { mode: 'json' }).$type<WorkflowDefinition>(),
+    /** Resolved worker contribution manifest (JSON). */
+    workerManifest: text('worker_manifest', { mode: 'json' }).$type<WorkerContributionManifest>().notNull(),
+    /** Bound input values (JSON object). */
+    inputs: text('inputs', { mode: 'json' }).$type<Record<string, JsonValue>>().notNull(),
+    /** Trigger payload from the firing trigger (JSON object). */
+    triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, JsonValue>>().notNull(),
+    /** Scope type discriminant. */
+    scopeType: text('scope_type', {
+      enum: ['global', 'workspace', 'session', 'external'],
+    })
+      .notNull()
+      .default('global')
+      .$type<WorkflowExecutionScope['type']>(),
+    /** Scope kind (for `type === 'external'`; empty string otherwise). */
+    scopeKind: text('scope_kind').notNull().default(''),
+    /** Scope identifier (for `workspace`/`session`/`external`; empty string for `global`). */
+    scopeId: text('scope_id').notNull().default(''),
+    /** Bus subject for cancellation signals. */
+    cancelSubject: text('cancel_subject').notNull(),
+    /**
+     * Platform/workspace context (JSON).
+     * Contains `repoPath`, `makaioHome`, `os`, `arch`, and optional `worktree`.
+     */
+    context: text('context', { mode: 'json' })
+      .$type<{
+        repoPath: string;
+        makaioHome: string;
+        os: 'darwin' | 'linux' | 'win32';
+        arch: string;
+        worktree?: string;
+      }>()
+      .notNull(),
+    /** Extra non-secret environment variables (JSON object). */
+    env: text('env', { mode: 'json' }).$type<Record<string, string>>().notNull(),
+    /** Snapshot creation timestamp (epoch ms). */
+    createdAt: integer('created_at').notNull(),
+  },
+  (table) => [index('idx_run_contexts_workflow').on(table.workflowId)],
+);
+
+export type InsertWorkflowRunContext = typeof workflowRunContexts.$inferInsert;
+export type SelectWorkflowRunContext = typeof workflowRunContexts.$inferSelect;

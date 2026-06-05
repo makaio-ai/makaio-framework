@@ -3,7 +3,7 @@
 The largest framework package: 30+ domain service namespaces, storage handlers,
 orchestration logic, and extension packages for the Makaio framework's core
 runtime. Everything from sessions, turns, and agents to model registry, tool
-approval, worker definitions, and execution targets lives here.
+approval, subagent templates, and execution targets lives here.
 
 ## Installation
 
@@ -72,7 +72,7 @@ major domains:
 | `./adapter-subsystem` | Adapter config | `IAdapterConfigRepository` |
 | `./agent-runtime` | Agent instance status | `AgentRuntimeSubjects`, `AgentRuntimeNamespace` |
 | `./execution-target` | Container/local targets | `ExecutionTargetSubjects`, spawn/stop/status RPCs, Docker subjects |
-| `./worker` | Worker definitions | `WorkerSubjects`, `WorkerDefinitionSchema`, worker CRUD |
+| `./subagent-template` | Subagent templates | `SubagentTemplateSubjects`, `SubagentTemplateSchema`, template CRUD |
 | `./codebase` | Codebase change events | `CodebaseSubjects`, `CodebaseChangedEventSchema` |
 | `./compression` | Context compression | `CompressionSubjects`, `CompressRequestSchema` |
 | `./preferences` | User preferences | `PreferencesSubjects`, `PreferenceItemSchema` |

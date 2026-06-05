@@ -346,26 +346,26 @@ export {
 } from './preferences/index.js';
 export type { PreferenceItem, PreferenceKey } from './preferences/index.js';
 export {
-  WorkerCompletedEventSchema,
-  WorkerDefinitionCreateSchema,
-  WorkerDefinitionSchema,
-  WorkerDefinitionSummarySchema,
-  WorkerDefinitionUpdateSchema,
-  WorkerInstanceSchema,
-  WorkerInstanceStatusSchema,
-  WorkerKernelNamespace,
-  WorkerKernelSchemas,
-  WorkerSettingsSchemas,
-  WorkerSpawnedEventSchema,
-  WorkerSpawnRequestSchema,
-  WorkerSubjects,
-} from './worker/index.js';
+  SubagentTemplateCompletedEventSchema,
+  SubagentTemplateCreateSchema,
+  SubagentTemplateSchema,
+  SubagentTemplateSummarySchema,
+  SubagentTemplateUpdateSchema,
+  SubagentTemplateInstanceSchema,
+  SubagentTemplateInstanceStatusSchema,
+  SubagentTemplateKernelNamespace,
+  SubagentTemplateKernelSchemas,
+  SubagentTemplateSettingsSchemas,
+  SubagentTemplateSpawnedEventSchema,
+  SubagentTemplateSpawnRequestSchema,
+  SubagentTemplateSubjects,
+} from './subagent-template/index.js';
 export type {
-  WorkerDefinition,
-  WorkerDefinitionCreate,
-  WorkerDefinitionSummary,
-  WorkerDefinitionUpdate,
-  WorkerInstance,
-  WorkerInstanceStatus,
-  WorkerSpawnRequest,
-} from './worker/index.js';
+  SubagentTemplate,
+  SubagentTemplateCreate,
+  SubagentTemplateSummary,
+  SubagentTemplateUpdate,
+  SubagentTemplateInstance,
+  SubagentTemplateInstanceStatus,
+  SubagentTemplateSpawnRequest,
+} from './subagent-template/index.js';

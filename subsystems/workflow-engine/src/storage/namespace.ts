@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { localSubject } from '@makaio/core';
 import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import {
   WorkflowDefinitionSchemaTyped,
@@ -11,6 +12,7 @@ import {
   ExecutionLinkSchema,
   SpanRecordSchema,
   StepStateSchemaTyped,
+  WorkflowRunContextSchema,
 } from '@makaio/contracts';
 import {
   workflowDefinitions,
@@ -18,6 +20,7 @@ import {
   workflowExecutionLinks,
   workflowExecutionSteps,
   workflowStepSpans,
+  workflowRunContexts,
 } from './schema.js';
 
 const ExecutionLinkListQuerySchema = z
@@ -95,6 +98,15 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ id: z.string() }),
     },
 
+    /**
+     * Persist a newly-started execution and its worker run-context snapshot as
+     * one storage transaction.
+     */
+    setExecutionStart: {
+      request: z.object({ execution: WorkflowExecutionSchemaTyped, runContext: WorkflowRunContextSchema }),
+      response: z.object({ id: z.string(), executionId: z.string() }),
+    },
+
     updateExecution: {
       request: ExecutionUpdateSchema,
       response: z.object({ success: z.boolean() }),
@@ -138,6 +150,28 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       request: ExecutionLinkListQuerySchema,
       response: z.object({ links: z.array(ExecutionLinkSchema) }),
     },
+
+    // ─────────────────────────────────────────────────────────────
+    // Run Context CRUD
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Persist the run-context snapshot for a workflow execution.
+     * Called by the executor after creating the execution row, before worker boot.
+     */
+    setRunContext: localSubject({
+      request: z.object({ runContext: WorkflowRunContextSchema }),
+      response: z.object({ executionId: z.string() }),
+    }),
+
+    /**
+     * Read the run-context snapshot by execution ID.
+     * Called internally by the public `workflow.getRunContext` handler.
+     */
+    getRunContext: localSubject({
+      request: z.object({ executionId: z.string().min(1) }),
+      response: z.object({ runContext: WorkflowRunContextSchema.nullable() }),
+    }),
   },
   extensions: {
     drizzle: {
@@ -146,6 +180,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       workflowExecutionSteps,
       workflowStepSpans,
       workflowExecutionLinks,
+      workflowRunContexts,
     },
   },
 });

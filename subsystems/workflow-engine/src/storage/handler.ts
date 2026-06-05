@@ -8,6 +8,7 @@ import type {
   JsonValue,
   StepState,
   WorkflowExecutionScope,
+  WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createDrizzleCrudHandlers, createDrizzleListHandler } from '@makaio/storage-handlers';
@@ -27,67 +28,12 @@ import {
   type InsertWorkflowDefinition,
 } from './schema.js';
 import { registerSpanHandlers } from './span-handler.js';
+import { registerRunContextHandlers, upsertWorkflowRunContext } from './run-context-handler.js';
+import { toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 
 type DbDefinitionRow = typeof workflowDefinitions.$inferSelect;
 type DbExecutionRow = typeof workflowExecutions.$inferSelect;
 type StorageExecutor = MakaioDatabase | Parameters<TransactionCallback<void>>[0];
-
-/**
- * Flat scope column values for DB insert/update and predicate building.
- */
-interface ScopeColumns {
-  scopeType: WorkflowExecutionScope['type'];
-  scopeKind: string;
-  scopeId: string;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Scope helpers
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Decompose a `WorkflowExecutionScope` into flat DB columns.
- * @param scope - Scope discriminated union to flatten
- * @returns Flat column values for `scopeType`, `scopeKind`, `scopeId`
- */
-function toScopeColumns(scope: WorkflowExecutionScope): ScopeColumns {
-  if (scope.type === 'global') {
-    return { scopeType: 'global', scopeKind: '', scopeId: '' };
-  }
-  if (scope.type === 'external') {
-    return { scopeType: 'external', scopeKind: scope.kind, scopeId: scope.id };
-  }
-  // workspace | session — id required, kind not applicable
-  return { scopeType: scope.type, scopeKind: '', scopeId: scope.id };
-}
-
-/**
- * Reconstruct a `WorkflowExecutionScope` from flat DB columns.
- * @param row - Row fragment with scope columns
- * @returns Reconstructed scope discriminated union
- * @throws Error when required columns are missing for the declared type
- */
-function fromScopeColumns(row: ScopeColumns): WorkflowExecutionScope {
-  switch (row.scopeType) {
-    case 'global':
-      return { type: 'global' };
-    case 'external':
-      if (!row.scopeKind || !row.scopeId) {
-        throw new Error('Invalid external workflow scope row: scopeKind and scopeId are required');
-      }
-      return { type: 'external', kind: row.scopeKind, id: row.scopeId };
-    case 'workspace':
-    case 'session':
-      if (!row.scopeId) {
-        throw new Error(`Invalid ${row.scopeType} workflow scope row: scopeId is required`);
-      }
-      return { type: row.scopeType, id: row.scopeId };
-    default: {
-      const _exhaustive: never = row.scopeType;
-      throw new Error(`Unknown scope type: ${String(_exhaustive)}`);
-    }
-  }
-}
 
 /**
  * Build equality predicates for scope columns on a given table.
@@ -430,6 +376,31 @@ function buildExecutionListPredicates(
 }
 
 /**
+ * Persist a newly-started execution and its run-context snapshot in one transaction.
+ * @param db - Database handle.
+ * @param execution - Execution row to upsert.
+ * @param runContext - Matching run-context snapshot to upsert.
+ */
+async function upsertExecutionStart(
+  db: MakaioDatabase,
+  execution: WorkflowExecution,
+  runContext: WorkflowRunContext,
+): Promise<void> {
+  if (runContext.executionId !== execution.id) {
+    throw new Error('setExecutionStart requires execution.id to match runContext.executionId');
+  }
+  const dbValues = toExecutionDbValues(execution);
+  await executeTransaction(db, async (tx) => {
+    await tx.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
+      target: workflowExecutions.id,
+      set: dbValues,
+    });
+    await replaceExecutionStepStates(tx, execution.id, execution.steps);
+    await upsertWorkflowRunContext(tx, runContext);
+  });
+}
+
+/**
  * Register all execution-related bus handlers (get, set, update, list).
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
@@ -458,6 +429,16 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     });
 
     ctx.setResult({ id: execution.id });
+  });
+
+  const unsubSetExecutionStart = bus.on(WorkflowStorageSubjects.setExecutionStart, async (ctx) => {
+    // Cast: the bus infers structurally identical types from workflow schemas,
+    // but TypeScript cannot unify duplicate z.infer results here.
+    const execution = ctx.payload.execution as WorkflowExecution;
+    const runContext = ctx.payload.runContext as WorkflowRunContext;
+    await upsertExecutionStart(db, execution, runContext);
+
+    ctx.setResult({ id: execution.id, executionId: execution.id });
   });
 
   const unsubUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, async (ctx) => {
@@ -511,6 +492,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
   return () => {
     unsubGetExecution();
     unsubSetExecution();
+    unsubSetExecutionStart();
     unsubUpdateExecution();
     unsubListExecutions();
   };
@@ -524,6 +506,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
  * - Execution CRUD: getExecution, setExecution, updateExecution, listExecutions
  * - Span CRUD: setSpan, listSpans
  * - Execution link CRUD: setExecutionLink, listExecutionLinks
+ * - Run context CRUD: setRunContext, getRunContext
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)
@@ -538,11 +521,13 @@ export function registerDrizzleWorkflowStorage(
   const definitionListCleanup = registerDefinitionList(bus, db);
   const executionCleanup = registerExecutionHandlers(bus, db);
   const spanCleanup = registerSpanHandlers(bus, db);
+  const runContextCleanup = registerRunContextHandlers(bus, db);
 
   return () => {
     definitionCrudCleanup();
     definitionListCleanup();
     executionCleanup();
     spanCleanup();
+    runContextCleanup();
   };
 }

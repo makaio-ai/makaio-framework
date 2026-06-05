@@ -88,6 +88,8 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.glob, async (ctx) => {
       const { pattern, cwd, limit = 100, offset = 0, ignore = [], machineId } = ctx.payload;
 
+      this.requireMachineIdForRemote(ctx, machineId);
+
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
         return; // Let another handler respond
@@ -132,6 +134,8 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.readFile, async (ctx) => {
       const { path: filePath, machineId, encoding = 'utf-8' } = ctx.payload;
 
+      this.requireMachineIdForRemote(ctx, machineId);
+
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
         return;
@@ -145,6 +149,8 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.writeFile, async (ctx) => {
       const { path: filePath, content, machineId, encoding = 'utf-8' } = ctx.payload;
 
+      this.requireMachineIdForRemote(ctx, machineId);
+
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
         return;
@@ -153,6 +159,37 @@ export class FileSystemService extends BaseService {
       await fs.writeFile(filePath, content, { encoding: encoding as BufferEncoding });
       ctx.setResult({ success: true });
     });
+  }
+
+  /**
+   * Throw when a remote caller omits the required `machineId`.
+   *
+   * Remote callers must include `machineId` so ownership is explicit and the
+   * correct service instance can be selected. Host-owned callers may omit it:
+   * direct in-process requests are local, and the browser SharedWorker bridge
+   * arrives through the `worker` transport without a remote peer.
+   * @param ctx - Bus context for the current request
+   * @param machineId - The `machineId` from the request payload
+   */
+  private requireMachineIdForRemote(
+    ctx: { origin: { local: boolean }; transport?: { transportName: string; peer?: unknown } },
+    machineId: string | undefined,
+  ): void {
+    if (!this.isHostOwnedOrigin(ctx) && machineId === undefined) {
+      throw new Error('machineId is required for remote filesystem access');
+    }
+  }
+
+  /**
+   * Check whether a request originated from host-owned code.
+   * @param ctx - Bus context for the current request.
+   * @returns True for local requests and host UI bridge requests.
+   */
+  private isHostOwnedOrigin(ctx: {
+    origin: { local: boolean };
+    transport?: { transportName: string; peer?: unknown };
+  }): boolean {
+    return ctx.origin.local || (ctx.transport?.transportName === 'worker' && ctx.transport.peer === undefined);
   }
 
   /**

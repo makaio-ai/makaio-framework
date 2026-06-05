@@ -143,6 +143,7 @@ function makeRequestCtx(targetVariant: 'base' | 'cef'): UpgradeRequestContext & 
     replacePayload: vi.fn<(newPayload: VariantRequestUpgradeRequest) => void>(),
     messageId: 'test-message-id',
     correlationId: undefined,
+    origin: { local: true },
   };
 }
 

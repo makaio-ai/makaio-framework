@@ -4,6 +4,7 @@ import type { RequestContext, SubjectDefinition, RequestHandler } from '@makaio/
 import { getMatchingHandlerEntries, getMatchingRemoteEntries } from './getMatchingHandlers.js';
 import { getFullSubjectForSubjectDefinition } from '../../utils/subject-transformation.js';
 import { isNoHandlerErrorForSubject } from '../../utils/transport.js';
+import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../../utils/transport-helpers.js';
 import { RequestError } from '../../errors/index.js';
 import { awaitWithTimeoutAndSignal, toAbortError } from './await-with-timeout-and-signal.js';
 
@@ -235,6 +236,7 @@ async function executeLocalEntry(
     messageId: options.messageId,
     correlationId: options.correlationId,
     transport: options.transport,
+    origin: options.transport ? REMOTE_ORIGIN : LOCAL_ORIGIN,
     ...(options.signal !== undefined && { signal: options.signal }),
     setResult: (value) => {
       resultValue = value;

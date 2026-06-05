@@ -49,6 +49,19 @@ export interface TransportReceiveContext {
 }
 
 /**
+ * Describes the call origin of a bus message.
+ *
+ * Set on every context before handlers run; never serialized to wire.
+ * Derivation: `local` is `true` when no transport received the message
+ * (the call originated in this process), `false` when it arrived over
+ * a transport from a remote peer.
+ */
+export interface MessageOrigin {
+  /** Whether the message originated locally (not from a remote transport). */
+  readonly local: boolean;
+}
+
+/**
  * Base message context interface for both events and requests.
  *
  * Provides common metadata for tracking and correlation:
@@ -101,6 +114,17 @@ export interface BaseMessageContext {
    * context. Never trust similarly named fields in payloads or wire messages.
    */
   transport?: TransportReceiveContext;
+
+  /**
+   * Where this message originated.
+   *
+   * `local: true` — emitted in this process.
+   * `local: false` — arrived via a transport from a remote caller.
+   *
+   * Always present; never serialized to the wire. Location-sensitive handlers
+   * check this before executing local side-effects.
+   */
+  origin: MessageOrigin;
 
   isRequest: boolean;
 }

@@ -152,6 +152,7 @@ export type { BroadcastContext, BroadcastResult } from './methods/broadcast.js';
 export { localSubject } from './utils/local-schema.js';
 export { collectorOnlySubject } from '@makaio/core';
 export { channelSubject } from './utils/channel-schema.js';
+export { defaultTransports } from '@makaio/core';
 
 export type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './channel/index.js';
 export { SystemChannelSchemas, createChannelEndpoint, openChannel } from './channel/index.js';
@@ -160,6 +161,8 @@ export { CorrelationTracker } from './utils/correlation-tracker.js';
 export type { ConnectedPayload, DisconnectedPayload } from './lifecycle.js';
 export type { ExtensionNamespaceConfig } from './extension-namespace-types.js';
 export {
+  LOCAL_ORIGIN,
+  REMOTE_ORIGIN,
   shouldReceiveMessage,
   handleCorrelationResponse,
   trackMessageCorrelation,

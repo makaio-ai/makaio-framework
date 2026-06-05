@@ -118,6 +118,7 @@ describe('SubagentService', () => {
           model: 'sonnet',
           tools: ['read_file', 'run_tests'],
           disallowedTools: ['delete_file'],
+          allowedDirectories: ['/workspace/project'],
           contextMode: 'fork',
         },
         depth: 1,
@@ -132,6 +133,7 @@ describe('SubagentService', () => {
         model: 'sonnet',
         allowedTools: ['read_file', 'run_tests'],
         disallowedTools: ['delete_file'],
+        allowedDirectories: ['/workspace/project'],
       });
     });
 

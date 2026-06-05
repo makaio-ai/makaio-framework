@@ -17,8 +17,25 @@ import type {
 import { matchesAnySubscription } from './subscription-matching.js';
 import { matchesFilter } from './payload-filter.js';
 import { deserializeTransportError } from './transport.js';
-import type { PayloadFilter } from '@makaio/core';
+import type { MessageOrigin, PayloadFilter } from '@makaio/core';
 import type { CorrelationTracker } from './correlation-tracker.js';
+
+/**
+ * Singleton frozen origin for messages emitted within the current process.
+ *
+ * Shared across `emit`, `broadcast`, and `dispatch` to avoid a per-message
+ * allocation on the hot path. Both variants are frozen to prevent accidental
+ * mutation since they are module-level constants.
+ */
+export const LOCAL_ORIGIN: MessageOrigin = Object.freeze({ local: true });
+
+/**
+ * Singleton frozen origin for messages that arrived via a transport.
+ *
+ * Used by `emit`, `broadcast`, and `dispatch` when a `TransportReceiveContext`
+ * is present (i.e. the message was forwarded from a remote caller).
+ */
+export const REMOTE_ORIGIN: MessageOrigin = Object.freeze({ local: false });
 
 /**
  * Check if a client/tab wants to receive a message based on subscriptions and filters.

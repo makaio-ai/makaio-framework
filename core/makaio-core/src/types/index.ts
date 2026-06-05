@@ -17,7 +17,9 @@ export type {
 export type { WildcardUnifiedHandler } from './handler-types.js';
 
 export type {
+  BaseMessageContext,
   EventMessagePayload,
+  MessageOrigin,
   PrincipalContext,
   RequestMessagePayload,
   MessagePayload,
@@ -31,6 +33,7 @@ export type {
   LocalSubjectSchema,
   CollectorOnlySubjectSchema,
   ChannelSubjectSchema,
+  DefaultTransportsSubjectSchema,
   BaseSubjectSchema,
   SubjectSchema,
   SchemaRecord,
@@ -45,6 +48,7 @@ export type {
   ScopedSubjectDefinition,
   FilterablePayloadIntersection,
   FilterPayloadFromSchemas,
+  TransportRoutingDefault,
 } from './subjects.js';
 
 export type { InferSchemaPayload, InferSubjectMeta } from './type-helpers.js';

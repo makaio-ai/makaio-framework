@@ -4,4 +4,5 @@ export { isRequestSchema } from './is-request-schema.js';
 export { localSubject, isLocalSchema } from './is-local-schema.js';
 export { collectorOnlySubject, isCollectorOnlySchema } from './is-collector-only-schema.js';
 export { channelSubject, isChannelSchema } from './is-channel-schema.js';
+export { defaultTransports, isDefaultTransportsSchema } from './default-transports-schema.js';
 export { unwrapSchema } from './unwrap-schema.js';

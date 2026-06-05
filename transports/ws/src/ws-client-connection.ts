@@ -11,7 +11,7 @@
  */
 
 import type { WebSocketLike, TransportAuth, ClientTransportCodec } from './types.js';
-import type { BusMessage, CorrelationTracker } from '@makaio/bus-core';
+import type { BusMessage, BusReceiveHandler, CorrelationTracker } from '@makaio/bus-core';
 import { sendEncoded, waitForSocketOpen } from './transport-helpers.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
@@ -40,7 +40,7 @@ export interface ConnectionDeps {
   /** Correlation tracker shared with the transport instance. */
   readonly correlations: CorrelationTracker;
   /** Application-level message handlers shared with the transport instance. */
-  readonly handlers: Set<(message: BusMessage) => Promise<void>>;
+  readonly handlers: Set<BusReceiveHandler>;
   /** Buffered local subscriptions to replay on each new connection. */
   readonly localSubscriptions: Map<string, SubscriptionEntry>;
   /** WebSocket factory — creates a new socket for each connect attempt. */

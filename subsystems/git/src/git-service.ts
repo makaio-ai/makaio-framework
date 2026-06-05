@@ -277,14 +277,16 @@ export class GitService extends BaseService {
   }
 
   private registerWorktreeManagementHandlers(): void {
-    // initRepo handler
+    // initRepo handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.initRepo, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'initRepo');
       const result = await initRepo(ctx.payload.path, ctx.payload.defaultBranch);
       ctx.setResult(result);
     });
 
-    // createWorktree handler
+    // createWorktree handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.createWorktree, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'createWorktree');
       const git = getGit(ctx.payload.repoPath);
       const result = await createWorktree(git, ctx.payload.path, ctx.payload.branch, {
         baseBranch: ctx.payload.baseBranch,
@@ -293,8 +295,9 @@ export class GitService extends BaseService {
       ctx.setResult(result);
     });
 
-    // removeWorktree handler
+    // removeWorktree handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.removeWorktree, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'removeWorktree');
       const git = getGit(ctx.payload.repoPath);
       const result = await removeWorktree(git, ctx.payload.path, {
         force: ctx.payload.force,
@@ -303,21 +306,38 @@ export class GitService extends BaseService {
       ctx.setResult(result);
     });
 
-    // stage handler
+    // stage handler — mutates git index, host-owned
     this.registerHandler(GitSubjects.stage, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'stage');
       const { repoPath, paths } = ctx.payload;
       const git = getGit(repoPath);
       const result = await stageFiles(git, paths);
       ctx.setResult(result);
     });
 
-    // unstage handler
+    // unstage handler — mutates git index, host-owned
     this.registerHandler(GitSubjects.unstage, async (ctx) => {
+      this.requireHostOwnedOrigin(ctx, 'unstage');
       const { repoPath, paths } = ctx.payload;
       const git = getGit(repoPath);
       const result = await unstageFiles(git, paths);
       ctx.setResult(result);
     });
+  }
+
+  /**
+   * Assert that a git mutation came from host-owned code or the host UI bridge.
+   * @param ctx - Bus handler context carrying origin and transport metadata.
+   * @param handlerName - Git handler name used in the error message.
+   */
+  private requireHostOwnedOrigin(
+    ctx: { origin: { local: boolean }; transport?: { transportName: string; peer?: unknown } },
+    handlerName: string,
+  ): void {
+    if (ctx.origin.local || (ctx.transport?.transportName === 'worker' && ctx.transport.peer === undefined)) {
+      return;
+    }
+    throw new Error(`Unauthorized: git.${handlerName} requires a host-owned request`);
   }
 
   /**

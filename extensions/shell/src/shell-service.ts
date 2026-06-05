@@ -29,6 +29,7 @@ export class ShellService extends BaseService {
     this.manager.startCleanupTimer();
 
     this.registerHandler(ShellSubjects.exec, async (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'exec');
       const constraints = this.mergeConstraints(ctx.payload.context.constraints);
       const timeout =
         ctx.payload.input.timeout === undefined ? undefined : Math.min(ctx.payload.input.timeout, constraints.timeout);
@@ -53,6 +54,7 @@ export class ShellService extends BaseService {
     });
 
     this.registerHandler(ShellSubjects.status, (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'status');
       const instance = this.requireShell(ctx.payload.shellId);
       const stats = instance.getBufferStats();
       ctx.setResult({
@@ -67,12 +69,14 @@ export class ShellService extends BaseService {
     });
 
     this.registerHandler(ShellSubjects.kill, async (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'kill');
       const instance = this.requireShell(ctx.payload.shellId);
       const signal = ctx.payload.signal ?? 'SIGTERM';
       ctx.setResult({ killed: await instance.kill(signal), signal });
     });
 
     this.registerHandler(ShellSubjects.output, (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'output');
       const instance = this.requireShell(ctx.payload.shellId);
       const output = instance.getOutput(
         ctx.payload.stream ?? 'both',
@@ -88,9 +92,13 @@ export class ShellService extends BaseService {
       });
     });
 
-    this.registerHandler(ShellSubjects.grep, (ctx) => this.handleGrep(ctx));
+    this.registerHandler(ShellSubjects.grep, (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'grep');
+      this.handleGrep(ctx);
+    });
 
     this.registerHandler(ShellSubjects.send, async (ctx) => {
+      this.requireLocalOrigin(ctx.origin.local, 'send');
       const instance = this.requireShell(ctx.payload.shellId);
       const bytesWritten = await instance.sendInput(ctx.payload.input);
       ctx.setResult({ sent: bytesWritten > 0, bytesWritten });
@@ -195,6 +203,22 @@ export class ShellService extends BaseService {
       ),
       bufferRetentionMs: positiveInteger(shellConstraints.bufferRetentionMs, DEFAULT_CONSTRAINTS.bufferRetentionMs),
     };
+  }
+
+  /**
+   * Throw when a shell handler is called from a remote origin.
+   *
+   * Shell execution is inherently local: all shell instances are owned by
+   * this process. A remote caller cannot create or interact with shells on
+   * this machine without an explicit local seam.
+   * @param isLocal - `ctx.origin.local` value from the handler context.
+   * @param handlerName - Name of the handler, used in the error message.
+   * @throws Error with PERMISSION_DENIED prefix when `isLocal` is false.
+   */
+  private requireLocalOrigin(isLocal: boolean, handlerName: string): void {
+    if (!isLocal) {
+      throw new Error(`${ToolErrorCodes.PERMISSION_DENIED}: Shell ${handlerName} requires a local-origin request`);
+    }
   }
 
   /**

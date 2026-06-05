@@ -18,6 +18,7 @@
 
 import type {
   BusMessage,
+  BusReceiveHandler,
   BusRequestMessage,
   BusBroadcastMessage,
   BusSubscribeMessage,
@@ -104,7 +105,7 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
   const transportName = options.name ?? 'message-port';
   const useEnvelope = options.envelope ?? false;
 
-  const handlers = new Set<(message: BusMessage) => Promise<void>>();
+  const handlers = new Set<BusReceiveHandler>();
   const correlations = new CorrelationTracker();
 
   // Messages that arrive before any handler is registered via onReceive().
@@ -220,11 +221,12 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
         return;
       }
 
+      const receiveContext = { transportName };
       // Call all registered handlers in parallel
       await Promise.all(
         Array.from(handlers).map(async (handler) => {
           try {
-            await handler(message);
+            await handler(message, receiveContext);
           } catch (error) {
             if (debug) {
               console.error(`[${transportName}] Handler error:`, error);
@@ -314,10 +316,10 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
    * buffer), they are replayed in order. After the replay settles, if
    * `subscribe-sync-complete` has already been received, the ready promise
    * is resolved so callers see a fully-populated handler set.
-   * @param handler - Handler function for incoming messages
+   * @param handler - Handler function for incoming messages with optional receive context
    * @returns Unsubscribe function
    */
-  function onReceive(handler: (message: BusMessage) => Promise<void>): () => void {
+  function onReceive(handler: BusReceiveHandler): () => void {
     handlers.add(handler);
 
     if (preRegistrationBuffer.length > 0) {
@@ -328,10 +330,11 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
       // replay could race when multiple subscribe updates target the same subject.
       const buffered = preRegistrationBuffer.splice(0);
       // Use an async IIFE so onReceive returns the unsubscribe fn synchronously.
+      const receiveContext = { transportName };
       void (async () => {
         for (const msg of buffered) {
           try {
-            await handler(msg);
+            await handler(msg, receiveContext);
           } catch (error: unknown) {
             if (debug) {
               console.error(`[${transportName}] Error replaying buffered message:`, error);

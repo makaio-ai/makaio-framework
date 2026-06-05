@@ -8,6 +8,16 @@ export type SubjectRecord<
   Payload extends MessagePayload = MessagePayload,
 > = Record<SubjectKeys, Payload>;
 
+/**
+ * Default transport routing semantics for a subject or namespace.
+ *
+ * - `'all'` — send to all registered transports (the default when omitted).
+ * - `'local-only'` — suppress outbound transport fan-out unless the caller
+ *   explicitly provides a `transports` override. Weaker than `localSubject()`:
+ *   the subject can still be invoked remotely.
+ */
+export type TransportRoutingDefault = 'all' | 'local-only';
+
 export type SubjectRecordFromSchemaRecord<SchemaRecord extends Record<string, SubjectSchema>> = {
   [K in keyof SchemaRecord & string]: Simplify<InferSchemaPayload<SchemaRecord[K]>>;
 };
@@ -34,6 +44,17 @@ export type SubjectDefinitionMeta<
    * DirectChannel encrypted point-to-point transport.
    */
   channel: boolean;
+  /**
+   * Default transport routing for bus calls on this subject when the caller
+   * does not provide an explicit `transports` option.
+   *
+   * - `'all'` (default) — send to all registered transports as usual.
+   * - `'local-only'` — suppress transport fan-out unless the caller explicitly
+   *   provides a `transports` override. Weaker than `localSubject()`: the
+   *   subject can still be invoked remotely; only the outbound default is
+   *   suppressed.
+   */
+  defaultTransports?: TransportRoutingDefault;
 };
 
 export type SubjectDefinition<
@@ -96,6 +117,7 @@ export type ValidSubjectDefinition<Domain extends string = string> = {
     isRequest: boolean;
     local: boolean;
     channel: boolean;
+    defaultTransports?: TransportRoutingDefault;
   };
   subject: string;
 };

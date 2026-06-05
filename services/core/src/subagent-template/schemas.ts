@@ -3,13 +3,16 @@ import { ContextModeSchema } from '@makaio/contracts';
 import type { SchemaRecord } from '@makaio/core';
 
 // ============================================================================
-// Worker Definition Schemas
+// SubagentTemplate Definition Schemas
 // ============================================================================
 
 /**
- * Worker Definition - User-configured template stored in settings.
+ * SubagentTemplate - User-configured template stored in settings.
+ *
+ * A convenience layer over the Subagent system for user-configured background
+ * tasks. Not to be confused with WorkerNode (one-shot workflow execution unit).
  */
-export const WorkerDefinitionSchema = z.object({
+export const SubagentTemplateSchema = z.object({
   id: z.string(),
   name: z.string(),
 
@@ -34,12 +37,12 @@ export const WorkerDefinitionSchema = z.object({
   updatedAt: z.number(),
 });
 
-export type WorkerDefinition = z.infer<typeof WorkerDefinitionSchema>;
+export type SubagentTemplate = z.infer<typeof SubagentTemplateSchema>;
 
 /**
- * Summary schema for listing workers.
+ * Summary schema for listing subagent templates.
  */
-export const WorkerDefinitionSummarySchema = z.object({
+export const SubagentTemplateSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
   adapterName: z.string(),
@@ -47,53 +50,53 @@ export const WorkerDefinitionSummarySchema = z.object({
   enabled: z.boolean(),
 });
 
-export type WorkerDefinitionSummary = z.infer<typeof WorkerDefinitionSummarySchema>;
+export type SubagentTemplateSummary = z.infer<typeof SubagentTemplateSummarySchema>;
 
 /**
- * Schema for creating a new worker definition.
+ * Schema for creating a new subagent template.
  * Omits server-managed fields: id, scope, createdAt, updatedAt.
  */
-export const WorkerDefinitionCreateSchema = WorkerDefinitionSchema.omit({
+export const SubagentTemplateCreateSchema = SubagentTemplateSchema.omit({
   id: true,
   scope: true,
   createdAt: true,
   updatedAt: true,
 });
 
-export type WorkerDefinitionCreate = z.infer<typeof WorkerDefinitionCreateSchema>;
+export type SubagentTemplateCreate = z.infer<typeof SubagentTemplateCreateSchema>;
 
 /**
- * Schema for updating a worker definition.
+ * Schema for updating a subagent template.
  */
-export const WorkerDefinitionUpdateSchema = WorkerDefinitionSchema.partial().required({ id: true });
+export const SubagentTemplateUpdateSchema = SubagentTemplateSchema.partial().required({ id: true });
 
-export type WorkerDefinitionUpdate = z.infer<typeof WorkerDefinitionUpdateSchema>;
+export type SubagentTemplateUpdate = z.infer<typeof SubagentTemplateUpdateSchema>;
 
 /**
- * Schema-only worker definition CRUD subjects used by the settings layer.
+ * Schema-only subagent template CRUD subjects used by the settings layer.
  *
  * Keeping these in the pure schema module avoids accidentally registering the
- * runtime worker namespace when settings code only needs the request/response
- * contracts for `settings:worker.*`.
+ * runtime subagent-template namespace when settings code only needs the
+ * request/response contracts for `settings:subagentTemplate.*`.
  */
-export const WorkerSettingsSchemas = {
+export const SubagentTemplateSettingsSchemas = {
   list: {
     request: z.object({}),
-    response: z.object({ definitions: z.array(WorkerDefinitionSummarySchema) }),
+    response: z.object({ definitions: z.array(SubagentTemplateSummarySchema) }),
   },
   get: {
     request: z.object({
       id: z.string().optional(),
       name: z.string().optional(),
     }),
-    response: WorkerDefinitionSchema,
+    response: SubagentTemplateSchema,
   },
   create: {
-    request: WorkerDefinitionCreateSchema,
+    request: SubagentTemplateCreateSchema,
     response: z.object({ id: z.string() }),
   },
   update: {
-    request: WorkerDefinitionUpdateSchema,
+    request: SubagentTemplateUpdateSchema,
     response: z.object({ success: z.boolean() }),
   },
   delete: {
@@ -103,13 +106,13 @@ export const WorkerSettingsSchemas = {
 } satisfies SchemaRecord;
 
 // ============================================================================
-// Worker Instance Schemas (Runtime)
+// SubagentTemplate Instance Schemas (Runtime)
 // ============================================================================
 
 /**
- * Worker Instance - Running execution backed by SubagentManager.
+ * SubagentTemplate Instance - Running execution backed by SubagentManager.
  */
-export const WorkerInstanceSchema = z.object({
+export const SubagentTemplateInstanceSchema = z.object({
   instanceId: z.string(),
   definitionId: z.string(),
   definitionName: z.string(),
@@ -119,14 +122,14 @@ export const WorkerInstanceSchema = z.object({
   createdAt: z.string(),
 });
 
-export type WorkerInstance = z.infer<typeof WorkerInstanceSchema>;
+export type SubagentTemplateInstance = z.infer<typeof SubagentTemplateInstanceSchema>;
 
 /**
- * Schema for spawning a worker.
+ * Schema for spawning a subagent template.
  */
-export const WorkerSpawnRequestSchema = z.object({
-  workerName: z.string().describe('Name of the Worker Definition'),
-  prompt: z.string().describe('Task for the worker'),
+export const SubagentTemplateSpawnRequestSchema = z.object({
+  subagentTemplateName: z.string().describe('Name of the SubagentTemplate'),
+  prompt: z.string().describe('Task for the subagent template'),
   sessionId: z.string().describe('Parent session ID'),
   overrides: z
     .object({
@@ -135,15 +138,15 @@ export const WorkerSpawnRequestSchema = z.object({
       allowedTools: z.array(z.string()).optional(),
     })
     .optional()
-    .describe('Runtime overrides for worker config'),
+    .describe('Runtime overrides for subagent template config'),
 });
 
-export type WorkerSpawnRequest = z.infer<typeof WorkerSpawnRequestSchema>;
+export type SubagentTemplateSpawnRequest = z.infer<typeof SubagentTemplateSpawnRequestSchema>;
 
 /**
- * Schema for worker instance status query.
+ * Schema for subagent template instance status query.
  */
-export const WorkerInstanceStatusSchema = z.object({
+export const SubagentTemplateInstanceStatusSchema = z.object({
   instanceId: z.string(),
   definitionName: z.string(),
   subagentId: z.string(),
@@ -153,18 +156,18 @@ export const WorkerInstanceStatusSchema = z.object({
   progress: z.array(z.string()).optional(),
 });
 
-export type WorkerInstanceStatus = z.infer<typeof WorkerInstanceStatusSchema>;
+export type SubagentTemplateInstanceStatus = z.infer<typeof SubagentTemplateInstanceStatusSchema>;
 
 // ============================================================================
-// Worker Events
+// SubagentTemplate Events
 // ============================================================================
 
-export const WorkerSpawnedEventSchema = z.object({
+export const SubagentTemplateSpawnedEventSchema = z.object({
   instanceId: z.string(),
-  workerName: z.string(),
+  subagentTemplateName: z.string(),
 });
 
-export const WorkerCompletedEventSchema = z.object({
+export const SubagentTemplateCompletedEventSchema = z.object({
   instanceId: z.string(),
   success: z.boolean(),
   result: z.string().optional(),
@@ -172,19 +175,19 @@ export const WorkerCompletedEventSchema = z.object({
 });
 
 /**
- * Schema-only worker runtime subjects.
+ * Schema-only subagent template runtime subjects.
  *
  * The runtime namespace registration lives in `./namespace.ts`; this export is
  * safe to import from settings or tests that only need the contracts.
  */
-export const WorkerKernelSchemas = {
+export const SubagentTemplateKernelSchemas = {
   spawn: {
-    request: WorkerSpawnRequestSchema,
+    request: SubagentTemplateSpawnRequestSchema,
     response: z.object({ instanceId: z.string() }),
   },
   get: {
     request: z.object({ instanceId: z.string() }),
-    response: WorkerInstanceStatusSchema,
+    response: SubagentTemplateInstanceStatusSchema,
   },
   send: {
     request: z.object({
@@ -197,6 +200,6 @@ export const WorkerKernelSchemas = {
     request: z.object({ instanceId: z.string() }),
     response: z.object({ killed: z.boolean() }),
   },
-  spawned: WorkerSpawnedEventSchema,
-  completed: WorkerCompletedEventSchema,
+  spawned: SubagentTemplateSpawnedEventSchema,
+  completed: SubagentTemplateCompletedEventSchema,
 } satisfies SchemaRecord;

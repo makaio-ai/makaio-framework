@@ -8,3 +8,5 @@ export type {
   SpawnOptions,
   TrackedSubagent,
 } from './manager/index.js';
+export { isPeerAuthorizedToDelegate } from './spawn-delegation.js';
+export type { SpawnDelegationAllowSet } from './spawn-delegation.js';

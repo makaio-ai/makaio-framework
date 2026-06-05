@@ -1,4 +1,5 @@
 import { z, ZodType } from 'zod';
+import type { TransportRoutingDefault } from './subjects.js';
 
 /**
  * Schema definition for event subjects (fire-and-forget).
@@ -72,13 +73,32 @@ export type ChannelSubjectSchema<T extends EventSchema | RequestSchema = EventSc
 };
 
 /**
+ * Wrapper to set a subject-level default transport routing policy.
+ *
+ * This is weaker than `localSubject()`: the subject remains routable remotely,
+ * but local callers that omit an explicit `transports` option use this default.
+ */
+export type DefaultTransportsSubjectSchema<
+  T extends EventSchema | RequestSchema = EventSchema | RequestSchema,
+  Default extends TransportRoutingDefault = TransportRoutingDefault,
+> = {
+  readonly __defaultTransports: Default;
+  readonly schema: T;
+};
+
+/**
  * Base schema types (unwrapped).
  */
 export type BaseSubjectSchema = EventSchema | RequestSchema;
 
 /**
- * Union of all subject schema types (including local and channel wrappers).
+ * Union of all subject schema types (including metadata wrappers).
  */
-export type SubjectSchema = BaseSubjectSchema | LocalSubjectSchema | CollectorOnlySubjectSchema | ChannelSubjectSchema;
+export type SubjectSchema =
+  | BaseSubjectSchema
+  | LocalSubjectSchema
+  | CollectorOnlySubjectSchema
+  | ChannelSubjectSchema
+  | DefaultTransportsSubjectSchema;
 
 export type SchemaRecord = Record<string, SubjectSchema>;

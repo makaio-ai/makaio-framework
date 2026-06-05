@@ -1,6 +1,7 @@
-import { MakaioBus, type ScopedBusFor, type BusNamespace, type NamespaceRegistrationOptions } from '@makaio/bus-core';
+import { MakaioBus, type ScopedBusFor, type BusNamespace } from '@makaio/bus-core';
 import {
   createBusNamespace,
+  type CreateBusNamespaceOptions,
   type FilterablePayloadIntersection,
   type SchemaRecord,
   type SubjectRecordFromSchemaRecord,
@@ -27,7 +28,7 @@ export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace
  * - Provides extension point for future adapter-specific features
  * @param domain - Namespace domain (e.g., 'adapter:claudeCode')
  * @param schemas - Record of subject schemas (events and requests)
- * @param options - Registration options (e.g., busValidationMode for Zod version conflicts)
+ * @param options - Registration and routing options (e.g., busValidationMode for Zod version conflicts)
  * @returns Adapter namespace with typed subjects and pre-computed FilterPayload
  * @example
  * ```typescript
@@ -61,7 +62,7 @@ export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace
 export function createAdapterNamespace<N extends string, Schemas extends SchemaRecord>(
   domain: N,
   schemas: Schemas,
-  options?: NamespaceRegistrationOptions,
+  options?: CreateBusNamespaceOptions,
 ): BusNamespace<
   N,
   SubjectRecordFromSchemaRecord<Schemas>,

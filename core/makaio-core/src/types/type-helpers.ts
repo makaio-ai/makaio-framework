@@ -7,11 +7,19 @@
 
 import { z } from 'zod';
 import { Simplify } from 'type-fest';
-import type { ChannelSubjectSchema, LocalSubjectSchema, SubjectSchema } from './schema.js';
+import type {
+  ChannelSubjectSchema,
+  DefaultTransportsSubjectSchema,
+  EventSchema,
+  LocalSubjectSchema,
+  RequestSchema,
+  SubjectSchema,
+} from './schema.js';
+import type { TransportRoutingDefault } from './subjects.js';
 
 /**
- * Unwrap LocalSubjectSchema, CollectorOnlySubjectSchema, or ChannelSubjectSchema wrappers if present.
- * Returns the inner schema for wrapped subjects, or the schema as-is otherwise.
+ * Unwrap subject schema wrappers if present. Returns the inner schema for
+ * wrapped subjects, or the schema as-is otherwise.
  */
 type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infer Inner }
   ? Inner
@@ -19,11 +27,12 @@ type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infe
     ? Inner
     : S extends { readonly __channel: true; readonly schema: infer Inner }
       ? Inner
-      : S;
+      : S extends { readonly __defaultTransports: TransportRoutingDefault; readonly schema: infer Inner }
+        ? Inner
+        : S;
 
 /**
- * Infer payload type from schema (handles EventSchema, RequestSchema,
- * LocalSubjectSchema, CollectorOnlySubjectSchema, and ChannelSubjectSchema).
+ * Infer payload type from schema, including subject metadata wrappers.
  *
  * For requests:
  * - Uses z.input for request (what callers pass before validation/defaults)
@@ -32,8 +41,7 @@ type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infe
  * This allows schemas with .default() to have optional fields in the caller API
  * while the response type reflects the validated output.
  *
- * LocalSubjectSchema, CollectorOnlySubjectSchema, and ChannelSubjectSchema wrappers are automatically
- * unwrapped before inference.
+ * Subject schema wrappers are automatically unwrapped before inference.
  *
  * Idempotent: Returns already-inferred types as-is.
  */
@@ -52,7 +60,7 @@ type InferSchemaPayloadInner<S> = S extends {
  * Compute all subject meta from the original schema in one place.
  *
  * Resolves payload, locality, channel membership, request/event discriminator,
- * and namespace from a raw SubjectSchema.
+ * default transport routing, and namespace from a raw SubjectSchema.
  * @typeParam S - The subject schema type
  * @typeParam Ns - The namespace string
  */
@@ -67,4 +75,6 @@ export type InferSubjectMeta<S extends SubjectSchema, Ns extends string> = {
   payload: InferSchemaPayload<S>;
   /** The namespace this subject belongs to. */
   namespace: Ns;
-};
+} & (S extends DefaultTransportsSubjectSchema<EventSchema | RequestSchema, infer Default>
+  ? { defaultTransports: Default }
+  : { defaultTransports?: TransportRoutingDefault });

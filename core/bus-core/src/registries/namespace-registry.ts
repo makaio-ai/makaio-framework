@@ -299,6 +299,9 @@ export const createNamespaceRegistry = () => {
   const collectorOnlySubjects = new Set<string>();
   // Validation configuration per namespace domain
   const validationConfig = new Map<string, ValidationConfig>();
+  // Default transport visibility per fully-qualified subject key.
+  // Populated at registration time from namespace-level defaultTransports.
+  const defaultTransportsMap = new Map<string, 'all' | 'local-only'>();
 
   return {
     /**
@@ -365,6 +368,11 @@ export const createNamespaceRegistry = () => {
         }
         if (collectorOnly) {
           collectorOnlySubjects.add(fullSubjectKey);
+        }
+        // Propagate namespace-level defaultTransports to each subject key so
+        // emit() can resolve the effective default in O(1).
+        if (definition.defaultTransports) {
+          defaultTransportsMap.set(fullSubjectKey, definition.defaultTransports);
         }
       }
 
@@ -463,6 +471,21 @@ export const createNamespaceRegistry = () => {
       return collectorOnlySubjects.has(subject);
     },
     /**
+     * Get the default transport visibility for a subject.
+     *
+     * Returns the namespace-level `defaultTransports` value recorded at
+     * registration time. Subject-level overrides in `SubjectDefinitionMeta`
+     * take precedence and are resolved by `emit()` directly from the subject
+     * definition token.
+     *
+     * Returns `'all'` when no namespace-level default was registered.
+     * @param subject - Fully-qualified subject identifier (e.g., `"session.list"`)
+     * @returns Effective namespace-level default transport visibility
+     */
+    getDefaultTransports(subject: string): 'all' | 'local-only' {
+      return defaultTransportsMap.get(subject) ?? 'all';
+    },
+    /**
      * Get the validation configuration for a subject.
      *
      * Looks up the namespace from the subject's prefix and returns
@@ -541,6 +564,7 @@ export const createNamespaceRegistry = () => {
             localSubjects.clear();
             collectorOnlySubjects.clear();
             validationConfig.clear();
+            defaultTransportsMap.clear();
           }
         : undefined,
   };

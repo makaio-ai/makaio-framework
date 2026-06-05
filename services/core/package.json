@@ -81,9 +81,9 @@
     "./turn": "./src/turn/index.ts",
     "./turn/namespace": "./src/turn/namespace.ts",
     "./turn/schemas": "./src/turn/schemas.ts",
-    "./worker": "./src/worker/index.ts",
-    "./worker/namespace": "./src/worker/namespace.ts",
-    "./worker/schemas": "./src/worker/schemas.ts",
+    "./subagent-template": "./src/subagent-template/index.ts",
+    "./subagent-template/namespace": "./src/subagent-template/namespace.ts",
+    "./subagent-template/schemas": "./src/subagent-template/schemas.ts",
     "./package.json": "./package.json"
   },
   "makaio": {
@@ -189,9 +189,9 @@
       "./turn": "./dist/turn/index.mjs",
       "./turn/namespace": "./dist/turn/namespace.mjs",
       "./turn/schemas": "./dist/turn/schemas.mjs",
-      "./worker": "./dist/worker/index.mjs",
-      "./worker/namespace": "./dist/worker/namespace.mjs",
-      "./worker/schemas": "./dist/worker/schemas.mjs",
+      "./subagent-template": "./dist/subagent-template/index.mjs",
+      "./subagent-template/namespace": "./dist/subagent-template/namespace.mjs",
+      "./subagent-template/schemas": "./dist/subagent-template/schemas.mjs",
       "./package.json": "./package.json"
     }
   },

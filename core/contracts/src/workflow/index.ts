@@ -127,6 +127,8 @@ export type {
   WorkflowTriggerBlock,
 } from './blocks.js';
 export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
+export { WorkflowRunContextSchema } from './run-context.js';
+export type { WorkflowRunContext } from './run-context.js';
 export {
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,

@@ -5,6 +5,7 @@
  * After successful handshake, provides a session encryption key for encrypting/decrypting bus messages.
  */
 
+import type { TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
 import {
@@ -325,6 +326,26 @@ export class E2EAuth implements TransportAuth {
   public getPeerId(socket?: WebSocketLike): string | null {
     if (socket) return this.serverSessions.get(socket)?.peerId ?? null;
     return this.clientSession?.peerId ?? null;
+  }
+
+  /**
+   * Return trusted receive context for a socket that has completed E2E authentication.
+   *
+   * The `transportName` is intentionally left as `''` here; the transport
+   * registry merges in the registered name when it synthesises the effective
+   * receive context.
+   * @param socket - Optional socket (server-side only)
+   * @returns Trusted receive context with peer identity, or `undefined`.
+   */
+  public getReceiveContext(socket?: WebSocketLike): TransportReceiveContext | undefined {
+    const peerId = this.getPeerId(socket);
+    if (peerId === null) {
+      return undefined;
+    }
+    return {
+      transportName: '',
+      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
+    };
   }
 
   /**

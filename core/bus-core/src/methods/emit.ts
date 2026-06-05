@@ -3,11 +3,13 @@ import { nanoid } from 'nanoid';
 
 import { matchesSubscription } from '../utils/subscription-matching.js';
 import { isExplicitLocalOnlyTransportSpec, normalizeTransportTargets } from './request/normalizeTransportTargets.js';
+import { resolveEffectiveTransports } from './resolve-effective-transports.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
 import { validateEventPayload } from '../utils/validate-event-payload.js';
 import { mergeSortedHandlerArrays } from '../utils/handler-merging.js';
+import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../utils/transport-helpers.js';
 import { executeInterceptors } from './intercept/index.js';
 import { warnIfUnregistered } from '../utils/warn-unregistered.js';
 import type { EventHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
@@ -44,6 +46,7 @@ interface EventContext {
   subject: string;
   isRequest: false;
   transport?: TransportReceiveContext;
+  origin: { readonly local: boolean };
 }
 
 /**
@@ -86,6 +89,7 @@ async function executeHandlers(
  * @param options - Emit options (messageId, correlationId, transports)
  * @see {@link IMakaioBus.emit} for full documentation and examples.
  */
+// eslint-disable-next-line max-lines-per-function -- effectiveTransports resolution adds 5 lines to localOnly + transport dispatch; splitting would fragment a single routing decision
 export async function emit<T extends SubjectDefinition>(
   context: MakaioBusContext,
   subjectDefinition: T,
@@ -99,10 +103,18 @@ export async function emit<T extends SubjectDefinition>(
 
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId;
+  // Determine effective transports early so localOnly telemetry reflects the
+  // actual routing decision (including defaultTransports suppression).
+  const effectiveTransports = resolveEffectiveTransports(
+    context,
+    subjectDefinition,
+    fullSubjectKey,
+    options?.transports,
+  );
   const localOnly =
     subjectDefinition.$meta.local ||
     context.namespaceRegistry.isCollectorOnlySubject(fullSubjectKey) ||
-    isExplicitLocalOnlyTransportSpec(options?.transports);
+    isExplicitLocalOnlyTransportSpec(effectiveTransports);
 
   // Validate payload in development (skip for namespaces with Zod version conflicts)
   validateEventPayload(context, fullSubjectKey, payload);
@@ -157,12 +169,13 @@ export async function emit<T extends SubjectDefinition>(
       subject: fullSubjectKey,
       isRequest: false,
       transport: options?.transport,
+      origin: options?.transport ? REMOTE_ORIGIN : LOCAL_ORIGIN,
     };
     await executeHandlers(handlers, eventContext, fullSubjectKey);
   }
 
-  // Determine which transports to send to
-  const transportTargets = normalizeTransportTargets(context, options?.transports, subjectDefinition);
+  // effectiveTransports was resolved above alongside localOnly.
+  const transportTargets = normalizeTransportTargets(context, effectiveTransports, subjectDefinition);
 
   // Send to transports if applicable
   if (transportTargets.length > 0) {

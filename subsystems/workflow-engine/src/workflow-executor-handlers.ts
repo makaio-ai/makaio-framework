@@ -1,7 +1,38 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { BaseMessageContext } from '@makaio/core';
 import type { IWorkflowTriggerTypeRegistry } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
+
+/**
+ * Enforce the trust-boundary rules documented on `WorkflowSubjects.getRunContext`.
+ *
+ * - Local callers are always permitted (hot path, no transport round-trip).
+ * - Direct-HMAC callers must present an authenticated `workflow-execution`
+ *   peer whose `id === executionId`.
+ * - Relay callers must present an encrypted E2E peer whose relay identity is
+ *   also bound to `executionId`. Encryption alone is not authorization.
+ * - All other remote callers are denied.
+ * @param ctx - Incoming message context.
+ * @param executionId - The requested execution identifier.
+ * @returns `true` when the caller may receive the run context.
+ */
+function isRunContextAccessAllowed(ctx: BaseMessageContext, executionId: string): boolean {
+  if (ctx.origin.local) {
+    return true;
+  }
+  const peer = ctx.transport?.peer;
+  if (peer?.authenticated !== true) {
+    return false;
+  }
+  if (peer.id !== executionId) {
+    return false;
+  }
+  if (peer.kind === 'workflow-execution') {
+    return true;
+  }
+  return peer.kind === 'e2e' && peer.encrypted === true;
+}
 
 /**
  * Register handlers that delegate workflow contract subjects to storage subjects.
@@ -41,6 +72,17 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
         executionId: ctx.payload.executionId,
       });
       ctx.setResult(result);
+    }),
+    bus.on(WorkflowSubjects.getRunContext, async (ctx) => {
+      const { executionId } = ctx.payload;
+      if (!isRunContextAccessAllowed(ctx, executionId)) {
+        throw new Error(`Unauthorized: caller is not permitted to read run context for execution: ${executionId}`);
+      }
+      const { runContext } = await bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+      if (!runContext) {
+        throw new Error(`Run context not found for execution: ${executionId}`);
+      }
+      ctx.setResult(runContext);
     }),
   ];
 }

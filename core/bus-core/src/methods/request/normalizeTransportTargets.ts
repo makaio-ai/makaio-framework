@@ -54,11 +54,14 @@ export function normalizeTransportTargets(
     return [];
   }
 
-  // undefined: send to all ready transports (no subscription filtering).
-  // Readiness filtering skips transports that haven't established connectivity
-  // (e.g., E2E relay before session key exchange). This matches how request()
-  // and broadcast() dispatch via getReadyTransports / getSortedTransports.
+  // undefined: send to all ready transports (no subscription filtering), unless
+  // the subject's $meta declares a 'local-only' default. In that case an absent
+  // explicit transports option is treated as local-only suppression — callers can
+  // still force transport delivery by passing an explicit non-empty list.
   if (transports === undefined) {
+    if (subjectDefinition.$meta.defaultTransports === 'local-only') {
+      return [];
+    }
     return getReadyTransports(context).map(({ transport }) => transport);
   }
 

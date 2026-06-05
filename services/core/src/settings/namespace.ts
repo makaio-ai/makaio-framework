@@ -1,5 +1,5 @@
 import { createBusNamespace } from '@makaio/core';
-import { WorkerSettingsSchemas } from '../worker/schemas.js';
+import { SubagentTemplateSettingsSchemas } from '../subagent-template/schemas.js';
 import { SettingsSchemas, AdapterInfoSchema } from './schemas.js';
 import { ExtensionConfigStorageSubjects } from './storage/extension-configs/namespace.js';
 
@@ -20,11 +20,15 @@ export const SettingsNamespace = createBusNamespace('settings', SettingsSchemas)
 export const SettingsSubjects = SettingsNamespace.subjects;
 
 /**
- * Worker settings namespace for worker definition CRUD.
- * Exposed for clients (e.g., WorkerService) to make typed RPC calls without registering the namespace themselves.
+ * SubagentTemplate settings namespace for subagent template definition CRUD.
+ * Exposed for clients (e.g., SubagentTemplateService) to make typed RPC calls
+ * without registering the namespace themselves.
  */
-export const WorkerSettingsNamespace = createBusNamespace('settings:worker', WorkerSettingsSchemas);
-export const WorkerSettingsSubjects = WorkerSettingsNamespace.subjects;
+export const SubagentTemplateSettingsNamespace = createBusNamespace(
+  'settings:subagentTemplate',
+  SubagentTemplateSettingsSchemas,
+);
+export const SubagentTemplateSettingsSubjects = SubagentTemplateSettingsNamespace.subjects;
 
 // ── Re-exported bus subjects and data contracts for external consumers ─────────
 

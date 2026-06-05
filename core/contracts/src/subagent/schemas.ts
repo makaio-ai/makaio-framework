@@ -60,6 +60,8 @@ export const SubagentConfigSchema = z.object({
   tools: z.array(z.string()).optional(),
   /** Additional tools to block */
   disallowedTools: z.array(z.string()).optional(),
+  /** Directory allowlist forwarded to adapters that enforce filesystem boundaries. */
+  allowedDirectories: z.array(z.string()).optional(),
   /** Additional system prompt instructions */
   systemPrompt: z.string().optional(),
   /** Max nesting depth (capped by runtime constraint) */
