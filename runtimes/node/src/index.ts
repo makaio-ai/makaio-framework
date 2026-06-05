@@ -30,6 +30,15 @@ export {
 export type { UpstreamTelemetryBootOptions, WorkflowRunnerBootOptions } from './boot-types.js';
 export { attachUpstreamTelemetry } from './upstream-telemetry.js';
 export type { AttachedUpstreamTelemetry } from './upstream-telemetry.js';
+export {
+  MAKAIO_UPSTREAM_SECRET_ENV,
+  MAKAIO_UPSTREAM_URL_ENV,
+  createUpstreamTelemetryTransport,
+  resolveUpstreamTelemetryBootOptionsFromEnv,
+  type ResolveUpstreamTelemetryBootOptionsFromEnvOptions,
+  type UpstreamTelemetryEnv,
+  type UpstreamTelemetryTransportConfig,
+} from './upstream-telemetry-config.js';
 export { buildNodeRuntimeOptions, type NodeRuntimeOptions } from './node-runtime-options.js';
 export {
   MAKAIO_CONFIG_FILE_ENV,

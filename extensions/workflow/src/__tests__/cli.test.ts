@@ -21,6 +21,7 @@ import type { CoreBootOptions, MakaioRuntime, ServerTransportProvider } from '@m
 // ---------------------------------------------------------------------------
 
 const shutdownMock = vi.fn<() => Promise<void>>(() => Promise.resolve());
+const resolveUpstreamTelemetryMock = vi.fn<() => CoreBootOptions['upstreamTelemetry']>(() => undefined);
 
 const mockBus: IMakaioBus = {} as IMakaioBus;
 
@@ -38,8 +39,14 @@ const bootMock = vi.fn<
   }),
 );
 
+// The entire @makaio/runtime-node boundary is mocked because a real boot needs
+// SQLite/filesystem. resolveUpstreamTelemetryBootOptionsFromEnv is stubbed at the
+// same seam so these tests can assert bootEmbeddedWorkflowRuntime's option-forwarding
+// contract; the resolver's real env-parsing behavior is covered end-to-end in
+// runtimes/node/src/__tests__/upstream-telemetry-config.test.ts.
 vi.mock('@makaio/runtime-node', () => ({
   bootMakaioRuntimeCore: bootMock,
+  resolveUpstreamTelemetryBootOptionsFromEnv: resolveUpstreamTelemetryMock,
 }));
 
 vi.mock('@makaio/kernel/providers', () => ({
@@ -112,6 +119,8 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   beforeEach(() => {
     bootMock.mockClear();
     shutdownMock.mockClear();
+    resolveUpstreamTelemetryMock.mockClear();
+    resolveUpstreamTelemetryMock.mockReturnValue(undefined);
   });
 
   it('calls bootMakaioRuntimeCore with surface: headless', async () => {
@@ -134,6 +143,24 @@ describe('bootEmbeddedWorkflowRuntime', () => {
 
     const options = bootMock.mock.calls[0]?.[3];
     expect(options?.workflowRunner).toEqual({ mode: 'in-process' });
+  });
+
+  it('resolves push embedded upstream telemetry from environment', async () => {
+    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+
+    expect(resolveUpstreamTelemetryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes resolved upstream telemetry options to bootMakaioRuntimeCore', async () => {
+    const upstreamTelemetry = {
+      transport: {} as NonNullable<CoreBootOptions['upstreamTelemetry']>['transport'],
+    };
+    resolveUpstreamTelemetryMock.mockReturnValueOnce(upstreamTelemetry);
+
+    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+
+    const options = bootMock.mock.calls[0]?.[3];
+    expect(options?.upstreamTelemetry).toBe(upstreamTelemetry);
   });
 
   it('returns the bus from the booted runtime', async () => {
