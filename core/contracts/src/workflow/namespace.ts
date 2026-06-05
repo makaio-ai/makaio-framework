@@ -255,14 +255,24 @@ export const WorkflowSchemas = {
     executionId: z.string(),
     workflowId: z.string(),
     coordinatorSessionId: z.string().optional(),
+    startedAt: z.number().nonnegative().optional(),
   }),
-  'execution.completed': z.object({ executionId: z.string(), totalDuration: z.number() }),
+  'execution.completed': z.object({
+    executionId: z.string(),
+    totalDuration: z.number(),
+    completedAt: z.number().nonnegative().optional(),
+  }),
   'execution.failed': z.object({
     executionId: z.string(),
     error: z.string(),
     failedStepId: z.string().optional(),
+    completedAt: z.number().nonnegative().optional(),
   }),
-  'execution.cancelled': z.object({ executionId: z.string(), reason: z.string().optional() }),
+  'execution.cancelled': z.object({
+    executionId: z.string(),
+    reason: z.string().optional(),
+    completedAt: z.number().nonnegative().optional(),
+  }),
 
   'step.beforeStart': StepLifecycleBaseSchema,
   'step.started': StepLifecycleBaseSchema.extend({
@@ -349,6 +359,8 @@ export const WorkflowSchemas = {
     path: z.array(z.string()),
     /** Parent frame ID. Absent for the root frame. */
     parentFrameId: z.string().optional(),
+    /** Runtime-recorded frame start timestamp in Unix milliseconds. */
+    startedAt: z.number().nonnegative().optional(),
   }),
 
   /**
@@ -366,6 +378,8 @@ export const WorkflowSchemas = {
     output: JsonValueSchema.optional(),
     /** Wall-clock duration in milliseconds from frame start to completion. */
     duration: z.number().nonnegative().optional(),
+    /** Runtime-recorded frame completion timestamp in Unix milliseconds. */
+    completedAt: z.number().nonnegative().optional(),
   }),
 
   /**
@@ -383,7 +397,27 @@ export const WorkflowSchemas = {
     error: z.string(),
     /** Wall-clock duration in milliseconds from frame start to failure. */
     duration: z.number().nonnegative().optional(),
+    /** Runtime-recorded frame failure timestamp in Unix milliseconds. */
+    completedAt: z.number().nonnegative().optional(),
   }),
+
+  /**
+   * Emitted when a workflow frame becomes associated with an agent session.
+   *
+   * The workflow runtime emits this after the subagent runtime reports the
+   * child session ID. Consumers use the link to correlate `agent.*` telemetry
+   * back to the workflow frame that spawned it.
+   */
+  'frame.sessionLinked': z
+    .object({
+      /** Execution this frame belongs to. */
+      executionId: z.string(),
+      /** Unique frame identifier within the execution. */
+      frameId: z.string(),
+      /** Agent session created for this frame. */
+      sessionId: z.string(),
+    })
+    .strict(),
 
   // ─────────────────────────────────────────────────────────────
   // Gate suspension / resumption events

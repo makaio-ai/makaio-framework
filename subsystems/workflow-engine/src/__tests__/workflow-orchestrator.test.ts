@@ -3,6 +3,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
+  SubagentSubjects,
   WORKFLOW_CANCELLED_REASON,
   WorkflowNamespace,
   defineWorkflow,
@@ -208,6 +209,72 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
 });
 
 describe('runWorkflowOrchestrator cancellation finalization', () => {
+  it('preserves the cancellation reason when a runtime node returns cancelled', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const cancellationEvents: Array<{ executionId: string; reason?: string; completedAt?: number }> = [];
+    const unsubscribe = bus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+      cancellationEvents.push(ctx.payload);
+    });
+    const offResolveAgent = bus.on(WorkflowSubjects.resolveAgent, (ctx) => {
+      ctx.setResult({ adapterName: 'test-adapter' });
+    });
+    const offSpawn = bus.on(SubagentSubjects.spawn, (ctx) => {
+      ctx.setResult({ subagentId: 'subagent-cancelled', status: 'spawning' });
+    });
+    const offAwait = bus.on(SubagentSubjects.await, (ctx) => {
+      ctx.setResult({ status: 'cancelled' });
+    });
+
+    const workflow = defineWorkflow('subagent-cancel-orchestrator').delegateToAgent('cancelled-subagent', {
+      agentId: 'cancel-agent',
+    });
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        config: {
+          source: { kind: 'path', path: '/workflows/subagent-cancel.ts' },
+          executionId: 'exec-runtime-cancel',
+          workflowId: workflow.id,
+          inputs: {},
+          config: {},
+          triggerPayload: {},
+          scope: { type: 'global' },
+          context: {
+            repoPath: '/repo',
+            makaioHome: '/home/.makaio',
+            os: 'linux',
+            arch: 'arm64',
+          },
+          env: {},
+          busAuth: { kind: 'none' },
+          coordinatorSessionId: 'session-runtime-cancel',
+          cancelSubject: 'workflow.exec-runtime-cancel.cancel',
+        },
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+
+      expect(result.status).toBe('cancelled');
+      expect(cancellationEvents).toEqual([
+        {
+          executionId: 'exec-runtime-cancel',
+          reason: WORKFLOW_CANCELLED_REASON,
+          completedAt: expect.any(Number),
+        },
+      ]);
+    } finally {
+      offAwait();
+      offSpawn();
+      offResolveAgent();
+      unsubscribe();
+      dbContext.cleanup();
+    }
+  });
+
   it('emits execution cancellation once when the worker signal aborts during runtime', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
@@ -257,7 +324,13 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
       });
 
       expect(result.status).toBe('cancelled');
-      expect(cancellationEvents).toEqual([{ executionId: 'exec-signal-cancel', reason: WORKFLOW_CANCELLED_REASON }]);
+      expect(cancellationEvents).toEqual([
+        {
+          executionId: 'exec-signal-cancel',
+          reason: WORKFLOW_CANCELLED_REASON,
+          completedAt: expect.any(Number),
+        },
+      ]);
 
       const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
         executionId: 'exec-signal-cancel',

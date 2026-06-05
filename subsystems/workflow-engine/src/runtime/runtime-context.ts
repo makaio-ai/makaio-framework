@@ -482,6 +482,7 @@ export class RuntimeContext {
         nodeType: frame.nodeType,
         path: frame.path,
         parentFrameId: frame.parentFrameId,
+        startedAt: frame.startedAt,
       });
     } catch (error) {
       console.error(`[RuntimeContext] frame.started observer failed for ${frame.frameId}:`, error);
@@ -504,6 +505,7 @@ export class RuntimeContext {
         nodeId: frame.nodeId,
         output: frame.output,
         duration: durationMs,
+        completedAt: frame.completedAt,
       });
     } catch (error) {
       console.error(`[RuntimeContext] frame.completed observer failed for ${frame.frameId}:`, error);
@@ -527,6 +529,7 @@ export class RuntimeContext {
         nodeId: frame.nodeId,
         error,
         duration: durationMs,
+        completedAt: frame.completedAt,
       });
     } catch (err) {
       console.error(`[RuntimeContext] frame.failed observer failed for ${frame.frameId}:`, err);

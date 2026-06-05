@@ -47,7 +47,8 @@ export async function completeExecutionWithSuccess(
     });
     await deps.bus.emit(WorkflowSubjects.execution.completed, {
       executionId,
-      totalDuration: Date.now() - startTime,
+      totalDuration: execution.completedAt - startTime,
+      completedAt: execution.completedAt,
     });
   } finally {
     deps.activeExecutions.delete(executionId);
@@ -84,7 +85,7 @@ export async function completeExecutionWithFailure(
     } catch (hookError) {
       console.error('[WorkflowFinalizer] Failed to run failure pre-emit hook:', hookError);
     }
-    await deps.bus.emit(WorkflowSubjects.execution.failed, { executionId, error });
+    await deps.bus.emit(WorkflowSubjects.execution.failed, { executionId, error, completedAt: execution.completedAt });
   } finally {
     deps.activeExecutions.delete(executionId);
   }
@@ -158,7 +159,11 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
       completedAt: execution.completedAt,
     });
 
-    await deps.bus.emit(WorkflowSubjects.execution.cancelled, { executionId, reason });
+    await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
+      executionId,
+      reason,
+      completedAt: execution.completedAt,
+    });
   } finally {
     deps.activeExecutions.delete(executionId);
   }

@@ -40,6 +40,7 @@ describe('WorkflowNamespace', () => {
     expect(WorkflowSubjects.frame.started.subject).toBe('frame.started');
     expect(WorkflowSubjects.frame.completed.subject).toBe('frame.completed');
     expect(WorkflowSubjects.frame.failed.subject).toBe('frame.failed');
+    expect(WorkflowSubjects.frame.sessionLinked.subject).toBe('frame.sessionLinked');
   });
 
   it('exposes gate suspension/resumption subjects as nested accessors', () => {
@@ -61,6 +62,37 @@ describe('WorkflowNamespace', () => {
     expect(WorkflowSubjects.worklog.get.subject).toBe('worklog.get');
     expect(WorkflowSubjects.worklog.list.subject).toBe('worklog.list');
     expect(WorkflowSubjects.worklog.changed.subject).toBe('worklog.changed');
+  });
+});
+
+describe('execution lifecycle events', () => {
+  it('parses execution lifecycle events with source timestamps', () => {
+    const started = WorkflowSchemas['execution.started'].parse({
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      coordinatorSessionId: 'sess-coordinator',
+      startedAt: 1000,
+    });
+    const completed = WorkflowSchemas['execution.completed'].parse({
+      executionId: 'wfx-1',
+      totalDuration: 1500,
+      completedAt: 2500,
+    });
+    const failed = WorkflowSchemas['execution.failed'].parse({
+      executionId: 'wfx-2',
+      error: 'Boom',
+      completedAt: 3000,
+    });
+    const cancelled = WorkflowSchemas['execution.cancelled'].parse({
+      executionId: 'wfx-3',
+      reason: 'User cancelled',
+      completedAt: 4000,
+    });
+
+    expect(started.startedAt).toBe(1000);
+    expect(completed.completedAt).toBe(2500);
+    expect(failed.completedAt).toBe(3000);
+    expect(cancelled.completedAt).toBe(4000);
   });
 });
 
@@ -989,11 +1021,13 @@ describe('frame lifecycle events', () => {
       nodeType: 'station',
       path: ['frame-root', 'frame-analyze'],
       parentFrameId: 'frame-root',
+      startedAt: 1000,
     });
     expect(payload.frameId).toBe('frame-analyze');
     expect(payload.nodeType).toBe('station');
     expect(payload.path).toEqual(['frame-root', 'frame-analyze']);
     expect(payload.parentFrameId).toBe('frame-root');
+    expect(payload.startedAt).toBe(1000);
   });
 
   it('parses a frame.started event for the root frame (no parentFrameId)', () => {
@@ -1026,9 +1060,11 @@ describe('frame lifecycle events', () => {
       nodeId: 'analyze',
       output: { findings: 3 },
       duration: 1500,
+      completedAt: 2500,
     });
     expect(payload.output).toEqual({ findings: 3 });
     expect(payload.duration).toBe(1500);
+    expect(payload.completedAt).toBe(2500);
   });
 
   it('parses a frame.completed event with no output', () => {
@@ -1059,9 +1095,38 @@ describe('frame lifecycle events', () => {
       nodeId: 'deploy',
       error: 'Timeout exceeded',
       duration: 300000,
+      completedAt: 301000,
     });
     expect(payload.error).toBe('Timeout exceeded');
     expect(payload.duration).toBe(300000);
+    expect(payload.completedAt).toBe(301000);
+  });
+});
+
+describe('frame.sessionLinked event', () => {
+  it('parses a session link event', () => {
+    const payload = WorkflowSchemas['frame.sessionLinked'].parse({
+      executionId: 'wfx-1',
+      frameId: 'frame-analyze',
+      sessionId: 'sess-child',
+    });
+
+    expect(payload).toEqual({
+      executionId: 'wfx-1',
+      frameId: 'frame-analyze',
+      sessionId: 'sess-child',
+    });
+  });
+
+  it('rejects unknown fields', () => {
+    expect(() =>
+      WorkflowSchemas['frame.sessionLinked'].parse({
+        executionId: 'wfx-1',
+        frameId: 'frame-analyze',
+        sessionId: 'sess-child',
+        subagentId: 'subagent-1',
+      }),
+    ).toThrow();
   });
 });
 

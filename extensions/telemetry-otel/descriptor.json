@@ -1,0 +1,13 @@
+{
+  "name": "telemetry-otel",
+  "displayName": "OpenTelemetry Exporter",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "surface": "headless",
+  "entrypoints": {
+    "server": "index"
+  },
+  "execution": "embedded"
+}

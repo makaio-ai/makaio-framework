@@ -20,24 +20,21 @@ import { resolveArtifactWriteMetadata } from './worklog-artifact-metadata.js';
 const GATE_TERMINAL_STATUS_BY_SOURCE = { user: 'rejected', timeout: 'timed-out', cancelled: 'cancelled' } as const;
 
 /**
- * Write the `execution.started` worklog summary row.
  * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
- * @param executionId - Execution identifier.
- * @param workflowId - Workflow definition identifier.
+ * @param payload - Source execution start event payload.
  */
 async function projectExecutionStarted(
   bus: IMakaioBus,
   db: MakaioDatabase,
-  executionId: string,
-  workflowId: string,
+  payload: { readonly executionId: string; readonly workflowId: string; readonly startedAt?: number },
 ): Promise<void> {
   await upsertWorklogSummary(db, {
-    executionId,
-    workflowId,
+    executionId: payload.executionId,
+    workflowId: payload.workflowId,
     workflowName: null,
     status: 'running',
-    startedAt: Date.now(),
+    startedAt: payload.startedAt ?? Date.now(),
     completedAt: null,
     durationMs: null,
     totalInputTokens: null,
@@ -46,52 +43,46 @@ async function projectExecutionStarted(
     error: null,
     failedNodeId: null,
   });
-  await emitWorklogChanged(bus, executionId);
+  await emitWorklogChanged(bus, payload.executionId);
 }
 
 /**
- * Write the `execution.completed` worklog summary row.
- *
- * Reads the existing summary so that token totals and workflow name accumulated
- * during the run are preserved — writing null would overwrite them.
  * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
- * @param executionId - Execution identifier.
- * @param totalDuration - Execution duration in milliseconds.
+ * @param payload - Source execution completion event payload.
  */
 async function projectExecutionCompleted(
   bus: IMakaioBus,
   db: MakaioDatabase,
-  executionId: string,
-  totalDuration: number,
+  payload: { readonly executionId: string; readonly totalDuration: number; readonly completedAt?: number },
 ): Promise<void> {
-  const completedAt = Date.now();
-  const existing = await getWorklogSummary(db, executionId);
+  const completedAt = payload.completedAt ?? Date.now();
+  const existing = await getWorklogSummary(db, payload.executionId);
   await upsertWorklogSummary(db, {
-    executionId,
-    workflowId: existing?.workflowId ?? executionId,
+    executionId: payload.executionId,
+    workflowId: existing?.workflowId ?? payload.executionId,
     workflowName: existing?.workflowName ?? null,
     status: 'completed',
-    startedAt: completedAt - totalDuration,
+    startedAt: existing?.startedAt ?? completedAt - payload.totalDuration,
     completedAt,
-    durationMs: totalDuration,
+    durationMs: payload.totalDuration,
     totalInputTokens: existing?.totalInputTokens ?? null,
     totalOutputTokens: existing?.totalOutputTokens ?? null,
     totalEstimatedCost: existing?.totalEstimatedCost ?? null,
     error: null,
     failedNodeId: null,
   });
-  await emitWorklogChanged(bus, executionId);
+  await emitWorklogChanged(bus, payload.executionId);
 }
 
 /**
- * Write the `execution.failed` or `execution.cancelled` worklog summary row.
  * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param executionId - Execution identifier.
  * @param status - Terminal status (`'failed'` or `'cancelled'`).
  * @param error - Error message for failed executions.
  * @param failedNodeId - Failed node ID for failed executions.
+ * @param completedAt - Source execution completion timestamp.
  */
 async function projectExecutionTerminated(
   bus: IMakaioBus,
@@ -100,8 +91,8 @@ async function projectExecutionTerminated(
   status: 'failed' | 'cancelled',
   error: string | null,
   failedNodeId: string | null,
+  completedAt: number,
 ): Promise<void> {
-  const completedAt = Date.now();
   const existing = await getWorklogSummary(db, executionId);
   const startedAt = existing?.startedAt ?? completedAt;
   await upsertWorklogSummary(db, {
@@ -130,27 +121,25 @@ async function projectExecutionTerminated(
 function registerExecutionProjections(bus: IMakaioBus, db: MakaioDatabase): Array<() => void> {
   return [
     bus.on(WorkflowSubjects.execution.started, async (ctx) => {
-      const { executionId, workflowId } = ctx.payload;
-      await safeProject(`execution.started[${executionId}]`, () =>
-        projectExecutionStarted(bus, db, executionId, workflowId),
-      );
+      const { executionId } = ctx.payload;
+      await safeProject(`execution.started[${executionId}]`, () => projectExecutionStarted(bus, db, ctx.payload));
     }),
     bus.on(WorkflowSubjects.execution.completed, async (ctx) => {
-      const { executionId, totalDuration } = ctx.payload;
-      await safeProject(`execution.completed[${executionId}]`, () =>
-        projectExecutionCompleted(bus, db, executionId, totalDuration),
-      );
+      const { executionId } = ctx.payload;
+      await safeProject(`execution.completed[${executionId}]`, () => projectExecutionCompleted(bus, db, ctx.payload));
     }),
     bus.on(WorkflowSubjects.execution.failed, async (ctx) => {
       const { executionId, error, failedStepId } = ctx.payload;
+      const completedAt = ctx.payload.completedAt ?? Date.now();
       await safeProject(`execution.failed[${executionId}]`, () =>
-        projectExecutionTerminated(bus, db, executionId, 'failed', error, failedStepId ?? null),
+        projectExecutionTerminated(bus, db, executionId, 'failed', error, failedStepId ?? null, completedAt),
       );
     }),
     bus.on(WorkflowSubjects.execution.cancelled, async (ctx) => {
       const { executionId } = ctx.payload;
+      const completedAt = ctx.payload.completedAt ?? Date.now();
       await safeProject(`execution.cancelled[${executionId}]`, () =>
-        projectExecutionTerminated(bus, db, executionId, 'cancelled', null, null),
+        projectExecutionTerminated(bus, db, executionId, 'cancelled', null, null, completedAt),
       );
     }),
   ];
@@ -267,6 +256,7 @@ function resolveFrameStartedMetadata(
  * @param frameId - Frame identifier.
  * @param nodeId - Node identifier from the event payload (fallback only).
  * @param duration - Wall-clock frame duration in milliseconds.
+ * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
  */
 async function projectFrameCompleted(
   bus: IMakaioBus,
@@ -275,17 +265,18 @@ async function projectFrameCompleted(
   frameId: string,
   nodeId: string,
   duration: number | undefined,
+  completedAt: number | undefined,
 ): Promise<void> {
-  const completedAt = Date.now();
+  const resolvedCompletedAt = completedAt ?? Date.now();
   const existing = await getWorklogFrameEntry(db, frameId);
-  const fallbackStartedAt = duration !== undefined ? completedAt - duration : null;
+  const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
   await upsertWorklogFrameEntry(db, {
     frameId,
     executionId,
     ...meta,
     status: 'completed',
-    completedAt,
+    completedAt: resolvedCompletedAt,
     durationMs: duration ?? null,
     error: null,
   });
@@ -307,6 +298,7 @@ async function projectFrameCompleted(
  * @param nodeId - Node identifier from the event payload (fallback only).
  * @param error - Human-readable failure reason.
  * @param duration - Wall-clock frame duration in milliseconds.
+ * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
  */
 async function projectFrameFailed(
   bus: IMakaioBus,
@@ -316,17 +308,18 @@ async function projectFrameFailed(
   nodeId: string,
   error: string,
   duration: number | undefined,
+  completedAt: number | undefined,
 ): Promise<void> {
-  const completedAt = Date.now();
+  const resolvedCompletedAt = completedAt ?? Date.now();
   const existing = await getWorklogFrameEntry(db, frameId);
-  const fallbackStartedAt = duration !== undefined ? completedAt - duration : null;
+  const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
   const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
   await upsertWorklogFrameEntry(db, {
     frameId,
     executionId,
     ...meta,
     status: 'failed',
-    completedAt,
+    completedAt: resolvedCompletedAt,
     durationMs: duration ?? null,
     error,
   });
@@ -348,7 +341,7 @@ async function projectFrameFailed(
 function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): Array<() => void> {
   return [
     bus.on(WorkflowSubjects.frame.started, async (ctx) => {
-      const { executionId, frameId, nodeId, nodeType, path } = ctx.payload;
+      const { executionId, frameId, nodeId, nodeType, path, startedAt } = ctx.payload;
       await safeProject(`frame.started[${frameId}]`, async () => {
         await upsertWorklogFrameEntry(db, {
           frameId,
@@ -360,7 +353,7 @@ function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): Array<()
           attempt: 0,
           iteration: null,
           branchKey: null,
-          startedAt: Date.now(),
+          startedAt: startedAt ?? Date.now(),
           completedAt: null,
           durationMs: null,
           inputTokens: null,
@@ -372,15 +365,15 @@ function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): Array<()
       });
     }),
     bus.on(WorkflowSubjects.frame.completed, async (ctx) => {
-      const { executionId, frameId, nodeId, duration } = ctx.payload;
+      const { executionId, frameId, nodeId, duration, completedAt } = ctx.payload;
       await safeProject(`frame.completed[${frameId}]`, () =>
-        projectFrameCompleted(bus, db, executionId, frameId, nodeId, duration),
+        projectFrameCompleted(bus, db, executionId, frameId, nodeId, duration, completedAt),
       );
     }),
     bus.on(WorkflowSubjects.frame.failed, async (ctx) => {
-      const { executionId, frameId, nodeId, error, duration } = ctx.payload;
+      const { executionId, frameId, nodeId, error, duration, completedAt } = ctx.payload;
       await safeProject(`frame.failed[${frameId}]`, () =>
-        projectFrameFailed(bus, db, executionId, frameId, nodeId, error, duration),
+        projectFrameFailed(bus, db, executionId, frameId, nodeId, error, duration, completedAt),
       );
     }),
   ];

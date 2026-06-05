@@ -184,7 +184,9 @@ export type ExecuteSequenceFn = (
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
  * @param executeSequenceFn - Injected sequence executor (from primitive-runtime.ts).
- * @param parentFrameId - Frame ID of the parent node, if any.
+ * @param currentFrameId - Frame ID for the node currently being dispatched. Leaf
+ *   executors use it for their own frame-linked events; container executors pass
+ *   it to child frames as their parent frame ID.
  * @param parentPath - Frame-ID path of ancestor frames (without this node's frame ID).
  * @returns Terminal execution outcome for this node.
  */
@@ -193,7 +195,7 @@ export async function executeNode(
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
   executeSequenceFn: ExecuteSequenceFn,
-  parentFrameId?: string,
+  currentFrameId?: string,
   parentPath: string[] = [],
 ): Promise<NodeOutcome> {
   // Abort check before creating any frame so cancelled nodes produce no
@@ -205,37 +207,37 @@ export async function executeNode(
 
   switch (node.type) {
     case 'sequence':
-      return executeSequenceFn(node as WorkflowSequenceNode, ctx, expressionCtx, parentFrameId, parentPath);
+      return executeSequenceFn(node as WorkflowSequenceNode, ctx, expressionCtx, currentFrameId, parentPath);
 
     case 'station':
-      return executeStationNode(node as WorkflowStationNode, ctx, expressionCtx, parentFrameId);
+      return executeStationNode(node as WorkflowStationNode, ctx, expressionCtx, currentFrameId);
 
     case 'delegate-agent':
-      return executeDelegateAgentNode(node as WorkflowDelegateAgentNode, ctx, expressionCtx);
+      return executeDelegateAgentNode(node as WorkflowDelegateAgentNode, ctx, expressionCtx, currentFrameId);
 
     case 'delegate-role':
-      return executeDelegateRoleNode(node as WorkflowDelegateRoleNode, ctx, expressionCtx);
+      return executeDelegateRoleNode(node as WorkflowDelegateRoleNode, ctx, expressionCtx, currentFrameId);
 
     case 'parallel':
       // The parallel node's own frame is created by the sequence loop in
-      // primitive-runtime.ts before executeNode is called. The frameId and
-      // path are forwarded as parentFrameId/parentPath for branch frames.
+      // primitive-runtime.ts before executeNode is called. The current frame
+      // ID and path are forwarded as parentFrameId/parentPath for branch frames.
       return executeParallelNode(
         node as WorkflowParallelNode,
         ctx,
         expressionCtx,
         executeSequenceFn,
-        parentFrameId ?? '',
+        currentFrameId ?? '',
         parentPath,
         (node as WorkflowParallelNode).mode ?? 'all-settled',
       );
 
     case 'gate':
       // The gate's own frame is created by the sequence loop in
-      // primitive-runtime.ts before executeNode is called. The frameId is
-      // forwarded as parentFrameId so the gate executor can update frame
+      // primitive-runtime.ts before executeNode is called. The current frame
+      // ID is forwarded so the gate executor can update frame
       // state while suspended.
-      return executeGateNode(node as WorkflowGateNode, ctx, expressionCtx, parentFrameId ?? '');
+      return executeGateNode(node as WorkflowGateNode, ctx, expressionCtx, currentFrameId ?? '');
 
     case 'iterate':
       return executeIterateNode(
@@ -243,7 +245,7 @@ export async function executeNode(
         ctx,
         expressionCtx,
         executeSequenceFn,
-        parentFrameId ?? '',
+        currentFrameId ?? '',
         parentPath,
       );
 
@@ -253,7 +255,7 @@ export async function executeNode(
         ctx,
         expressionCtx,
         executeSequenceFn,
-        parentFrameId ?? '',
+        currentFrameId ?? '',
         parentPath,
       );
 

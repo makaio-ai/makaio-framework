@@ -3,6 +3,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
+  SubagentSubjects,
   type ArtifactRevision,
   type IWorkflowRunner,
   type WorkflowExecutionScope,
@@ -402,6 +403,81 @@ describe('workflow public subjects', () => {
     ]);
   });
 
+  it('emits frame.sessionLinked when a role-backed station spawns a child session', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.resolveRole, (ctx) => {
+        ctx.setResult({
+          adapterName: 'claude-code',
+          model: 'workflow-test-model',
+          contextMode: 'fresh',
+        });
+      }),
+    );
+
+    setup.cleanupFns.push(
+      MakaioBus.on(SubagentSubjects.getStatus, (ctx) => {
+        ctx.setResult({
+          status: 'running',
+          childSessionId: `session-${ctx.payload.subagentId}`,
+          progress: [],
+        });
+      }),
+    );
+
+    const analyzeStation: WorkflowStationNode = {
+      id: 'analyze',
+      type: 'station',
+      prompt: 'Analyze the plan',
+      role: 'reviewer',
+    };
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-session-linked',
+      name: 'Public Session Linked',
+      root: {
+        id: 'public-session-linked-root',
+        type: 'sequence',
+        nodes: [analyzeStation],
+      },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const sessionLinks: Array<{ frameId: string; sessionId: string }> = [];
+    const cleanupLinks = MakaioBus.on(WorkflowSubjects.frame.sessionLinked, (ctx) => {
+      sessionLinks.push({ frameId: ctx.payload.frameId, sessionId: ctx.payload.sessionId });
+    });
+
+    const completedPromise = new Promise<string>((resolve) => {
+      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        unsubscribe();
+        resolve(ctx.payload.executionId);
+      });
+    });
+
+    try {
+      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+        workflowId: workflow.id,
+      });
+
+      await expect(completedPromise).resolves.toBe(executionId);
+
+      expect(sessionLinks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            frameId: expect.any(String),
+            sessionId: expect.stringMatching(/^session-/),
+          }),
+        ]),
+      );
+    } finally {
+      cleanupLinks();
+    }
+  });
+
   it('runs stored delegate-role nodes through the public start subject', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
@@ -458,6 +534,81 @@ describe('workflow public subjects', () => {
         output: 'completed:Review delegate execution',
       }),
     ]);
+  });
+
+  it('emits frame.sessionLinked when a delegate-role node spawns a child session', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.resolveRole, (ctx) => {
+        ctx.setResult({
+          adapterName: 'claude-code',
+          model: 'workflow-test-model',
+          contextMode: 'fresh',
+        });
+      }),
+    );
+
+    setup.cleanupFns.push(
+      MakaioBus.on(SubagentSubjects.getStatus, (ctx) => {
+        ctx.setResult({
+          status: 'running',
+          childSessionId: `session-${ctx.payload.subagentId}`,
+          progress: [],
+        });
+      }),
+    );
+
+    const delegateRole: WorkflowDelegateRoleNode = {
+      id: 'linked-review-delegate',
+      type: 'delegate-role',
+      role: 'reviewer',
+      prompt: 'Review linked session',
+    };
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-delegate-session-linked',
+      name: 'Public Delegate Session Linked',
+      root: {
+        id: 'public-delegate-session-linked-root',
+        type: 'sequence',
+        nodes: [delegateRole],
+      },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const sessionLinks: Array<{ frameId: string; sessionId: string }> = [];
+    const cleanupLinks = MakaioBus.on(WorkflowSubjects.frame.sessionLinked, (ctx) => {
+      sessionLinks.push({ frameId: ctx.payload.frameId, sessionId: ctx.payload.sessionId });
+    });
+
+    const completedPromise = new Promise<string>((resolve) => {
+      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        unsubscribe();
+        resolve(ctx.payload.executionId);
+      });
+    });
+
+    try {
+      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+        workflowId: workflow.id,
+      });
+
+      await expect(completedPromise).resolves.toBe(executionId);
+
+      expect(sessionLinks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            frameId: expect.any(String),
+            sessionId: expect.stringMatching(/^session-/),
+          }),
+        ]),
+      );
+    } finally {
+      cleanupLinks();
+    }
   });
 
   it('finalizes in-process executions as completed when the primitive runtime succeeds', async () => {
