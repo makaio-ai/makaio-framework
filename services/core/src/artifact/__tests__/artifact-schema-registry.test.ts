@@ -1,7 +1,28 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, type ArtifactKindRegistration, type RelationTypeRegistration } from '@makaio/contracts';
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
+
+/**
+ * Builds a minimal {@link ArtifactKindRegistration} for use in tests.
+ * @param kind - Kind discriminator string.
+ * @param schemaVersion - Schema version string.
+ * @param dataSchema - Optional JSON Schema for the kind's data payload.
+ * @returns A minimal valid kind registration.
+ */
+function makeKind(
+  kind: string,
+  schemaVersion: string,
+  dataSchema: ArtifactKindRegistration['dataSchema'] = { type: 'object' },
+): ArtifactKindRegistration {
+  return {
+    kind,
+    description: `${kind} test kind`,
+    schemaVersion,
+    dataSchema,
+    conflictPolicy: 'supersedes',
+  };
+}
 
 describe('ArtifactSchemaRegistry', () => {
   let bus: IMakaioBus;
@@ -190,6 +211,131 @@ describe('ArtifactSchemaRegistry', () => {
 
       await expect(changed).resolves.toEqual({ kind: 'plan', schemaVersion: '1' });
     });
+
+    it('keeps extension-owned kinds ahead of factory and target registrations, then resurfaces lower-priority owners', async () => {
+      const extensionKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'extension' } } });
+      const factoryKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'factory' } } });
+      const targetKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'target' } } });
+
+      registry.registerKind(targetKind, { source: 'target-repo', ownerKey: 'target:acme/factory:acme/app' });
+      registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      registry.registerKind(extensionKind, { source: 'extension', ownerKey: 'extension:planner' });
+
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(extensionKind.dataSchema);
+
+      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:planner' });
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(factoryKind.dataSchema);
+
+      registry.deregisterKind('plan', '1', { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(targetKind.dataSchema);
+    });
+
+    it('emits kind.changed only when the active winner changes', async () => {
+      const extensionKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'extension' } } });
+      const factoryKind = makeKind('plan', '1', { type: 'object', properties: { source: { const: 'factory' } } });
+      const events: Array<{ kind: string; schemaVersion: string }> = [];
+      bus.on(ArtifactSubjects.kind.changed, (ctx) => {
+        events.push(ctx.payload);
+      });
+
+      registry.registerKind(extensionKind, { source: 'extension', ownerKey: 'extension:planner' });
+      await vi.waitFor(
+        () => {
+          expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+        },
+        { timeout: 5000 },
+      );
+
+      registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+
+      registry.deregisterKind('plan', '1', { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      expect(events).toEqual([{ kind: 'plan', schemaVersion: '1' }]);
+
+      registry.registerKind(factoryKind, { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:planner' });
+
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(factoryKind.dataSchema);
+      await vi.waitFor(
+        () => {
+          expect(events).toEqual([
+            { kind: 'plan', schemaVersion: '1' },
+            { kind: 'plan', schemaVersion: '1' },
+          ]);
+        },
+        { timeout: 5000 },
+      );
+    });
+
+    it('uses LIFO ordering for same-tier extension contributors', () => {
+      const alphaKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'alpha' } } });
+      const betaKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'beta' } } });
+
+      registry.registerKind(alphaKind, { source: 'extension', ownerKey: 'extension:alpha' });
+      registry.registerKind(betaKind, { source: 'extension', ownerKey: 'extension:beta' });
+
+      // Later registration wins for extensions (LIFO)
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(betaKind.dataSchema);
+
+      registry.deregisterKind('plan', '1', { source: 'extension', ownerKey: 'extension:beta' });
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(alphaKind.dataSchema);
+    });
+
+    it('warns and keeps first winner for same-tier repo collision', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const firstKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'first' } } });
+      const secondKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'second' } } });
+
+      registry.registerKind(firstKind, { source: 'factory-repo', ownerKey: 'factory:acme/first' });
+      registry.registerKind(secondKind, { source: 'factory-repo', ownerKey: 'factory:acme/second' });
+
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(firstKind.dataSchema);
+      expect(warnSpy).toHaveBeenCalledOnce();
+
+      warnSpy.mockRestore();
+    });
+
+    it('replaces all registrations for one owner without removing other owners', () => {
+      registry.registerKind(makeKind('plan', '1'), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+      registry.registerKind(makeKind('audit', '1'), {
+        source: 'target-repo',
+        ownerKey: 'target:acme/factory:acme/app',
+      });
+
+      registry.replaceKindRegistrationsForOwner({ source: 'factory-repo', ownerKey: 'factory:acme/factory' }, [
+        makeKind('blueprint', '1'),
+      ]);
+
+      expect(registry.getKind('plan', '1')).toBeUndefined();
+      expect(registry.getKind('blueprint', '1')).toBeDefined();
+      expect(registry.getKind('audit', '1')).toBeDefined();
+    });
+
+    it('keeps first same-tier repo winner during owner replacement', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const firstKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'first' } } });
+      const secondKind = makeKind('plan', '1', { type: 'object', properties: { owner: { const: 'second' } } });
+      const refreshedFirstKind = makeKind('plan', '1', {
+        type: 'object',
+        properties: { owner: { const: 'first' }, refreshed: { type: 'boolean' } },
+      });
+
+      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-a' }, [
+        firstKind,
+      ]);
+      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-b' }, [
+        secondKind,
+      ]);
+      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-a' }, [
+        refreshedFirstKind,
+      ]);
+
+      expect(registry.getKind('plan', '1')?.dataSchema).toEqual(refreshedFirstKind.dataSchema);
+      expect(warnSpy).toHaveBeenCalledOnce();
+
+      warnSpy.mockRestore();
+    });
   });
 
   describe('relation type registration and listing', () => {
@@ -291,6 +437,15 @@ describe('ArtifactSchemaRegistry', () => {
 
     it('getRelationType returns undefined for an unknown type', () => {
       expect(registry.getRelationType('unknown-type')).toBeUndefined();
+    });
+
+    it('clears kind and relation state on destroy', async () => {
+      registry.registerKind(makeKind('plan', '1'), { source: 'factory-repo', ownerKey: 'factory:acme/factory' });
+
+      await registry.destroy();
+
+      expect(registry.getKind('plan', '1')).toBeUndefined();
+      expect(registry.getRelationType('supersedes')).toBeUndefined();
     });
   });
 });
