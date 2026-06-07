@@ -314,6 +314,17 @@ describe('WorkflowExecutor — paused gate integration', () => {
     }
   });
 
+  it('returns false when cancelling an unknown execution', async () => {
+    setup = await setupWorkflowExecutorTest();
+
+    const cancelResult = await MakaioBus.request(WorkflowSubjects.cancel, {
+      executionId: 'missing-paused-cancel',
+      reason: 'not running',
+    });
+
+    expect(cancelResult).toEqual({ cancelled: false });
+  });
+
   it('accepts a paused gate response and dispatches resume through the stored run context', async () => {
     const workflowId = `wf-resume-${Math.random().toString(36).slice(2)}`;
     const executionId = `wfx-resume-${Math.random().toString(36).slice(2)}`;

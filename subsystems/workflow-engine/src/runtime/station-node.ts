@@ -1,4 +1,9 @@
-import { type JsonValue, type StationHandler, type WorkflowStationNode } from '@makaio/contracts';
+import {
+  type JsonValue,
+  type StationHandler,
+  type WorkflowProgressUpdate,
+  type WorkflowStationNode,
+} from '@makaio/contracts';
 import {
   buildPreviousStepsFromFrames,
   type PrimitiveExpressionContext,
@@ -7,6 +12,7 @@ import {
 import type { NodeOutcome } from './node-execution.js';
 import { createArtifactContext } from '../artifact-context/update-artifact.js';
 import { executeRoleSubagentNode } from './role-subagent-node.js';
+import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
 
 // ─────────────────────────────────────────────────────────────
 // Station node executor
@@ -68,6 +74,40 @@ export async function executeStationNode(
         })
       : undefined;
 
+  /**
+   * Emit a structured progress signal to the `execution.progress` bus subject.
+   *
+   * Observer failures are swallowed so a misbehaving subscriber cannot abort the
+   * station handler. Producer-side schema validation errors still propagate and
+   * fail the station because they indicate an invalid progress contract.
+   *
+   * When `frameId` is absent (e.g. in isolated unit tests that call the executor
+   * directly without a frame registry), the emit is skipped — progress signals
+   * require frame identity for routing.
+   * @param update - The progress payload to emit.
+   */
+  async function updateProgress(update: WorkflowProgressUpdate): Promise<void> {
+    if (frameId === undefined) {
+      console.warn(`[station-node] updateProgress called without frameId for node '${node.id}'; skipping emit`);
+      return;
+    }
+    const payload = WorkflowSchemas['execution.progress'].parse({
+      executionId: ctx.executionId,
+      workflowId: ctx.workflowId,
+      frameId,
+      nodeId: node.id,
+      progress: update,
+      emittedAt: Date.now(),
+    });
+    try {
+      await ctx.bus.emit(WorkflowSubjects.execution.progress, payload);
+    } catch (error) {
+      // The producer payload is parsed before emit; rejections here are
+      // observer-side delivery failures and must not abort the station.
+      console.error(`[station-node] execution.progress observer failed for ${node.id}:`, error);
+    }
+  }
+
   let output: JsonValue;
   try {
     output = await handler({
@@ -91,6 +131,8 @@ export async function executeStationNode(
       signal: ctx.signal,
       // ── Artifact context (present when a binding is configured) ──
       ...(artifact !== undefined && { artifact }),
+      // ── Progress reporting ────────────────────────────────────
+      updateProgress,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

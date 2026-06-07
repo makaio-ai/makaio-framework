@@ -134,7 +134,7 @@ export type {
   WorkflowStepBlockRun,
   WorkflowTriggerBlock,
 } from './blocks.js';
-export { WorkflowNamespace, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
+export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowArtifactRefSchema } from './artifact-ref.js';
 export { WorkflowRunContextSchema } from './run-context.js';
 export type { WorkflowRunContext } from './run-context.js';
@@ -211,6 +211,7 @@ export type {
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,
+  WorkflowProgressUpdate,
   WorkflowTriggerDef,
   WorkflowZodSchemas,
 } from './authoring.js';

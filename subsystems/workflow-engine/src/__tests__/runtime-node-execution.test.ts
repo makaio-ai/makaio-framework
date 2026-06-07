@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { z } from 'zod';
+import { createBusInstance, ValidationError } from '@makaio/bus-core';
 import {
   SubagentSubjects,
   WorkflowNamespace,
@@ -197,6 +198,126 @@ describe('executeStationNode', () => {
     });
     // Failed frames are excluded from previousSteps.
     expect((receivedPreviousSteps as Record<string, unknown>)['failed-step']).toBeUndefined();
+  });
+
+  it('emits structured progress updates with execution, workflow, frame, and node identity', async () => {
+    const node: WorkflowStationNode = {
+      id: 'progress-station',
+      type: 'station',
+      prompt: 'Report progress',
+    };
+    const handler: StationHandler = async (ctx) => {
+      await ctx.updateProgress({
+        message: 'Review draft ready',
+        details: 'The review artifact has been updated.',
+        kind: 'checkpoint',
+        metadata: { artifactId: 'artifact-1', percent: 50 },
+      });
+      return 'done';
+    };
+    const ctx = makeCtx({ 'progress-station': handler });
+    let receivedPayload: unknown;
+    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, (eventCtx) => {
+      receivedPayload = eventCtx.payload;
+    });
+
+    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-progress');
+
+    expect(outcome.status).toBe('completed');
+    expect(receivedPayload).toMatchObject({
+      executionId: 'exec-test',
+      workflowId: 'workflow-test',
+      frameId: 'frame-progress',
+      nodeId: 'progress-station',
+      progress: {
+        message: 'Review draft ready',
+        details: 'The review artifact has been updated.',
+        kind: 'checkpoint',
+        metadata: { artifactId: 'artifact-1', percent: 50 },
+      },
+    });
+    expect((receivedPayload as { emittedAt: number }).emittedAt).toBeGreaterThan(0);
+    unsubscribe();
+  });
+
+  it('fails the station when updateProgress receives a payload rejected by the progress schema', async () => {
+    const node: WorkflowStationNode = {
+      id: 'invalid-progress',
+      type: 'station',
+      prompt: 'Report invalid progress',
+    };
+    const handler: StationHandler = async (ctx) => {
+      await ctx.updateProgress({ message: '' });
+      return 'done';
+    };
+    const ctx = makeCtx({ 'invalid-progress': handler });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-invalid-progress');
+
+      expect(outcome.status).toBe('failed');
+      if (outcome.status === 'failed') {
+        expect(outcome.error).toContain('message');
+      }
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it('does not fail the station when a progress subscriber fails', async () => {
+    const node: WorkflowStationNode = {
+      id: 'progress-observer-failure',
+      type: 'station',
+      prompt: 'Report progress',
+    };
+    const handler: StationHandler = async (ctx) => {
+      await ctx.updateProgress({ message: 'Observer may fail' });
+      return 'done';
+    };
+    const ctx = makeCtx({ 'progress-observer-failure': handler });
+    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, () => {
+      throw new Error('subscriber exploded');
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-observer-failure');
+
+      expect(outcome.status).toBe('completed');
+    } finally {
+      consoleError.mockRestore();
+      unsubscribe();
+    }
+  });
+
+  it('does not fail the station when a progress subscriber throws a ValidationError', async () => {
+    const node: WorkflowStationNode = {
+      id: 'progress-validation-observer-failure',
+      type: 'station',
+      prompt: 'Report progress',
+    };
+    const handler: StationHandler = async (ctx) => {
+      await ctx.updateProgress({ message: 'Observer validation may fail' });
+      return 'done';
+    };
+    const ctx = makeCtx({ 'progress-validation-observer-failure': handler });
+    const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, () => {
+      const parsed = z.object({ value: z.string() }).safeParse({ value: 1 });
+      if (!parsed.success) {
+        throw new ValidationError('subscriber.validation', parsed.error);
+      }
+    });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-validation-observer-failure');
+
+      expect(outcome.status).toBe('completed');
+    } finally {
+      consoleError.mockRestore();
+      unsubscribe();
+    }
   });
 
   it('fails with a descriptive message when no handler is registered', async () => {

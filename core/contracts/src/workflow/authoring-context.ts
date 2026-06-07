@@ -1,4 +1,5 @@
 import type { JsonValue } from '../shared/json-value.js';
+import type { WorkflowProgressUpdate } from './namespace.js';
 
 // ─────────────────────────────────────────────────────────────
 // Artifact Context
@@ -161,6 +162,12 @@ export type PreviousStepOutput<TOutput extends JsonValue> =
     };
 
 // ─────────────────────────────────────────────────────────────
+// Progress Update
+// ─────────────────────────────────────────────────────────────
+
+export type { WorkflowProgressUpdate };
+
+// ─────────────────────────────────────────────────────────────
 // Step Context
 // ─────────────────────────────────────────────────────────────
 
@@ -203,6 +210,14 @@ export interface StepContext<
    * artifact could not be initialised.
    */
   readonly artifact?: ArtifactContext<TArtifactData>;
+  /**
+   * Emit a structured progress signal.
+   *
+   * Progress updates are projected by materialization providers (GitHub
+   * comments, dashboard updates, etc.) but are not durable WorkLog entries.
+   * @param update - The progress signal to emit.
+   */
+  readonly updateProgress: (update: WorkflowProgressUpdate) => Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────

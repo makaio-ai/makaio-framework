@@ -20,7 +20,7 @@ import {
   WorkflowParallelModeSchema,
 } from '../schemas.js';
 import type { WorkflowParallelNode } from '../schemas.js';
-import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
+import { WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
 import { WorkLogExecutionSummarySchema } from '../worklog.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -33,6 +33,7 @@ describe('WorkflowNamespace', () => {
     expect(WorkflowSubjects.gate.respond.subject).toBe('gate.respond');
     expect(WorkflowSubjects.gate.requested.subject).toBe('gate.requested');
     expect(WorkflowSubjects.execution.started.subject).toBe('execution.started');
+    expect(WorkflowSubjects.execution.progress.subject).toBe('execution.progress');
     expect(WorkflowSubjects.step.beforeStart.subject).toBe('step.beforeStart');
     expect(WorkflowSubjects.step.completed.subject).toBe('step.completed');
   });
@@ -80,16 +81,19 @@ describe('execution lifecycle events', () => {
     });
     const completed = WorkflowSchemas['execution.completed'].parse({
       executionId: 'wfx-1',
+      workflowId: 'wf-1',
       totalDuration: 1500,
       completedAt: 2500,
     });
     const failed = WorkflowSchemas['execution.failed'].parse({
       executionId: 'wfx-2',
+      workflowId: 'wf-2',
       error: 'Boom',
       completedAt: 3000,
     });
     const cancelled = WorkflowSchemas['execution.cancelled'].parse({
       executionId: 'wfx-3',
+      workflowId: 'wf-3',
       reason: 'User cancelled',
       completedAt: 4000,
     });
@@ -98,6 +102,59 @@ describe('execution lifecycle events', () => {
     expect(completed.completedAt).toBe(2500);
     expect(failed.completedAt).toBe(3000);
     expect(cancelled.completedAt).toBe(4000);
+  });
+
+  it('requires workflow identity on terminal execution events', () => {
+    expect(() =>
+      WorkflowSchemas['execution.completed'].parse({
+        executionId: 'wfx-1',
+        totalDuration: 1500,
+      }),
+    ).toThrow();
+    expect(() =>
+      WorkflowSchemas['execution.failed'].parse({
+        executionId: 'wfx-2',
+        error: 'Boom',
+      }),
+    ).toThrow();
+    expect(() =>
+      WorkflowSchemas['execution.cancelled'].parse({
+        executionId: 'wfx-3',
+      }),
+    ).toThrow();
+  });
+
+  it('parses structured progress updates and execution.progress events', () => {
+    const progress = WorkflowProgressUpdateSchema.parse({
+      message: 'Review draft ready',
+      details: 'The review artifact has been updated.',
+      kind: 'checkpoint',
+      metadata: { artifactId: 'artifact-1', percent: 50 },
+    });
+    const event = WorkflowSchemas['execution.progress'].parse({
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      frameId: 'frame-review',
+      nodeId: 'review',
+      progress,
+      emittedAt: 2500,
+    });
+
+    expect(event.progress).toEqual(progress);
+    expect(event.frameId).toBe('frame-review');
+  });
+
+  it('rejects progress events with an empty progress message', () => {
+    expect(() =>
+      WorkflowSchemas['execution.progress'].parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        frameId: 'frame-review',
+        nodeId: 'review',
+        progress: { message: '' },
+        emittedAt: 2500,
+      }),
+    ).toThrow();
   });
 });
 

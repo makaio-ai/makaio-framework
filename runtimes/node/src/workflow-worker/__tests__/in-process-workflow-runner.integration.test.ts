@@ -120,6 +120,7 @@ describe('InProcessWorkflowRunner integration', () => {
       expect(completedEvents).toEqual([
         {
           executionId: 'exec-runner-001',
+          workflowId: 'wf-runner-001',
           totalDuration: expect.any(Number),
           completedAt: expect.any(Number),
         },

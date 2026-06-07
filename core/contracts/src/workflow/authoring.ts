@@ -499,6 +499,7 @@ export type {
   StepContext,
   WorkflowContext,
   WorkflowContextBase,
+  WorkflowProgressUpdate,
 } from './authoring-context.js';
 export type {
   AgentConfig,

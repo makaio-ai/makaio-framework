@@ -110,7 +110,11 @@ describe('TelemetryOtelService', () => {
         costUnits: 3,
         costUnitType: 'tokens',
       });
-      await MakaioBus.emit(WorkflowSubjects.execution.completed, { executionId: 'wfx-1', totalDuration: 1000 });
+      await MakaioBus.emit(WorkflowSubjects.execution.completed, {
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        totalDuration: 1000,
+      });
 
       expect(exported).toHaveLength(1);
       expect(exported[0]).toEqual(
@@ -141,11 +145,12 @@ describe('TelemetryOtelService', () => {
     try {
       await MakaioBus.emit(WorkflowSubjects.execution.started, {
         executionId: 'wfx-execution-time',
-        workflowId: 'wf-1',
+        workflowId: 'wf-execution-time',
         startedAt: 1000,
       });
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {
         executionId: 'wfx-execution-time',
+        workflowId: 'wf-execution-time',
         totalDuration: 800,
         completedAt: 1800,
       });
@@ -177,7 +182,10 @@ describe('TelemetryOtelService', () => {
 
     await service.init();
     try {
-      await MakaioBus.emit(WorkflowSubjects.execution.started, { executionId: 'wfx-frame-time', workflowId: 'wf-1' });
+      await MakaioBus.emit(WorkflowSubjects.execution.started, {
+        executionId: 'wfx-frame-time',
+        workflowId: 'wf-frame-time',
+      });
       await MakaioBus.emit(WorkflowSubjects.frame.started, {
         executionId: 'wfx-frame-time',
         frameId: 'frame-time',
@@ -195,6 +203,7 @@ describe('TelemetryOtelService', () => {
       });
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {
         executionId: 'wfx-frame-time',
+        workflowId: 'wf-frame-time',
         totalDuration: 1000,
       });
 
@@ -225,7 +234,10 @@ describe('TelemetryOtelService', () => {
 
     await service.init();
     try {
-      await MakaioBus.emit(WorkflowSubjects.execution.started, { executionId: 'wfx-tool-service', workflowId: 'wf-1' });
+      await MakaioBus.emit(WorkflowSubjects.execution.started, {
+        executionId: 'wfx-tool-service',
+        workflowId: 'wf-tool-service',
+      });
       await MakaioBus.emit(WorkflowSubjects.frame.started, {
         executionId: 'wfx-tool-service',
         frameId: 'frame-1',
@@ -260,6 +272,7 @@ describe('TelemetryOtelService', () => {
       });
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {
         executionId: 'wfx-tool-service',
+        workflowId: 'wf-tool-service',
         totalDuration: 1000,
       });
 
@@ -299,6 +312,7 @@ describe('TelemetryOtelService', () => {
       await expect(
         MakaioBus.emit(WorkflowSubjects.execution.completed, {
           executionId: 'wfx-enrich-error',
+          workflowId: 'wf-1',
           totalDuration: 1000,
         }),
       ).resolves.toBeUndefined();
@@ -439,6 +453,7 @@ describe('TelemetryOtelService', () => {
     await MakaioBus.emit(WorkflowSubjects.execution.started, { executionId: 'wfx-after-destroy', workflowId: 'wf-1' });
     await MakaioBus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'wfx-after-destroy',
+      workflowId: 'wf-1',
       totalDuration: 1000,
     });
     expect(exported).toHaveLength(1);
