@@ -316,6 +316,7 @@ async function createHarness(count = 1, dispatch: 'local-first' | 'remote' = 're
 
   let index = 0;
   const connect = client.connect({
+    auth: false,
     dispatch,
     createWebSocket: () => {
       const fake = fakes[index];
@@ -416,7 +417,7 @@ describe('BusClient public facade', () => {
     fake = new FakeWebSocket();
     client = new BusClient('ws://test-host/bus');
 
-    const connectPromise = client.connect({ createWebSocket: () => fake });
+    const connectPromise = client.connect({ auth: false, createWebSocket: () => fake });
     await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
     fake.receiveMessage({ type: 'subscribe-sync-complete' });
     await connectPromise;
@@ -507,7 +508,7 @@ describe('BusClient public facade', () => {
     fake = new FakeWebSocket();
     client = new BusClient('ws://test-host/bus');
 
-    const connectPromise = client.connect({ dispatch: 'remote', createWebSocket: () => fake });
+    const connectPromise = client.connect({ auth: false, dispatch: 'remote', createWebSocket: () => fake });
     await waitFor(() => fake.hasListener('message'), 2000, 'client did not attach a message listener');
     fake.receiveMessage({ type: 'subscribe-sync-complete' });
     await connectPromise;

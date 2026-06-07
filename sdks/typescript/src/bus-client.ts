@@ -26,8 +26,14 @@ const SDK_CLIENT_TRANSPORT_NAME = 'sdk-client';
 
 /** Options for {@link BusClient.connect}. */
 export interface BusClientOptions {
-  /** Authentication strategy. Resolved automatically when omitted and the server requires auth. */
-  auth?: TransportAuth;
+  /**
+   * Authentication strategy.
+   *
+   * Resolved automatically when omitted and the server requires auth. Pass
+   * `false` to disable auth auto-discovery for callers that already know the
+   * connection is unauthenticated, such as in-process socket tests.
+   */
+  auth?: TransportAuth | false;
   /**
    * WebSocket factory used by the underlying transport.
    *
@@ -122,7 +128,7 @@ export class BusClient {
     if (this.bus) return;
 
     this.dispatch = options?.dispatch ?? 'local-first';
-    const auth = options?.auth ?? (await this.resolveAuth());
+    const auth = options?.auth === false ? undefined : (options?.auth ?? (await this.resolveAuth()));
     const reconnect = resolveReconnectConfig(options?.autoReconnect);
 
     const transport = new WebSocketClientTransport({
