@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createBusNamespace, type SchemaRecord } from '@makaio/core';
+import { createBusNamespace, observability, type SchemaRecord } from '@makaio/core';
 import {
   ExecutionListQuerySchema,
   ExecutionStatusSchema,
@@ -280,17 +280,24 @@ export const WorkflowSchemas = {
    * Dispatched by providers using `exit-and-redispatch` or `exit-and-resume`
    * suspension strategies. In-process providers that block at the gate do not
    * emit this event.
+   *
+   * All scalar fields are projected as telemetry attributes (`traceAll`) so
+   * that collectors can filter persisted facts by `executionId` without a
+   * request/response correlation ID (events do not carry one).
    */
-  'execution.paused': z.object({
-    /** Execution that has paused. */
-    executionId: z.string(),
-    /** Workflow definition being executed. */
-    workflowId: z.string(),
-    /** Node ID of the gate in the workflow definition. */
-    pausedAtGateId: z.string().min(1),
-    /** Frame ID of the suspended gate instance. */
-    pausedAtFrameId: z.string().min(1),
-  }),
+  'execution.paused': observability.schema(
+    z.object({
+      /** Execution that has paused. */
+      executionId: z.string(),
+      /** Workflow definition being executed. */
+      workflowId: z.string(),
+      /** Node ID of the gate in the workflow definition. */
+      pausedAtGateId: z.string().min(1),
+      /** Frame ID of the suspended gate instance. */
+      pausedAtFrameId: z.string().min(1),
+    }),
+    { traceAll: true },
+  ),
 
   'step.beforeStart': StepLifecycleBaseSchema,
   'step.started': StepLifecycleBaseSchema.extend({

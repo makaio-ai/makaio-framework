@@ -94,19 +94,15 @@ function normalizeOptionalUrl(raw: string | undefined): string | undefined {
 
 /**
  * Normalize the optional upstream HMAC secret.
+ *
+ * Treats an unset or blank value as absent so that environments which populate
+ * the variable with an empty string (e.g. GitHub Actions when a secret is not
+ * provisioned) behave the same as environments where the variable is not set
+ * at all.
  * @param raw - Raw environment value.
- * @returns Trimmed secret, or `undefined` when unset.
- * @throws When the variable is set but empty after trimming.
+ * @returns Trimmed secret, or `undefined` when unset or blank.
  */
 function normalizeUpstreamSecret(raw: string | undefined): string | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-
-  const trimmed = raw.trim();
-  if (trimmed === '') {
-    throw new Error(`${MAKAIO_UPSTREAM_SECRET_ENV} is set but empty after trimming; refusing to use an empty secret`);
-  }
-
-  return trimmed;
+  const trimmed = raw?.trim();
+  return trimmed === undefined || trimmed === '' ? undefined : trimmed;
 }
