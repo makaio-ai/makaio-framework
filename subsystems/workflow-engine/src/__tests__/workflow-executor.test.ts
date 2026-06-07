@@ -263,10 +263,14 @@ describe('WorkflowExecutor — paused gate integration', () => {
     setup = await setupWorkflowExecutorTest();
     await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
 
-    const cancelledEvents: Array<{ executionId: string; reason?: string }> = [];
+    const cancelledEvents: Array<{ executionId: string; workflowId: string; reason?: string }> = [];
     const gateResolvedEvents: Array<{ executionId: string; frameId: string; source: 'cancelled' }> = [];
     const offCancelled = MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
-      cancelledEvents.push({ executionId: ctx.payload.executionId, reason: ctx.payload.reason });
+      cancelledEvents.push({
+        executionId: ctx.payload.executionId,
+        workflowId: ctx.payload.workflowId,
+        reason: ctx.payload.reason,
+      });
     });
     const offGateResolved = MakaioBus.on(
       WorkflowSubjects.gate.resolved,
@@ -306,7 +310,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       expect(gate?.status).toBe('cancelled');
       expect(gate?.resolvedAt).toEqual(expect.any(Number));
       expect(response.accepted).toBe(false);
-      expect(cancelledEvents).toEqual([{ executionId, reason: 'stop parked gate' }]);
+      expect(cancelledEvents).toEqual([{ executionId, workflowId, reason: 'stop parked gate' }]);
       expect(gateResolvedEvents).toEqual([{ executionId, frameId, source: 'cancelled' }]);
     } finally {
       offCancelled();

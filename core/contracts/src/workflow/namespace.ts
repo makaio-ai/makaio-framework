@@ -23,7 +23,7 @@ import { ExecutionHintsSchema } from './execution-hints.js';
  * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
  *
  * Progress updates are ephemeral — useful for real-time monitoring and
- * surface-specific projections (comments, dashboard updates), but not
+ * observer-specific projections and materializations, but not
  * durable WorkLog entries. For structured knowledge that should participate
  * in accountability chains, use Observations instead.
  */
@@ -31,22 +31,22 @@ export const WorkflowProgressUpdateSchema = z
   .object({
     /** Human-readable progress message. */
     message: z.string().min(1),
-    /** Extended details for surfaces that can display them. */
+    /** Extended details for observers that can display them. */
     details: z.string().min(1).optional(),
     /**
      * Optional semantic kind for materialization routing.
      *
-     * Surfaces can match on kind to decide rendering: a `'station-started'`
-     * progress might always become a GitHub comment, while a `'checkpoint'`
-     * might only appear on a dashboard.
+     * Observers can match on kind to decide projection behavior: a
+     * `'station-started'` progress might be materialized immediately, while a
+     * `'checkpoint'` might be reserved for aggregate views.
      *
      * Not a closed enum — workflow authors define their own vocabulary.
      */
     kind: z.string().min(1).optional(),
     /**
-     * Structured metadata for surfaces that need more than message + details.
+     * Structured metadata for observers that need more than message + details.
      *
-     * The workflow does not know which surface consumes this. The surface
+     * The workflow does not know which observer consumes this. The observer
      * decides what to extract.
      */
     metadata: JsonValueSchema.optional(),
@@ -186,7 +186,7 @@ export const WorkflowSchemas = {
   /**
    * List persisted step spans for a workflow execution.
    *
-   * This is the public read surface for execution traces. Storage subjects remain
+   * This is the public read API for execution traces. Storage subjects remain
    * internal to the workflow subsystem.
    */
   listSpans: {
@@ -196,7 +196,7 @@ export const WorkflowSchemas = {
   /**
    * List persisted gate instances for a workflow execution.
    *
-   * This is the public read surface for pending and resolved gate state.
+   * This is the public read API for pending and resolved gate state.
    * Storage subjects remain internal to the workflow subsystem.
    */
   listGateInstances: {
@@ -317,9 +317,8 @@ export const WorkflowSchemas = {
   /**
    * Ephemeral progress signal emitted by a station handler via `ctx.updateProgress()`.
    *
-   * Progress events are not persisted as WorkLog entries. Subscribers such as
-   * materialization providers (GitHub comment writers, dashboard projectors)
-   * consume them for real-time surface updates.
+   * Progress events are not persisted as WorkLog entries. Observers and
+   * materialization providers consume them for real-time projections.
    */
   'execution.progress': z.object({
     /** Execution that emitted the progress signal. */
@@ -395,7 +394,7 @@ export const WorkflowSchemas = {
        */
       gateId: z.string(),
       /**
-       * Approval-surface action recorded for lifecycle/audit views.
+       * Approval action recorded for lifecycle/audit views.
        *
        * This is separate from `resumeData` so domain payloads can carry their
        * own decision fields while the workflow still resumes through the typed
@@ -622,7 +621,7 @@ export const WorkflowSchemas = {
   /**
    * Retrieve the WorkLog execution summary for a single execution (RPC).
    *
-   * Returns the denormalized summary record used in list views and dashboards.
+   * Returns the denormalized summary record used by execution summary views.
    * The summary is updated as execution events arrive.
    */
   'worklog.get': {
@@ -640,7 +639,7 @@ export const WorkflowSchemas = {
    * List WorkLog execution summaries with optional filtering (RPC).
    *
    * At least one of `workflowId` or `status` is recommended to avoid
-   * unbounded scans; both are optional to support dashboard-level queries.
+   * unbounded scans; both are optional to support broad projection queries.
    */
   'worklog.list': {
     request: z.object({

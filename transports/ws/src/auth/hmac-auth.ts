@@ -9,7 +9,7 @@
  * Uses Web Crypto API for HMAC computation (browser and Node.js compatible).
  */
 
-import type { TransportReceiveContext } from '@makaio/core';
+import type { TransportPeerContext, TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
 
@@ -87,6 +87,17 @@ export interface HmacAuthOptions {
    * @returns The HMAC secret for this identity, or `null` to reject.
    */
   resolveSecret?: (claimedId: string) => string | null;
+
+  /**
+   * Server-side peer context resolver for identity-bound mode.
+   *
+   * When provided, the authenticated identity is exposed to bus handlers as
+   * this peer context instead of the backward-compatible `workflow-execution`
+   * default. Return `null` when no peer context should be exposed.
+   * @param claimedId - The authenticated `identityId`.
+   * @returns Trusted peer context for the authenticated identity, or `null`.
+   */
+  resolvePeer?: (claimedId: string) => TransportPeerContext | null;
 }
 
 /**
@@ -120,6 +131,7 @@ export class HmacAuth implements TransportAuth {
   private readonly challengeTimeout: number;
   private readonly identityId: string | undefined;
   private readonly resolveSecret: ((claimedId: string) => string | null) | undefined;
+  private readonly resolvePeer: ((claimedId: string) => TransportPeerContext | null) | undefined;
 
   // Client-side: pending auth operations (single client per instance)
   private pendingChallenge?: PendingAuth<string>;
@@ -130,6 +142,7 @@ export class HmacAuth implements TransportAuth {
 
   // Server-side: pending auth operations (multiple concurrent clients)
   private serverPendingResponses = new Map<WebSocketLike, PendingAuth<AuthResponsePayload>>();
+  private serverAuthenticatedSockets = new Set<WebSocketLike>();
 
   /**
    * Maps each successfully authenticated socket to the identity ID it claimed.
@@ -144,6 +157,7 @@ export class HmacAuth implements TransportAuth {
     this.challengeTimeout = options.challengeTimeout ?? 5000;
     this.identityId = options.identityId;
     this.resolveSecret = options.resolveSecret;
+    this.resolvePeer = options.resolvePeer;
   }
 
   /**
@@ -218,6 +232,7 @@ export class HmacAuth implements TransportAuth {
       }
 
       // Success
+      this.serverAuthenticatedSockets.add(socket);
       this.sendAuthResultBestEffort(send, { type: 'auth-result', success: true });
       authResultSent = true;
     } catch (error) {
@@ -478,10 +493,44 @@ export class HmacAuth implements TransportAuth {
     if (identityId === undefined) {
       return undefined;
     }
-    return {
-      transportName: '',
-      peer: { kind: 'workflow-execution', id: identityId, authenticated: true },
-    };
+    const resolvedPeer = this.resolvePeer?.(identityId);
+    if (this.resolvePeer !== undefined && resolvedPeer === null) {
+      return undefined;
+    }
+    const peer = resolvedPeer ?? { kind: 'workflow-execution', id: identityId };
+    return { transportName: '', peer: { ...peer, id: peer.id ?? identityId, authenticated: true } };
+  }
+
+  /**
+   * Check whether a server-side socket remains authorized for bus traffic.
+   *
+   * Identity-bound HMAC sockets are revalidated against `resolveSecret()` on
+   * every inbound frame so process-local registry revocation, such as dashboard
+   * session expiry, takes effect without waiting for the WebSocket to close.
+   * Global-secret sockets have no identity to revoke and remain authorized by
+   * their completed handshake.
+   * @param socket - The socket whose live authorization should be checked.
+   * @returns `true` when the socket is still authorized.
+   */
+  public isSocketAuthenticated(socket: WebSocketLike): boolean {
+    if (!this.serverAuthenticatedSockets.has(socket)) {
+      return false;
+    }
+    if (!this.resolveSecret) {
+      return true;
+    }
+
+    const identityId = this.serverAuthenticatedPeers.get(socket);
+    if (identityId === undefined) {
+      return true;
+    }
+
+    if (this.resolveSecret(identityId) === null) {
+      this.cleanupSocket(socket);
+      return false;
+    }
+
+    return true;
   }
 
   /**
@@ -543,6 +592,7 @@ export class HmacAuth implements TransportAuth {
       pendingEntry.reject(new Error('Socket disconnected during HMAC authentication'));
     }
     this.serverAuthenticatedPeers.delete(socket);
+    this.serverAuthenticatedSockets.delete(socket);
   }
 
   /**
@@ -570,5 +620,6 @@ export class HmacAuth implements TransportAuth {
     }
     this.serverPendingResponses.clear();
     this.serverAuthenticatedPeers.clear();
+    this.serverAuthenticatedSockets.clear();
   }
 }

@@ -12,23 +12,11 @@ import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { transformSync } from 'esbuild';
-import { parseExtensionDescriptor, type ExtensionDescriptor } from '@makaio/contracts';
-import * as platformNodeModule from '@makaio/runtime-node';
-import * as makaioConfigModule from '@makaio/runtime-node/makaio-config';
+import { minimatch } from 'minimatch';
 import type { ExtensionDevEntry } from './vite-extension-dev-plugin.js';
 
-const {
-  defineMakaioConfig,
-  MAKAIO_CONFIG_FILE_ENV,
-  MAKAIO_HOME_ENV,
-  buildExtensionBrowserRollupInputName,
-  buildExtensionBrowserRuntimeEntrypoint,
-  entrypointStem,
-  parseMakaioConfig,
-  resolveConventionEntrypoint,
-  shouldIncludeExtension,
-} = platformNodeModule;
-
+const MAKAIO_CONFIG_FILE_ENV = 'MAKAIO_CONFIG_FILE';
+const MAKAIO_HOME_ENV = 'MAKAIO_HOME';
 const CONFIG_FILE_BASENAMES = [
   'makaio.config.ts',
   'makaio.config.js',
@@ -37,7 +25,30 @@ const CONFIG_FILE_BASENAMES = [
 ] as const;
 const SKIPPED_DISCOVERY_DIRS = new Set(['.git', 'dist', 'node_modules']);
 
-type ParsedMakaioConfig = platformNodeModule.ParsedMakaioConfig;
+interface ParsedMakaioConfig {
+  /** Normalized extension discovery configuration. */
+  readonly extensions: {
+    /** Whether descriptors are included when no include filter is present. */
+    readonly autoDiscover: boolean;
+    /** Absolute or configured discovery roots scanned for descriptors. */
+    readonly discoveryPaths: readonly string[];
+    /** Include glob filters matched against descriptor names. */
+    readonly include: readonly string[];
+    /** Exclude glob filters matched against descriptor names. */
+    readonly exclude: readonly string[];
+  };
+}
+
+/** Minimal descriptor shape needed for browser entry discovery. */
+interface ExtensionDescriptor {
+  /** Descriptor name used in runtime extension URLs. */
+  readonly name: string;
+  /** Surface entrypoint declarations. */
+  readonly entrypoints?: {
+    /** Browser entrypoint declaration. */
+    readonly browser?: true | string;
+  };
+}
 
 /** Production browser entry derived from an extension descriptor. */
 export interface BrowserBuildEntry {
@@ -76,8 +87,8 @@ type ConfigModuleRunner = (
 /**
  * Read a Makaio runtime config synchronously for Vite config evaluation.
  *
- * The returned value is normalized through the runtime `parseMakaioConfig`
- * schema so discovery paths follow the same rules as boot-time discovery.
+ * The returned value is normalized through the metadata-only config parser in
+ * this module so Vite config evaluation does not import framework TS sources.
  * @param cwd - Workspace root used for config lookup and relative path resolution.
  * @returns Parsed Makaio config.
  */
@@ -329,7 +340,7 @@ function resolveMakaioConfigPathSync(cwd: string): string | undefined {
  * discovery: configured root order, first descriptor by name wins, and
  * exclude/include/autoDiscover policy decides whether a descriptor contributes.
  * @param cwd - Workspace root used to resolve non-normalized relative paths.
- * @param config - Parsed runtime config.
+ * @param config - Parsed metadata-only discovery config.
  * @returns Selected descriptor roots in runtime discovery order.
  */
 function discoverSelectedDescriptorRootsFromConfig(cwd: string, config: ParsedMakaioConfig): SelectedDescriptorRoot[] {
@@ -396,7 +407,7 @@ function evaluateConfigModuleSync(configPath: string): unknown {
  *
  * Returns a full `NodeRequire`-shaped function so that config files can use
  * `require.resolve()` and other standard helpers. The `@makaio/runtime-node`
- * specifier is intercepted to supply the already-loaded framework module surface.
+ * specifier is intercepted with the metadata-only helpers this evaluator needs.
  * @param configPath - Absolute config file path.
  * @returns `require` implementation scoped to the config file.
  */
@@ -404,10 +415,10 @@ function createRequireForConfigModule(configPath: string): NodeRequire {
   const requireFromConfig = createRequire(configPath);
   const shim = ((specifier: string): unknown => {
     if (specifier === '@makaio/runtime-node') {
-      return { ...platformNodeModule, defineMakaioConfig };
+      return RUNTIME_NODE_CONFIG_SHIM;
     }
     if (specifier === '@makaio/runtime-node/makaio-config') {
-      return { ...makaioConfigModule, defineMakaioConfig };
+      return RUNTIME_NODE_CONFIG_SHIM;
     }
     return requireFromConfig(specifier);
   }) as NodeRequire;
@@ -427,6 +438,130 @@ function unwrapDefaultExport(moduleExports: unknown): unknown {
   if (typeof moduleExports !== 'object' || moduleExports === null) return moduleExports;
   const record = moduleExports as Record<string, unknown>;
   return 'default' in record ? record['default'] : moduleExports;
+}
+
+const RUNTIME_NODE_CONFIG_SHIM = {
+  defineMakaioConfig,
+  MAKAIO_CONFIG_FILE_ENV,
+  MAKAIO_HOME_ENV,
+  buildExtensionBrowserRuntimeEntrypoint,
+  buildExtensionBrowserRollupInputName,
+};
+
+/**
+ * Identity helper for TS config modules that import `defineMakaioConfig`.
+ * @param config - Raw config object.
+ * @returns The same config object.
+ */
+function defineMakaioConfig<T>(config: T): T {
+  return config;
+}
+
+/**
+ * Normalize the subset of Makaio config needed for browser entry discovery.
+ * @param rawConfig - Raw config module export.
+ * @param options - Config source metadata.
+ * @returns Parsed discovery config.
+ */
+function parseMakaioConfig(
+  rawConfig: unknown,
+  options: { readonly baseDir: string; readonly makaioHome: string; readonly source?: string },
+): ParsedMakaioConfig {
+  void options.makaioHome;
+  void options.source;
+  const raw = isRecord(rawConfig) ? rawConfig : {};
+  const extensions = isRecord(raw['extensions']) ? raw['extensions'] : {};
+  const discoveryPaths = readStringArray(extensions['discoveryPaths']).map((entry) =>
+    path.isAbsolute(entry) ? entry : path.resolve(options.baseDir, entry),
+  );
+  return {
+    extensions: {
+      autoDiscover: typeof extensions['autoDiscover'] === 'boolean' ? extensions['autoDiscover'] : true,
+      discoveryPaths,
+      include: readStringArray(extensions['include']),
+      exclude: readStringArray(extensions['exclude']),
+    },
+  };
+}
+
+/**
+ * Decide whether a descriptor name is selected by config filters.
+ * @param name - Extension descriptor name.
+ * @param config - Parsed discovery config.
+ * @returns Whether the descriptor should contribute browser entries.
+ */
+function shouldIncludeExtension(name: string, config: ParsedMakaioConfig): boolean {
+  const { autoDiscover, include, exclude } = config.extensions;
+  if (exclude.some((pattern) => minimatch(name, pattern))) return false;
+  if (include.length > 0) return include.some((pattern) => minimatch(name, pattern));
+  return autoDiscover;
+}
+
+/**
+ * Derive the stem string from a descriptor entrypoint declaration.
+ * @param surface - Runtime surface name.
+ * @param entrypointValue - Descriptor entrypoint declaration.
+ * @returns Resolved entrypoint stem.
+ */
+function entrypointStem(surface: string, entrypointValue: true | string): string {
+  return entrypointValue === true ? surface : entrypointValue;
+}
+
+/**
+ * Build the stable Rollup input name for a browser extension entry.
+ * @param extensionName - Descriptor name.
+ * @param browserEntrypoint - Browser entrypoint stem.
+ * @returns Rollup input name.
+ */
+function buildExtensionBrowserRollupInputName(extensionName: string, browserEntrypoint: string): string {
+  return `extensions/${extensionName}/browser/${getEntrypointBasename(browserEntrypoint)}`;
+}
+
+/**
+ * Build the runtime import URL for a browser extension entry.
+ * @param extensionName - Descriptor name.
+ * @param browserEntrypoint - Browser entrypoint stem.
+ * @returns Public browser entrypoint URL.
+ */
+function buildExtensionBrowserRuntimeEntrypoint(extensionName: string, browserEntrypoint: string): string {
+  return `/${buildExtensionBrowserRollupInputName(extensionName, browserEntrypoint)}.js`;
+}
+
+/**
+ * Resolve a descriptor entrypoint using the runtime source/dist convention.
+ * @param surface - Runtime surface name.
+ * @param entrypointValue - Descriptor entrypoint declaration.
+ * @param extensionPath - Absolute extension root.
+ * @returns Absolute resolved entrypoint path, or `undefined`.
+ */
+function resolveConventionEntrypoint(
+  surface: string,
+  entrypointValue: true | string,
+  extensionPath: string,
+): string | undefined {
+  if (!path.isAbsolute(extensionPath)) return undefined;
+  const stem = entrypointStem(surface, entrypointValue);
+  const normalizedExtensionRoot = normalizeForContainment(extensionPath);
+
+  const devPath = path.resolve(extensionPath, 'src', `${stem}.ts`);
+  if (isExistingPathWithinDirectory(devPath, normalizedExtensionRoot)) return devPath;
+
+  const prodPath = path.resolve(extensionPath, 'dist', `${stem}.mjs`);
+  if (isExistingPathWithinDirectory(prodPath, normalizedExtensionRoot)) return prodPath;
+
+  return undefined;
+}
+
+/**
+ * Return the final path segment without a source extension.
+ * @param browserEntrypoint - Browser entrypoint stem.
+ * @returns Extension-free basename.
+ */
+function getEntrypointBasename(browserEntrypoint: string): string {
+  const normalizedEntrypoint = browserEntrypoint.replaceAll(path.win32.sep, path.posix.sep);
+  const filename = path.posix.basename(normalizedEntrypoint);
+  const extension = path.posix.extname(filename);
+  return extension ? filename.slice(0, -extension.length) : filename;
 }
 
 /**
@@ -501,6 +636,41 @@ function readExtensionDescriptor(descriptorRoot: string): ExtensionDescriptor | 
 }
 
 /**
+ * Parse the descriptor fields needed for browser entry discovery.
+ * @param raw - Raw descriptor JSON.
+ * @returns Parsed descriptor.
+ */
+function parseExtensionDescriptor(raw: unknown): ExtensionDescriptor {
+  if (!isRecord(raw)) throw new Error('descriptor must be an object');
+  const name = raw['name'];
+  if (typeof name !== 'string' || name.length === 0) throw new Error('descriptor.name must be a non-empty string');
+  const entrypoints = raw['entrypoints'];
+  if (entrypoints === undefined) return { name };
+  if (!isRecord(entrypoints)) throw new Error('descriptor.entrypoints must be an object');
+
+  const browser = entrypoints['browser'];
+  if (browser === undefined) return { name, entrypoints: {} };
+  if (browser !== true && typeof browser !== 'string') {
+    throw new Error('descriptor.entrypoints.browser must be true or a string');
+  }
+  if (typeof browser === 'string' && !isSafeEntrypointStem(browser)) {
+    throw new Error(`descriptor.entrypoints.browser is not a contained entrypoint stem: ${browser}`);
+  }
+  return { name, entrypoints: { browser } };
+}
+
+/**
+ * Check whether a descriptor entrypoint stem is path-contained by construction.
+ * @param stem - Entrypoint stem from descriptor metadata.
+ * @returns Whether the stem can be resolved below the extension root.
+ */
+function isSafeEntrypointStem(stem: string): boolean {
+  if (stem.length === 0 || path.isAbsolute(stem)) return false;
+  const normalized = stem.replaceAll(path.win32.sep, path.posix.sep);
+  return !normalized.split('/').some((segment) => segment === '..' || segment.length === 0);
+}
+
+/**
  * Build the source dev URL for a descriptor browser entry.
  * @param descriptorName - Descriptor name.
  * @param sourceAbsPath - Resolved browser source path.
@@ -534,4 +704,60 @@ function statSync(filePath: string): fs.Stats | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Check whether a value is a string-keyed object.
+ * @param value - Value to inspect.
+ * @returns Whether the value is a record.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Read a string array from unknown config input.
+ * @param value - Raw config value.
+ * @returns String entries, or an empty array.
+ */
+function readStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+/**
+ * Check that an existing candidate path resolves inside a normalized base directory.
+ * @param candidatePath - Candidate entrypoint path.
+ * @param normalizedBaseDir - Normalized extension root.
+ * @returns Whether the candidate exists and stays within the extension root.
+ */
+function isExistingPathWithinDirectory(candidatePath: string, normalizedBaseDir: string): boolean {
+  try {
+    return isWithinNormalizedDirectory(fs.realpathSync(candidatePath), normalizedBaseDir);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Normalize a path for descriptor entrypoint containment checks.
+ * @param filePath - Path to normalize.
+ * @returns Real path when available, otherwise resolved path.
+ */
+function normalizeForContainment(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+/**
+ * Check whether a normalized path is inside a normalized directory.
+ * @param resolved - Path to inspect.
+ * @param baseDir - Base directory.
+ * @returns Whether `resolved` is within `baseDir`.
+ */
+function isWithinNormalizedDirectory(resolved: string, baseDir: string): boolean {
+  const relative = path.relative(baseDir, normalizeForContainment(resolved));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }

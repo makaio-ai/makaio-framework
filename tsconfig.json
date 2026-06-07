@@ -128,7 +128,8 @@
       "@makaio/extension-telemetry-langfuse": ["./extensions/telemetry-langfuse/src/index.ts"],
       "@makaio/electron/schemas": ["./apps/electron/src/bus/schemas.ts"],
       "@makaio/electron/register": ["./apps/electron/src/bus/namespace.ts"],
-      "@makaio/platform-macos": ["./platforms/macos/src/index.ts"]
+      "@makaio/platform-macos": ["./platforms/macos/src/index.ts"],
+      "@makaio/oauth-core": ["./packages/oauth-core/src/index.ts"]
     }
   },
   "include": ["./**/*"],

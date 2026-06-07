@@ -6,7 +6,7 @@ import {
   type ExtensionCliAttachResult,
   type ExtensionLoadResult,
 } from './load-extensions.js';
-import { bridgeExtensionBrowserEntries } from './bridge-extension-browser-entries.js';
+import { bridgeExtensionBrowserEntries, type BridgeBrowserOptions } from './bridge-extension-browser-entries.js';
 import {
   synthesizeBrowserOnlyPackages,
   type SynthesizedBrowserOnlyResult,
@@ -35,13 +35,14 @@ export interface BootExtensionLoadingResult {
 /**
  * Discover extension descriptors and assemble executable package surfaces for
  * coordinator loading.
- * @param options - Discovery, framework-version, and skip-filter inputs.
+ * @param options - Discovery, framework-version, skip-filter, and static-mount inputs.
  * @returns Descriptor discovery and package-loading results for boot.
  */
 export async function loadBootExtensions(options: {
   readonly extensionOptions: ResolvedExtensionOptions;
   readonly skipExtensions: ReadonlySet<string>;
   readonly frameworkVersion: string | undefined;
+  readonly createMount?: BridgeBrowserOptions['createMount'];
 }): Promise<BootExtensionLoadingResult> {
   let extensionLoadResult: ExtensionLoadResult = {
     packages: [],
@@ -76,8 +77,12 @@ export async function loadBootExtensions(options: {
     }
   }
 
-  const bridgedPackages = bridgeExtensionBrowserEntries(compatible, extensionLoadResult.packages);
-  const browserOnlyResult = synthesizeBrowserOnlyPackages(compatible, { frameworkVersion });
+  const browserOptions = {
+    ...(options.createMount ? { createMount: options.createMount } : {}),
+    frameworkVersion,
+  };
+  const bridgedPackages = bridgeExtensionBrowserEntries(compatible, extensionLoadResult.packages, browserOptions);
+  const browserOnlyResult = synthesizeBrowserOnlyPackages(compatible, browserOptions);
   const extensionsWithCli = await attachExtensionCliContributions(
     compatible,
     [...bridgedPackages, ...browserOnlyResult.packages],

@@ -5168,6 +5168,14 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/oauth-core@workspace:packages/oauth-core":
+  version: 0.0.0-use.local
+  resolution: "@makaio/oauth-core@workspace:packages/oauth-core"
+  dependencies:
+    vitest: "npm:4.1.7"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/platform-macos@workspace:*, @makaio/platform-macos@workspace:platforms/macos":
   version: 0.0.0-use.local
   resolution: "@makaio/platform-macos@workspace:platforms/macos"

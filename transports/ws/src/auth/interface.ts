@@ -58,6 +58,17 @@ export interface TransportAuth {
   getReceiveContext?(socket?: WebSocketLike): TransportReceiveContext | undefined;
 
   /**
+   * Return whether a previously authenticated socket may still send bus frames.
+   *
+   * Auth strategies with expiring or revocable credentials should re-check the
+   * backing authorization state here because a successful WebSocket handshake
+   * can outlive the credential used for that handshake.
+   * @param socket - Server-side socket whose live authorization should be checked.
+   * @returns `true` when the socket remains authorized, `false` when it must be closed.
+   */
+  isSocketAuthenticated?(socket: WebSocketLike): boolean;
+
+  /**
    * Clean up authentication resources for a specific socket.
    *
    * Called when a socket disconnects to immediately release per-socket resources like:

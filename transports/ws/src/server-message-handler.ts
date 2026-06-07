@@ -263,6 +263,15 @@ export function createInboundMessageHandler(
         return;
       }
 
+      if (auth?.isSocketAuthenticated?.(socket) === false) {
+        if (debug) {
+          console.warn('[ServerTransport] Closing socket with expired authentication');
+        }
+        auth.cleanupSocket(socket);
+        socket.close(1008, 'Authentication expired');
+        return;
+      }
+
       await routeMessage(message, socket, deps);
     } catch (error) {
       if (debug) {

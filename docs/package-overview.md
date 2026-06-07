@@ -146,6 +146,7 @@ shared service lifecycle behavior, inspect `packages/service-base` before adding
 | `packages/inbound-hooks`    | `@makaio/inbound-hooks`    | Fail-open ingress helpers for native hook events.                                   |
 | `packages/service-base`     | `@makaio/service-base`     | Abstract base class for Makaio bus services (init/start/stop lifecycle).            |
 | `packages/kernel`           | `@makaio/kernel`           | Runtime extension orchestration: ExtensionCoordinator, boot sequencing, providers.  |
+| `packages/oauth-core`       | `@makaio/oauth-core`       | OAuth state management primitives for framework auth flows.                         |
 | `packages/providers`        | `@makaio/providers`        | Platform-specific ConfigProvider and WebhookProvider implementations.               |
 | `packages/bus-server`       | `@makaio/bus-server`       | WebSocket server for MakaioBus message routing with HMAC auth.                      |
 | `packages/bus-server-vite`  | `@makaio/bus-server-vite`  | Vite dev-server plugin that co-boots the full Makaio Node runtime.                  |

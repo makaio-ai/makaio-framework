@@ -347,6 +347,7 @@ export async function bootMakaioRuntimeCore(
         extensionOptions: ext,
         skipExtensions,
         frameworkVersion: runtimeFrameworkVersion,
+        createMount: options.createMount,
       });
     const runtimeEnvironment = buildRuntimeEnvironment(process.platform, options.hostCapabilities);
     const bootEligibleExtensionPackages = selectBootEligibleExtensionPackages({
