@@ -16,6 +16,7 @@ import type { TelemetryOtelConfig } from './config.js';
 import { SpanCollector } from './collector/span-collector.js';
 import { SpanEnricherRuleRegistry } from './enrichers/registry.js';
 import { SpanEnricherPipeline } from './enrichers/pipeline.js';
+import type { SpanProcessorRegistration, TelemetryOtelProcessorRegistry } from './otel/dynamic-span-processor.js';
 
 /**
  * Export sink for enriched span drafts.
@@ -44,6 +45,13 @@ export interface TelemetryOtelServiceOptions {
   /** Emitter that exports fully enriched span batches. */
   readonly emitter: TelemetryOtelSpanEmitter;
   /**
+   * Runtime-mutable span processor registry. When provided, the service
+   * delegates {@link TelemetryOtelProcessorRegistry} calls to this instance.
+   *
+   * Omit in tests that do not exercise OTel processor registration.
+   */
+  readonly processorRegistry?: TelemetryOtelProcessorRegistry;
+  /**
    * Clock function returning the current wall-clock time in Unix milliseconds.
    *
    * Defaults to `Date.now`. Inject a deterministic clock in tests.
@@ -66,11 +74,12 @@ export interface TelemetryOtelServiceOptions {
  *    `config.batchConfig.scheduledDelayMs`.
  * 5. In `onDestroy`, flushes all open executions with error status via `collector.flushAll()`.
  */
-export class TelemetryOtelService extends BaseService {
+export class TelemetryOtelService extends BaseService implements TelemetryOtelProcessorRegistry {
   private readonly collector: SpanCollector;
   private readonly registry: SpanEnricherRuleRegistry;
   private readonly pipeline: SpanEnricherPipeline;
   private readonly emitter: TelemetryOtelSpanEmitter;
+  private readonly processorRegistry: TelemetryOtelProcessorRegistry | undefined;
   private readonly clock: () => number;
   private readonly scheduledDelayMs: number;
   private readonly terminalTelemetryTasks = new Set<Promise<void>>();
@@ -82,6 +91,7 @@ export class TelemetryOtelService extends BaseService {
   public constructor(options: TelemetryOtelServiceOptions) {
     super(options.bus);
 
+    this.processorRegistry = options.processorRegistry;
     this.clock = options.now ?? (() => Date.now());
     this.scheduledDelayMs = options.config.batchConfig.scheduledDelayMs;
 
@@ -234,5 +244,29 @@ export class TelemetryOtelService extends BaseService {
 
     clearInterval(this.sweepIntervalId);
     this.sweepIntervalId = undefined;
+  }
+
+  /**
+   * Delegate processor registration to the configured registry.
+   *
+   * Throws if the service was started without a processor registry.
+   * @param registration - Registration id and processor.
+   * @returns Cleanup callback that flushes, shuts down, and removes this processor.
+   */
+  public registerSpanProcessor(registration: SpanProcessorRegistration): () => Promise<void> {
+    if (this.processorRegistry === undefined) {
+      throw new Error('telemetry-otel was started without a processor registry');
+    }
+    return this.processorRegistry.registerSpanProcessor(registration);
+  }
+
+  /**
+   * List registered processor ids from the underlying registry.
+   *
+   * Returns an empty array when no registry was configured.
+   * @returns Registered ids in insertion order.
+   */
+  public registeredProcessorIds(): readonly string[] {
+    return this.processorRegistry?.registeredProcessorIds() ?? [];
   }
 }

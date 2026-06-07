@@ -8,6 +8,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts/extension';
+import { extensionToken } from '@makaio/contracts/extension';
 import { BasicTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -16,7 +17,18 @@ import { TelemetryOtelNamespace } from './contracts/namespace.js';
 import { TelemetryOtelConfigSchema } from './config.js';
 import type { TelemetryOtelConfig } from './config.js';
 import { OtelSpanEmitter } from './otel/otel-span-emitter.js';
+import { DynamicSpanProcessor } from './otel/dynamic-span-processor.js';
+import type { TelemetryOtelProcessorRegistry } from './otel/dynamic-span-processor.js';
 import { TelemetryOtelService } from './telemetry-otel-service.js';
+
+/**
+ * Extension token for retrieving the processor registry from the runtime
+ * extension coordinator.
+ *
+ * Dependent extensions use this token to register local OTel span processors
+ * without a direct import dependency on the service instance.
+ */
+export const TelemetryOtelServiceToken = extensionToken<TelemetryOtelProcessorRegistry>('telemetry-otel');
 
 /**
  * Build a fully wired {@link TelemetryOtelService} from a parsed config.
@@ -49,21 +61,23 @@ function createTelemetryOtelService(bus: IMakaioBus, config: TelemetryOtelConfig
       : undefined,
   );
 
-  const processor = new BatchSpanProcessor(exporter, {
+  const batchProcessor = new BatchSpanProcessor(exporter, {
     maxExportBatchSize: config.batchConfig.maxExportBatchSize,
     scheduledDelayMillis: config.batchConfig.scheduledDelayMs,
     exportTimeoutMillis: config.batchConfig.exportTimeoutMs,
   });
 
+  const dynamicProcessor = new DynamicSpanProcessor();
+
   const provider = new BasicTracerProvider({
     resource,
-    spanProcessors: [processor],
+    spanProcessors: [batchProcessor, dynamicProcessor],
   });
 
   const tracer = provider.getTracer(config.serviceName);
   const emitter = new OtelSpanEmitter({ tracer, provider });
 
-  return new TelemetryOtelService({ bus, config, emitter });
+  return new TelemetryOtelService({ bus, config, emitter, processorRegistry: dynamicProcessor });
 }
 
 /**
@@ -130,3 +144,10 @@ export { TelemetryOtelNamespace, TelemetryOtelSchemas, TelemetryOtelSubjects } f
 
 // Contracts — registration helper
 export { registerSpanEnricherRule } from './contracts/register.js';
+
+// OTel processor registry
+export { DynamicSpanProcessor } from './otel/dynamic-span-processor.js';
+export type {
+  SpanProcessorRegistration,
+  TelemetryOtelProcessorRegistry,
+} from './otel/dynamic-span-processor.js';

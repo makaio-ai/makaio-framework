@@ -4,6 +4,7 @@ import { AgentSubjects, WorkflowSubjects } from '@makaio/contracts';
 import { TelemetryOtelService } from '../telemetry-otel-service.js';
 import { TelemetryOtelSubjects, type SpanDraft } from '../contracts/index.js';
 import type { TelemetryOtelConfig } from '../config.js';
+import type { SpanProcessorRegistration, TelemetryOtelProcessorRegistry } from '../otel/dynamic-span-processor.js';
 
 function baseConfig(overrides: Partial<TelemetryOtelConfig> = {}): TelemetryOtelConfig {
   return {
@@ -17,7 +18,54 @@ function baseConfig(overrides: Partial<TelemetryOtelConfig> = {}): TelemetryOtel
   };
 }
 
+const processorRegistration: SpanProcessorRegistration = {
+  id: 'langfuse',
+  processor: {
+    onStart: () => {},
+    onEnd: () => {},
+    forceFlush: async () => {},
+    shutdown: async () => {},
+  },
+};
+
 describe('TelemetryOtelService', () => {
+  it('delegates span processor registration to the injected registry and returns its unregister cleanup', async () => {
+    const unregister = vi.fn(async () => {});
+    const registry: TelemetryOtelProcessorRegistry = {
+      registerSpanProcessor: vi.fn(() => unregister),
+      registeredProcessorIds: vi.fn(() => ['langfuse']),
+    };
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig(),
+      emitter: {
+        emit: async () => {},
+      },
+      processorRegistry: registry,
+    });
+
+    const cleanup = service.registerSpanProcessor(processorRegistration);
+    await cleanup();
+
+    expect(registry.registerSpanProcessor).toHaveBeenCalledWith(processorRegistration);
+    expect(unregister).toHaveBeenCalledTimes(1);
+    expect(service.registeredProcessorIds()).toEqual(['langfuse']);
+  });
+
+  it('throws when registering a span processor without a processor registry', () => {
+    const service = new TelemetryOtelService({
+      bus: MakaioBus,
+      config: baseConfig(),
+      emitter: {
+        emit: async () => {},
+      },
+    });
+
+    expect(() => service.registerSpanProcessor(processorRegistration)).toThrow(
+      'telemetry-otel was started without a processor registry',
+    );
+  });
+
   it('subscribes to bus events and exports enriched span drafts on terminal execution', async () => {
     const exported: SpanDraft[][] = [];
     const service = new TelemetryOtelService({
