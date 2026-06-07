@@ -150,7 +150,11 @@ describe('WorkerNodeRunner', () => {
   });
 
   it('merges execution hint capabilities into dispatch requirements', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ status: 'completed', output: undefined });
+    const dispatch = vi.fn().mockResolvedValue({
+      executionId: 'exec-1',
+      workflowId: 'factory:intake',
+      status: 'completed',
+    });
     const runner = new WorkerNodeRunner({ dispatch, requirements: { customCapabilities: ['base'] } });
 
     await runner.run(

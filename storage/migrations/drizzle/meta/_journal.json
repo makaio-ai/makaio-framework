@@ -78,6 +78,13 @@
       "when": 1780489744341,
       "tag": "0010_grey_chronomancer",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1780568212122,
+      "tag": "0011_solid_nomad",
+      "breakpoints": true
     }
   ]
 }

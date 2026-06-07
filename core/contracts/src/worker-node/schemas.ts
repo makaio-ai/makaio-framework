@@ -101,6 +101,75 @@ export const WorkerNodeSchemas = {
   }),
 
   /**
+   * Worker node claims its execution-scoped bus credentials during bootstrap.
+   *
+   * The node presents a provider bootstrap credential together with its
+   * execution/node identity. The server validates the credential and pending
+   * claim, then exchanges it for an execution-scoped `busAuthSecret` the node
+   * uses for all subsequent bus communication.
+   *
+   * Subject: `worker-node.control.bootstrap.claim`
+   * Type: Request (RPC)
+   */
+  'control.bootstrap.claim': {
+    request: z
+      .object({
+        /** Unique workflow execution identifier assigned to this worker. */
+        executionId: z.string().min(1),
+        /** Node identifier assigned by the provider at dispatch time. */
+        nodeId: z.string().min(1),
+        /**
+         * Provider bootstrap credential presented during claim exchange.
+         *
+         * The host validates this credential and invalidates the pending claim
+         * on use so the exchange cannot be replayed.
+         */
+        bootstrapSecret: z.string().min(1),
+      })
+      .strict(),
+    response: z
+      .object({
+        /** WebSocket URL of the bus server the node should connect to. */
+        busUrl: z.string().min(1),
+        /**
+         * Execution-scoped HMAC secret for authenticating subsequent bus
+         * messages.
+         */
+        busAuthSecret: z.string().min(1),
+      })
+      .strict(),
+  },
+
+  /**
+   * Worker node reports the terminal result of a workflow execution.
+   *
+   * Emitted after the workflow runner returns so the orchestrator can
+   * materialise the result without waiting for the process to exit.
+   *
+   * Subject: `worker-node.control.result`
+   * Type: Event
+   */
+  'control.result': z
+    .object({
+      /** Node identifier assigned by the provider at dispatch time. */
+      nodeId: z.string().min(1),
+      /** Unique workflow execution identifier owned by this worker. */
+      executionId: z.string().min(1),
+      /** Terminal result produced by the isolated workflow runner. */
+      result: WorkflowRunResultSchema,
+    })
+    .strict()
+    .superRefine((payload, ctx) => {
+      if (payload.result.executionId !== payload.executionId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['result', 'executionId'],
+          message: 'result.executionId must match executionId',
+        });
+      }
+    }),
+
+  /**
    * Dispatch has selected a provider; node allocation is in progress.
    *
    * Subject: `worker-node.lifecycle.provisioning`

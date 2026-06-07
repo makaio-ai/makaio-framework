@@ -8,6 +8,8 @@ export interface ExecutionMetadataPatch {
   status?: ExecutionStatus;
   /** Terminal execution error, or `null` to clear it. */
   error?: string | null;
+  /** Terminal cancellation reason, or `null` to clear it. */
+  reason?: string | null;
   /** Terminal completion timestamp, or `null` to clear it. */
   completedAt?: number | null;
 }
@@ -27,6 +29,7 @@ export async function persistExecutionUpdate(
     executionId: execution.id,
     status: patch.status,
     error: patch.error,
+    reason: patch.reason,
     completedAt: patch.completedAt,
   });
 

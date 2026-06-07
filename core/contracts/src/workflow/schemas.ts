@@ -839,6 +839,8 @@ export const WorkflowExecutionSchema = z.object({
   completedAt: z.number().optional(),
   /** Error message if execution failed. */
   error: z.string().optional(),
+  /** Cancellation reason if execution was cancelled. */
+  reason: z.string().optional(),
   /**
    * Payload from the firing trigger.
    * Present when triggered by cron, webhook, or plugin event.

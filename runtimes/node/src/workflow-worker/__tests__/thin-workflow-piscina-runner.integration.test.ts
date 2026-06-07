@@ -24,7 +24,6 @@ async function createEchoWorkerEntry(): Promise<string> {
       '    executionId: task.config.executionId,',
       '    workflowId: task.config.workflowId,',
       "    status: 'completed',",
-      '    output: { packages: task.manifest.packages.map((pkg) => pkg.name) },',
       '  };',
       '}',
     ].join('\n'),
@@ -59,7 +58,6 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
         executionId: 'wfx-1',
         workflowId: 'workflow-1',
         status: 'completed',
-        output: { packages: ['per-call-package'] },
       });
     } finally {
       await runner.dispose();
@@ -96,7 +94,6 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
         executionId: 'wfx-1',
         workflowId: 'workflow-1',
         status: 'completed',
-        output: { packages: ['provider-package'] },
       });
     } finally {
       await runner.dispose();

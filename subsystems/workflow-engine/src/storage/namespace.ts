@@ -40,6 +40,7 @@ const ExecutionUpdateSchema = z.object({
   executionId: z.string().min(1),
   status: ExecutionStatusSchema.optional(),
   error: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
   completedAt: z.number().nullable().optional(),
 });
 
@@ -121,7 +122,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      * one transaction.
      */
     cancelPausedExecution: {
-      request: z.object({ executionId: z.string().min(1), completedAt: z.number() }),
+      request: z.object({ executionId: z.string().min(1), completedAt: z.number(), reason: z.string().optional() }),
       response: z.object({
         cancelled: z.boolean(),
         gates: z.array(WorkflowGateInstanceSchema.extend({ status: z.literal('cancelled') })),

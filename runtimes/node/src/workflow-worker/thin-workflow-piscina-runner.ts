@@ -49,7 +49,7 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call manifest override.
-   * @returns Execution result with terminal status and optional output.
+   * @returns Execution result with terminal status and status-specific result fields.
    */
   public async run(
     config: WorkflowWorkerConfig,

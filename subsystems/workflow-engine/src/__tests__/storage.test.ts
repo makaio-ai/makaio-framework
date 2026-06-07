@@ -873,6 +873,7 @@ describe('workflow storage handlers', () => {
     const cancelled = await MakaioBus.request(WorkflowStorageSubjects.cancelPausedExecution, {
       executionId: execution.id,
       completedAt: 2000,
+      reason: 'review requested cancellation',
     });
     const { execution: persistedExecution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
       executionId: execution.id,
@@ -888,7 +889,12 @@ describe('workflow storage handlers', () => {
       gates: [{ ...waitingGate, status: 'cancelled', resolvedAt: 2000 }],
     });
     expect(persistedExecution).toEqual(
-      expect.objectContaining({ id: execution.id, status: 'cancelled', completedAt: 2000 }),
+      expect.objectContaining({
+        id: execution.id,
+        status: 'cancelled',
+        completedAt: 2000,
+        reason: 'review requested cancellation',
+      }),
     );
     expect(gate).toEqual({ ...waitingGate, status: 'cancelled', resolvedAt: 2000 });
   });

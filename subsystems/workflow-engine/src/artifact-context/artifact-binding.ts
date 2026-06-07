@@ -142,6 +142,7 @@ function buildArtifactExpressionContext(
 ): ExpressionContext {
   return {
     inputs: runContext.inputs,
+    config: runContext.config ?? {},
     trigger: runContext.triggerPayload,
     scope: runContext.scope,
     context: runContext.context,

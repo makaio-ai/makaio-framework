@@ -1,5 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { JsonValue } from '../../shared/index.js';
+import { describe, expect, it } from 'vitest';
 import {
   WorkflowRunResultSchema,
   WorkerContributionManifestSchema,
@@ -10,17 +9,55 @@ import {
 import { WorkflowRunContextSchema, WorkflowWorkerConfigSchema } from '../index.js';
 
 describe('WorkflowRunResult', () => {
-  it('types output as JSON-safe data', () => {
-    expectTypeOf<WorkflowRunResult['output']>().toEqualTypeOf<JsonValue | undefined>();
-
-    const result: WorkflowRunResult = {
+  it('models completed results with an optional artifact revision', () => {
+    const completed: WorkflowRunResult = {
       executionId: 'wfx-1',
       workflowId: 'wf-1',
       status: 'completed',
-      output: { approved: true },
+      artifact: {
+        kind: 'workflow-report',
+        id: 'artifact-1',
+        revision: 'rev-1',
+        schemaVersion: '1',
+        scope: { level: 'global' },
+        data: { approved: true },
+        relations: [],
+        actor: { kind: 'workflow-execution', id: 'wfx-1' },
+        timestamp: 1,
+      },
     };
 
-    expect(result.output).toEqual({ approved: true });
+    expect(completed.artifact?.revision).toBe('rev-1');
+  });
+
+  it('models failed and cancelled results with explicit reason fields', () => {
+    const failed: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'failed',
+      error: 'adapter failed',
+    };
+    const cancelled: WorkflowRunResult = {
+      executionId: 'wfx-2',
+      workflowId: 'wf-1',
+      status: 'cancelled',
+      reason: 'user requested cancellation',
+    };
+
+    expect(failed.error).toBe('adapter failed');
+    expect(cancelled.reason).toBe('user requested cancellation');
+  });
+
+  it('does not allow top-level output on run results', () => {
+    const completedWithOutput: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'completed',
+      // @ts-expect-error WorkflowRunResult no longer carries top-level output.
+      output: { ok: true },
+    };
+
+    expect(completedWithOutput.status).toBe('completed');
   });
 
   it('requires pause identity only for paused results', () => {
@@ -104,25 +141,80 @@ describe('WorkerContributionManifestSchema', () => {
 });
 
 describe('WorkflowRunResultSchema', () => {
-  it('validates serializable workflow run results', () => {
+  it('validates completed results with artifact revisions', () => {
     const result = WorkflowRunResultSchema.parse({
       executionId: 'wfx-1',
       workflowId: 'workflow-1',
       status: 'completed',
-      output: { ok: true },
+      artifact: {
+        kind: 'workflow-report',
+        id: 'artifact-1',
+        revision: 'rev-1',
+        schemaVersion: '1',
+        scope: { level: 'global' },
+        data: { ok: true },
+        relations: [],
+        actor: { kind: 'workflow-execution', id: 'wfx-1' },
+        timestamp: 1,
+      },
     });
 
-    expect(result.output).toEqual({ ok: true });
+    expect(result.status).toBe('completed');
+    expect(result.status === 'completed' && result.artifact?.data).toEqual({ ok: true });
   });
 
-  it('accepts all terminal statuses', () => {
-    for (const status of ['completed', 'failed', 'cancelled'] as const) {
-      const result = WorkflowRunResultSchema.parse({
+  it('requires an error for failed results', () => {
+    const result = WorkflowRunResultSchema.parse({
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'failed',
+      error: 'Workflow execution failed',
+    });
+
+    expect(result.status === 'failed' && result.error).toBe('Workflow execution failed');
+    expect(() =>
+      WorkflowRunResultSchema.parse({
         executionId: 'wfx-1',
         workflowId: 'wf-1',
-        status,
-      });
-      expect(result.status).toBe(status);
+        status: 'failed',
+      }),
+    ).toThrow();
+  });
+
+  it('accepts cancelled results with an optional reason', () => {
+    expect(
+      WorkflowRunResultSchema.parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'cancelled',
+        reason: 'user cancelled',
+      }),
+    ).toMatchObject({ status: 'cancelled', reason: 'user cancelled' });
+
+    expect(
+      WorkflowRunResultSchema.parse({
+        executionId: 'wfx-2',
+        workflowId: 'wf-1',
+        status: 'cancelled',
+      }),
+    ).toMatchObject({ status: 'cancelled' });
+  });
+
+  it('rejects top-level output on every result variant', () => {
+    for (const payload of [
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'completed', output: { ok: true } },
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'failed', error: 'failed', output: 'failed' },
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'cancelled', output: { reason: 'cancelled' } },
+      {
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'paused',
+        pausedAtGateId: 'gate-1',
+        pausedAtFrameId: 'frame-1',
+        output: { reason: 'paused' },
+      },
+    ]) {
+      expect(() => WorkflowRunResultSchema.parse(payload)).toThrow();
     }
   });
 

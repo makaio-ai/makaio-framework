@@ -328,11 +328,26 @@ describe('workflow public subjects', () => {
     const workflowRunner: IWorkflowRunner = {
       async run(config): Promise<WorkflowRunResult> {
         capturedConfigs.push(config);
+        if (returnedStatus === 'failed') {
+          return {
+            executionId: config.executionId,
+            workflowId: config.workflowId,
+            status: 'failed',
+            error: `${returnedStatus} by remote runner`,
+          };
+        }
+        if (returnedStatus === 'cancelled') {
+          return {
+            executionId: config.executionId,
+            workflowId: config.workflowId,
+            status: 'cancelled',
+            reason: `${returnedStatus} by remote runner`,
+          };
+        }
         return {
           executionId: config.executionId,
           workflowId: config.workflowId,
-          status: returnedStatus,
-          ...(returnedStatus !== 'completed' ? { output: { reason: `${returnedStatus} by remote runner` } } : {}),
+          status: 'completed',
         };
       },
     };
@@ -370,6 +385,13 @@ describe('workflow public subjects', () => {
     expect(capturedConfigs).toHaveLength(1);
     expect(execution?.status).toBe(expectedStatus);
     expect(execution?.completedAt).toEqual(expect.any(Number));
+    // Runner configs are launch inputs; terminal metadata belongs on the
+    // persisted execution returned by the public read subject.
+    if (expectedStatus === 'failed') {
+      expect(execution?.error).toBe('failed by remote runner');
+    } else if (expectedStatus === 'cancelled') {
+      expect(execution?.reason).toBe('cancelled by remote runner');
+    }
   });
 
   it('persists the requested artifact reference when starting through the public start subject', async () => {

@@ -109,6 +109,8 @@ export const workflowExecutions = sqliteTable(
     inputs: text('inputs', { mode: 'json' }).$type<JsonValue>(),
     /** Error message if execution failed. */
     error: text('error'),
+    /** Cancellation reason if execution was cancelled. */
+    reason: text('reason'),
     /** Execution start timestamp. */
     startedAt: integer('started_at').notNull(),
     /** Execution completion timestamp. */
