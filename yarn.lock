@@ -5520,6 +5520,7 @@ __metadata:
     "@makaio/storage-core": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/storage-handlers": "workspace:*"
+    "@makaio/subsystem-git": "workspace:*"
     "@makaio/test-utils": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@makaio/utils": "workspace:*"
@@ -5687,7 +5688,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/subsystem-git@workspace:subsystems/git":
+"@makaio/subsystem-git@workspace:*, @makaio/subsystem-git@workspace:subsystems/git":
   version: 0.0.0-use.local
   resolution: "@makaio/subsystem-git@workspace:subsystems/git"
   dependencies:
@@ -5699,6 +5700,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     "@types/picomatch": "npm:^3.0.2"
     picomatch: "npm:^4.0.3"
+    simple-git: "npm:^3.28.0"
     tsx: "npm:^4.22.3"
   languageName: unknown
   linkType: soft

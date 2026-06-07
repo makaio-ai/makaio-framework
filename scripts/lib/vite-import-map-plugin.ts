@@ -21,8 +21,56 @@ import { generateImportMapFromBundle } from './generate-import-map.js';
 
 type RollupInput = string | readonly string[] | Record<string, string>;
 
+const VIRTUAL_FACADE_PREFIX = '\0makaio-shared-facade:';
+
+/**
+ * CJS shared externals that need a virtual ESM facade so that Rolldown
+ * emits named exports instead of a default-only CJS wrapper.
+ *
+ * Each entry maps a bare specifier to the named exports that extension
+ * browser bundles expect to import by name.
+ */
+const CJS_SHARED_FACADES: ReadonlyMap<string, readonly string[]> = new Map([
+  [
+    'react',
+    [
+      'createElement',
+      'createContext',
+      'createRef',
+      'Component',
+      'useCallback',
+      'useContext',
+      'useDebugValue',
+      'useEffect',
+      'useId',
+      'useLayoutEffect',
+      'useMemo',
+      'useReducer',
+      'useRef',
+      'useState',
+      'useSyncExternalStore',
+      'useTransition',
+      'forwardRef',
+      'memo',
+      'lazy',
+      'StrictMode',
+      'Suspense',
+      'Fragment',
+      'Children',
+      'cloneElement',
+      'isValidElement',
+      'startTransition',
+    ],
+  ],
+  ['react-dom', ['createPortal', 'flushSync']],
+  ['react/jsx-runtime', ['jsx', 'jsxs', 'Fragment']],
+]);
+
 const SHARED_BROWSER_INPUTS: Record<string, string> = Object.fromEntries(
-  SHARED_BROWSER_EXTERNALS.map((specifier) => [toSharedBrowserExternalEntryName(specifier), specifier]),
+  SHARED_BROWSER_EXTERNALS.map((specifier) => {
+    const entryName = toSharedBrowserExternalEntryName(specifier);
+    return [entryName, CJS_SHARED_FACADES.has(specifier) ? `${VIRTUAL_FACADE_PREFIX}${specifier}` : specifier];
+  }),
 );
 
 /**
@@ -69,9 +117,23 @@ export function viteImportMapPlugin(): Plugin {
         build: {
           rollupOptions: {
             input: mergeSharedBrowserInputs(input),
+            preserveEntrySignatures: 'exports-only',
           },
         },
       };
+    },
+
+    resolveId(source) {
+      if (source.startsWith(VIRTUAL_FACADE_PREFIX)) return source;
+      return undefined;
+    },
+
+    load(id) {
+      if (!id.startsWith(VIRTUAL_FACADE_PREFIX)) return undefined;
+      const specifier = id.slice(VIRTUAL_FACADE_PREFIX.length);
+      const exports = CJS_SHARED_FACADES.get(specifier);
+      if (!exports) return undefined;
+      return `import _cjs_default from ${JSON.stringify(specifier)};\nexport const { ${exports.join(', ')} } = _cjs_default;\nexport default _cjs_default;\n`;
     },
 
     configResolved(config) {

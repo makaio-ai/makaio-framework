@@ -23,7 +23,8 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/tools-core": "workspace:*",
-    "picomatch": "^4.0.3"
+    "picomatch": "^4.0.3",
+    "simple-git": "^3.28.0"
   },
   "publishConfig": {
     "exports": {
