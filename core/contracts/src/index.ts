@@ -72,6 +72,20 @@ export type {
   LocalRef,
   RelationTypeRegistration,
 } from './artifact/index.js';
+export { defineArtifactLifecycleHooks } from './artifact/index.js';
+export type {
+  ArtifactDraft,
+  ArtifactDraftPatch,
+  ArtifactHookFilter,
+  ArtifactLifecycleHookDefinition,
+  ArtifactLifecycleHookEvent,
+  ArtifactLifecycleHookRegistration,
+  ArtifactLifecycleSemanticEvent,
+  ArtifactReactionHookContext,
+  ArtifactReactionHookRegistration,
+  BeforeArtifactHookContext,
+  BeforeArtifactHookRegistration,
+} from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {
   AIModel,
@@ -861,6 +875,7 @@ export type {
   AdapterDefinitionContract,
   AdapterProviderDefinitionContract,
   AdapterProviderRef,
+  ArtifactLifecycleHooksContributionContext,
   BootstrapAsset,
   BootstrapAssetKey,
   BootstrapChoice,
@@ -880,6 +895,7 @@ export type {
   EventFilter,
   ExecuteContext,
   ExecuteResult,
+  ExtensionArtifactLifecycleHooksContribution,
   ExtensionBootstrap,
   ExtensionConfigComponentProps,
   ExtensionConfigProvider,

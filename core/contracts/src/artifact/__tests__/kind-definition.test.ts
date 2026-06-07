@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { defineArtifactKind, type ArtifactDataOf, type ArtifactOf } from '../kind-definition.js';
 import { ArtifactKindRegistrationSchema } from '../schemas.js';
+import { defineArtifactLifecycleHooks } from '../lifecycle-hooks.js';
 
 const PlanDataSchema = z.object({
   status: z.enum(['draft', 'approved']),
@@ -128,5 +129,28 @@ describe('defineArtifactKind', () => {
     (reg1.status!.values as string[]).push('archived');
     const reg2 = kind.toRegistration();
     expect(reg2.status!.values).toHaveLength(2);
+  });
+
+  it('keeps artifact kind hooks live-only and out of bus registration payloads', () => {
+    const beforeCreate = vi.fn();
+    const kind = defineArtifactKind({
+      kind: 'review-findings',
+      schemaVersion: '1',
+      dataSchema: z.object({ findings: z.array(z.object({ message: z.string() })) }),
+      conflictPolicy: 'manual',
+      hooks: defineArtifactLifecycleHooks({
+        hooks: [
+          {
+            id: 'review-findings.require-findings',
+            event: 'beforeCreate',
+            handler: beforeCreate,
+          },
+        ],
+      }),
+    });
+
+    expect(kind.hooks?.hooks).toHaveLength(1);
+    expect(kind.hooks?.hooks[0]?.handler).toBe(beforeCreate);
+    expect(kind.toRegistration()).not.toHaveProperty('hooks');
   });
 });

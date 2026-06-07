@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ArtifactLifecycleHookEvent,
   AdapterClientRefSchema,
   AdapterManifestSchema,
   ClientManifestSchema,
@@ -478,6 +479,31 @@ describe('ContributionManifestSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('parses artifact lifecycle hook metadata for every lifecycle event', () => {
+    const events: readonly ArtifactLifecycleHookEvent[] = [
+      'beforeCreate',
+      'beforeRevise',
+      'afterCreate',
+      'afterRevise',
+      'afterStatusChanged',
+      'afterObservationAdded',
+    ];
+
+    const result = ContributionManifestSchema.safeParse({
+      artifactLifecycleHooks: events.map((event) => ({
+        id: `artifact-hooks.${event}`,
+        event,
+        kind: 'review-finding',
+        schemaVersion: '1',
+      })),
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.artifactLifecycleHooks?.map((hook) => hook.event)).toEqual(events);
+    }
+  });
+
   it('rejects a contribution manifest with invalid adapter entry', () => {
     const result = ContributionManifestSchema.safeParse({
       adapters: [{ name: '', protocols: ['anthropic'] }],
@@ -492,6 +518,27 @@ describe('ContributionManifestSchema', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('rejects invalid artifact lifecycle hook metadata fields', () => {
+    const result = ContributionManifestSchema.safeParse({
+      artifactLifecycleHooks: [
+        { id: 'bad-event', event: 'afterDelete' },
+        { id: '', event: 'afterCreate' },
+        { id: 'empty-kind', event: 'afterCreate', kind: '' },
+        { id: 'empty-schema-version', event: 'afterCreate', kind: 'review-finding', schemaVersion: '' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(({ path }) => path)).toEqual([
+        ['artifactLifecycleHooks', 0, 'event'],
+        ['artifactLifecycleHooks', 1, 'id'],
+        ['artifactLifecycleHooks', 2, 'kind'],
+        ['artifactLifecycleHooks', 3, 'schemaVersion'],
+      ]);
+    }
   });
 
   it('rejects duplicate adapter contribution names with exact issue paths and messages', () => {
@@ -550,6 +597,31 @@ describe('ContributionManifestSchema', () => {
       ]);
     }
   });
+
+  it('rejects duplicate artifact lifecycle hook IDs with exact issue paths and messages', () => {
+    const result = ContributionManifestSchema.safeParse({
+      artifactLifecycleHooks: [
+        { id: 'github.default-projection', event: 'afterCreate' },
+        { id: 'status.audit', event: 'afterStatusChanged' },
+        { id: 'github.default-projection', event: 'afterRevise' },
+        { id: 'status.audit', event: 'afterObservationAdded' },
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map(({ path, message }) => ({ path, message }))).toEqual([
+        {
+          path: ['artifactLifecycleHooks'],
+          message: 'Duplicate artifact lifecycle hook contribution identifier "github.default-projection"',
+        },
+        {
+          path: ['artifactLifecycleHooks'],
+          message: 'Duplicate artifact lifecycle hook contribution identifier "status.audit"',
+        },
+      ]);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -576,6 +648,34 @@ describe('ExtensionManifestSchema with contributions field', () => {
     if (result.success) {
       expect(result.data.contributions?.adapters?.[0]?.name).toBe('my-adapter');
       expect(result.data.contributions?.clients?.[0]?.id).toBe('my-client');
+    }
+  });
+
+  it('parses descriptor metadata with artifact lifecycle hook contributions', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      contributions: {
+        artifactLifecycleHooks: [
+          {
+            id: 'github-materialization.default-projection',
+            event: 'afterCreate',
+            kind: 'review-finding',
+            schemaVersion: '1',
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.contributions?.artifactLifecycleHooks).toEqual([
+        {
+          id: 'github-materialization.default-projection',
+          event: 'afterCreate',
+          kind: 'review-finding',
+          schemaVersion: '1',
+        },
+      ]);
     }
   });
 

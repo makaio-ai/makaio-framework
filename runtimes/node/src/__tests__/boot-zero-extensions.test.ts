@@ -9,6 +9,7 @@ import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
 import { ExtensionSubjects } from '@makaio/kernel';
 import {
   AdapterRuntimeSubjects,
+  ArtifactLifecycleHookRegistryToken,
   frameworkCorePackages,
   ModelRegistryToken,
   SessionOrchestratorToken,
@@ -406,6 +407,58 @@ export default {
 
     expect(transport.disconnectCount).toBe(1);
     await expect(MakaioBus.request(ExtensionSubjects.list, {})).rejects.toBeInstanceOf(NoHandlerError);
+  });
+
+  it('registers extension artifact lifecycle hooks during boot', async () => {
+    const transport = new FakeTransportProvider();
+    const hook = vi.fn();
+    const pkg: KernelMakaioExtension = {
+      name: 'artifact-hook-fixture',
+      displayName: 'Artifact Hook Fixture',
+      version: '1.0.0',
+      artifactLifecycleHooks: {
+        createHooks: () => [{ id: 'artifact-hook-fixture.after-create', event: 'afterCreate', handler: hook }],
+      },
+    };
+    const descriptor: DiscoveredExtension = {
+      descriptor: {
+        name: 'artifact-hook-fixture',
+        displayName: 'Artifact Hook Fixture',
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { server: true },
+      },
+      extensionPath: tempHome,
+      source: 'local',
+      preloadedModule: { default: pkg },
+    };
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      discovery: new ExplicitDescriptorDiscovery([descriptor]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const registry = runtime.coordinator.getExtensionService(ArtifactLifecycleHookRegistryToken);
+    expect(registry).toBeDefined();
+
+    await registry!.runAfterCreate({
+      artifact: {
+        kind: 'test',
+        id: 'test-1',
+        revision: 'rev-1',
+        schemaVersion: '1',
+        scope: { level: 'project', ids: { projectId: 'p1' } },
+        data: {},
+        relations: [],
+        actor: { kind: 'agent', id: 'a1' },
+        timestamp: 1,
+      },
+      meta: new Map(),
+      kindRegistration: undefined,
+      projectionPolicy: { mode: 'none' },
+    });
+    expect(hook).toHaveBeenCalledTimes(1);
   });
 
   it('runs host coordinator cleanups before coordinator shutdown during teardown', async () => {

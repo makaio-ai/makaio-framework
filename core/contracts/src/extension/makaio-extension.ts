@@ -20,6 +20,7 @@ import type { EntityUIConfig } from '../shared/ui-config.js';
 import type { ExtensionBootstrap } from './contributions/bootstrap-types.js';
 import type { ExtensionWorkflowBlocksContribution } from './contributions/workflow-block-types.js';
 import type { AnyArtifactKindDefinition } from '../artifact/index.js';
+import type { ArtifactLifecycleHookRegistration } from '../artifact/lifecycle-hooks.js';
 import type { FacetNamespaceDefinition } from '../facet/index.js';
 import type { SurfaceBindingDefinition } from '../materialization/definition.js';
 import type {
@@ -128,6 +129,41 @@ export interface ExtensionSurfaceBindingsContribution {
    * Surface binding definitions to register during extension activation.
    */
   readonly bindings?: readonly SurfaceBindingDefinition[];
+}
+
+/**
+ * Context supplied to the `createHooks` factory of an
+ * {@link ExtensionArtifactLifecycleHooksContribution}.
+ * @typeParam TBus - Concrete bus type supplied by the host runtime.
+ */
+export interface ArtifactLifecycleHooksContributionContext<TBus extends MakaioBusLike = MakaioBusLike> {
+  /** Runtime bus available during hook factory invocation. */
+  readonly bus: TBus;
+  /** Name of the owning extension, used for hook ID namespacing. */
+  readonly extensionName: string;
+}
+
+/**
+ * Executable artifact lifecycle hooks contribution declared by an extension package.
+ *
+ * The `createHooks` factory is called during extension activation with the
+ * runtime context and must return the set of hook registrations to install.
+ * Returning a `Promise` allows async resource acquisition (e.g. lazy loading).
+ * @typeParam TBus - Concrete bus type supplied by the host runtime.
+ */
+export interface ExtensionArtifactLifecycleHooksContribution<TBus extends MakaioBusLike = MakaioBusLike> {
+  /**
+   * Factory that produces the hook registrations for this extension.
+   *
+   * Called once during extension activation. The returned hooks are registered
+   * with the artifact lifecycle hook registry and unregistered when the
+   * extension stops.
+   * @param ctx - Activation context supplying the bus and extension name.
+   * @returns Hook registrations or a promise that resolves to them.
+   */
+  readonly createHooks: (
+    ctx: ArtifactLifecycleHooksContributionContext<TBus>,
+  ) => readonly ArtifactLifecycleHookRegistration<TBus>[] | Promise<readonly ArtifactLifecycleHookRegistration<TBus>[]>;
 }
 
 /**
@@ -404,6 +440,19 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * declares artifact kinds.
    */
   readonly artifactKinds?: ExtensionArtifactKindsContribution;
+
+  /**
+   * Artifact lifecycle hook factory contributed by this extension.
+   *
+   * When present, the runtime calls `createHooks(ctx)` during extension
+   * activation and registers the returned hooks with the artifact lifecycle
+   * hook registry. Hooks are unregistered when the extension stops.
+   *
+   * Hooks are live-only and must not be included in serializable registration
+   * payloads. The `ArtifactLifecycleHookRegistry` package must be started
+   * before any extension that declares lifecycle hooks.
+   */
+  readonly artifactLifecycleHooks?: ExtensionArtifactLifecycleHooksContribution<THostContext['bus']>;
 
   /**
    * Facet namespace definitions contributed by this extension.

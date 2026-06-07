@@ -51,6 +51,20 @@ export type {
   ArtifactKindDefinition,
   ArtifactOf,
 } from './kind-definition.js';
+export { defineArtifactLifecycleHooks } from './lifecycle-hooks.js';
+export type {
+  ArtifactDraft,
+  ArtifactDraftPatch,
+  ArtifactHookFilter,
+  ArtifactLifecycleHookDefinition,
+  ArtifactLifecycleHookEvent,
+  ArtifactLifecycleHookRegistration,
+  ArtifactLifecycleSemanticEvent,
+  ArtifactReactionHookContext,
+  ArtifactReactionHookRegistration,
+  BeforeArtifactHookContext,
+  BeforeArtifactHookRegistration,
+} from './lifecycle-hooks.js';
 export { ArtifactNamespace, ArtifactSchemas, ArtifactSubjects } from './namespace.js';
 export type {
   ArtifactCreatedPayload,
