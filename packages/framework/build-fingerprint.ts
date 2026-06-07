@@ -155,7 +155,11 @@ export function isFrameworkDistFresh(options: FrameworkDistFreshnessOptions = {}
   }
 
   const stamp = readFrameworkDistBuildStamp(distDir);
-  return stamp?.fingerprint === computeFrameworkDistFingerprint(workspaceRoot);
+  if (!stamp) {
+    return false;
+  }
+
+  return stamp.fingerprint === computeFrameworkDistFingerprint(workspaceRoot);
 }
 
 /**

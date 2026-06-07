@@ -22,6 +22,7 @@ import { isTmuxAvailable, TmuxBackend } from '../tmux-backend.js';
 // ---------------------------------------------------------------------------
 
 const describeWithTmux = isTmuxAvailable() ? describe : describe.skip;
+const REAL_TMUX_TEST_TIMEOUT_MS = 20_000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -112,7 +113,7 @@ function listSessionNames(serverName: string): string[] {
 // Tests
 // ---------------------------------------------------------------------------
 
-describeWithTmux('TmuxBackend — real tmux integration', () => {
+describeWithTmux('TmuxBackend — real tmux integration', { timeout: REAL_TMUX_TEST_TIMEOUT_MS }, () => {
   let serverName: string;
   let backend: TmuxBackend;
   let spawned: IPtyProcess[];

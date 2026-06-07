@@ -42,12 +42,13 @@ describe('framework dist freshness', () => {
   );
 
   it('rejects stamped dist output when a required runtime file is missing', () => {
-    withTempDist((distDir) => {
-      writeFrameworkDistBuildStamp({ workspaceRoot: WORKSPACE_ROOT, distDir });
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
 
       expect(
         isFrameworkDistFresh({
-          workspaceRoot: WORKSPACE_ROOT,
+          workspaceRoot,
           distDir,
           requiredFiles: ['contracts/index.mjs'],
         }),
@@ -56,13 +57,14 @@ describe('framework dist freshness', () => {
   });
 
   it('rejects stamped dist output when a required runtime file is a directory', () => {
-    withTempDist((distDir) => {
+    withTempWorkspace((workspaceRoot) => {
+      const distDir = join(workspaceRoot, 'packages/framework/dist');
       mkdirSync(join(distDir, 'contracts/index.mjs'), { recursive: true });
-      writeFrameworkDistBuildStamp({ workspaceRoot: WORKSPACE_ROOT, distDir });
+      writeFrameworkDistBuildStamp({ workspaceRoot, distDir });
 
       expect(
         isFrameworkDistFresh({
-          workspaceRoot: WORKSPACE_ROOT,
+          workspaceRoot,
           distDir,
           requiredFiles: ['contracts/index.mjs'],
         }),

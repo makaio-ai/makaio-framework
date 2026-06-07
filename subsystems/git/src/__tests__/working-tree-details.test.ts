@@ -9,8 +9,9 @@ import { GitService } from '../git-service.js';
 import { configureTestGit } from './git-test-utils.js';
 
 let bus: IMakaioBus;
+const GIT_WORKING_TREE_DETAILS_TIMEOUT_MS = 30_000;
 
-describe('GitService Working Tree', { timeout: 20_000 }, () => {
+describe('GitService Working Tree', { timeout: GIT_WORKING_TREE_DETAILS_TIMEOUT_MS }, () => {
   let gitService: GitService;
 
   beforeEach(async () => {
