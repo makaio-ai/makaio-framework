@@ -201,6 +201,61 @@ describe('createArtifactKindContributionProcessor', () => {
     await registry.destroy();
   });
 
+  it('replaces an extension kind set when the same extension activates again', async () => {
+    const bus = createBusInstance();
+    const registry = new ArtifactSchemaRegistry(bus);
+    await registry.init();
+    const processor = createArtifactKindContributionProcessor();
+
+    const initialPkg: KernelMakaioExtension = {
+      name: 'planner',
+      displayName: 'Planner',
+      version: '0.1.0',
+      artifactKinds: {
+        kinds: [
+          defineArtifactKind({
+            kind: 'implementation-plan',
+            description: 'Initial implementation-plan fixture for extension reactivation test.',
+            schemaVersion: '1',
+            dataSchema: z.object({ status: z.literal('draft') }),
+            conflictPolicy: 'supersedes',
+          }),
+          defineArtifactKind({
+            kind: 'design-note',
+            description: 'Design-note fixture removed during extension reactivation test.',
+            schemaVersion: '1',
+            dataSchema: z.object({ content: z.string() }),
+            conflictPolicy: 'coexist',
+          }),
+        ],
+      },
+    };
+    const updatedPkg: KernelMakaioExtension = {
+      ...initialPkg,
+      artifactKinds: {
+        kinds: [
+          defineArtifactKind({
+            kind: 'implementation-plan',
+            description: 'Updated implementation-plan fixture for extension reactivation test.',
+            schemaVersion: '1',
+            dataSchema: z.object({ status: z.literal('approved') }),
+            conflictPolicy: 'supersedes',
+          }),
+        ],
+      },
+    };
+
+    await processor.processActivated('planner', initialPkg, makeContext(bus, registry));
+    await processor.processActivated('planner', updatedPkg, makeContext(bus, registry));
+
+    expect(registry.getKind('design-note', '1')).toBeUndefined();
+    expect(registry.getKind('implementation-plan', '1')?.dataSchema).toMatchObject({
+      properties: { status: { const: 'approved' } },
+    });
+
+    await registry.destroy();
+  });
+
   it('rebuilds active registrations when a stopped extension shares a kind key', async () => {
     const bus = createBusInstance();
     const registry = new ArtifactSchemaRegistry(bus);

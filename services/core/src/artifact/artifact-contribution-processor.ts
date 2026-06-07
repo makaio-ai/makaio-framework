@@ -1,13 +1,24 @@
 import type { ContributionProcessor } from '@makaio/kernel';
 import type { ArtifactKindRegistration } from '@makaio/contracts';
 import { ArtifactSchemaRegistryToken } from '../framework-packages.js';
-import type { ArtifactSchemaRegistry } from './artifact-schema-registry.js';
+import type { ArtifactKindRegistrationOwner, ArtifactSchemaRegistry } from './artifact-schema-registry.js';
 
 interface ActiveArtifactKindContribution {
   /** Registry instance that owns these registrations. */
   readonly registry: ArtifactSchemaRegistry;
+  /** Owner identity passed to the registry for every registration in this contribution. */
+  readonly owner: ArtifactKindRegistrationOwner;
   /** Concrete artifact kind records contributed by the active package. */
   readonly registrations: readonly ArtifactKindRegistration[];
+}
+
+/**
+ * Constructs an `extension`-tier owner identity for a named extension.
+ * @param name - The extension package name.
+ * @returns An owner record attributed to that extension.
+ */
+function extensionKindOwner(name: string): ArtifactKindRegistrationOwner {
+  return { source: 'extension', ownerKey: `extension:${name}` };
 }
 
 /**
@@ -23,7 +34,7 @@ function rebuildActiveRegistrations(
   for (const contribution of activeContributions.values()) {
     if (contribution.registry !== registry) continue;
     for (const registration of contribution.registrations) {
-      registry.registerKind(registration);
+      registry.registerKind(registration, contribution.owner);
     }
   }
 }
@@ -48,7 +59,7 @@ export function createArtifactKindContributionProcessor(): ContributionProcessor
 
     for (let index = contribution.registrations.length - 1; index >= 0; index -= 1) {
       const registration = contribution.registrations[index]!;
-      contribution.registry.deregisterKind(registration.kind, registration.schemaVersion);
+      contribution.registry.deregisterKind(registration.kind, registration.schemaVersion, contribution.owner);
     }
     rebuildActiveRegistrations(activeContributions, contribution.registry);
   };
@@ -65,11 +76,12 @@ export function createArtifactKindContributionProcessor(): ContributionProcessor
       }
 
       const registrations = (pkg.artifactKinds?.kinds ?? []).map((kindDef) => kindDef.toRegistration());
+      const owner = extensionKindOwner(name);
       stopContribution(name);
       for (const registration of registrations) {
-        registry.registerKind(registration);
+        registry.registerKind(registration, owner);
       }
-      activeContributions.set(name, { registry, registrations });
+      activeContributions.set(name, { registry, owner, registrations });
     },
 
     async processStopped(name) {

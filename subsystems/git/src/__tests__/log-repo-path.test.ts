@@ -33,7 +33,7 @@ describe('resolveLogRepoPath', { timeout: 20_000 }, () => {
 
     // Create a linked worktree
     await git.raw(['worktree', 'add', worktreePath, '-b', 'wt-branch']);
-  });
+  }, 20_000);
 
   afterEach(async () => {
     // Clean up worktree before removing tmpDir
@@ -44,7 +44,7 @@ describe('resolveLogRepoPath', { timeout: 20_000 }, () => {
       // Ignore cleanup errors
     }
     await fs.rm(tmpDir, { recursive: true, force: true });
-  });
+  }, 20_000);
 
   it('returns repoPath when selectedWorktree is not provided', async () => {
     const result = await resolveLogRepoPath(repoPath);
