@@ -91,6 +91,26 @@ describe('resolveUpstreamTelemetryBootOptionsFromEnv', () => {
     });
   });
 
+  it('creates an unauthenticated transport when MAKAIO_UPSTREAM_SECRET is blank but URL is valid', () => {
+    // A blank/whitespace secret is treated as absent (e.g. unprovisioned GitHub
+    // Actions secret) and must not suppress transport creation when a URL is set.
+    const transport = createTransport();
+    const createTransportMock = vi.fn(() => transport);
+
+    const options = resolveUpstreamTelemetryBootOptionsFromEnv({
+      env: {
+        MAKAIO_UPSTREAM_URL: 'wss://team.example.com/bus',
+        MAKAIO_UPSTREAM_SECRET: '   ',
+      },
+      createTransport: createTransportMock,
+    });
+
+    expect(options).toBeDefined();
+    expect(options?.transport).toBe(transport);
+    // Secret is normalized away — factory receives no secret (unauthenticated).
+    expect(createTransportMock).toHaveBeenCalledWith({ url: 'wss://team.example.com/bus' });
+  });
+
   it('rejects MAKAIO_UPSTREAM_SECRET without MAKAIO_UPSTREAM_URL', () => {
     expect(() =>
       resolveUpstreamTelemetryBootOptionsFromEnv({
@@ -100,13 +120,19 @@ describe('resolveUpstreamTelemetryBootOptionsFromEnv', () => {
     ).toThrow('MAKAIO_UPSTREAM_SECRET requires MAKAIO_UPSTREAM_URL');
   });
 
-  it('rejects an empty MAKAIO_UPSTREAM_SECRET before URL dependency checks', () => {
-    expect(() =>
-      resolveUpstreamTelemetryBootOptionsFromEnv({
-        env: { MAKAIO_UPSTREAM_SECRET: '   ' },
-        createTransport,
-      }),
-    ).toThrow('MAKAIO_UPSTREAM_SECRET is set but empty after trimming; refusing to use an empty secret');
+  it('treats a blank MAKAIO_UPSTREAM_SECRET as absent (e.g. unprovisioned GitHub Actions secret)', () => {
+    // An empty or whitespace-only secret must not throw: environments such as
+    // GitHub Actions set the variable to "" when the secret is not provisioned,
+    // and that should be indistinguishable from "not set".
+    const createTransportMock = vi.fn(createTransport);
+
+    const options = resolveUpstreamTelemetryBootOptionsFromEnv({
+      env: { MAKAIO_UPSTREAM_SECRET: '   ' },
+      createTransport: createTransportMock,
+    });
+
+    expect(options).toBeUndefined();
+    expect(createTransportMock).not.toHaveBeenCalled();
   });
 });
 

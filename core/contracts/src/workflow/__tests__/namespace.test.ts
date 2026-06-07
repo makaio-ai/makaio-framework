@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { getObservabilitySchemaPolicy } from '@makaio/core';
 import {
   WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
@@ -66,6 +67,10 @@ describe('WorkflowNamespace', () => {
 });
 
 describe('execution lifecycle events', () => {
+  it('marks paused execution events as traceAll for observability', () => {
+    expect(getObservabilitySchemaPolicy(WorkflowSchemas['execution.paused'])).toEqual({ traceAll: true });
+  });
+
   it('parses execution lifecycle events with source timestamps', () => {
     const started = WorkflowSchemas['execution.started'].parse({
       executionId: 'wfx-1',
