@@ -31,12 +31,12 @@ export function readApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
 /**
  * API extension.
  *
- * Mounts the product release API under `/api`. The server host remains a
+ * Mounts the release API under `/api`. The server host remains a
  * generic composition root; release behavior is selected by including this
  * descriptor-backed package in the bundled extension list.
  */
 export const apiExtension: MakaioNodeExtension<IMakaioBus> = {
-  name: 'api',
+  name: 'public-api',
   displayName: 'Makaio API',
   version: '0.1.0',
 

@@ -108,6 +108,7 @@
     "@makaio/storage-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/storage-handlers": "workspace:*",
+    "@makaio/subsystem-git": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "zod": "^4.1.13"

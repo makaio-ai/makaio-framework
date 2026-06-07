@@ -76,6 +76,20 @@ function callConfigResolved(plugin: ReturnType<typeof viteImportMapPlugin>, base
 }
 
 /**
+ * Invoke the plugin `load` hook for a virtual module id.
+ * @param plugin - Plugin returned by `viteImportMapPlugin`.
+ * @param id - Module id to load.
+ * @returns Loaded module source, or `undefined`.
+ */
+function callLoadHook(plugin: ReturnType<typeof viteImportMapPlugin>, id: string): string | undefined {
+  const hook = plugin.load;
+  if (typeof hook !== 'function') {
+    throw new Error('load hook is not a function - adjust test helper');
+  }
+  return (hook as (id: string) => string | undefined)(id);
+}
+
+/**
  * Invoke the plugin `config` hook and return the merged Rollup input object.
  * @param plugin - Plugin returned by `viteImportMapPlugin`.
  * @param input - Existing host Rollup input.
@@ -121,13 +135,23 @@ describe('viteImportMapPlugin', () => {
 
     expect(input.main).toBe('/repo/index.html');
     expect(input['extensions/foo']).toBe('/repo/extensions/foo.js');
-    expect(input.__makaio_shared_react).toBe('react');
-    expect(input.__makaio_shared_react_dom).toBe('react-dom');
-    expect(input.__makaio_shared_react_jsx_runtime).toBe('react/jsx-runtime');
+    expect(input.__makaio_shared_react).toBe('\0makaio-shared-facade:react');
+    expect(input.__makaio_shared_react_dom).toBe('\0makaio-shared-facade:react-dom');
+    expect(input.__makaio_shared_react_jsx_runtime).toBe('\0makaio-shared-facade:react/jsx-runtime');
     expect(input.__makaio_shared_makaio_ui_kernel).toBe('@makaio/ui-kernel');
     expect(input.__makaio_shared_makaio_ui_hooks).toBe('@makaio/ui-hooks');
     expect(input.__makaio_shared_makaio_ui_components).toBe('@makaio/ui-components');
     expect(input.__makaio_shared_makaio_ui_views).toBe('@makaio/ui-views');
+  });
+
+  it('loads React facade modules with named exports used by host bootstraps', () => {
+    const plugin = viteImportMapPlugin();
+
+    const source = callLoadHook(plugin, '\0makaio-shared-facade:react');
+
+    expect(source).toContain('StrictMode');
+    expect(source).toContain('Component');
+    expect(source).toContain('createRef');
   });
 
   it('returns a tag descriptor with importmap type and head-prepend injection', () => {
