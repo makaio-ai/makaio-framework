@@ -26,6 +26,7 @@ describe('ArtifactSchemaRegistry', () => {
       });
       const registration = {
         kind: 'note',
+        description: 'Minimal note kind fixture for kind.changed event test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'coexist' as const,
@@ -39,6 +40,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('registers a kind and returns it via kind.list', async () => {
       const planKind = {
         kind: 'implementation-plan',
+        description: 'Minimal implementation-plan kind fixture for kind.list registration test.',
         schemaVersion: '1',
         dataSchema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
         conflictPolicy: 'supersedes' as const,
@@ -54,6 +56,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('registers kind.list { registered: true } response', async () => {
       const registration = {
         kind: 'note',
+        description: 'Minimal note kind fixture for registered flag test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'coexist' as const,
@@ -66,6 +69,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('returns detached kind records so callers cannot mutate registry state', async () => {
       const registration: ArtifactKindRegistration = {
         kind: 'note',
+        description: 'Minimal note kind fixture for detached record mutation test.',
         schemaVersion: '1',
         dataSchema: { type: 'object', properties: { title: { type: 'string' } } },
         conflictPolicy: 'coexist' as const,
@@ -85,12 +89,14 @@ describe('ArtifactSchemaRegistry', () => {
     it('replaces an existing kind for the same kind+schemaVersion pair', async () => {
       const v1 = {
         kind: 'implementation-plan',
+        description: 'Minimal implementation-plan v1 fixture for replacement test.',
         schemaVersion: '1',
         dataSchema: { type: 'object', properties: { status: { type: 'string' } } },
         conflictPolicy: 'supersedes' as const,
       };
       const v1Updated = {
         kind: 'implementation-plan',
+        description: 'Minimal implementation-plan v1 updated fixture for replacement test.',
         schemaVersion: '1',
         dataSchema: { type: 'object', properties: { status: { type: 'string' }, priority: { type: 'number' } } },
         conflictPolicy: 'supersedes' as const,
@@ -107,12 +113,14 @@ describe('ArtifactSchemaRegistry', () => {
     it('registers distinct kinds under different kind+schemaVersion pairs', async () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
+        description: 'Minimal plan v1 fixture for distinct-version pair test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,
       });
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
+        description: 'Minimal plan v2 fixture for distinct-version pair test.',
         schemaVersion: '2',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,
@@ -125,12 +133,14 @@ describe('ArtifactSchemaRegistry', () => {
     it('filters kind.list results by kind string', async () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
+        description: 'Minimal plan fixture for kind.list filter-by-kind test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,
       });
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'note',
+        description: 'Minimal note fixture for kind.list filter-by-kind test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'coexist' as const,
@@ -149,6 +159,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('deregisters a kind by kind+schemaVersion pair', async () => {
       const planKind = {
         kind: 'plan',
+        description: 'Minimal plan fixture for deregister-by-version test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,
@@ -164,6 +175,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('emits kind.changed when a kind is deregistered', async () => {
       await bus.request(ArtifactSubjects.kind.register, {
         kind: 'plan',
+        description: 'Minimal plan fixture for kind.changed on deregister test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,
@@ -259,6 +271,7 @@ describe('ArtifactSchemaRegistry', () => {
     it('getKind returns the registration for a known kind+version pair', async () => {
       const planKind = {
         kind: 'plan',
+        description: 'Minimal plan fixture for getKind direct API test.',
         schemaVersion: '1',
         dataSchema: { type: 'object' },
         conflictPolicy: 'supersedes' as const,

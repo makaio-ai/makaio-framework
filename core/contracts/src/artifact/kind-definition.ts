@@ -20,6 +20,8 @@ type JsonSchemaObject = Record<string, unknown>;
 export interface ArtifactKindDefinition<TData extends Record<string, unknown>, TScope extends ArtifactScope> {
   /** Kind discriminator string registered with the artifact service. */
   readonly kind: string;
+  /** Human-readable kind description for schema discovery and agent guidance. */
+  readonly description: string;
   /** Schema version string (semver or opaque) for this kind definition. */
   readonly schemaVersion: string;
   /** Live Zod schema for the kind-specific `data` payload. */
@@ -84,7 +86,12 @@ export type AnyArtifactKindDefinition = ArtifactKindDefinition<Record<string, un
  * @typeParam T - An {@link ArtifactKindDefinition} whose `data` type to extract.
  * @example
  * ```ts
- * const planDef = defineArtifactKind({ kind: 'plan', dataSchema: PlanDataSchema, ... });
+ * const planDef = defineArtifactKind({
+ *   kind: 'plan',
+ *   description: 'Project plan with approval status.',
+ *   dataSchema: PlanDataSchema,
+ *   ...
+ * });
  * type PlanData = ArtifactDataOf<typeof planDef>;
  * // PlanData = { status: 'draft' | 'approved'; topic: string }
  * ```
@@ -101,7 +108,12 @@ export type ArtifactDataOf<T extends ArtifactKindDefinition<Record<string, unkno
  * @typeParam T - An {@link ArtifactKindDefinition} to narrow against.
  * @example
  * ```ts
- * const planDef = defineArtifactKind({ kind: 'plan', dataSchema: PlanDataSchema, ... });
+ * const planDef = defineArtifactKind({
+ *   kind: 'plan',
+ *   description: 'Project plan with approval status.',
+ *   dataSchema: PlanDataSchema,
+ *   ...
+ * });
  * type PlanArtifact = ArtifactOf<typeof planDef>;
  * // PlanArtifact = ArtifactRevision<PlanData> & { kind: 'plan'; scope: ProjectScope }
  * ```
@@ -123,6 +135,8 @@ export type ArtifactOf<T extends ArtifactKindDefinition<Record<string, unknown>,
 interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScope extends ArtifactScope> {
   /** Kind discriminator string. */
   readonly kind: string;
+  /** Human-readable kind description for schema discovery and agent guidance. */
+  readonly description: string;
   /** Schema version string. */
   readonly schemaVersion: string;
   /** Live Zod schema for the kind-specific `data` payload. */
@@ -193,6 +207,7 @@ function toJsonSchemaObject(schema: z.ZodType): JsonSchemaObject {
  * ```ts
  * export const implementationPlanKind = defineArtifactKind({
  *   kind: 'implementation-plan',
+ *   description: 'Structured implementation plan for agent and human review.',
  *   schemaVersion: '1',
  *   dataSchema: z.object({ status: z.enum(['draft', 'approved']), topic: z.string() }),
  *   conflictPolicy: 'supersedes',
@@ -208,6 +223,7 @@ export function defineArtifactKind<TData extends Record<string, unknown>, TScope
     ...options,
     toRegistration: (): ArtifactKindRegistration => ({
       kind: options.kind,
+      description: options.description,
       schemaVersion: options.schemaVersion,
       dataSchema: toJsonSchemaObject(options.dataSchema),
       ...(options.scopeSchema ? { scopeSchema: toJsonSchemaObject(options.scopeSchema) } : {}),

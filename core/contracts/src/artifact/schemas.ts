@@ -370,6 +370,8 @@ export const ArtifactConflictPolicySchema = z.enum(['supersedes', 'manual', 'coe
 export const ArtifactKindRegistrationSchema = z.object({
   /** Unique kind string. Must be stable across releases. */
   kind: z.string().min(1),
+  /** Human-readable kind description for schema discovery and agent guidance. */
+  description: z.string().trim().min(1),
   /** Schema version that `dataSchema` validates against. */
   schemaVersion: z.string().min(1),
   /** JSON Schema for the kind-specific `data` payload. */

@@ -212,6 +212,7 @@ export default [bootPackage, targetPackage];
         kinds: [
           defineArtifactKind({
             kind: 'boot-note',
+            description: 'Minimal boot-note fixture for boot-time artifact kind registration test.',
             schemaVersion: '1',
             dataSchema: z.object({ title: z.string() }),
             conflictPolicy: 'coexist',

@@ -148,6 +148,7 @@ describe('Artifact core schemas', () => {
     expect(
       ArtifactKindRegistrationSchema.parse({
         kind: 'implementation-plan',
+        description: 'Minimal implementation-plan fixture for kind and relation type registration schema test.',
         schemaVersion: '1',
         dataSchema: { type: 'object', properties: { status: { type: 'string' } }, required: ['status'] },
         conflictPolicy: 'supersedes',
@@ -165,6 +166,18 @@ describe('Artifact core schemas', () => {
         targetRefClasses: ['artifact', 'evidence'],
       }).type,
     ).toBe('derives_from');
+  });
+
+  it('rejects whitespace-only artifact kind descriptions', () => {
+    expect(() =>
+      ArtifactKindRegistrationSchema.parse({
+        kind: 'implementation-plan',
+        description: '   ',
+        schemaVersion: '1',
+        dataSchema: { type: 'object' },
+        conflictPolicy: 'supersedes',
+      }),
+    ).toThrow();
   });
 
   it('allows artifact relation queries by artifact identity without revision', () => {
