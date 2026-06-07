@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ICapabilityProvider } from '../../capability/index.js';
 import type { WorkflowRunResult, WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
+import { SuspensionStrategySchema } from '../../worker-node/suspension.js';
 
 /** Capability identifier used for WorkerNode providers. */
 export const WORKER_NODE_CAPABILITY_ID = 'worker-node' as const;
@@ -28,13 +29,25 @@ export const WorkerNodeCapabilitiesSchema = z.object({
   persistentStorage: z.boolean(),
   /** Product- or environment-specific capability tags. */
   customCapabilities: z.array(z.string().min(1)).default([]),
+  /**
+   * Suspension behavior this provider uses when a workflow reaches a gate.
+   *
+   * Defaults to `'wait-in-process'` for providers that block in-place
+   * (e.g. local Piscina threads). Providers that exit and redispatch or
+   * exit and resume on a managed environment must declare the appropriate
+   * strategy here so dispatchers can select the right gate-parking path.
+   */
+  suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
 });
 
-/** Provider capabilities advertised when registering a WorkerNode provider. */
-export type WorkerNodeCapabilities = z.input<typeof WorkerNodeCapabilitiesSchema>;
+/** Raw provider capability input accepted before schema defaults are applied. */
+export type WorkerNodeCapabilitiesInput = z.input<typeof WorkerNodeCapabilitiesSchema>;
+
+/** Provider capabilities advertised after schema defaults have been applied. */
+export type WorkerNodeCapabilities = z.output<typeof WorkerNodeCapabilitiesSchema>;
 
 /** Provider capabilities after schema defaults have been applied. */
-export type NormalizedWorkerNodeCapabilities = z.output<typeof WorkerNodeCapabilitiesSchema>;
+export type NormalizedWorkerNodeCapabilities = WorkerNodeCapabilities;
 
 /**
  * Zod schema for the resource requirements a workflow dispatch can express
@@ -150,7 +163,7 @@ export interface WorkerNodeHandle {
 export interface IWorkerNodeProvider extends ICapabilityProvider {
   /** Environment tag advertised to dispatch selectors (e.g. `'piscina'`, `'process'`). */
   readonly environment: string;
-  /** Capabilities supported by this provider instance. */
+  /** Capabilities supported by this provider instance after schema defaults are applied. */
   readonly baseCapabilities: WorkerNodeCapabilities;
   /**
    * Provision a new isolated execution node for the given request.
@@ -164,6 +177,16 @@ export interface IWorkerNodeProvider extends ICapabilityProvider {
    * @returns A handle for the provisioned node.
    */
   provision(request: WorkerNodeProvisionRequest): Promise<WorkerNodeHandle>;
+  /**
+   * Resume a previously parked execution on its original provider-managed environment.
+   *
+   * Required only when `baseCapabilities.suspensionStrategy` is `exit-and-resume`.
+   * Providers using `exit-and-redispatch` resume through a fresh `provision()` call.
+   * @param executionId - Persisted workflow execution to resume.
+   * @param signal - Abort signal for cooperative cancellation of the provider resume operation.
+   * @returns A handle for the resumed node.
+   */
+  resumeExecution?(executionId: string, signal: AbortSignal): Promise<WorkerNodeHandle>;
 }
 
 /**

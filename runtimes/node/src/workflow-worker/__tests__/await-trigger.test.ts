@@ -28,6 +28,7 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     env: {},
     coordinatorSessionId: 'session-await-001',
     cancelSubject: 'workflow.cancel.wf-await-001',
+    suspensionStrategy: 'wait-in-process',
     ...overrides,
   };
 }

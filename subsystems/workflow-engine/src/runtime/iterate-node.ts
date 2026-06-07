@@ -1,8 +1,10 @@
-import type { JsonValue, WorkflowIterateNode, WorkflowSequenceNode } from '@makaio/contracts';
+import type { JsonValue, WorkflowFrameState, WorkflowIterateNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
 import type { PrimitiveExpressionContext, RuntimeContext } from './runtime-context.js';
 import { evaluateCollection, extractLastBodyOutput } from './iterate-helpers.js';
+import { findReusableResumeFrame } from './resume-frames.js';
+import { linkSignals } from './signal-helpers.js';
 
 // ─────────────────────────────────────────────────────────────
 // Iterate output types
@@ -23,9 +25,44 @@ export interface IterateOutput {
  * Terminal settled state for a single collection item execution.
  */
 export type ItemSettled =
-  | { readonly status: 'fulfilled'; readonly value: JsonValue | undefined }
+  | { readonly status: 'fulfilled'; readonly value?: JsonValue }
   | { readonly status: 'rejected'; readonly reason: string }
-  | { readonly status: 'cancelled' };
+  | { readonly status: 'cancelled' }
+  | { readonly status: 'paused'; readonly pausedAtGateId: string; readonly pausedAtFrameId: string };
+
+/**
+ * Build a JSON-safe fulfilled item outcome.
+ * @param value - Optional JSON output for the item body.
+ * @returns Fulfilled item outcome without undefined properties.
+ */
+export function fulfilledItem(value?: JsonValue): ItemSettled {
+  return { status: 'fulfilled', ...(value !== undefined ? { value } : {}) };
+}
+
+/** Item frame statuses that can be reused while redispatching a parked iterate node. */
+const ITEM_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
+
+/** Cancellation source signals needed to decide whether an item frame remains resumable. */
+interface ItemCancellationOptions {
+  /** Execution-level cancellation signal. */
+  readonly outerSignal: AbortSignal;
+  /** Internal signal used only to stop sibling items after an item parks. */
+  readonly pauseSignal?: AbortSignal;
+}
+
+/**
+ * Whether an item frame should remain running after a cancellation outcome.
+ *
+ * Pause-triggered sibling aborts are not terminal workflow cancellation. They
+ * checkpoint the iterate node so a later redispatch can reuse already-completed
+ * child frames under the same item parent frame.
+ * @param frame - Item frame whose terminal transition is being considered.
+ * @param options - Cancellation source signals for this iterate run.
+ * @returns True when the item frame must stay resumable.
+ */
+function shouldKeepItemFrameRunningOnCancel(frame: WorkflowFrameState, options: ItemCancellationOptions): boolean {
+  return frame.status === 'running' && options.pauseSignal?.aborted === true && !options.outerSignal.aborted;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Iterate node executor
@@ -107,6 +144,13 @@ export async function executeIterateNode(
     return { status: 'cancelled' };
   }
 
+  // When any item's body paused at a gate, surface the first paused outcome so
+  // the enclosing sequence can exit cleanly without completing the iterate node.
+  const paused = settled.find((item): item is Extract<ItemSettled, { status: 'paused' }> => item.status === 'paused');
+  if (paused !== undefined) {
+    return { status: 'paused', pausedAtGateId: paused.pausedAtGateId, pausedAtFrameId: paused.pausedAtFrameId };
+  }
+
   return { status: 'completed', output: buildIterateOutput(settled) };
 }
 
@@ -141,18 +185,39 @@ async function runItemsWithConcurrency(
   parentPath: string[],
   batchSize: number,
 ): Promise<ItemSettled[]> {
+  const pauseController = new AbortController();
+  const abortSiblingsOnPause = ctx.suspensionStrategy !== 'wait-in-process';
+  const itemSignal = abortSiblingsOnPause ? linkSignals(ctx.signal, pauseController.signal) : ctx.signal;
+  const itemCtx = itemSignal === ctx.signal ? ctx : ctx.withSignal(itemSignal);
+  const cancellationOptions: ItemCancellationOptions = {
+    outerSignal: ctx.signal,
+    ...(abortSiblingsOnPause ? { pauseSignal: pauseController.signal } : {}),
+  };
+
   if (batchSize === 0) {
     // Unlimited concurrency: launch all items at once.
     const promises = collection.map((item, index) =>
-      runItem(item, index, node, ctx, expressionCtx, executeSequenceFn, parentFrameId, parentPath),
+      runItem(
+        item,
+        index,
+        node,
+        itemCtx,
+        expressionCtx,
+        executeSequenceFn,
+        parentFrameId,
+        parentPath,
+        cancellationOptions,
+      ),
     );
-    return Promise.all(promises);
+    return Promise.all(
+      abortSiblingsOnPause ? promises.map((promise) => abortSiblingsWhenPaused(promise, pauseController)) : promises,
+    );
   }
 
   // Bounded concurrency: process in sequential batches.
   const settled: ItemSettled[] = new Array<ItemSettled>(collection.length);
   for (let batchStart = 0; batchStart < collection.length; batchStart += batchSize) {
-    if (ctx.signal.aborted) {
+    if (itemCtx.signal.aborted) {
       // Fill remaining slots with cancelled.
       for (let i = batchStart; i < collection.length; i++) {
         settled[i] = { status: 'cancelled' };
@@ -163,15 +228,54 @@ async function runItemsWithConcurrency(
     const batchPromises: Promise<ItemSettled>[] = [];
     for (let i = batchStart; i < batchEnd; i++) {
       batchPromises.push(
-        runItem(collection[i], i, node, ctx, expressionCtx, executeSequenceFn, parentFrameId, parentPath),
+        runItem(
+          collection[i],
+          i,
+          node,
+          itemCtx,
+          expressionCtx,
+          executeSequenceFn,
+          parentFrameId,
+          parentPath,
+          cancellationOptions,
+        ),
       );
     }
-    const batchResults = await Promise.all(batchPromises);
+    const batchResults = await Promise.all(
+      abortSiblingsOnPause
+        ? batchPromises.map((promise) => abortSiblingsWhenPaused(promise, pauseController))
+        : batchPromises,
+    );
     for (let i = 0; i < batchResults.length; i++) {
       settled[batchStart + i] = batchResults[i];
     }
+    const paused = batchResults.some((result) => result.status === 'paused');
+    if (paused) {
+      for (let i = batchEnd; i < collection.length; i++) {
+        settled[i] = { status: 'cancelled' };
+      }
+      break;
+    }
   }
   return settled;
+}
+
+/**
+ * Abort in-flight sibling items once a parked gate pauses the iterate node.
+ * @param promise - In-flight item execution promise.
+ * @param pauseController - Controller shared by item contexts for this iterate run.
+ * @returns The original item outcome after applying pause-triggered cancellation.
+ */
+function abortSiblingsWhenPaused(
+  promise: Promise<ItemSettled>,
+  pauseController: AbortController,
+): Promise<ItemSettled> {
+  return promise.then((outcome) => {
+    if (outcome.status === 'paused') {
+      pauseController.abort();
+    }
+    return outcome;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -192,6 +296,7 @@ async function runItemsWithConcurrency(
  * @param executeSequenceFn - Injected sequence executor.
  * @param parentFrameId - Frame ID of the iterate container frame.
  * @param parentPath - Frame-ID path of the iterate container (inclusive).
+ * @param cancellationOptions - Signals used to classify item cancellation source.
  * @returns Settled outcome for this item.
  */
 async function runItem(
@@ -203,6 +308,7 @@ async function runItem(
   executeSequenceFn: ExecuteSequenceFn,
   parentFrameId: string,
   parentPath: string[],
+  cancellationOptions: ItemCancellationOptions,
 ): Promise<ItemSettled> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
@@ -215,21 +321,37 @@ async function runItem(
     index,
   };
 
-  // Create a dedicated frame for this item iteration.
-  const frame = ctx.createFrame({
-    nodeId: node.id,
-    nodeType: 'iterate',
-    path: parentPath,
+  const resumeFrame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
     parentFrameId,
     iteration: index,
+    statuses: ITEM_RESUME_STATUSES,
   });
+  if (resumeFrame?.status === 'completed') {
+    return fulfilledItem(resumeFrame.output);
+  }
+
+  // Create a dedicated frame for this item iteration, or reuse the running
+  // item frame left behind by a parked descendant gate.
+  const frame =
+    resumeFrame ??
+    ctx.createFrame({
+      nodeId: node.id,
+      nodeType: 'iterate',
+      path: parentPath,
+      parentFrameId,
+      iteration: index,
+    });
 
   if (ctx.signal.aborted) {
-    await cancelFrame(frame, ctx);
+    if (!shouldKeepItemFrameRunningOnCancel(frame, cancellationOptions)) {
+      await cancelFrame(frame, ctx);
+    }
     return { status: 'cancelled' };
   }
 
-  await startFrame(frame, ctx);
+  if (resumeFrame === undefined) {
+    await startFrame(frame, ctx);
+  }
 
   let outcome: NodeOutcome;
   try {
@@ -247,16 +369,23 @@ async function runItem(
       // output value. Extract the last body node's output from the frame registry.
       const bodyOutput = extractLastBodyOutput(node, frame.frameId, ctx);
       await completeFrame(frame, ctx, bodyOutput);
-      return { status: 'fulfilled', value: bodyOutput };
+      return fulfilledItem(bodyOutput);
     }
     case 'skipped': {
       // A fully-skipped body sequence is treated as fulfilled with no output.
       await completeFrame(frame, ctx);
-      return { status: 'fulfilled', value: undefined };
+      return fulfilledItem();
     }
     case 'cancelled': {
-      await cancelFrame(frame, ctx);
+      if (!shouldKeepItemFrameRunningOnCancel(frame, cancellationOptions)) {
+        await cancelFrame(frame, ctx);
+      }
       return { status: 'cancelled' };
+    }
+    case 'paused': {
+      // The gate already persisted its frame as 'waiting'. Propagate the paused
+      // outcome so the iterate node can surface it to its caller.
+      return outcome;
     }
     case 'failed': {
       await failFrame(frame, ctx, outcome.error);

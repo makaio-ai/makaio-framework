@@ -50,4 +50,45 @@ describe('worker-node namespace', () => {
       adapters: ['claude-code'],
     });
   });
+
+  describe('lifecycle.paused', () => {
+    it('defines lifecycle.paused with required gate and frame identity', () => {
+      const parsed = WorkerNodeSchemas['lifecycle.paused'].parse({
+        nodeId: 'node-1',
+        executionId: 'wfx-1',
+        environment: 'piscina',
+        pausedAtGateId: 'approve',
+        pausedAtFrameId: 'frame-approve-1',
+      });
+
+      expect(parsed).toMatchObject({
+        nodeId: 'node-1',
+        executionId: 'wfx-1',
+        pausedAtGateId: 'approve',
+        pausedAtFrameId: 'frame-approve-1',
+      });
+    });
+
+    it('rejects lifecycle.paused without pausedAtGateId', () => {
+      expect(() =>
+        WorkerNodeSchemas['lifecycle.paused'].parse({
+          nodeId: 'node-1',
+          executionId: 'wfx-1',
+          environment: 'piscina',
+          pausedAtFrameId: 'frame-approve-1',
+        }),
+      ).toThrow();
+    });
+
+    it('rejects lifecycle.paused without pausedAtFrameId', () => {
+      expect(() =>
+        WorkerNodeSchemas['lifecycle.paused'].parse({
+          nodeId: 'node-1',
+          executionId: 'wfx-1',
+          environment: 'piscina',
+          pausedAtGateId: 'approve',
+        }),
+      ).toThrow();
+    });
+  });
 });

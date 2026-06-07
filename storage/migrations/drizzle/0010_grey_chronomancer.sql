@@ -1,0 +1,1 @@
+ALTER TABLE `workflow_run_contexts` ADD `dispatch_metadata` text;

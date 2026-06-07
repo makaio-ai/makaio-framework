@@ -7,6 +7,7 @@ import {
   type WorkerContributionManifest,
   type WorkerContributionPackageRef,
 } from '../worker.js';
+import { WorkflowRunContextSchema, WorkflowWorkerConfigSchema } from '../index.js';
 
 describe('WorkflowRunResult', () => {
   it('types output as JSON-safe data', () => {
@@ -20,6 +21,41 @@ describe('WorkflowRunResult', () => {
     };
 
     expect(result.output).toEqual({ approved: true });
+  });
+
+  it('requires pause identity only for paused results', () => {
+    const paused: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'paused',
+      pausedAtGateId: 'approve',
+      pausedAtFrameId: 'frame-approve-1',
+    };
+    const completed: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'completed',
+    };
+
+    // @ts-expect-error paused results must identify the suspended gate.
+    const missingFrame: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'paused',
+      pausedAtGateId: 'approve',
+    };
+    // @ts-expect-error non-paused results cannot carry pause identity.
+    const completedWithPauseIdentity: WorkflowRunResult = {
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      status: 'completed',
+      pausedAtGateId: 'approve',
+    };
+
+    expect(paused.pausedAtFrameId).toBe('frame-approve-1');
+    expect(completed.status).toBe('completed');
+    expect(missingFrame.status).toBe('paused');
+    expect(completedWithPauseIdentity.status).toBe('completed');
   });
 });
 
@@ -107,5 +143,89 @@ describe('WorkflowRunResultSchema', () => {
         status: 'completed',
       }),
     ).toThrow();
+  });
+
+  it('accepts paused worker results with frame-aware gate identity', () => {
+    expect(
+      WorkflowRunResultSchema.parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'paused',
+        pausedAtGateId: 'approve',
+        pausedAtFrameId: 'frame-approve-1',
+      }),
+    ).toMatchObject({ status: 'paused', pausedAtFrameId: 'frame-approve-1' });
+  });
+
+  it('rejects paused result without pausedAtGateId', () => {
+    expect(() =>
+      WorkflowRunResultSchema.parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'paused',
+        pausedAtFrameId: 'frame-1',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects paused result without pausedAtFrameId', () => {
+    expect(() =>
+      WorkflowRunResultSchema.parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        status: 'paused',
+        pausedAtGateId: 'gate-1',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects non-paused results with pause identity', () => {
+    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+      expect(() =>
+        WorkflowRunResultSchema.parse({
+          executionId: 'wfx-1',
+          workflowId: 'wf-1',
+          status,
+          pausedAtGateId: 'gate-1',
+          pausedAtFrameId: 'frame-1',
+        }),
+      ).toThrow();
+    }
+  });
+});
+
+describe('suspension strategy in WorkflowWorkerConfigSchema and WorkflowRunContextSchema', () => {
+  it('carries selected suspension strategy through worker config and run context', () => {
+    const config = WorkflowWorkerConfigSchema.parse({
+      source: { kind: 'definition', workflowId: 'wf-1' },
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
+      env: {},
+      coordinatorSessionId: 'session-1',
+      cancelSubject: 'workflow.wfx-1.cancel',
+      suspensionStrategy: 'exit-and-redispatch',
+    });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: 'wfx-1',
+      workflowId: 'wf-1',
+      source: { kind: 'path', path: '/repo/workflow.ts' },
+      workerManifest: { packages: [] },
+      inputs: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-1',
+      cancelSubject: 'workflow.wfx-1.cancel',
+      context: { repoPath: '/repo', makaioHome: '/home/.makaio', os: 'linux', arch: 'arm64' },
+      env: {},
+      createdAt: 1,
+      suspensionStrategy: 'exit-and-redispatch',
+    });
+
+    expect(config.suspensionStrategy).toBe('exit-and-redispatch');
+    expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 });

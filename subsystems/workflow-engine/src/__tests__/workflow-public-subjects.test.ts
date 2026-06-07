@@ -942,6 +942,8 @@ describe('workflow public subjects', () => {
         schema: {},
         prompt: 'Approve this execution?',
         status: 'waiting',
+        autoAction: 'reject',
+        timeoutMs: null,
         createdAt: Date.now(),
       },
     });

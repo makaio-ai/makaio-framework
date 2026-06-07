@@ -1,9 +1,10 @@
-import type { JsonValue, WorkflowIterateChainNode, WorkflowSequenceNode } from '@makaio/contracts';
+import type { JsonValue, WorkflowFrameState, WorkflowIterateChainNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
 import type { PrimitiveExpressionContext, RuntimeContext } from './runtime-context.js';
-import type { ItemSettled } from './iterate-node.js';
+import { fulfilledItem, type ItemSettled } from './iterate-node.js';
 import { evaluateCollection, extractLastBodyOutput } from './iterate-helpers.js';
+import { findReusableResumeFrame } from './resume-frames.js';
 
 // ─────────────────────────────────────────────────────────────
 // Iterate-chain output type
@@ -20,6 +21,9 @@ export interface IterateChainOutput {
   /** Ordered array of per-item outcomes in collection order. */
   readonly items: ItemSettled[];
 }
+
+/** Item frame statuses that can be reused while redispatching a parked iterate-chain node. */
+const ITEM_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
 
 // ─────────────────────────────────────────────────────────────
 // Iterate-chain node executor
@@ -129,6 +133,11 @@ export async function executeIterateChainNode(
       case 'cancelled': {
         return { status: 'cancelled' };
       }
+      case 'paused': {
+        // The gate already persisted its frame as 'waiting'. Exit immediately so
+        // the enclosing sequence can surface the paused outcome to its caller.
+        return { status: 'paused', pausedAtGateId: result.pausedAtGateId, pausedAtFrameId: result.pausedAtFrameId };
+      }
     }
   }
 
@@ -180,21 +189,35 @@ async function runChainItem(
     ...(previous !== undefined && { previous }),
   };
 
-  // Create a dedicated frame for this item iteration.
-  const frame = ctx.createFrame({
-    nodeId: node.id,
-    nodeType: 'iterate-chain',
-    path: parentPath,
+  const resumeFrame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
     parentFrameId,
     iteration: index,
+    statuses: ITEM_RESUME_STATUSES,
   });
+  if (resumeFrame?.status === 'completed') {
+    return fulfilledItem(resumeFrame.output);
+  }
+
+  // Create a dedicated frame for this item iteration, or reuse the running
+  // item frame left behind by a parked descendant gate.
+  const frame =
+    resumeFrame ??
+    ctx.createFrame({
+      nodeId: node.id,
+      nodeType: 'iterate-chain',
+      path: parentPath,
+      parentFrameId,
+      iteration: index,
+    });
 
   if (ctx.signal.aborted) {
     await cancelFrame(frame, ctx);
     return { status: 'cancelled' };
   }
 
-  await startFrame(frame, ctx);
+  if (resumeFrame === undefined) {
+    await startFrame(frame, ctx);
+  }
 
   let outcome: NodeOutcome;
   try {
@@ -213,16 +236,21 @@ async function runChainItem(
       // so it can be passed as `previous` to the next item.
       const bodyOutput = extractLastBodyOutput(node, frame.frameId, ctx);
       await completeFrame(frame, ctx, bodyOutput);
-      return { status: 'fulfilled', value: bodyOutput };
+      return fulfilledItem(bodyOutput);
     }
     case 'skipped': {
       // A fully-skipped body sequence is treated as fulfilled with no output.
       await completeFrame(frame, ctx);
-      return { status: 'fulfilled', value: undefined };
+      return fulfilledItem();
     }
     case 'cancelled': {
       await cancelFrame(frame, ctx);
       return { status: 'cancelled' };
+    }
+    case 'paused': {
+      // The gate already persisted its frame as 'waiting'. Propagate the paused
+      // outcome so the iterate-chain node can surface it to its caller.
+      return outcome;
     }
     case 'failed': {
       await failFrame(frame, ctx, outcome.error);

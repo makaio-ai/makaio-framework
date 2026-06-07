@@ -7,6 +7,7 @@ import type {
   PreviousStepOutput,
   StationHandler,
   SpanRecord,
+  SuspensionStrategy,
   WorkflowDefinition,
   WorkflowExecution,
   WorkflowFrameState,
@@ -144,6 +145,49 @@ export interface CreateFrameParams {
 }
 
 /**
+ * Index of persisted frames available for resumption in a re-dispatched execution.
+ *
+ * This structural alias mirrors the interface defined in `resume-frames.ts`,
+ * replicated here to avoid a circular module dependency:
+ * `resume-frames.ts` imports `PrimitiveExpressionContext` from this module,
+ * so importing from `resume-frames.ts` here would create a cycle.
+ *
+ * Both shapes must be kept in sync. The two access paths are:
+ * - `byNodeId`: all frames for a node ID, ordered by `startedAt` ascending.
+ * - `byFrameId`: O(1) lookup by frame ID.
+ */
+export interface ResumeFrameIndex {
+  /** All frames for a given node ID, preserving storage order (startedAt asc). */
+  readonly byNodeId: ReadonlyMap<string, readonly WorkflowFrameState[]>;
+  /** Direct frame lookup by frame ID. */
+  readonly byFrameId: ReadonlyMap<string, WorkflowFrameState>;
+}
+
+/**
+ * Execution-level options that customize runtime behavior beyond the workflow
+ * definition, such as suspension strategy and pre-loaded resume data.
+ *
+ * All fields are optional; sensible defaults are applied by {@link RuntimeContext}.
+ */
+export interface RuntimeExecutionOptions {
+  /**
+   * How the runtime should handle workflow suspension points (e.g., gate nodes).
+   * Defaults to `'wait-in-process'` when absent.
+   */
+  readonly suspensionStrategy?: SuspensionStrategy;
+  /**
+   * Pre-loaded resume frames for re-dispatched executions. When populated the
+   * runtime resumes from the provided frame payloads instead of waiting for
+   * external responses.
+   */
+  readonly resumeFrames?: ResumeFrameIndex;
+}
+
+interface FramePersistenceOptions {
+  readonly requireFrameStorage?: boolean;
+}
+
+/**
  * Platform fields made available to station handlers during runtime.
  */
 export interface RuntimePlatformContext {
@@ -278,6 +322,7 @@ export class RuntimeContext {
    * @param sharedFrameRegistry - Optional shared frame registry for child contexts.
    * @param artifactBinding - Optional pre-resolved artifact binding state.
    * @param platform - Platform context and environment exposed to station handlers.
+   * @param options - Execution-level options (suspension strategy, resume frames).
    */
   public constructor(
     public readonly executionId: string,
@@ -290,11 +335,14 @@ export class RuntimeContext {
     sharedFrameRegistry?: Map<string, WorkflowFrameState>,
     artifactBinding?: ArtifactBindingState,
     platform: RuntimePlatformContext = resolveDefaultPlatformContext(),
+    options: RuntimeExecutionOptions = {},
   ) {
     this.frameRegistry = sharedFrameRegistry ?? new Map<string, WorkflowFrameState>();
     this.artifactBinding = artifactBinding;
     this.platformContext = platform.context;
     this.env = platform.env;
+    this.suspensionStrategy = options.suspensionStrategy ?? 'wait-in-process';
+    this.resumeFrames = options.resumeFrames;
   }
 
   /** Platform/workspace context exposed to station handlers. */
@@ -302,6 +350,18 @@ export class RuntimeContext {
 
   /** Extra environment variables exposed to station handlers. */
   public readonly env: Record<string, string>;
+
+  /**
+   * Suspension strategy selected for this execution run.
+   * Defaults to `'wait-in-process'`.
+   */
+  public readonly suspensionStrategy: SuspensionStrategy;
+
+  /**
+   * Pre-loaded resume frames for re-dispatched executions.
+   * `undefined` when the execution is starting fresh.
+   */
+  public readonly resumeFrames: ResumeFrameIndex | undefined;
 
   /**
    * Create a child context that shares this execution's frame registry and
@@ -328,6 +388,7 @@ export class RuntimeContext {
       this.frameRegistry,
       this.artifactBinding,
       { context: this.platformContext, env: this.env },
+      { suspensionStrategy: this.suspensionStrategy, resumeFrames: this.resumeFrames },
     );
   }
 
@@ -354,9 +415,10 @@ export class RuntimeContext {
    * in the in-memory frame registry, and enqueue a bus upsert to persist the
    * initial row to the database.
    *
-   * Persistence errors are swallowed so a missing storage handler (e.g. in
-   * unit tests without a DB) does not abort execution. The in-memory registry
-   * is the authoritative source of truth during a single execution run.
+   * For in-process executions, persistence errors are swallowed so a missing
+   * storage handler (e.g. in unit tests without a DB) does not abort execution.
+   * Exit-based executions require durable frame storage because persisted
+   * frames are the resume checkpoint contract.
    *
    * The returned frame is mutable; since it is the same reference stored in the
    * registry, direct mutations are sufficient for lifecycle helpers. Callers that
@@ -380,7 +442,11 @@ export class RuntimeContext {
       branchKey: params.branchKey,
     };
     this.frameRegistry.set(frameId, frame);
-    void this.persistFrame(frame);
+    // The first pending write is enqueued from a synchronous factory. Later
+    // lifecycle helpers await their own required writes, so observe this
+    // promise here only to prevent unhandled rejections from the fire-and-forget
+    // pending checkpoint.
+    void this.persistFrame(frame).catch(() => undefined);
     return frame;
   }
 
@@ -390,32 +456,49 @@ export class RuntimeContext {
    *
    * Writes are ordered per frame so the initial pending row cannot race after
    * a later running/completed transition. Missing storage handlers are allowed
-   * for isolated unit tests; handler failures are downgraded to warnings.
+   * for isolated in-process unit tests; exit-based suspension strategies make
+   * frame storage mandatory so a failed checkpoint write fails the execution
+   * before it can park and later replay side effects.
    * @param frame - Frame state to persist.
+   * @param options - Persistence behavior for this write.
    */
-  public async persistFrame(frame: WorkflowFrameState): Promise<void> {
+  public async persistFrame(frame: WorkflowFrameState, options: FramePersistenceOptions = {}): Promise<void> {
+    const requireFrameStorage = options.requireFrameStorage === true || this.suspensionStrategy !== 'wait-in-process';
     const snapshot = snapshotFrame(frame);
     const span = toFrameSpanRecord(this.executionId, snapshot);
     const previous = this.framePersistenceTasks.get(frame.frameId) ?? Promise.resolve();
     const task = previous
       .catch(() => undefined)
       .then(async () => {
-        await this.bus.requestOptional(WorkflowStorageSubjects.setFrame, {
-          executionId: this.executionId,
-          frame: snapshot,
-        });
+        if (requireFrameStorage) {
+          await this.bus.request(WorkflowStorageSubjects.setFrame, {
+            executionId: this.executionId,
+            frame: snapshot,
+          });
+        } else {
+          await this.bus.requestOptional(WorkflowStorageSubjects.setFrame, {
+            executionId: this.executionId,
+            frame: snapshot,
+          });
+        }
         if (span !== undefined) {
           await this.bus.requestOptional(WorkflowStorageSubjects.setSpan, { span });
         }
       })
       .catch((error: unknown) => {
+        if (requireFrameStorage) {
+          throw error;
+        }
         console.warn(`[RuntimeContext] Failed to persist frame ${frame.frameId}:`, error);
       });
 
     this.framePersistenceTasks.set(frame.frameId, task);
-    await task;
-    if (this.framePersistenceTasks.get(frame.frameId) === task) {
-      this.framePersistenceTasks.delete(frame.frameId);
+    try {
+      await task;
+    } finally {
+      if (this.framePersistenceTasks.get(frame.frameId) === task) {
+        this.framePersistenceTasks.delete(frame.frameId);
+      }
     }
   }
 
@@ -426,14 +509,19 @@ export class RuntimeContext {
    * Throws if the frame ID is not found in the registry.
    * @param frameId - The frame to update.
    * @param patch - Fields to merge into the frame.
+   * @param options - Persistence behavior for this update.
    */
-  public async updateFrame(frameId: string, patch: Partial<WorkflowFrameState>): Promise<void> {
+  public async updateFrame(
+    frameId: string,
+    patch: Partial<WorkflowFrameState>,
+    options: FramePersistenceOptions = {},
+  ): Promise<void> {
     const frame = this.frameRegistry.get(frameId);
     if (!frame) {
       throw new Error(`Frame not found: ${frameId}`);
     }
     Object.assign(frame, patch);
-    await this.persistFrame(frame);
+    await this.persistFrame(frame, options);
   }
 
   /**

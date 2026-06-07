@@ -731,6 +731,7 @@ export type {
   WorkflowWorkerSource,
   WorkflowWorkerConfig,
   WorkflowRunResult,
+  WorkflowRunnerRunOptions,
   IWorkflowRunner,
   WorkerContributionPackageRef,
   WorkerContributionManifest,
@@ -822,7 +823,9 @@ export {
   WorkerNodeNamespace,
   WorkerNodeSchemas,
   WorkerNodeSubjects,
+  SuspensionStrategySchema,
 } from './worker-node/index.js';
+export type { SuspensionStrategy } from './worker-node/index.js';
 export {
   BrowserEntrypointSchema,
   CliManifestSchema,

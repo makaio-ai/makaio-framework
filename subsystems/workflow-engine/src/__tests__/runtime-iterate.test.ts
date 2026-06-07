@@ -1,20 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
   type JsonValue,
   type StationHandler,
   type WorkflowDefinition,
   type WorkflowExecution,
+  type WorkflowGateNode,
   type WorkflowIterateChainNode,
   type WorkflowIterateNode,
   type WorkflowSequenceNode,
   type WorkflowStationNode,
 } from '@makaio/contracts';
-import { RuntimeContext } from '../runtime/runtime-context.js';
+import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeIterateNode, type IterateOutput } from '../runtime/iterate-node.js';
 import { executeIterateChainNode, type IterateChainOutput } from '../runtime/iterate-chain-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
+import { WorkflowStorageSubjects } from '../storage/namespace.js';
 
 // ─────────────────────────────────────────────────────────────
 // Test helpers
@@ -62,10 +64,12 @@ function makeBus(): ReturnType<typeof createBusInstance> {
  * Create a fresh RuntimeContext with an isolated bus.
  * @param handlers - Station handlers keyed by node ID.
  * @param signal - Optional abort signal.
+ * @param options - Optional runtime execution options.
  */
 function makeCtx(
   handlers: Record<string, StationHandler>,
   signal: AbortSignal = new AbortController().signal,
+  options: RuntimeExecutionOptions = {},
 ): RuntimeContext {
   const bus = makeBus();
   return new RuntimeContext(
@@ -76,7 +80,27 @@ function makeCtx(
     new Map(Object.entries(handlers)),
     bus,
     signal,
+    undefined,
+    undefined,
+    undefined,
+    options,
   );
+}
+
+/**
+ * Register the durable storage handlers required for exit-based gate parking.
+ * @param bus - Isolated workflow test bus.
+ */
+function registerGateParkingStorage(bus: IMakaioBus): void {
+  bus.on(WorkflowStorageSubjects.getGateInstance, (ctx) => {
+    ctx.setResult({ gate: null });
+  });
+  bus.on(WorkflowStorageSubjects.setGateInstance, (ctx) => {
+    ctx.setResult({ id: ctx.payload.gate.frameId });
+  });
+  bus.on(WorkflowStorageSubjects.setFrame, (ctx) => {
+    ctx.setResult({ frameId: ctx.payload.frame.frameId });
+  });
 }
 
 /** Minimal expression context with no pre-populated frames. */
@@ -381,6 +405,101 @@ describe('executeIterateNode', () => {
     expect(outcome.status).toBe('completed');
     // With concurrency=2 and 4 items, max concurrent must be ≤ 2.
     expect(maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
+  it('stops bounded batches and cancels running siblings when an exit-based item parks', async () => {
+    let slowStartedResolve: () => void = () => {};
+    const slowStarted = new Promise<void>((resolve) => {
+      slowStartedResolve = resolve;
+    });
+    const startedStations: unknown[] = [];
+    const sideEffects: string[] = [];
+
+    const waitForSiblingNode = {
+      id: 'iter-pause__wait-for-sibling',
+      type: 'station',
+      prompt: 'Wait for sibling',
+      when: "item == 'pause'",
+    } satisfies WorkflowStationNode;
+    const gateNode = {
+      id: 'iter-pause__gate',
+      type: 'gate',
+      prompt: 'Approve?',
+      autoAction: 'reject',
+      timeoutMs: null,
+      when: "item == 'pause'",
+    } satisfies WorkflowGateNode;
+    const workerNode = {
+      id: 'iter-pause__worker',
+      type: 'station',
+      prompt: 'Worker',
+      when: "item != 'pause'",
+    } satisfies WorkflowStationNode;
+    const node: WorkflowIterateNode = {
+      id: 'iter-pause',
+      type: 'iterate',
+      collection: 'inputs.items',
+      concurrency: 2,
+      body: {
+        id: 'iter-pause__body',
+        type: 'sequence',
+        nodes: [waitForSiblingNode, gateNode, workerNode],
+      },
+    };
+
+    const worker: StationHandler = async (ctx) => {
+      startedStations.push(ctx.item);
+      slowStartedResolve();
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(() => {
+          if (!ctx.signal.aborted) {
+            sideEffects.push(String(ctx.item));
+          }
+          resolve();
+        }, 25);
+        if (ctx.signal.aborted) {
+          clearTimeout(timeout);
+          resolve();
+          return;
+        }
+        ctx.signal.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timeout);
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      return null;
+    };
+    const ctx = makeCtx(
+      {
+        'iter-pause__wait-for-sibling': async () => {
+          await slowStarted;
+          return null;
+        },
+        'iter-pause__worker': worker,
+      },
+      new AbortController().signal,
+      { suspensionStrategy: 'exit-and-redispatch' },
+    );
+    registerGateParkingStorage(ctx.bus);
+    const iterFrame = makeContainerFrame(ctx, 'iter-pause', 'iterate');
+    const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['pause', 'slow', 'later'] } };
+
+    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+
+    expect(outcome).toMatchObject({
+      status: 'paused',
+      pausedAtGateId: 'iter-pause__gate',
+      pausedAtFrameId: expect.any(String),
+    });
+    expect(startedStations).toContain('slow');
+    expect(startedStations).not.toContain('later');
+    expect(sideEffects).toEqual([]);
+    const itemFrames = ctx.getFramesByNodeId('iter-pause').filter((frame) => frame.iteration !== undefined);
+    expect(itemFrames.map((frame) => frame.iteration).sort()).toEqual([0, 1]);
   });
 });
 

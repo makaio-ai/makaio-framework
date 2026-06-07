@@ -151,6 +151,7 @@ export type {
   WorkflowWorkerSource,
   WorkflowWorkerConfig,
   WorkflowRunResult,
+  WorkflowRunnerRunOptions,
   IWorkflowRunner,
   WorkerContributionPackageRef,
   WorkerContributionManifest,

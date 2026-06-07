@@ -63,6 +63,7 @@ export interface StartExecutionDeps {
     artifactRef?: WorkflowRunContext['artifactRef'];
     executionHints?: WorkflowRunContext['executionHints'];
     workspaceRoot: string;
+    suspensionStrategy?: WorkflowRunContext['suspensionStrategy'];
   }): WorkflowRunContext;
   /**
    * Build a {@link RunnerTaskDeps} bundle for the given workflow runner.
@@ -456,6 +457,7 @@ export async function startExecution(
       ...(artifactRef !== undefined ? { artifactRef } : {}),
       ...(mergedExecutionHints !== undefined ? { executionHints: mergedExecutionHints } : {}),
       workspaceRoot,
+      suspensionStrategy: runContext.suspensionStrategy,
     });
 
     launched = true;

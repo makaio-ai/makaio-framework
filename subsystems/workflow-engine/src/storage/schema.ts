@@ -234,6 +234,12 @@ export const workflowGateInstances = sqliteTable(
     prompt: text('prompt'),
     /** Current gate status. */
     status: text('status').notNull().default('waiting').$type<WorkflowGateInstance['status']>(),
+    /** Effective timeout action captured when the gate opened. */
+    autoAction: text('auto_action', { enum: ['approve', 'reject'] })
+      .notNull()
+      .default('reject'),
+    /** Effective timeout in milliseconds captured when the gate opened. */
+    timeoutMs: integer('timeout_ms'),
     /** JSON-serializable resume data submitted by the approver. */
     resumeData: text('resume_data', { mode: 'json' }).$type<JsonValue>(),
     /** Whether `resume_data` was explicitly submitted, including JSON null. */
@@ -373,6 +379,8 @@ export const workflowRunContexts = sqliteTable(
     artifactRef: text('artifact_ref', { mode: 'json' }).$type<WorkflowRunContext['artifactRef']>(),
     /** Advisory worker provisioning hints supplied by the start request. */
     executionHints: text('execution_hints', { mode: 'json' }).$type<WorkflowRunContext['executionHints']>(),
+    /** Opaque dispatch metadata that must survive pause/resume boundaries. */
+    dispatchMetadata: text('dispatch_metadata', { mode: 'json' }).$type<WorkflowRunContext['dispatchMetadata']>(),
     /** Scope type discriminant. */
     scopeType: text('scope_type', {
       enum: ['global', 'workspace', 'session', 'external'],
@@ -403,6 +411,14 @@ export const workflowRunContexts = sqliteTable(
     env: text('env', { mode: 'json' }).$type<Record<string, string>>().notNull(),
     /** Snapshot creation timestamp (epoch ms). */
     createdAt: integer('created_at').notNull(),
+    /**
+     * Durable record of the suspension strategy selected for this execution.
+     *
+     * Persisted so resumers and redispatchers can apply the same strategy
+     * without re-resolving provider capabilities. Null for rows created before
+     * this column was introduced — callers should fall back to `'wait-in-process'`.
+     */
+    suspensionStrategy: text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
   },
   (table) => [index('idx_run_contexts_workflow').on(table.workflowId)],
 );

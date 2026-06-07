@@ -10,6 +10,7 @@ import {
   ExecutionListQuerySchema,
   WorkflowRunContextSchema,
   type WorkflowDefinition,
+  type WorkflowGateInstance,
 } from '@makaio/contracts';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 
@@ -305,6 +306,35 @@ describe('workflow storage handlers', () => {
     await expect(
       MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id }),
     ).resolves.toEqual(expect.objectContaining({ runContext: expect.objectContaining({ executionId: execution.id }) }));
+  });
+
+  it('round-trips suspensionStrategy through run context storage', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-suspension-strategy' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-suspension-strategy', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-suspension-strategy',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+      suspensionStrategy: 'exit-and-redispatch',
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: execution.id,
+    });
+    expect(fetched?.suspensionStrategy).toBe('exit-and-redispatch');
   });
 
   it('rejects execution start snapshots whose ids do not match', async () => {
@@ -673,6 +703,8 @@ describe('workflow storage handlers', () => {
         frameId: 'frame-waiting-gate',
         schema: {},
         status: 'waiting',
+        autoAction: 'reject',
+        timeoutMs: null,
         createdAt: 1000,
       },
     });
@@ -683,6 +715,8 @@ describe('workflow storage handlers', () => {
         frameId: 'frame-null-gate',
         schema: {},
         status: 'resumed',
+        autoAction: 'approve',
+        timeoutMs: 5000,
         resumeData: null,
         createdAt: 1000,
         resolvedAt: 2000,
@@ -703,9 +737,234 @@ describe('workflow storage handlers', () => {
 
     expect(absentResumeGate).not.toBeNull();
     expect(Object.hasOwn(absentResumeGate!, 'resumeData')).toBe(false);
+    expect(absentResumeGate?.autoAction).toBe('reject');
+    expect(absentResumeGate?.timeoutMs).toBeNull();
     expect(nullResumeGate?.resumeData).toBeNull();
+    expect(nullResumeGate?.autoAction).toBe('approve');
+    expect(nullResumeGate?.timeoutMs).toBe(5000);
     expect(gates.find((gate) => gate.nodeId === 'waiting-gate')).not.toHaveProperty('resumeData');
     expect(gates.find((gate) => gate.nodeId === 'null-gate')?.resumeData).toBeNull();
+  });
+
+  it('resolves a waiting gate instance only once', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-gate-atomic-resolve' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-gate-atomic-resolve', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    const waitingGate: WorkflowGateInstance = {
+      executionId: execution.id,
+      nodeId: 'gate-atomic-resolve',
+      frameId: 'frame-gate-atomic-resolve',
+      schema: {},
+      status: 'waiting',
+      autoAction: 'reject',
+      timeoutMs: null,
+      createdAt: 1000,
+    };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
+
+    const firstResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
+      gate: {
+        ...waitingGate,
+        status: 'resumed',
+        resumeData: { decision: 'first' },
+        resolvedAt: 2000,
+      },
+    });
+    const secondResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
+      gate: {
+        ...waitingGate,
+        status: 'rejected',
+        resumeData: { decision: 'second' },
+        resolvedAt: 3000,
+      },
+    });
+
+    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: execution.id,
+      nodeId: waitingGate.nodeId,
+      frameId: waitingGate.frameId,
+    });
+
+    expect(firstResponse).toEqual({ accepted: true });
+    expect(secondResponse).toEqual({ accepted: false });
+    expect(gate).toEqual({
+      ...waitingGate,
+      status: 'resumed',
+      resumeData: { decision: 'first' },
+      resolvedAt: 2000,
+    });
+  });
+
+  it('restores paused execution and waiting gate state through one storage subject', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-gate-restore-state' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const pausedExecution = {
+      ...createWorkflowExecution({
+        id: 'execution-gate-restore-state',
+        workflowId: workflow.id,
+      }),
+      status: 'paused',
+    } satisfies ReturnType<typeof createWorkflowExecution> & { readonly status: 'paused' };
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+      execution: { ...pausedExecution, status: 'running' },
+    });
+
+    const waitingGate = {
+      executionId: pausedExecution.id,
+      nodeId: 'gate-restore-state',
+      frameId: 'frame-gate-restore-state',
+      schema: {},
+      status: 'waiting',
+      autoAction: 'reject',
+      timeoutMs: 5000,
+      createdAt: 1000,
+    } satisfies WorkflowGateInstance & { readonly status: 'waiting' };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        ...waitingGate,
+        status: 'resumed',
+        resumeData: { decision: 'accepted' },
+        resolvedAt: 2000,
+      },
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.restorePausedGateResumeState, {
+      execution: pausedExecution,
+      gate: waitingGate,
+    });
+
+    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: pausedExecution.id,
+    });
+    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: waitingGate.executionId,
+      nodeId: waitingGate.nodeId,
+      frameId: waitingGate.frameId,
+    });
+
+    expect(execution).toEqual(expect.objectContaining({ id: pausedExecution.id, status: 'paused' }));
+    expect(gate).toEqual(waitingGate);
+  });
+
+  it('cancels a paused execution and its waiting gates through one storage subject', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-paused-cancel' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({
+      id: 'execution-paused-cancel',
+      workflowId: workflow.id,
+      status: 'paused',
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    const waitingGate = {
+      executionId: execution.id,
+      nodeId: 'gate-paused-cancel',
+      frameId: 'frame-gate-paused-cancel',
+      schema: {},
+      status: 'waiting',
+      autoAction: 'reject',
+      timeoutMs: null,
+      createdAt: 1000,
+    } satisfies WorkflowGateInstance & { readonly status: 'waiting' };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
+
+    const cancelled = await MakaioBus.request(WorkflowStorageSubjects.cancelPausedExecution, {
+      executionId: execution.id,
+      completedAt: 2000,
+    });
+    const { execution: persistedExecution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: execution.id,
+    });
+    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: waitingGate.executionId,
+      nodeId: waitingGate.nodeId,
+      frameId: waitingGate.frameId,
+    });
+
+    expect(cancelled).toEqual({
+      cancelled: true,
+      gates: [{ ...waitingGate, status: 'cancelled', resolvedAt: 2000 }],
+    });
+    expect(persistedExecution).toEqual(
+      expect.objectContaining({ id: execution.id, status: 'cancelled', completedAt: 2000 }),
+    );
+    expect(gate).toEqual({ ...waitingGate, status: 'cancelled', resolvedAt: 2000 });
+  });
+
+  it('lists only finite-timeout waiting gates on paused executions for scheduler rehydration', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-paused-gate-timeouts' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const pausedExecution = createWorkflowExecution({
+      id: 'execution-paused-gate-timeout',
+      workflowId: workflow.id,
+      status: 'paused',
+    });
+    const runningExecution = createWorkflowExecution({
+      id: 'execution-running-gate-timeout',
+      workflowId: workflow.id,
+      status: 'running',
+    });
+    const completedExecution = createWorkflowExecution({
+      id: 'execution-completed-gate-timeout',
+      workflowId: workflow.id,
+      status: 'completed',
+      completedAt: Date.now(),
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: pausedExecution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: runningExecution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: completedExecution });
+
+    const baseGate = {
+      nodeId: 'gate',
+      frameId: 'frame',
+      schema: {},
+      autoAction: 'reject' as const,
+      timeoutMs: 1000,
+      createdAt: 1000,
+    };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: { ...baseGate, executionId: pausedExecution.id, status: 'waiting' },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        ...baseGate,
+        executionId: pausedExecution.id,
+        nodeId: 'gate-null-timeout',
+        timeoutMs: null,
+        status: 'waiting',
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        ...baseGate,
+        executionId: pausedExecution.id,
+        nodeId: 'gate-resumed',
+        status: 'resumed',
+        resumeData: null,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: { ...baseGate, executionId: runningExecution.id, nodeId: 'gate-running', status: 'waiting' },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: { ...baseGate, executionId: completedExecution.id, nodeId: 'gate-completed', status: 'waiting' },
+    });
+
+    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listPausedGateTimeouts, {});
+
+    expect(gates.map((gate) => gate.nodeId)).toEqual(['gate']);
+    expect(gates[0]).toEqual(
+      expect.objectContaining({
+        executionId: pausedExecution.id,
+        status: 'waiting',
+        timeoutMs: 1000,
+        autoAction: 'reject',
+      }),
+    );
   });
 
   it('rejects execution links without existing source and target executions', async () => {
@@ -744,6 +1003,43 @@ describe('workflow storage handlers', () => {
         process.env.NODE_ENV = originalNodeEnv;
       }
     }
+  });
+
+  it('lists execution frames in deterministic start order', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-frame-order' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-frame-order', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    // Insert frame-b first (startedAt: 2), then frame-a (startedAt: 1).
+    await MakaioBus.request(WorkflowStorageSubjects.setFrame, {
+      executionId: execution.id,
+      frame: {
+        frameId: 'frame-b',
+        nodeId: 'b',
+        nodeType: 'station',
+        path: ['frame-b'],
+        status: 'completed',
+        startedAt: 2,
+        attempt: 0,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setFrame, {
+      executionId: execution.id,
+      frame: {
+        frameId: 'frame-a',
+        nodeId: 'a',
+        nodeType: 'station',
+        path: ['frame-a'],
+        status: 'completed',
+        startedAt: 1,
+        attempt: 0,
+      },
+    });
+
+    const { frames } = await MakaioBus.request(WorkflowStorageSubjects.listFrames, { executionId: execution.id });
+
+    expect(frames.map((frame) => frame.frameId)).toEqual(['frame-a', 'frame-b']);
   });
 
   describe('Lifecycle events', () => {

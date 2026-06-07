@@ -1,8 +1,10 @@
-import type { JsonValue, WorkflowParallelNode, WorkflowSequenceNode } from '@makaio/contracts';
+import type { JsonValue, WorkflowFrameState, WorkflowParallelNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import type { PrimitiveExpressionContext, RuntimeContext } from './runtime-context.js';
 import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
 import { extractLastSequenceOutput } from './iterate-helpers.js';
+import { findReusableResumeFrame } from './resume-frames.js';
+import { linkSignals } from './signal-helpers.js';
 
 // ─────────────────────────────────────────────────────────────
 // Parallel execution mode
@@ -23,6 +25,31 @@ import { extractLastSequenceOutput } from './iterate-helpers.js';
  */
 export type ParallelExecutionMode = 'all-settled' | 'fail-fast';
 
+/** Branch frame statuses that can be reused while redispatching a parked parallel node. */
+const BRANCH_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
+
+/** Cancellation source signals needed to decide whether a branch frame remains resumable. */
+interface BranchCancellationOptions {
+  /** Execution-level cancellation signal. */
+  readonly outerSignal: AbortSignal;
+  /** Internal signal used only to stop siblings after a branch parks. */
+  readonly pauseSignal?: AbortSignal;
+}
+
+/**
+ * Whether a branch frame should remain running after a cancellation outcome.
+ *
+ * Pause-triggered sibling aborts are not terminal workflow cancellation. They
+ * checkpoint the parallel node so a later redispatch can reuse already-completed
+ * child frames under the same branch parent frame.
+ * @param frame - Branch frame whose terminal transition is being considered.
+ * @param options - Cancellation source signals for this parallel run.
+ * @returns True when the branch frame must stay resumable.
+ */
+function shouldKeepBranchFrameRunningOnCancel(frame: WorkflowFrameState, options: BranchCancellationOptions): boolean {
+  return frame.status === 'running' && options.pauseSignal?.aborted === true && !options.outerSignal.aborted;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Per-branch outcome
 // ─────────────────────────────────────────────────────────────
@@ -34,9 +61,10 @@ export type ParallelExecutionMode = 'all-settled' | 'fail-fast';
  * inspect per-branch results without pattern-matching on `NodeOutcome`.
  */
 export type BranchSettled =
-  | { readonly status: 'fulfilled'; readonly value: JsonValue | undefined }
+  | { readonly status: 'fulfilled'; readonly value?: JsonValue }
   | { readonly status: 'rejected'; readonly reason: string }
-  | { readonly status: 'cancelled' };
+  | { readonly status: 'cancelled' }
+  | { readonly status: 'paused'; readonly pausedAtGateId: string; readonly pausedAtFrameId: string };
 
 // ─────────────────────────────────────────────────────────────
 // Parallel node executor
@@ -93,29 +121,59 @@ export async function executeParallelNode(
     return { status: 'completed', output: buildParallelOutput({}, mode) };
   }
 
-  // Internal abort controller for fail-fast cancellation.
+  // Internal abort controllers for fail-fast and pause-triggered cancellation.
   // The parent signal is chained so outer cancellation always propagates.
   const failFastController = new AbortController();
-  const combinedSignal = mode === 'fail-fast' ? linkSignals(ctx.signal, failFastController.signal) : ctx.signal;
+  const pauseController = new AbortController();
+  const abortSiblingsOnPause = ctx.suspensionStrategy !== 'wait-in-process';
+  const localSignal =
+    mode === 'fail-fast'
+      ? linkSignals(failFastController.signal, pauseController.signal)
+      : abortSiblingsOnPause
+        ? pauseController.signal
+        : undefined;
+  const combinedSignal = localSignal === undefined ? ctx.signal : linkSignals(ctx.signal, localSignal);
 
-  // Create a child RuntimeContext that uses the combined signal for fail-fast.
-  // In all-settled mode the original ctx is used directly.
-  const branchCtx: RuntimeContext = mode === 'fail-fast' ? ctx.withSignal(combinedSignal) : ctx;
+  // Create a child RuntimeContext when this parallel run needs a derived signal.
+  const branchCtx: RuntimeContext = combinedSignal === ctx.signal ? ctx : ctx.withSignal(combinedSignal);
 
   const branchPromises = branchEntries.map(([branchKey, branchSequence]) =>
-    runBranch(branchKey, branchSequence, node, branchCtx, expressionCtx, executeSequenceFn, parentFrameId, parentPath),
+    runBranch(branchKey, branchSequence, node, branchCtx, expressionCtx, executeSequenceFn, parentFrameId, parentPath, {
+      outerSignal: ctx.signal,
+      pauseSignal: mode === 'fail-fast' || abortSiblingsOnPause ? pauseController.signal : undefined,
+    }),
   );
 
   if (mode === 'all-settled') {
-    const results = await Promise.all(branchPromises);
+    const results = await Promise.all(
+      abortSiblingsOnPause
+        ? branchPromises.map((promise) =>
+            promise.then((outcome) => {
+              if (outcome.status === 'paused') {
+                pauseController.abort();
+              }
+              return outcome;
+            }),
+          )
+        : branchPromises,
+    );
+    // When any branch paused at a gate, surface the first paused outcome so the
+    // enclosing sequence can exit cleanly without completing the parallel node.
+    const firstPause = results.find((r): r is Extract<NodeOutcome, { status: 'paused' }> => r.status === 'paused');
+    if (firstPause !== undefined) {
+      return firstPause;
+    }
     const settled = buildSettledMap(branchEntries, results);
     return { status: 'completed', output: buildParallelOutput(settled, mode) };
   }
 
-  // fail-fast: race all branches; cancel siblings on the first failure.
-  const results = await runFailFast(branchEntries, branchPromises, failFastController);
+  // fail-fast: race all branches; cancel siblings on the first failure or pause.
+  const results = await runFailFast(branchEntries, branchPromises, failFastController, pauseController);
   if (results.type === 'cancelled') {
     return { status: 'cancelled' };
+  }
+  if (results.type === 'paused') {
+    return results.outcome;
   }
   if (results.type === 'failed') {
     return { status: 'failed', error: results.error };
@@ -142,6 +200,7 @@ export async function executeParallelNode(
  * @param executeSequenceFn - Injected sequence executor.
  * @param parentFrameId - Frame ID of the parallel container frame.
  * @param parentPath - Frame-ID path of the parallel container (inclusive).
+ * @param cancellationOptions - Signals used to classify branch cancellation source.
  * @returns Settled outcome for this branch.
  */
 async function runBranch(
@@ -153,26 +212,43 @@ async function runBranch(
   executeSequenceFn: ExecuteSequenceFn,
   parentFrameId: string,
   parentPath: string[],
+  cancellationOptions: BranchCancellationOptions,
 ): Promise<NodeOutcome> {
   if (ctx.signal.aborted) {
     return { status: 'cancelled' };
   }
 
-  // Create a dedicated frame for this branch so the GUI can track it.
-  const frame = ctx.createFrame({
-    nodeId: parallelNode.id,
-    nodeType: 'parallel',
-    path: parentPath,
+  const resumeFrame = findReusableResumeFrame(ctx.resumeFrames, parallelNode.id, {
     parentFrameId,
     branchKey,
+    statuses: BRANCH_RESUME_STATUSES,
   });
+  if (resumeFrame?.status === 'completed') {
+    return { status: 'completed', ...(resumeFrame.output !== undefined ? { output: resumeFrame.output } : {}) };
+  }
+
+  // Create a dedicated frame for this branch so the GUI can track it, or reuse
+  // the running branch frame left behind by a parked descendant gate.
+  const frame =
+    resumeFrame ??
+    ctx.createFrame({
+      nodeId: parallelNode.id,
+      nodeType: 'parallel',
+      path: parentPath,
+      parentFrameId,
+      branchKey,
+    });
 
   if (ctx.signal.aborted) {
-    await cancelFrame(frame, ctx);
+    if (!shouldKeepBranchFrameRunningOnCancel(frame, cancellationOptions)) {
+      await cancelFrame(frame, ctx);
+    }
     return { status: 'cancelled' };
   }
 
-  await startFrame(frame, ctx);
+  if (resumeFrame === undefined) {
+    await startFrame(frame, ctx);
+  }
 
   let outcome: NodeOutcome;
   try {
@@ -199,8 +275,15 @@ async function runBranch(
       return { status: 'completed' };
     }
     case 'cancelled': {
-      await cancelFrame(frame, ctx);
+      if (!shouldKeepBranchFrameRunningOnCancel(frame, cancellationOptions)) {
+        await cancelFrame(frame, ctx);
+      }
       return { status: 'cancelled' };
+    }
+    case 'paused': {
+      // The gate already persisted its frame as 'waiting'. Propagate the paused
+      // outcome so the enclosing parallel node can surface it to its caller.
+      return outcome;
     }
     case 'failed': {
       await failFrame(frame, ctx, outcome.error);
@@ -219,35 +302,44 @@ async function runBranch(
 type FailFastResult =
   | { readonly type: 'completed'; readonly outcomes: NodeOutcome[] }
   | { readonly type: 'failed'; readonly error: string }
-  | { readonly type: 'cancelled' };
+  | { readonly type: 'cancelled' }
+  | { readonly type: 'paused'; readonly outcome: NodeOutcome & { readonly status: 'paused' } };
 
 /**
  * Await all branch promises in fail-fast mode.
  *
- * Monitors each branch promise. If any branch fails, immediately fires the
- * failFastController so sibling branches receive a cancellation signal.
+ * Monitors each branch promise. If any branch fails or pauses, immediately
+ * fires the failFastController so sibling branches receive a cancellation
+ * signal. A paused branch aborts siblings and surfaces the paused outcome so
+ * the enclosing sequence can exit cleanly without completing the parallel node.
  * Waits for all branches to settle before returning so no promises are
  * left dangling.
  * @param branchEntries - Ordered branch entries for index alignment.
  * @param branchPromises - In-flight branch promise for each entry.
  * @param failFastController - Controller whose signal is injected into branch contexts.
+ * @param pauseController - Controller used when a branch parks at a gate.
  * @returns Discriminated result describing whether all branches completed,
- *   at least one failed, or the execution was cancelled.
+ *   at least one failed, a branch paused at a gate, or the execution was cancelled.
  */
 async function runFailFast(
   branchEntries: Array<[string, WorkflowSequenceNode]>,
   branchPromises: Promise<NodeOutcome>[],
   failFastController: AbortController,
+  pauseController: AbortController,
 ): Promise<FailFastResult> {
   let firstError: string | undefined;
+  let firstPaused: (NodeOutcome & { readonly status: 'paused' }) | undefined;
 
-  // Wrap each branch promise to detect failures and cancel siblings.
+  // Wrap each branch promise to detect failures and pauses, then cancel siblings.
   const monitored = branchPromises.map((p) =>
     p.then(
       (outcome) => {
         if (outcome.status === 'failed' && firstError === undefined) {
           firstError = outcome.error;
           failFastController.abort();
+        } else if (outcome.status === 'paused' && firstPaused === undefined) {
+          firstPaused = outcome;
+          pauseController.abort();
         }
         return outcome;
       },
@@ -264,6 +356,12 @@ async function runFailFast(
   );
 
   const outcomes = await Promise.all(monitored);
+
+  // A paused branch takes priority over failures — the gate suspension is the
+  // primary reason for exit, and the sibling cancellations are a consequence.
+  if (firstPaused !== undefined) {
+    return { type: 'paused', outcome: firstPaused };
+  }
 
   // Determine the aggregate result.
   const hasCancelled = outcomes.some((o) => o.status === 'cancelled');
@@ -329,37 +427,16 @@ function buildSettledMap(
 function outcomeToSettled(outcome: NodeOutcome): BranchSettled {
   switch (outcome.status) {
     case 'completed':
-      return { status: 'fulfilled', value: outcome.output };
+      return { status: 'fulfilled', ...(outcome.output !== undefined ? { value: outcome.output } : {}) };
     case 'skipped':
       return { status: 'fulfilled', value: null };
     case 'cancelled':
       return { status: 'cancelled' };
+    case 'paused':
+      // A paused branch surfaces gate identity so the parallel output
+      // can communicate which gate is waiting when the run is re-dispatched.
+      return { status: 'paused', pausedAtGateId: outcome.pausedAtGateId, pausedAtFrameId: outcome.pausedAtFrameId };
     case 'failed':
       return { status: 'rejected', reason: outcome.error };
   }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Signal helpers
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Create an AbortSignal that aborts when either input signal aborts.
- *
- * Uses `AbortSignal.any()` when available (Node ≥ 20) and falls back to
- * a manual listener chain for older environments.
- * @param outer - The execution-level abort signal.
- * @param inner - The fail-fast abort signal.
- * @returns A combined signal that aborts on the first trigger.
- */
-function linkSignals(outer: AbortSignal, inner: AbortSignal): AbortSignal {
-  if (typeof AbortSignal.any === 'function') {
-    return AbortSignal.any([outer, inner]);
-  }
-  // Fallback for environments without AbortSignal.any.
-  const controller = new AbortController();
-  const abort = (): void => controller.abort();
-  outer.addEventListener('abort', abort, { once: true });
-  inner.addEventListener('abort', abort, { once: true });
-  return controller.signal;
 }

@@ -26,6 +26,7 @@ function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']
     },
     env: {},
     createdAt: Date.now(),
+    suspensionStrategy: 'wait-in-process',
   };
 }
 

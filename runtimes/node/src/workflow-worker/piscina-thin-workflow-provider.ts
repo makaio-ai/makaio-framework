@@ -1,11 +1,13 @@
 import type {
   IWorkerNodeProvider,
   IWorkflowRunner,
+  NormalizedWorkerNodeCapabilities,
   WorkerNodeCapabilities,
   WorkerNodeHandle,
   WorkerNodeProvisionRequest,
   WorkflowRunResult,
 } from '@makaio/contracts';
+import { WorkerNodeCapabilitiesSchema } from '@makaio/contracts';
 import type { ThinWorkflowPiscinaRunWithReadiness } from './thin-workflow-piscina-runner.js';
 
 interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
@@ -63,11 +65,18 @@ export interface PiscinaThinWorkflowProviderOptions {
   /**
    * Capabilities advertised when this provider is registered.
    *
-   * Defaults to a local, delegating workflow capability set. The Piscina runner shares the
-   * host process filesystem and delegates agent/subagent execution to the host runtime.
+   * Overrides are merged onto the built-in local, delegating workflow
+   * capability set. The Piscina runner shares the host process filesystem and
+   * delegates agent/subagent execution to the host runtime.
    */
-  readonly baseCapabilities?: WorkerNodeCapabilities;
+  readonly baseCapabilities?: Partial<WorkerNodeCapabilities>;
 }
+
+const DEFAULT_BASE_CAPABILITIES: NormalizedWorkerNodeCapabilities = {
+  persistentStorage: true,
+  customCapabilities: ['workflow.local-runtime', 'workflow.thin-runner'],
+  suspensionStrategy: 'wait-in-process',
+};
 
 /**
  * Built-in thin workflow provider backed by the existing workflow-level Piscina runner.
@@ -83,16 +92,17 @@ export class PiscinaThinWorkflowProvider implements IWorkerNodeProvider {
   /** Execution environment tag used for pool provider matching. */
   public readonly environment = 'piscina' as const;
   /** Capabilities advertised to the pool dispatch selector. */
-  public readonly baseCapabilities: WorkerNodeCapabilities;
+  public readonly baseCapabilities: NormalizedWorkerNodeCapabilities;
 
   /**
    * @param options - Provider identity, runner, and optional capability overrides.
    */
   public constructor(private readonly options: PiscinaThinWorkflowProviderOptions) {
-    this.baseCapabilities = options.baseCapabilities ?? {
-      persistentStorage: true,
-      customCapabilities: ['workflow.local-runtime', 'workflow.thin-runner'],
-    };
+    this.baseCapabilities = WorkerNodeCapabilitiesSchema.parse({
+      ...DEFAULT_BASE_CAPABILITIES,
+      ...options.baseCapabilities,
+      suspensionStrategy: options.baseCapabilities?.suspensionStrategy ?? DEFAULT_BASE_CAPABILITIES.suspensionStrategy,
+    });
   }
 
   /** @returns Unique identifier for this provider instance. */

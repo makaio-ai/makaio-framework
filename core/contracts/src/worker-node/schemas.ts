@@ -69,6 +69,7 @@ export const WorkerNodeDispatchResponseSchema = WorkflowRunResultSchema;
  * - `lifecycle.completed`    — execution finished successfully
  * - `lifecycle.failed`       — execution terminated with an error
  * - `lifecycle.terminated`   — node environment has been torn down
+ * - `lifecycle.paused`       — node parked at a gate and exited for later resume
  */
 export const WorkerNodeSchemas = {
   /**
@@ -162,5 +163,22 @@ export const WorkerNodeSchemas = {
   'lifecycle.terminated': WorkerNodeLifecycleBaseSchema.extend({
     /** Optional reason for termination (e.g. `'cancelled'`, `'timeout'`). */
     reason: z.string().optional(),
+  }),
+
+  /**
+   * Node has suspended at a gate and the worker has exited.
+   *
+   * Emitted by providers using `exit-and-redispatch` or `exit-and-resume`
+   * suspension strategies before the environment tears down. In-process
+   * providers that block at the gate do not emit this event.
+   *
+   * Subject: `worker-node.lifecycle.paused`
+   * Type: Event
+   */
+  'lifecycle.paused': WorkerNodeLifecycleBaseSchema.extend({
+    /** Node ID of the gate at which execution paused. */
+    pausedAtGateId: z.string().min(1),
+    /** Frame ID of the suspended gate instance. */
+    pausedAtFrameId: z.string().min(1),
   }),
 } satisfies SchemaRecord;

@@ -37,9 +37,10 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(provider.baseCapabilities.persistentStorage).toBe(true);
     expect(provider.baseCapabilities.customCapabilities).toContain('workflow.local-runtime');
     expect(provider.baseCapabilities.customCapabilities).toContain('workflow.thin-runner');
+    expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
   });
 
-  it('uses custom base capabilities when provided', () => {
+  it('merges custom base capability overrides onto the local defaults', () => {
     const runner = { run: vi.fn() };
     const customCapabilities = { persistentStorage: false, customCapabilities: ['custom.tag'] };
     const provider = new PiscinaThinWorkflowProvider({
@@ -51,6 +52,7 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     expect(provider.baseCapabilities.persistentStorage).toBe(false);
     expect(provider.baseCapabilities.customCapabilities).toEqual(['custom.tag']);
+    expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
   });
 
   it('aborts the underlying runner when cancel is called', async () => {

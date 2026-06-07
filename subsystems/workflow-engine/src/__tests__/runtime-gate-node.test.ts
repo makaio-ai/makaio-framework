@@ -7,7 +7,7 @@ import {
   type WorkflowExecution,
   type WorkflowGateNode,
 } from '@makaio/contracts';
-import { RuntimeContext } from '../runtime/runtime-context.js';
+import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeGateNode, type GateNodeOutput } from '../runtime/gate-node.js';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -57,10 +57,14 @@ function makeBus(): ReturnType<typeof createBusInstance> {
 
 /**
  * Create a fresh RuntimeContext with an isolated bus.
+ * @param options - Optional runtime execution options (e.g. suspension strategy).
  * @param signal - Optional abort signal.
  * @returns A runtime context and its underlying bus.
  */
-function makeCtx(signal: AbortSignal = new AbortController().signal): {
+function makeCtx(
+  options: RuntimeExecutionOptions = {},
+  signal: AbortSignal = new AbortController().signal,
+): {
   ctx: RuntimeContext;
   bus: ReturnType<typeof createBusInstance>;
 } {
@@ -73,6 +77,10 @@ function makeCtx(signal: AbortSignal = new AbortController().signal): {
     new Map<string, StationHandler>(),
     bus,
     signal,
+    undefined,
+    undefined,
+    undefined,
+    options,
   );
   return { ctx, bus };
 }
@@ -245,7 +253,7 @@ describe('executeGateNode — suspension', () => {
   it('returns cancelled immediately when the signal is already aborted', async () => {
     const ctrl = new AbortController();
     ctrl.abort();
-    const { ctx } = makeCtx(ctrl.signal);
+    const { ctx } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-pre-aborted' });
     const frameId = makeGateFrame(ctx, 'gate-pre-aborted');
 
@@ -633,7 +641,7 @@ describe('executeGateNode — timeout', () => {
 describe('executeGateNode — cancellation', () => {
   it('returns cancelled when the abort signal fires while waiting', async () => {
     const ctrl = new AbortController();
-    const { ctx, bus } = makeCtx(ctrl.signal);
+    const { ctx, bus } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-abort' });
     const frameId = makeGateFrame(ctx, 'gate-abort');
     const resumedPayloads: unknown[] = [];
@@ -668,7 +676,7 @@ describe('executeGateNode — cancellation', () => {
 
   it('returns accepted: false for a respond call after cancellation', async () => {
     const ctrl = new AbortController();
-    const { ctx, bus } = makeCtx(ctrl.signal);
+    const { ctx, bus } = makeCtx({}, ctrl.signal);
     const node = makeGateNode({ id: 'gate-post-cancel' });
     const frameId = makeGateFrame(ctx, 'gate-post-cancel');
 
@@ -868,5 +876,395 @@ describe('executeGateNode — resume data validation', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Gate parking tests (exit-and-redispatch strategy)
+// ─────────────────────────────────────────────────────────────
+
+describe('executeGateNode — parking (exit-and-redispatch)', () => {
+  /**
+   * Register a required gate lookup that proves this is a first-run gate entry.
+   * @param bus - Isolated workflow test bus.
+   */
+  function registerMissingPersistedGate(bus: ReturnType<typeof createBusInstance>): void {
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({ gate: null });
+    });
+  }
+
+  /**
+   * Register required frame persistence for successful exit-based parking tests.
+   * @param bus - Isolated workflow test bus.
+   */
+  function registerFramePersistence(bus: ReturnType<typeof createBusInstance>): void {
+    bus.on(WorkflowStorageSubjects.setFrame, (c) => {
+      c.setResult({ frameId: c.payload.frame.frameId });
+    });
+  }
+
+  it('parks instead of waiting when suspension strategy exits the runner', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-park' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-park');
+    const gateRows: unknown[] = [];
+    registerMissingPersistedGate(bus);
+    registerFramePersistence(bus);
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      gateRows.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({ status: 'paused', pausedAtGateId: 'gate-park', pausedAtFrameId: frameId });
+    expect(runtimeCtx.getFrame(frameId)?.status).toBe('waiting');
+    expect(gateRows).toContainEqual(expect.objectContaining({ status: 'waiting', frameId }));
+  });
+
+  it('parks finite-timeout gates under exit strategy', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-park-timeout', autoAction: 'approve', timeoutMs: 1000 });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-park-timeout');
+    const gateRows: unknown[] = [];
+    registerMissingPersistedGate(bus);
+    registerFramePersistence(bus);
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      gateRows.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({
+      status: 'paused',
+      pausedAtGateId: 'gate-park-timeout',
+      pausedAtFrameId: frameId,
+    });
+    expect(gateRows).toContainEqual(expect.objectContaining({ status: 'waiting', frameId }));
+  });
+
+  it('does not accept synchronous responses before the exit-based gate parks', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-sync-respond' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-sync-respond');
+    const gateRows: unknown[] = [];
+    let syncResponse: Awaited<ReturnType<typeof bus.requestOptional<typeof WorkflowSubjects.gate.respond>>> | undefined;
+
+    registerMissingPersistedGate(bus);
+    registerFramePersistence(bus);
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      gateRows.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+    bus.on(WorkflowSubjects.gate.suspended, async () => {
+      syncResponse = await bus.requestOptional(WorkflowSubjects.gate.respond, {
+        executionId: runtimeCtx.executionId,
+        gateId: 'gate-sync-respond',
+        frameId,
+        action: 'approve',
+        resumeData: { decision: 'approved' },
+      });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({
+      status: 'paused',
+      pausedAtGateId: 'gate-sync-respond',
+      pausedAtFrameId: frameId,
+    });
+    expect(syncResponse).toEqual({ handled: false });
+    expect(gateRows).toEqual([expect.objectContaining({ status: 'waiting', frameId })]);
+  });
+
+  it('fails exit-based parking when the gate storage handler is missing', async () => {
+    const { ctx: runtimeCtx } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-missing-storage' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-missing-storage');
+
+    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow();
+  });
+
+  it('fails exit-based parking when the waiting gate row cannot be persisted', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-storage-fails' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-storage-fails');
+    registerMissingPersistedGate(bus);
+    bus.on(WorkflowStorageSubjects.setGateInstance, () => {
+      throw new Error('gate storage unavailable');
+    });
+
+    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
+      'gate storage unavailable',
+    );
+  });
+
+  it('fails exit-based parking when the waiting frame cannot be persisted', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-frame-storage-fails' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-frame-storage-fails');
+    registerMissingPersistedGate(bus);
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+    bus.on(WorkflowStorageSubjects.setFrame, () => {
+      throw new Error('frame storage unavailable');
+    });
+
+    await expect(executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId)).rejects.toThrow(
+      'frame storage unavailable',
+    );
+  });
+
+  it('completes a parked gate from a persisted rejected response with valid resume data', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-resume' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-resume');
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-resume',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'rejected',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'needs-changes' },
+          createdAt: 1,
+          resolvedAt: 2,
+        },
+      });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'needs-changes' } } });
+  });
+
+  it('validates persisted resume data against the persisted gate schema on redispatch', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({
+      id: 'gate-persisted-schema',
+      resumeSchema: {
+        type: 'object',
+        required: ['currentOnly'],
+        properties: { currentOnly: { type: 'boolean' } },
+        additionalProperties: false,
+      },
+    });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-persisted-schema');
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-persisted-schema',
+          frameId,
+          schema: {
+            type: 'object',
+            required: ['decision'],
+            properties: { decision: { const: 'approved' } },
+            additionalProperties: false,
+          },
+          prompt: 'Approve this action?',
+          status: 'resumed',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'approved' },
+          createdAt: 1,
+          resolvedAt: 2,
+        },
+      });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
+  });
+
+  it('applies timeout semantics to an expired persisted waiting gate on redispatch', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-expired', timeoutMs: 1000 });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-expired');
+    const persistedUpdates: unknown[] = [];
+    const resolvedPayloads: unknown[] = [];
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-expired',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'waiting',
+          autoAction: 'reject',
+          timeoutMs: 1000,
+          createdAt: Date.now() - 1001,
+        },
+      });
+    });
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedUpdates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+    bus.on(WorkflowSubjects.gate.resolved, (c) => {
+      resolvedPayloads.push(c.payload);
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome.status).toBe('failed');
+    if (outcome.status === 'failed') {
+      expect(outcome.error).toContain('gate-expired');
+      expect(outcome.error).toContain('1000ms');
+      expect(outcome.error).toContain('auto-rejected');
+    }
+    expect(persistedUpdates).toContainEqual(expect.objectContaining({ status: 'timed-out', frameId }));
+    expect(resolvedPayloads).toEqual([
+      expect.objectContaining({
+        executionId: runtimeCtx.executionId,
+        stepId: 'gate-expired',
+        stepType: 'gate',
+        frameId,
+        action: 'reject',
+        source: 'timeout',
+      }),
+    ]);
+  });
+
+  it('auto-approves an expired persisted waiting gate on redispatch', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-expired-approve', autoAction: 'approve', timeoutMs: 1000 });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-approve');
+    const persistedUpdates: unknown[] = [];
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-expired-approve',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'waiting',
+          autoAction: 'approve',
+          timeoutMs: 1000,
+          createdAt: Date.now() - 1001,
+        },
+      });
+    });
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedUpdates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({
+      status: 'completed',
+      output: { resumeData: { action: 'approve', source: 'timeout' } },
+    });
+    expect(persistedUpdates).toContainEqual(
+      expect.objectContaining({
+        status: 'resumed',
+        frameId,
+        resumeData: { action: 'approve', source: 'timeout' },
+      }),
+    );
+  });
+
+  it('validates persisted auto-approve timeout data against the persisted gate schema on redispatch', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({
+      id: 'gate-expired-schema-policy',
+      autoAction: 'reject',
+      timeoutMs: 60_000,
+      resumeSchema: {
+        type: 'object',
+        required: ['currentOnly'],
+        properties: { currentOnly: { type: 'boolean' } },
+        additionalProperties: false,
+      },
+    });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-schema-policy');
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-expired-schema-policy',
+          frameId,
+          schema: {
+            type: 'object',
+            properties: {
+              action: { const: 'approve' },
+              source: { const: 'timeout' },
+            },
+            required: ['action', 'source'],
+            additionalProperties: false,
+          },
+          prompt: 'Approve this action?',
+          status: 'waiting',
+          autoAction: 'approve',
+          timeoutMs: 1000,
+          createdAt: Date.now() - 1001,
+        },
+      });
+    });
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({
+      status: 'completed',
+      output: { resumeData: { action: 'approve', source: 'timeout' } },
+    });
+  });
+
+  it('uses persisted timeout policy when redispatching an expired waiting gate', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-expired-policy', autoAction: 'reject', timeoutMs: 60_000 });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-expired-policy');
+    const persistedUpdates: unknown[] = [];
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-expired-policy',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'waiting',
+          autoAction: 'approve',
+          timeoutMs: 1000,
+          createdAt: Date.now() - 1001,
+        },
+      });
+    });
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedUpdates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({
+      status: 'completed',
+      output: { resumeData: { action: 'approve', source: 'timeout' } },
+    });
+    expect(persistedUpdates).toContainEqual(
+      expect.objectContaining({
+        status: 'resumed',
+        resumeData: { action: 'approve', source: 'timeout' },
+      }),
+    );
   });
 });

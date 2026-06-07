@@ -33,11 +33,17 @@ import { executeIterateChainNode } from './iterate-chain-node.js';
  *
  * Discriminated on `status` so callers can pattern-match without
  * narrowing through `instanceof` checks.
+ *
+ * The `paused` status is produced when a gate node parks execution for an
+ * `exit-and-redispatch` or `exit-and-resume` suspension strategy. The runner
+ * should persist state and exit; the workflow will be re-dispatched when the
+ * gate is resolved externally.
  */
 export type NodeOutcome =
   | { status: 'completed'; output?: JsonValue }
   | { status: 'skipped' }
   | { status: 'cancelled' }
+  | { status: 'paused'; pausedAtGateId: string; pausedAtFrameId: string }
   | { status: 'failed'; error: string };
 
 // ─────────────────────────────────────────────────────────────

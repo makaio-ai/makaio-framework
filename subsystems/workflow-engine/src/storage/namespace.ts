@@ -117,6 +117,18 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     },
 
     /**
+     * Cancel a paused execution and all of its still-waiting gate instances in
+     * one transaction.
+     */
+    cancelPausedExecution: {
+      request: z.object({ executionId: z.string().min(1), completedAt: z.number() }),
+      response: z.object({
+        cancelled: z.boolean(),
+        gates: z.array(WorkflowGateInstanceSchema.extend({ status: z.literal('cancelled') })),
+      }),
+    },
+
+    /**
      * List workflow executions by workflow ID or scope.
      *
      * At least one of `workflowId` or `scope` is required. `limit` is optional
@@ -172,6 +184,32 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     },
 
     /**
+     * Resolve a waiting gate instance with compare-and-set semantics.
+     *
+     * Used for manual responses to paused exit-based gates. Only the first
+     * request that observes the persisted gate in `waiting` status wins; all
+     * later responses leave the row unchanged and return `accepted: false`.
+     */
+    resolveWaitingGateInstance: {
+      request: z.object({
+        gate: WorkflowGateInstanceSchema.extend({ status: z.enum(['resumed', 'rejected']) }),
+      }),
+      response: z.object({ accepted: z.boolean() }),
+    },
+
+    /**
+     * Restore a paused execution and its waiting gate in one transaction after
+     * a resolved manual response fails to launch a resume runner.
+     */
+    restorePausedGateResumeState: {
+      request: z.object({
+        execution: WorkflowExecutionSchema.extend({ status: z.literal('paused') }),
+        gate: WorkflowGateInstanceSchema.extend({ status: z.literal('waiting') }),
+      }),
+      response: z.object({ executionId: z.string(), gateId: z.string() }),
+    },
+
+    /**
      * Retrieve a gate instance by execution ID, node ID, and optional frame ID.
      * Provide `frameId` when the gate lives inside an `iterate` expansion.
      */
@@ -191,6 +229,18 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       request: z.object({ executionId: z.string().min(1) }),
       response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
     },
+
+    /**
+     * List finite-timeout gate instances whose owning execution is still paused.
+     *
+     * Used by the executor during startup to rehydrate long-lived timeout
+     * wakeups for exit-based runs. This stays storage-local because it exposes
+     * recovery state rather than a product-facing listing contract.
+     */
+    listPausedGateTimeouts: localSubject({
+      request: z.object({}),
+      response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
+    }),
 
     // ─────────────────────────────────────────────────────────────
     // Span CRUD

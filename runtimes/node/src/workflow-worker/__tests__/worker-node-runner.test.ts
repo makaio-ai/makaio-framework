@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { WorkerContributionManifest } from '@makaio/contracts';
+import type { WorkerContributionManifest, WorkerNodeDispatch } from '@makaio/contracts';
 import { WorkerNodeRunner } from '../worker-node-runner.js';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -34,6 +34,28 @@ describe('WorkerNodeRunner', () => {
     await runner.run(makeWorkerConfig(), signal);
 
     expect(dispatch).toHaveBeenCalledWith({ config: makeWorkerConfig(), manifest, requirements }, signal);
+  });
+
+  it('forwards per-run dispatch metadata to the dispatch function', async () => {
+    const dispatchMetadata = { resume: true, providerRunId: 'gha-1' };
+    let capturedRequest: Parameters<WorkerNodeDispatch>[0] | undefined;
+    let capturedSignal: AbortSignal | undefined;
+    const dispatch: WorkerNodeDispatch = (request, signal) => {
+      capturedRequest = request;
+      capturedSignal = signal;
+      return Promise.resolve({
+        executionId: 'wfx-1',
+        workflowId: 'workflow-1',
+        status: 'completed',
+      });
+    };
+    const runner = new WorkerNodeRunner({ dispatch });
+    const signal = new AbortController().signal;
+
+    await runner.run(makeWorkerConfig(), signal, undefined, { dispatchMetadata });
+
+    expect(capturedRequest).toStrictEqual({ config: makeWorkerConfig(), metadata: dispatchMetadata });
+    expect(capturedSignal).toBe(signal);
   });
 
   it('omits requirements from the dispatch payload when not provided', async () => {
