@@ -11,7 +11,12 @@
 import type { Server as HttpServer } from 'node:http';
 import { Hono } from 'hono';
 import { createAdaptorServer } from '@hono/node-server';
-import { DispatchingAuth, HmacAuth, resolveHmacIdentitySecret } from '@makaio/bus-transport-websocket';
+import {
+  DispatchingAuth,
+  HmacAuth,
+  resolveHmacIdentityPeer,
+  resolveHmacIdentitySecret,
+} from '@makaio/bus-transport-websocket';
 import {
   waitForServerListening,
   resolveListeningPort,
@@ -163,7 +168,9 @@ export function resolveAuth(lanBind: boolean): DispatchingAuth | HmacAuth | unde
     throw new Error('[serve] MAKAIO_BUS_SECRET is set but empty; refusing to initialize HmacAuth', { cause: error });
   }
 
-  const hmacAuth = secret ? new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret }) : undefined;
+  const hmacAuth = secret
+    ? new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolvePeer: resolveHmacIdentityPeer })
+    : undefined;
 
   if (lanBind) {
     return new DispatchingAuth({ hmac: hmacAuth });

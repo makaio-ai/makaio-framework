@@ -43,7 +43,7 @@ export type ArtifactUpdater<TData extends Record<string, unknown>> = (
 ) => TData | Promise<TData>;
 
 /**
- * Artifact access surface exposed on {@link StepContext}.
+ * Artifact access API exposed on {@link StepContext}.
  *
  * Provides a read-only snapshot of the current artifact data and the two
  * mutation methods — `updateArtifact` and `updateStatus` — that write new
@@ -202,7 +202,7 @@ export interface StepContext<
   /** Abort signal for cooperative cancellation of long-running station handlers. */
   readonly signal: AbortSignal;
   /**
-   * Artifact access surface for the workflow's primary artifact binding.
+   * Artifact access API for the workflow's primary artifact binding.
    *
    * Present when the workflow declares an artifact binding via `.artifact()`
    * and the runtime has successfully resolved or created the artifact at
@@ -213,8 +213,8 @@ export interface StepContext<
   /**
    * Emit a structured progress signal.
    *
-   * Progress updates are projected by materialization providers (GitHub
-   * comments, dashboard updates, etc.) but are not durable WorkLog entries.
+   * Progress updates are consumed by observers and materialization providers
+   * for real-time projections, but are not durable WorkLog entries.
    * @param update - The progress signal to emit.
    */
   readonly updateProgress: (update: WorkflowProgressUpdate) => Promise<void>;

@@ -11,6 +11,7 @@ import { HmacAuth } from '../hmac-auth.js';
 import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
+  resolveHmacIdentityPeer,
   resolveHmacIdentitySecret,
 } from '../identity-secret-registry.js';
 import type { WebSocketLike } from '../../types.js';
@@ -60,6 +61,7 @@ describe('HmacAuth — global-secret mode', () => {
     const socket = makeSocket();
 
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
+    expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
   });
 
   it('getReceiveContext returns undefined in global-secret mode', async () => {
@@ -84,6 +86,7 @@ describe('HmacAuth — global-secret mode', () => {
     const socket = makeSocket();
 
     await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
+    expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
     expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
   });
 
@@ -143,25 +146,80 @@ describe('HmacAuth — identity-bound mode', () => {
     clearHmacIdentitySecretsForTesting();
     const executionId = 'exec-registry-1';
     const secret = 'per-execution-registry-secret';
-    const unregister = registerHmacIdentitySecret(executionId, secret);
+    registerHmacIdentitySecret(executionId, secret);
 
     try {
       const serverAuth = new HmacAuth({
         secret: 'global-secret',
         challengeTimeout: 200,
         resolveSecret: resolveHmacIdentitySecret,
+        resolvePeer: resolveHmacIdentityPeer,
       });
       const clientAuth = new HmacAuth({ secret, identityId: executionId, challengeTimeout: 200 });
       const socket = makeSocket();
 
       await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
+      expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
       expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
         kind: 'workflow-execution',
         id: executionId,
         authenticated: true,
       });
+
+      clearHmacIdentitySecretsForTesting();
+
+      expect(serverAuth.isSocketAuthenticated(socket)).toBe(false);
+      expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
     } finally {
-      unregister();
+      clearHmacIdentitySecretsForTesting();
+    }
+  });
+
+  it('exposes registered non-workflow peer kinds through receive context', async () => {
+    clearHmacIdentitySecretsForTesting();
+    const identityId = 'dashboard:session-1';
+    const secret = 'per-dashboard-session-secret';
+    registerHmacIdentitySecret(identityId, secret, { peerKind: 'dashboard-session' });
+
+    try {
+      const serverAuth = new HmacAuth({
+        secret: 'global-secret',
+        challengeTimeout: 200,
+        resolveSecret: resolveHmacIdentitySecret,
+        resolvePeer: resolveHmacIdentityPeer,
+      });
+      const clientAuth = new HmacAuth({ secret, identityId, challengeTimeout: 200 });
+      const socket = makeSocket();
+
+      await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
+      expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
+        kind: 'dashboard-session',
+        id: identityId,
+        authenticated: true,
+      });
+    } finally {
+      clearHmacIdentitySecretsForTesting();
+    }
+  });
+
+  it('keeps a newer peer registration when an older cleanup uses the same secret', () => {
+    clearHmacIdentitySecretsForTesting();
+    const identityId = 'shared-identity';
+    const secret = 'same-transport-secret';
+    const cleanupWorkflowPeer = registerHmacIdentitySecret(identityId, secret);
+    const cleanupDashboardPeer = registerHmacIdentitySecret(identityId, secret, { peerKind: 'dashboard-session' });
+
+    try {
+      cleanupWorkflowPeer();
+
+      expect(resolveHmacIdentitySecret(identityId)).toBe(secret);
+      expect(resolveHmacIdentityPeer(identityId)).toEqual({
+        kind: 'dashboard-session',
+        id: identityId,
+        authenticated: true,
+      });
+    } finally {
+      cleanupDashboardPeer();
       clearHmacIdentitySecretsForTesting();
     }
   });
@@ -196,9 +254,11 @@ describe('HmacAuth — identity-bound mode', () => {
 
     await runAuthHandshake(serverAuth, clientAuth, socket);
     expect(serverAuth.getReceiveContext(socket)).toBeDefined();
+    expect(serverAuth.isSocketAuthenticated(socket)).toBe(true);
 
     serverAuth.cleanupSocket(socket);
     expect(serverAuth.getReceiveContext(socket)).toBeUndefined();
+    expect(serverAuth.isSocketAuthenticated(socket)).toBe(false);
   });
 
   it('getReceiveContext returns undefined when called without a socket', async () => {

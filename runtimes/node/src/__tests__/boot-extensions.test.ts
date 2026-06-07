@@ -39,6 +39,7 @@ import { createNodeWorkflowRunner } from '../workflow-worker/index.js';
 import { WorkerNodeRunner } from '../workflow-worker/worker-node-runner.js';
 import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
+import { loadBootExtensions } from '../boot-extension-loading.js';
 import { createToolContributionProcessor, SessionOrchestratorToken, toolRegistryPackage } from '@makaio/services-core';
 import { filesystemPackage } from '@makaio/extension-filesystem';
 import { shellPackage } from '@makaio/extension-shell';
@@ -712,5 +713,84 @@ describe('extension pipeline integration', () => {
     ]);
 
     expect(merged).toStrictEqual(loaded.packages);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createMount seam threading through loadBootExtensions
+// ---------------------------------------------------------------------------
+
+describe('loadBootExtensions createMount seam', () => {
+  let testFixtureRoot: string | undefined;
+
+  beforeEach(() => {
+    testFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'makaio-boot-createMount-'));
+  });
+
+  afterEach(() => {
+    if (testFixtureRoot !== undefined) {
+      fs.rmSync(testFixtureRoot, { recursive: true, force: true });
+      testFixtureRoot = undefined;
+    }
+  });
+
+  /**
+   * Create an {@link ExplicitDescriptorDiscovery} with a single browser-only
+   * extension that has a real browser bundle on disk.
+   * @param options - Extension fixture options: `name` (extension name) and
+   *   `browserEntrypoint` (browser entry stem, e.g. `'browser/index'`).
+   * @returns Discovery instance ready for use in boot options.
+   */
+  function createDiscoveryWithBrowserOnlyExtension(options: {
+    name: string;
+    browserEntrypoint: string;
+  }): ExplicitDescriptorDiscovery {
+    const extensionPath = fs.mkdtempSync(path.join(testFixtureRoot!, `${options.name}-`));
+    const stem = options.browserEntrypoint;
+    const bundlePath = path.join(extensionPath, 'dist', `${stem}.mjs`);
+    fs.mkdirSync(path.dirname(bundlePath), { recursive: true });
+    fs.writeFileSync(bundlePath, 'export default {};\n');
+
+    const discovered: DiscoveredExtension = {
+      descriptor: {
+        name: options.name,
+        displayName: `${options.name} Display`,
+        version: '1.0.0',
+        makaio: { framework: '>=0.1.0' },
+        entrypoints: { browser: options.browserEntrypoint },
+      },
+      extensionPath,
+      source: 'local',
+    };
+
+    return new ExplicitDescriptorDiscovery([discovered]);
+  }
+
+  it('threads createMount into browser extension package synthesis', async () => {
+    const mount = vi.fn();
+    const createMount = vi.fn(() => mount);
+    const options = minimalBootOptions({
+      createMount,
+      discovery: createDiscoveryWithBrowserOnlyExtension({
+        name: 'browser-only-dashboard',
+        browserEntrypoint: 'browser/index',
+      }),
+    });
+
+    const resolved = resolveExtensionOptions(options, TEST_MAKAIO_HOME);
+    const result = await loadBootExtensions({
+      extensionOptions: resolved,
+      skipExtensions: new Set(),
+      frameworkVersion: '0.1.0',
+      createMount: options.createMount,
+    });
+
+    const pkg = result.allExtensionPackages.find((entry) => entry.name === 'browser-only-dashboard');
+    expect(pkg?.http?.prefix).toBe('/extensions/browser-only-dashboard/browser');
+    expect(createMount).toHaveBeenCalledWith(
+      expect.stringContaining('browser'),
+      '/extensions/browser-only-dashboard/browser',
+    );
+    expect(pkg?.http?.mount).toBe(mount);
   });
 });

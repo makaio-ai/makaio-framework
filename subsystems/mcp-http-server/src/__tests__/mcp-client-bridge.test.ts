@@ -50,6 +50,7 @@ function resolveBin(name: string, startDir: string): string {
 
 const PACKAGE_ROOT = path.resolve(__dirname, '../..');
 const TSX_BIN = resolveBin('tsx', PACKAGE_ROOT);
+const MCP_FIXTURE_TIMEOUT_MS = 15_000;
 
 /**
  * Start a bridge connected to the fixture MCP server.
@@ -123,7 +124,7 @@ function waitForCondition(
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('startMcpClientBridge', () => {
+describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
   let handle: McpClientBridgeHandle | undefined;
 
   afterEach(async () => {
@@ -241,7 +242,7 @@ describe('startMcpClientBridge', () => {
     const updatedNames = toolChanges[toolChanges.length - 1];
     expect(updatedNames).toContain('echo');
     expect(updatedNames).toContain('add');
-  }, 10_000); // generous timeout for subprocess startup + notification round-trip
+  });
 
   it('handle.tools is live-updated after tools/list_changed', async () => {
     // Use a short delay so the fixture sends the notification soon after
@@ -261,7 +262,7 @@ describe('startMcpClientBridge', () => {
     expect(handle.toolNames).toContain('echo');
     expect(handle.toolNames).toContain('add');
     expect(handle.tools.map((t) => t.name)).toEqual(handle.toolNames);
-  }, 10_000); // generous timeout for subprocess startup + notification round-trip
+  });
 
   // =========================================================================
   // Bus integration

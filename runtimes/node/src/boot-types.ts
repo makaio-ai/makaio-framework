@@ -3,6 +3,7 @@ import type { BusTransport, IMakaioBus, SubjectTelemetryProjectorRegistry } from
 import type { RegistrableBusNamespaceDefinition } from '@makaio/core';
 import type { FrameworkModuleResolver } from './framework-module-resolver.js';
 import type { DispatchingAuth, TransportAuth } from '@makaio/bus-transport-websocket';
+import type { BridgeBrowserOptions } from './create-static-mount.js';
 import type {
   ExtensionConfigProvider,
   TrayManifest,
@@ -437,6 +438,16 @@ export interface CoreBootOptions {
    * registered directly on the bus.
    */
   readonly upstreamTelemetry?: UpstreamTelemetryBootOptions;
+
+  /**
+   * Static mount factory for extension browser bundles.
+   *
+   * Node hosts default to `@hono/node-server/serve-static`; Bun hosts pass
+   * their Bun-native `hono/bun` implementation through this seam.
+   *
+   * When omitted, the platform-default factory is used (Node: `@hono/node-server/serve-static`).
+   */
+  readonly createMount?: BridgeBrowserOptions['createMount'];
 }
 
 /** Context passed to host-owned coordinator setup. */

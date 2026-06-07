@@ -85,6 +85,40 @@ describe('createInboundMessageHandler', () => {
     expect(warnSpy).toHaveBeenCalledWith('[ServerTransport] Ignoring message from unauthenticated client');
   });
 
+  it('closes sockets whose authenticated session has expired before routing bus messages', async () => {
+    const socket = new MockWebSocket();
+    const handlers = new Set<BusReceiveHandler>();
+    const handlerSpy = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    handlers.add(handlerSpy);
+    const auth = makeAuth({
+      handleAuthMessage: vi.fn(() => false),
+      isSocketAuthenticated: vi.fn(() => false),
+    });
+    const closeSpy = vi.spyOn(socket, 'close');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = createInboundMessageHandler(socket, makeDeps({ auth, handlers }));
+
+    await handler(JSON.stringify({ type: 'event', namespace: 'test', subject: 'x', payload: {} }));
+
+    expect(handlerSpy).not.toHaveBeenCalled();
+    expect(auth.cleanupSocket).toHaveBeenCalledWith(socket);
+    expect(closeSpy).toHaveBeenCalledWith(1008, 'Authentication expired');
+    expect(warnSpy).toHaveBeenCalledWith('[ServerTransport] Closing socket with expired authentication');
+  });
+
+  it('routes messages when auth has no live-socket authorization hook', async () => {
+    const socket = new MockWebSocket();
+    const handlers = new Set<BusReceiveHandler>();
+    const handlerSpy = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    handlers.add(handlerSpy);
+    const auth = makeAuth({ handleAuthMessage: vi.fn(() => false) });
+    const handler = createInboundMessageHandler(socket, makeDeps({ auth, handlers }));
+
+    await handler(JSON.stringify({ type: 'event', namespace: 'test', subject: 'x', payload: {} }));
+
+    expect(handlerSpy).toHaveBeenCalledOnce();
+  });
+
   it('does not acknowledge subscribe messages when a handler fails', async () => {
     const socket = new MockWebSocket();
     const sendSafely = vi.fn();

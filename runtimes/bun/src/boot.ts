@@ -82,5 +82,9 @@ export interface BunBootMakaioRuntimeOptions extends CoreBootOptions {
  */
 export async function bootMakaioRuntime(options: BunBootMakaioRuntimeOptions): Promise<MakaioRuntime> {
   const { port, hostname } = options.bunServer;
-  return bootMakaioRuntimeCore(options.transport, port, hostname, options);
+  const createMount = options.createMount ?? (await import('./create-static-mount.js')).defaultCreateMount;
+  return bootMakaioRuntimeCore(options.transport, port, hostname, {
+    ...options,
+    createMount,
+  });
 }
