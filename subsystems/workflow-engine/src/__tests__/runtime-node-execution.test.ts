@@ -939,6 +939,35 @@ describe('executeStationNode', () => {
     }
   });
 
+  it('passes the bus into station step contexts', async () => {
+    const bus = makeBus();
+    let receivedBus: unknown;
+
+    const node: WorkflowStationNode = {
+      id: 'capture-bus',
+      type: 'station',
+      prompt: 'Capture bus reference',
+    };
+    const handler: StationHandler = (ctx) => {
+      receivedBus = ctx.bus;
+      return { ok: true };
+    };
+    const ctx = new RuntimeContext(
+      'exec-bus-context',
+      'workflow-bus-context',
+      makeDefinition('workflow-bus-context'),
+      makeExecution('workflow-bus-context'),
+      new Map([['capture-bus', handler]]),
+      bus,
+      new AbortController().signal,
+    );
+
+    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+
+    expect(outcome.status).toBe('completed');
+    expect(receivedBus).toBe(bus);
+  });
+
   it('propagates handler errors as failed outcomes', async () => {
     const node: WorkflowStationNode = {
       id: 'broken',

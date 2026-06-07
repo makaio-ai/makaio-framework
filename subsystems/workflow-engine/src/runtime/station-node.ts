@@ -131,6 +131,8 @@ export async function executeStationNode(
       signal: ctx.signal,
       // ── Artifact context (present when a binding is configured) ──
       ...(artifact !== undefined && { artifact }),
+      // ── Runtime bus ──────────────────────────────────────────
+      bus: ctx.bus,
       // ── Progress reporting ────────────────────────────────────
       updateProgress,
     });
