@@ -125,6 +125,7 @@
       "@makaio/extension-telemetry-otel": ["./extensions/telemetry-otel/src/index.ts"],
       "@makaio/extension-telemetry-otel/contracts": ["./extensions/telemetry-otel/src/contracts/index.ts"],
       "@makaio/extension-telemetry-otel/subjects": ["./extensions/telemetry-otel/src/contracts/namespace.ts"],
+      "@makaio/extension-telemetry-langfuse": ["./extensions/telemetry-langfuse/src/index.ts"],
       "@makaio/electron/schemas": ["./apps/electron/src/bus/schemas.ts"],
       "@makaio/electron/register": ["./apps/electron/src/bus/namespace.ts"],
       "@makaio/platform-macos": ["./platforms/macos/src/index.ts"]

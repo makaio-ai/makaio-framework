@@ -3711,6 +3711,29 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@langfuse/core@npm:^5.4.1":
+  version: 5.4.1
+  resolution: "@langfuse/core@npm:5.4.1"
+  peerDependencies:
+    "@opentelemetry/api": ^1.9.0
+  checksum: 10c0/12f3b3f931d156213ba3151cd6747bf76024a25ec0b0b971fac8a58f356e3b820392a6d3630d44f68bc8f79e71b71121b349d355a9102e4a9782d5a1328cc999
+  languageName: node
+  linkType: hard
+
+"@langfuse/otel@npm:^5.4.1":
+  version: 5.4.1
+  resolution: "@langfuse/otel@npm:5.4.1"
+  dependencies:
+    "@langfuse/core": "npm:^5.4.1"
+  peerDependencies:
+    "@opentelemetry/api": ^1.9.0
+    "@opentelemetry/core": ^2.0.1
+    "@opentelemetry/exporter-trace-otlp-http": ">=0.202.0 <1.0.0"
+    "@opentelemetry/sdk-trace-base": ^2.0.1
+  checksum: 10c0/89f0abf7a74d3f301fc33dc5135d032175da3bbd3bb3b59d5cbca328ed2212f77032a57bcd5e84ab9c28573f13583eb3694cb838a6463e5739b357dac69ae828
+  languageName: node
+  linkType: hard
+
 "@libsql/client@npm:^0.17.3":
   version: 0.17.3
   resolution: "@libsql/client@npm:0.17.3"
@@ -4912,7 +4935,30 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@makaio/extension-telemetry-otel@workspace:extensions/telemetry-otel":
+"@makaio/extension-telemetry-langfuse@workspace:extensions/telemetry-langfuse":
+  version: 0.0.0-use.local
+  resolution: "@makaio/extension-telemetry-langfuse@workspace:extensions/telemetry-langfuse"
+  dependencies:
+    "@langfuse/otel": "npm:^5.4.1"
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/extension-telemetry-otel": "workspace:*"
+    "@makaio/kernel": "workspace:*"
+    "@makaio/service-base": "workspace:*"
+    "@opentelemetry/api": "npm:^1.9.0"
+    "@opentelemetry/core": "npm:2.7.1"
+    "@opentelemetry/exporter-trace-otlp-http": "npm:0.217.0"
+    "@opentelemetry/sdk-trace-base": "npm:2.7.1"
+    "@types/node": "npm:^24.3.0"
+    tsdown: "npm:0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.7"
+    zod: "npm:^4.1.13"
+  languageName: unknown
+  linkType: soft
+
+"@makaio/extension-telemetry-otel@workspace:*, @makaio/extension-telemetry-otel@workspace:extensions/telemetry-otel":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-telemetry-otel@workspace:extensions/telemetry-otel"
   dependencies:
@@ -4920,6 +4966,7 @@ __metadata:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
+    "@makaio/expression": "workspace:*"
     "@makaio/rules": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@opentelemetry/api": "npm:^1.9.0"

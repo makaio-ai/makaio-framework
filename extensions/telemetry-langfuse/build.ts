@@ -6,9 +6,6 @@ await build({
   ...defineExtensionConfig({
     entry: {
       index: './src/index.ts',
-      'contracts/index': './src/contracts/index.ts',
-      'contracts/namespace': './src/contracts/namespace.ts',
-      testing: './src/testing.ts',
     },
   }),
 });
