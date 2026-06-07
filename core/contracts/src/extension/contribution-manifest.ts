@@ -2,8 +2,8 @@
  * Pure-data contribution manifest types and Zod schemas for Makaio extensions.
  *
  * Extensions may declare which adapters, clients, providers, triggers, log
- * importers, and session event actions they contribute through the
- * `contributions` field on
+ * importers, session event actions, and artifact lifecycle hooks they contribute
+ * through the `contributions` field on
  * {@link ExtensionManifest}. This is discovery-time metadata only — fully
  * serializable and safe to inspect without executing any extension code.
  *
@@ -21,10 +21,12 @@
  * @see {@link TriggerManifest} for hash trigger contribution declarations.
  * @see {@link LogImporterManifest} for log importer contribution declarations.
  * @see {@link SessionEventActionManifest} for session event action declarations.
+ * @see {@link ArtifactLifecycleHookManifest} for artifact lifecycle hook declarations.
  * @see {@link UiSurfaceFlags} for browser UI surface flag declarations.
  */
 
 import { z } from 'zod';
+import { type ArtifactLifecycleHookEvent } from '../artifact/lifecycle-hooks.js';
 import { type ProtocolId, ProtocolIdSchema } from '../provider/definition.js';
 import { type VersionLiteral, type VersionRange, VersionRangeSchema, VersionLiteralSchema } from '../version/index.js';
 
@@ -440,6 +442,65 @@ export const SessionEventActionManifestSchema = z.object({
 }) satisfies z.ZodType<SessionEventActionManifest>;
 
 // ---------------------------------------------------------------------------
+// ArtifactLifecycleHookManifest
+// ---------------------------------------------------------------------------
+
+export type { ArtifactLifecycleHookEvent };
+
+/** Zod schema for {@link ArtifactLifecycleHookEvent}. */
+export const ArtifactLifecycleHookEventSchema = z.enum([
+  'beforeCreate',
+  'beforeRevise',
+  'afterCreate',
+  'afterRevise',
+  'afterStatusChanged',
+  'afterObservationAdded',
+]);
+
+/**
+ * Describes a single artifact lifecycle hook entry declared by an extension.
+ *
+ * This is serializable discovery-time metadata only — it does NOT carry the
+ * hook handler function. The executable runtime source is
+ * `MakaioExtension.artifactLifecycleHooks.createHooks()`; descriptor
+ * contributions are not a registration fallback.
+ *
+ * When `kind` is omitted, the hook applies to all registered artifact kinds.
+ * When `schemaVersion` is omitted, the hook applies to all schema versions of
+ * the targeted kind.
+ */
+export interface ArtifactLifecycleHookManifest {
+  /**
+   * Stable identifier for this hook entry within the declaring extension.
+   *
+   * Must be unique within the extension's `artifactLifecycleHooks` array.
+   */
+  readonly id: string;
+  /** Artifact lifecycle event this hook responds to. */
+  readonly event: ArtifactLifecycleHookEvent;
+  /**
+   * Artifact kind discriminator this hook targets.
+   *
+   * When omitted, the hook applies across all registered kinds.
+   */
+  readonly kind?: string;
+  /**
+   * Schema version constraint for the targeted kind.
+   *
+   * When omitted, the hook applies to all schema versions of the targeted kind.
+   */
+  readonly schemaVersion?: string;
+}
+
+/** Zod schema for {@link ArtifactLifecycleHookManifest}. */
+export const ArtifactLifecycleHookManifestSchema = z.object({
+  id: z.string().min(1),
+  event: ArtifactLifecycleHookEventSchema,
+  kind: z.string().min(1).optional(),
+  schemaVersion: z.string().min(1).optional(),
+}) satisfies z.ZodType<ArtifactLifecycleHookManifest>;
+
+// ---------------------------------------------------------------------------
 // UiSurfaceFlags
 // ---------------------------------------------------------------------------
 
@@ -532,6 +593,14 @@ export interface ContributionManifest {
   readonly logImporters?: readonly LogImporterManifest[];
   /** Session event action contributions declared by this extension. */
   readonly sessionEventActions?: readonly SessionEventActionManifest[];
+  /**
+   * Artifact lifecycle hook entries declared by this extension.
+   *
+   * Each entry is serializable discovery-time metadata. The executable runtime
+   * source is `MakaioExtension.artifactLifecycleHooks.createHooks()`; this
+   * field is for pre-load introspection only.
+   */
+  readonly artifactLifecycleHooks?: readonly ArtifactLifecycleHookManifest[];
 
   // -- Boolean surface flags ------------------------------------------------
 
@@ -552,7 +621,14 @@ export interface ContributionManifest {
 }
 
 /** Contribution array paths that support uniqueness validation. */
-type ContributionArrayPath = 'adapters' | 'clients' | 'providers' | 'triggers' | 'logImporters' | 'sessionEventActions';
+type ContributionArrayPath =
+  | 'adapters'
+  | 'clients'
+  | 'providers'
+  | 'triggers'
+  | 'logImporters'
+  | 'sessionEventActions'
+  | 'artifactLifecycleHooks';
 
 /**
  * Singular label for each contribution array path, used in error messages.
@@ -564,6 +640,7 @@ const CONTRIBUTION_SINGULAR_LABELS: Record<ContributionArrayPath, string> = {
   triggers: 'trigger',
   logImporters: 'log importer',
   sessionEventActions: 'session event action',
+  artifactLifecycleHooks: 'artifact lifecycle hook',
 };
 
 /**
@@ -616,6 +693,7 @@ export const ContributionManifestSchema = z
     triggers: z.array(TriggerManifestSchema).readonly().optional(),
     logImporters: z.array(LogImporterManifestSchema).readonly().optional(),
     sessionEventActions: z.array(SessionEventActionManifestSchema).readonly().optional(),
+    artifactLifecycleHooks: z.array(ArtifactLifecycleHookManifestSchema).readonly().optional(),
     create: z.boolean().optional(),
     tools: z.boolean().optional(),
     bootstrap: z.boolean().optional(),
@@ -650,5 +728,9 @@ export const ContributionManifestSchema = z
 
     for (const duplicateActionId of findDuplicateIdentifiers(manifest.sessionEventActions, (action) => action.id)) {
       addDuplicateIssue(ctx, 'sessionEventActions', duplicateActionId);
+    }
+
+    for (const duplicateHookId of findDuplicateIdentifiers(manifest.artifactLifecycleHooks, (hook) => hook.id)) {
+      addDuplicateIssue(ctx, 'artifactLifecycleHooks', duplicateHookId);
     }
   }) satisfies z.ZodType<ContributionManifest>;

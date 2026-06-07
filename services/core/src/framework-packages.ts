@@ -3,6 +3,7 @@ import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ArtifactSchemaRegistry } from './artifact/artifact-schema-registry.js';
+import { ArtifactLifecycleHookRegistry } from './artifact/artifact-lifecycle-hook-registry.js';
 import { FacetNamespaceRegistry } from './facet/facet-namespace-registry.js';
 import { SurfaceBindingRegistry } from './materialization/surface-binding-registry.js';
 import { CapabilityService } from './capability/capability-service.js';
@@ -69,6 +70,10 @@ export const GitToken = extensionToken<GitService>('git');
 export { SubagentServiceToken };
 /** Token for the artifact schema registry service. */
 export const ArtifactSchemaRegistryToken = extensionToken<ArtifactSchemaRegistry>('artifact-schema-registry');
+/** Token for the artifact lifecycle hook registry service. */
+export const ArtifactLifecycleHookRegistryToken = extensionToken<ArtifactLifecycleHookRegistry>(
+  'artifact-lifecycle-hook-registry',
+);
 /** Token for the facet namespace registry service. */
 export const FacetNamespaceRegistryToken = extensionToken<FacetNamespaceRegistry>('facet-namespace-registry');
 /** Token for the surface binding registry service. */
@@ -81,6 +86,15 @@ export const artifactSchemaRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   version: '0.1.0',
   critical: true,
   create: (ctx) => new ArtifactSchemaRegistry(ctx.bus),
+};
+
+/** Package that starts the framework artifact lifecycle hook registry. */
+export const artifactLifecycleHookRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: ArtifactLifecycleHookRegistryToken.name,
+  displayName: 'Artifact Lifecycle Hook Registry',
+  version: '0.1.0',
+  critical: true,
+  create: (ctx) => new ArtifactLifecycleHookRegistry(ctx.bus),
 };
 
 /** Package that starts the framework facet namespace registry. */
@@ -273,6 +287,7 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
 /** Framework packages that are independent of host-specific factories. */
 export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
   artifactSchemaRegistryPackage,
+  artifactLifecycleHookRegistryPackage,
   facetNamespaceRegistryPackage,
   surfaceBindingRegistryPackage,
   sessionStoragePackage,

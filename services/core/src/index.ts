@@ -124,7 +124,14 @@ export type {
   TurnResult,
   TurnStateChange,
 } from './session/index.js';
-export { ArtifactSchemaRegistry, createArtifactKindContributionProcessor } from './artifact/index.js';
+export {
+  ArtifactSchemaRegistry,
+  createArtifactKindContributionProcessor,
+  ArtifactLifecycleHookRegistry,
+  ArtifactLifecycleHookRejectedError,
+  createArtifactLifecycleHookContributionProcessor,
+} from './artifact/index.js';
+export type { RunAfterInput, RunBeforeInput, RunBeforeResult } from './artifact/index.js';
 export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } from './facet/index.js';
 export { SurfaceBindingRegistry, createSurfaceBindingContributionProcessor } from './materialization/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
@@ -207,6 +214,8 @@ export { activateProviderContext, activateProviderContextStrict } from './provid
 export {
   artifactSchemaRegistryPackage,
   ArtifactSchemaRegistryToken,
+  artifactLifecycleHookRegistryPackage,
+  ArtifactLifecycleHookRegistryToken,
   capabilityPackage,
   CapabilityToken,
   createModelRegistryPackage,

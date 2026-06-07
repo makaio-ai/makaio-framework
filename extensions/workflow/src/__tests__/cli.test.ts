@@ -36,6 +36,7 @@ const bootMock = vi.fn<
     machineId: 'test-machine-id',
     trayEntries: [],
     windowRegistry: {} as MakaioRuntime['windowRegistry'],
+    coordinator: {} as MakaioRuntime['coordinator'],
   }),
 );
 

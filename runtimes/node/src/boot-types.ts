@@ -531,6 +531,14 @@ export interface MakaioRuntime {
   windowRegistry: WindowRegistry;
 
   /**
+   * Extension coordinator that manages the lifecycle of all loaded packages.
+   *
+   * Exposed so integration tests and host composition roots can inspect the
+   * active service graph (e.g. via `getExtensionService`) after boot.
+   */
+  readonly coordinator: ExtensionCoordinator;
+
+  /**
    * Shut down all services in reverse startup order.
    */
   shutdown(): Promise<void>;

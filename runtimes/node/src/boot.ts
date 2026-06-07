@@ -50,6 +50,7 @@ import {
 import {
   createModelRegistryPackage,
   createArtifactKindContributionProcessor,
+  createArtifactLifecycleHookContributionProcessor,
   createFacetNamespaceContributionProcessor,
   createSurfaceBindingContributionProcessor,
   createToolContributionProcessor,
@@ -468,6 +469,7 @@ export async function bootMakaioRuntimeCore(
     // (above, before load) so the adapter subsystem composes as one unit.
     coordinator.registerContributionProcessor(createLogImportContributionProcessor());
     coordinator.registerContributionProcessor(createArtifactKindContributionProcessor());
+    coordinator.registerContributionProcessor(createArtifactLifecycleHookContributionProcessor());
     coordinator.registerContributionProcessor(createFacetNamespaceContributionProcessor());
     coordinator.registerContributionProcessor(createSurfaceBindingContributionProcessor());
     coordinator.registerContributionProcessor(createToolContributionProcessor());
@@ -603,6 +605,7 @@ export async function bootMakaioRuntimeCore(
       host: boundHost,
       machineId,
       bus,
+      coordinator,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
       shutdown,

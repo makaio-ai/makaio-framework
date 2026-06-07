@@ -2,6 +2,8 @@ export { BrowserEntrypointSchema } from './browser-entrypoint.js';
 export {
   AdapterClientRefSchema,
   AdapterManifestSchema,
+  ArtifactLifecycleHookEventSchema,
+  ArtifactLifecycleHookManifestSchema,
   ClientManifestSchema,
   ContributionManifestSchema,
   LogImporterManifestSchema,
@@ -15,6 +17,8 @@ export {
 export type {
   AdapterClientRef,
   AdapterManifest,
+  ArtifactLifecycleHookEvent,
+  ArtifactLifecycleHookManifest,
   ClientManifest,
   ContributionManifest,
   LogImporterManifest,
@@ -82,6 +86,8 @@ export type {
   LogImportContribution,
 } from './extension-contributions.js';
 export type {
+  ArtifactLifecycleHooksContributionContext,
+  ExtensionArtifactLifecycleHooksContribution,
   ExtensionContributionProcessor,
   ExtensionRuntimeBootContext,
   ExtensionRuntimeBootContribution,

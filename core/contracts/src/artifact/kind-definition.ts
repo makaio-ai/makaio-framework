@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ArtifactKindRegistration, ArtifactRevision, ArtifactScope } from './schemas.js';
 import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
+import type { ArtifactLifecycleHookDefinition } from './lifecycle-hooks.js';
 
 type JsonSchemaObject = Record<string, unknown>;
 
@@ -48,6 +49,13 @@ export interface ArtifactKindDefinition<TData extends Record<string, unknown>, T
    * defaults.
    */
   readonly projection?: ArtifactProjectionPolicy;
+  /**
+   * Optional live-only lifecycle hooks owned by this kind definition.
+   *
+   * Hooks carry function references and are intentionally excluded from
+   * `toRegistration()`. They are never serialized or transmitted over the bus.
+   */
+  readonly hooks?: ArtifactLifecycleHookDefinition;
   /**
    * Phantom field for compile-time `data` type extraction.
    * Never assigned at runtime.
@@ -143,6 +151,13 @@ interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScop
    * external providers.
    */
   readonly projection?: ArtifactProjectionPolicy;
+  /**
+   * Optional live-only lifecycle hooks. Not included in `toRegistration()`.
+   *
+   * Hooks carry function references and are never serialized or transmitted
+   * over the bus.
+   */
+  readonly hooks?: ArtifactLifecycleHookDefinition;
 }
 
 /**
