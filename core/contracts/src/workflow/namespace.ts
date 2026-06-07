@@ -19,6 +19,43 @@ import { WorkflowRunContextSchema } from './run-context.js';
 import { WorkLogExecutionSummarySchema } from './worklog.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 
+/**
+ * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
+ *
+ * Progress updates are ephemeral — useful for real-time monitoring and
+ * surface-specific projections (comments, dashboard updates), but not
+ * durable WorkLog entries. For structured knowledge that should participate
+ * in accountability chains, use Observations instead.
+ */
+export const WorkflowProgressUpdateSchema = z
+  .object({
+    /** Human-readable progress message. */
+    message: z.string().min(1),
+    /** Extended details for surfaces that can display them. */
+    details: z.string().min(1).optional(),
+    /**
+     * Optional semantic kind for materialization routing.
+     *
+     * Surfaces can match on kind to decide rendering: a `'station-started'`
+     * progress might always become a GitHub comment, while a `'checkpoint'`
+     * might only appear on a dashboard.
+     *
+     * Not a closed enum — workflow authors define their own vocabulary.
+     */
+    kind: z.string().min(1).optional(),
+    /**
+     * Structured metadata for surfaces that need more than message + details.
+     *
+     * The workflow does not know which surface consumes this. The surface
+     * decides what to extract.
+     */
+    metadata: JsonValueSchema.optional(),
+  })
+  .strict();
+
+/** Inferred type for {@link WorkflowProgressUpdateSchema}. */
+export type WorkflowProgressUpdate = z.infer<typeof WorkflowProgressUpdateSchema>;
+
 const StepLifecycleBaseSchema = z.object({
   executionId: z.string(),
   /** Node identifier within the workflow definition. */
@@ -259,19 +296,44 @@ export const WorkflowSchemas = {
   }),
   'execution.completed': z.object({
     executionId: z.string(),
+    workflowId: z.string(),
     totalDuration: z.number(),
     completedAt: z.number().nonnegative().optional(),
   }),
   'execution.failed': z.object({
     executionId: z.string(),
+    workflowId: z.string(),
     error: z.string(),
     failedStepId: z.string().optional(),
     completedAt: z.number().nonnegative().optional(),
   }),
   'execution.cancelled': z.object({
     executionId: z.string(),
+    workflowId: z.string(),
     reason: z.string().optional(),
     completedAt: z.number().nonnegative().optional(),
+  }),
+
+  /**
+   * Ephemeral progress signal emitted by a station handler via `ctx.updateProgress()`.
+   *
+   * Progress events are not persisted as WorkLog entries. Subscribers such as
+   * materialization providers (GitHub comment writers, dashboard projectors)
+   * consume them for real-time surface updates.
+   */
+  'execution.progress': z.object({
+    /** Execution that emitted the progress signal. */
+    executionId: z.string().min(1),
+    /** Workflow definition being executed. */
+    workflowId: z.string().min(1),
+    /** Frame from which the progress signal was emitted. */
+    frameId: z.string().min(1),
+    /** Node that emitted the progress signal. */
+    nodeId: z.string().min(1),
+    /** The structured progress payload. */
+    progress: WorkflowProgressUpdateSchema,
+    /** Epoch milliseconds when the signal was emitted by the runtime. */
+    emittedAt: z.number().int().nonnegative(),
   }),
 
   /**

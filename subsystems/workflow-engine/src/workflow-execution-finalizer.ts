@@ -48,6 +48,7 @@ export async function completeExecutionWithSuccess(
     });
     await deps.bus.emit(WorkflowSubjects.execution.completed, {
       executionId,
+      workflowId: execution.workflowId,
       totalDuration: execution.completedAt - startTime,
       completedAt: execution.completedAt,
     });
@@ -86,7 +87,12 @@ export async function completeExecutionWithFailure(
     } catch (hookError) {
       console.error('[WorkflowFinalizer] Failed to run failure pre-emit hook:', hookError);
     }
-    await deps.bus.emit(WorkflowSubjects.execution.failed, { executionId, error, completedAt: execution.completedAt });
+    await deps.bus.emit(WorkflowSubjects.execution.failed, {
+      executionId,
+      workflowId: execution.workflowId,
+      error,
+      completedAt: execution.completedAt,
+    });
   } finally {
     deps.activeExecutions.delete(executionId);
   }
@@ -131,6 +137,14 @@ export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string
  * @returns True when a paused execution was cancelled.
  */
 async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+  const existing = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+  if (existing.execution == null) return false;
+
+  const workflowId = existing.execution.workflowId;
+  if (workflowId === undefined) {
+    throw new Error(`Paused execution ${executionId} is missing stored workflowId`);
+  }
+
   const completedAt = Date.now();
   const { cancelled, gates } = await deps.bus.request(WorkflowStorageSubjects.cancelPausedExecution, {
     executionId,
@@ -154,6 +168,7 @@ async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, r
 
   await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
     executionId,
+    workflowId,
     reason,
     completedAt,
   });
@@ -206,6 +221,7 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
 
     await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
       executionId,
+      workflowId: execution.workflowId,
       reason,
       completedAt: execution.completedAt,
     });

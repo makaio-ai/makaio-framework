@@ -164,6 +164,7 @@ describe('telemetry-langfuse integration', () => {
 
       await MakaioBus.emit(WorkflowSubjects.execution.completed, {
         executionId: 'wfx-integration',
+        workflowId: 'wf-integration',
         totalDuration: 1000,
       });
 

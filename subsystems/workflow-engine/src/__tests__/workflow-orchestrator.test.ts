@@ -296,6 +296,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
       expect(cancellationEvents).toEqual([
         {
           executionId: 'exec-runtime-cancel',
+          workflowId: workflow.id,
           reason: WORKFLOW_CANCELLED_REASON,
           completedAt: expect.any(Number),
         },
@@ -362,6 +363,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
       expect(cancellationEvents).toEqual([
         {
           executionId: 'exec-signal-cancel',
+          workflowId: workflow.id,
           reason: WORKFLOW_CANCELLED_REASON,
           completedAt: expect.any(Number),
         },

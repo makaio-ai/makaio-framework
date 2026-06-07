@@ -228,7 +228,11 @@ describe('handleWorkflowRun with --payload', () => {
     const runPromise = handleWorkflowRun(ctx);
 
     // Emit execution.completed to unblock bus.once().
-    await bus.emit(WorkflowSubjects.execution.completed, { executionId: 'exec-1', totalDuration: 123 });
+    await bus.emit(WorkflowSubjects.execution.completed, {
+      executionId: 'exec-1',
+      workflowId: 'wf-test',
+      totalDuration: 123,
+    });
 
     await runPromise;
 
@@ -258,6 +262,7 @@ describe('handleWorkflowRun with --payload', () => {
 
       await bus.emit(WorkflowSubjects.execution.completed, {
         executionId: 'exec-abs-1',
+        workflowId: 'wf-test',
         totalDuration: 100,
       });
 
@@ -286,6 +291,7 @@ describe('handleWorkflowRun with --payload', () => {
 
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'exec-abs-2',
+      workflowId: 'wf-test',
       totalDuration: 101,
     });
 
@@ -381,6 +387,7 @@ describe('handleWorkflowRun with piped stdin', () => {
 
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'exec-stdin-1',
+      workflowId: 'wf-test',
       totalDuration: 200,
     });
 
@@ -443,6 +450,7 @@ describe('handleWorkflowRun in await-trigger mode', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'exec-await-1',
+      workflowId: 'wf-test',
       totalDuration: 25,
     });
 
@@ -505,6 +513,7 @@ describe('handleWorkflowRun with --verbose', () => {
 
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'exec-verbose-1',
+      workflowId: 'wf-test',
       totalDuration: 50,
     });
 
@@ -544,6 +553,7 @@ describe('handleWorkflowRun — execution.failed', () => {
 
     await bus.emit(WorkflowSubjects.execution.failed, {
       executionId: 'exec-fail-1',
+      workflowId: 'wf-test',
       error: 'step "fetch" timed out',
     });
 
@@ -561,6 +571,7 @@ describe('handleWorkflowRun — execution.failed', () => {
       ctx.setResult({ executionId: 'exec-handler-fail' });
       await bus.emit(WorkflowSubjects.execution.failed, {
         executionId: 'exec-handler-fail',
+        workflowId: 'wf-test',
         error: 'runtime handler emitted failure',
       });
     });
@@ -585,12 +596,14 @@ describe('handleWorkflowRun — execution.failed', () => {
     // Emit failure for a different execution — should be ignored.
     await bus.emit(WorkflowSubjects.execution.failed, {
       executionId: 'exec-other',
+      workflowId: 'wf-test',
       error: 'unrelated failure',
     });
 
     // Now complete the target execution normally.
     await bus.emit(WorkflowSubjects.execution.completed, {
       executionId: 'exec-target',
+      workflowId: 'wf-test',
       totalDuration: 42,
     });
 
@@ -614,6 +627,7 @@ describe('handleWorkflowRun — execution.failed', () => {
       // before the executionId is known to the waiter.
       await bus.emit(WorkflowSubjects.execution.failed, {
         executionId: 'exec-early-fail',
+        workflowId: 'wf-test',
         error: 'crashed before start',
       });
       ctx.setResult({ executionId: 'exec-early-fail' });
