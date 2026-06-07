@@ -78,6 +78,7 @@ describe('Artifact namespace', () => {
       // The `status.path` is a dot-separated string defined by each kind independently.
       const kindWithStatus = {
         kind: 'review-artifact',
+        description: 'Minimal review-artifact fixture for open status path schema contract test.',
         schemaVersion: '1.0.0',
         dataSchema: { type: 'object', properties: {} },
         conflictPolicy: 'supersedes' as const,
@@ -95,6 +96,7 @@ describe('Artifact namespace', () => {
     it('kind registration accepts enumerated status values but they remain optional', () => {
       const kindWithEnumeratedStatus = {
         kind: 'task-artifact',
+        description: 'Minimal task-artifact fixture for enumerated status values schema contract test.',
         schemaVersion: '1.0.0',
         dataSchema: { type: 'object', properties: {} },
         conflictPolicy: 'supersedes' as const,

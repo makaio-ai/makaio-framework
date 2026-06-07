@@ -13,6 +13,7 @@ describe('defineArtifactKind', () => {
   it('keeps Zod schemas live while exposing serializable registration data', () => {
     const definition = defineArtifactKind({
       kind: 'implementation-plan',
+      description: 'Implementation plan artifact for a project topic.',
       schemaVersion: '1',
       dataSchema: PlanDataSchema,
       scopeSchema: z.object({ level: z.literal('project'), ids: z.object({ projectId: z.string() }) }),
@@ -40,6 +41,7 @@ describe('defineArtifactKind', () => {
 
     expect(artifact.data.status).toBe('draft');
     expect(definition.toRegistration().kind).toBe('implementation-plan');
+    expect(definition.toRegistration().description).toBe('Implementation plan artifact for a project topic.');
     expect(definition.toRegistration().dataSchema).toMatchObject({
       type: 'object',
       properties: {
@@ -53,6 +55,7 @@ describe('defineArtifactKind', () => {
   it('serializes provider-neutral projection policy', () => {
     const kind = defineArtifactKind({
       kind: 'implementation-plan',
+      description: 'Implementation plan artifact used by projection policy tests.',
       schemaVersion: '1',
       dataSchema: z.object({ status: z.string(), goal: z.string() }),
       conflictPolicy: 'supersedes',
@@ -74,6 +77,7 @@ describe('defineArtifactKind', () => {
   it('omits projection from toRegistration when not supplied', () => {
     const kind = defineArtifactKind({
       kind: 'simple-kind',
+      description: 'Simple artifact kind used by contract serialization tests.',
       schemaVersion: '1',
       dataSchema: z.object({ value: z.string() }),
       conflictPolicy: 'coexist',
@@ -86,6 +90,7 @@ describe('defineArtifactKind', () => {
   it('projection object is a copy — mutation does not affect stored options', () => {
     const kind = defineArtifactKind({
       kind: 'mut-test',
+      description: 'Mutation-test artifact kind for projection copy assertions.',
       schemaVersion: '1',
       dataSchema: z.object({ v: z.string() }),
       conflictPolicy: 'coexist',
@@ -102,6 +107,7 @@ describe('defineArtifactKind', () => {
   it('semanticEvents array is copied — push on snapshot does not affect future toRegistration calls', () => {
     const kind = defineArtifactKind({
       kind: 'events-mut-test',
+      description: 'Mutation-test artifact kind for semanticEvents copy assertions.',
       schemaVersion: '1',
       dataSchema: z.object({ v: z.string() }),
       conflictPolicy: 'coexist',
@@ -118,6 +124,7 @@ describe('defineArtifactKind', () => {
   it('status.values array is copied — push on snapshot does not affect future toRegistration calls', () => {
     const kind = defineArtifactKind({
       kind: 'status-mut-test',
+      description: 'Mutation-test artifact kind for status.values copy assertions.',
       schemaVersion: '1',
       dataSchema: z.object({ v: z.string() }),
       conflictPolicy: 'coexist',
@@ -135,6 +142,7 @@ describe('defineArtifactKind', () => {
     const beforeCreate = vi.fn();
     const kind = defineArtifactKind({
       kind: 'review-findings',
+      description: 'Review findings artifact kind used to verify live-only lifecycle hooks.',
       schemaVersion: '1',
       dataSchema: z.object({ findings: z.array(z.object({ message: z.string() })) }),
       conflictPolicy: 'manual',

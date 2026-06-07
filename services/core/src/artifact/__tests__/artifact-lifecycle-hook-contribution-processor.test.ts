@@ -43,6 +43,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Implementation plan artifact kind used by lifecycle hook processor tests.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.string() }),
             conflictPolicy: 'manual',
@@ -90,6 +91,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Implementation plan artifact kind used by lifecycle hook scoping tests.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.string() }),
             conflictPolicy: 'manual',
@@ -99,6 +101,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
           }),
           defineArtifactKind({
             kind: 'review-findings',
+            description: 'Review findings artifact kind used by lifecycle hook scoping tests.',
             schemaVersion: '1',
             dataSchema: z.object({ count: z.number() }),
             conflictPolicy: 'manual',

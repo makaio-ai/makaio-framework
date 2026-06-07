@@ -54,6 +54,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Minimal implementation-plan fixture for single-kind registration test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.enum(['draft', 'approved']) }),
             conflictPolicy: 'supersedes',
@@ -84,12 +85,14 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Minimal implementation-plan fixture for multi-kind registration test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.enum(['draft', 'approved']) }),
             conflictPolicy: 'supersedes',
           }),
           defineArtifactKind({
             kind: 'design-note',
+            description: 'Minimal design-note fixture for multi-kind registration test.',
             schemaVersion: '1',
             dataSchema: z.object({ content: z.string() }),
             conflictPolicy: 'coexist',
@@ -128,6 +131,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'foo',
+            description: 'Minimal foo fixture for filter-predicate test.',
             schemaVersion: '1',
             dataSchema: z.object({}),
             conflictPolicy: 'supersedes',
@@ -149,6 +153,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Minimal implementation-plan fixture for missing-registry error test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.string() }),
             conflictPolicy: 'supersedes',
@@ -176,6 +181,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Minimal implementation-plan fixture for processStopped deregister test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.string() }),
             conflictPolicy: 'supersedes',
@@ -209,6 +215,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Alpha implementation-plan fixture for shared-kind-key rebuild test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.literal('alpha') }),
             conflictPolicy: 'supersedes',
@@ -224,6 +231,7 @@ describe('createArtifactKindContributionProcessor', () => {
         kinds: [
           defineArtifactKind({
             kind: 'implementation-plan',
+            description: 'Beta implementation-plan fixture for shared-kind-key rebuild test.',
             schemaVersion: '1',
             dataSchema: z.object({ status: z.literal('beta') }),
             conflictPolicy: 'supersedes',
