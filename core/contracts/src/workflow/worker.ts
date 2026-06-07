@@ -1,9 +1,10 @@
 import { z } from 'zod';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
-import { JsonObjectContractSchema, JsonValueSchema, type JsonValue } from '../shared/json-value.js';
+import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 import { SuspensionStrategySchema } from '../worker-node/suspension.js';
+import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -138,81 +139,164 @@ export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Result produced when a workflow execution completes in an isolated worker.
- *
- * Fully serializable so it can be transferred across process / thread
- * boundaries (Piscina worker threads, child processes, Docker containers).
- *
- * NOTE: A companion {@link WorkflowRunResultSchema} exists for runtime
- * validation. Both definitions must stay in sync.
+ * Shared identity fields present on every workflow run result variant.
  */
 interface WorkflowRunResultBase {
   /** Unique identifier for this execution run. */
   readonly executionId: string;
   /** Workflow definition identifier. */
   readonly workflowId: string;
-  /** Final output produced by the workflow, if any. */
-  readonly output?: JsonValue;
 }
 
 /**
- * Result produced when execution reaches a terminal, non-paused status.
+ * Result produced when execution completes successfully.
+ *
+ * Carries an optional {@link ArtifactRevision} written by the workflow.
+ * Never carries top-level output, error, reason, or pause identity fields.
  */
-type WorkflowTerminalRunResult = WorkflowRunResultBase & {
-  /**
-   * Terminal status of the execution.
-   *
-   * - `completed`: execution finished successfully
-   * - `failed`: execution terminated with an error
-   * - `cancelled`: execution was stopped by an abort signal
-   */
-  readonly status: 'completed' | 'failed' | 'cancelled';
+export interface WorkflowCompletedRunResult extends WorkflowRunResultBase {
+  /** Completed execution status. */
+  readonly status: 'completed';
+  /** Artifact revision written by the workflow, if any. */
+  readonly artifact?: ArtifactRevision;
+  /** Top-level output is no longer carried on run results. */
+  readonly output?: never;
+  /** Error is only valid on failed results. */
+  readonly error?: never;
+  /** Reason is only valid on cancelled results. */
+  readonly reason?: never;
   /** Pause identity is only valid for paused results. */
   readonly pausedAtGateId?: never;
   /** Pause identity is only valid for paused results. */
   readonly pausedAtFrameId?: never;
-};
+}
+
+/**
+ * Result produced when execution terminates with an error.
+ *
+ * Carries a required human-readable {@link error} string describing the failure.
+ */
+export interface WorkflowFailedRunResult extends WorkflowRunResultBase {
+  /** Failed execution status. */
+  readonly status: 'failed';
+  /** Human-readable description of the failure. */
+  readonly error: string;
+  /** Artifact is only valid on completed results. */
+  readonly artifact?: never;
+  /** Top-level output is not carried on run results. */
+  readonly output?: never;
+  /** Reason is only valid on cancelled results. */
+  readonly reason?: never;
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtGateId?: never;
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtFrameId?: never;
+}
+
+/**
+ * Result produced when execution is stopped by an abort signal.
+ *
+ * Carries an optional human-readable {@link reason} string.
+ */
+export interface WorkflowCancelledRunResult extends WorkflowRunResultBase {
+  /** Cancelled execution status. */
+  readonly status: 'cancelled';
+  /** Optional human-readable description of why execution was cancelled. */
+  readonly reason?: string;
+  /** Artifact is only valid on completed results. */
+  readonly artifact?: never;
+  /** Top-level output is not carried on run results. */
+  readonly output?: never;
+  /** Error is only valid on failed results. */
+  readonly error?: never;
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtGateId?: never;
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtFrameId?: never;
+}
 
 /**
  * Result produced when execution parks at a gate and will resume later.
+ *
+ * Both {@link pausedAtGateId} and {@link pausedAtFrameId} are required to
+ * uniquely identify the suspended gate frame for redispatch.
  */
-type WorkflowPausedRunResult = WorkflowRunResultBase & {
+export interface WorkflowPausedRunResult extends WorkflowRunResultBase {
   /**
    * Execution suspended at a gate; the worker has exited and will be
    * redispatched or resumed when the gate resolves.
    */
   readonly status: 'paused';
-  /**
-   * Node ID of the gate at which execution paused.
-   */
+  /** Node ID of the gate at which execution paused. */
   readonly pausedAtGateId: string;
-  /**
-   * Frame ID of the suspended gate instance at which execution paused.
-   */
+  /** Frame ID of the suspended gate instance at which execution paused. */
   readonly pausedAtFrameId: string;
-};
-
-export type WorkflowRunResult = WorkflowTerminalRunResult | WorkflowPausedRunResult;
+  /** Artifact is only valid on completed results. */
+  readonly artifact?: never;
+  /** Top-level output is not carried on run results. */
+  readonly output?: never;
+  /** Error is only valid on failed results. */
+  readonly error?: never;
+  /** Reason is only valid on cancelled results. */
+  readonly reason?: never;
+}
 
 /**
- * Zod schema for the serializable result returned by isolated workflow workers.
+ * Result produced when a workflow execution completes in an isolated worker.
  *
- * When `status` is `'paused'`, both `pausedAtGateId` and `pausedAtFrameId`
- * are required to uniquely identify the suspended gate frame.
+ * Fully serializable so it can be transferred across process / thread
+ * boundaries (Piscina worker threads, child processes, Docker containers).
+ *
+ * Discriminated on `status`:
+ * - `completed`: finished successfully — carries an optional artifact revision
+ * - `failed`: terminated with an error — carries a required error string
+ * - `cancelled`: stopped by an abort signal — carries an optional reason
+ * - `paused`: parked at a gate — carries required pause identity fields
+ *
+ * NOTE: A companion {@link WorkflowRunResultSchema} exists for runtime
+ * validation. Both definitions must stay in sync.
  */
+export type WorkflowRunResult =
+  | WorkflowCompletedRunResult
+  | WorkflowFailedRunResult
+  | WorkflowCancelledRunResult
+  | WorkflowPausedRunResult;
+
+/** Base Zod fields shared by all result variants. */
 const WorkflowRunResultBaseSchema = z.object({
   /** Unique identifier for this execution run. */
   executionId: z.string().min(1),
   /** Workflow definition identifier. */
   workflowId: z.string().min(1),
-  /** Final output produced by the workflow, if any. */
-  output: JsonValueSchema.optional(),
 });
 
+/**
+ * Zod schema for the serializable result returned by isolated workflow workers.
+ *
+ * Each variant uses `.strict()` to reject unknown fields (including the
+ * former top-level `output` field) at runtime.
+ *
+ * When `status` is `'paused'`, both `pausedAtGateId` and `pausedAtFrameId`
+ * are required to uniquely identify the suspended gate frame.
+ */
 export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
   WorkflowRunResultBaseSchema.extend({
-    /** Terminal execution status. */
-    status: z.enum(['completed', 'failed', 'cancelled']),
+    /** Completed execution status. */
+    status: z.literal('completed'),
+    /** Artifact revision written by the workflow, if any. */
+    artifact: ArtifactRevisionSchema.optional(),
+  }).strict(),
+  WorkflowRunResultBaseSchema.extend({
+    /** Failed execution status. */
+    status: z.literal('failed'),
+    /** Human-readable description of the failure. */
+    error: z.string().min(1),
+  }).strict(),
+  WorkflowRunResultBaseSchema.extend({
+    /** Cancelled execution status. */
+    status: z.literal('cancelled'),
+    /** Optional human-readable description of why execution was cancelled. */
+    reason: z.string().min(1).optional(),
   }).strict(),
   WorkflowRunResultBaseSchema.extend({
     /** Paused execution status. */
@@ -303,7 +387,7 @@ export interface IWorkflowRunner {
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @param options - Optional per-run controls for dispatch-capable runners.
-   * @returns The execution result with terminal status and optional output.
+   * @returns The execution result with status-specific terminal details.
    */
   run(
     config: WorkflowWorkerConfig,

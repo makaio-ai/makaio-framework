@@ -103,7 +103,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
         kind: 'workflow-report',
         schemaVersion: '1',
         scope: { level: 'global' },
-        create: '{ status: "draft", title: inputs.title }',
+        create: '{ status: config.initialStatus, title: inputs.title }',
         statusPath: 'status',
       })
       .station('write-report', async (ctx) => {
@@ -123,7 +123,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
           executionId: 'exec-artifact-context',
           workflowId: workflow.id,
           inputs: { title: 'Runtime report' },
-          config: {},
+          config: { initialStatus: 'draft' },
           triggerPayload: {},
           scope: { type: 'global' },
           context: {
@@ -144,6 +144,15 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
       });
 
       expect(result.status).toBe('completed');
+      expect(result).toMatchObject({
+        status: 'completed',
+        artifact: expect.objectContaining({
+          kind: 'workflow-report',
+          id: 'artifact-report-1',
+          revision: 'rev-1',
+          data: { status: 'written', title: 'Runtime report' },
+        }),
+      });
       expect(createdArtifacts).toHaveLength(1);
       expect(createdArtifacts[0]?.data).toEqual({ status: 'draft', title: 'Runtime report' });
       expect(revisedArtifacts).toHaveLength(1);
@@ -242,6 +251,54 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
 });
 
 describe('runWorkflowOrchestrator cancellation finalization', () => {
+  it('persists failed execution errors for storage-backed reads', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+
+    const workflow = defineWorkflow('failed-execution-error-persistence').station('fail-station', async () => {
+      throw new Error('station failed');
+    });
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        config: {
+          source: { kind: 'path', path: '/workflows/fail.ts' },
+          executionId: 'exec-failed-error-persistence',
+          workflowId: workflow.id,
+          inputs: {},
+          config: {},
+          triggerPayload: {},
+          scope: { type: 'global' },
+          context: {
+            repoPath: '/repo',
+            makaioHome: '/home/.makaio',
+            os: 'linux',
+            arch: 'arm64',
+          },
+          env: {},
+          busAuth: { kind: 'none' },
+          coordinatorSessionId: 'session-failed-error-persistence',
+          cancelSubject: 'workflow.exec-failed-error-persistence.cancel',
+          suspensionStrategy: 'wait-in-process',
+        },
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+
+      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
+        executionId: 'exec-failed-error-persistence',
+      });
+
+      expect(result).toMatchObject({ status: 'failed', error: 'station failed' });
+      expect(execution).toMatchObject({ status: 'failed', error: 'station failed' });
+    } finally {
+      dbContext.cleanup();
+    }
+  });
+
   it('preserves the cancellation reason when a runtime node returns cancelled', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);

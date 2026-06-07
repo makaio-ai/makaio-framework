@@ -149,6 +149,7 @@ async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, r
   const { cancelled, gates } = await deps.bus.request(WorkflowStorageSubjects.cancelPausedExecution, {
     executionId,
     completedAt,
+    reason,
   });
   if (!cancelled) return false;
 
@@ -201,6 +202,7 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
 
   const { execution } = active;
   execution.status = 'cancelled';
+  execution.reason = reason;
   execution.completedAt = Date.now();
 
   try {
@@ -216,6 +218,7 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
 
     await persistExecutionUpdate(deps.bus, execution, {
       status: execution.status,
+      reason,
       completedAt: execution.completedAt,
     });
 

@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
 import type {
+  ArtifactRevision,
   StationHandler,
   WorkflowZodSchemas,
   WorkflowDefinition,
@@ -96,7 +97,15 @@ async function persistPreRuntimeTerminalExecution(
     });
   }
 
-  return { executionId: config.executionId, workflowId: config.workflowId, status };
+  if (status === 'cancelled') {
+    return {
+      executionId: config.executionId,
+      workflowId: config.workflowId,
+      status: 'cancelled',
+      ...(reason !== undefined ? { reason } : {}),
+    };
+  }
+  return { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' };
 }
 
 /**
@@ -107,10 +116,20 @@ async function persistPreRuntimeTerminalExecution(
  */
 function buildWorkflowRunResult(config: WorkflowWorkerConfig, result: RuntimeSequenceResult): WorkflowRunResult {
   if (result.status === 'completed') {
-    return { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' };
+    return {
+      executionId: config.executionId,
+      workflowId: config.workflowId,
+      status: 'completed',
+      ...(result.artifact !== undefined ? { artifact: result.artifact } : {}),
+    };
   }
   if (result.status === 'cancelled') {
-    return { executionId: config.executionId, workflowId: config.workflowId, status: 'cancelled' };
+    return {
+      executionId: config.executionId,
+      workflowId: config.workflowId,
+      status: 'cancelled',
+      ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    };
   }
   if (result.status === 'paused') {
     return {
@@ -125,7 +144,7 @@ function buildWorkflowRunResult(config: WorkflowWorkerConfig, result: RuntimeSeq
     executionId: config.executionId,
     workflowId: config.workflowId,
     status: 'failed',
-    output: result.error ?? 'Workflow execution failed',
+    error: result.error,
   };
 }
 
@@ -192,9 +211,9 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
  * runtime guards after narrowing to `'paused'`.
  */
 type RuntimeSequenceResult =
-  | { readonly status: 'completed' }
+  | { readonly status: 'completed'; readonly artifact?: ArtifactRevision }
   | { readonly status: 'failed'; readonly error: string }
-  | { readonly status: 'cancelled' }
+  | { readonly status: 'cancelled'; readonly reason?: string }
   | {
       readonly status: 'paused';
       /** Node ID of the gate at which execution was suspended. */
@@ -335,9 +354,9 @@ async function runRuntimeSequence(
     };
   }
   if (outcome.status === 'cancelled' || signal.aborted) {
-    return { status: 'cancelled' };
+    return { status: 'cancelled', reason: WORKFLOW_CANCELLED_REASON };
   }
-  return { status: 'completed' };
+  return { status: 'completed', artifact: artifactBinding?.current };
 }
 
 /**
@@ -566,11 +585,11 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   if (signalCancellationFinalized) {
     // Signal cancellation owns the terminal write and lifecycle event once
     // cancelExecution() transitions the active run to cancelled.
-    return buildWorkflowRunResult(config, { status: 'cancelled' });
+    return buildWorkflowRunResult(config, { status: 'cancelled', reason: WORKFLOW_CANCELLED_REASON });
   }
 
   if (signal.aborted || liveExecution.status === 'cancelled') {
-    result = { status: 'cancelled' };
+    result = { status: 'cancelled', reason: WORKFLOW_CANCELLED_REASON };
   }
 
   // Paused executions are not terminal: they have no completedAt and emit a
@@ -584,6 +603,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   const terminalError = result.status === 'failed' ? result.error : undefined;
   liveExecution.status = result.status;
   liveExecution.completedAt = completedAt;
+  liveExecution.error = terminalError;
   await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
   await emitTerminalExecutionEvent(bus, config, result.status, liveExecution, completedAt, terminalError);
 

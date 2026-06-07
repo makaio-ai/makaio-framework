@@ -35,6 +35,7 @@ function mapExecution(row: DbExecutionRow): WorkflowExecution {
     inputs: row.inputs,
     config: {},
     error: row.error ?? undefined,
+    reason: row.reason ?? undefined,
     startedAt: row.startedAt,
     completedAt: row.completedAt ?? undefined,
     triggerPayload: row.triggerPayload ?? undefined,
@@ -56,6 +57,7 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
     status: execution.status,
     inputs: execution.inputs,
     error: execution.error ?? null,
+    reason: execution.reason ?? null,
     startedAt: execution.startedAt,
     completedAt: execution.completedAt ?? null,
     triggerPayload: (execution.triggerPayload as Record<string, JsonValue> | undefined) ?? null,
@@ -154,12 +156,14 @@ async function restorePausedGateResumeState(
  * @param db - Drizzle database instance.
  * @param executionId - Paused execution to terminalize.
  * @param completedAt - Cancellation timestamp to persist on execution and gates.
+ * @param reason - Optional cancellation reason to persist on the execution.
  * @returns Cancel result with the gate rows transitioned to `cancelled`.
  */
 async function cancelPausedExecution(
   db: MakaioDatabase,
   executionId: string,
   completedAt: number,
+  reason: string | undefined,
 ): Promise<{
   readonly cancelled: boolean;
   readonly gates: Array<WorkflowGateInstance & { readonly status: 'cancelled' }>;
@@ -185,7 +189,7 @@ async function cancelPausedExecution(
 
     await tx
       .update(workflowExecutions)
-      .set({ status: 'cancelled', completedAt })
+      .set({ status: 'cancelled', completedAt, reason: reason ?? null })
       .where(eq(workflowExecutions.id, executionId));
     for (const gate of gates) {
       const gateValues = toGateDbValues(gate);
@@ -202,6 +206,7 @@ async function cancelPausedExecution(
  * @param executionId - Target execution identifier.
  * @param status - Optional new execution status.
  * @param error - Optional error message (nullable to clear).
+ * @param reason - Optional cancellation reason (nullable to clear).
  * @param completedAt - Optional completion timestamp (nullable to clear).
  * @returns True when the execution was found and updated.
  */
@@ -210,6 +215,7 @@ async function applyExecutionUpdate(
   executionId: string,
   status: InsertWorkflowExecution['status'] | undefined,
   error: string | null | undefined,
+  reason: string | null | undefined,
   completedAt: number | null | undefined,
 ): Promise<boolean> {
   return executeTransaction(db, async (tx) => {
@@ -223,6 +229,7 @@ async function applyExecutionUpdate(
     const metadataValues: Partial<InsertWorkflowExecution> = {};
     if (status !== undefined) metadataValues.status = status;
     if (error !== undefined) metadataValues.error = error;
+    if (reason !== undefined) metadataValues.reason = reason;
     if (completedAt !== undefined) metadataValues.completedAt = completedAt;
 
     if (Object.keys(metadataValues).length > 0) {
@@ -276,14 +283,14 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
   );
 
   const unsubUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, async (ctx) => {
-    const { executionId, status, error, completedAt } = ctx.payload;
-    const success = await applyExecutionUpdate(db, executionId, status, error, completedAt);
+    const { executionId, status, error, reason, completedAt } = ctx.payload;
+    const success = await applyExecutionUpdate(db, executionId, status, error, reason, completedAt);
     ctx.setResult({ success });
   });
 
   const unsubCancelPausedExecution = bus.on(WorkflowStorageSubjects.cancelPausedExecution, async (ctx) => {
-    const { executionId, completedAt } = ctx.payload;
-    ctx.setResult(await cancelPausedExecution(db, executionId, completedAt));
+    const { executionId, completedAt, reason } = ctx.payload;
+    ctx.setResult(await cancelPausedExecution(db, executionId, completedAt, reason));
   });
 
   const unsubListExecutions = bus.on(WorkflowStorageSubjects.listExecutions, async (ctx) => {

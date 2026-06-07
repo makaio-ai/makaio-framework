@@ -192,30 +192,13 @@ async function finalizeResolvedRunnerResult(deps: RunnerTaskDeps, result: Workfl
     return;
   }
   if (result.status === 'cancelled') {
-    await cancelExecution(finalizerDeps, result.executionId, extractRunnerResultReason(result));
+    await cancelExecution(finalizerDeps, result.executionId, result.reason ?? WORKFLOW_CANCELLED_REASON);
     return;
   }
-  await completeExecutionWithFailure(
-    finalizerDeps,
-    active.execution,
-    result.executionId,
-    extractRunnerResultReason(result) ?? 'Workflow runner reported failure',
-  );
-}
-
-/**
- * Extract a human-readable reason from a runner result output.
- * @param result - Terminal runner result.
- * @returns Reason string when one is present.
- */
-function extractRunnerResultReason(result: WorkflowRunResult): string | undefined {
-  const output = result.output;
-  if (typeof output === 'string') return output;
-  if (typeof output === 'object' && output !== null && !Array.isArray(output)) {
-    const reason = (output as Record<string, unknown>)['reason'];
-    if (typeof reason === 'string') return reason;
+  if (result.status === 'failed') {
+    await completeExecutionWithFailure(finalizerDeps, active.execution, result.executionId, result.error);
+    return;
   }
-  return undefined;
 }
 
 /**

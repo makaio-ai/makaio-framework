@@ -85,7 +85,7 @@ export class WorkerNodeRunner implements IWorkflowRunner {
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @param options - Optional per-run controls forwarded to dispatch-capable providers.
-   * @returns The execution result with terminal status and optional output.
+   * @returns The execution result with terminal status and status-specific result fields.
    */
   public run(
     config: WorkflowWorkerConfig,
