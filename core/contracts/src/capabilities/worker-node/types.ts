@@ -18,9 +18,8 @@ export const BUILT_IN_THIN_WORKFLOW_PROVIDER_ID = 'makaio.runtime-node.piscina-l
 /**
  * Zod schema for the capabilities advertised by a WorkerNode provider.
  *
- * `customCapabilities` is an open list so product hosts can declare
- * domain-specific tags (e.g. `'workflow.bus-events'`) without modifying
- * the framework contract.
+ * `customCapabilities` is an open list so hosts can declare environment-
+ * specific tags (e.g. `'workflow.bus-events'`) without modifying the contract.
  */
 export const WorkerNodeCapabilitiesSchema = z.object({
   /** Optional upper bound on a single execution's wall-clock duration, in milliseconds. */
@@ -63,8 +62,7 @@ export type NormalizedWorkerNodeRequirements = z.output<typeof WorkerNodeRequire
  * Request handed to a WorkerNode provider after pool dispatch has selected it.
  *
  * This is a framework-level transfer object. Pool identity and resource
- * allocation details live in the product-owned dispatch layer above this
- * contract.
+ * allocation details live in the host-owned dispatch layer above this contract.
  */
 export interface WorkerNodeProvisionRequest {
   /** Unique identifier for this node instance within an execution. */

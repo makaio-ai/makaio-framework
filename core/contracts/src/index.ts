@@ -325,6 +325,7 @@ export type {
   WorkerNodeDispatch,
   WorkerNodeHandle,
   WorkerNodeProvisionRequest,
+  WorkerNodeReadyState,
   WorkerNodeRequirements,
 } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';

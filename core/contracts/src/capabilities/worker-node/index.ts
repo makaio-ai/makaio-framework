@@ -12,6 +12,7 @@ export type {
   WorkerNodeDispatch,
   WorkerNodeHandle,
   WorkerNodeProvisionRequest,
+  WorkerNodeReadyState,
   WorkerNodeRequirements,
 } from './types.js';
 export { registerWorkerNodeProvider, unregisterWorkerNodeProvider } from './register.js';

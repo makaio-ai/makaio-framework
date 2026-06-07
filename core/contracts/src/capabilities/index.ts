@@ -156,6 +156,7 @@ export type {
   WorkerNodeDispatch,
   WorkerNodeHandle,
   WorkerNodeProvisionRequest,
+  WorkerNodeReadyState,
   WorkerNodeRequirements,
 } from './worker-node/index.js';
 export {

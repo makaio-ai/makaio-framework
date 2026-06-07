@@ -31,4 +31,23 @@ describe('worker-node namespace', () => {
     });
     expect('poolId' in parsed).toBe(false);
   });
+
+  it('registers control ready under worker-node', () => {
+    expect(WorkerNodeSubjects.control.ready.$meta.namespace).toBe('worker-node');
+    expect(WorkerNodeSubjects.control.ready.subject).toBe('control.ready');
+  });
+
+  it('parses control ready payloads', () => {
+    const parsed = WorkerNodeSchemas['control.ready'].parse({
+      nodeId: 'node-1',
+      executionId: 'wfx-1',
+      adapters: ['claude-code'],
+    });
+
+    expect(parsed).toStrictEqual({
+      nodeId: 'node-1',
+      executionId: 'wfx-1',
+      adapters: ['claude-code'],
+    });
+  });
 });

@@ -11,7 +11,7 @@ import {
 /**
  * Base fields present on every WorkerNode lifecycle event.
  *
- * Pool identity is deliberately absent — pool assignment is product-owned and
+ * Pool identity is deliberately absent — pool assignment is host-owned and
  * must not leak into the framework lifecycle payload surface.
  */
 const WorkerNodeLifecycleBaseSchema = z.object({
@@ -28,7 +28,7 @@ const WorkerNodeLifecycleBaseSchema = z.object({
 /**
  * Framework-level WorkerNode dispatch request.
  *
- * Pool selection and provider allocation remain product-owned. This request is
+ * Pool selection and provider allocation remain caller-owned. This request is
  * the generic bus seam used by workflow-level runners that need WorkerNode
  * execution without importing a concrete pool service.
  */
@@ -83,6 +83,23 @@ export const WorkerNodeSchemas = {
   },
 
   /**
+   * Worker runtime has connected to the host bus and is ready to receive
+   * control messages. Providers consume this as an internal readiness signal;
+   * WorkerPoolService remains responsible for public lifecycle emission.
+   *
+   * Subject: `worker-node.control.ready`
+   * Type: Event
+   */
+  'control.ready': z.object({
+    /** Node identifier assigned by the provider and passed to the worker bootstrap. */
+    nodeId: z.string().min(1),
+    /** Workflow execution identifier owned by this worker. */
+    executionId: z.string().min(1),
+    /** Adapter identifiers loaded inside the worker before readiness. */
+    adapters: z.array(z.string().min(1)).default([]),
+  }),
+
+  /**
    * Dispatch has selected a provider; node allocation is in progress.
    *
    * Subject: `worker-node.lifecycle.provisioning`
@@ -106,7 +123,7 @@ export const WorkerNodeSchemas = {
    */
   'lifecycle.ready': WorkerNodeLifecycleBaseSchema.extend({
     /** Adapter identifiers that have been loaded and registered inside this node. */
-    adapters: z.array(z.string()).default([]),
+    adapters: z.array(z.string().min(1)).default([]),
   }),
 
   /**
