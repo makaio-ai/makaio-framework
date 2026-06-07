@@ -4464,7 +4464,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    tsdown: "npm:^0.22.0"
+    tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
@@ -5226,7 +5226,7 @@ __metadata:
   dependencies:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    tsdown: "npm:^0.22.0"
+    tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
@@ -25438,7 +25438,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsdown@npm:0.22.0, tsdown@npm:^0.22.0":
+"tsdown@npm:0.22.0":
   version: 0.22.0
   resolution: "tsdown@npm:0.22.0"
   dependencies:
