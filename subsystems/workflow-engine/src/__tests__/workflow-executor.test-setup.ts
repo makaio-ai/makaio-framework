@@ -131,7 +131,7 @@ function registerCommonMockHandlers(cleanupFns: Array<() => void>): void {
  * @returns Initialized workflow executor test setup.
  */
 export async function setupWorkflowExecutorTest(
-  options: { readonly workflowRunner?: IWorkflowRunner } = {},
+  options: { readonly workflowRunner?: IWorkflowRunner; readonly initExecutor?: boolean } = {},
 ): Promise<WorkflowExecutorTestSetup> {
   MakaioBus.__resetHandlers?.();
 
@@ -154,7 +154,9 @@ export async function setupWorkflowExecutorTest(
     },
     options.workflowRunner,
   );
-  await workflowExecutor.init();
+  if (options.initExecutor !== false) {
+    await workflowExecutor.init();
+  }
 
   cleanupFns.push(registerAdapterStartHandler());
   registerCommonMockHandlers(cleanupFns);

@@ -274,6 +274,24 @@ export const WorkflowSchemas = {
     completedAt: z.number().nonnegative().optional(),
   }),
 
+  /**
+   * Emitted when a workflow execution parks at a gate and the worker exits.
+   *
+   * Dispatched by providers using `exit-and-redispatch` or `exit-and-resume`
+   * suspension strategies. In-process providers that block at the gate do not
+   * emit this event.
+   */
+  'execution.paused': z.object({
+    /** Execution that has paused. */
+    executionId: z.string(),
+    /** Workflow definition being executed. */
+    workflowId: z.string(),
+    /** Node ID of the gate in the workflow definition. */
+    pausedAtGateId: z.string().min(1),
+    /** Frame ID of the suspended gate instance. */
+    pausedAtFrameId: z.string().min(1),
+  }),
+
   'step.beforeStart': StepLifecycleBaseSchema,
   'step.started': StepLifecycleBaseSchema.extend({
     sessionId: z.string().optional(),

@@ -939,6 +939,10 @@ export const WorkflowGateInstanceSchema = z.object({
   prompt: z.string().optional(),
   /** Current gate status. */
   status: z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']),
+  /** Effective timeout action captured when the gate opened. */
+  autoAction: z.enum(['approve', 'reject']),
+  /** Effective timeout in milliseconds captured when the gate opened; `null` blocks indefinitely. */
+  timeoutMs: z.number().int().positive().nullable(),
   /** JSON-serializable resume data submitted by the approver. */
   resumeData: JsonValueSchema.optional(),
   /** Epoch milliseconds when the gate was created (node entered). */

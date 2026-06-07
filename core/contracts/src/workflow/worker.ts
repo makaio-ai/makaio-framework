@@ -3,6 +3,7 @@ import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schema
 import { JsonObjectContractSchema, JsonValueSchema, type JsonValue } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
+import { SuspensionStrategySchema } from '../worker-node/suspension.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -126,6 +127,8 @@ export const WorkflowWorkerConfigSchema = z.object({
   executionHints: ExecutionHintsSchema.optional(),
   /** Bus subject the worker subscribes to for cancellation signals. */
   cancelSubject: z.string().min(1),
+  /** Selected provider suspension behavior for this execution. */
+  suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
 });
 
 export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
@@ -141,15 +144,21 @@ export type WorkflowWorkerConfig = z.infer<typeof WorkflowWorkerConfigSchema>;
  * boundaries (Piscina worker threads, child processes, Docker containers).
  *
  * NOTE: A companion {@link WorkflowRunResultSchema} exists for runtime
- * validation. The interface predates the schema and is retained because it
- * is used as a TypeScript type throughout the codebase. Both definitions
- * must stay in sync.
+ * validation. Both definitions must stay in sync.
  */
-export interface WorkflowRunResult {
+interface WorkflowRunResultBase {
   /** Unique identifier for this execution run. */
   readonly executionId: string;
   /** Workflow definition identifier. */
   readonly workflowId: string;
+  /** Final output produced by the workflow, if any. */
+  readonly output?: JsonValue;
+}
+
+/**
+ * Result produced when execution reaches a terminal, non-paused status.
+ */
+type WorkflowTerminalRunResult = WorkflowRunResultBase & {
   /**
    * Terminal status of the execution.
    *
@@ -158,23 +167,62 @@ export interface WorkflowRunResult {
    * - `cancelled`: execution was stopped by an abort signal
    */
   readonly status: 'completed' | 'failed' | 'cancelled';
-  /** Final output produced by the workflow, if any. */
-  readonly output?: JsonValue;
-}
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtGateId?: never;
+  /** Pause identity is only valid for paused results. */
+  readonly pausedAtFrameId?: never;
+};
+
+/**
+ * Result produced when execution parks at a gate and will resume later.
+ */
+type WorkflowPausedRunResult = WorkflowRunResultBase & {
+  /**
+   * Execution suspended at a gate; the worker has exited and will be
+   * redispatched or resumed when the gate resolves.
+   */
+  readonly status: 'paused';
+  /**
+   * Node ID of the gate at which execution paused.
+   */
+  readonly pausedAtGateId: string;
+  /**
+   * Frame ID of the suspended gate instance at which execution paused.
+   */
+  readonly pausedAtFrameId: string;
+};
+
+export type WorkflowRunResult = WorkflowTerminalRunResult | WorkflowPausedRunResult;
 
 /**
  * Zod schema for the serializable result returned by isolated workflow workers.
+ *
+ * When `status` is `'paused'`, both `pausedAtGateId` and `pausedAtFrameId`
+ * are required to uniquely identify the suspended gate frame.
  */
-export const WorkflowRunResultSchema = z.object({
+const WorkflowRunResultBaseSchema = z.object({
   /** Unique identifier for this execution run. */
   executionId: z.string().min(1),
   /** Workflow definition identifier. */
   workflowId: z.string().min(1),
-  /** Terminal execution status. */
-  status: z.enum(['completed', 'failed', 'cancelled']),
   /** Final output produced by the workflow, if any. */
   output: JsonValueSchema.optional(),
 });
+
+export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
+  WorkflowRunResultBaseSchema.extend({
+    /** Terminal execution status. */
+    status: z.enum(['completed', 'failed', 'cancelled']),
+  }).strict(),
+  WorkflowRunResultBaseSchema.extend({
+    /** Paused execution status. */
+    status: z.literal('paused'),
+    /** Node ID of the gate at which execution paused. */
+    pausedAtGateId: z.string().min(1),
+    /** Frame ID of the suspended gate instance at which execution paused. */
+    pausedAtFrameId: z.string().min(1),
+  }).strict(),
+]);
 
 // ─────────────────────────────────────────────────────────────
 // Worker Contribution Manifest
@@ -220,6 +268,18 @@ export const WorkerContributionManifestSchema = z.object({
 
 export type WorkerContributionManifest = z.infer<typeof WorkerContributionManifestSchema>;
 
+/**
+ * Optional controls for one workflow runner invocation.
+ */
+export interface WorkflowRunnerRunOptions {
+  /**
+   * Opaque metadata forwarded to dispatch layers that support it.
+   *
+   * Runners that do not call through WorkerNode dispatch may ignore this.
+   */
+  readonly dispatchMetadata?: z.infer<typeof JsonObjectContractSchema>;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Workflow Runner Interface
 // ─────────────────────────────────────────────────────────────
@@ -242,12 +302,14 @@ export interface IWorkflowRunner {
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
+   * @param options - Optional per-run controls for dispatch-capable runners.
    * @returns The execution result with terminal status and optional output.
    */
   run(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
+    options?: WorkflowRunnerRunOptions,
   ): Promise<WorkflowRunResult>;
 
   /**

@@ -740,18 +740,33 @@ describe('WorkflowFrameStateSchema', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowGateInstanceSchema', () => {
-  it('parses a minimal waiting gate instance', () => {
+  it('parses a waiting gate instance with captured timeout policy', () => {
     const gate = WorkflowGateInstanceSchema.parse({
       executionId: 'wfx-1',
       nodeId: 'approval',
       frameId: 'frame-gate',
-      schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+      schema: {},
       status: 'waiting',
+      autoAction: 'approve',
+      timeoutMs: 5000,
       createdAt: 1000,
     });
-    expect(gate.status).toBe('waiting');
-    expect(gate.schema).toBeDefined();
-    expect(gate.resolvedAt).toBeUndefined();
+
+    expect(gate.autoAction).toBe('approve');
+    expect(gate.timeoutMs).toBe(5000);
+  });
+
+  it('rejects gate instances without captured timeout policy', () => {
+    expect(() =>
+      WorkflowGateInstanceSchema.parse({
+        executionId: 'wfx-1',
+        nodeId: 'approval',
+        frameId: 'frame-gate',
+        schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+        status: 'waiting',
+        createdAt: 1000,
+      }),
+    ).toThrow();
   });
 
   it('parses a resumed gate instance with resumeData', () => {
@@ -761,6 +776,8 @@ describe('WorkflowGateInstanceSchema', () => {
       frameId: 'frame-gate',
       schema: { type: 'object' },
       status: 'resumed',
+      autoAction: 'reject',
+      timeoutMs: null,
       createdAt: 1000,
       resolvedAt: 2000,
       resumeData: { approved: true, comment: 'LGTM' },
@@ -777,6 +794,8 @@ describe('WorkflowGateInstanceSchema', () => {
       frameId: 'frame-gate',
       schema: {},
       status: 'timed-out',
+      autoAction: 'reject',
+      timeoutMs: null,
       createdAt: 1000,
       resolvedAt: 3600000,
     });
@@ -790,6 +809,8 @@ describe('WorkflowGateInstanceSchema', () => {
       frameId: 'frame-gate',
       schema: {},
       status: 'rejected',
+      autoAction: 'reject',
+      timeoutMs: null,
       createdAt: 1000,
       resolvedAt: 2000,
       resumeData: { decision: 'rejected' },
@@ -1278,6 +1299,8 @@ describe('listGateInstances subject', () => {
           schema: {},
           prompt: 'Approve?',
           status: 'waiting',
+          autoAction: 'reject',
+          timeoutMs: null,
           createdAt: 1000,
         },
       ],
@@ -1480,5 +1503,23 @@ describe('worklog.changed event', () => {
 
   it('rejects worklog.changed with empty executionId', () => {
     expect(() => WorkflowSchemas['worklog.changed'].parse({ executionId: '' })).toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// execution.paused event
+// ─────────────────────────────────────────────────────────────
+
+describe('execution.paused event', () => {
+  it('defines execution.paused with gate and frame identity', () => {
+    expect(WorkflowSubjects.execution.paused.subject).toBe('execution.paused');
+    expect(
+      WorkflowSchemas['execution.paused'].parse({
+        executionId: 'wfx-1',
+        workflowId: 'wf-1',
+        pausedAtGateId: 'approve',
+        pausedAtFrameId: 'frame-approve-1',
+      }),
+    ).toMatchObject({ pausedAtFrameId: 'frame-approve-1' });
   });
 });

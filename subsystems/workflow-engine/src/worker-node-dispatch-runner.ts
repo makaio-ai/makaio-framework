@@ -10,11 +10,13 @@ import { WorkerNodeSubjects, type IWorkflowRunner, type WorkflowRunContext } fro
  * only trigger placeholders and remote execution hints.
  * @param bus - Message bus used to call the generic WorkerNode dispatch seam.
  * @param executionHints - Merged definition/request execution hints.
+ * @param dispatchMetadata - Opaque metadata forwarded to the WorkerNode dispatch request.
  * @returns A WorkerNode dispatch runner, or `undefined` when no capability constraint exists.
  */
 export function createExecutionHintWorkerNodeRunner(
   bus: IMakaioBus,
   executionHints: WorkflowRunContext['executionHints'],
+  dispatchMetadata?: Record<string, unknown>,
 ): IWorkflowRunner | undefined {
   const capabilities = executionHints?.requirements?.capabilities ?? [];
   if (capabilities.length === 0) return undefined;
@@ -25,6 +27,7 @@ export function createExecutionHintWorkerNodeRunner(
         {
           config,
           requirements: { customCapabilities: capabilities },
+          ...(dispatchMetadata !== undefined ? { metadata: dispatchMetadata } : {}),
         },
         { signal },
       ),

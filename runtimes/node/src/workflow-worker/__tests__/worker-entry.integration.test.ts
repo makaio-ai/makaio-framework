@@ -129,6 +129,7 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
     env: {},
     coordinatorSessionId: 'session-entry-integration',
     cancelSubject: 'workflow.cancel.exec-entry-integration',
+    suspensionStrategy: 'wait-in-process',
   };
 }
 

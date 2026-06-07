@@ -4,6 +4,7 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
 import { WorkflowWorkerSourceSchema, WorkerContributionManifestSchema } from './worker.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
+import { SuspensionStrategySchema } from '../worker-node/suspension.js';
 
 /**
  * Persisted, per-execution snapshot of the configuration and context needed to
@@ -52,6 +53,14 @@ export const WorkflowRunContextSchema = z
     coordinatorSessionId: z.string().min(1),
     /** Advisory worker provisioning hints supplied by the start request. */
     executionHints: ExecutionHintsSchema.optional(),
+    /**
+     * Opaque dispatch metadata that must survive pause/resume boundaries.
+     *
+     * Framework code treats this as a generic JSON object. Product-owned
+     * dispatchers may store non-secret routing identity here so resumed
+     * executions can be handed back to the same dispatch target.
+     */
+    dispatchMetadata: JsonObjectContractSchema.optional(),
     /** Bus subject for cancellation signals. */
     cancelSubject: z.string().min(1),
     /** Platform/workspace context for expression resolution and tool access. */
@@ -71,6 +80,15 @@ export const WorkflowRunContextSchema = z
     env: z.record(z.string(), z.string()).default({}),
     /** Snapshot creation timestamp (epoch ms). */
     createdAt: z.number(),
+    /**
+     * Durable record of the suspension strategy selected for this execution.
+     *
+     * Persisted alongside the run context so resumers and redispatchers can
+     * apply the same strategy without re-resolving provider capabilities.
+     * Defaults to `'wait-in-process'` for executions started before this
+     * field was introduced.
+     */
+    suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
   })
   .superRefine((value, ctx) => {
     if (value.source.kind === 'definition' && value.definitionSnapshot === undefined) {

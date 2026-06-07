@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from './namespace.js';
+import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { createStepCancelSubject, type IStepRunner, type WorkflowExecution } from '@makaio/contracts';
 import type { ActiveExecution, ActiveRunnerStep } from './types.js';
 import { persistExecutionUpdate } from './workflow-execution-persistence.js';
@@ -118,25 +119,69 @@ export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string
 }
 
 /**
- * Cancel a running workflow execution and release all active step resources.
+ * Cancel an execution that is parked in storage without active runtime ownership.
+ *
+ * Exit-and-redispatch providers release the executor's active execution entry
+ * after the gate is durably parked. A later public cancel must still
+ * terminalize the paused execution and its waiting gates so timeout/manual
+ * resume paths cannot continue the run.
+ * @param deps - Finalizer dependencies.
+ * @param executionId - Paused execution identifier to cancel.
+ * @param reason - Optional human-readable cancellation reason.
+ * @returns True when a paused execution was cancelled.
+ */
+async function cancelPausedExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+  const completedAt = Date.now();
+  const { cancelled, gates } = await deps.bus.request(WorkflowStorageSubjects.cancelPausedExecution, {
+    executionId,
+    completedAt,
+  });
+  if (!cancelled) return false;
+
+  for (const gate of gates) {
+    await deps.bus
+      .emit(WorkflowSubjects.gate.resolved, {
+        executionId,
+        stepId: gate.nodeId,
+        stepType: 'gate',
+        frameId: gate.frameId,
+        source: 'cancelled',
+      })
+      .catch((error: unknown) => {
+        console.error(`[WorkflowFinalizer] Failed to emit cancelled gate resolution for ${gate.frameId}:`, error);
+      });
+  }
+
+  await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
+    executionId,
+    reason,
+    completedAt,
+  });
+  deps.activeExecutions.delete(executionId);
+  return true;
+}
+
+/**
+ * Cancel a running or parked workflow execution and release active resources.
  *
  * In the primitive runtime, the abort signal drives frame-level cancellation.
  * This function handles the execution-level state transition:
  * - Updates execution status to `cancelled`
  * - Aborts shell controllers for any in-flight shell steps
  * - Cancels active runner steps (cooperative abort + hard kill timer)
+ * - Cancels waiting gate rows for parked paused executions
  * - Persists the cancelled status
  * - Emits `execution.cancelled`
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution identifier to cancel.
  * @param reason - Optional human-readable cancellation reason.
- * @returns True when an active running execution was cancelled.
+ * @returns True when a running or parked execution was cancelled.
  */
 export async function cancelExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
   const active = deps.activeExecutions.get(executionId);
 
   if (!active || active.execution.status !== 'running') {
-    return false;
+    return cancelPausedExecution(deps, executionId, reason);
   }
 
   const { execution } = active;

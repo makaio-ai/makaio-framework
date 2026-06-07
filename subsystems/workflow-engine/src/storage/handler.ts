@@ -2,12 +2,18 @@ import { eq, and, desc, lt, or } from 'drizzle-orm';
 import { executeTransaction, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
-import type { ExtensionContext, JsonValue, WorkflowExecution, WorkflowRunContext } from '@makaio/contracts';
+import type {
+  ExtensionContext,
+  JsonValue,
+  WorkflowExecution,
+  WorkflowGateInstance,
+  WorkflowRunContext,
+} from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowExecutions, type InsertWorkflowExecution } from './schema.js';
+import { workflowExecutions, workflowGateInstances, type InsertWorkflowExecution } from './schema.js';
 import { registerDefinitionHandlers } from './definition-handler.js';
 import { registerFrameHandlers } from './frame-handler.js';
-import { registerGateInstanceHandlers } from './gate-handler.js';
+import { mapGateInstance, registerGateInstanceHandlers, toGateDbValues } from './gate-handler.js';
 import { registerSpanHandlers } from './span-handler.js';
 import { registerRunContextHandlers, upsertWorkflowRunContext } from './run-context-handler.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
@@ -113,6 +119,84 @@ async function upsertExecutionStart(
 }
 
 /**
+ * Restore a paused execution and its waiting gate in one storage transaction.
+ * @param db - Database handle.
+ * @param execution - Paused execution row to restore.
+ * @param gate - Waiting gate row to restore.
+ */
+async function restorePausedGateResumeState(
+  db: MakaioDatabase,
+  execution: WorkflowExecution,
+  gate: WorkflowGateInstance,
+): Promise<void> {
+  if (gate.executionId !== execution.id) {
+    throw new Error('restorePausedGateResumeState requires execution.id to match gate.executionId');
+  }
+  if (execution.status !== 'paused' || gate.status !== 'waiting') {
+    throw new Error('restorePausedGateResumeState requires a paused execution and waiting gate');
+  }
+  const executionValues = toExecutionDbValues(execution);
+  const gateValues = toGateDbValues(gate);
+  await executeTransaction(db, async (tx) => {
+    await tx.insert(workflowExecutions).values(executionValues).onConflictDoUpdate({
+      target: workflowExecutions.id,
+      set: executionValues,
+    });
+    await tx.insert(workflowGateInstances).values(gateValues).onConflictDoUpdate({
+      target: workflowGateInstances.id,
+      set: gateValues,
+    });
+  });
+}
+
+/**
+ * Cancel a paused execution and every still-waiting gate in one transaction.
+ * @param db - Drizzle database instance.
+ * @param executionId - Paused execution to terminalize.
+ * @param completedAt - Cancellation timestamp to persist on execution and gates.
+ * @returns Cancel result with the gate rows transitioned to `cancelled`.
+ */
+async function cancelPausedExecution(
+  db: MakaioDatabase,
+  executionId: string,
+  completedAt: number,
+): Promise<{
+  readonly cancelled: boolean;
+  readonly gates: Array<WorkflowGateInstance & { readonly status: 'cancelled' }>;
+}> {
+  return executeTransaction(db, async (tx) => {
+    const executionRows = await tx
+      .select()
+      .from(workflowExecutions)
+      .where(eq(workflowExecutions.id, executionId))
+      .limit(1);
+    const execution = executionRows[0];
+    if (execution?.status !== 'paused') return { cancelled: false, gates: [] };
+
+    const gateRows = await tx
+      .select()
+      .from(workflowGateInstances)
+      .where(and(eq(workflowGateInstances.executionId, executionId), eq(workflowGateInstances.status, 'waiting')));
+    const gates = gateRows.map((row) => ({
+      ...mapGateInstance(row),
+      status: 'cancelled' as const,
+      resolvedAt: completedAt,
+    }));
+
+    await tx
+      .update(workflowExecutions)
+      .set({ status: 'cancelled', completedAt })
+      .where(eq(workflowExecutions.id, executionId));
+    for (const gate of gates) {
+      const gateValues = toGateDbValues(gate);
+      await tx.update(workflowGateInstances).set(gateValues).where(eq(workflowGateInstances.id, gateValues.id));
+    }
+
+    return { cancelled: true, gates };
+  });
+}
+
+/**
  * Apply partial execution metadata updates.
  * @param db - Drizzle database instance.
  * @param executionId - Target execution identifier.
@@ -181,10 +265,25 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     ctx.setResult({ id: execution.id, executionId: execution.id });
   });
 
+  const unsubRestorePausedGateResumeState = bus.on(
+    WorkflowStorageSubjects.restorePausedGateResumeState,
+    async (ctx) => {
+      const execution = ctx.payload.execution as WorkflowExecution;
+      const gate = ctx.payload.gate as WorkflowGateInstance;
+      await restorePausedGateResumeState(db, execution, gate);
+      ctx.setResult({ executionId: execution.id, gateId: gate.nodeId });
+    },
+  );
+
   const unsubUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, async (ctx) => {
     const { executionId, status, error, completedAt } = ctx.payload;
     const success = await applyExecutionUpdate(db, executionId, status, error, completedAt);
     ctx.setResult({ success });
+  });
+
+  const unsubCancelPausedExecution = bus.on(WorkflowStorageSubjects.cancelPausedExecution, async (ctx) => {
+    const { executionId, completedAt } = ctx.payload;
+    ctx.setResult(await cancelPausedExecution(db, executionId, completedAt));
   });
 
   const unsubListExecutions = bus.on(WorkflowStorageSubjects.listExecutions, async (ctx) => {
@@ -224,7 +323,9 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     unsubGetExecution();
     unsubSetExecution();
     unsubSetExecutionStart();
+    unsubRestorePausedGateResumeState();
     unsubUpdateExecution();
+    unsubCancelPausedExecution();
     unsubListExecutions();
   };
 }

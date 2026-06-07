@@ -2,7 +2,10 @@ import {
   WORKFLOW_CANCELLED_REASON,
   type IWorkflowRunner,
   type JsonValue,
+  type SuspensionStrategy,
   type WorkflowDefinition,
+  type WorkflowRunContext,
+  type WorkflowRunnerRunOptions,
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -14,6 +17,7 @@ import {
   completeExecutionWithSuccess,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
+import { WorkflowSubjects } from './namespace.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
 export type WorkerOs = 'darwin' | 'linux' | 'win32';
@@ -116,6 +120,52 @@ async function cancelRunningExecutionAfterRunnerAbort(
 }
 
 /**
+ * Transition a paused execution to the `paused` storage status and emit
+ * `execution.paused` when the host executor still sees a `running` execution.
+ *
+ * This is the host-side complement to the orchestrator's
+ * `persistPausedExecution`. When an isolated runner (Piscina thread, Docker
+ * container, remote worker) returns a `paused` result the orchestrator has
+ * already updated storage and emitted the event on its own bus connection. When
+ * storage is already paused, this helper releases active executor ownership
+ * without writing duplicate storage rows or emitting duplicate events.
+ *
+ * For stub runners used in tests (or future runners that return paused results
+ * without running the orchestrator), the host executor still holds a `running`
+ * execution and must perform the state transition itself.
+ * @param deps - Runner task dependencies.
+ * @param result - Paused runner result carrying gate identity.
+ */
+async function parkExecution(deps: RunnerTaskDeps, result: WorkflowRunResult): Promise<void> {
+  if (result.pausedAtGateId === undefined || result.pausedAtFrameId === undefined) {
+    throw new Error(`Paused runner result for '${result.executionId}' is missing gate identity`);
+  }
+  const { bus } = deps.buildFinalizerDeps();
+  const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: result.executionId });
+  if (execution?.status !== 'running') {
+    const active = deps.activeExecutions.get(result.executionId);
+    if (active !== undefined && execution?.status === 'paused') {
+      active.execution.status = 'paused';
+      deps.activeExecutions.delete(result.executionId);
+    }
+    return;
+  }
+  const pausedExecution = { ...execution, status: 'paused' as const };
+  await bus.request(WorkflowStorageSubjects.setExecution, { execution: pausedExecution });
+  const active = deps.activeExecutions.get(result.executionId);
+  if (active !== undefined) {
+    active.execution = pausedExecution;
+  }
+  await bus.emit(WorkflowSubjects.execution.paused, {
+    executionId: result.executionId,
+    workflowId: result.workflowId,
+    pausedAtGateId: result.pausedAtGateId,
+    pausedAtFrameId: result.pausedAtFrameId,
+  });
+  deps.activeExecutions.delete(result.executionId);
+}
+
+/**
  * Persist terminal state from a resolved workflow runner result when the local
  * executor still owns the execution.
  *
@@ -195,7 +245,13 @@ export interface RunnerTaskDeps {
   config: ExecutorConfig;
 }
 
-interface DefinitionRunnerTaskParams {
+/**
+ * Parameters for building a workflow runner task from a storage-backed definition.
+ *
+ * Used by {@link buildExecutionTask} and reconstructed from a persisted
+ * {@link WorkflowRunContext} when resuming a paused execution.
+ */
+export interface DefinitionRunnerTaskParams {
   executionId: string;
   workflowId: string;
   workflow: WorkflowDefinition;
@@ -208,6 +264,22 @@ interface DefinitionRunnerTaskParams {
   executionHints?: WorkflowWorkerConfig['executionHints'];
   scope: WorkflowDefinition['scope'];
   workspaceRoot: string;
+  /**
+   * Suspension strategy persisted from the original run context.
+   *
+   * Forwarded to the worker config so resumed executions inherit the same
+   * provider suspension behavior as the initial dispatch. Defaults to
+   * `'wait-in-process'` when absent (executions started before this field
+   * was introduced).
+   */
+  readonly suspensionStrategy?: SuspensionStrategy;
+  /**
+   * Opaque metadata forwarded to the WorkerNode dispatch request.
+   *
+   * Used by the resume path to signal `{ resume: true }` so providers
+   * applying `exit-and-redispatch` can apply the correct re-dispatch strategy.
+   */
+  dispatchMetadata?: Record<string, unknown>;
 }
 
 /**
@@ -255,11 +327,16 @@ export function buildFileExecutionTask(
     env: config.platformDefaults.env ?? {},
     coordinatorSessionId,
     cancelSubject: `workflow.${executionId}.cancel`,
+    suspensionStrategy: 'wait-in-process',
   };
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal))
     .then(async (result) => {
+      if (result.status === 'paused') {
+        await parkExecution(deps, result);
+        return;
+      }
       await finalizeResolvedRunnerResult(deps, result);
     })
     .catch(async (error: unknown) => {
@@ -319,6 +396,7 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
     env: config.platformDefaults.env ?? {},
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
+    suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
   };
 }
 
@@ -344,10 +422,16 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
   workflowAbortControllers.set(executionId, controller);
 
   const workerConfig = buildDefinitionWorkerConfig(deps, params);
+  const runOptions: WorkflowRunnerRunOptions | undefined =
+    params.dispatchMetadata === undefined ? undefined : { dispatchMetadata: params.dispatchMetadata };
 
   return Promise.resolve()
-    .then(() => workflowRunner.run(workerConfig, controller.signal))
+    .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
     .then(async (result) => {
+      if (result.status === 'paused') {
+        await parkExecution(deps, result);
+        return;
+      }
       await finalizeResolvedRunnerResult(deps, result);
     })
     .catch(async (error: unknown) => {
@@ -381,4 +465,62 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
       // on the success/failure paths; deleting a missing key is a no-op.
       activeExecutions.delete(executionId);
     });
+}
+
+/**
+ * Reconstruct {@link DefinitionRunnerTaskParams} from a persisted
+ * {@link WorkflowRunContext} and the corresponding workflow definition.
+ *
+ * Used by the resume path in {@link WorkflowExecutor} to re-dispatch a paused
+ * execution through the same runner infrastructure as an initial dispatch,
+ * without requiring the caller to reconstruct every field manually.
+ *
+ * The `options.resume` flag merges the durable run-context dispatch metadata
+ * with `{ resume: true }` so WorkerNode dispatch runners can signal the
+ * provider that this is a resume, not a fresh dispatch, without dropping the
+ * original dispatch target identity. In-process runners ignore it.
+ * @param runContext - Persisted run-context snapshot for the paused execution.
+ * @param workflow - Workflow definition for the execution.
+ * @param options - Optional flags; set `resume: true` for resumed executions.
+ * @returns Fully populated runner task params ready for execution dispatch.
+ */
+export function buildDefinitionRunnerParamsFromRunContext(
+  runContext: WorkflowRunContext,
+  workflow: WorkflowDefinition,
+  options: { readonly resume?: boolean } = {},
+): DefinitionRunnerTaskParams {
+  const dispatchMetadata = buildRunContextDispatchMetadata(runContext, options);
+
+  return {
+    executionId: runContext.executionId,
+    workflowId: runContext.workflowId,
+    workflow,
+    source: runContext.source,
+    coordinatorSessionId: runContext.coordinatorSessionId,
+    sanitizedTriggerPayload: runContext.triggerPayload,
+    boundInputs: runContext.inputs,
+    boundConfig: runContext.config ?? {},
+    ...(runContext.artifactRef !== undefined ? { artifactRef: runContext.artifactRef } : {}),
+    ...(runContext.executionHints !== undefined ? { executionHints: runContext.executionHints } : {}),
+    scope: runContext.scope,
+    workspaceRoot: runContext.context.repoPath,
+    suspensionStrategy: runContext.suspensionStrategy,
+    ...(dispatchMetadata !== undefined ? { dispatchMetadata } : {}),
+  };
+}
+
+/**
+ * Build dispatch metadata for a task reconstructed from durable run context.
+ * @param runContext - Persisted run-context snapshot for the execution.
+ * @param options - Resume options for the reconstructed dispatch.
+ * @returns Metadata to forward to the runner, or undefined when no metadata is required.
+ */
+function buildRunContextDispatchMetadata(
+  runContext: WorkflowRunContext,
+  options: { readonly resume?: boolean },
+): Record<string, unknown> | undefined {
+  if (options.resume === true) {
+    return { ...runContext.dispatchMetadata, resume: true };
+  }
+  return runContext.dispatchMetadata;
 }

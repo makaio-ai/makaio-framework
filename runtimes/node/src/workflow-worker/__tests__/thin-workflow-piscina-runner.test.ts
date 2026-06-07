@@ -45,6 +45,7 @@ function makeConfig(): WorkflowWorkerConfig {
     env: {},
     coordinatorSessionId: 'test-session',
     cancelSubject: 'workflow.cancel.test',
+    suspensionStrategy: 'wait-in-process',
   };
 }
 

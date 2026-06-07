@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowFrameState } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
@@ -90,7 +90,8 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
     const rows = await db
       .select()
       .from(workflowExecutionFrames)
-      .where(eq(workflowExecutionFrames.executionId, ctx.payload.executionId));
+      .where(eq(workflowExecutionFrames.executionId, ctx.payload.executionId))
+      .orderBy(asc(workflowExecutionFrames.startedAt), asc(workflowExecutionFrames.frameId));
     ctx.setResult({ frames: rows.map(mapFrame) });
   });
 

@@ -3,6 +3,7 @@ import type {
   WorkerContributionManifest,
   WorkerNodeDispatch,
   WorkerNodeRequirements,
+  WorkflowRunnerRunOptions,
   WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
@@ -83,21 +84,25 @@ export class WorkerNodeRunner implements IWorkflowRunner {
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
+   * @param options - Optional per-run controls forwarded to dispatch-capable providers.
    * @returns The execution result with terminal status and optional output.
    */
   public run(
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,
+    options?: WorkflowRunnerRunOptions,
   ): Promise<WorkflowRunResult> {
     const resolvedManifest = manifest ?? this.options.manifest;
     const resolvedRequirements = mergeRequirements(this.options.requirements, config);
+    const dispatchMetadata = options?.dispatchMetadata;
 
     return this.options.dispatch(
       {
         config,
         ...(resolvedManifest !== undefined && { manifest: resolvedManifest }),
         ...(resolvedRequirements !== undefined && { requirements: resolvedRequirements }),
+        ...(dispatchMetadata !== undefined && { metadata: dispatchMetadata }),
       },
       signal,
     );

@@ -57,6 +57,27 @@
       "when": 1780345899769,
       "tag": "0007_sparkling_terror",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1780474043382,
+      "tag": "0008_petite_deathstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1780486681006,
+      "tag": "0009_lethal_malcolm_colcord",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1780489744341,
+      "tag": "0010_grey_chronomancer",
+      "breakpoints": true
     }
   ]
 }

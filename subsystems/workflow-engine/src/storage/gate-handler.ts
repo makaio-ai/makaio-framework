@@ -1,18 +1,27 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowGateInstance } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowGateInstances, type InsertWorkflowGateInstance } from './schema.js';
+import { workflowExecutions, workflowGateInstances, type InsertWorkflowGateInstance } from './schema.js';
 
 type DbGateRow = typeof workflowGateInstances.$inferSelect;
+
+/**
+ * Build the stable primary key for a gate instance row.
+ * @param gate - Gate instance identity fields.
+ * @returns Storage row ID for the gate instance.
+ */
+function gateInstanceId(gate: Pick<WorkflowGateInstance, 'executionId' | 'nodeId' | 'frameId'>): string {
+  return `${gate.executionId}:${gate.nodeId}:${gate.frameId}`;
+}
 
 /**
  * Maps a database row to the `WorkflowGateInstance` API type.
  * @param row - Database row from `workflow_gate_instances`
  * @returns Mapped `WorkflowGateInstance` with optional fields normalised
  */
-function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
+export function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
   return {
     executionId: row.executionId,
     nodeId: row.nodeId,
@@ -20,6 +29,8 @@ function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
     schema: row.schema as WorkflowGateInstance['schema'],
     prompt: row.prompt ?? undefined,
     status: row.status,
+    autoAction: row.autoAction,
+    timeoutMs: row.timeoutMs ?? null,
     ...(row.resumeDataPresent ? { resumeData: row.resumeData as JsonValue } : {}),
     createdAt: row.createdAt,
     resolvedAt: row.resolvedAt ?? undefined,
@@ -31,15 +42,17 @@ function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
  * @param gate - Gate instance to persist
  * @returns Column values for the `workflow_gate_instances` table
  */
-function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateInstance {
+export function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateInstance {
   return {
-    id: `${gate.executionId}:${gate.nodeId}:${gate.frameId}`,
+    id: gateInstanceId(gate),
     executionId: gate.executionId,
     nodeId: gate.nodeId,
     frameId: gate.frameId,
     schema: gate.schema,
     prompt: gate.prompt ?? null,
     status: gate.status,
+    autoAction: gate.autoAction,
+    timeoutMs: gate.timeoutMs,
     resumeData: gate.resumeData === undefined ? null : gate.resumeData,
     resumeDataPresent: gate.resumeData !== undefined,
     createdAt: gate.createdAt,
@@ -48,7 +61,7 @@ function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateInstance 
 }
 
 /**
- * Registers all gate instance bus handlers (setGateInstance, getGateInstance, listGateInstances).
+ * Registers all gate instance bus handlers.
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
  * @returns Cleanup function that unsubscribes all registered handlers.
@@ -62,6 +75,18 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
       set: dbValues,
     });
     ctx.setResult({ id: dbValues.id });
+  });
+
+  const unsubResolveWaitingGate = bus.on(WorkflowStorageSubjects.resolveWaitingGateInstance, async (ctx) => {
+    const gate = ctx.payload.gate as WorkflowGateInstance;
+    const dbValues = toGateDbValues(gate);
+    const resolvedRows = await db
+      .update(workflowGateInstances)
+      .set(dbValues)
+      .where(and(eq(workflowGateInstances.id, dbValues.id), eq(workflowGateInstances.status, 'waiting')))
+      .returning({ id: workflowGateInstances.id });
+
+    ctx.setResult({ accepted: resolvedRows.length === 1 });
   });
 
   const unsubGetGate = bus.on(WorkflowStorageSubjects.getGateInstance, async (ctx) => {
@@ -86,9 +111,27 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
     ctx.setResult({ gates: rows.map(mapGateInstance) });
   });
 
+  const unsubListPausedGateTimeouts = bus.on(WorkflowStorageSubjects.listPausedGateTimeouts, async (ctx) => {
+    const rows = await db
+      .select({ gate: workflowGateInstances })
+      .from(workflowGateInstances)
+      .innerJoin(workflowExecutions, eq(workflowGateInstances.executionId, workflowExecutions.id))
+      .where(
+        and(
+          eq(workflowGateInstances.status, 'waiting'),
+          eq(workflowExecutions.status, 'paused'),
+          isNotNull(workflowGateInstances.timeoutMs),
+        ),
+      );
+
+    ctx.setResult({ gates: rows.map((row) => mapGateInstance(row.gate)) });
+  });
+
   return () => {
     unsubSetGate();
+    unsubResolveWaitingGate();
     unsubGetGate();
     unsubListGates();
+    unsubListPausedGateTimeouts();
   };
 }
