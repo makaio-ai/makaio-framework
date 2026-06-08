@@ -1064,12 +1064,16 @@ export {
   MaterializationNamespace,
   MaterializationSchemas,
   MaterializationSubjects,
+  ProjectedFieldSchema,
+  ProjectedFieldSemanticSchema,
   SurfaceBindingRegistrationSchema,
   SurfaceBindingTargetSchema,
 } from './materialization/index.js';
 export type {
   ArtifactMaterializationRef,
   ArtifactProjectionPolicy,
+  ProjectedField,
+  ProjectedFieldSemantic,
   SurfaceBindingChangedPayload,
   SurfaceBindingDefinition,
   SurfaceBindingListRequest,
