@@ -109,7 +109,7 @@ jobs:
             esac
 
             case "${file##*/}" in
-              bun.lock|bun.lockb|package-lock.json|pnpm-lock.yaml|yarn.lock) continue ;;
+              bun.lock|bun.lockb|Cargo.lock|package-lock.json|pnpm-lock.yaml|yarn.lock) continue ;;
             esac
 
             if [[ "${file##*/}" =~ \.(snap|(test|spec)\.[cm]?[jt]sx?)$ ]]; then

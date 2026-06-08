@@ -33,6 +33,7 @@ const NON_PUBLISHABLE_PATH_SEGMENTS = new Set(['__tests__', 'fixtures', 'snapsho
 const NON_PUBLISHABLE_FILE_NAMES = new Set([
   'bun.lock',
   'bun.lockb',
+  'Cargo.lock',
   'package-lock.json',
   'pnpm-lock.yaml',
   'yarn.lock',

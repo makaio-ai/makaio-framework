@@ -48,7 +48,7 @@ describe('changeset-required reusable workflow', () => {
       expect(workflow).toContain('skip:ci');
       expect(workflow).toContain('skip:all');
       expect(workflow).toContain('case "${file##*/}" in');
-      expect(workflow).toContain('bun.lock|bun.lockb|package-lock.json|pnpm-lock.yaml|yarn.lock');
+      expect(workflow).toContain('bun.lock|bun.lockb|Cargo.lock|package-lock.json|pnpm-lock.yaml|yarn.lock');
       expect(workflow).toContain('\\.(snap|(test|spec)\\.[cm]?[jt]sx?)$');
       expect(workflow).toContain('__tests__/*|*/__tests__/*|fixtures/*|*/fixtures/*|snapshots/*|*/snapshots/*');
       expect(workflow).not.toContain('|*/test/*|');

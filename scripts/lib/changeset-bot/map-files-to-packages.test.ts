@@ -59,11 +59,13 @@ describe('mapFilesToPackages', () => {
   });
 
   it('returns empty array for dependency lockfile-only changes', () => {
-    expect(mapFilesToPackages(['yarn.lock', 'scripts/bun.lock'])).toEqual([]);
+    expect(mapFilesToPackages(['yarn.lock', 'scripts/bun.lock', 'sdks/rust/Cargo.lock'])).toEqual([]);
   });
 
   it('ignores lockfiles while preserving publishable package changes', () => {
-    expect(mapFilesToPackages(['yarn.lock', 'core/contracts/src/index.ts'])).toEqual(['@makaio/contracts']);
+    expect(mapFilesToPackages(['yarn.lock', 'sdks/rust/Cargo.lock', 'core/contracts/src/index.ts'])).toEqual([
+      '@makaio/contracts',
+    ]);
   });
 
   it('returns empty array for tests-only changes in publishable packages', () => {
