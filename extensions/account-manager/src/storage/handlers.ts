@@ -1,6 +1,6 @@
 /* eslint max-lines-per-function: ["error", { "max": 90 }] */
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import type { Account } from '../bus/schemas.js';
@@ -340,7 +340,7 @@ function registerSnapshotHandlers({ bus, db }: AccountManagerStorageHandlerDeps)
             usageSnapshots.fetchedAt,
           ],
         });
-      ctx.setResult({ persisted: (result.rowsAffected ?? 0) > 0 });
+      ctx.setResult({ persisted: didAffectRows(result) });
     }),
     bus.on(AccountManagerStorageSubjects.snapshots.read, async (ctx) => {
       const filters = [

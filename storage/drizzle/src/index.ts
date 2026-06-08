@@ -58,5 +58,8 @@ export { executeTransaction, type TransactionCallback } from './transaction';
 // FTS5 query utilities
 export { sanitizeFtsQuery } from './fts';
 
+// Cross-driver write-result normalisation
+export { didAffectRows, affectedRowCount } from './result';
+
 // Typed registration helper — isolates the single db cast at the Drizzle boundary
 export { registerDrizzleHandlers, type DrizzleHandlerRegistration } from './register-handlers';

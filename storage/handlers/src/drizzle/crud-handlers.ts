@@ -1,6 +1,6 @@
 import { eq, getTableColumns, sql } from 'drizzle-orm';
 import type { SQL } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { RequestContext } from '@makaio/core';
 import type { DrizzleCrudConfig } from './types';
@@ -212,7 +212,7 @@ function registerDeleteHandler<
     const { id } = ctx.payload;
     const column = getTableColumns(table)[idField];
     const result = await db.delete(table).where(eq(column, id));
-    ctx.setResult({ deleted: (result.rowsAffected ?? 0) > 0 });
+    ctx.setResult({ deleted: didAffectRows(result) });
   });
 }
 

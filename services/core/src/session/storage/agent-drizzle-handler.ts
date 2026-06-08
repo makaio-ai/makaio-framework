@@ -1,5 +1,5 @@
 import { eq, and } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CompressionModeSchema, type ExtensionContext, type MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageNamespace, AgentStorageSubjects } from './agent-namespace.js';
@@ -67,15 +67,6 @@ function toDbValues(agent: MakaioSessionAgent): typeof agents.$inferInsert {
     clientId: agent.clientId ?? null,
     compressionMode: agent.compressionMode ?? null,
   };
-}
-
-/**
- * Determine whether a Drizzle write mutated at least one row.
- * @param result - Write result with optional affected-row count
- * @returns True when one or more rows were affected
- */
-function didAffectRows(result: { rowsAffected?: number | null }): boolean {
-  return (result.rowsAffected ?? 0) > 0;
 }
 
 /**

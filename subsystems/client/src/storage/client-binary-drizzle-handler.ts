@@ -9,7 +9,12 @@
  */
 
 import { eq, and } from 'drizzle-orm';
-import { executeTransaction, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
+import {
+  didAffectRows,
+  executeTransaction,
+  type MakaioDatabase,
+  type TransactionCallback,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { clientBinaryVersions, clientBinaryState } from './client-binary-schema.js';
@@ -324,7 +329,7 @@ async function handleRemoveVersionAndClearActive(
       .delete(clientBinaryVersions)
       .where(and(eq(clientBinaryVersions.clientId, clientId), eq(clientBinaryVersions.version, version)));
 
-    const wasDeleted = (deleteResult.rowsAffected ?? 0) > 0;
+    const wasDeleted = didAffectRows(deleteResult);
     if (!wasDeleted) {
       return { removedVersion: null, previousActiveVersion, activeVersion: previousActiveVersion };
     }

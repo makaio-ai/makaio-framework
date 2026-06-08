@@ -1,5 +1,5 @@
 import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionStorageSetRequestSchema,
@@ -213,7 +213,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
         .insert(sessions)
         .values({ sessionId, createdAt: session.createdAt, ...dbValues })
         .onConflictDoNothing();
-      const inserted = (insertResult.rowsAffected ?? 0) > 0;
+      const inserted = didAffectRows(insertResult);
       ctx.setResult({ success: inserted, clientAccountChanged: inserted && session.clientAccountId !== undefined });
       if (inserted) {
         emitSessionClientAccountChangedIfNeeded(bus, null, session);
@@ -234,7 +234,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
           setWhere: buildClientAccountBaselinePredicate(previousRow),
         });
 
-      if ((result.rowsAffected ?? 0) === 0) {
+      if (!didAffectRows(result)) {
         continue;
       }
 
@@ -285,7 +285,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
     }
     if (!updatesClientAccountState) {
       const result = await db.update(sessions).set(updateFields).where(eq(sessions.sessionId, sessionId));
-      ctx.setResult({ success: (result.rowsAffected ?? 0) > 0, clientAccountChanged: false });
+      ctx.setResult({ success: didAffectRows(result), clientAccountChanged: false });
       return;
     }
     for (let attempt = 0; attempt < CLIENT_ACCOUNT_WRITE_RETRY_LIMIT; attempt++) {
@@ -301,7 +301,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         .update(sessions)
         .set(updateFields)
         .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow)));
-      if ((result.rowsAffected ?? 0) === 0) {
+      if (!didAffectRows(result)) {
         continue;
       }
       ctx.setResult({
