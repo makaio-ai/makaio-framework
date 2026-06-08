@@ -486,7 +486,18 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@astrojs/starlight@npm:^0.39.2":
+"@astrojs/sitemap@npm:^3.7.3":
+  version: 3.7.3
+  resolution: "@astrojs/sitemap@npm:3.7.3"
+  dependencies:
+    sitemap: "npm:^9.0.0"
+    stream-replace-string: "npm:^2.0.0"
+    zod: "npm:^4.3.6"
+  checksum: 10c0/99c0240586ea2ab1868903341a302ff4bd909b53c49c1c8be476921593fbee838623207c4fa88522264d79291f074ea536aef614d6b1fb286f29a1a5d244ec21
+  languageName: node
+  linkType: hard
+
+"@astrojs/starlight@npm:^0.39.3":
   version: 0.39.3
   resolution: "@astrojs/starlight@npm:0.39.3"
   dependencies:
@@ -4299,7 +4310,7 @@ __metadata:
     sass: "npm:^1.100.0"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
-    vite: "npm:^8.0.13"
+    vite: "npm:^8.0.16"
     vite-plugin-dts: "npm:^4.5.4"
   peerDependencies:
     "@vitejs/plugin-react": ^6.0.1
@@ -4333,7 +4344,7 @@ __metadata:
     "@makaio/bus-transport-websocket": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
-    hono: "npm:^4.12.18"
+    hono: "npm:^4.12.23"
   peerDependencies:
     vite: ^8.0.12
   languageName: unknown
@@ -4383,10 +4394,10 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/ws": "npm:^8.5.10"
     typescript: "npm:^6.0.3"
-    ws: "npm:^8.20.1"
+    ws: "npm:^8.21.0"
     zod: "npm:^4.1.13"
   peerDependencies:
-    ws: ^8.20.1
+    ws: ^8.21.0
   languageName: unknown
   linkType: soft
 
@@ -4411,7 +4422,7 @@ __metadata:
     "@types/react": "npm:^19.2.15"
     commander: "npm:^14.0.3"
     esbuild: "npm:^0.28.0"
-    hono: "npm:^4.12.18"
+    hono: "npm:^4.12.23"
     ink: "npm:^6.5.1"
     ink-testing-library: "npm:^3.0.0"
     react: "npm:^19.0.0"
@@ -4574,7 +4585,7 @@ __metadata:
     hono: "npm:^4.12.23"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react-dom: "npm:^19.2.7"
     sass: "npm:^1.100.0"
     tsx: "npm:^4.22.3"
     vite: "npm:^8.0.16"
@@ -4618,7 +4629,7 @@ __metadata:
     hono: "npm:^4.12.23"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react-dom: "npm:^19.2.7"
     sass: "npm:^1.100.0"
     tsx: "npm:^4.22.3"
     vite: "npm:^8.0.16"
@@ -4666,7 +4677,7 @@ __metadata:
     ink: "npm:^6.0.0"
     ink-testing-library: "npm:^3.0.0"
     react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react-dom: "npm:^19.2.7"
     smol-toml: "npm:^1.3.0"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.3"
@@ -4677,7 +4688,7 @@ __metadata:
   peerDependencies:
     "@makaio/bus-core": "*"
     react: ^19.2.6
-    react-dom: ^19.2.6
+    react-dom: ^19.2.7
   languageName: unknown
   linkType: soft
 
@@ -5065,7 +5076,7 @@ __metadata:
     playwright: "npm:^1.60.0"
     prettier: "npm:3.8.3"
     react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react-dom: "npm:^19.2.7"
     strip-ansi: "npm:^7.1.0"
     stylelint: "npm:^16.26.1"
     tree-kill: "npm:^1.2.2"
@@ -5127,7 +5138,7 @@ __metadata:
     "@makaio/ui-views": "workspace:*"
     "@makaio/utils": "workspace:*"
     react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react-dom: "npm:^19.2.7"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft
@@ -5393,7 +5404,7 @@ __metadata:
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    hono: "npm:^4.12.18"
+    hono: "npm:^4.12.23"
   languageName: unknown
   linkType: soft
 
@@ -5431,7 +5442,7 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
     "@types/bun": "npm:^1.3.14"
-    hono: "npm:^4.12.18"
+    hono: "npm:^4.12.23"
   languageName: unknown
   linkType: soft
 
@@ -5468,13 +5479,13 @@ __metadata:
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.12.18"
+    hono: "npm:^4.12.23"
     minimatch: "npm:^10.0.3"
     piscina: "npm:^5.1.4"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.7"
-    ws: "npm:^8.20.1"
+    ws: "npm:^8.21.0"
     yaml: "npm:^2.9.0"
     zod: "npm:^4.1.13"
   languageName: unknown
@@ -5492,7 +5503,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.7"
-    ws: "npm:^8.20.1"
+    ws: "npm:^8.21.0"
   languageName: unknown
   linkType: soft
 
@@ -5565,8 +5576,8 @@ __metadata:
     "@makaio/test-utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     "@types/semver": "npm:^7.5.8"
-    "@yarnpkg/cli": "npm:^4.12.0"
-    "@yarnpkg/core": "npm:^4.7.0"
+    "@yarnpkg/cli": "npm:^4.16.0"
+    "@yarnpkg/core": "npm:^4.8.0"
     "@yarnpkg/fslib": "npm:^3.1.4"
     semver: "npm:^7.8.0"
     zod: "npm:^4.1.13"
@@ -5814,7 +5825,7 @@ __metadata:
     "@types/react-dom": "npm:^19.0.0"
     clsx: "npm:^2.1.1"
     lucide-react: "npm:^0.562.0"
-    react-resizable-panels: "npm:^4.11.1"
+    react-resizable-panels: "npm:^4.11.2"
     react-use: "npm:^17.6.0"
   peerDependencies:
     react: ^19.0.0
@@ -5833,7 +5844,7 @@ __metadata:
     "@makaio/services-core": "workspace:*"
     "@makaio/ui-kernel": "workspace:*"
     "@types/react": "npm:^19.2.15"
-    zustand: "npm:^5.0.0"
+    zustand: "npm:^5.0.14"
   peerDependencies:
     react: ^19.0.0
   languageName: unknown
@@ -5899,8 +5910,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/website@workspace:apps/website"
   dependencies:
-    "@astrojs/sitemap": "npm:^3.7.2"
-    "@astrojs/starlight": "npm:^0.39.2"
+    "@astrojs/sitemap": "npm:^3.7.3"
+    "@astrojs/starlight": "npm:^0.39.3"
     "@fontsource-variable/jetbrains-mono": "npm:^5.2.5"
     "@fontsource/outfit": "npm:^5.2.5"
     "@makaio/type-lens": "workspace:*"
@@ -5909,7 +5920,7 @@ __metadata:
     sharp: "npm:^0.34.3"
     starlight-llms-txt: "npm:^0.10.0"
     typedoc: "npm:^0.28.19"
-    typedoc-plugin-markdown: "npm:^4.11.0"
+    typedoc-plugin-markdown: "npm:^4.12.0"
     typescript: "npm:^6.0.3"
   languageName: unknown
   linkType: soft
@@ -11019,7 +11030,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@yarnpkg/cli@npm:^4.12.0":
+"@yarnpkg/cli@npm:^4.16.0":
   version: 4.16.0
   resolution: "@yarnpkg/cli@npm:4.16.0"
   dependencies:
@@ -11098,7 +11109,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@yarnpkg/core@npm:^4.7.0, @yarnpkg/core@npm:^4.8.0":
+"@yarnpkg/core@npm:^4.8.0":
   version: 4.8.0
   resolution: "@yarnpkg/core@npm:4.8.0"
   dependencies:
@@ -22518,14 +22529,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-dom@npm:^19.2.6":
-  version: 19.2.6
-  resolution: "react-dom@npm:19.2.6"
+"react-dom@npm:^19.2.7":
+  version: 19.2.7
+  resolution: "react-dom@npm:19.2.7"
   dependencies:
     scheduler: "npm:^0.27.0"
   peerDependencies:
-    react: ^19.2.6
-  checksum: 10c0/dbf2aef67857c03a612bc9316a4562e5066f43fa04bf28f7f0734963fc1350da2c9f8eb973930655453281079f30cc8222bab383dbec4b5097084e2c081e3334
+    react: ^19.2.7
+  checksum: 10c0/970ff600f6e80d47d39e2f226f12f226173b3cba3382efc97c5f0cd663de9af38c7a4c11c213fb936094faeac83060d660247accaa96b752180d5b951b9cfecb
   languageName: node
   linkType: hard
 
@@ -22597,7 +22608,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-resizable-panels@npm:^4.11.1":
+"react-resizable-panels@npm:^4.11.2":
   version: 4.11.2
   resolution: "react-resizable-panels@npm:4.11.2"
   peerDependencies:
@@ -25689,7 +25700,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"typedoc-plugin-markdown@npm:^4.11.0":
+"typedoc-plugin-markdown@npm:^4.12.0":
   version: 4.12.0
   resolution: "typedoc-plugin-markdown@npm:4.12.0"
   peerDependencies:
@@ -26441,7 +26452,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^8.0.13, vite@npm:^8.0.16":
+"vite@npm:^8.0.16":
   version: 8.0.16
   resolution: "vite@npm:8.0.16"
   dependencies:
@@ -26965,7 +26976,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:^8.20.1, ws@npm:^8.21.0":
+"ws@npm:^8.21.0":
   version: 8.21.0
   resolution: "ws@npm:8.21.0"
   peerDependencies:
@@ -27177,7 +27188,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zustand@npm:^5.0.0, zustand@npm:^5.0.14":
+"zustand@npm:^5.0.14":
   version: 5.0.14
   resolution: "zustand@npm:5.0.14"
   peerDependencies:

@@ -20,7 +20,7 @@
     "@makaio/kernel": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/ui-kernel": "workspace:*",
-    "zustand": "^5.0.0"
+    "zustand": "^5.0.14"
   },
   "peerDependencies": {
     "react": "^19.0.0"
