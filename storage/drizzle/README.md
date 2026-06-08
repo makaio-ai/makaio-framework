@@ -94,6 +94,8 @@ URL while exposing one `MakaioDatabase` contract
   extension manifests
 - `DrizzleHandlerRegistration` - Typed registration callback consumed by `registerDrizzleHandlers`
 - `sanitizeFtsQuery(query)` - Quote user input for safe SQLite FTS5 `MATCH` usage
+- `didAffectRows(result)` - Normalize libsql/bun-sqlite write results to a boolean
+- `affectedRowCount(result)` - Normalize libsql/bun-sqlite write results to a row count
 - `DrizzleSchemaRecord` - `Record<string, Table>` for table definitions
 - `MakaioDatabase` - Canonical database type alias for storage consumers
 - `TransactionCallback` - Callback type for `executeTransaction`

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MaterializationSchemas, MaterializationSubjects } from '../namespace.js';
+import { ArtifactProjectionPolicySchema } from '../schemas.js';
 
 describe('Materialization namespace', () => {
   it('defines a provider-neutral materialization ref changed event', () => {
@@ -62,5 +63,33 @@ describe('Materialization namespace', () => {
         degraded: true,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe('ArtifactProjectionPolicySchema projectedFields', () => {
+  it('parses provider-neutral projected field declarations', () => {
+    const parsed = ArtifactProjectionPolicySchema.parse({
+      mode: 'surface',
+      projectedFields: [
+        { path: 'status', semantic: 'status' },
+        { path: 'priority', semantic: 'priority' },
+        { path: 'title' },
+      ],
+    });
+
+    expect(parsed.projectedFields).toEqual([
+      { path: 'status', semantic: 'status' },
+      { path: 'priority', semantic: 'priority' },
+      { path: 'title' },
+    ]);
+  });
+
+  it('rejects empty projected field paths', () => {
+    expect(() =>
+      ArtifactProjectionPolicySchema.parse({
+        mode: 'surface',
+        projectedFields: [{ path: '' }],
+      }),
+    ).toThrow();
   });
 });

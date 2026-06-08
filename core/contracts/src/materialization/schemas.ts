@@ -93,6 +93,23 @@ export type SurfaceBindingRegistration = z.infer<typeof SurfaceBindingRegistrati
 /** Discriminated target on the external provider surface. */
 export type SurfaceBindingTarget = z.infer<typeof SurfaceBindingTargetSchema>;
 
+/** Semantic hint for provider-neutral artifact projected fields. */
+export const ProjectedFieldSemanticSchema = z.enum(['status', 'workflow', 'priority']);
+
+/** A provider-neutral field from artifact data that may be projected to an external surface. */
+export const ProjectedFieldSchema = z.object({
+  /** Dot-separated path into artifact.data, such as `status` or `metadata.priority`. */
+  path: z.string().min(1),
+  /** Optional semantic hint used by provider-specific materializers. */
+  semantic: ProjectedFieldSemanticSchema.optional(),
+});
+
+/** Semantic hint for provider-neutral artifact projected fields. */
+export type ProjectedFieldSemantic = z.infer<typeof ProjectedFieldSemanticSchema>;
+
+/** A provider-neutral artifact field projection declaration. */
+export type ProjectedField = z.infer<typeof ProjectedFieldSchema>;
+
 /**
  * Projection policy that controls how an artifact kind surfaces on a provider.
  *
@@ -114,6 +131,11 @@ export const ArtifactProjectionPolicySchema = z.object({
    * When absent all events trigger a sync.
    */
   semanticEvents: z.array(z.enum(['created', 'revised', 'status-changed', 'observation-added'])).optional(),
+  /**
+   * Provider-neutral artifact data fields that materializers may map to external
+   * issue fields or equivalent structured provider surfaces.
+   */
+  projectedFields: z.array(ProjectedFieldSchema).optional(),
 });
 
 /** Projection policy that controls how an artifact kind surfaces on a provider. */

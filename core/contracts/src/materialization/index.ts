@@ -1,12 +1,16 @@
 export {
   ArtifactMaterializationRefSchema,
   ArtifactProjectionPolicySchema,
+  ProjectedFieldSchema,
+  ProjectedFieldSemanticSchema,
   SurfaceBindingRegistrationSchema,
   SurfaceBindingTargetSchema,
 } from './schemas.js';
 export type {
   ArtifactMaterializationRef,
   ArtifactProjectionPolicy,
+  ProjectedField,
+  ProjectedFieldSemantic,
   SurfaceBindingRegistration,
   SurfaceBindingTarget,
 } from './schemas.js';

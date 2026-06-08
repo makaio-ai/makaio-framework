@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { defineArtifactKind, type ArtifactDataOf, type ArtifactOf } from '../kind-definition.js';
 import { ArtifactKindRegistrationSchema } from '../schemas.js';
 import { defineArtifactLifecycleHooks } from '../lifecycle-hooks.js';
+import type { ProjectedField } from '../../materialization/index.js';
 
 const PlanDataSchema = z.object({
   status: z.enum(['draft', 'approved']),
@@ -136,6 +137,26 @@ describe('defineArtifactKind', () => {
     (reg1.status!.values as string[]).push('archived');
     const reg2 = kind.toRegistration();
     expect(reg2.status!.values).toHaveLength(2);
+  });
+
+  it('defensively copies projected fields when serializing projection policy', () => {
+    const projectedFields: ProjectedField[] = [{ path: 'status', semantic: 'status' }];
+    const kind = defineArtifactKind({
+      kind: 'planning-schema-sync-test',
+      description: 'Test artifact kind for projected field serialization.',
+      schemaVersion: '1',
+      dataSchema: z.object({ status: z.enum(['draft', 'approved']) }),
+      conflictPolicy: 'manual',
+      projection: {
+        mode: 'surface',
+        projectedFields,
+      },
+    });
+
+    const registration = kind.toRegistration();
+    projectedFields.push({ path: 'priority', semantic: 'priority' });
+
+    expect(registration.projection?.projectedFields).toEqual([{ path: 'status', semantic: 'status' }]);
   });
 
   it('keeps artifact kind hooks live-only and out of bus registration payloads', () => {
