@@ -9,7 +9,7 @@
  */
 
 import { and, eq } from 'drizzle-orm';
-import { executeTransaction, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, executeTransaction, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { clientProfiles } from './profile-schema.js';
@@ -160,7 +160,7 @@ export function registerDrizzleProfileStorage(bus: IMakaioBus, db: MakaioDatabas
       const result = await db
         .delete(clientProfiles)
         .where(and(eq(clientProfiles.clientId, clientId), eq(clientProfiles.name, name)));
-      ctx.setResult({ success: (result.rowsAffected ?? 0) > 0 });
+      ctx.setResult({ success: didAffectRows(result) });
     }),
 
     bus.on(ClientProfileStorageSubjects.clearDefault, async (ctx) => {

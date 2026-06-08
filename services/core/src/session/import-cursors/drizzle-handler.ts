@@ -6,7 +6,7 @@
  */
 
 import { eq } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
@@ -94,7 +94,7 @@ export function registerDrizzleImportCursorStorage(
 
       const result = await db.delete(importCursors).where(eq(importCursors.filePath, filePath));
 
-      ctx.setResult({ success: result.rowsAffected > 0 });
+      ctx.setResult({ success: didAffectRows(result) });
     }),
   );
 
