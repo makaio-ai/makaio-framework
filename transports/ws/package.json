@@ -27,10 +27,10 @@
     "@makaio/build-tooling": "workspace:*",
     "@types/ws": "^8.5.10",
     "typescript": "^6.0.3",
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "peerDependencies": {
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "publishConfig": {
     "exports": {
