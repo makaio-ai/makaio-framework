@@ -70,10 +70,10 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.7",
     "tsdown": "0.22.0",
-    "tsx": "^4.22.3",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "unrun": "^0.3.0",
-    "vitest": "4.1.7"
+    "vitest": "4.1.8"
   },
   "publishConfig": {
     "exports": {
