@@ -37,6 +37,21 @@ describe('evaluateSync', () => {
     expect(evaluateSync('"hello"|upper', createTestContext())).toBe('HELLO');
   });
 
+  it('plucks object properties for array membership expressions', () => {
+    const context: ExpressionContext = {
+      current: [
+        { id: 'existing', type: 'queue-item' },
+        { id: 'new', type: 'queue-item' },
+      ],
+      previous: [{ id: 'existing', type: 'queue-item' }],
+    };
+
+    expect(evaluateSync("previous|pluck('id')", context)).toEqual(['existing']);
+    expect(evaluateSync("current[.type == 'queue-item' && !((previous|pluck('id'))|includes(.id))]", context)).toEqual([
+      { id: 'new', type: 'queue-item' },
+    ]);
+  });
+
   it('returns undefined for an unknown path', () => {
     expect(evaluateSync('trigger.nonexistent', createTestContext())).toBeUndefined();
   });

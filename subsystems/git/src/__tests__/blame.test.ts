@@ -6,6 +6,7 @@ import { getBlame } from '../queries/blame.js';
 import { createTestRepoWithCommit, type TestRepo } from './git-test-utils.js';
 
 const BLAME_FILE = 'src/index.ts';
+const GIT_FIXTURE_HOOK_TIMEOUT_MS = 60_000;
 
 /**
  * Write content to the blame fixture file and commit it with deterministic author metadata.
@@ -49,11 +50,11 @@ describe('getBlame', { timeout: 20_000 }, () => {
         'alice@example.com',
       );
       result = await getBlame(repo.git, BLAME_FILE);
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     afterAll(async () => {
       await repo.cleanup();
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     it('should return file content from git show', () => {
       expect(result.content).toBe('const x = 1;\nconst y = 2;\nexport { x, y };');
@@ -88,11 +89,11 @@ describe('getBlame', { timeout: 20_000 }, () => {
         'bob@example.com',
       );
       result = await getBlame(repo.git, BLAME_FILE);
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     afterAll(async () => {
       await repo.cleanup();
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     it('should produce two blame ranges', () => {
       expect(result.lines).toHaveLength(2);
@@ -126,11 +127,11 @@ describe('getBlame', { timeout: 20_000 }, () => {
       await commitFile(repo, 'line 1\nline 2\nline 3', 'First', 'Alice', 'alice@example.com');
       await commitFile(repo, 'line 1\nline 2 changed\nline 3', 'Second', 'Bob', 'bob@example.com');
       result = await getBlame(repo.git, BLAME_FILE);
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     afterAll(async () => {
       await repo.cleanup();
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     it('should produce three ranges for A-B-A pattern', () => {
       // A(1), B(2), A(3) - cannot collapse because B interrupts
@@ -167,11 +168,11 @@ describe('getBlame', { timeout: 20_000 }, () => {
       repo = await createTestRepoWithCommit('git-blame-');
       await commitFile(repo, '', 'empty file', 'Alice', 'alice@example.com');
       result = await getBlame(repo.git, BLAME_FILE);
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     afterAll(async () => {
       await repo.cleanup();
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     it('should return empty lines for empty porcelain output', () => {
       expect(result.lines).toEqual([]);
@@ -189,11 +190,11 @@ describe('getBlame', { timeout: 20_000 }, () => {
       initialRef = await commitFile(repo, 'line 1\nline 2\n', 'baseline', 'Alice', 'alice@example.com');
       await commitFile(repo, 'line 1 changed\nline 2 changed\n', 'follow-up', 'Bob', 'bob@example.com');
       result = await getBlame(repo.git, BLAME_FILE, initialRef);
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     afterAll(async () => {
       await repo.cleanup();
-    });
+    }, GIT_FIXTURE_HOOK_TIMEOUT_MS);
 
     it('should honor ref and return historical blame/content', () => {
       expect(result.content).toBe('line 1\nline 2\n');

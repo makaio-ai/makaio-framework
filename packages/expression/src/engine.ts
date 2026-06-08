@@ -1,5 +1,28 @@
-import jexl from 'jexl-extended';
+import { JexlExtended } from 'jexl-extended';
 import type { ExpressionContext } from './types.js';
+
+/**
+ * Extract one property from every object in an array.
+ * @param value - Value flowing through the pipe.
+ * @param key - Object key to read from each array element.
+ * @returns Extracted values, omitting non-object elements and missing keys.
+ */
+function pluck(value: unknown, key: unknown): unknown[] {
+  if (!Array.isArray(value) || typeof key !== 'string') {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (item === null || typeof item !== 'object' || !(key in item)) {
+      return [];
+    }
+
+    return [(item as Record<string, unknown>)[key]];
+  });
+}
+
+const jexl = new JexlExtended();
+jexl.addTransform('pluck', pluck);
 
 /**
  * Result of compiling a jexl expression for repeated evaluation.
