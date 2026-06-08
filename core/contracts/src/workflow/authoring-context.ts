@@ -180,11 +180,16 @@ export type { WorkflowProgressUpdate };
  * @typeParam TPreviousSteps - Map of completed predecessor station outputs
  * @typeParam TArtifactData - Artifact data shape; defaults to `Record<string, unknown>`
  *   when no artifact binding is declared
+ * @typeParam TBus - Runtime bus type supplied by the host runtime; defaults to
+ *   `unknown` so the contracts package stays free of any bus implementation dependency.
+ *   Bind to `IMakaioBus` (from `@makaio/bus-core`) in host layers that need full bus
+ *   authoring surface access inside station handlers.
  */
 export interface StepContext<
   TTrigger,
   TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>>,
   TArtifactData extends Record<string, unknown> = Record<string, unknown>,
+  TBus = unknown,
 > extends WorkflowContextBase {
   /** Typed payload from the trigger that started this execution. */
   readonly trigger: TTrigger;
@@ -210,6 +215,15 @@ export interface StepContext<
    * artifact could not be initialised.
    */
   readonly artifact?: ArtifactContext<TArtifactData>;
+  /**
+   * Runtime bus for station handlers that need to query or write durable
+   * artifacts as part of their authored output.
+   *
+   * Typed as the `TBus` type parameter (defaults to `unknown` in the
+   * contracts package). Host runtimes that thread `IMakaioBus` through the
+   * execution pipeline will expose the fully-typed bus here.
+   */
+  readonly bus: TBus;
   /**
    * Emit a structured progress signal.
    *
