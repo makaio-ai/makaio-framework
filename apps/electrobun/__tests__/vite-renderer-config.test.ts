@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ConfigEnv } from 'vite';
 import createRendererConfig from '../vite.renderer.config.js';
-import { sharedRendererAliases } from '@makaio/host-shared/renderer/vite-assets';
+import { sharedRendererAliases, sharedRendererDedupe } from '@makaio/host-shared/renderer/vite-assets';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ELECTROBUN_APP_ROOT = path.resolve(__dirname, '..');
@@ -34,6 +34,19 @@ describe('vite renderer config', () => {
     const aliases = config.resolve?.alias;
 
     expect(aliases).toMatchObject(sharedRendererAliases);
+  });
+
+  it('deduplicates shared React runtime packages', async () => {
+    const configEnv = {
+      command: 'build',
+      mode: 'framework',
+      isSsrBuild: false,
+      isPreview: false,
+    } satisfies ConfigEnv;
+
+    const config = await createRendererConfig(configEnv);
+
+    expect(config.resolve?.dedupe).toEqual([...sharedRendererDedupe]);
   });
 
   it('adds descriptor-discovered browser entries to production Rollup inputs', async () => {

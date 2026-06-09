@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 import type { ConfigEnv } from 'vite';
 import createRendererConfig from '../vite.renderer.config.js';
 import { HOST_WORKSPACE_ROOT_ENV } from '../src/main/dev-host-options.js';
-import { sharedRendererAliases, sharedRendererRoot } from '@makaio/host-shared/renderer/vite-assets';
+import {
+  sharedRendererAliases,
+  sharedRendererDedupe,
+  sharedRendererRoot,
+} from '@makaio/host-shared/renderer/vite-assets';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ELECTRON_APP_ROOT = path.resolve(__dirname, '..');
@@ -62,6 +66,12 @@ describe('vite renderer config', () => {
     const aliases = config.resolve?.alias;
 
     expect(aliases).toMatchObject(sharedRendererAliases);
+  });
+
+  it('deduplicates shared React runtime packages', async () => {
+    const config = await createRendererConfig(BUILD_CONFIG_ENV);
+
+    expect(config.resolve?.dedupe).toEqual([...sharedRendererDedupe]);
   });
 
   it('adds descriptor-discovered browser entries to production Rollup inputs', async () => {

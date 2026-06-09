@@ -10,7 +10,11 @@ import {
 } from '../../scripts/lib/discover-extension-browser-dev-entries.js';
 import { viteImportMapPlugin } from '../../scripts/lib/vite-import-map-plugin.js';
 import { resolveWorkspaceRoot } from '@makaio/utils/workspace-root';
-import { sharedRendererAliases, sharedRendererRoot } from '@makaio/host-shared/renderer/vite-assets';
+import {
+  sharedRendererAliases,
+  sharedRendererDedupe,
+  sharedRendererRoot,
+} from '@makaio/host-shared/renderer/vite-assets';
 import { UiNamespace } from '@makaio/ui-kernel';
 import { buildDevHostRuntimeOptions, resolveDevHostOptions, type DevHostOptions } from '@makaio/host-shared';
 import { isValidPort, parseCliPortArg } from '../../scripts/lib/vite-port-helpers.js';
@@ -198,6 +202,7 @@ export default async function createRendererConfig({ command, mode }: ConfigEnv)
     },
     resolve: {
       conditions: ['browser', 'module', 'development|production'],
+      dedupe: [...sharedRendererDedupe],
       tsconfigPaths: true,
       alias: {
         ...sharedRendererAliases,

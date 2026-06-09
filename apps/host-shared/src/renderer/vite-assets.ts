@@ -30,3 +30,8 @@ export const sharedRendererAliases = {
   os: resolveSharedRendererAssetPath('os-stub.ts'),
   'node:os': resolveSharedRendererAssetPath('os-stub.ts'),
 } as const;
+
+/**
+ * Browser renderer packages that must be resolved as singletons by host Vite configs.
+ */
+export const sharedRendererDedupe = ['react', 'react-dom'] as const;

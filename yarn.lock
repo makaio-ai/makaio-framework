@@ -4585,8 +4585,8 @@ __metadata:
     get-port: "npm:^7.0.0"
     hono: "npm:^4.12.23"
     lucide-react: "npm:^0.562.0"
-    react: "npm:19.2.6"
-    react-dom: "npm:19.2.6"
+    react: "npm:^19.2.6"
+    react-dom: "npm:^19.2.6"
     sass: "npm:^1.100.0"
     tsx: "npm:^4.22.3"
     vite: "npm:^8.0.16"
@@ -22530,17 +22530,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-dom@npm:19.2.6":
-  version: 19.2.6
-  resolution: "react-dom@npm:19.2.6"
-  dependencies:
-    scheduler: "npm:^0.27.0"
-  peerDependencies:
-    react: ^19.2.6
-  checksum: 10c0/dbf2aef67857c03a612bc9316a4562e5066f43fa04bf28f7f0734963fc1350da2c9f8eb973930655453281079f30cc8222bab383dbec4b5097084e2c081e3334
-  languageName: node
-  linkType: hard
-
 "react-dom@npm:19.2.7, react-dom@npm:^19.2.6":
   version: 19.2.7
   resolution: "react-dom@npm:19.2.7"
@@ -22675,13 +22664,6 @@ __metadata:
     react: "*"
     react-dom: "*"
   checksum: 10c0/d122199f3edd056bfd866837b0f19a44366e77c7535c6c2c5eb5f400409eae4c9b1fe73c9d35073c8434080eee388ca8fe49a68d09d6f794ccaa35a4ae2112a9
-  languageName: node
-  linkType: hard
-
-"react@npm:19.2.6":
-  version: 19.2.6
-  resolution: "react@npm:19.2.6"
-  checksum: 10c0/66afde33b9a9ee87b1e1cae39d8e7e040d1262e719524fd70660c4d4ce79929c532ac19fc3df5a911edaf02768fdf2c49de4ede1ba99bc6aad72796e0e26e798
   languageName: node
   linkType: hard
 
