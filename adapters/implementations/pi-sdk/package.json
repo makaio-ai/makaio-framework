@@ -54,7 +54,7 @@
     "@mariozechner/pi-ai": "0.73.1",
     "@mariozechner/pi-coding-agent": "0.73.1",
     "@types/node": "^24.3.0",
-    "vitest": "4.1.7"
+    "vitest": "4.1.8"
   },
   "publishConfig": {
     "access": "public",
