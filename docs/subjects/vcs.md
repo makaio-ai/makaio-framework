@@ -261,7 +261,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `statuses` | `{ id: number; state: "error" \| "success" \| "failure" \| "pending"; description: string \| null; targetUrl: string \| null; context: string; createdAt: string; updatedAt: string; creator: string \| null; }[]` | yes |
+| `statuses` | `{ id: number; state: "success" \| "error" \| "failure" \| "pending"; description: string \| null; targetUrl: string \| null; context: string; createdAt: string; updatedAt: string; creator: string \| null; }[]` | yes |
 
 ---
 

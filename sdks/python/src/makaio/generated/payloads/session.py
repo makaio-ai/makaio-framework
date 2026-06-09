@@ -27,6 +27,13 @@ class SessionCreatedPayload:
 
 
 @dataclass(frozen=True)
+class SessionSendMessageRequestResponseSchema:
+    schema: dict[str, Any]
+    name: str | None = None
+    strict: bool | None = None
+
+
+@dataclass(frozen=True)
 class SessionSendMessageRequestSessionContextMessageHistoryItem:
     blocks: dict[str, Any]
     role: Literal["user", "assistant", "system"] | None = None
@@ -53,7 +60,7 @@ class SessionSendMessageRequest:
     extension_id: str | None = None
     origin: Literal["voice", "text", "compact"] | None = None
     origin_window_id: str | None = None
-    response_schema: dict[str, Any] | None = None
+    response_schema: SessionSendMessageRequestResponseSchema | None = None
     session_context: SessionSendMessageRequestSessionContext | None = None
     skip_connector_swap_warning: bool | None = None
     source: Literal["extension", "user", "system"] | None = None

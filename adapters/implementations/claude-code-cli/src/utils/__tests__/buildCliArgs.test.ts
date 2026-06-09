@@ -80,6 +80,25 @@ describe('buildCliArgs', () => {
     });
   });
 
+  describe('responseSchema', () => {
+    it('passes json schema flag for response schema descriptors', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ responseSchema: { schema: { type: 'object' }, name: 'object_schema' } }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      expect(args).toContain('--json-schema');
+      expect(args).toContain(JSON.stringify({ type: 'object' }));
+    });
+
+    it('omits --json-schema when responseSchema is not provided', () => {
+      const args = buildCliArgs({ config: makeConfig(), prompt: 'hi', sessionId: 'sid' });
+
+      expect(args).not.toContain('--json-schema');
+    });
+  });
+
   describe('reasoningEffort', () => {
     it('emits --effort low for level "low"', () => {
       const args = buildCliArgs({ config: makeConfig({ reasoningEffort: 'low' }), prompt: 'hi', sessionId: 'sid' });

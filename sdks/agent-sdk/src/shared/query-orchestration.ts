@@ -8,6 +8,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import type { HandlerForSubjectDefinition } from '@makaio/core';
 import { createQueryGenerator } from './query-generator.js';
 import { registerToolApprovalHandler } from './permissions.js';
@@ -181,7 +182,7 @@ const dispatchMessage = async (
   sessionId: string,
   message: string,
   agentPayload?: ReturnType<typeof buildAgentPayload>,
-  responseSchema?: Record<string, unknown>,
+  responseSchema?: ResponseSchemaDescriptor,
 ): Promise<void> => {
   await bus.request(SessionSubjects.sendMessage, {
     sessionId,
@@ -198,6 +199,7 @@ const runFollowUpDispatcher = async (
   iterator: AsyncIterator<SDKUserMessage>,
   waitForTurnComplete: () => Promise<void>,
   onComplete: () => void,
+  responseSchema?: ResponseSchemaDescriptor,
   maxTurns?: number,
 ): Promise<void> => {
   let completedTurns = 0;
@@ -213,7 +215,7 @@ const runFollowUpDispatcher = async (
       onComplete();
       return;
     }
-    await dispatchMessage(bus, sessionId, getMessageText(next.value));
+    await dispatchMessage(bus, sessionId, getMessageText(next.value), undefined, responseSchema);
   }
 };
 
@@ -222,11 +224,20 @@ const startFollowUpDispatcher = (
   sessionId: string,
   iterator: AsyncIterator<SDKUserMessage> | undefined,
   waitForTurnComplete: () => Promise<void>,
+  responseSchema: ResponseSchemaDescriptor | undefined,
   maxTurns: number | undefined,
   onExhausted: () => void,
 ): void => {
   if (iterator === undefined) return;
-  void runFollowUpDispatcher(bus, sessionId, iterator, waitForTurnComplete, onExhausted, maxTurns).catch(onExhausted);
+  void runFollowUpDispatcher(
+    bus,
+    sessionId,
+    iterator,
+    waitForTurnComplete,
+    onExhausted,
+    responseSchema,
+    maxTurns,
+  ).catch(onExhausted);
 };
 
 /**
@@ -407,6 +418,7 @@ export async function buildQuery(
 
   // Build the agent configuration payload.
   const agentPayload = buildAgentPayload(config, sessionId, mcpServerReplacement.getPreparedServers()?.servers);
+  const responseSchema = config.outputFormat !== undefined ? { schema: config.outputFormat.schema } : undefined;
 
   // Send the message to start the agent. On failure, close the generator so
   // its onClose callback fires (unsubscribes canUseTool listeners) before rethrowing.
@@ -414,13 +426,13 @@ export async function buildQuery(
     if (config.abortController?.signal.aborted) {
       throw new Error('Query aborted before dispatch');
     }
-    await dispatchMessage(bus, sessionId, message, agentPayload, config.outputFormat?.schema);
+    await dispatchMessage(bus, sessionId, message, agentPayload, responseSchema);
   } catch (err) {
     generator.close();
     throw err;
   }
 
-  startFollowUpDispatcher(bus, sessionId, iterator, waitForTurnComplete, config.maxTurns, () => {
+  startFollowUpDispatcher(bus, sessionId, iterator, waitForTurnComplete, responseSchema, config.maxTurns, () => {
     promptExhausted = true;
     generator.close();
   });

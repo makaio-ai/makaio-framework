@@ -500,7 +500,17 @@ export type {
   TurnUsage,
   UsageMetrics,
 } from './session/index.js';
-export { EntityUIConfigSchema, ERROR_CATEGORIES, ErrorCategorySchema, JsonValueSchema } from './shared/index.js';
+export {
+  EntityUIConfigSchema,
+  ERROR_CATEGORIES,
+  ErrorCategorySchema,
+  JsonValueSchema,
+  ResponseSchemaDescriptorSchema,
+  ResponseSchemaNameSchema,
+  StructuredOutputValidationErrorSchema,
+  StructuredOutputValidationSchema,
+  StructuredOutputValidationStatusSchema,
+} from './shared/index.js';
 export type {
   ContentSource,
   CustomFieldDefinition,
@@ -517,8 +527,13 @@ export type {
   MessageDeliveryMode,
   MessageInput,
   MessageOutcome,
+  ResponseSchemaDescriptor,
+  ResponseSchemaName,
   SendMessageResultInnerResult,
   StandardFieldDefinition,
+  StructuredOutputValidation,
+  StructuredOutputValidationError,
+  StructuredOutputValidationStatus,
   SystemPrompt,
 } from './shared/index.js';
 export {

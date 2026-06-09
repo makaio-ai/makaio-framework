@@ -72,7 +72,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `contributions` | `{ name: string; description: string; subcommands?: readonly { name: string; description: string; args?: readonly { name: string; description: string; required?: boolean \| undefined; positional?: boolean \| undefined; short?: string \| undefined; type?: "string" \| "number" \| "boolean" \| undefined; }[] \| undefined; }[] \| undefined; hasInteractive?: boolean \| undefined; }[]` | yes |
+| `contributions` | `{ name: string; description: string; subcommands?: readonly { name: string; description: string; args?: readonly { name: string; description: string; required?: boolean \| undefined; positional?: boolean \| undefined; short?: string \| undefined; type?: "string" \| "number" \| "boolean" \| undefined; }[] \| undefined; }[] \| undefined; hasInteractive?: boolean \| undefined; canProvideBus?: boolean \| undefined; }[]` | yes |
 
 ---
 

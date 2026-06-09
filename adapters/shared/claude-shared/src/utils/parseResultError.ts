@@ -41,6 +41,30 @@ function classifyBySubtype(subtype: string, errorMessage: string | unknown, resu
 }
 
 /**
+ * Resolve the most specific error text exposed by the SDK result payload.
+ * Native structured-output failures surface their actionable diagnostics in
+ * `errors[]` rather than `result`, so keep those details ahead of subtype
+ * fallbacks.
+ * @param msg - SDK result message with possible error details.
+ * @returns Specific error text when available.
+ */
+function resolveResultErrorMessage(msg: {
+  subtype: string;
+  is_error?: boolean;
+  result?: string;
+  errors?: string[];
+  stop_reason?: string | null;
+}): string {
+  if (msg.subtype !== 'success' && msg.errors && msg.errors.length > 0) {
+    return msg.errors.join('\n');
+  }
+  if (msg.subtype === 'success' && msg.is_error && msg.result) {
+    return msg.result;
+  }
+  return msg.subtype;
+}
+
+/**
  * Classify error by message content for success+is_error cases.
  * @param message - Error message to analyze
  * @returns Classified error or null if not matched
@@ -77,13 +101,19 @@ function classifyByMessageContent(message: string): Error | null {
  * - AuthenticationError for authentication_error / permission_error
  * - QuotaExceededError for overloaded_error (quota exceeded)
  * - Full error message text for success+is_error cases
- * - Subtype string as fallback
+ * - Resolved SDK error message as fallback (`errors[]`, `result`, or subtype)
  * @param msg - SDK result message with error info
  * @returns Parsed error (MakaioError subclass, Error, or string)
  */
-export function parseResultError(msg: { subtype: string; is_error?: boolean; result?: string }): Error | string {
+export function parseResultError(msg: {
+  subtype: string;
+  is_error?: boolean;
+  result?: string;
+  errors?: string[];
+  stop_reason?: string | null;
+}): Error | string {
   const isWeirdSuccessWithError = msg.subtype === 'success' && msg.is_error;
-  const errorMessage = isWeirdSuccessWithError && msg.result ? msg.result : msg.subtype;
+  const errorMessage = resolveResultErrorMessage(msg);
 
   // Try subtype classification first
   const subtypeError = classifyBySubtype(msg.subtype, errorMessage, msg.result);
@@ -100,6 +130,6 @@ export function parseResultError(msg: { subtype: string; is_error?: boolean; res
     return msg.result;
   }
 
-  // Fallback to subtype
-  return msg.subtype;
+  // Fallback to SDK error details or subtype.
+  return errorMessage;
 }

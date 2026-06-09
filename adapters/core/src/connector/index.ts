@@ -1,5 +1,6 @@
 export { AIAgentConnector } from './agent-connector.js';
-export type { BaseAgentConnectorConfig, MessageHandleOptions } from './agent-connector.js';
+export type { BaseAgentConnectorConfig } from './agent-connector.js';
+export type { MessageHandleOptions } from '../message-handle/index.js';
 export { BaseConnectorSession } from './base-connector-session.js';
 export type { ConnectorSessionConfig, PausableTurn } from './base-connector-session.js';
 export { BaseConnectorTurn } from './base-connector-turn.js';

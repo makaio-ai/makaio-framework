@@ -1,5 +1,6 @@
 import {
   UserMessageQueue,
+  markCompletedWithFinalResult,
   processQueueMessages,
   type MessageHandle,
   type MessageResult,
@@ -111,8 +112,7 @@ export class TmuxConnectorSession {
     };
 
     try {
-      handle.markCompleted(result);
-      this.config.onTurnComplete(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
       await this.config.emitTurnCompleted({ message: lastAssistantMessage });
     } finally {
       await this.finishActiveTurn(turn);
@@ -141,8 +141,7 @@ export class TmuxConnectorSession {
     const result: MessageResult = { outcome: 'error', error };
 
     try {
-      handle.markCompleted(result);
-      this.config.onTurnComplete(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
     } finally {
       await this.finishActiveTurn(turn);
     }

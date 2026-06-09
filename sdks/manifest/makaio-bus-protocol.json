@@ -52,6 +52,63 @@
           "sessionId": {
             "type": "string"
           },
+          "structuredOutputValidation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "const": "passed",
+                    "type": "string"
+                  }
+                },
+                "required": ["status"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "const": "enforced",
+                    "type": "string"
+                  }
+                },
+                "required": ["status"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "errors": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "instancePath": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "schemaPath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["message", "instancePath", "schemaPath"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "status": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "errors"],
+                "type": "object"
+              }
+            ]
+          },
           "turnId": {
             "type": "string"
           }
@@ -1855,10 +1912,27 @@
             "type": "string"
           },
           "responseSchema": {
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9_-]+$",
+                "type": "string"
+              },
+              "schema": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "strict": {
+                "type": "boolean"
+              }
             },
+            "required": ["schema"],
             "type": "object"
           },
           "sessionContext": {
@@ -3164,6 +3238,255 @@
       }
     },
     {
+      "kind": "request",
+      "namespace": "agent",
+      "subject": "structuredOutput.enforce",
+      "fullSubject": "agent.structuredOutput.enforce",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "adapterHasCapability": {
+            "type": "boolean"
+          },
+          "adapterId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "fallbackAdapterId": {
+            "type": "string"
+          },
+          "fallbackAdapterName": {
+            "type": "string"
+          },
+          "fallbackModel": {
+            "type": "string"
+          },
+          "rawOutput": {
+            "type": "string"
+          },
+          "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9_-]+$",
+                "type": "string"
+              },
+              "schema": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "strict": {
+                "type": "boolean"
+              }
+            },
+            "required": ["schema"],
+            "type": "object"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "validationErrors": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "instancePath": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "schemaPath": {
+                  "type": "string"
+                }
+              },
+              "required": ["message", "instancePath", "schemaPath"],
+              "type": "object"
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": ["agentId", "adapterId", "responseSchema", "rawOutput", "validationErrors", "adapterHasCapability"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enforced": {
+                "const": true,
+                "type": "boolean"
+              },
+              "output": {
+                "type": "string"
+              }
+            },
+            "required": ["enforced", "output"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "enforced": {
+                "const": false,
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": ["enforced", "error"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "request",
+      "namespace": "agent",
+      "subject": "structuredOutput.retryPolicy",
+      "fullSubject": "agent.structuredOutput.retryPolicy",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "adapterCapabilities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "adapterId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "attemptNumber": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "responseSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9_-]+$",
+                "type": "string"
+              },
+              "schema": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "strict": {
+                "type": "boolean"
+              }
+            },
+            "required": ["schema"],
+            "type": "object"
+          }
+        },
+        "required": ["agentId", "adapterId", "adapterCapabilities", "responseSchema", "attemptNumber"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "maxRetries": {
+            "maximum": 5,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": ["maxRetries"],
+        "type": "object"
+      }
+    },
+    {
       "kind": "event",
       "namespace": "agent",
       "subject": "tool.completed",
@@ -3572,6 +3895,63 @@
           },
           "sessionId": {
             "type": "string"
+          },
+          "structuredOutputValidation": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "const": "passed",
+                    "type": "string"
+                  }
+                },
+                "required": ["status"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "const": "enforced",
+                    "type": "string"
+                  }
+                },
+                "required": ["status"],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "errors": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "instancePath": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "schemaPath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["message", "instancePath", "schemaPath"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "status": {
+                    "const": "failed",
+                    "type": "string"
+                  }
+                },
+                "required": ["status", "errors"],
+                "type": "object"
+              }
+            ]
           },
           "turnId": {
             "type": "string"
@@ -6327,10 +6707,27 @@
             "type": "string"
           },
           "responseSchema": {
-            "additionalProperties": {},
-            "propertyNames": {
-              "type": "string"
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "maxLength": 64,
+                "pattern": "^[a-zA-Z0-9_-]+$",
+                "type": "string"
+              },
+              "schema": {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "strict": {
+                "type": "boolean"
+              }
             },
+            "required": ["schema"],
             "type": "object"
           },
           "sessionContext": {

@@ -62,7 +62,7 @@ Purpose: Query available widgets, optionally filtered by scope.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `widgets` | `{ id: string; name: string; scope: string \| string[]; supportedSizes: ("medium" \| "small" \| "large" \| "full-width")[]; defaultSize: "medium" \| "small" \| "large" \| "full-width"; component: {} \| null; description?: string \| undefined; defaultConfig?: unknown; allowMultiple?: boolean \| undefined; activate?: { pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: Function \| undefined; } \| undefined; }[]` | yes |
+| `widgets` | `{ id: string; name: string; scope: string \| string[]; supportedSizes: ("small" \| "medium" \| "large" \| "full-width")[]; defaultSize: "small" \| "medium" \| "large" \| "full-width"; component: {} \| null; description?: string \| undefined; defaultConfig?: unknown; allowMultiple?: boolean \| undefined; activate?: { pageId?: string \| undefined; windowId?: string \| undefined; onActivate?: Function \| undefined; } \| undefined; }[]` | yes |
 
 ### <a id="widget.register"></a>`widget.register` (event)
 
@@ -78,12 +78,12 @@ Purpose: Plugins or built-in widgets emit this to register themselves.
 | `allowMultiple` | `boolean \| undefined` | no |
 | `component` | `unknown` | yes |
 | `defaultConfig` | `unknown` | no |
-| `defaultSize` | `"medium" \| "small" \| "large" \| "full-width"` | yes |
+| `defaultSize` | `"small" \| "medium" \| "large" \| "full-width"` | yes |
 | `description` | `string \| undefined` | no |
 | `id` | `string` | yes |
 | `name` | `string` | yes |
 | `scope` | `string \| string[]` | yes |
-| `supportedSizes` | `("medium" \| "small" \| "large" \| "full-width")[]` | yes |
+| `supportedSizes` | `("small" \| "medium" \| "large" \| "full-width")[]` | yes |
 
 ### <a id="widget.unregister"></a>`widget.unregister` (event)
 

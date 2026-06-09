@@ -38,8 +38,16 @@ export interface AIAdapterCapabilityRegistry {
   /**
    * Adapter supports native structured output (JSON schema enforcement
    * at the model level via response_format or equivalent).
+   *
+   * Sub-capability:
+   * - `structuredOutput:strict` — adapter enforces strict schema validation
+   *   (no additional properties, all fields required). Corresponds to
+   *   `response_format: { type: 'json_schema', json_schema: { strict: true } }`
+   *   in the OpenAI API.
    */
-  structuredOutput: boolean;
+  structuredOutput: {
+    strict: boolean;
+  };
 }
 
 /**

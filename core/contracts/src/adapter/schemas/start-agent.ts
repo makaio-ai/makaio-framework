@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MessageInputSchema } from '../../shared/index.js';
+import { MessageInputSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
 import { AgentRoleSchema } from '../../session/schemas.js';
 import { SessionContextSchema } from '../../session/session-context.js';
 import { McpRuntimeSessionContextSchema, McpSessionContextSchema } from '../../mcp/schemas.js';
@@ -32,10 +32,10 @@ const StartAgentBaseSchema = z
     initialMessage: MessageInputSchema.optional(),
 
     /**
-     * JSON Schema for structured output from the initial turn.
+     * Structured output descriptor for the initial turn.
      * Forwarded to adapters that support model-level structured output.
      */
-    responseSchema: z.record(z.string(), z.unknown()).optional(),
+    responseSchema: ResponseSchemaDescriptorSchema.optional(),
 
     /** Model to use (adapter-specific, e.g., 'sonnet', 'opus') */
     model: z.string().optional(),

@@ -14,9 +14,19 @@ import { convertMessageHistory } from './utils/convertMessageHistory.js';
 import type { OpenAISessionConfig } from './types/index.js';
 import { classifyOpenAIError } from './utils/classifyOpenAIError.js';
 import { buildChatCompletionRequest } from './utils/buildChatCompletionRequest.js';
-import { BaseStreamSession } from '@makaio/ai-adapters-stream-session';
+import { BaseStreamSession, type MessageToolCall } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
-import type { ToolListItem } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
+import { STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME } from './structured-output-finalizer.js';
+
+/**
+ * Return the OpenAI tool name regardless of concrete tool kind.
+ * @param tool - OpenAI chat completion tool definition
+ * @returns Tool name used in model-visible requests
+ */
+function getOpenAIToolName(tool: ChatCompletionTool): string {
+  return tool.type === 'function' ? tool.function.name : tool.custom.name;
+}
 
 /**
  * Session for OpenAI SDK lifecycle management.
@@ -34,7 +44,7 @@ export class OpenAIConnectorSession extends BaseStreamSession<
   OpenAIConnectorTurn,
   MessageCompleteEvent
 > {
-  private messages: ChatCompletionMessageParam[] = [];
+  protected messages: ChatCompletionMessageParam[] = [];
 
   /**
    * Mutable tool list for this session.
@@ -57,6 +67,14 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    * Initialized from `config.reasoningEffort` at session construction.
    */
   private currentReasoningEffort: AIReasoningLevel | undefined;
+
+  /**
+   * Per-turn structured-output schema descriptor, captured from the active
+   * {@link MessageHandle} in {@link buildMessages} and consumed by
+   * {@link executeApiCall} when building the `response_format` payload.
+   * Reset to `undefined` at the start of each new turn.
+   */
+  private currentResponseSchema: ResponseSchemaDescriptor | undefined;
 
   /**
    * Create an OpenAI connector session.
@@ -115,7 +133,82 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    * @returns Ordered list of tool names matching the next API request
    */
   protected getEffectiveToolNames(): string[] {
-    return this.currentTools.map((tool) => (tool.type === 'function' ? tool.function.name : tool.custom.name));
+    return this.currentTools.map(getOpenAIToolName);
+  }
+
+  /**
+   * Return true when OpenAI-compatible tool calling must carry the structured
+   * result because the active provider rejects `response_format` alongside tools.
+   * @returns Whether this turn should use the internal finalizer tool
+   */
+  private shouldUseStructuredOutputFinalizer(): boolean {
+    return this.currentResponseSchema !== undefined && this.currentTools.length > 0;
+  }
+
+  /**
+   * Build the internal terminal tool used when structured output and normal
+   * tool calling are both active.
+   * @returns OpenAI function tool that submits the final structured result
+   */
+  private createStructuredOutputFinalizerTool(): ChatCompletionTool {
+    if (this.currentResponseSchema === undefined) {
+      throw new Error('Structured output finalizer requires an active response schema');
+    }
+
+    return {
+      type: 'function',
+      function: {
+        name: STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME,
+        description: 'Submit the final structured response for this turn after any required tools have been used.',
+        parameters: this.currentResponseSchema.schema,
+        ...(this.currentResponseSchema.strict === true && { strict: true }),
+      },
+    };
+  }
+
+  /**
+   * Build the tool list for the next OpenAI request.
+   * @returns Normal tools plus the internal finalizer when needed
+   */
+  protected buildRequestTools(): ChatCompletionTool[] {
+    if (!this.shouldUseStructuredOutputFinalizer()) {
+      return this.currentTools;
+    }
+    if (this.currentTools.some((tool) => getOpenAIToolName(tool) === STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME)) {
+      throw new Error(`Tool name ${STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME} is reserved for structured output.`);
+    }
+    return [...this.currentTools, this.createStructuredOutputFinalizerTool()];
+  }
+
+  /**
+   * Return the response schema to send via OpenAI `response_format`.
+   *
+   * The schema is intentionally omitted when the finalizer tool is active
+   * because some OpenAI-compatible providers reject `response_format` and
+   * function tools in the same request.
+   * @returns Direct response schema for schema-only turns, otherwise undefined
+   */
+  protected getRequestResponseSchema(): ResponseSchemaDescriptor | undefined {
+    if (this.shouldUseStructuredOutputFinalizer()) {
+      return undefined;
+    }
+    return this.currentResponseSchema;
+  }
+
+  /**
+   * Instruction prepended to the current user turn when the internal finalizer
+   * tool is required.
+   * @returns Internal turn instruction or an empty string
+   */
+  private getStructuredOutputFinalizerInstruction(): string {
+    if (!this.shouldUseStructuredOutputFinalizer()) {
+      return '';
+    }
+    return [
+      'Structured output is required for this turn.',
+      `When you are ready to provide the final answer, call the ${STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME} function exactly once with arguments matching its schema.`,
+      'Use other tools first when needed. Do not provide the final answer as plain text.',
+    ].join(' ');
   }
 
   // ---------------------------------------------------------------------------
@@ -155,10 +248,17 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    *
    * Ensures the configured system prompt is always at index 0 without
    * duplicating existing history system entries.
+   *
+   * Also snapshots {@link MessageHandle.responseSchema} into
+   * {@link currentResponseSchema} so {@link executeApiCall} can forward it to
+   * the OpenAI `response_format` field without re-reading the handle.
    * @param handle - The message handle containing history
    * @param mergedContent - Optional content from superseded/merged messages
    */
   protected buildMessages(handle: MessageHandle, mergedContent?: string[]): void {
+    // Snapshot the per-turn response schema for use in executeApiCall.
+    this.currentResponseSchema = handle.responseSchema;
+
     // Explicit history injection replaces accumulated messages (recovery / rehydration).
     // Otherwise keep existing this.messages — they accumulate across turns (stateless API pattern).
     if (handle.messageHistory) {
@@ -195,7 +295,12 @@ export class OpenAIConnectorSession extends BaseStreamSession<
     // NormalizedMessageInput.message is optional (undefined for block-only inputs);
     // build structured content parts so media blocks (images, PDFs, attachments)
     // are passed natively to the OpenAI API rather than as text placeholders.
-    const contextText = formatContextBlocksAsText(serializeTurnContext(handle.turnContext));
+    const contextText = [
+      formatContextBlocksAsText(serializeTurnContext(handle.turnContext)),
+      this.getStructuredOutputFinalizerInstruction(),
+    ]
+      .filter((text) => text.length > 0)
+      .join('\n\n');
 
     if (handle.message.message !== undefined) {
       // Simple string message — prepend context text when present.
@@ -220,6 +325,27 @@ export class OpenAIConnectorSession extends BaseStreamSession<
       }
       this.messages.push({ role: 'user', content: parts });
     }
+  }
+
+  /**
+   * Return the current OpenAI chat history length.
+   * @returns Number of messages currently staged for the next request
+   */
+  protected getConversationHistoryLength(): number {
+    return this.messages.length;
+  }
+
+  /**
+   * Compact provisional assistant/retry blocks to the canonical assistant turn.
+   * @param startIndex - History index immediately after the user turn input
+   * @param endIndex - Exclusive history boundary for the provisional blocks
+   * @param assistantMessage - Canonical assistant content to persist
+   */
+  protected replaceAssistantTurnHistory(startIndex: number, endIndex: number, assistantMessage: string): void {
+    this.messages.splice(startIndex, endIndex - startIndex, {
+      role: 'assistant',
+      content: assistantMessage,
+    });
   }
 
   /**
@@ -257,9 +383,13 @@ export class OpenAIConnectorSession extends BaseStreamSession<
       buildChatCompletionRequest({
         model: this.currentModel,
         messages: this.messages,
-        tools: this.currentTools,
+        tools: this.buildRequestTools(),
         reasoningEffort: this.currentReasoningEffort,
         supportsReasoningEffort,
+        responseSchema: this.getRequestResponseSchema(),
+        // The adapter supports OpenAI-compatible base URLs, so strict mode cannot
+        // be claimed globally until capability resolution is provider/model-aware.
+        supportsStructuredOutputStrict: false,
       }),
       { signal: abortSignal },
     );
@@ -275,6 +405,9 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         adapterSessionId,
         model: this.currentModel,
         logLowLevelEvent: this.config.logLowLevelEvent,
+        hiddenToolCallNames: this.shouldUseStructuredOutputFinalizer()
+          ? [STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME]
+          : undefined,
       });
     } finally {
       await turn.markStepFinished();
@@ -307,6 +440,16 @@ export class OpenAIConnectorSession extends BaseStreamSession<
     turn: OpenAIConnectorTurn,
   ): Promise<void> {
     if (this.shouldAbortTurnProcessing(turn, currentHandle)) {
+      return;
+    }
+
+    const structuredOutputMessage = this.extractStructuredOutputFinalizerMessage(result.tool_calls);
+    if (structuredOutputMessage !== undefined) {
+      this.messages.push({
+        role: 'assistant',
+        content: structuredOutputMessage,
+      });
+      this.lastAssistantMessage = structuredOutputMessage;
       return;
     }
 
@@ -362,5 +505,34 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    */
   protected classifyError(error: unknown): Error {
     return classifyOpenAIError(error);
+  }
+
+  /**
+   * Convert an internal structured-output finalizer call into terminal content.
+   * @param toolCalls - Tool calls from the current message_complete event
+   * @returns Serialized final structured output, or undefined when absent
+   */
+  private extractStructuredOutputFinalizerMessage(toolCalls: MessageToolCall[] | undefined): string | undefined {
+    if (!this.shouldUseStructuredOutputFinalizer() || toolCalls === undefined) {
+      return undefined;
+    }
+
+    const finalizerCalls = toolCalls.filter(
+      (toolCall) => toolCall.function.name === STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME,
+    );
+    if (finalizerCalls.length === 0) {
+      return undefined;
+    }
+    if (finalizerCalls.length > 1 || finalizerCalls.length !== toolCalls.length) {
+      throw new Error('Structured output finalizer must be the only tool call in the terminal OpenAI response.');
+    }
+
+    const [finalizerCall] = finalizerCalls;
+    try {
+      return JSON.stringify(JSON.parse(finalizerCall.function.arguments) as unknown);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Structured output finalizer emitted invalid JSON arguments: ${message}`);
+    }
   }
 }

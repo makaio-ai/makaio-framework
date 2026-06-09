@@ -70,3 +70,11 @@ export {
   type ValidateModelChangeRequest,
   type ValidateModelChangeResponse,
 } from './validate-model-change.js';
+export {
+  StructuredOutputRetryPolicySchema,
+  StructuredOutputEnforceSchema,
+  type StructuredOutputRetryPolicyRequest,
+  type StructuredOutputRetryPolicyResponse,
+  type StructuredOutputEnforceRequest,
+  type StructuredOutputEnforceResponse,
+} from './structured-output.js';

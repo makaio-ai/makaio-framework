@@ -60,7 +60,7 @@ Type: Request (RPC)
 | `hook` | `{ type: "command"; command: string; timeout?: number \| undefined; }` | yes |
 | `matcher` | `string \| undefined` | no |
 | `projectDir` | `string \| undefined` | no |
-| `scope` | `"user" \| "local" \| "project"` | yes |
+| `scope` | `"local" \| "user" \| "project"` | yes |
 
 **Response:**
 
@@ -90,7 +90,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `effective` | `Record<string, { hooks: { type: "command"; command: string; timeout?: number \| undefined; }[]; matcher?: string \| undefined; }[]>` | yes |
-| `perScope` | `{ scope: "user" \| "local" \| "project"; path: string; events: Record<string, { hooks: { type: "command"; command: string; timeout?: number \| undefined; }[]; matcher?: string \| undefined; }[]>; }[]` | yes |
+| `perScope` | `{ scope: "local" \| "user" \| "project"; path: string; events: Record<string, { hooks: { type: "command"; command: string; timeout?: number \| undefined; }[]; matcher?: string \| undefined; }[]>; }[]` | yes |
 
 ### <a id="client:claude-code.config.hooks.remove"></a>`client:claude-code.config.hooks.remove` (rpc)
 
@@ -110,7 +110,7 @@ Type: Request (RPC)
 | `eventName` | `string` | yes |
 | `match` | `{ commandContains: string; }` | yes |
 | `projectDir` | `string \| undefined` | no |
-| `scope` | `"user" \| "local" \| "project"` | yes |
+| `scope` | `"local" \| "user" \| "project"` | yes |
 
 **Response:**
 
@@ -207,7 +207,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `plugins` | `{ name: string; enabled: boolean; scope: "user" \| "local" \| "project"; }[]` | yes |
+| `plugins` | `{ name: string; enabled: boolean; scope: "local" \| "user" \| "project"; }[]` | yes |
 
 ### <a id="client:claude-code.config.prime"></a>`client:claude-code.config.prime` (rpc)
 
@@ -260,7 +260,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `effective` | `{ type: "command"; command: string; padding?: number \| undefined; } \| null` | yes |
-| `perScope` | `{ scope: "user" \| "local" \| "project"; path: string; value: { type: "command"; command: string; padding?: number \| undefined; } \| null; }[]` | yes |
+| `perScope` | `{ scope: "local" \| "user" \| "project"; path: string; value: { type: "command"; command: string; padding?: number \| undefined; } \| null; }[]` | yes |
 
 ### <a id="client:claude-code.config.statusline.set"></a>`client:claude-code.config.statusline.set` (rpc)
 
@@ -278,7 +278,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `projectDir` | `string \| undefined` | no |
-| `scope` | `"user" \| "local" \| "project"` | yes |
+| `scope` | `"local" \| "user" \| "project"` | yes |
 | `value` | `{ type: "command"; command: string; padding?: number \| undefined; }` | yes |
 
 **Response:**
@@ -382,7 +382,7 @@ Type: Request (RPC)
 | `envPairs` | `string[] \| undefined` | no |
 | `makaioCommand` | `string` | yes |
 | `projectDir` | `string \| undefined` | no |
-| `scope` | `"user" \| "local" \| "project"` | yes |
+| `scope` | `"local" \| "user" \| "project"` | yes |
 | `skipDangerousModePermissionPrompt` | `boolean \| undefined` | no |
 
 **Response:**
@@ -434,7 +434,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `projectDir` | `string \| undefined` | no |
-| `scope` | `"user" \| "local" \| "project"` | yes |
+| `scope` | `"local" \| "user" \| "project"` | yes |
 
 **Response:**
 

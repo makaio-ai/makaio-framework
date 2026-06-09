@@ -31,6 +31,10 @@ from makaio.generated.payloads.agent import (
     AgentStartedPayload,
     AgentStepFinishedPayload,
     AgentStepStartedPayload,
+    AgentStructuredOutputEnforceRequest,
+    AgentStructuredOutputEnforceResponse,
+    AgentStructuredOutputRetryPolicyRequest,
+    AgentStructuredOutputRetryPolicyResponse,
     AgentToolCompletedPayload,
     AgentToolOutputPayload,
     AgentToolStartedPayload,
@@ -67,6 +71,8 @@ session_closed: EventSubject[AgentSessionClosedPayload] = EventSubject("agent.se
 started: EventSubject[AgentStartedPayload] = EventSubject("agent.started", payload_type=AgentStartedPayload)
 step_finished: EventSubject[AgentStepFinishedPayload] = EventSubject("agent.step.finished", payload_type=AgentStepFinishedPayload)
 step_started: EventSubject[AgentStepStartedPayload] = EventSubject("agent.step.started", payload_type=AgentStepStartedPayload)
+structured_output_enforce: RequestSubject[AgentStructuredOutputEnforceRequest, AgentStructuredOutputEnforceResponse] = RequestSubject("agent.structuredOutput.enforce", request_type=AgentStructuredOutputEnforceRequest, response_type=AgentStructuredOutputEnforceResponse)
+structured_output_retry_policy: RequestSubject[AgentStructuredOutputRetryPolicyRequest, AgentStructuredOutputRetryPolicyResponse] = RequestSubject("agent.structuredOutput.retryPolicy", request_type=AgentStructuredOutputRetryPolicyRequest, response_type=AgentStructuredOutputRetryPolicyResponse)
 tool_completed: EventSubject[AgentToolCompletedPayload] = EventSubject("agent.tool.completed", payload_type=AgentToolCompletedPayload)
 tool_output: EventSubject[AgentToolOutputPayload] = EventSubject("agent.tool.output", payload_type=AgentToolOutputPayload)
 tool_started: EventSubject[AgentToolStartedPayload] = EventSubject("agent.tool.started", payload_type=AgentToolStartedPayload)

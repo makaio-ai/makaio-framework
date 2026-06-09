@@ -9,6 +9,7 @@ import {
 import {
   BaseConnectorSession,
   UserMessageQueue,
+  markCompletedWithFinalResult,
   processQueueMessages,
   serializeTurnContext,
   formatContextBlocksAsText,
@@ -209,8 +210,7 @@ export class GeminiConnectorSession extends BaseConnectorSession<GeminiSessionCo
             outcome: 'completed' as const,
             result: { message: this.lastTurnContent || '(Empty response)' },
           };
-          handle.markCompleted(result);
-          this.config.onTurnComplete?.(handle, result);
+          await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
 
           await this.config.emitSdkEvent({
             type: 'session.completed',
@@ -229,8 +229,7 @@ export class GeminiConnectorSession extends BaseConnectorSession<GeminiSessionCo
           error: error instanceof Error ? error.message : String(error),
         };
         if (!handle.isProcessed) {
-          handle.markCompleted(errorResult);
-          this.config.onTurnComplete?.(handle, errorResult);
+          await markCompletedWithFinalResult(handle, errorResult, this.config.onTurnComplete);
         }
         this.config.handleError(error instanceof Error ? error : new Error(String(error)), false);
       } finally {

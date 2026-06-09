@@ -155,7 +155,7 @@ describe('query()', () => {
     expect(sendMessagePayloads[0]).toMatchObject({
       sessionId: SESSION_ID,
       message: 'Hello',
-      responseSchema: { type: 'object', properties: { answer: { type: 'string' } } },
+      responseSchema: { schema: { type: 'object', properties: { answer: { type: 'string' } } } },
       agent: {
         kind: 'canonical-model',
         model: 'sonnet',
@@ -216,8 +216,12 @@ describe('query()', () => {
       yield { type: 'user', message: { role: 'user', content: 'First' }, parent_tool_use_id: null };
       yield { type: 'user', message: { role: 'user', content: 'Second' }, parent_tool_use_id: null };
     }
+    const schema = { type: 'object', properties: { answer: { type: 'string' } } };
 
-    const gen = query({ prompt: prompt(), options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = query({
+      prompt: prompt(),
+      options: { model: 'sonnet', sessionId: SESSION_ID, outputFormat: { type: 'json_schema', schema } },
+    });
     closeWhenReady(gen, cleanups);
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
@@ -232,6 +236,10 @@ describe('query()', () => {
     expect(sendMessagePayloads.map((payload) => (payload as { sessionId: string }).sessionId)).toEqual([
       SESSION_ID,
       SESSION_ID,
+    ]);
+    expect(sendMessagePayloads.map((payload) => (payload as { responseSchema?: unknown }).responseSchema)).toEqual([
+      { schema },
+      { schema },
     ]);
   });
 

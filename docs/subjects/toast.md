@@ -80,7 +80,7 @@ Type: Event
 |-------|------|----------|
 | `actions` | `{ id: string; label: string; variant?: "default" \| "destructive" \| "outline" \| undefined; }[] \| undefined` | no |
 | `durationMs` | `number \| null \| undefined` | no |
-| `level` | `"error" \| "success" \| "info" \| "warning"` | yes |
+| `level` | `"success" \| "error" \| "info" \| "warning"` | yes |
 | `message` | `string` | yes |
 | `title` | `string \| undefined` | no |
 | `toastId` | `string \| undefined` | no |

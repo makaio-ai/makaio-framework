@@ -4,6 +4,7 @@ import type { PayloadFilter, ScopedSubjectDefinition } from '@makaio/core';
 import {
   BaseConnectorSession,
   UserMessageQueue,
+  markCompletedWithFinalResult,
   processQueueMessages,
   type MessageHandle,
   ProceduralConnectorTurn,
@@ -72,6 +73,9 @@ export abstract class BaseStreamSession<
   /** Runtime working directory for tool execution; set from config.cwd. */
   protected currentCwd: string;
 
+  /** Pending public-turn history compactions waiting for canonical completion. */
+  private readonly pendingAssistantHistoryCompactions: Array<{ setEndIndex: (endIndex: number) => void }> = [];
+
   /**
    * Initialize a stream session with connector runtime config.
    * @param config - Session configuration (bus identity, model/cwd defaults, and adapter hooks).
@@ -102,6 +106,25 @@ export abstract class BaseStreamSession<
    * @param mergedContent - Text content from superseded/merged messages
    */
   protected abstract buildMessages(handle: MessageHandle, mergedContent?: string[]): void;
+
+  /**
+   * Return the current adapter-specific conversation history length.
+   *
+   * Used to checkpoint the boundary immediately after a user turn has been
+   * materialized, so structured-output retries can later compact provisional
+   * assistant/retry blocks back to the canonical public completion.
+   * @returns Number of provider-native messages currently in history
+   */
+  protected abstract getConversationHistoryLength(): number;
+
+  /**
+   * Replace all assistant-side history for a turn with the canonical assistant
+   * message emitted by the `MessageHandle`.
+   * @param startIndex - History index immediately after the user turn input
+   * @param endIndex - Exclusive history boundary for provisional assistant/retry blocks
+   * @param assistantMessage - Canonical assistant message for that turn
+   */
+  protected abstract replaceAssistantTurnHistory(startIndex: number, endIndex: number, assistantMessage: string): void;
 
   /**
    * Execute the adapter-specific streaming API call.
@@ -190,8 +213,37 @@ export abstract class BaseStreamSession<
     this.sessionId = crypto.randomUUID();
     handle.adapterSessionId = this.sessionId;
 
+    if (!handle.internalRetry) {
+      this.closePendingAssistantHistoryCompactions(this.getConversationHistoryLength());
+    }
+
     // Populate adapter-specific messages array before creating the turn.
     this.buildMessages(handle, mergedContent);
+    const assistantHistoryStartIndex = this.getConversationHistoryLength();
+    let rawTerminalMessage: string | undefined;
+    if (!handle.isProcessed && !handle.internalRetry) {
+      let assistantHistoryEndIndex: number | undefined;
+      const pendingCompaction = {
+        setEndIndex: (endIndex: number) => {
+          assistantHistoryEndIndex ??= endIndex;
+        },
+      };
+      this.pendingAssistantHistoryCompactions.push(pendingCompaction);
+      handle.addCompletionObserver((finalResult) => {
+        try {
+          const finalMessage = finalResult.outcome === 'completed' ? finalResult.result?.message : undefined;
+          if (finalMessage === undefined || rawTerminalMessage === undefined || finalMessage === rawTerminalMessage) {
+            return;
+          }
+
+          const endIndex = assistantHistoryEndIndex ?? this.getConversationHistoryLength();
+          this.replaceAssistantTurnHistory(assistantHistoryStartIndex, endIndex, finalMessage);
+          this.lastAssistantMessage = finalMessage;
+        } finally {
+          this.removePendingAssistantHistoryCompaction(pendingCompaction);
+        }
+      });
+    }
 
     // Create the adapter-specific turn instance.
     this.currentTurn = this.createTurn(handle);
@@ -227,14 +279,14 @@ export abstract class BaseStreamSession<
           return;
         }
 
+        rawTerminalMessage = this.lastAssistantMessage || '';
         const result = {
           outcome: 'completed' as const,
-          result: { message: this.lastAssistantMessage || '' },
+          result: { message: rawTerminalMessage },
         };
-        handle.markCompleted(result);
-        this.config.onTurnComplete?.(handle, result);
+        await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
       } catch (error) {
-        this.handleTurnError(error, turn, handle);
+        await this.handleTurnError(error, turn, handle);
       } finally {
         // Guarantee turn finalisation: emit turn_finished so the connector
         // transitions through processing_finished → idle (or processes the
@@ -258,7 +310,7 @@ export abstract class BaseStreamSession<
    * @param turn - The captured turn reference for pause-state checks
    * @param handle - The message handle to finalise on non-abort errors
    */
-  private handleTurnError(error: unknown, turn: TTurn | undefined, handle: MessageHandle): void {
+  private async handleTurnError(error: unknown, turn: TTurn | undefined, handle: MessageHandle): Promise<void> {
     // Aborted for immediate mode — the replacement turn takes over.
     if (turn?.isPaused() && handle.deliveryMode === 'immediate') {
       return;
@@ -271,8 +323,7 @@ export abstract class BaseStreamSession<
     if (turn?.isPaused()) {
       if (!handle.isProcessed) {
         const abortResult = { outcome: 'error' as const, error: err };
-        handle.markCompleted(abortResult);
-        this.config.onTurnComplete?.(handle, abortResult);
+        await markCompletedWithFinalResult(handle, abortResult, this.config.onTurnComplete);
       }
       return;
     }
@@ -280,8 +331,7 @@ export abstract class BaseStreamSession<
     console.error(`[${this.config.adapterName}] Turn error:`, error);
     if (!handle.isProcessed) {
       const errorResult = { outcome: 'error' as const, error: err };
-      handle.markCompleted(errorResult);
-      this.config.onTurnComplete?.(handle, errorResult);
+      await markCompletedWithFinalResult(handle, errorResult, this.config.onTurnComplete);
     }
     this.config.handleError(err, false);
   }
@@ -511,5 +561,27 @@ export abstract class BaseStreamSession<
    */
   protected shouldAbortTurnProcessing(turn: TTurn, currentHandle: MessageHandle): boolean {
     return currentHandle.isProcessed || turn.isPaused() || this.isTurnSuperseded(turn);
+  }
+
+  /**
+   * Close any unresolved public-turn history compactions before a new public
+   * turn appends its user message.
+   * @param endIndex - Exclusive boundary before the new public turn starts
+   */
+  private closePendingAssistantHistoryCompactions(endIndex: number): void {
+    for (const compaction of this.pendingAssistantHistoryCompactions) {
+      compaction.setEndIndex(endIndex);
+    }
+  }
+
+  /**
+   * Remove a completed history compaction from the pending set.
+   * @param compaction - Pending compaction handle to remove
+   */
+  private removePendingAssistantHistoryCompaction(compaction: { setEndIndex: (endIndex: number) => void }): void {
+    const index = this.pendingAssistantHistoryCompactions.indexOf(compaction);
+    if (index >= 0) {
+      this.pendingAssistantHistoryCompactions.splice(index, 1);
+    }
   }
 }

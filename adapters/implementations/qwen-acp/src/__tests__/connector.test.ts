@@ -3,7 +3,7 @@ import { constants as fsConstants } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MessageHandle, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
+import { MessageHandle, type MessageResult, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { TerminalManager } from '@makaio/ai-adapters-acp-client';
@@ -51,6 +51,19 @@ const TEST_MESSAGE: NormalizedMessageInput = {
 
 interface ToolApprovalRequester {
   requestToolApprovalWithHandling: (subject: unknown, payload: unknown) => Promise<{ action: 'allow' | 'deny' }>;
+}
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+  let resolveDeferred!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    resolveDeferred = resolve;
+  });
+  return { promise, resolve: resolveDeferred };
 }
 
 /**
@@ -326,6 +339,108 @@ describe('QwenAcpConnector', () => {
 
     // The finally block must have run: connector returns to idle so complete() resolves promptly.
     await expect(connector.complete()).resolves.toBeDefined();
+  });
+
+  it('returns transformed final result from complete after prompt completion', async () => {
+    const handle = makeAcpHandle('session-final-result');
+    const promptReleased = createDeferred<void>();
+    handle.connection.prompt = vi.fn().mockReturnValue(promptReleased.promise);
+    mockCreateAcpConnection.mockResolvedValueOnce(handle);
+
+    const connector = await makeConnector();
+
+    try {
+      const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+      await vi.waitFor(() => {
+        expect(handle.connection.prompt).toHaveBeenCalledTimes(1);
+      });
+
+      const finalResult: MessageResult = {
+        outcome: 'completed',
+        result: { message: '{"ok":true}' },
+      };
+      messageHandle.addCompletionTransform(() => finalResult);
+      await connector['onSessionUpdate']({
+        sessionId: 'session-final-result',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'raw provider text' },
+        },
+      });
+
+      promptReleased.resolve();
+
+      await expect(messageHandle.waitForCompletion()).resolves.toEqual(finalResult);
+      await expect(connector.complete()).resolves.toEqual(finalResult);
+    } finally {
+      await connector.close();
+    }
+  });
+
+  it('starts internal retry turns while the original completion transform is waiting', async () => {
+    const handle = makeAcpHandle('session-retry-interlock');
+    const firstPromptReleased = createDeferred<void>();
+    const retryPromptReleased = createDeferred<void>();
+    handle.connection.prompt = vi
+      .fn()
+      .mockReturnValueOnce(firstPromptReleased.promise)
+      .mockReturnValueOnce(retryPromptReleased.promise);
+    mockCreateAcpConnection.mockResolvedValueOnce(handle);
+
+    const connector = await makeConnector();
+
+    try {
+      const messageHandle = await connector.sendMessage(TEST_MESSAGE);
+      await vi.waitFor(() => {
+        expect(handle.connection.prompt).toHaveBeenCalledTimes(1);
+      });
+
+      let retryHandle: MessageHandle | undefined;
+      messageHandle.addCompletionTransform(async () => {
+        retryHandle = await connector.sendMessage(TEST_MESSAGE, {
+          deliveryMode: 'enqueue',
+          internalRetry: true,
+          messageId: 'message-structured-output-retry',
+        });
+        const retryResult = await retryHandle.waitForCompletion();
+        return {
+          outcome: 'completed',
+          result: { message: retryResult.result?.message ?? '' },
+        };
+      });
+      await connector['onSessionUpdate']({
+        sessionId: 'session-retry-interlock',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'invalid json' },
+        },
+      });
+
+      firstPromptReleased.resolve();
+
+      await vi.waitFor(() => {
+        expect(handle.connection.prompt).toHaveBeenCalledTimes(2);
+      });
+      expect(retryHandle?.messageId).toBe('message-structured-output-retry');
+
+      await connector['onSessionUpdate']({
+        sessionId: 'session-retry-interlock',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: '{"ok":true}' },
+        },
+      });
+      retryPromptReleased.resolve();
+
+      const finalResult: MessageResult = {
+        outcome: 'completed',
+        result: { message: '{"ok":true}' },
+      };
+      await expect(messageHandle.waitForCompletion()).resolves.toEqual(finalResult);
+      await expect(connector.complete()).resolves.toEqual(finalResult);
+    } finally {
+      await connector.close();
+    }
   });
 
   it('reopens a text step after a tool step completes', async () => {

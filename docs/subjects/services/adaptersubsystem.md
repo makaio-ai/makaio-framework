@@ -250,7 +250,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; clientId?: string \| undefined; displayName?: string \| undefined; protocol?: string \| undefined; description?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; } \| null` | yes |
+| `config` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; description?: string \| undefined; displayName?: string \| undefined; clientId?: string \| undefined; protocol?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; } \| null` | yes |
 
 ### <a id="adapterSubsystem.getDefaultBinding"></a>`adapterSubsystem.getDefaultBinding` (rpc)
 
@@ -327,7 +327,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `configs` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; clientId?: string \| undefined; displayName?: string \| undefined; protocol?: string \| undefined; description?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; }[]` | yes |
+| `configs` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; description?: string \| undefined; displayName?: string \| undefined; clientId?: string \| undefined; protocol?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="adapterSubsystem.listAdapters"></a>`adapterSubsystem.listAdapters` (rpc)
 
@@ -516,7 +516,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; clientId?: string \| undefined; displayName?: string \| undefined; protocol?: string \| undefined; description?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; }` | yes |
+| `config` | `{ name: string; enabled: boolean; bindings: { adapterName: string; providerConfigId: string; isDefault: boolean; }[]; description?: string \| undefined; displayName?: string \| undefined; clientId?: string \| undefined; protocol?: string \| undefined; helpLinks?: { label: string; url: string; }[] \| undefined; instructions?: string \| undefined; providerDefinitionIds?: string[] \| undefined; settings?: Record<string, unknown> \| undefined; }` | yes |
 
 ### <a id="adapterSubsystem.setAdapterEnabled"></a>`adapterSubsystem.setAdapterEnabled` (rpc)
 

@@ -11,7 +11,13 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { IMakaioSession, MessageInput, MakaioSessionAgent, SessionContext } from '@makaio/contracts';
+import type {
+  IMakaioSession,
+  MessageInput,
+  MakaioSessionAgent,
+  ResponseSchemaDescriptor,
+  SessionContext,
+} from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
 import type { Turn } from '../entities/turn.js';
 import type { TurnCompleteCallback } from '../session-turn-manager.js';
@@ -31,7 +37,7 @@ import type { TurnCompleteCallback } from '../session-turn-manager.js';
  * @param deliveryMode - How to deliver the message to the agent
  * @param onTurnComplete - Callback invoked when the turn completes (all agents done)
  * @param sessionContext - Optional shared session context forwarded to all agents
- * @param responseSchema - Optional JSON schema for structured responses
+ * @param responseSchema - Optional structured output descriptor for the turn
  */
 export async function routeToAgentsCore(
   bus: IMakaioBus,
@@ -43,7 +49,7 @@ export async function routeToAgentsCore(
   deliveryMode: 'enqueue' | 'immediate' | undefined,
   onTurnComplete: TurnCompleteCallback,
   sessionContext?: SessionContext,
-  responseSchema?: Record<string, unknown>,
+  responseSchema?: ResponseSchemaDescriptor,
 ): Promise<void> {
   const routingPromises = agents.map(async (agent) => {
     try {

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { registerPreUserMessageHook, resetPreUserMessageHooks } from '@makaio/hooks';
 import { createMockScopedBus } from '@makaio/test-utils';
@@ -11,7 +12,12 @@ import { createAdapterNamespace } from '../../factory/create-adapter-namespace.j
 import { AIAgent } from '../../agent/ai-agent.js';
 import { AIAgentConnector } from '../../connector/agent-connector.js';
 import { MessageHandle } from '../../message-handle/index.js';
-import type { AIAgentConfig, AgentStartResult, BaseAgentConnectorConfig } from '../../agent/types.js';
+import type {
+  AIAgentConfig,
+  AgentStartResult,
+  BaseAgentConnectorConfig,
+  ConnectorSendMessageOptions,
+} from '../../agent/types.js';
 import type { ConfigFactoryInput } from '../ai-adapter-config.js';
 import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
@@ -21,6 +27,7 @@ type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
 
 interface ConnectorBehavior {
   inferredText: string;
+  retryInferredText?: string;
   throwOnStart?: Error;
   throwOnClose?: Error;
   completeOnStart?: boolean;
@@ -32,23 +39,30 @@ class ConfigurableConnector extends AIAgentConnector {
   private readonly behavior: ConnectorBehavior;
   public capturedStartMessage?: NormalizedMessageInput;
   public capturedStartSystemPrompt?: string;
-  public capturedStartResponseSchema?: Record<string, unknown>;
+  public capturedStartResponseSchema?: ResponseSchemaDescriptor;
+  public capturedSendMessageOptions?: ConnectorSendMessageOptions;
   public capturedInitializeSystemPrompt?: string;
+  public capturedInitializeResponseSchema?: ResponseSchemaDescriptor;
   public readonly startedHandles: MessageHandle[] = [];
+  public sendMessageCalls = 0;
 
   public constructor(config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }, behavior: ConnectorBehavior) {
     super(config);
     this.behavior = behavior;
   }
 
-  public async initialize(options?: { systemPrompt?: string }): Promise<void> {
+  public async initialize(options?: {
+    systemPrompt?: string;
+    responseSchema?: ResponseSchemaDescriptor;
+  }): Promise<void> {
     this.initializeCalls += 1;
     this.capturedInitializeSystemPrompt = options?.systemPrompt;
+    this.capturedInitializeResponseSchema = options?.responseSchema;
   }
 
   public async start(
     message: NormalizedMessageInput,
-    options?: { systemPrompt?: string; responseSchema?: Record<string, unknown> },
+    options?: { systemPrompt?: string; responseSchema?: ResponseSchemaDescriptor },
   ): Promise<AgentStartResult> {
     this.capturedStartMessage = message;
     this.capturedStartSystemPrompt = options?.systemPrompt;
@@ -74,8 +88,26 @@ class ConfigurableConnector extends AIAgentConnector {
     };
   }
 
-  public async sendMessage(_message: NormalizedMessageInput): Promise<MessageHandle> {
-    throw new Error('sendMessage should not be called in infer tests');
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    if (this.behavior.retryInferredText === undefined) {
+      throw new Error('sendMessage should not be called in infer tests');
+    }
+
+    this.sendMessageCalls += 1;
+    this.capturedSendMessageOptions = options;
+    const handle = new MessageHandle(
+      options?.messageId ?? 'infer-retry-msg',
+      message,
+      options?.deliveryMode ?? 'enqueue',
+    );
+    handle.markCompleted({
+      outcome: 'completed',
+      result: { message: this.behavior.retryInferredText },
+    });
+    return handle;
   }
 
   public abort(): void {}
@@ -224,6 +256,140 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.connectors[0]?.capturedStartMessage?.message).toBe('infer this');
     expect(capture.connectors[0]?.capturedStartSystemPrompt).toBe('classification-system-prompt');
     expect(capture.connectors[0]?.closeCalls).toBe(1);
+  });
+
+  it('forwards responseSchema from infer payload to connector initialize and start', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '{"answer":"schema-inferred"}' }, capture);
+    await adapter.init();
+
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+      name: 'answer_schema',
+    };
+    const result = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'classify this',
+      responseSchema,
+    });
+
+    expect(result.text).toBe('{"answer":"schema-inferred"}');
+    expect(capture.connectors[0]?.capturedInitializeResponseSchema).toEqual(responseSchema);
+    expect(capture.connectors[0]?.capturedStartResponseSchema).toEqual(responseSchema);
+  });
+
+  it('validates and enforces responseSchema output before returning from infer', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    let enforcePayload: unknown;
+    MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforcePayload = ctx.payload;
+      ctx.setResult({ enforced: true, output: '{"answer":"fixed"}' });
+    });
+    adapter = createTestAdapter({ inferredText: 'not json' }, capture);
+    await adapter.init();
+
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false,
+      },
+      name: 'answer_schema',
+    };
+    const result = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'classify this',
+      responseSchema,
+    });
+
+    expect(result.text).toBe('{"answer":"fixed"}');
+    expect(enforcePayload).toMatchObject({
+      adapterId: adapter.adapterId,
+      adapterHasCapability: false,
+      rawOutput: 'not json',
+      responseSchema,
+    });
+  });
+
+  it('retries invalid responseSchema infer output before returning', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    MakaioBus.on(AgentSubjects.structuredOutput.retryPolicy, (ctx) => {
+      ctx.setResult({ maxRetries: 1 });
+    });
+    const enforceHandler = vi.fn();
+    MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforceHandler();
+      ctx.setResult({ enforced: false, error: 'unexpected enforce' });
+    });
+    adapter = createTestAdapter({ inferredText: '{"answer":7}', retryInferredText: '{"answer":"retried"}' }, capture);
+    await adapter.init();
+
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false,
+      },
+      name: 'answer_schema',
+    };
+    const result = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'classify this',
+      responseSchema,
+    });
+
+    expect(result.text).toBe('{"answer":"retried"}');
+    expect(capture.connectors[0]?.sendMessageCalls).toBe(1);
+    expect(capture.connectors[0]?.capturedSendMessageOptions).toMatchObject({
+      internalRetry: true,
+      responseSchema,
+      turnContext: {
+        structuredOutputRetry: expect.objectContaining({ attemptNumber: 1 }),
+      },
+    });
+    expect(enforceHandler).not.toHaveBeenCalled();
+  });
+
+  it('rejects infer when responseSchema validation cannot be enforced', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '{"answer":7}' }, capture);
+    await adapter.init();
+
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: {
+        type: 'object',
+        properties: { answer: { type: 'string' } },
+        required: ['answer'],
+        additionalProperties: false,
+      },
+      name: 'answer_schema',
+    };
+
+    await expect(
+      MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'classify this',
+        responseSchema,
+      }),
+    ).rejects.toThrow('Structured output validation failed');
   });
 
   it('propagates inference errors while still closing the ephemeral connector', async () => {
@@ -470,9 +636,9 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '' }, capture);
     await adapter.init();
 
-    const responseSchema = {
-      type: 'object',
-      properties: { approved: { type: 'boolean' } },
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+      name: 'approved_schema',
     };
     const result = await MakaioBus.request(AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,

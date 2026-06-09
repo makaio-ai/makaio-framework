@@ -24,6 +24,7 @@
     "@makaio/storage-core": "workspace:*",
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
+    "ajv": "^8.17.1",
     "emittery": "^1.2.0",
     "type-fest": "^5.2.0",
     "zod": "^4.1.13"

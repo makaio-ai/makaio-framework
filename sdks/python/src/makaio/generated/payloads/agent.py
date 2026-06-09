@@ -6,6 +6,29 @@ from dataclasses import dataclass
 from typing import Any, Literal, Union
 
 @dataclass(frozen=True)
+class AgentCompletePayloadStructuredOutputValidationVariantA:
+    status: Literal["passed"]
+
+
+@dataclass(frozen=True)
+class AgentCompletePayloadStructuredOutputValidationVariantB:
+    status: Literal["enforced"]
+
+
+@dataclass(frozen=True)
+class AgentCompletePayloadStructuredOutputValidationVariantCErrorsItem:
+    instance_path: str
+    message: str
+    schema_path: str
+
+
+@dataclass(frozen=True)
+class AgentCompletePayloadStructuredOutputValidationVariantC:
+    errors: list[AgentCompletePayloadStructuredOutputValidationVariantCErrorsItem]
+    status: Literal["failed"]
+
+
+@dataclass(frozen=True)
 class AgentCompletePayload:
     adapter_id: str
     adapter_name: str
@@ -20,6 +43,7 @@ class AgentCompletePayload:
     outcome: Literal["completed", "superseded", "merged", "cancelled", "error", "rejected"] | None = None
     provider_config_id: str | None = None
     session_id: str | None = None
+    structured_output_validation: Union[AgentCompletePayloadStructuredOutputValidationVariantA, AgentCompletePayloadStructuredOutputValidationVariantB, AgentCompletePayloadStructuredOutputValidationVariantC] | None = None
     turn_id: str | None = None
 
 
@@ -60,8 +84,15 @@ class AgentCredentialChangeRequest:
 
 
 @dataclass(frozen=True)
-class AgentCredentialChangeResponse:
-    pass
+class AgentCredentialChangeResponseVariantA:
+    success: Literal[True]
+    swapped: Literal[True]
+
+
+@dataclass(frozen=True)
+class AgentCredentialChangeResponseVariantB:
+    reason: str
+    success: Literal[False]
 
 
 @dataclass(frozen=True)
@@ -144,8 +175,14 @@ class AgentInterruptRequest:
 
 
 @dataclass(frozen=True)
-class AgentInterruptResponse:
-    pass
+class AgentInterruptResponseVariantA:
+    success: Literal[True]
+
+
+@dataclass(frozen=True)
+class AgentInterruptResponseVariantB:
+    reason: str
+    success: Literal[False]
 
 
 @dataclass(frozen=True)
@@ -379,6 +416,13 @@ class AgentReasoningDeltaPayload:
 
 
 @dataclass(frozen=True)
+class AgentSendMessageRequestResponseSchema:
+    schema: dict[str, Any]
+    name: str | None = None
+    strict: bool | None = None
+
+
+@dataclass(frozen=True)
 class AgentSendMessageRequestSessionContextMessageHistoryItem:
     blocks: dict[str, Any]
     role: Literal["user", "assistant", "system"] | None = None
@@ -402,7 +446,7 @@ class AgentSendMessageRequest:
     message: dict[str, Any]
     delivery_mode: Literal["enqueue", "immediate"] | None = None
     message_id: str | None = None
-    response_schema: dict[str, Any] | None = None
+    response_schema: AgentSendMessageRequestResponseSchema | None = None
     session_context: AgentSendMessageRequestSessionContext | None = None
     session_id: str | None = None
     turn_id: str | None = None
@@ -683,6 +727,67 @@ class AgentStepStartedPayload:
 
 
 @dataclass(frozen=True)
+class AgentStructuredOutputEnforceRequestResponseSchema:
+    schema: dict[str, Any]
+    name: str | None = None
+    strict: bool | None = None
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputEnforceRequestValidationErrorsItem:
+    instance_path: str
+    message: str
+    schema_path: str
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputEnforceRequest:
+    adapter_has_capability: bool
+    adapter_id: str
+    agent_id: str
+    raw_output: str
+    response_schema: AgentStructuredOutputEnforceRequestResponseSchema
+    validation_errors: list[AgentStructuredOutputEnforceRequestValidationErrorsItem]
+    fallback_adapter_id: str | None = None
+    fallback_adapter_name: str | None = None
+    fallback_model: str | None = None
+    session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputEnforceResponseVariantA:
+    enforced: Literal[True]
+    output: str
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputEnforceResponseVariantB:
+    enforced: Literal[False]
+    error: str
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputRetryPolicyRequestResponseSchema:
+    schema: dict[str, Any]
+    name: str | None = None
+    strict: bool | None = None
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputRetryPolicyRequest:
+    adapter_capabilities: list[str]
+    adapter_id: str
+    agent_id: str
+    attempt_number: int
+    response_schema: AgentStructuredOutputRetryPolicyRequestResponseSchema
+
+
+@dataclass(frozen=True)
+class AgentStructuredOutputRetryPolicyResponse:
+    max_retries: int
+
+
+@dataclass(frozen=True)
 class AgentToolCompletedPayload:
     adapter_id: str
     adapter_name: str
@@ -771,8 +876,40 @@ class AgentToolApproveRequest:
 
 
 @dataclass(frozen=True)
-class AgentToolApproveResponse:
-    pass
+class AgentToolApproveResponseVariantA:
+    action: Literal["allow"]
+    updated_input: dict[str, Any] | None = None
+    updated_permissions: list[Any] | None = None
+
+
+@dataclass(frozen=True)
+class AgentToolApproveResponseVariantB:
+    action: Literal["deny"]
+    message: str
+    should_abort: bool | None = None
+
+
+@dataclass(frozen=True)
+class AgentTurnCompletedPayloadStructuredOutputValidationVariantA:
+    status: Literal["passed"]
+
+
+@dataclass(frozen=True)
+class AgentTurnCompletedPayloadStructuredOutputValidationVariantB:
+    status: Literal["enforced"]
+
+
+@dataclass(frozen=True)
+class AgentTurnCompletedPayloadStructuredOutputValidationVariantCErrorsItem:
+    instance_path: str
+    message: str
+    schema_path: str
+
+
+@dataclass(frozen=True)
+class AgentTurnCompletedPayloadStructuredOutputValidationVariantC:
+    errors: list[AgentTurnCompletedPayloadStructuredOutputValidationVariantCErrorsItem]
+    status: Literal["failed"]
 
 
 @dataclass(frozen=True)
@@ -789,6 +926,7 @@ class AgentTurnCompletedPayload:
     occurred_at: float | None = None
     provider_config_id: str | None = None
     session_id: str | None = None
+    structured_output_validation: Union[AgentTurnCompletedPayloadStructuredOutputValidationVariantA, AgentTurnCompletedPayloadStructuredOutputValidationVariantB, AgentTurnCompletedPayloadStructuredOutputValidationVariantC] | None = None
     turn_id: str | None = None
 
 
@@ -1109,3 +1247,15 @@ class AgentValidateModelChangeRequest:
 class AgentValidateModelChangeResponse:
     proceed: bool
     request_edit_history: bool | None = None
+
+
+AgentCredentialChangeResponse = Union[AgentCredentialChangeResponseVariantA, AgentCredentialChangeResponseVariantB]
+
+
+AgentInterruptResponse = Union[AgentInterruptResponseVariantA, AgentInterruptResponseVariantB]
+
+
+AgentStructuredOutputEnforceResponse = Union[AgentStructuredOutputEnforceResponseVariantA, AgentStructuredOutputEnforceResponseVariantB]
+
+
+AgentToolApproveResponse = Union[AgentToolApproveResponseVariantA, AgentToolApproveResponseVariantB]

@@ -18,8 +18,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { MakaioBus } from '@makaio/bus-core';
-import { MessageHandle } from '@makaio/ai-adapters-core';
+import { MessageHandle, type MessageResult } from '@makaio/ai-adapters-core';
 import { AnthropicSdkSession } from '../session.js';
 import { AnthropicSdkConnectorNamespace, AnthropicSdkConnectorSubjects } from '../namespaces/index.js';
 import type { AnthropicSdkConnectorTurn } from '../turn.js';
@@ -145,6 +146,14 @@ class TestAnthropicSdkSession extends AnthropicSdkSession {
    */
   public override async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
     return super.startNewTurn(handle, mergedContent);
+  }
+
+  /**
+   * Expose adapter history for focused session assertions.
+   * @returns Current Anthropic message history
+   */
+  public getHistory(): MessageParam[] {
+    return this.messages;
   }
 }
 
@@ -401,6 +410,31 @@ describe('applyMessageComplete — text response', () => {
       outcome: 'completed',
       result: { message: '4' },
     });
+  });
+
+  it('rewrites accumulated assistant history when completion returns corrected structured output', async () => {
+    const session = makeSession(scopedBus, ADAPTER_ID, AGENT_ID);
+    const handle = makeHandle('msg-text-corrected', 'return json');
+    handle.addCompletionTransform(
+      (result): MessageResult => ({
+        ...result,
+        result: { message: '{"ok":true}' },
+        structuredOutputValidation: { status: 'enforced' },
+      }),
+    );
+
+    session.apiCallFn = async (adapterSessionId) => {
+      await emitMessageComplete(scopedBus, makeTextCompleteEvent('not json'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+    };
+
+    await session.startNewTurn(handle);
+    await expect(handle.waitForCompletion()).resolves.toEqual({
+      outcome: 'completed',
+      result: { message: '{"ok":true}' },
+      structuredOutputValidation: { status: 'enforced' },
+    });
+
+    expect(session.getHistory().at(-1)).toEqual({ role: 'assistant', content: '{"ok":true}' });
   });
 });
 

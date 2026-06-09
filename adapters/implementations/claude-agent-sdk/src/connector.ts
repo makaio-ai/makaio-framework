@@ -72,8 +72,6 @@ function stripSdkMetadata(payload: unknown): ConnectorSdkEventPayload | undefine
 export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus> {
   /** Runtime system prompt configuration from options (session-level, set once) */
   private runtimeSystemPrompt?: SystemPrompt;
-  /** Runtime response schema for structured output (session-level, set once) */
-  private runtimeResponseSchema?: Record<string, unknown>;
 
   /** Session abstraction handling SDK query lifecycle */
   private session?: ClaudeConnectorSession;
@@ -107,8 +105,9 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
   /**
    * Initialize Session and UserMessageQueue for SDK lifecycle management.
    * Called on first start() to setup Session/Turn abstractions.
+   * @param responseSchema - Optional schema used to create the initial SDK query with outputFormat.
    */
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(responseSchema?: ConnectorStartOptions['responseSchema']): Promise<void> {
     // Validate model early to fail fast with clear error
     if (!this.model || this.model.trim() === '') {
       throw new InvalidModelError('Model is required but was not provided');
@@ -168,7 +167,6 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       reasoningEffort: this.config.reasoningEffort,
       providerConfig: resolvedProviderConfig,
       systemPrompt: this.runtimeSystemPrompt,
-      responseSchema: this.runtimeResponseSchema,
       resumeAdapterSessionId: this.config.resumeAdapterSessionId,
       predeterminedSessionId: this.config.adapterSessionId,
       mcpUpstreamServers: agentConfig.mcpUpstreamServers,
@@ -199,8 +197,8 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
         this.lastResult = result;
         this.pendingMessageHandle = undefined;
         // Account observation is a post-completion side effect. The session
-        // does not await `onTurnComplete`, so awaiting here would not create a
-        // lifecycle barrier; keep it best-effort and non-blocking instead.
+        // awaits this callback as the final-result lifecycle barrier, so keep
+        // observation best-effort and non-blocking.
         void this.emitCompletedTurnAccountObservation(result).catch(() => undefined);
       },
     };
@@ -209,7 +207,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     this.userMessageQueue = new UserMessageQueue();
 
     // Initialize session with tool approval handler
-    await this.session.initialize(() => this.createToolApprovalHandler());
+    await this.session.initialize(() => this.createToolApprovalHandler(), responseSchema);
 
     // Wire turn events for state updates
     this.wireSessionEvents();
@@ -401,7 +399,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    */
   private async createInitialMessage(message: NormalizedMessageInput, options?: ConnectorSendMessageOptions) {
     if (!this.session) {
-      await this.initializeSession();
+      await this.initializeSession(options?.responseSchema);
     }
 
     // Create message handle and enqueue
@@ -430,10 +428,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     if (options?.systemPrompt && !this.runtimeSystemPrompt) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
-    if (options?.responseSchema && !this.runtimeResponseSchema) {
-      this.runtimeResponseSchema = options.responseSchema;
-    }
-    await this.initializeSession();
+    await this.initializeSession(options?.responseSchema);
     this.adapterSessionId = await this.session!.getAdapterSessionId();
   }
 
@@ -448,12 +443,9 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     message: NormalizedMessageInput,
     options?: ConnectorStartOptions | undefined,
   ): Promise<AgentStartResult> {
-    // Capture systemPrompt and responseSchema from options (session-level, set once on first call)
+    // Capture systemPrompt from options (session-level, set once on first call)
     if (options?.systemPrompt && !this.runtimeSystemPrompt) {
       this.runtimeSystemPrompt = options.systemPrompt;
-    }
-    if (options?.responseSchema && !this.runtimeResponseSchema) {
-      this.runtimeResponseSchema = options.responseSchema;
     }
 
     const { handle } = await this.createInitialMessage(message, options);

@@ -5,7 +5,7 @@ import {
   AgentSelectionSchema,
 } from '../../adapter/schemas/agent-resolution.js';
 import { CanonicalModelSelectionSchema } from '../../canonical-model/selection.js';
-import { MessageInputSchema, MessageOutcomeSchema } from '../../shared/index.js';
+import { MessageInputSchema, MessageOutcomeSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
 import type { SchemaRecord } from '@makaio/core';
 import { SessionContextSchema } from '../session-context.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
@@ -87,6 +87,10 @@ export const OrchestratorSchemas = {
    * - Routing to targeted agents
    *
    * Default targets lead agent; use `agentIds: 'all'` for broadcast.
+   *
+   * `responseSchema.schema` is a JSON Schema document serialized as a
+   * JSON-safe `Record<string, JsonValue>` so it can cross bus, storage, and
+   * provider adapter boundaries without runtime-only values.
    * @example
    * ```typescript
    * // Start new conversation (client generates sessionId)
@@ -158,10 +162,10 @@ export const OrchestratorSchemas = {
        */
       sessionContext: SessionContextSchema.optional(),
       /**
-       * JSON Schema for structured output.
+       * Structured output descriptor.
        * Forwarded to agent.sendMessage for adapters that support constrained responses.
        */
-      responseSchema: z.record(z.string(), z.unknown()).optional(),
+      responseSchema: ResponseSchemaDescriptorSchema.optional(),
       /** Source of the request (for audit trail). */
       source: z.enum(['extension', 'user', 'system']).optional(),
       /** Extension ID if source is 'extension' (for audit trail). */

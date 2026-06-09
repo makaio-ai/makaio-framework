@@ -1,5 +1,10 @@
 import { resolveTemplate } from '@makaio/expression';
-import { SubagentSubjects, type AwaitSubagentResponse, type WorkflowResolvedRole } from '@makaio/contracts';
+import {
+  SubagentSubjects,
+  type AwaitSubagentResponse,
+  type ResponseSchemaDescriptor,
+  type WorkflowResolvedRole,
+} from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import {
   buildRuntimeExpressionScope,
@@ -25,7 +30,7 @@ interface ResolvedSubagentConfigInput {
   readonly systemPrompt?: string;
   readonly contextMode?: WorkflowResolvedRole['contextMode'];
   readonly providerContext?: WorkflowResolvedRole['providerContext'];
-  readonly responseSchema?: Record<string, unknown>;
+  readonly responseSchema?: ResponseSchemaDescriptor;
 }
 
 export interface ExecuteRoleSubagentNodeParams {
@@ -38,7 +43,7 @@ export interface ExecuteRoleSubagentNodeParams {
   /** Prompt template resolved against the current workflow expression scope. */
   readonly prompt: string;
   /** Optional structured-output schema forwarded to the subagent runtime. */
-  readonly outputSchema?: Record<string, unknown>;
+  readonly outputSchema?: ResponseSchemaDescriptor;
   /** Optional await timeout for the spawned subagent. */
   readonly timeoutMs?: number;
   /** Error emitted when no role resolver handles the requested role. */
@@ -63,7 +68,7 @@ export interface ExecuteResolvedSubagentNodeParams {
   /** Resolved adapter/model/provider configuration for the child subagent. */
   readonly resolvedConfig: WorkflowResolvedRole;
   /** Optional structured-output schema forwarded to the subagent runtime. */
-  readonly outputSchema?: Record<string, unknown>;
+  readonly outputSchema?: ResponseSchemaDescriptor;
   /** Optional await timeout for the spawned subagent. */
   readonly timeoutMs?: number;
   /** Error emitted when the subagent spawn subject has no runtime handler. */
@@ -327,13 +332,13 @@ function waitForSessionLinkPollDelay(signal: AbortSignal, delayMs: number): Prom
  * contract.
  * @param task - Fully resolved task prompt for the child subagent.
  * @param role - Resolved workflow role configuration.
- * @param outputSchema - Optional structured response JSON Schema.
+ * @param outputSchema - Optional structured output descriptor.
  * @returns Subagent spawn configuration.
  */
 function buildSubagentConfig(
   task: string,
   role: WorkflowResolvedRole,
-  outputSchema?: Record<string, unknown>,
+  outputSchema?: ResponseSchemaDescriptor,
 ): ResolvedSubagentConfigInput {
   return {
     task,

@@ -20,7 +20,6 @@ describe('AgentConnectorLifecycleManager', () => {
         getConnector: () => ({}) as never,
         setConnector: () => {},
         getRuntimeSystemPrompt: () => undefined,
-        getRuntimeResponseSchema: () => undefined,
         setLastKnownAdapterSessionId: () => {},
       });
 

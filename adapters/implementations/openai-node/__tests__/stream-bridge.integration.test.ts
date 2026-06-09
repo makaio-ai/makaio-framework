@@ -8,6 +8,7 @@ import { chunksQwen_3_VL_ToolCall } from './fixtures/qwen-v3-tl/tool-call.js';
 import { toAsyncIterable } from './shared.js';
 import { processStream } from '../src/stream-bridge.js';
 import { OpenAINodeConnectorNamespace, OpenAINodeConnectorSubjects } from '../src/index.js';
+import { STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME } from '../src/structured-output-finalizer.js';
 import type {
   SdkEvent,
   SdkEventMessage,
@@ -130,5 +131,75 @@ describe('stream-bridge', () => {
         expect(completeEnvelope?.adapterSessionId).toBe('adapter-session-test');
       });
     });
+  });
+
+  it('keeps hidden finalizer tool calls out of public tool_calls events', async () => {
+    const events: SdkEventMessage[] = [];
+    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const finalizerChunks: ChatCompletionChunk[] = [
+      {
+        id: 'chunk-1',
+        object: 'chat.completion.chunk',
+        created: 0,
+        model: 'openai-compatible',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call-final',
+                  type: 'function',
+                  function: {
+                    name: STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME,
+                    arguments: '{"ok":true}',
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: 'chunk-2',
+        object: 'chat.completion.chunk',
+        created: 0,
+        model: 'openai-compatible',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      },
+    ];
+
+    bus.on(OpenAINodeConnectorSubjects.sdk.event, (context) => {
+      events.push(context.payload.event);
+    });
+
+    await processStream(toAsyncIterable(finalizerChunks), {
+      bus,
+      agentId: 'test-agent',
+      adapterId: 'test-adapter',
+      adapterName: 'openai-node',
+      adapterSessionId: 'adapter-session-test',
+      model: 'openai-compatible',
+      hiddenToolCallNames: [STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME],
+    });
+
+    const toolCallsEvent = events.find((event): event is ToolCallsEvent => event.eventType === 'tool_calls');
+    const messageComplete = events.find(
+      (event): event is MessageCompleteEvent => event.eventType === 'message_complete',
+    );
+
+    expect(toolCallsEvent).toBeUndefined();
+    expect(messageComplete?.tool_calls).toEqual([
+      {
+        id: 'call-final',
+        type: 'function',
+        function: {
+          name: STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME,
+          arguments: '{"ok":true}',
+        },
+      },
+    ]);
   });
 });

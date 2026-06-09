@@ -52,7 +52,7 @@ domain service based on `kind`.
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `allowedTools` | `string[] \| undefined` | no |
 | `approvalPolicy` | `"reject" \| "always-ask" \| "full-access" \| undefined` | no |
-| `compressionMode` | `"auto" \| "manual" \| "off"` | yes |
+| `compressionMode` | `"manual" \| "auto" \| "off"` | yes |
 | `contextMode` | `"fork" \| "fresh"` | yes |
 | `disallowedTools` | `string[] \| undefined` | no |
 | `harnessId` | `string \| undefined` | no |

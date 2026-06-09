@@ -1,5 +1,6 @@
 import {
   processQueueMessages,
+  markCompletedWithFinalResult,
   formatContextBlockAsText,
   formatContextBlocksAsText,
   formatMessageHistoryAsTranscript,
@@ -401,7 +402,7 @@ export class CursorSdkSession {
    */
   private async runSend(turn: CursorSdkTurn, handle: MessageHandle, text: string): Promise<void> {
     if (this.closed) {
-      this.completeTurn(turn, handle, { outcome: 'cancelled' });
+      await this.completeTurn(turn, handle, { outcome: 'cancelled' });
       return;
     }
 
@@ -467,7 +468,7 @@ export class CursorSdkSession {
       const runResult = await run.wait();
       const result = await this.buildCompletionResult(run, runResult);
       this.emitCompletion(result, state);
-      this.completeTurn(turn, handle, result);
+      await this.completeTurn(turn, handle, result);
     } catch (error) {
       if (turn.isPaused()) {
         // The turn was aborted for immediate mode — the replacement turn owns finalization.
@@ -477,7 +478,7 @@ export class CursorSdkSession {
       this.flushAccumulatedContent(state);
       this.emitRunError(error);
 
-      this.completeTurn(turn, handle, {
+      await this.completeTurn(turn, handle, {
         outcome: 'error',
         error: error instanceof Error ? error : new Error(String(error)),
       });
@@ -534,25 +535,22 @@ export class CursorSdkSession {
    * The `completedTurns` WeakSet ensures only the first caller takes effect.
    *
    * Ordering guarantee:
-   * 1. `handle.markCompleted()` — notifies downstream waiters; sets `lastResult`.
-   * 2. `turn.markTurnFinished()` — emits `turn_finished` bus event that wires through
-   *    `ProceduralAgentConnector.wireSessionEvents` to advance the processing-state machine.
+   * 1. Complete the handle and notify `onTurnComplete` with the transformed final result.
+   * 2. Emit `turn_finished`, which wires through `ProceduralAgentConnector.wireSessionEvents`
+   *    to advance the processing-state machine.
    * @param turn - The turn instance being finalized.
    * @param handle - The message handle for this turn.
    * @param result - The message result to record on the handle.
    */
-  private completeTurn(turn: CursorSdkTurn, handle: MessageHandle, result: MessageResult): void {
+  private async completeTurn(turn: CursorSdkTurn, handle: MessageHandle, result: MessageResult): Promise<void> {
     if (this.completedTurns.has(turn)) return;
     this.completedTurns.add(turn);
 
     if (!handle.isProcessed) {
-      handle.markCompleted(result);
-      this.config.onTurnComplete?.(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
     }
 
-    // Fire-and-forget: turn_finished drives the processing-state machine via
-    // wireSessionEvents subscriptions. Errors here must not block the message lifecycle.
-    void turn
+    await turn
       .markTurnFinished()
       .catch((err: unknown) => {
         console.error('[CursorSdkSession] turn.markTurnFinished failed:', err);

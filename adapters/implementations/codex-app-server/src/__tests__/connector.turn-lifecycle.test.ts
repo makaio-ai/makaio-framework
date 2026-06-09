@@ -14,7 +14,9 @@ import {
   createConnectorTestContext,
   cleanupConnectorTestContext,
   startConnectorWithTurn,
+  startConnectorAndEmitThreadStarted,
   createMockTurn,
+  createMockThread,
   type ConnectorTestContext,
 } from './shared.js';
 
@@ -135,5 +137,53 @@ describe('CodexAppServerConnector - Turn lifecycle', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(ctx.connector.getProcessingState()).toBe('idle');
+  });
+});
+
+describe('CodexAppServerConnector - outputSchema forwarding', () => {
+  it('includes outputSchema in turn/start when message handle has responseSchema', async () => {
+    const localCtx = await createConnectorTestContext();
+
+    try {
+      const startPromise = localCtx.connector.start(
+        {
+          role: 'user',
+          message: 'Hello',
+          blocks: [{ type: 'text', content: 'Hello' }],
+        },
+        {
+          responseSchema: { schema: { type: 'object' }, name: 'object_schema' },
+        },
+      );
+
+      // Yield to allow startThread() to register the deferred promise.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      await localCtx.mockJsonRpcClient.receiveNotification('thread/started', {
+        thread: createMockThread(),
+      });
+
+      await startPromise;
+
+      const turnStartRequests = localCtx.mockJsonRpcClient.sentRequests.filter((r) => r.method === 'turn/start');
+      expect(turnStartRequests).toHaveLength(1);
+      expect((turnStartRequests[0].params as { outputSchema: unknown }).outputSchema).toEqual({ type: 'object' });
+    } finally {
+      cleanupConnectorTestContext(localCtx);
+    }
+  });
+
+  it('sends outputSchema as null when message handle has no responseSchema', async () => {
+    const localCtx = await createConnectorTestContext();
+
+    try {
+      await startConnectorAndEmitThreadStarted(localCtx.connector, localCtx.mockJsonRpcClient);
+
+      const turnStartRequests = localCtx.mockJsonRpcClient.sentRequests.filter((r) => r.method === 'turn/start');
+      expect(turnStartRequests).toHaveLength(1);
+      expect((turnStartRequests[0].params as { outputSchema: unknown }).outputSchema).toBeNull();
+    } finally {
+      cleanupConnectorTestContext(localCtx);
+    }
   });
 });

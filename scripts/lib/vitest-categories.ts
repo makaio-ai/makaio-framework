@@ -155,6 +155,12 @@ export const FORKS_REQUIRED_FILES: string[] = [
 ];
 
 /**
+ * Git subsystem tests spawn real git subprocesses and temporary repositories.
+ * Run them in a serial forks project to avoid cross-file process contention.
+ */
+export const GIT_SERIAL_TEST_GLOBS = ['subsystems/git/src/**/*.test.ts'];
+
+/**
  * Infers the test category from a file's name suffix.
  * @param filePath - Test file path.
  */

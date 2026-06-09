@@ -38,7 +38,7 @@ export class CodexAppServerAdapter extends AIAdapter<CodexAppServerBus, CodexApp
   public constructor(config?: Partial<AIAdapterConfig>) {
     super({
       name: CodexAppServerAdapterName,
-      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append'],
+      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'structuredOutput'],
       nativeTools: ['bash', 'patch'],
       ...config,
       namespace: CodexAppServerNamespace,

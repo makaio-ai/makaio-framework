@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MessageInputSchema } from '../../shared/index.js';
+import { MessageInputSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
 import { SessionContextSchema } from '../../session/session-context.js';
 
 /**
@@ -37,11 +37,11 @@ export const SendMessageSchema = {
      */
     sessionContext: SessionContextSchema.optional(),
     /**
-     * JSON Schema for structured output.
+     * Structured output descriptor.
      * When present and supported by the adapter, the model response
-     * is constrained to this schema.
+     * is constrained to the declared schema.
      */
-    responseSchema: z.record(z.string(), z.unknown()).optional(),
+    responseSchema: ResponseSchemaDescriptorSchema.optional(),
   }),
   response: z.object({
     messageId: z.string(),

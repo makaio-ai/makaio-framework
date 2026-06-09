@@ -49,7 +49,13 @@ export class ClaudeCodeCliAdapter extends AIAdapter<ClaudeCodeCliConnectorBus, C
   public constructor(config?: ClaudeCodeCliAdapterConfig) {
     super({
       name: ClaudeCodeCliAdapterName,
-      capabilities: ['tools', 'chat:inTurnMessages', 'systemPrompt:override', 'systemPrompt:append'],
+      capabilities: [
+        'tools',
+        'chat:inTurnMessages',
+        'systemPrompt:override',
+        'systemPrompt:append',
+        'structuredOutput',
+      ],
       ...config,
       namespace: ClaudeCodeCliConnectorNamespace,
       agentFactory: (agentConfig) => new ClaudeCodeCliAgent(agentConfig),

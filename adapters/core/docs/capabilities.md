@@ -53,6 +53,7 @@ The built-in registry lives in `../src/types/capabilities.ts`.
 | `tools` | `caps.tools` | Adapter supports tool/function calling |
 | `vision` | `caps.vision` | Adapter accepts image inputs |
 | `structuredOutput` | `caps.structuredOutput` | Adapter supports model-level JSON schema enforcement |
+| `structuredOutput:strict` | `caps.structuredOutputStrict` | Adapter supports provider-level strict JSON schema enforcement |
 
 `parseAIAdapterCapabilities()` derives runtime property names from the exact strings declared by
 the adapter. `chat:inTurnMessages` is the canonical token used by current adapters; do not

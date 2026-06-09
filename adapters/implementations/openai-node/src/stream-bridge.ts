@@ -336,13 +336,21 @@ async function processChoiceDelta(
  * Emit final events after stream completes.
  * @param state - Final aggregation state
  * @param emitEvent - Event emitter function
+ * @param hiddenToolCallNames - Tool names kept out of public tool lifecycle events
  */
-async function emitFinalEvents(state: StreamState, emitEvent: EventEmitter): Promise<void> {
+async function emitFinalEvents(
+  state: StreamState,
+  emitEvent: EventEmitter,
+  hiddenToolCallNames: readonly string[] = [],
+): Promise<void> {
   const rawToolCalls = buildToolCalls(state.toolCallAccumulators);
   const normalized = normalizeResult(state.content, state.reasoning, rawToolCalls, state.finishReason);
+  const publicToolCalls = normalized.toolCalls.filter(
+    (toolCall) => !hiddenToolCallNames.includes(toolCall.function.name),
+  );
 
-  if (normalized.toolCalls.length > 0) {
-    await emitEvent({ eventType: 'tool_calls', toolCalls: normalized.toolCalls });
+  if (publicToolCalls.length > 0) {
+    await emitEvent({ eventType: 'tool_calls', toolCalls: publicToolCalls });
   }
 
   await emitEvent({
@@ -425,5 +433,5 @@ export async function processStream(
 
     await processChoiceDelta(choice, chunk, state, emitEvent);
   }
-  await emitFinalEvents(state, emitEvent);
+  await emitFinalEvents(state, emitEvent, config.hiddenToolCallNames);
 }

@@ -111,4 +111,91 @@ describe('SessionBridge fallback replay accumulation', () => {
       }),
     );
   });
+
+  it('stores validated structured-output completion instead of provisional retry blocks', async () => {
+    const appendSpy = vi.fn();
+
+    cleanups.push(
+      MakaioBus.on(MessageStorageSubjects.append, (ctx) => {
+        appendSpy(ctx.payload);
+        const message = ctx.payload.message;
+        ctx.setResult({
+          message: {
+            messageId: message.messageId ?? 'assistant-msg-structured',
+            turnId: message.turnId,
+            sessionId: message.sessionId,
+            role: message.role,
+            contentText: message.contentText,
+            blocks: message.blocks,
+            agentId: message.agentId,
+            adapterSessionId: message.adapterSessionId,
+            timestamp: message.timestamp,
+          },
+        });
+      }),
+    );
+
+    await MakaioBus.emit(SessionSubjects.turn.started, {
+      sessionId: 'session-structured',
+      turnId: 'turn-structured',
+      turnNumber: 1,
+      messageId: 'user-msg-structured',
+      agentIds: ['structured-agent'],
+    });
+
+    await MakaioBus.emit(AgentSubjects.message, {
+      agentId: 'structured-agent',
+      adapterId: 'adapter-1',
+      adapterName: 'openai-node',
+      adapterSessionId: 'native-structured',
+      sessionId: 'session-structured',
+      messageId: 'user-msg-structured',
+      content: '{"answer":7}',
+    });
+
+    await MakaioBus.emit(AgentSubjects.reasoning, {
+      agentId: 'structured-agent',
+      adapterId: 'adapter-1',
+      adapterName: 'openai-node',
+      adapterSessionId: 'native-structured',
+      sessionId: 'session-structured',
+      messageId: 'user-msg-structured',
+      content: 'retrying schema mismatch',
+    });
+
+    await MakaioBus.emit(AgentSubjects.message, {
+      agentId: 'structured-agent',
+      adapterId: 'adapter-1',
+      adapterName: 'openai-node',
+      adapterSessionId: 'native-structured',
+      sessionId: 'session-structured',
+      messageId: 'user-msg-structured',
+      content: '{"answer":"fixed"}',
+    });
+
+    await MakaioBus.emit(AgentSubjects.complete, {
+      agentId: 'structured-agent',
+      adapterId: 'adapter-1',
+      adapterName: 'openai-node',
+      adapterSessionId: 'native-structured',
+      sessionId: 'session-structured',
+      messageId: 'user-msg-structured',
+      message: '{"answer":"fixed"}',
+      outcome: 'completed',
+      structuredOutputValidation: { status: 'passed' },
+    });
+
+    expect(appendSpy).toHaveBeenCalledTimes(1);
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          turnId: 'turn-structured',
+          sessionId: 'session-structured',
+          role: 'assistant',
+          contentText: '{"answer":"fixed"}',
+          blocks: [{ type: 'text', content: '{"answer":"fixed"}' }],
+        }),
+      }),
+    );
+  });
 });

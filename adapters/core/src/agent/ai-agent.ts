@@ -78,6 +78,7 @@ import {
   createAgentRuntimeMutationManager,
   createAgentTurnExecutor,
 } from './agent-internal-factories.js';
+import { AgentStructuredOutputManager } from './agent-structured-output-manager.js';
 
 /**
  * Extract typed error category from known Makaio error subclasses.
@@ -132,8 +133,6 @@ export abstract class AIAgent<
   private initialized = false;
   /** Runtime system prompt captured from start/initialize, preserved across connector swaps. */
   private runtimeSystemPrompt?: SystemPrompt;
-  /** Runtime response schema captured from start/initialize, preserved across connector swaps. */
-  private runtimeResponseSchema?: Record<string, unknown>;
   /** Tracks message lifecycle and emits turn events. */
   protected readonly lifecycleTracker: MessageLifecycleTracker;
   /** Tracks tool.use → tool.output correlation across adapters. */
@@ -150,6 +149,10 @@ export abstract class AIAgent<
   private readonly payloadEmitter: AgentPayloadEmitter;
   /** Stateful lifecycle emitter for start/complete/error/session.closed. */
   private readonly lifecycleEmitter: AgentLifecycleEmitter;
+  /** Validates structured output before public terminal results and lifecycle events resolve. */
+  private readonly structuredOutputManager: AgentStructuredOutputManager;
+  /** Latest tracked message completion with agent-level terminal transforms applied. */
+  private latestMessageCompletion?: Promise<MessageResult>;
   /** Current content block index within the turn, reset on each turn start */
   private currentBlockIndex = 0;
   /** Normalized config with defaults applied */
@@ -197,6 +200,7 @@ export abstract class AIAgent<
       agentId: this.agentId,
       adapterId: this.adapterId,
       sessionId: this.sessionId,
+      adapterCapabilities: this.capabilities,
       globalBus: this.globalBus,
       getConnector: () => this.connector,
       shouldUseNativeResume: this.shouldUseNativeResume.bind(this),
@@ -232,12 +236,12 @@ export abstract class AIAgent<
         this.connector = connector;
       },
       getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
-      getRuntimeResponseSchema: () => this.runtimeResponseSchema,
       setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => {
         this.lastKnownAdapterSessionId = adapterSessionId;
       },
     });
     this.lifecycleEmitter = this.createLifecycleEmitter();
+    this.structuredOutputManager = this.createStructuredOutputManager();
   }
 
   private getEventMetadataDefaults() {
@@ -263,6 +267,19 @@ export abstract class AIAgent<
       },
       onBeforeEmitCompletion: this.onBeforeEmitCompletion.bind(this),
       clearToolCallTracker: () => this.toolCallTracker.clear(),
+    });
+  }
+
+  /**
+   * Create the structured-output manager for this agent.
+   * @returns Configured manager instance
+   */
+  private createStructuredOutputManager(): AgentStructuredOutputManager {
+    return new AgentStructuredOutputManager({
+      bus: this.globalBus,
+      agentId: this.agentId,
+      adapterId: this.adapterId,
+      adapterCapabilities: this.capabilities,
     });
   }
   // ── Public getters (external API) ──────────────────────────────────────────
@@ -355,6 +372,7 @@ export abstract class AIAgent<
           await this.handleCredentialChanged(ctx);
         },
       }),
+      ...this.structuredOutputManager.registerDefaultHandlers(),
     );
 
     // Step 4b: Subscribe to MCP tool change events so connectors can refresh at the next
@@ -902,11 +920,7 @@ export abstract class AIAgent<
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
-    // Capture responseSchema for reuse across connector swaps
-    if (options?.responseSchema !== undefined && this.runtimeResponseSchema === undefined) {
-      this.runtimeResponseSchema = options.responseSchema;
-    }
-    return this.turnExecutor.executeStart(message, options, this.runtimeSystemPrompt, this.runtimeResponseSchema);
+    return this.turnExecutor.executeStart(message, options, this.runtimeSystemPrompt, options?.responseSchema);
   }
 
   /**
@@ -918,10 +932,6 @@ export abstract class AIAgent<
     // Capture systemPrompt for reuse across connector swaps
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
-    }
-    // Capture responseSchema for reuse across connector swaps
-    if (options?.responseSchema !== undefined && this.runtimeResponseSchema === undefined) {
-      this.runtimeResponseSchema = options.responseSchema;
     }
     if (!this.initialized) {
       await this.init();
@@ -935,15 +945,71 @@ export abstract class AIAgent<
     // Reset per-turn dedup so adapters that don't emit agent.started per turn
     // (e.g., codex emits thread_started once) can still fire agent.complete.
     this.lifecycleEmitter.resetTurnState();
-    this.lifecycleTracker.track(messageHandle, (messageId, result) => {
-      const errorStr = result.error instanceof Error ? result.error.message : result.error;
-      void this.emitCompletion({
-        message: result.result?.message,
-        messageId,
-        outcome: result.outcome,
-        ...(errorStr && { error: errorStr }),
-      });
-    });
+    this.latestMessageCompletion = messageHandle.waitForCompletion();
+    const responseSchema = messageHandle.responseSchema;
+    const transformTerminal =
+      responseSchema === undefined
+        ? undefined
+        : async (result: MessageResult): Promise<MessageResult> => {
+            if (result.outcome !== 'completed') return result;
+
+            const validated = await this.structuredOutputManager.validateTerminalResult({
+              responseSchema,
+              message: result.result?.message,
+              sessionId: this.sessionId,
+              retryTurn: async ({ attemptNumber, validationErrors }) => {
+                const connector = this.connector;
+                if (!connector) return '';
+                // Internal retry emissions are provisional. SessionBridge persists
+                // structured-output turns from the validated agent.complete.message
+                // so invalid attempt blocks cannot be flushed as the assistant turn.
+                const retryHandle = await connector.sendMessage(messageHandle.message, {
+                  deliveryMode: 'enqueue',
+                  internalRetry: true,
+                  messageId: `${messageHandle.messageId}:structured-output-retry:${attemptNumber}`,
+                  messageHistory: messageHandle.messageHistory,
+                  responseSchema,
+                  turnContext: {
+                    ...messageHandle.turnContext,
+                    structuredOutputRetry: {
+                      attemptNumber,
+                      validationErrors,
+                      instruction:
+                        'Previous output did not match the requested JSON schema. Respond only with corrected JSON.',
+                    },
+                  },
+                });
+                const retryResult = await retryHandle.waitForCompletion();
+                return retryResult.result?.message ?? '';
+              },
+            });
+
+            return {
+              ...result,
+              result:
+                result.result !== null && result.result !== undefined
+                  ? { ...result.result, message: validated.message }
+                  : result.result,
+              structuredOutputValidation: validated.structuredOutputValidation,
+            };
+          };
+
+    this.lifecycleTracker.track(
+      messageHandle,
+      (messageId, result) => {
+        const errorStr = result.error instanceof Error ? result.error.message : result.error;
+        void this.emitCompletion({
+          message: result.result?.message,
+          messageId,
+          outcome: result.outcome,
+          ...(errorStr && { error: errorStr }),
+          ...(result.structuredOutputValidation !== undefined
+            ? { structuredOutputValidation: result.structuredOutputValidation }
+            : {}),
+        });
+      },
+      transformTerminal,
+    );
   }
 
   /**
@@ -974,12 +1040,15 @@ export abstract class AIAgent<
   /**
    * Complete the agent session by waiting for all messages to finish.
    *
-   * Delegates to the underlying connector's complete method.
+   * Waits for the connector to finish, then returns the agent-level terminal
+   * result so structured-output transforms are reflected in direct callers.
    * @returns Last message result or null if no messages processed
    * @throws Error if connector is not initialized
    */
   public async complete(): Promise<MessageResult | null> {
-    return this.ensureConnector().complete();
+    const connectorResult = await this.ensureConnector().complete();
+    if (connectorResult === null || this.latestMessageCompletion === undefined) return connectorResult;
+    return this.latestMessageCompletion;
   }
 
   /**

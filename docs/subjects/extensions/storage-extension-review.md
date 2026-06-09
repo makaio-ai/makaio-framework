@@ -44,7 +44,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; } \| null` | yes |
+| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; } \| null` | yes |
 
 ### <a id="storage:extension:review.findings.list"></a>`storage:extension:review.findings.list` (rpc)
 
@@ -55,14 +55,14 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `status` | `"open" \| "addressed" \| "verified" \| "dismissed" \| "deferred" \| undefined` | no |
+| `status` | `"verified" \| "open" \| "addressed" \| "dismissed" \| "deferred" \| undefined` | no |
 | `target` | `{ repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
+| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
 
 ### <a id="storage:extension:review.findings.upsert"></a>`storage:extension:review.findings.upsert` (rpc)
 
@@ -73,7 +73,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
+| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
 
 **Response:**
 
@@ -90,7 +90,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "addressed" \| "verified" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
+| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
 
 **Response:**
 

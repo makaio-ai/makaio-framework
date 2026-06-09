@@ -34,6 +34,8 @@ import {
   McpServersSetSchema,
   CredentialChangeSchema,
   ValidateModelChangeSchema,
+  StructuredOutputRetryPolicySchema,
+  StructuredOutputEnforceSchema,
 } from './schemas/index.js';
 
 /**
@@ -94,4 +96,6 @@ export const AgentSchemas = {
   toolApprove: AgentToolApproveSchema,
   getCapabilities: AgentGetCapabilitiesSchema,
   validateModelChange: ValidateModelChangeSchema,
+  'structuredOutput.retryPolicy': StructuredOutputRetryPolicySchema,
+  'structuredOutput.enforce': StructuredOutputEnforceSchema,
 } satisfies SchemaRecord;

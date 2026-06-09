@@ -11,7 +11,7 @@
  */
 
 import type { ProcessingState, MessageHandle, MessageResult } from '@makaio/ai-adapters-core';
-import { UserMessageQueue } from '@makaio/ai-adapters-core';
+import { UserMessageQueue, markCompletedWithFinalResult } from '@makaio/ai-adapters-core';
 import type { TurnCompletedNotification, ThreadStartedNotification } from '../protocol/generated/v2/index.js';
 import { CodexAppServerSubjects, type CodexAppServerBus } from '../namespaces/index.js';
 import { CodexAppServerThread } from '../thread.js';
@@ -177,7 +177,7 @@ export async function startTurn(
     model: ctx.getModel() ?? null,
     effort: effort !== undefined && effort !== 'none' ? mapToCodexEffort(effort) : null,
     summary: null,
-    outputSchema: null,
+    outputSchema: messageHandle.responseSchema?.schema ?? null,
   });
 }
 
@@ -308,8 +308,9 @@ export async function onTurnCompleted(ctx: TurnFlowContext, _notification: TurnC
       outcome: 'completed',
       result: { message: agentMessageContent || '(Empty response)' },
     };
-    pendingHandle.markCompleted(result);
-    ctx.setLastResult(result);
+    await markCompletedWithFinalResult(pendingHandle, result, (_handle, finalResult) => {
+      ctx.setLastResult(finalResult);
+    });
     ctx.setPendingMessageHandle(undefined);
   }
 

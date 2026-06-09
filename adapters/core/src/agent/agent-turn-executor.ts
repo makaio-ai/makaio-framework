@@ -1,10 +1,11 @@
 import { runPreUserMessageHooks, runPostUserMessageHooks } from '@makaio/hooks';
-import { SessionContextSchema, type MessageInput } from '@makaio/contracts';
+import { SessionContextSchema, type MessageInput, type ResponseSchemaDescriptor } from '@makaio/contracts';
 import { normalizeMessageInput, type NormalizedMessageInput } from '../utils/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
 import type { AgentStartResult, ConnectorStartOptions, SendMessageRequestPayload, StartAgentOptions } from './types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { buildStructuredOutputTurnContext } from './structured-output-turn-context.js';
 
 /**
  * Runtime dependencies for AgentTurnExecutor.
@@ -16,6 +17,8 @@ export interface AgentTurnExecutorConfig {
   adapterId: string;
   /** Optional Makaio session identifier. */
   sessionId?: string;
+  /** Capability tags reported by the adapter (e.g. `'structuredOutput'`). */
+  adapterCapabilities?: string[];
   /** Global bus instance for hooks. */
   globalBus: IMakaioBus;
   /** Current connector reference resolver. */
@@ -52,6 +55,7 @@ export class AgentTurnExecutor {
   private readonly agentId: string;
   private readonly adapterId: string;
   private readonly sessionId?: string;
+  private readonly adapterCapabilities: string[];
   private readonly globalBus: IMakaioBus;
   private readonly getConnector: () => AIAgentConnector;
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
@@ -63,6 +67,7 @@ export class AgentTurnExecutor {
     this.agentId = config.agentId;
     this.adapterId = config.adapterId;
     this.sessionId = config.sessionId;
+    this.adapterCapabilities = config.adapterCapabilities ?? [];
     this.globalBus = config.globalBus;
     this.getConnector = config.getConnector;
     this.shouldUseNativeResume = config.shouldUseNativeResume;
@@ -97,7 +102,11 @@ export class AgentTurnExecutor {
       deliveryMode: payload.deliveryMode,
       messageId: payload.messageId,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
-      turnContext: hookResult.sessionContext?.turnContext,
+      turnContext: buildStructuredOutputTurnContext(
+        hookResult.sessionContext?.turnContext,
+        payload.responseSchema,
+        this.adapterCapabilities,
+      ),
       ...(payload.responseSchema !== undefined && { responseSchema: payload.responseSchema }),
     });
 
@@ -112,14 +121,14 @@ export class AgentTurnExecutor {
    * @param message - Initial message payload
    * @param options - Start options from caller
    * @param systemPrompt - Runtime system prompt chosen by AIAgent
-   * @param responseSchema - Runtime response schema chosen by AIAgent
+   * @param responseSchema - Runtime structured output descriptor chosen by AIAgent
    * @returns Agent start result from connector
    */
   public async executeStart(
     message: NormalizedMessageInput | MessageInput,
     options: StartAgentOptions | undefined,
     systemPrompt: StartAgentOptions['systemPrompt'],
-    responseSchema?: Record<string, unknown>,
+    responseSchema?: ResponseSchemaDescriptor,
   ): Promise<AgentStartResult> {
     await this.onBeforeDispatch?.();
 
@@ -139,7 +148,11 @@ export class AgentTurnExecutor {
     const connectorOptions: ConnectorStartOptions = {
       systemPrompt,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
-      turnContext: hookResult.sessionContext?.turnContext,
+      turnContext: buildStructuredOutputTurnContext(
+        hookResult.sessionContext?.turnContext,
+        responseSchema,
+        this.adapterCapabilities,
+      ),
       ...(responseSchema !== undefined && { responseSchema }),
     };
 

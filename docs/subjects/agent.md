@@ -42,6 +42,8 @@ next: false
 | `started` | [`agent.started`](#agent.started) | event | [`started.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/started.ts) |
 | `step.finished` | [`agent.step.finished`](#agent.step.finished) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/step.ts) |
 | `step.started` | [`agent.step.started`](#agent.step.started) | event | [`step.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/step.ts) |
+| `structuredOutput.enforce` | [`agent.structuredOutput.enforce`](#agent.structuredOutput.enforce) | rpc | [`structured-output.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/structured-output.ts) |
+| `structuredOutput.retryPolicy` | [`agent.structuredOutput.retryPolicy`](#agent.structuredOutput.retryPolicy) | rpc | [`structured-output.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/structured-output.ts) |
 | `tool.completed` | [`agent.tool.completed`](#agent.tool.completed) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
 | `tool.output` | [`agent.tool.output`](#agent.tool.output) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
 | `tool.started` | [`agent.tool.started`](#agent.tool.started) | event | [`tool.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/agent/schemas/tool.ts) |
@@ -85,6 +87,7 @@ Consumers can inspect `outcome` to distinguish success from failure:
 | `outcome` | `"error" \| "completed" \| "superseded" \| "merged" \| "cancelled" \| "rejected" \| undefined` | no |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
+| `structuredOutputValidation` | `{ status: "passed"; } \| { status: "enforced"; } \| { status: "failed"; errors: { message: string; instancePath: string; schemaPath: string; }[]; } \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
 ### <a id="agent.contextWindow.updated"></a>`agent.contextWindow.updated` (event)
@@ -492,7 +495,7 @@ Purpose: Sends a message to an existing agent instance (errors if agent doesn't 
 | `deliveryMode` | `"enqueue" \| "immediate" \| undefined` | no |
 | `message` | `string \| { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }` | yes |
 | `messageId` | `string \| undefined` | no |
-| `responseSchema` | `Record<string, unknown> \| undefined` | no |
+| `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined` | no |
 | `sessionContext` | `{ messageHistory?: { blocks: { type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; } \| ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; role?: "user" \| "assistant" \| "system" \| undefined; }[] \| undefined; hasNewTransforms?: boolean \| undefined; hasCompression?: boolean \| undefined; extractedContext?: unknown; isFirstTurn?: boolean \| undefined; hasConnectorSwap?: boolean \| undefined; turnContext?: Record<string, unknown> \| undefined; } \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
@@ -600,6 +603,70 @@ Emitted when: A content block begins processing
 | `sessionId` | `string \| undefined` | no |
 | `stepType` | `"text" \| "reasoning" \| "tool_use"` | yes |
 | `turnId` | `string \| undefined` | no |
+
+### <a id="agent.structuredOutput.enforce"></a>`agent.structuredOutput.enforce` (rpc)
+
+RPC schema for enforcing structured output after validation failures.
+
+Subject: `agent.structuredOutput.enforce`
+Type: Request (RPC)
+Direction: framework → host
+
+Emitted when retry attempts are exhausted and the framework needs the host
+to decide whether to enforce conformance via a fallback adapter/model or
+to surface the error upstream. Returning `enforced: true` with a corrected
+`output` string means the framework treats the turn as successfully completed.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterHasCapability` | `boolean` | yes |
+| `adapterId` | `string` | yes |
+| `agentId` | `string` | yes |
+| `fallbackAdapterId` | `string \| undefined` | no |
+| `fallbackAdapterName` | `string \| undefined` | no |
+| `fallbackModel` | `string \| undefined` | no |
+| `rawOutput` | `string` | yes |
+| `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; }` | yes |
+| `sessionId` | `string \| undefined` | no |
+| `validationErrors` | `{ message: string; instancePath: string; schemaPath: string; }[]` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `enforced` | `boolean` | yes |
+
+### <a id="agent.structuredOutput.retryPolicy"></a>`agent.structuredOutput.retryPolicy` (rpc)
+
+RPC schema for resolving the structured-output retry policy.
+
+Subject: `agent.structuredOutput.retryPolicy`
+Type: Request (RPC)
+Direction: framework → host
+
+Emitted before a retry decision is made. The host layer (or any registered
+handler) returns the maximum number of retry attempts permitted for this
+agent/adapter/schema combination. If no host handler is registered the
+framework applies its built-in default of 0 retries, because replaying a
+turn can duplicate non-idempotent tool or outbound side effects.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterCapabilities` | `string[]` | yes |
+| `adapterId` | `string` | yes |
+| `agentId` | `string` | yes |
+| `attemptNumber` | `number` | yes |
+| `responseSchema` | `{ schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; }` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `maxRetries` | `number` | yes |
 
 ### <a id="agent.tool.completed"></a>`agent.tool.completed` (event)
 
@@ -766,6 +833,7 @@ For full outcome details (supersededBy, mergedInto), listen to user_message.comp
 | `outcome` | `"error" \| "completed" \| "superseded" \| "merged" \| "cancelled" \| "rejected"` | yes |
 | `providerConfigId` | `string \| undefined` | no |
 | `sessionId` | `string \| undefined` | no |
+| `structuredOutputValidation` | `{ status: "passed"; } \| { status: "enforced"; } \| { status: "failed"; errors: { message: string; instancePath: string; schemaPath: string; }[]; } \| undefined` | no |
 | `turnId` | `string \| undefined` | no |
 
 ### <a id="agent.turn.started"></a>`agent.turn.started` (event)

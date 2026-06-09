@@ -3,6 +3,7 @@ import { McpSubjects, type McpTransportConfig } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   BaseConnectorSession,
+  markCompletedWithFinalResult,
   type AIReasoningLevel,
   type MessageHandle,
   type MessageResult,
@@ -56,6 +57,11 @@ interface TurnSessionIdentity {
   resumeId: string | undefined;
   sessionIdForMcp: string;
 }
+
+type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }> & {
+  result?: string;
+  structured_output?: unknown;
+};
 
 /**
  * Session for the Claude Code CLI adapter.
@@ -301,6 +307,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       config: {
         ...this.config,
         resumeAdapterSessionId: resumeId,
+        responseSchema: handle.responseSchema,
       },
       prompt,
       sessionId: this.sessionId!,
@@ -333,13 +340,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     transport.onError((error) => {
       // Ignore if a newer subprocess has replaced this transport
       if (this.transport !== transport) return;
-      const result: MessageResult = { outcome: 'error', error };
-      turnForThisTransport.markCompleted(result);
-      this.onTurnComplete?.(handle, result);
-      // Drive the turn state machine to turn_finished so the connector reaches idle.
-      void turnForThisTransport.finishOnError().catch((finishError) => {
-        console.error('[Session] Failed to finish errored turn:', finishError);
-      });
+      void this.completeTransportError(turnForThisTransport, handle, error);
     });
 
     transport.onMessage((msg) => {
@@ -419,7 +420,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         ? {
             outcome: 'completed',
             result: {
-              message: 'result' in sdkMessage && typeof sdkMessage.result === 'string' ? sdkMessage.result : '',
+              message: this.resolveResultMessage(sdkMessage),
             },
           }
         : {
@@ -427,14 +428,51 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
             error: new Error(sdkMessage.subtype ?? 'Unknown CLI error'),
           };
 
-      this.currentTurn.markCompleted(result);
-      this.onTurnComplete?.(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.onTurnComplete);
     }
 
     // Advance turn state machine
     if (this.currentTurn) {
       await this.currentTurn.handleSdkEvent(sdkMessage);
     }
+  }
+
+  /**
+   * Complete a transport-level error turn after canonical handle transforms.
+   * @param turn - Turn attached to the failed transport
+   * @param handle - Message handle for the failed turn
+   * @param error - Transport error
+   */
+  private async completeTransportError(turn: ClaudeConnectorTurn, handle: MessageHandle, error: Error): Promise<void> {
+    // Once provider result handling has started, that path owns terminal turn finalization.
+    // Late transport errors from the same subprocess must not re-enter completion while
+    // result callbacks are still draining.
+    if (handle.isProcessed) return;
+
+    const result: MessageResult = { outcome: 'error', error };
+    await markCompletedWithFinalResult(handle, result, this.onTurnComplete);
+    try {
+      await turn.finishOnError();
+    } catch (finishError) {
+      console.error('[Session] Failed to finish errored turn:', finishError);
+    }
+  }
+
+  /**
+   * Resolve the terminal message from a successful CLI result.
+   *
+   * When `--json-schema` is active, Claude Code CLI returns the typed value in
+   * `structured_output`. Makaio's terminal message contract is still text, so
+   * the structured value is serialized back to JSON for shared validation and
+   * persistence.
+   * @param msg - Successful CLI result message.
+   * @returns Terminal message text for the Makaio message result.
+   */
+  private resolveResultMessage(msg: ResultMessageWithStructuredOutput): string {
+    if ('structured_output' in msg && msg.structured_output !== undefined) {
+      return JSON.stringify(msg.structured_output);
+    }
+    return msg.result ?? '';
   }
 
   /**

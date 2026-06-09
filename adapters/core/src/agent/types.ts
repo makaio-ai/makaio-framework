@@ -5,6 +5,7 @@ import type {
   McpSessionContext,
   Message,
   ProviderContext,
+  ResponseSchemaDescriptor,
   SessionContext,
   SystemPrompt,
 } from '@makaio/contracts';
@@ -288,12 +289,12 @@ export interface AgentSendMessageOptions extends SendMessageOptions {
   sessionContext?: SessionContext;
 
   /**
-   * JSON Schema for structured output.
+   * Structured output descriptor.
    * When present and the adapter declares `structuredOutput` capability,
    * the adapter enforces this schema at the model level.
    * Ignored by adapters that lack the capability.
    */
-  responseSchema?: Record<string, unknown>;
+  responseSchema?: ResponseSchemaDescriptor;
 }
 
 /**
@@ -318,6 +319,12 @@ export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
    * LLM-facing message using serializeTurnContext().
    */
   turnContext?: Record<string, JsonValue>;
+  /**
+   * Whether this message is an internal retry turn synthesized by the structured-output
+   * manager. When `true`, the connector suppresses `user_message.sent` so the retry
+   * is not surfaced as a new user message.
+   */
+  internalRetry?: boolean;
 }
 
 /**

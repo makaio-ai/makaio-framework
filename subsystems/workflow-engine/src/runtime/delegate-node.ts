@@ -1,5 +1,5 @@
 import { evaluateSync } from '@makaio/expression';
-import type { WorkflowDelegateAgentNode, WorkflowDelegateRoleNode } from '@makaio/contracts';
+import type { WorkflowDelegateAgentNode, WorkflowDelegateRoleNode, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import {
   buildRuntimeExpressionScope,
@@ -50,13 +50,15 @@ export async function executeDelegateAgentNode(
     return taskResult;
   }
 
+  const outputSchema: ResponseSchemaDescriptor | undefined =
+    node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   return executeResolvedSubagentNode(
     {
       nodeId: node.id,
       nodeLabel: 'Delegate-agent node',
       task: taskResult.task,
       resolvedConfig: agentResult.data,
-      ...(node.outputSchema !== undefined ? { outputSchema: node.outputSchema } : {}),
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
       unavailableRuntimeError: `Subagent runtime is not available for delegate-agent node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await delegate-agent node '${node.id}'`,
       cancellationLabel: 'delegate-agent',
@@ -89,13 +91,15 @@ export async function executeDelegateRoleNode(
     return { status: 'cancelled' };
   }
 
+  const outputSchema: ResponseSchemaDescriptor | undefined =
+    node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   return executeRoleSubagentNode(
     {
       nodeId: node.id,
       nodeLabel: 'Delegate-role node',
       roleId: node.role,
       prompt: node.prompt,
-      ...(node.outputSchema !== undefined ? { outputSchema: node.outputSchema } : {}),
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
       ...(node.timeoutMs !== undefined ? { timeoutMs: node.timeoutMs } : {}),
       unresolvedRoleError: `Role '${node.role}' could not be resolved for delegate-role node '${node.id}'`,
       unavailableRuntimeError: `Subagent runtime is not available for delegate-role node '${node.id}'`,

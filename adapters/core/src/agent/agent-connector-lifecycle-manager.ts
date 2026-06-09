@@ -43,8 +43,6 @@ export interface AgentConnectorLifecycleManagerConfig<
   setConnector: (connector: TConnector) => void;
   /** Get runtime system prompt to preserve across swaps. */
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
-  /** Get runtime response schema to preserve across swaps. */
-  getRuntimeResponseSchema: () => Record<string, unknown> | undefined;
   /** Store latest adapter session ID for enrichment after swaps. */
   setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
 }
@@ -141,10 +139,8 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
 
     try {
       await this.wireAllConnectorEvents(newConnector);
-      const runtimeResponseSchema = this.config.getRuntimeResponseSchema();
       await newConnector.initialize({
         systemPrompt: this.config.getRuntimeSystemPrompt(),
-        ...(runtimeResponseSchema !== undefined && { responseSchema: runtimeResponseSchema }),
       });
     } catch (wiringError) {
       // newConnector.close() handles cleanup of partially-wired resources.

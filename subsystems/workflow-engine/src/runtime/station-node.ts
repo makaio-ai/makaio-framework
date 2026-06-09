@@ -1,5 +1,6 @@
 import {
   type JsonValue,
+  type ResponseSchemaDescriptor,
   type StationHandler,
   type WorkflowProgressUpdate,
   type WorkflowStationNode,
@@ -169,13 +170,15 @@ async function executeRoleStationNode(
     };
   }
 
+  const outputSchema: ResponseSchemaDescriptor | undefined =
+    node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   return executeRoleSubagentNode(
     {
       nodeId: node.id,
       nodeLabel: 'Station node',
       roleId: node.role,
       prompt: node.prompt,
-      ...(node.outputSchema !== undefined ? { outputSchema: node.outputSchema } : {}),
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
       ...(node.timeoutMs !== undefined ? { timeoutMs: node.timeoutMs } : {}),
       unresolvedRoleError: `No runtime handler registered for station node '${node.id}', and role '${node.role}' could not be resolved`,
       unavailableRuntimeError: `Subagent runtime is not available for station node '${node.id}'`,

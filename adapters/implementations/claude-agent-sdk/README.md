@@ -139,8 +139,8 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 
 - `tools` - Tool use support
 - `vision` - Image/vision input
+- `structuredOutput` - Native JSON schema output through the Agent SDK `outputFormat`
 - `chat:inTurnMessages` - Multi-turn conversation
-- `structuredOutput` - Native structured output support through the Agent SDK
 - `systemPrompt:override` - Replace/set the system prompt
 
 ## File Structure
@@ -164,7 +164,6 @@ src/
 ├── mcp-integration.ts             # MCP tool integration
 ├── account-observation.ts         # Account observation
 ├── account-observation-requester.ts
-├── on-turn-complete.ts            # Post-turn hooks
 ├── namespace/
 │   └── index.ts                   # Namespace + subjects
 ├── types/

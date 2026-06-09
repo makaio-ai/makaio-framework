@@ -5,6 +5,7 @@ import type {
   TextBlockParam,
   Tool,
 } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import { parseReasoningLevel } from './parseReasoningLevel.js';
 
 /** Default max_tokens for Anthropic API requests. */
@@ -26,6 +27,8 @@ interface BuildMessageCreateRequestInput {
   supportsReasoningEffort?: boolean;
   /** Override for max_tokens. Falls back to {@link DEFAULT_MAX_TOKENS} when not provided. */
   maxTokens?: number;
+  /** Optional structured output descriptor. When provided, adds output_config.format to the request. */
+  responseSchema?: ResponseSchemaDescriptor;
 }
 
 /**
@@ -40,7 +43,7 @@ interface BuildMessageCreateRequestInput {
  * @returns Anthropic API request parameters with `stream: true`.
  */
 export function buildMessageCreateRequest(input: BuildMessageCreateRequestInput): MessageCreateParamsStreaming {
-  const { model, messages, systemPrompt, tools, reasoningEffort, supportsReasoningEffort } = input;
+  const { model, messages, systemPrompt, tools, reasoningEffort, supportsReasoningEffort, responseSchema } = input;
   const maxTokens = input.maxTokens ?? DEFAULT_MAX_TOKENS;
 
   const system = buildSystemParam(systemPrompt);
@@ -58,6 +61,9 @@ export function buildMessageCreateRequest(input: BuildMessageCreateRequestInput)
     ...(system !== undefined ? { system } : {}),
     ...(tools !== undefined && tools.length > 0 ? { tools } : {}),
     ...(thinking !== undefined ? { thinking } : {}),
+    ...(responseSchema !== undefined
+      ? { output_config: { format: { type: 'json_schema' as const, schema: responseSchema.schema } } }
+      : {}),
   };
 }
 

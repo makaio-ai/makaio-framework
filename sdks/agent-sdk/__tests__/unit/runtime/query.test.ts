@@ -134,7 +134,7 @@ describe('query()', () => {
     expect(sendMessagePayloads[0]).toMatchObject({
       sessionId: SESSION_ID,
       message: 'Hello',
-      responseSchema: { type: 'object', properties: { answer: { type: 'string' } } },
+      responseSchema: { schema: { type: 'object', properties: { answer: { type: 'string' } } } },
       agent: {
         kind: 'canonical-model',
         model: 'sonnet',

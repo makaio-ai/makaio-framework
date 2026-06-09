@@ -6,6 +6,7 @@ import { isKnownSdkMessageForRouting } from '@makaio/client-claude-code';
 import {
   BaseConnectorSession,
   SessionLifecycle,
+  markCompletedWithFinalResult,
   serializeTurnContext,
   type AIReasoningLevel,
   type MessageHandle,
@@ -18,16 +19,19 @@ import {
   prependContextBlock,
   sdkUserMessageFromNormalized,
 } from '@makaio/ai-adapters-claude-shared';
-import { notifyOnTurnCompleteHook } from './on-turn-complete.js';
 import { ClaudeConnectorTurn } from './turn.js';
 import { UserMessageQueue, processQueueMessages, formatMessageHistoryAsTranscript } from '@makaio/ai-adapters-core';
 import { ClaudeCodeConnectorSubjects } from './namespace/index.js';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js';
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
-import { McpSubjects, type McpResolvedServer } from '@makaio/contracts';
+import { McpSubjects, type McpResolvedServer, type ResponseSchemaDescriptor } from '@makaio/contracts';
 
 type StreamEvent = { type: string; delta?: { type: string; thinking?: string } };
 type StreamEventMessage = Extract<SDKMessage, { type: 'stream_event' }> & { event: StreamEvent };
+type ResultMessageWithStructuredOutput = Extract<SDKMessage, { type: 'result' }> & {
+  result?: string;
+  structured_output?: unknown;
+};
 
 /**
  * Session for Claude SDK query lifecycle management.
@@ -64,6 +68,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private mcpServerPort?: number;
   /** Monotonic owner token for the currently active SDK query. */
   private queryGeneration = 0;
+  /** Stable key for the SDK-relevant response schema on the active query. */
+  private activeResponseSchemaKey: string | undefined;
 
   public constructor(config: ClaudeSessionConfig) {
     super(config);
@@ -74,10 +80,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Initialize the session - creates query instance and starts consumption.
    * @param createToolApprovalHandler - Factory for tool approval handler
+   * @param responseSchema - Optional response schema descriptor for the initial query.
    */
-  public async initialize(createToolApprovalHandler: CreateToolApprovalHandler): Promise<void> {
+  public async initialize(
+    createToolApprovalHandler: CreateToolApprovalHandler,
+    responseSchema?: ResponseSchemaDescriptor,
+  ): Promise<void> {
     this.createToolApprovalHandler = createToolApprovalHandler;
-    await this.createQuery(this.config.resumeAdapterSessionId);
+    await this.createQuery(this.config.resumeAdapterSessionId, responseSchema);
 
     // Register MCP context after query creation so the session ID is known.
     // If registration returns a port, patch the live query's MCP servers so the
@@ -221,8 +231,9 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Create a new query instance (optionally resuming from a previous session).
    * @param resumeSessionId - Optional session ID to resume
+   * @param responseSchema - Optional response schema descriptor for SDK outputFormat.
    */
-  private async createQuery(resumeSessionId?: string) {
+  private async createQuery(resumeSessionId?: string, responseSchema?: ResponseSchemaDescriptor) {
     if (!this.createToolApprovalHandler) {
       throw new Error('createToolApprovalHandler not set - initialize() must be called first');
     }
@@ -240,8 +251,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       config: this.config,
       lifecycle: this.lifecycle,
       createToolApprovalHandler: this.createToolApprovalHandler,
-      responseSchema: this.config.responseSchema,
       mcpServerPort: this.mcpServerPort,
+      responseSchema,
     });
 
     this.queryInstance = query({
@@ -250,8 +261,44 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     });
 
     const queryGeneration = ++this.queryGeneration;
+    this.activeResponseSchemaKey = this.getResponseSchemaKey(responseSchema);
     this.consumptionStarted = false;
     this.startConsumption(queryGeneration);
+  }
+
+  /**
+   * Key the active query by the SDK-visible JSON schema.
+   * @param responseSchema - Optional per-turn response schema descriptor.
+   * @returns Comparable schema key for the active query.
+   */
+  private getResponseSchemaKey(responseSchema: ResponseSchemaDescriptor | undefined): string | undefined {
+    return responseSchema === undefined ? undefined : JSON.stringify(responseSchema.schema);
+  }
+
+  /**
+   * Ensure the active SDK query was created with the response schema required
+   * by the turn about to start.
+   * Claude Agent SDK accepts `outputFormat` only as a `query()` option, while
+   * Makaio response schemas are turn-scoped, so schema changes are query
+   * boundaries. Resume only after `system.init` confirms a provider session ID.
+   * @param responseSchema - Optional per-turn response schema descriptor.
+   * @returns True when a new SDK query was created.
+   */
+  private async ensureQueryForResponseSchema(responseSchema: ResponseSchemaDescriptor | undefined): Promise<boolean> {
+    const nextKey = this.getResponseSchemaKey(responseSchema);
+    if (this.queryInstance && this.activeResponseSchemaKey === nextKey) {
+      return false;
+    }
+
+    const resumeSessionId = this.confirmedSessionId ? this.sessionId : undefined;
+    const oldQuery = this.disownActiveQuery();
+    oldQuery?.close();
+    if (resumeSessionId === undefined && this.registeredMcpSessionId !== undefined) {
+      this.unregisterMcpContext();
+    }
+    await this.createQuery(resumeSessionId, responseSchema);
+    await this.refreshMcpContext();
+    return true;
   }
 
   /**
@@ -288,6 +335,15 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private async startNewTurn(handle: MessageHandle, mergedContent?: string[]): Promise<void> {
     if (!this.queryInstance || !this.source) {
       throw new Error('Session not initialized');
+    }
+
+    const schemaKey = this.getResponseSchemaKey(handle.responseSchema);
+    const pausedTurnNeedsSchemaRotation = this.currentTurn?.isPaused() && this.activeResponseSchemaKey !== schemaKey;
+    if (!this.currentTurn || this.currentTurn.isCompleted() || pausedTurnNeedsSchemaRotation) {
+      await this.ensureQueryForResponseSchema(handle.responseSchema);
+      if (pausedTurnNeedsSchemaRotation) {
+        this.currentTurn = undefined;
+      }
     }
 
     // Reset thinking accumulation at turn start so stale reasoning is not forwarded
@@ -438,7 +494,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
     // Handle turn completion AFTER emitting event
     if (sdkMessage.type === 'result' && turnForThisMessage) {
-      this.handleResultMessage(sdkMessage, turnForThisMessage);
+      await this.handleResultMessage(sdkMessage, turnForThisMessage);
     }
 
     // Let turn handle state transitions
@@ -453,10 +509,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * @param msg - Result SDK message
    * @param turn - Turn to complete
    */
-  private handleResultMessage(
-    msg: SDKMessage & { type: 'result'; subtype: string; is_error?: boolean; result?: string },
-    turn: ClaudeConnectorTurn,
-  ): void {
+  private async handleResultMessage(msg: ResultMessageWithStructuredOutput, turn: ClaudeConnectorTurn): Promise<void> {
     // Check if we should absorb this error result (it's from an interrupted query)
     if (turn.isExpectingInterruptResult()) {
       return;
@@ -467,7 +520,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const isWeirdSuccessWithError = msg.subtype === 'success' && msg.is_error;
 
     const result = isSuccess
-      ? { outcome: 'completed' as const, result: { message: msg.result } }
+      ? { outcome: 'completed' as const, result: { message: this.resolveResultMessage(msg) } }
       : {
           outcome: 'error' as const,
           error: (() => {
@@ -476,19 +529,30 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
             return parsedError instanceof Error ? parsedError : new Error(String(parsedError));
           })(),
           // Preserve result message for success+is_error cases (contains error details)
-          result: isWeirdSuccessWithError ? { message: msg.result } : undefined,
+          result: isWeirdSuccessWithError ? { message: this.resolveResultMessage(msg) } : undefined,
         };
 
-    turn.markCompleted(result);
+    if (handle) {
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+    } else {
+      turn.markCompleted(result);
+    }
+  }
 
-    // `onTurnComplete` is an already-completed notification seam; keep hook failures best-effort.
-    if (handle)
-      notifyOnTurnCompleteHook({
-        onTurnComplete: this.config.onTurnComplete,
-        handle,
-        result,
-        sessionId: this.sessionId,
-      });
+  /**
+   * Resolve the terminal message from a successful SDK result.
+   * When `outputFormat` is active, Claude Agent SDK returns the typed value in
+   * `structured_output`. Makaio's terminal message contract is still text, so
+   * the structured value is serialized back to JSON for the shared validation
+   * and persistence pipeline.
+   * @param msg - Successful SDK result message.
+   * @returns Terminal message text for the Makaio message result.
+   */
+  private resolveResultMessage(msg: ResultMessageWithStructuredOutput): string {
+    if ('structured_output' in msg && msg.structured_output !== undefined) {
+      return JSON.stringify(msg.structured_output);
+    }
+    return msg.result ?? '';
   }
 
   /**

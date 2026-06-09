@@ -126,8 +126,6 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   resumeAdapterSessionId?: string;
   /** Predetermined session ID for new connectors (from swapConnector). Different from resume. */
   predeterminedSessionId?: string;
-  /** Optional JSON Schema for structured output enforcement at the model level. */
-  responseSchema?: Record<string, unknown>;
   /**
    * Port of the in-process HTTP MCP server.
    * Populated from the `mcp.session.register` bus RPC response; `undefined` when

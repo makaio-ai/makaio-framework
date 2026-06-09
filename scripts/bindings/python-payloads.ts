@@ -96,6 +96,16 @@ interface PythonClassDefinition {
 }
 
 /**
+ * Internal structure describing a generated Python type alias.
+ */
+interface PythonTypeAliasDefinition {
+  /** Python alias name. */
+  name: string;
+  /** Python type annotation assigned to the alias. */
+  typeAnnotation: string;
+}
+
+/**
  * Internal context threaded through schema traversal.
  */
 interface SchemaRenderContext {
@@ -131,8 +141,20 @@ function primitiveTypeAnnotation(jsonType: string): string | null {
  * @returns Python Literal annotation string, e.g. `Literal["a", "b"]`
  */
 function enumToLiteral(values: readonly unknown[]): string {
-  const literals = values.map((v) => (typeof v === 'string' ? `"${v}"` : String(v))).join(', ');
+  const literals = values.map(formatPythonLiteralValue).join(', ');
   return `Literal[${literals}]`;
+}
+
+/**
+ * Format a JSON scalar as a Python literal expression.
+ * @param value - JSON scalar value from enum/const
+ * @returns Python literal source
+ */
+function formatPythonLiteralValue(value: unknown): string {
+  if (typeof value === 'string') return `"${value}"`;
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (value === null) return 'None';
+  return String(value);
 }
 
 /**
@@ -439,6 +461,15 @@ function renderClassDefinition(definition: PythonClassDefinition): string[] {
   return renderDataclass(definition.name, definition.fields);
 }
 
+/**
+ * Render a generated Python type alias.
+ * @param definition - Generated alias definition
+ * @returns Generated Python alias source line
+ */
+function renderTypeAliasDefinition(definition: PythonTypeAliasDefinition): string[] {
+  return [`${definition.name} = ${definition.typeAnnotation}`];
+}
+
 // ---------------------------------------------------------------------------
 // Per-namespace payload file generator
 // ---------------------------------------------------------------------------
@@ -481,11 +512,13 @@ function collectEventDataclasses(
  * Both a request dataclass and a response dataclass are emitted.
  * @param subject - Protocol request subject
  * @param classes - Output array to push class definitions into
+ * @param aliases - Output array to push generated top-level response aliases into
  * @param imports - Import set to update based on annotations used
  */
 function collectRequestDataclasses(
   subject: MakaioProtocolRequestSubject,
   classes: PythonClassDefinition[],
+  aliases: PythonTypeAliasDefinition[],
   imports: ImportSet,
 ): void {
   const requestClassName = payloadClassName(subject.fullSubject, 'Request');
@@ -496,6 +529,13 @@ function collectRequestDataclasses(
   classes.push({ name: requestClassName, fields: requestFields });
 
   const responseClassName = payloadClassName(subject.fullSubject, 'Response');
+  if (Array.isArray(subject.responseSchema['oneOf'])) {
+    const responseAnnotation = schemaToTypeAnnotationInContext(subject.responseSchema, { classes }, responseClassName);
+    collectAnnotationImports(responseAnnotation, imports);
+    aliases.push({ name: responseClassName, typeAnnotation: responseAnnotation });
+    return;
+  }
+
   const responseFields = schemaToFields(subject.responseSchema, { classes }, responseClassName);
   for (const f of responseFields) {
     collectAnnotationImports(f.typeAnnotation, imports);
@@ -517,12 +557,13 @@ function collectRequestDataclasses(
 export function generatePythonPayloadsModule(namespace: string, subjects: MakaioProtocolSubject[]): string {
   const imports: ImportSet = { needsAny: false, needsLiteral: false, needsUnion: false };
   const classes: PythonClassDefinition[] = [];
+  const aliases: PythonTypeAliasDefinition[] = [];
 
   for (const subject of subjects) {
     if (subject.kind === 'event') {
       collectEventDataclasses(subject, classes, imports);
     } else {
-      collectRequestDataclasses(subject, classes, imports);
+      collectRequestDataclasses(subject, classes, aliases, imports);
     }
   }
 
@@ -530,6 +571,9 @@ export function generatePythonPayloadsModule(namespace: string, subjects: Makaio
     for (const field of classDefinition.fields) {
       collectAnnotationImports(field.typeAnnotation, imports);
     }
+  }
+  for (const aliasDefinition of aliases) {
+    collectAnnotationImports(aliasDefinition.typeAnnotation, imports);
   }
 
   // Build typing imports
@@ -552,12 +596,14 @@ export function generatePythonPayloadsModule(namespace: string, subjects: Makaio
 
   lines.push('');
 
-  for (let i = 0; i < classes.length; i++) {
+  const renderedDefinitions = [...classes.map(renderClassDefinition), ...aliases.map(renderTypeAliasDefinition)];
+
+  for (let i = 0; i < renderedDefinitions.length; i++) {
     if (i > 0) {
       // PEP 8: two blank lines between top-level class definitions
       lines.push('', '');
     }
-    lines.push(...renderClassDefinition(classes[i]));
+    lines.push(...renderedDefinitions[i]);
   }
 
   lines.push('');

@@ -5,7 +5,7 @@
  */
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { IMakaioSession, MakaioSessionAgent, MessageInput } from '@makaio/contracts';
+import type { IMakaioSession, MakaioSessionAgent, MessageInput, ResponseSchemaDescriptor } from '@makaio/contracts';
 import {
   resetBusHandlers,
   waitForAsync,
@@ -229,7 +229,7 @@ export function registerSendMessageHandler(
     message: MessageInput;
     messageId: string;
     sessionContext?: unknown;
-    responseSchema?: Record<string, unknown>;
+    responseSchema?: ResponseSchemaDescriptor;
   }) => void,
 ): UnsubscribeFunction {
   return MakaioBus.on(AgentSubjects.sendMessage, (ctx) => {

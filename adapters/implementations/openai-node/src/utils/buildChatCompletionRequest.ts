@@ -1,4 +1,5 @@
 import type { AIReasoningLevel } from '@makaio/ai-adapters-core';
+import { ResponseSchemaNameSchema, type ResponseSchemaDescriptor } from '@makaio/contracts';
 import type {
   ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam,
@@ -12,6 +13,14 @@ interface BuildChatCompletionRequestInput {
   tools: ChatCompletionTool[];
   reasoningEffort?: AIReasoningLevel;
   supportsReasoningEffort: boolean;
+  /** Per-turn structured-output schema descriptor forwarded from the message handle. */
+  responseSchema?: ResponseSchemaDescriptor;
+  /**
+   * Whether the active model supports the OpenAI `strict` structured-output flag.
+   * When `false`, `strict` is omitted from the `json_schema` payload even if
+   * {@link BuildChatCompletionRequestInput.responseSchema} requests it.
+   */
+  supportsStructuredOutputStrict: boolean;
 }
 
 type OpenAIChatCompletionRequest = ChatCompletionCreateParamsStreaming;
@@ -26,6 +35,24 @@ function toOpenAIReasoningEffort(reasoningEffort: AIReasoningLevel): ReasoningEf
     return 'xhigh';
   }
   return reasoningEffort;
+}
+
+/**
+ * Derive a provider-safe `name` field for the OpenAI `json_schema` response format.
+ *
+ * Resolution order:
+ * 1. `responseSchema.name` — explicitly supplied by the caller.
+ * 2. `responseSchema.schema.title` — when it is a string that satisfies
+ *    {@link ResponseSchemaNameSchema} (provider-safe alphanumeric, max 64 characters).
+ * 3. `'response'` — safe ASCII fallback that always passes validation.
+ * @param responseSchema - The descriptor to extract a name from
+ * @returns A provider-safe schema name string
+ */
+function resolveResponseSchemaName(responseSchema: ResponseSchemaDescriptor): string {
+  if (responseSchema.name) return responseSchema.name;
+  const title = responseSchema.schema.title;
+  if (typeof title === 'string' && ResponseSchemaNameSchema.safeParse(title).success) return title;
+  return 'response';
 }
 
 /**
@@ -46,5 +73,15 @@ export function buildChatCompletionRequest(input: BuildChatCompletionRequestInpu
     stream: true,
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
     stream_options: { include_usage: true },
+    ...(input.responseSchema !== undefined && {
+      response_format: {
+        type: 'json_schema' as const,
+        json_schema: {
+          name: resolveResponseSchemaName(input.responseSchema),
+          schema: input.responseSchema.schema,
+          ...(input.supportsStructuredOutputStrict && input.responseSchema.strict === true && { strict: true }),
+        },
+      },
+    }),
   };
 }

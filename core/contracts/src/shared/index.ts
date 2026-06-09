@@ -199,6 +199,18 @@ export const ErrorCategorySchema = z.enum(ERROR_CATEGORIES);
 
 export type ErrorCategory = z.infer<typeof ErrorCategorySchema>;
 
+export {
+  ResponseSchemaDescriptorSchema,
+  ResponseSchemaNameSchema,
+  StructuredOutputValidationErrorSchema,
+  StructuredOutputValidationSchema,
+  StructuredOutputValidationStatusSchema,
+  type ResponseSchemaDescriptor,
+  type ResponseSchemaName,
+  type StructuredOutputValidation,
+  type StructuredOutputValidationError,
+  type StructuredOutputValidationStatus,
+} from './response-schema.js';
 export { EntityUIConfigSchema, FieldOptionSchema, FieldOverrideSchema } from './ui-config.js';
 export type {
   BaseFieldDefinition,

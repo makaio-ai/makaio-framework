@@ -70,6 +70,8 @@ export interface StreamBridgeConfig {
   adapterSessionId?: string;
   /** Model name for event metadata */
   model: string;
+  /** Tool names that stay internal and are omitted from public tool lifecycle events. */
+  hiddenToolCallNames?: readonly string[];
 
   logLowLevelEvent?: (event: unknown) => void;
 }

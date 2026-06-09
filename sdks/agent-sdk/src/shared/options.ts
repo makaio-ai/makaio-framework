@@ -1,5 +1,5 @@
 import { parseCanonicalModel } from '@makaio/contracts';
-import type { ResolvableCanonicalModel } from '@makaio/contracts';
+import type { JsonValue, ResolvableCanonicalModel } from '@makaio/contracts';
 import type { TransportAuth } from '@makaio/bus-transport-websocket';
 import type { CanUseToolCallback, MakaioOptions, MakaioToolDefinition, McpServerConfig } from './types.js';
 import { MakaioModelError, MakaioUnsupportedFeatureError } from './errors.js';
@@ -22,7 +22,7 @@ export interface ResolvedQueryConfig {
   readonly resume?: string;
   readonly sessionId?: string;
   readonly effort?: 'low' | 'medium' | 'high';
-  readonly outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
+  readonly outputFormat?: { type: 'json_schema'; schema: Record<string, JsonValue> };
   readonly websocketUrl?: string;
   readonly websocketAuth?: TransportAuth;
   readonly credentials?: Record<string, { apiKey?: string; [key: string]: string | undefined }>;

@@ -48,7 +48,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `group` | `{ packageName: string; groupId: string; entries: { label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; enabled?: boolean \| undefined; priority?: number \| undefined; }[]; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; }` | yes |
+| `group` | `{ packageName: string; groupId: string; entries: { label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; priority?: number \| undefined; enabled?: boolean \| undefined; }[]; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; }` | yes |
 
 **Response:**
 

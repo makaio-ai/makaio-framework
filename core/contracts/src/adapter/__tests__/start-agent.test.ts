@@ -60,8 +60,8 @@ describe('StartAgentSchema', () => {
       role: 'lead',
       initialMessage: 'hello',
       responseSchema: {
-        type: 'object',
-        properties: { approved: { type: 'boolean' } },
+        schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+        name: 'approved_schema',
       },
     });
 
