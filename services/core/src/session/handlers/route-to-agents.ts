@@ -7,7 +7,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import { PreferencesSubjects } from '../../preferences/storage-namespace.js';
-import type { IMakaioSession, Message, MessageInput, MakaioSessionAgent, SessionContext } from '@makaio/contracts';
+import type {
+  IMakaioSession,
+  Message,
+  MessageInput,
+  MakaioSessionAgent,
+  ResponseSchemaDescriptor,
+  SessionContext,
+} from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
 import type { Turn } from '../entities/turn.js';
 import { assembleForkContext } from '../context/assemble-fork-context.js';
@@ -81,7 +88,7 @@ interface RouteToSingleAgentInput {
   onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
   agent: MakaioSessionAgent;
   agentContext?: SessionContext;
-  responseSchema?: Record<string, unknown>;
+  responseSchema?: ResponseSchemaDescriptor;
 }
 
 /**
@@ -259,7 +266,7 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
  * @param swappedAgentIds - Set of agent IDs that swapped connector due to cwd mismatch
  * @param swappedAgentCwd - Previous/new cwd metadata keyed by agent ID
  * @param freshMessageHistory - Curated history for agents forced into fresh mode
- * @param responseSchema - Optional JSON schema for structured responses
+ * @param responseSchema - Optional structured output descriptor for the turn
  */
 export async function routeToAgents(
   bus: IMakaioBus,
@@ -278,7 +285,7 @@ export async function routeToAgents(
   swappedAgentIds?: ReadonlySet<string>,
   swappedAgentCwd?: ReadonlyMap<string, CwdSwapMeta>,
   freshMessageHistory?: Message[],
-  responseSchema?: Record<string, unknown>,
+  responseSchema?: ResponseSchemaDescriptor,
 ): Promise<void> {
   const forkEnrichedContext = await assembleForkContext(bus, session, session.sessionId, sessionContext, isNewTurn);
 

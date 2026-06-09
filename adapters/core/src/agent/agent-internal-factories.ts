@@ -101,6 +101,8 @@ export function createAgentTurnExecutor(config: {
   agentId: string;
   adapterId: string;
   sessionId?: string;
+  /** Capability tags reported by the adapter (e.g. `'structuredOutput'`). */
+  adapterCapabilities?: string[];
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
   shouldUseNativeResume: (sessionContext?: StartAgentOptions['sessionContext']) => boolean;
@@ -187,7 +189,6 @@ export function createAgentConnectorLifecycleManager<
   getConnector: () => TConnector;
   setConnector: (connector: TConnector) => void;
   getRuntimeSystemPrompt: () => SystemPrompt | undefined;
-  getRuntimeResponseSchema: () => Record<string, unknown> | undefined;
   setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void;
 }): AgentConnectorLifecycleManager<TBus, TConnector> {
   return new AgentConnectorLifecycleManager<TBus, TConnector>({
@@ -203,7 +204,6 @@ export function createAgentConnectorLifecycleManager<
     getConnector: config.getConnector,
     setConnector: config.setConnector,
     getRuntimeSystemPrompt: config.getRuntimeSystemPrompt,
-    getRuntimeResponseSchema: config.getRuntimeResponseSchema,
     setLastKnownAdapterSessionId: config.setLastKnownAdapterSessionId,
   });
 }

@@ -1,6 +1,6 @@
 import type { MessageHandle, MessageResult } from '../message-handle/index.js';
 import type { SubjectDefinition, ExtractSubjectPayload } from '@makaio/core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type StructuredOutputValidation } from '@makaio/contracts';
 import type { AgentContext } from './types.js';
 
 /**
@@ -135,6 +135,9 @@ export class MessageLifecycleTracker {
           : typeof result.error === 'string'
             ? result.error
             : undefined,
+      ...(result.structuredOutputValidation !== undefined
+        ? { structuredOutputValidation: result.structuredOutputValidation }
+        : {}),
     });
 
     // Emit user_message.completed (always, with outcome details)
@@ -150,20 +153,50 @@ export class MessageLifecycleTracker {
    * Wire up a message handle for lifecycle tracking.
    *
    * Subscribes to the handle's acknowledgment and completion promises
-   * and emits the appropriate events.
+   * and emits the appropriate events. When `transformTerminal` is provided,
+   * it is registered on the handle so validation or other post-processing
+   * amends the public completion result before lifecycle events fire.
    * @param handle - The message handle to track
    * @param onTerminal - Optional callback for any terminal outcome (emits agent.complete)
+   * @param transformTerminal - Optional async transform applied before public completion resolves
    */
-  public track(handle: MessageHandle, onTerminal?: (messageId: string, result: MessageResult) => void): void {
+  public track(
+    handle: MessageHandle,
+    onTerminal?: (messageId: string, result: MessageResult) => void,
+    transformTerminal?: (result: MessageResult) => Promise<MessageResult>,
+  ): void {
+    if (transformTerminal !== undefined) {
+      handle.addCompletionTransform(async (result) => {
+        try {
+          return await transformTerminal(result);
+        } catch (error) {
+          // Transform failed — synthesize a validation failure so the cause is
+          // visible in every completion consumer while preserving the terminal
+          // event invariant: complete() and onTerminal must always be called.
+          const structuredOutputValidation: StructuredOutputValidation = {
+            status: 'failed',
+            errors: [
+              {
+                message: error instanceof Error ? error.message : 'Structured output validation failed',
+                instancePath: '',
+                schemaPath: '#',
+              },
+            ],
+          };
+          return { ...result, structuredOutputValidation };
+        }
+      });
+    }
+
     handle.waitForAcknowledgment().then(() => {
       this.acknowledge(handle);
     });
 
-    handle.waitForCompletion().then((result) => {
-      this.complete(handle, result);
+    handle.waitForCompletion().then((finalResult) => {
+      this.complete(handle, finalResult);
 
       if (onTerminal) {
-        onTerminal(handle.messageId, result);
+        onTerminal(handle.messageId, finalResult);
       }
     });
   }

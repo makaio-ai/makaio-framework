@@ -20,6 +20,8 @@ AGENT_SESSION_CLOSED = "agent.session.closed"
 AGENT_STARTED = "agent.started"
 AGENT_STEP_FINISHED = "agent.step.finished"
 AGENT_STEP_STARTED = "agent.step.started"
+AGENT_STRUCTURED_OUTPUT_ENFORCE = "agent.structuredOutput.enforce"
+AGENT_STRUCTURED_OUTPUT_RETRY_POLICY = "agent.structuredOutput.retryPolicy"
 AGENT_TOOL_COMPLETED = "agent.tool.completed"
 AGENT_TOOL_OUTPUT = "agent.tool.output"
 AGENT_TOOL_STARTED = "agent.tool.started"
@@ -69,6 +71,8 @@ ALL_SUBJECTS = (
     AGENT_STARTED,
     AGENT_STEP_FINISHED,
     AGENT_STEP_STARTED,
+    AGENT_STRUCTURED_OUTPUT_ENFORCE,
+    AGENT_STRUCTURED_OUTPUT_RETRY_POLICY,
     AGENT_TOOL_COMPLETED,
     AGENT_TOOL_OUTPUT,
     AGENT_TOOL_STARTED,

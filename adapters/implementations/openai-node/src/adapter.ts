@@ -40,7 +40,7 @@ export class OpenAIAdapter extends AIAdapter<OpenAINodeConnectorBus, OpenAINodeC
   public constructor(config?: Partial<AIAdapterConfig>) {
     super({
       name: OpenAINodeAdapterName,
-      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append'],
+      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'structuredOutput'],
       ...config,
       namespace: OpenAINodeConnectorNamespace,
       agentFactory: (agentConfig) => {

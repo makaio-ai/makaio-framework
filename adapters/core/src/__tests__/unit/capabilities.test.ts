@@ -66,6 +66,14 @@ describe('parseAIAdapterCapabilities', () => {
       expect(caps.systemPrompt).toBe(true);
       expect(caps.systemPromptOverride).toBe(true);
     });
+
+    it('parses structuredOutput strict nested capability', () => {
+      const caps = parseAIAdapterCapabilities(['structuredOutput', 'structuredOutput:strict']);
+
+      expect(caps.structuredOutput).toBe(true);
+      expect(caps.structuredOutputStrict).toBe(true);
+      expect(caps.hasAll(['structuredOutput', 'structuredOutput:strict'])).toBe(true);
+    });
   });
 
   describe('mixed capabilities', () => {

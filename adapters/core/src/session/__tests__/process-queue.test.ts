@@ -7,8 +7,20 @@ import { processQueueMessages, type QueueableTurn } from '../process-queue.js';
 /** Typed mock for the startNewTurn callback */
 type StartNewTurnFn = (handle: MessageHandle, mergedContent?: string[], extra?: unknown) => Promise<void>;
 
-function createHandle(message: string, deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue'): MessageHandle {
-  return new MessageHandle(crypto.randomUUID(), normalizeMessageInput(message), deliveryMode);
+function createHandle(
+  message: string,
+  deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue',
+  internalRetry = false,
+): MessageHandle {
+  return new MessageHandle(
+    crypto.randomUUID(),
+    normalizeMessageInput(message),
+    deliveryMode,
+    undefined,
+    undefined,
+    undefined,
+    internalRetry,
+  );
 }
 
 /**
@@ -96,6 +108,23 @@ describe('processQueueMessages', () => {
       // No immediate in queue, turn is active -> nothing happens
       expect(startNewTurn).not.toHaveBeenCalled();
       expect(queue.size()).toBe(1);
+    });
+
+    it('starts internal retries once the active message handle is processed', async () => {
+      const activeHandle = createHandle('active');
+      activeHandle.markCompleted({ outcome: 'completed', result: { message: 'invalid json' } });
+      const turn = createMockTurn('active', activeHandle);
+
+      const retryHandle = createHandle('retry', 'enqueue', true);
+      queue.enqueue(retryHandle);
+
+      await processQueueMessages(queue, {
+        getCurrentTurn: () => turn,
+        startNewTurn,
+      });
+
+      expect(startNewTurn).toHaveBeenCalledWith(retryHandle);
+      expect(queue.isEmpty()).toBe(true);
     });
   });
 

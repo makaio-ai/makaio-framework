@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ResponseSchemaDescriptorSchema } from '../../shared/index.js';
 import { ProviderContextSchema } from './provider-context.js';
 
 /**
@@ -25,6 +26,13 @@ export const InferSchema = {
 
     /** System prompt for inference instructions (optional) */
     systemPrompt: z.string().optional(),
+
+    /**
+     * Structured output descriptor.
+     * When present and supported by the adapter, constrains the inference response
+     * to the declared JSON Schema.
+     */
+    responseSchema: ResponseSchemaDescriptorSchema.optional(),
 
     /**
      * Unresolved provider context (credential refs, not plaintext).

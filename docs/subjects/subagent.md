@@ -62,7 +62,7 @@ Type: Request (RPC)
 | `error` | `string \| undefined` | no |
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "waiting_input" \| "timeout"` | yes |
+| `status` | `"completed" \| "cancelled" \| "failed" \| "timeout" \| "waiting_input"` | yes |
 
 ### <a id="subagent.cancelled"></a>`subagent.cancelled` (event)
 
@@ -123,7 +123,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `subagentId` | `string` | yes |
@@ -173,7 +173,7 @@ Type: Request (RPC)
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `progress` | `string[]` | yes |
 | `result` | `string \| undefined` | no |
-| `status` | `"completed" \| "cancelled" \| "failed" \| "spawning" \| "running" \| "waiting_input" \| "hung"` | yes |
+| `status` | `"completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "waiting_input" \| "hung"` | yes |
 | `summary` | `string \| undefined` | no |
 
 ### <a id="subagent.kill"></a>`subagent.kill` (rpc)
@@ -215,7 +215,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "spawning" \| "running" \| "waiting_input" \| "hung"; }[]` | yes |
+| `subagents` | `{ subagentId: string; task: string; status: "completed" \| "cancelled" \| "failed" \| "running" \| "spawning" \| "waiting_input" \| "hung"; }[]` | yes |
 
 ### <a id="subagent.reportProgress"></a>`subagent.reportProgress` (rpc)
 
@@ -295,7 +295,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |
@@ -319,7 +319,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: Record<string, unknown> \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |

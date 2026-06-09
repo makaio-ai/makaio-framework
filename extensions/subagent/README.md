@@ -67,7 +67,11 @@ Spawns a new subagent to perform a delegated task.
   disallowedTools?: string[];                // Tools to block
   systemPrompt?: string;                     // Additional instructions
   maxDepth?: number;                         // Max nesting depth
-  responseSchema?: Record<string, unknown>;  // JSON Schema for structured output
+  responseSchema?: {                         // Structured-output descriptor
+    schema: Record<string, unknown>;         // JSON Schema for structured output
+    name?: string;                           // Provider-safe schema name
+    strict?: boolean;                        // Strict-mode hint for capable providers
+  };
   executionTargetId?: string;                // Execution target override
 }
 

@@ -4272,6 +4272,7 @@ __metadata:
     "@makaio/subsystem-adapter": "workspace:*"
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
+    ajv: "npm:^8.17.1"
     emittery: "npm:^1.2.0"
     type-fest: "npm:^5.2.0"
     zod: "npm:^4.1.13"

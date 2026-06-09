@@ -126,8 +126,10 @@ export abstract class AIAdapter<
       filteredBus.on(AdapterSubjects.infer, (ctx) =>
         handleInfer(ctx, {
           adapterBus: this.adapterBus,
+          globalBus: this.globalBus,
           adapterId: this.adapterId,
           adapterName: this.name,
+          adapterCapabilities: this.capabilities,
           platformDefaults: this.platformDefaults,
           configFactory: this.configFactory,
           connectorFactory: this.connectorFactory,

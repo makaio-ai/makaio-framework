@@ -145,7 +145,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `cwd` | `string` | yes |
-| `entries` | `{ name: string; description: string; activationMode: "auto" \| "manual"; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; compatibility?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
+| `entries` | `{ name: string; description: string; activationMode: "manual" \| "auto"; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; compatibility?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
 
 ---
 

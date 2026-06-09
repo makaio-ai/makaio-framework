@@ -69,7 +69,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agent` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; } \| null` | yes |
+| `agent` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; } \| null` | yes |
 
 ### <a id="storage:agent.listByAdapter"></a>`storage:agent.listByAdapter` (rpc)
 
@@ -83,13 +83,13 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string` | yes |
-| `status` | `"active" \| "all" \| "idle" \| "dead" \| "disposed" \| undefined` | no |
+| `status` | `"all" \| "active" \| "idle" \| "dead" \| "disposed" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agents` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]` | yes |
+| `agents` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]` | yes |
 
 ### <a id="storage:agent.listBySession"></a>`storage:agent.listBySession` (rpc)
 
@@ -108,7 +108,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agents` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]` | yes |
+| `agents` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]` | yes |
 
 ### <a id="storage:agent.set"></a>`storage:agent.set` (rpc)
 
@@ -121,7 +121,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `agent` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }` | yes |
+| `agent` | `{ agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }` | yes |
 | `agentId` | `string` | yes |
 
 **Response:**

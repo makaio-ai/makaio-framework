@@ -29,6 +29,50 @@ function makeLifecycleStub(): SessionLifecycle {
   return new SessionLifecycle();
 }
 
+describe('buildQueryOptions — responseSchema behaviour', () => {
+  it('passes response schema descriptor schema to SDK outputFormat', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+      responseSchema: { schema: { type: 'object' }, name: 'object_schema' },
+    });
+
+    expect(options.outputFormat).toEqual({ type: 'json_schema', schema: { type: 'object' } });
+  });
+
+  it('omits outputFormat when responseSchema is not provided', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+
+    expect(options).not.toHaveProperty('outputFormat');
+  });
+});
+
+describe('buildQueryOptions — resume behaviour', () => {
+  it('omits sessionId when resuming an existing SDK session', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'local-session-id',
+      resumeAdapterSessionId: 'provider-session-id',
+      responseSchema: { schema: { type: 'object' }, name: 'object_schema' },
+    });
+
+    expect(options.resume).toBe('provider-session-id');
+    expect(options).not.toHaveProperty('sessionId');
+  });
+});
+
 describe('buildQueryOptions — maxThinkingTokens behaviour', () => {
   it('omits maxThinkingTokens when reasoningEffort is not configured', () => {
     const config = makeMinimalConfig(); // no reasoningEffort

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, SessionSubjects, SubagentSubjects } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/index.js';
 import { ExecutionTargetSubjects } from '../../execution-target/namespace.js';
 import { MakaioSessionService } from '../../session/session-service.js';
@@ -87,9 +88,9 @@ describe('SubagentService - context mode', () => {
     const { sessionId: parentSessionId } = await MakaioBus.request(SessionSubjects.create, {
       title: 'Parent',
     });
-    const responseSchema = {
-      type: 'object',
-      properties: { verdict: { type: 'string' } },
+    const responseSchema: ResponseSchemaDescriptor = {
+      schema: { type: 'object', properties: { verdict: { type: 'string' } } },
+      name: 'verdict_schema',
     };
     let capturedResponseSchema: unknown;
     MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {

@@ -208,7 +208,7 @@ export type {
 } from './log-importer/index.js';
 
 // Message handle
-export { MessageHandle } from './message-handle/index.js';
+export { markCompletedWithFinalResult, MessageHandle } from './message-handle/index.js';
 export type {
   MessageDeliveryMode,
   MessageResult,

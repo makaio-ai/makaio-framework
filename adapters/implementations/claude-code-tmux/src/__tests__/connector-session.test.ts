@@ -59,18 +59,27 @@ async function makeSession(
 
 describe('TmuxConnectorSession', () => {
   it('detaches the active turn when completion callbacks throw', async () => {
-    const session = await makeSession({
-      onTurnComplete: vi.fn(() => {
-        throw new Error('completion callback failed');
-      }),
-    });
-    const queue = new UserMessageQueue();
-    queue.enqueue(makeHandle());
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const session = await makeSession({
+        onTurnComplete: vi.fn(() => {
+          throw new Error('completion callback failed');
+        }),
+      });
+      const queue = new UserMessageQueue();
+      queue.enqueue(makeHandle());
 
-    await expect(session.processQueue(queue)).resolves.toBe(true);
-    await expect(session.handleTurnFinished('done')).rejects.toThrow('completion callback failed');
+      await expect(session.processQueue(queue)).resolves.toBe(true);
+      await expect(session.handleTurnFinished('done')).resolves.toBeUndefined();
 
-    expect(session.getCurrentTurn()).toBeUndefined();
+      expect(session.getCurrentTurn()).toBeUndefined();
+      expect(consoleWarn).toHaveBeenCalledWith(
+        expect.stringMatching(/completion notification failed/),
+        expect.any(Error),
+      );
+    } finally {
+      consoleWarn.mockRestore();
+    }
   });
 
   it('detaches the active turn when start callbacks throw', async () => {

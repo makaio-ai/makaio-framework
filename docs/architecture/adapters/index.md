@@ -33,7 +33,7 @@ AIAdapter           — lifecycle owner, bus integration, agent registry
 | Adapter | Package | Upstream SDK | Protocol | Capabilities |
 |---------|---------|--------------|----------|--------------|
 | `anthropic-sdk` | `@makaio/ai-adapters-anthropic-sdk` | `@anthropic-ai/sdk` | `anthropic` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |
-| `claude-code` | `@makaio/ai-adapters-claude-agent-sdk` | `@anthropic-ai/claude-agent-sdk` | `anthropic` | `tools`, `vision`, `chat:inTurnMessages`, `structuredOutput`, `systemPrompt:override` |
+| `claude-code` | `@makaio/ai-adapters-claude-agent-sdk` | `@anthropic-ai/claude-agent-sdk` | `anthropic` | `tools`, `vision`, `structuredOutput`, `chat:inTurnMessages`, `systemPrompt:override` |
 | `claude-code-cli` | `@makaio/ai-adapters-claude-code-cli` | Claude Code CLI (subprocess) | `anthropic` | `tools`, `chat:inTurnMessages`, `systemPrompt:override`, `systemPrompt:append` |
 | `codex-app-server` | `@makaio/ai-adapters-codex-app-server` | Codex CLI (JSON-RPC over JSONL) | `openai` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |
 | `gemini-sdk` | `@makaio/ai-adapters-gemini-sdk` | `@google/genai` | `openai` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |

@@ -13,6 +13,7 @@ import type {
 import {
   AIAgentConnector,
   UserMessageQueue,
+  markCompletedWithFinalResult,
   processQueueMessages,
   type NormalizedMessageInput,
   type AgentStartResult,
@@ -395,14 +396,16 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
         text: accumulatedText,
         timestamp: Date.now(),
       });
-      this.lastResult = successResult;
-      handle.markCompleted(successResult);
+      await markCompletedWithFinalResult(handle, successResult, (_handle, finalResult) => {
+        this.lastResult = finalResult;
+      });
     } catch (error) {
       if (turn.isPaused()) return;
       const err = error instanceof Error ? error : new Error(String(error));
       const errorResult: MessageResult = { outcome: 'error', error: err };
-      this.lastResult = errorResult;
-      handle.markCompleted(errorResult);
+      await markCompletedWithFinalResult(handle, errorResult, (_handle, finalResult) => {
+        this.lastResult = finalResult;
+      });
     } finally {
       if (!turn.isPaused()) {
         try {

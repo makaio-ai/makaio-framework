@@ -2,6 +2,7 @@ import type { z } from 'zod/v3';
 import type { TransportAuth } from '@makaio/bus-transport-websocket';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { JsonValue } from '@makaio/contracts';
 import type { SDKMessage, SDKUserMessage } from './sdk-messages.js';
 
 // ---------------------------------------------------------------------------
@@ -126,7 +127,7 @@ export interface MakaioOptions {
   /** Reasoning effort level. */
   effort?: 'low' | 'medium' | 'high';
   /** JSON Schema for structured output. */
-  outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
+  outputFormat?: { type: 'json_schema'; schema: Record<string, JsonValue> };
 
   // --- Makaio extensions (not in Claude SDK) ---
 

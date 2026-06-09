@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
   FORKS_REQUIRED_FILES,
+  GIT_SERIAL_TEST_GLOBS,
   frameworkShards,
   inferCategory,
   resolveShardForFile,
@@ -58,6 +59,9 @@ function resolveTest(inputPath: string): ResolvedTest | null {
   const category = inferCategory(relativePath);
   if (FORKS_REQUIRED_FILES.includes(relativePath)) {
     return { category, shard: 'forks-required', relativePath };
+  }
+  if (GIT_SERIAL_TEST_GLOBS.some((glob) => relativePath.startsWith(glob.replace('/**/*.test.ts', '/')))) {
+    return { category, shard: 'git-serial', relativePath };
   }
   const shard = resolveShardForFile(relativePath, frameworkShards);
   if (!shard) return null;

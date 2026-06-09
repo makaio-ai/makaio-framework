@@ -7,7 +7,7 @@ next: false
 
 # services
 
-31 namespaces, 176 subjects (29 events, 147 RPCs).
+32 namespaces, 220 subjects (35 events, 185 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
@@ -23,6 +23,7 @@ next: false
 | [`docker`](./docker.md) | bus | 7 | 4E / 3R |
 | [`execution-target`](./execution-target.md) | bus | 8 | 3E / 5R |
 | [`fs`](./fs.md) | bus | 10 | 2E / 8R |
+| [`git`](./git.md) | bus | 44 | 6E / 38R |
 | [`host:tray`](./host-tray.md) | bus | 7 | 2E / 5R |
 | [`local-notification`](./local-notification.md) | bus | 2 | 0E / 2R |
 | [`log-import`](./log-import.md) | bus | 12 | 0E / 12R |

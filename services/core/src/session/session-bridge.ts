@@ -20,6 +20,17 @@ interface AgentContext {
   adapterSessionId?: string;
 }
 
+/**
+ * Validated terminal message override from agent completion metadata.
+ *
+ * When structured-output enforcement rewrites the terminal text, this content
+ * replaces the accumulated provider blocks so persisted assistant history
+ * stores the authoritative post-validation message.
+ */
+interface AssistantMessageOverride {
+  content?: string;
+}
+
 export class SessionBridge {
   private readonly agentToSession = new Map<string, string>();
   /** Extended mapping: agentId -\> \{ sessionId, turnId, adapterSessionId \} */
@@ -157,6 +168,9 @@ export class SessionBridge {
     );
 
     // On agent.complete, store accumulated blocks as assistant message.
+    // Structured-output completions carry the post-validation message as the
+    // authoritative assistant text; provisional validation/retry blocks must
+    // not be persisted with the final turn.
     // Error outcomes carry an `error` string for partial-block storage.
     this.cleanups.push(
       this.bus.on(AgentSubjects.complete, async (ctx) => {
@@ -166,11 +180,12 @@ export class SessionBridge {
           this.agentBlocks.delete(ctx.payload.agentId);
           return;
         }
-        const { agentId, adapterSessionId, outcome, error } = ctx.payload;
+        const { agentId, adapterSessionId, outcome, error, message, structuredOutputValidation } = ctx.payload;
         await this.storeAssistantMessage(
           agentId,
           outcome === 'error' ? undefined : adapterSessionId,
           outcome === 'error' ? error : undefined,
+          structuredOutputValidation !== undefined ? { content: message } : undefined,
         );
       }),
     );
@@ -181,13 +196,27 @@ export class SessionBridge {
    * @param agentId - ID of the agent that produced the message
    * @param adapterSessionId - Optional adapter session ID
    * @param error - Optional error message if agent failed
+   * @param messageOverride - Optional validated terminal message to store instead of accumulated provider blocks
    */
-  private async storeAssistantMessage(agentId: string, adapterSessionId?: string, error?: string): Promise<void> {
+  private async storeAssistantMessage(
+    agentId: string,
+    adapterSessionId?: string,
+    error?: string,
+    messageOverride?: AssistantMessageOverride,
+  ): Promise<void> {
     const context = this.agentContext.get(agentId);
     if (!context?.turnId) return;
 
-    const blocks = this.agentBlocks.get(agentId) ?? [];
-    if (blocks.length === 0 && !error) return;
+    const blocks: SessionMessageBlock[] =
+      messageOverride !== undefined
+        ? messageOverride.content !== undefined
+          ? [{ type: 'text', content: messageOverride.content }]
+          : []
+        : (this.agentBlocks.get(agentId) ?? []);
+    if (blocks.length === 0 && !error) {
+      this.agentBlocks.delete(agentId);
+      return;
+    }
 
     // Extract text content for FTS
     const contentText = blocks

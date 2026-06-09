@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from typing import Literal, Union
 
 from makaio._serialization import to_wire, from_wire, camel_to_snake, snake_to_camel
+from makaio.generated.payloads.agent import (
+    AgentStructuredOutputEnforceResponse,
+    AgentStructuredOutputEnforceResponseVariantA,
+    AgentStructuredOutputEnforceResponseVariantB,
+)
 from makaio.generated.payloads.session import (
     SessionSendMessageRequest,
     SessionSendMessageRequestSessionContext,
@@ -151,3 +156,15 @@ def test_from_wire_selects_one_of_variant_by_literal_discriminator():
     result = from_wire({"block": {"type": "text", "text": "hello"}}, BlockPayload)
 
     assert result == BlockPayload(block=TextBlock(type="text", text="hello"))
+
+
+def test_from_wire_selects_top_level_generated_one_of_alias_success_variant():
+    result = from_wire({"enforced": True, "output": '{"ok":true}'}, AgentStructuredOutputEnforceResponse)
+
+    assert result == AgentStructuredOutputEnforceResponseVariantA(enforced=True, output='{"ok":true}')
+
+
+def test_from_wire_selects_top_level_generated_one_of_alias_error_variant():
+    result = from_wire({"enforced": False, "error": "schema validation failed"}, AgentStructuredOutputEnforceResponse)
+
+    assert result == AgentStructuredOutputEnforceResponseVariantB(enforced=False, error="schema validation failed")

@@ -11,14 +11,14 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 88 |
-| Subjects | 742 (327 events, 415 RPCs) |
-| framework | 85 |
-| extension | 3 |
-| kind: bus | 64 |
-| kind: adapter | 8 |
+| Namespaces | 100 |
+| Subjects | 894 (397 events, 497 RPCs) |
+| framework | 96 |
+| extension | 4 |
+| kind: bus | 74 |
+| kind: adapter | 9 |
 | kind: client | 2 |
-| kind: extension | 1 |
+| kind: extension | 2 |
 | kind: storage | 11 |
 | kind: extension-storage | 2 |
 
@@ -28,8 +28,8 @@ next: false
 |-----------|-----------|----------|
 | [adapters/](./adapters/index.md) | 1 | 3 |
 | [clients/](./clients/index.md) | 2 | 24 |
-| [extensions/](./extensions/index.md) | 3 | 15 |
-| [services/](./services/index.md) | 31 | 176 |
+| [extensions/](./extensions/index.md) | 4 | 18 |
+| [services/](./services/index.md) | 32 | 220 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
@@ -40,14 +40,16 @@ next: false
 | [`adapter:anthropic-sdk`](./adapter-anthropic-sdk.md) | adapter | 19 | 18E / 1R |
 | [`adapter:claude-code-tmux`](./adapter-claude-code-tmux.md) | adapter | 9 | 8E / 1R |
 | [`adapter:codex-app-server`](./adapter-codex-app-server.md) | adapter | 23 | 20E / 3R |
+| [`adapter:cursorSdk`](./adapter-cursorsdk.md) | adapter | 23 | 22E / 1R |
 | [`adapter:geminiSDK`](./adapter-geminisdk.md) | adapter | 15 | 14E / 1R |
 | [`adapter:github-copilot`](./adapter-github-copilot.md) | adapter | 30 | 29E / 1R |
 | [`adapter:openai-node`](./adapter-openai-node.md) | adapter | 19 | 18E / 1R |
 | [`adapter:piSdk`](./adapter-pisdk.md) | adapter | 23 | 22E / 1R |
 | [`adapter:qwen-acp`](./adapter-qwen-acp.md) | adapter | 13 | 12E / 1R |
-| [`agent`](./agent.md) | bus | 32 | 23E / 9R |
+| [`agent`](./agent.md) | bus | 34 | 23E / 11R |
 | [`agentResolution`](./agentresolution.md) | bus | 1 | 0E / 1R |
 | [`approval`](./approval.md) | bus | 2 | 0E / 2R |
+| [`artifact`](./artifact.md) | bus | 15 | 6E / 9R |
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
@@ -57,6 +59,8 @@ next: false
 | [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
 | [`credential`](./credential.md) | bus | 8 | 0E / 8R |
+| [`facet`](./facet.md) | bus | 3 | 1E / 2R |
+| [`gitHook`](./githook.md) | bus | 3 | 2E / 1R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |
 | [`host`](./host.md) | bus | 10 | 3E / 7R |
 | [`host:variant`](./host-variant.md) | bus | 3 | 1E / 2R |
@@ -64,25 +68,31 @@ next: false
 | [`kernel:boot`](./kernel-boot.md) | bus | 7 | 6E / 1R |
 | [`kernel:cli`](./kernel-cli.md) | bus | 2 | 0E / 2R |
 | [`kernel:extension`](./kernel-extension.md) | bus | 8 | 3E / 5R |
+| [`materialization`](./materialization.md) | bus | 5 | 3E / 2R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
+| [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
 | [`session`](./session.md) | bus | 55 | 29E / 26R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 12 | 0E / 12R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 25 | 0E / 25R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
+| [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
 | [`tool`](./tool.md) | bus | 7 | 5E / 2R |
+| [`ui`](./ui.md) | bus | 4 | 2E / 2R |
 | [`vcs`](./vcs.md) | bus | 11 | 0E / 11R |
 | [`vcs:events`](./vcs-events.md) | bus | 2 | 2E / 0R |
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`workflow`](./workflow.md) | bus | 25 | 14E / 11R |
+| [`widget`](./widget.md) | bus | 4 | 4E / 0R |
+| [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
+| [`workflow`](./workflow.md) | bus | 44 | 25E / 19R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

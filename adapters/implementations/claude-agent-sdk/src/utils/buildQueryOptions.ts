@@ -6,7 +6,7 @@ import type {
   McpStdioServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import { Options } from '@anthropic-ai/claude-agent-sdk';
-import type { McpResolvedServer } from '@makaio/contracts';
+import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { ClaudeSessionConfig } from '../types/index.js';
 import { SessionLifecycle, type AIReasoningLevel } from '@makaio/ai-adapters-core';
 
@@ -24,8 +24,8 @@ interface BuildQueryOptionsArgs {
   sessionId: string;
   /** Previous adapter session ID for resume attempts. */
   resumeAdapterSessionId?: string;
-  /** Optional JSON Schema for structured output. */
-  responseSchema?: Record<string, unknown>;
+  /** Optional structured output descriptor. */
+  responseSchema?: ResponseSchemaDescriptor;
   /**
    * Port of the in-process HTTP MCP server.
    * When set, adds the makaio MCP server to the query's mcpServers config.
@@ -187,8 +187,7 @@ export function buildQueryOptions({
     ...(config.providerConfig?.queryOptions ?? {}),
     cwd: config.cwd,
     model: config.model,
-    sessionId,
-    ...(resumeAdapterSessionId !== undefined && { resume: resumeAdapterSessionId }),
+    ...(resumeAdapterSessionId === undefined ? { sessionId } : { resume: resumeAdapterSessionId }),
     extraArgs,
     env: config.env,
     ...(maxThinkingTokens !== undefined && { maxThinkingTokens }),
@@ -198,7 +197,9 @@ export function buildQueryOptions({
     canUseTool: createToolApprovalHandler(),
     abortController,
     systemPrompt,
-    ...(responseSchema !== undefined && { outputFormat: { type: 'json_schema' as const, schema: responseSchema } }),
+    ...(responseSchema !== undefined && {
+      outputFormat: { type: 'json_schema' as const, schema: responseSchema.schema },
+    }),
     ...(mcpServers !== undefined && { mcpServers }),
   };
 }

@@ -2,6 +2,7 @@
 import {
   BaseConnectorSession,
   UserMessageQueue,
+  markCompletedWithFinalResult,
   processQueueMessages,
   serializeTurnContext,
   formatContextBlockAsText,
@@ -616,8 +617,8 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * handles delayed completions from previous turns even after a new turn starts.
    *
    * Ordering guarantee:
-   * 1. `turn.markTurnFinished()` emits `turn_finished` bus event (agent layer subscribes)
-   * 2. `handle.markCompleted()` notifies downstream waiters the turn is done
+   * 1. Complete the handle and notify `onTurnComplete` with the transformed final result.
+   * 2. Emit `turn_finished` so `complete()` observes the canonical cached result.
    * @param turn - The turn instance being finalized
    * @param handle - The message handle for this turn
    * @param result - The message result to record on the handle
@@ -633,13 +634,10 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
       );
     }
 
-    // Mark the handle complete and notify the connector BEFORE emitting
-    // turn_finished. turn_finished triggers the processing-state → idle
-    // transition; complete() polls for idle and returns lastResult, so the
-    // result must already be set by that point.
+    // Notify the connector with the canonical final result before turn_finished
+    // drives the processing-state → idle transition observed by complete().
     if (!handle.isProcessed) {
-      handle.markCompleted(result);
-      this.config.onTurnComplete?.(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
     }
 
     if (!turn.isPaused()) {

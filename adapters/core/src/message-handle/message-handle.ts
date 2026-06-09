@@ -1,7 +1,11 @@
 import { DeferredPromise } from '@makaio/utils';
-import type { JsonValue, Message, MessageDeliveryMode } from '@makaio/contracts';
+import type { JsonValue, Message, MessageDeliveryMode, ResponseSchemaDescriptor } from '@makaio/contracts';
 import type { MessageResult, MessageState } from './types.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
+
+type CompletionTransform = (result: MessageResult) => MessageResult | Promise<MessageResult>;
+type CompletionObserver = (result: MessageResult) => void;
+type CompletionNotification = (handle: MessageHandle, result: MessageResult) => void | Promise<void>;
 
 export class MessageHandle {
   protected readonly deferredCompletion: DeferredPromise<MessageResult>;
@@ -9,6 +13,9 @@ export class MessageHandle {
   public state: MessageState;
   private isAcknowledged: boolean | undefined = undefined;
   private completionResult: MessageResult | undefined = undefined;
+  private completionStarted = false;
+  private readonly completionTransforms: CompletionTransform[] = [];
+  private readonly completionObservers: CompletionObserver[] = [];
 
   /** If this message was merged into another, the winner's messageId */
   public mergedInto?: string;
@@ -34,6 +41,17 @@ export class MessageHandle {
     messageHistory?: Message[],
     /** Turn-scoped context from PreUserMessage hooks */
     turnContext?: Record<string, JsonValue>,
+    /**
+     * Per-turn structured-output schema descriptor.
+     * When present, the agent validates the terminal message against this
+     * schema before resolving completion and emitting terminal events.
+     */
+    public readonly responseSchema?: ResponseSchemaDescriptor,
+    /**
+     * Internal structured-output retry turns must stay hidden from user-message
+     * lifecycle events while still taking precedence over queued user turns.
+     */
+    public readonly internalRetry = false,
   ) {
     this.deferredCompletion = new DeferredPromise<MessageResult>();
     this.deferredAcknowledgement = new DeferredPromise<boolean>();
@@ -117,11 +135,11 @@ export class MessageHandle {
    */
   public async cancel(): Promise<boolean> {
     this.updateState('cancelled');
+    this.completionStarted = true;
+    this.completionResult = { outcome: 'cancelled' };
 
     this.deferredAcknowledgement.reject(new Error('Message cancelled'));
-    this.deferredCompletion.resolve({
-      outcome: 'cancelled',
-    });
+    this.deferredCompletion.resolve(this.completionResult);
 
     return true;
   }
@@ -140,14 +158,37 @@ export class MessageHandle {
   }
 
   /**
+   * Register a transform that canonicalizes the terminal result before
+   * {@link waitForCompletion} resolves.
+   * @param transform - Transform applied to the raw provider completion result
+   */
+  public addCompletionTransform(transform: CompletionTransform): void {
+    if (this.completionStarted) {
+      throw new Error('Cannot add a completion transform after completion has started');
+    }
+    this.completionTransforms.push(transform);
+  }
+
+  /**
+   * Register an observer that runs after all completion transforms have
+   * produced the canonical terminal result, but before completion resolves.
+   * @param observer - Observer called with the final completion result
+   */
+  public addCompletionObserver(observer: CompletionObserver): void {
+    if (this.completionStarted) {
+      throw new Error('Cannot add a completion observer after completion has started');
+    }
+    this.completionObservers.push(observer);
+  }
+
+  /**
    * Mark message turn as completed
    * @param result - The result message or null if no result available
    */
   public markCompleted(result: MessageResult): void {
-    if (this.completionResult === undefined) {
+    if (!this.completionStarted) {
+      this.completionStarted = true;
       this.updateState('completed');
-      this.completionResult = result;
-      this.deferredCompletion.resolve(result);
 
       // Also resolve acknowledgment promise if not yet resolved (e.g., for superseded/cancelled messages)
       // This prevents orphaned acknowledgment timeouts from firing after completion
@@ -155,8 +196,45 @@ export class MessageHandle {
         this.isAcknowledged = false;
         this.deferredAcknowledgement.resolve(false);
       }
+
+      void this.resolveCompletion(result);
     } else {
       console.warn(`markCompleted called for messageId: ${this.messageId} but already completed.`);
+    }
+  }
+
+  /**
+   * Apply registered completion transforms and publish the canonical result.
+   * @param result - Raw provider completion result
+   */
+  private async resolveCompletion(result: MessageResult): Promise<void> {
+    let finalResult = result;
+    try {
+      for (const transform of this.completionTransforms) {
+        finalResult = await transform(finalResult);
+      }
+    } catch (error) {
+      finalResult = {
+        outcome: 'error',
+        error: error instanceof Error ? error : String(error),
+      };
+    }
+    this.completionResult = finalResult;
+    this.notifyCompletionObservers(finalResult);
+    this.deferredCompletion.resolve(finalResult);
+  }
+
+  /**
+   * Notify registered completion observers without changing terminal outcome.
+   * @param result - Canonical completion result
+   */
+  private notifyCompletionObservers(result: MessageResult): void {
+    for (const observer of this.completionObservers) {
+      try {
+        observer(result);
+      } catch (error) {
+        console.warn(`[MessageHandle] completion observer failed for messageId: ${this.messageId}`, error);
+      }
     }
   }
 
@@ -194,4 +272,33 @@ export class MessageHandle {
     }
     return this.deferredCompletion.getPromise();
   }
+}
+
+/**
+ * Complete a handle while notifying a callback with the transformed final result.
+ *
+ * `markCompleted()` starts async completion transforms before resolving
+ * waiters. Connector/session layers that cache `lastResult` must observe the
+ * final transformed value, not the raw provider result they pass into
+ * `markCompleted()`.
+ * @param handle - Message handle being completed
+ * @param result - Raw provider completion result
+ * @param onComplete - Optional notification callback receiving the final result
+ * @returns Promise that settles after the final-result callback completes
+ */
+export function markCompletedWithFinalResult(
+  handle: MessageHandle,
+  result: MessageResult,
+  onComplete?: CompletionNotification,
+): Promise<void> {
+  const shouldNotify = onComplete !== undefined && !handle.isProcessed;
+  handle.markCompleted(result);
+  if (!shouldNotify) return Promise.resolve();
+  return handle.waitForCompletion().then(async (finalResult) => {
+    try {
+      await onComplete(handle, finalResult);
+    } catch (error: unknown) {
+      console.warn(`[MessageHandle] completion notification failed for messageId: ${handle.messageId}`, error);
+    }
+  });
 }

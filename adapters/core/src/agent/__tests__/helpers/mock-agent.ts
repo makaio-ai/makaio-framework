@@ -28,6 +28,8 @@ export class MockConnector implements Partial<AIAgentConnector> {
   public mcpSessionContext?: McpSessionContext | LedgerSessionContext;
   public startedMessages: NormalizedMessageInput[] = [];
   public sentMessages: NormalizedMessageInput[] = [];
+  public startedHandles: MessageHandle[] = [];
+  public sentHandles: MessageHandle[] = [];
   private processingState: ProcessingState = 'idle';
   public closeCalled = false;
   public interruptCalled = false;
@@ -162,10 +164,12 @@ export class MockConnector implements Partial<AIAgentConnector> {
    */
   public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
     this.startedMessages.push(message);
+    const messageHandle = this.createMessageHandle(message, options);
+    this.startedHandles.push(messageHandle);
     return {
       adapterSessionId: 'test-session-id',
       agentId: 'test-agent',
-      messageHandle: this.createMessageHandle(message, options),
+      messageHandle,
     };
   }
 
@@ -180,7 +184,9 @@ export class MockConnector implements Partial<AIAgentConnector> {
     options?: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     this.sentMessages.push(message);
-    return this.createMessageHandle(message, options);
+    const messageHandle = this.createMessageHandle(message, options);
+    this.sentHandles.push(messageHandle);
+    return messageHandle;
   }
 
   /**
@@ -196,6 +202,8 @@ export class MockConnector implements Partial<AIAgentConnector> {
       options?.deliveryMode ?? 'enqueue',
       options?.messageHistory,
       options?.turnContext,
+      options?.responseSchema,
+      options?.internalRetry ?? false,
     );
     handle.adapterSessionId = 'test-session-id';
     handle.markAcknowledged(true);

@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
-import type { IMakaioSession } from '@makaio/contracts';
+import type { IMakaioSession, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import {
@@ -75,8 +75,11 @@ describe('SessionOrchestrator - Routing', () => {
 
     it('forwards responseSchema to agent.sendMessage', async () => {
       const sessionId = 'session-response-schema';
-      const responseSchema = { type: 'object', properties: { answer: { type: 'string' } } };
-      let capturedResponseSchema: Record<string, unknown> | undefined;
+      const responseSchema: ResponseSchemaDescriptor = {
+        schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+        name: 'answer_schema',
+      };
+      let capturedResponseSchema: ResponseSchemaDescriptor | undefined;
       sessions.set(
         sessionId,
         createMockSession({

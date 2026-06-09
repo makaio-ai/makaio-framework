@@ -126,6 +126,24 @@ describe('buildMessageCreateRequest', () => {
     });
   });
 
+  describe('responseSchema', () => {
+    it('adds output_config for response schema descriptors', () => {
+      const result = buildMessageCreateRequest({
+        model: 'claude-sonnet-4-20250514',
+        messages: MESSAGES,
+        responseSchema: { schema: { type: 'object' }, name: 'object_schema' },
+      });
+
+      expect(result.output_config).toEqual({ format: { type: 'json_schema', schema: { type: 'object' } } });
+    });
+
+    it('omits output_config when responseSchema is not provided', () => {
+      const result = buildMessageCreateRequest({ model: 'claude-sonnet-4-20250514', messages: MESSAGES });
+
+      expect(result).not.toHaveProperty('output_config');
+    });
+  });
+
   describe('thinking config', () => {
     it('omits thinking field when reasoningEffort is undefined', () => {
       const result = buildMessageCreateRequest({

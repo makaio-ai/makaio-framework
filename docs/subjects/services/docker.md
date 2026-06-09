@@ -67,7 +67,9 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapter` | `string` | yes |
+| `bootstrapConfig` | `{ busAuthSecret?: string \| undefined; relayPeer?: { id: string; signingPublicKey: string; } \| undefined; relayIdentity?: { id: string; signingPublicKey: string; signingPrivateKeyPem: string; } \| undefined; gitToken?: string \| undefined; credentialEnv?: Record<string, string> \| undefined; providerEnv?: Record<string, string> \| undefined; } \| undefined` | no |
 | `env` | `Record<string, string> \| undefined` | no |
+| `executionId` | `string \| undefined` | no |
 | `image` | `string \| undefined` | no |
 | `mode` | `"container-local" \| "container-isolated"` | yes |
 | `runtime` | `"full" \| "simple" \| undefined` | no |

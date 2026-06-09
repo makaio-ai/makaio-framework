@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { NormalizedMessageInputSchema, MessageOutcomeSchema } from '../../shared/index.js';
+import {
+  NormalizedMessageInputSchema,
+  MessageOutcomeSchema,
+  StructuredOutputValidationSchema,
+} from '../../shared/index.js';
 import { BaseAgentEventSchema } from './base-event.js';
 
 /**
@@ -43,6 +47,11 @@ export const TurnCompletedSchema = BaseAgentEventSchema.extend({
   outcome: MessageOutcomeSchema,
   /** Error message when outcome is 'error' */
   error: z.string().optional(),
+  /**
+   * Structured-output validation result for this turn.
+   * Present only when a {@link ResponseSchemaDescriptor} was active during the turn.
+   */
+  structuredOutputValidation: StructuredOutputValidationSchema.optional(),
 });
 
 export type TurnCompleted = z.infer<typeof TurnCompletedSchema>;

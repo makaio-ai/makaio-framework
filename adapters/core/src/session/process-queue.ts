@@ -156,8 +156,12 @@ export async function processQueueMessages<TExtra = unknown>(
   }
 
   // --- Normal queue processing ---
-  if (!currentTurn || currentTurn.isCompleted()) {
-    const nextMsg = queue.peek();
+  const nextMsg = queue.peek();
+  const canStartQueuedTurn =
+    !currentTurn ||
+    currentTurn.isCompleted() ||
+    (nextMsg?.internalRetry === true && currentTurn.getMessageHandle().isProcessed);
+  if (canStartQueuedTurn) {
     if (nextMsg) {
       // Immediate mode is only "late" when it missed an active turn window.
       if (nextMsg.deliveryMode === 'immediate' && currentTurn?.isCompleted()) {

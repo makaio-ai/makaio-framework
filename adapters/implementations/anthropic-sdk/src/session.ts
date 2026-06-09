@@ -16,7 +16,7 @@ import { classifyAnthropicError } from './utils/classifyAnthropicError.js';
 import { buildMessageCreateRequest } from './utils/buildMessageCreateRequest.js';
 import { BaseStreamSession } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
-import type { ToolListItem } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
 
 /**
  * Session for Anthropic SDK lifecycle management.
@@ -34,13 +34,20 @@ export class AnthropicSdkSession extends BaseStreamSession<
   AnthropicSdkConnectorTurn,
   MessageCompleteEvent
 > {
-  private messages: MessageParam[] = [];
+  protected messages: MessageParam[] = [];
 
   /**
    * Runtime reasoning effort level; updated by `updateReasoning()`.
    * Initialized from `config.reasoningEffort` at session construction.
    */
   protected currentReasoningEffort: AIReasoningLevel | undefined;
+
+  /**
+   * Per-turn structured output schema descriptor.
+   * Captured from the active `MessageHandle.responseSchema` in `buildMessages`
+   * and forwarded to `buildMessageCreateRequest` in `executeApiCall`.
+   */
+  private currentResponseSchema: ResponseSchemaDescriptor | undefined;
 
   /**
    * Mutable tool list for this session.
@@ -143,6 +150,9 @@ export class AnthropicSdkSession extends BaseStreamSession<
    * @param mergedContent - Optional content from superseded/merged messages
    */
   protected buildMessages(handle: MessageHandle, mergedContent?: string[]): void {
+    // Capture the per-turn structured output schema for use in executeApiCall.
+    this.currentResponseSchema = handle.responseSchema;
+
     // Explicit history injection replaces accumulated messages (recovery / rehydration).
     // Otherwise keep existing this.messages — they accumulate across turns (stateless API pattern).
     if (handle.messageHistory) {
@@ -181,6 +191,27 @@ export class AnthropicSdkSession extends BaseStreamSession<
   }
 
   /**
+   * Return the current Anthropic messages history length.
+   * @returns Number of messages currently staged for the next request
+   */
+  protected getConversationHistoryLength(): number {
+    return this.messages.length;
+  }
+
+  /**
+   * Compact provisional assistant/retry blocks to the canonical assistant turn.
+   * @param startIndex - History index immediately after the user turn input
+   * @param endIndex - Exclusive history boundary for the provisional blocks
+   * @param assistantMessage - Canonical assistant content to persist
+   */
+  protected replaceAssistantTurnHistory(startIndex: number, endIndex: number, assistantMessage: string): void {
+    this.messages.splice(startIndex, endIndex - startIndex, {
+      role: 'assistant',
+      content: assistantMessage,
+    });
+  }
+
+  /**
    * Execute the Anthropic streaming API call.
    *
    * Calls `client.messages.create` with the current messages array and
@@ -208,6 +239,7 @@ export class AnthropicSdkSession extends BaseStreamSession<
       supportsReasoningEffort,
       systemPrompt: this.config.systemPrompt,
       maxTokens: this.config.maxTokens,
+      responseSchema: this.currentResponseSchema,
     });
 
     // Use messages.create with stream:true — returns AsyncIterable<RawMessageStreamEvent>

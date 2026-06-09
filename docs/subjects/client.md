@@ -212,7 +212,7 @@ Type: Event
 | `installPath` | `string \| undefined` | no |
 | `jobId` | `string` | yes |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
-| `status` | `"error" \| "success"` | yes |
+| `status` | `"success" \| "error"` | yes |
 | `strategy` | `"npm" \| "signed-binary-bucket"` | yes |
 | `version` | `string \| undefined` | no |
 
@@ -520,7 +520,7 @@ Type: Request (RPC)
 | `kind` | `string` | yes |
 | `locator` | `{ kind: "session"; sessionId: string; } \| { kind: "adapter-session"; adapterSessionId: string; } \| { kind: "both"; sessionId: string; adapterSessionId: string; }` | yes |
 | `observedAt` | `number` | yes |
-| `payload` | `unknown` | yes |
+| `payload` | `Record<string, unknown>` | yes |
 | `source` | `string` | yes |
 
 **Response:**

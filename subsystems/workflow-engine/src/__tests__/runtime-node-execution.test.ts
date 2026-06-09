@@ -388,7 +388,7 @@ describe('executeStationNode', () => {
         model: 'sonnet',
         harnessId: 'review-harness',
         contextMode: 'fresh',
-        responseSchema: { type: 'object' },
+        responseSchema: { schema: { type: 'object' } },
       });
     } finally {
       unsubscribeRole();
@@ -1124,7 +1124,7 @@ describe('executeDelegateNode', () => {
           adapterName: 'claude-code',
           model: 'sonnet',
           contextMode: 'fresh',
-          responseSchema: { type: 'object' },
+          responseSchema: { schema: { type: 'object' } },
         },
       });
     } finally {
@@ -1189,7 +1189,7 @@ describe('executeDelegateNode', () => {
           task: JSON.stringify({ task: 'Add tests', branch: 'workflow-api' }, null, 2),
           adapterName: 'claude-code',
           harnessId: 'implementation-harness',
-          responseSchema: { type: 'object' },
+          responseSchema: { schema: { type: 'object' } },
         },
       });
     } finally {

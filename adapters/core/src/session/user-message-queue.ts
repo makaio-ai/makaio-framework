@@ -6,7 +6,8 @@ import type { MessageHandle } from '../message-handle/index.js';
  * This queue is owned by adapter Connectors and passed to Sessions for processing.
  *
  * Delivery modes:
- * - 'enqueue': Add to end of queue (default)
+ * - 'enqueue': Add to end of queue (default); internal retries are prioritized
+ *   ahead of already queued user turns.
  * - 'replace': Supersede all unacknowledged messages, add to queue
  * - 'immediate': Handled by Session (abort/restart), not queue
  *
@@ -33,7 +34,27 @@ export class UserMessageQueue {
       }
       this.removeSuperseded();
     }
+    if (handle.internalRetry && handle.deliveryMode === 'enqueue') {
+      this.enqueueInternalRetry(handle);
+      return;
+    }
     this.queue.push(handle);
+  }
+
+  /**
+   * Enqueue an internal retry before ordinary queued user turns while preserving
+   * immediate-mode ordering and FIFO ordering among retries.
+   * @param handle - Internal retry handle to enqueue
+   */
+  private enqueueInternalRetry(handle: MessageHandle): void {
+    const insertionIndex = this.queue.findIndex(
+      (queuedHandle) => queuedHandle.deliveryMode !== 'immediate' && !queuedHandle.internalRetry,
+    );
+    if (insertionIndex === -1) {
+      this.queue.push(handle);
+      return;
+    }
+    this.queue.splice(insertionIndex, 0, handle);
   }
 
   /**

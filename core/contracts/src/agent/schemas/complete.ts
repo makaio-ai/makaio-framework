@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { BaseAgentEventSchema } from './base-event.js';
-import { ErrorCategorySchema, MessageOutcomeSchema } from '../../shared/index.js';
+import { ErrorCategorySchema, MessageOutcomeSchema, StructuredOutputValidationSchema } from '../../shared/index.js';
 
 /**
  * Agent turn completed (any terminal outcome).
@@ -23,6 +23,11 @@ export const CompleteSchema = BaseAgentEventSchema.extend({
   error: z.string().optional(),
   /** Error category for structured fallback/retry logic (present when outcome is 'error'). */
   errorCategory: ErrorCategorySchema.optional(),
+  /**
+   * Structured-output validation result for this turn.
+   * Present only when a {@link ResponseSchemaDescriptor} was active during the turn.
+   */
+  structuredOutputValidation: StructuredOutputValidationSchema.optional(),
 });
 
 export type AgentComplete = z.infer<typeof CompleteSchema>;

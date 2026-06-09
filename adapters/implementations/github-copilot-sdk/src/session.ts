@@ -4,6 +4,7 @@ import {
   BaseConnectorSession,
   UserMessageQueue,
   formatMessageHistoryAsTranscript,
+  markCompletedWithFinalResult,
   processQueueMessages,
   serializeTurnContext,
   formatContextBlockAsText,
@@ -206,8 +207,7 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
           error: error instanceof Error ? error.message : String(error),
         };
         if (!handle.isProcessed) {
-          handle.markCompleted(errorResult);
-          this.config.onTurnComplete?.(handle, errorResult);
+          await markCompletedWithFinalResult(handle, errorResult, this.config.onTurnComplete);
         }
         this.config.handleError(error instanceof Error ? error : new Error(String(error)), false);
 
@@ -351,8 +351,7 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
           outcome: 'error' as const,
           error: this.lastRetryableError || 'Turn failed to start',
         };
-        turn.markCompleted(errorResult);
-        this.config.onTurnComplete?.(handle, errorResult);
+        await markCompletedWithFinalResult(handle, errorResult, this.config.onTurnComplete);
         this.config.handleError(new Error(errorResult.error), false);
       }
       await turn.markTurnFinished(true);
@@ -365,8 +364,7 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
         outcome: 'completed' as const,
         result: { message: this.lastAssistantMessage?.data?.content },
       };
-      turn.markCompleted(result);
-      this.config.onTurnComplete?.(handle, result);
+      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
       // Reset retry state on success
       this.rateLimitRetries = 0;
       this.lastRetryableError = undefined;
@@ -389,36 +387,43 @@ export class CopilotConnectorSession extends BaseConnectorSession<CopilotSession
   private startInactivityTimer(turn: CopilotConnectorTurn): void {
     this.clearInactivityTimer();
     this.inactivityTimer = setTimeout(() => {
-      this.inactivityTimer = undefined;
-
-      // Only act if this turn is still current and active
-      if (this.currentTurn !== turn || turn.isPaused()) return;
-
-      const handle = turn.getMessageHandle();
-      if (handle.isProcessed) return;
-
-      console.warn('[CopilotSession] Inactivity timeout — force-finalizing stuck turn');
-
-      // If content was received before the stall, complete successfully with partial content.
-      // If no content at all, surface as error so consumers can distinguish timeout from empty response.
-      const hasContent = !!this.lastAssistantMessage?.data?.content;
-      const result = hasContent
-        ? {
-            outcome: 'completed' as const,
-            result: { message: this.lastAssistantMessage!.data!.content },
-          }
-        : {
-            outcome: 'error' as const,
-            error: `Inactivity timeout after ${INACTIVITY_TIMEOUT_MS / 1000}s — no content received`,
-          };
-      if (result.outcome === 'error') {
-        this.config.handleError(new Error(result.error), false);
-      }
-      turn.markCompleted(result);
-      this.config.onTurnComplete?.(handle, result);
-
-      void turn.markTurnFinished(true);
+      void this.forceFinalizeInactiveTurn(turn);
     }, INACTIVITY_TIMEOUT_MS);
+  }
+
+  /**
+   * Force-finalize a turn whose SDK stream stopped producing progress events.
+   * @param turn - The inactive turn to finalize
+   */
+  private async forceFinalizeInactiveTurn(turn: CopilotConnectorTurn): Promise<void> {
+    this.inactivityTimer = undefined;
+
+    // Only act if this turn is still current and active
+    if (this.currentTurn !== turn || turn.isPaused()) return;
+
+    const handle = turn.getMessageHandle();
+    if (handle.isProcessed) return;
+
+    console.warn('[CopilotSession] Inactivity timeout — force-finalizing stuck turn');
+
+    // If content was received before the stall, complete successfully with partial content.
+    // If no content at all, surface as error so consumers can distinguish timeout from empty response.
+    const hasContent = !!this.lastAssistantMessage?.data?.content;
+    const result = hasContent
+      ? {
+          outcome: 'completed' as const,
+          result: { message: this.lastAssistantMessage!.data!.content },
+        }
+      : {
+          outcome: 'error' as const,
+          error: `Inactivity timeout after ${INACTIVITY_TIMEOUT_MS / 1000}s — no content received`,
+        };
+    if (result.outcome === 'error') {
+      this.config.handleError(new Error(result.error), false);
+    }
+    await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+
+    await turn.markTurnFinished(true);
   }
 
   /**

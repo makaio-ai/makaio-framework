@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ResponseSchemaDescriptorSchema } from '../shared/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 
 // ============================================================================
@@ -67,10 +68,10 @@ export const SubagentConfigSchema = z.object({
   /** Max nesting depth (capped by runtime constraint) */
   maxDepth: z.number().optional(),
   /**
-   * JSON Schema for structured output.
+   * Structured output descriptor.
    * When present, the executor requests structured output from the adapter.
    */
-  responseSchema: z.record(z.string(), z.unknown()).optional(),
+  responseSchema: ResponseSchemaDescriptorSchema.optional(),
   /** Execution target override. Resolved via ExecutionTargetSubjects.resolve if omitted. */
   executionTargetId: z.string().optional(),
 });

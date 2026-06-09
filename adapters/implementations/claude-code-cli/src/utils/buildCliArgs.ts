@@ -55,6 +55,7 @@ interface BuildCliArgsOptions {
  * - `--effort` — reasoning effort level (`low | medium | high | max`); omitted when `none`
  * - `--mcp-config` — optional inline JSON MCP config string (or path to a JSON file)
  * - `--permission-prompt-tool` — optional MCP tool to handle permission prompts
+ * - `--json-schema` — JSON-serialized schema from `config.responseSchema`; constrains model output to valid JSON
  * @param options - Arguments for building CLI args
  * @returns Array of CLI arguments to pass to spawn()
  */
@@ -111,6 +112,10 @@ export function buildCliArgs({
 
   if (permissionPromptTool) {
     args.push('--permission-prompt-tool', permissionPromptTool);
+  }
+
+  if (config.responseSchema) {
+    args.push('--json-schema', JSON.stringify(config.responseSchema.schema));
   }
 
   // Prompt is the final positional argument

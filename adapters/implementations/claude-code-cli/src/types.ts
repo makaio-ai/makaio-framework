@@ -5,7 +5,7 @@ import type {
   MessageHandle,
   MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { McpResolvedServer, McpSessionContext, SystemPrompt } from '@makaio/contracts';
+import type { McpResolvedServer, McpSessionContext, ResponseSchemaDescriptor, SystemPrompt } from '@makaio/contracts';
 import type { ClaudeCodeCliConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeCliProviderConfig } from './schemas.js';
 
@@ -126,4 +126,10 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
    * registry entry so the CLI subprocess can connect to upstream servers natively.
    */
   mcpUpstreamServers?: McpResolvedServer[];
+  /**
+   * Per-turn structured output schema descriptor.
+   * When present, passes `--json-schema <JSON>` to the CLI subprocess so the
+   * model is constrained to respond with valid JSON matching the schema.
+   */
+  responseSchema?: ResponseSchemaDescriptor;
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 @dataclass(frozen=True)
 class ApprovalRequestRequest:
@@ -23,8 +23,15 @@ class ApprovalRequestRequest:
 
 
 @dataclass(frozen=True)
-class ApprovalRequestResponse:
-    pass
+class ApprovalRequestResponseVariantA:
+    action: Literal["allow"]
+    updated_input: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalRequestResponseVariantB:
+    action: Literal["deny"]
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,3 +48,6 @@ class ApprovalResolveEnrichedPolicyResponse:
     persona_name: str | None = None
     profile_name: str | None = None
     risk_level: Literal["safe", "neutral", "destructive"] | None = None
+
+
+ApprovalRequestResponse = Union[ApprovalRequestResponseVariantA, ApprovalRequestResponseVariantB]

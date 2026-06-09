@@ -74,6 +74,8 @@ def from_wire(data: dict[str, Any], cls: type[T]) -> T:
     @param cls: The frozen dataclass type to construct.
     @returns: An instance of ``cls`` populated from ``data``.
     """
+    if get_origin(cls) in (types.UnionType, Union):
+        return _from_wire_value(data, cls)  # type: ignore[return-value]
     if not dataclasses.is_dataclass(cls):
         return data  # type: ignore[return-value]
     field_names = _field_names(cls)

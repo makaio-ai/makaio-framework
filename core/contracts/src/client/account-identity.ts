@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { JsonObjectSchema } from '../shared/index.js';
+import { JsonObjectContractSchema } from '../shared/index.js';
 import { EpochMillisecondsSchema, NonEmptyStringSchema } from './primitives.js';
 import { VersionRangeSchema } from '../version/index.js';
 
@@ -133,7 +133,7 @@ export const ClientIdentityObservationSchema = z.object({
   source: z.string(),
   kind: z.string(),
   observedAt: EpochMillisecondsSchema,
-  payload: JsonObjectSchema,
+  payload: JsonObjectContractSchema,
 });
 
 export type ClientIdentityObservation = z.infer<typeof ClientIdentityObservationSchema>;

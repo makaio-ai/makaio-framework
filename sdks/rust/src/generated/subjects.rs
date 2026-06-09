@@ -212,6 +212,26 @@ pub mod agent {
         const SUBJECT: &'static str = STEP_STARTED;
     }
 
+    pub const STRUCTURED_OUTPUT_ENFORCE: &str = "agent.structuredOutput.enforce";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StructuredOutputEnforce;
+    impl RequestSubject for StructuredOutputEnforce {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = STRUCTURED_OUTPUT_ENFORCE;
+    }
+
+    pub const STRUCTURED_OUTPUT_RETRY_POLICY: &str = "agent.structuredOutput.retryPolicy";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct StructuredOutputRetryPolicy;
+    impl RequestSubject for StructuredOutputRetryPolicy {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = STRUCTURED_OUTPUT_RETRY_POLICY;
+    }
+
     pub const TOOL_COMPLETED: &str = "agent.tool.completed";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -595,6 +615,18 @@ pub const SUBJECTS: &[ProtocolSubject] = &[
         namespace: "agent",
         subject: "step.started",
         full_subject: agent::STEP_STARTED,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "agent",
+        subject: "structuredOutput.enforce",
+        full_subject: agent::STRUCTURED_OUTPUT_ENFORCE,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "agent",
+        subject: "structuredOutput.retryPolicy",
+        full_subject: agent::STRUCTURED_OUTPUT_RETRY_POLICY,
     },
     ProtocolSubject {
         kind: SubjectKind::Event,

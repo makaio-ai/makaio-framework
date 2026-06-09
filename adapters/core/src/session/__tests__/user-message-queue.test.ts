@@ -3,8 +3,20 @@ import { UserMessageQueue } from '../user-message-queue.js';
 import { MessageHandle } from '../../message-handle/index.js';
 import { normalizeMessageInput } from '../../utils/normalizeMessageInput.js';
 
-function createHandle(message: string, deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue'): MessageHandle {
-  return new MessageHandle(crypto.randomUUID(), normalizeMessageInput(message), deliveryMode);
+function createHandle(
+  message: string,
+  deliveryMode: 'enqueue' | 'replace' | 'immediate' = 'enqueue',
+  internalRetry = false,
+): MessageHandle {
+  return new MessageHandle(
+    crypto.randomUUID(),
+    normalizeMessageInput(message),
+    deliveryMode,
+    undefined,
+    undefined,
+    undefined,
+    internalRetry,
+  );
 }
 
 describe('UserMessageQueue', () => {
@@ -193,6 +205,36 @@ describe('UserMessageQueue', () => {
       // Immediate messages should remain in order
       expect(queue.dequeue()).toBe(h2);
       expect(queue.dequeue()).toBe(h4);
+    });
+  });
+
+  describe('internal retry priority', () => {
+    it('dequeues internal structured-output retries before already queued user turns', () => {
+      const h1 = createHandle('follow-up');
+      const h2 = createHandle('later follow-up');
+      const retry = createHandle('retry', 'enqueue', true);
+
+      queue.enqueue(h1);
+      queue.enqueue(h2);
+      queue.enqueue(retry);
+
+      expect(queue.dequeue()).toBe(retry);
+      expect(queue.dequeue()).toBe(h1);
+      expect(queue.dequeue()).toBe(h2);
+    });
+
+    it('preserves existing immediate priority ahead of internal retries', () => {
+      const immediate = createHandle('interrupt', 'immediate');
+      const followUp = createHandle('follow-up');
+      const retry = createHandle('retry', 'enqueue', true);
+
+      queue.enqueue(immediate);
+      queue.enqueue(followUp);
+      queue.enqueue(retry);
+
+      expect(queue.dequeue()).toBe(immediate);
+      expect(queue.dequeue()).toBe(retry);
+      expect(queue.dequeue()).toBe(followUp);
     });
   });
 });

@@ -38,7 +38,7 @@ export class AnthropicSdkAdapter extends AIAdapter<AnthropicSdkConnectorBus, Ant
   public constructor(config?: Partial<AIAdapterConfig>) {
     super({
       name: AnthropicSdkAdapterName,
-      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append'],
+      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'structuredOutput'],
       ...config,
       namespace: AnthropicSdkConnectorNamespace,
       agentFactory: (agentConfig) => {

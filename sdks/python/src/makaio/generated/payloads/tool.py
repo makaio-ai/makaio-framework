@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 @dataclass(frozen=True)
 class ToolCompletedPayload:
@@ -55,8 +55,22 @@ class ToolExecuteRequest:
 
 
 @dataclass(frozen=True)
-class ToolExecuteResponse:
-    pass
+class ToolExecuteResponseVariantA:
+    data: Any
+    success: Literal[True]
+
+
+@dataclass(frozen=True)
+class ToolExecuteResponseVariantBError:
+    code: str
+    message: str
+    details: Any | None = None
+
+
+@dataclass(frozen=True)
+class ToolExecuteResponseVariantB:
+    error: ToolExecuteResponseVariantBError
+    success: Literal[False]
 
 
 @dataclass(frozen=True)
@@ -118,3 +132,6 @@ class ToolStartedPayload:
     timestamp: float
     tool_name: str
     toolset_name: str
+
+
+ToolExecuteResponse = Union[ToolExecuteResponseVariantA, ToolExecuteResponseVariantB]
