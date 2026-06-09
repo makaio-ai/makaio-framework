@@ -19,7 +19,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.7"
+    "vitest": "4.1.8"
   },
   "scripts": {
     "build": "tsdown",

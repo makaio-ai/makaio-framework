@@ -39,7 +39,7 @@
     "@makaio/extension-opencode": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsx": "^4.22.3"
+    "tsx": "^4.22.4"
   },
   "publishConfig": {
     "exports": {
