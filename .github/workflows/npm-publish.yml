@@ -191,7 +191,7 @@ jobs:
 
       - name: Build selected package closure
         run: |
-          from="$(node -e "const pkgs = JSON.parse(require('fs').readFileSync(process.env.DEV_PUBLISH_MANIFEST, 'utf8')); console.log('{' + pkgs.map((pkg) => pkg.name).join(',') + '}');")"
+          from="$(node -e "const pkgs = JSON.parse(require('fs').readFileSync(process.env.DEV_PUBLISH_MANIFEST, 'utf8')); const names = pkgs.map((pkg) => pkg.name); console.log(names.length > 1 ? '{' + names.join(',') + '}' : names[0]);")"
           yarn workspaces foreach -Rpt --from "$from" run build
 
       - name: Pack selected packages
