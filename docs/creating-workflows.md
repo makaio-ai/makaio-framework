@@ -712,6 +712,9 @@ Add this to your repo's `.gitignore`:
 .makaio/personal/
 ```
 
+Host applications and extensions may also register workflow definitions programmatically.
+Those extension-specific discovery conventions are documented by the extension that owns them.
+
 ---
 
 ## Execution Model
