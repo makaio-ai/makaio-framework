@@ -119,6 +119,75 @@ describe('TransitionPipelineService', () => {
     await service.destroy();
   });
 
+  it('resolves previous artifact revisions for revised transition rules', async () => {
+    const bus: IMakaioBus = createBusInstance();
+    const service = new TransitionPipelineService(bus);
+    const previousRef = {
+      refClass: 'artifact',
+      kind: 'implementation-plan',
+      id: 'artifact-1',
+      revision: 'rev-1',
+    } as const;
+    const previousArtifact = makeArtifact({
+      revision: previousRef.revision,
+      data: { status: 'ready', queue: [{ id: 'existing', workflow: 'implementation' }] },
+    });
+    const revisedArtifact = makeArtifact({
+      revision: 'rev-2',
+      data: {
+        status: 'ready',
+        queue: [
+          { id: 'existing', workflow: 'implementation' },
+          { id: 'new', workflow: 'implementation' },
+        ],
+      },
+    });
+    const capturedStart = new Promise<unknown>((resolve) => {
+      bus.on(WorkflowSubjects.start, (ctx) => {
+        resolve(ctx.payload);
+        ctx.setResult({ executionId: 'wfx-revised-transition' });
+      });
+    });
+    bus.on(ArtifactSubjects.resolve, (ctx) => {
+      expect(ctx.payload.ref).toStrictEqual(previousRef);
+      ctx.setResult({ artifact: previousArtifact });
+    });
+    await service.init();
+
+    service.ruleRegistry.register('pkg-transition', [
+      {
+        id: 'pkg-transition.start-from-revised',
+        on: 'artifact.revised',
+        when: {
+          $expr:
+            "(artifact.data.queue[.workflow == 'implementation' && !((previousArtifact.data.queue|pluck('id'))|includes(.id))]|length) > 0",
+        },
+        action: {
+          type: 'workflow.start',
+          input: {
+            workflowId: 'implementation',
+            inputExpression:
+              "{ queue: artifact.data.queue[.workflow == 'implementation' && !((previousArtifact.data.queue|pluck('id'))|includes(.id))] }",
+          },
+        },
+        enabled: true,
+      },
+    ]);
+
+    await bus.emit(ArtifactSubjects.revised, {
+      previous: previousRef,
+      artifact: revisedArtifact,
+    });
+
+    await expect(capturedStart).resolves.toMatchObject({
+      workflowId: 'implementation',
+      input: {
+        queue: [{ id: 'new', workflow: 'implementation' }],
+      },
+    });
+    await service.destroy();
+  });
+
   it('skips status transition evaluation when the artifact ref cannot be resolved', async () => {
     const bus: IMakaioBus = createBusInstance();
     const service = new TransitionPipelineService(bus);

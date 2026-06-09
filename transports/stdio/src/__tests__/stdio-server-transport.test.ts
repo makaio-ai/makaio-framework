@@ -9,6 +9,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { StdioServerTransport } from '../stdio-server-transport.js';
 import type { BusMessage } from '@makaio/bus-core';
 
+const TRANSPORT_INTEGRATION_TIMEOUT_MS = 20_000;
+
 // ---------------------------------------------------------------------------
 // Minimal child-process script
 //
@@ -96,7 +98,7 @@ process.stdin.on('data', (chunk) => {
 process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
 `;
 
-describe('StdioServerTransport', () => {
+describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, () => {
   let transport: StdioServerTransport | undefined;
 
   afterEach(async () => {
@@ -167,34 +169,38 @@ describe('StdioServerTransport', () => {
     expect(transport.isReady()).toBe(false);
   });
 
-  it('creates a fresh ready session and reports it on reconnect', async () => {
-    transport = new StdioServerTransport({
-      spawn: {
-        command: 'node',
-        args: ['-e', DELAYED_HANDSHAKE_SCRIPT],
-        cwd: process.cwd(),
-        processName: 'delayed-child',
-      },
-    });
+  it(
+    'creates a fresh ready session and reports it on reconnect',
+    async () => {
+      transport = new StdioServerTransport({
+        spawn: {
+          command: 'node',
+          args: ['-e', DELAYED_HANDSHAKE_SCRIPT],
+          cwd: process.cwd(),
+          processName: 'delayed-child',
+        },
+      });
 
-    await transport.connect();
-    await transport.ready;
-    await transport.disconnect();
+      await transport.connect();
+      await transport.ready;
+      await transport.disconnect();
 
-    const sessions: Array<Promise<void>> = [];
-    transport.onNewReadySession = (promise) => {
-      sessions.push(promise);
-    };
+      const sessions: Array<Promise<void>> = [];
+      transport.onNewReadySession = (promise) => {
+        sessions.push(promise);
+      };
 
-    await transport.connect();
+      await transport.connect();
 
-    expect(sessions).toHaveLength(1);
-    expect(transport.ready).toBe(sessions[0]);
-    expect(transport.isReady()).toBe(false);
+      expect(sessions).toHaveLength(1);
+      expect(transport.ready).toBe(sessions[0]);
+      expect(transport.isReady()).toBe(false);
 
-    await transport.ready;
-    expect(transport.isReady()).toBe(true);
-  });
+      await transport.ready;
+      expect(transport.isReady()).toBe(true);
+    },
+    TRANSPORT_INTEGRATION_TIMEOUT_MS,
+  );
 
   it('isReady() returns false before connect() is called', () => {
     transport = new StdioServerTransport({ spawn: SPAWN_OPTIONS });

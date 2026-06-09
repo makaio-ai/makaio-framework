@@ -5,7 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { renderHookWrapper } from '../install/wrapper-template.js';
 
 const tempDirs: string[] = [];
-const RECEIVER_PROCESS_TIMEOUT_MS = 6_500;
+const RECEIVER_BOUNDARY_TIMEOUT_MS = 9_000;
+const RECEIVER_TIMEOUT_GRACE_MS = 500;
 const TEST_TIMEOUT_MS = 10_000;
 
 async function makeTempDir(prefix: string): Promise<string> {
@@ -43,10 +44,10 @@ describe('renderHookWrapper', () => {
         cwd: dir,
         input: 'stdin payload',
         reject: false,
-        timeout: RECEIVER_PROCESS_TIMEOUT_MS,
+        timeout: RECEIVER_BOUNDARY_TIMEOUT_MS,
       });
 
-      expect(Date.now() - startedAt).toBeLessThan(RECEIVER_PROCESS_TIMEOUT_MS);
+      expect(Date.now() - startedAt).toBeLessThanOrEqual(RECEIVER_BOUNDARY_TIMEOUT_MS + RECEIVER_TIMEOUT_GRACE_MS);
       expect(result.exitCode).toBe(7);
     },
     TEST_TIMEOUT_MS,

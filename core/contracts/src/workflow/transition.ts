@@ -33,6 +33,8 @@ export type TransitionEventType = z.infer<typeof TransitionEventTypeSchema>;
  * Evaluation context shape:
  * - `artifact` — the `ArtifactRevision` involved in the event
  * - `previous` — the previous `ArtifactRef` for `artifact.revised` events
+ * - `previousArtifact` — the resolved previous `ArtifactRevision` for
+ *   `artifact.revised` events when the artifact store can provide it
  * - `path` — the status path for `artifact.status.changed` events
  * - `current` — the new status value for `artifact.status.changed` events
  */
@@ -229,6 +231,13 @@ export interface TransitionEvaluationContext {
    * status value.
    */
   readonly previous?: unknown;
+  /**
+   * Resolved previous artifact revision for `artifact.revised` events.
+   *
+   * This preserves `previous` as the original event value while giving rules a
+   * full before/after snapshot when they need to detect semantic deltas.
+   */
+  readonly previousArtifact?: ArtifactRevision;
   /**
    * JSON Pointer path to the status field that changed.
    * Present only for `artifact.status.changed` events.

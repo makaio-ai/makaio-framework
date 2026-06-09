@@ -78,9 +78,11 @@ export class TransitionPipelineService extends BaseService {
     });
 
     this.registerHandler(ArtifactSubjects.revised, async (ctx) => {
+      const previousArtifact = await this.resolvePreviousRevisedArtifact(ctx.payload.previous);
       await this.handleArtifactEvent('artifact.revised', {
         artifact: ctx.payload.artifact,
         previous: ctx.payload.previous,
+        ...(previousArtifact !== undefined ? { previousArtifact } : {}),
       });
     });
 
@@ -150,6 +152,24 @@ export class TransitionPipelineService extends BaseService {
         `[TransitionPipelineService] Could not resolve status transition artifact '${this.artifactKey(ref)}'. ` +
           `Skipping rule evaluation.`,
       );
+      return undefined;
+    }
+
+    return result.data.artifact;
+  }
+
+  /**
+   * Resolve the previous revision for an artifact.revised event.
+   *
+   * The original `previous` context value remains the event's artifact ref for
+   * compatibility; this helper adds a full `previousArtifact` snapshot when the
+   * artifact store can provide it so rules can compare before/after state.
+   * @param ref - Revisioned artifact reference from the revised event.
+   * @returns Full previous artifact revision, or `undefined` when unavailable.
+   */
+  private async resolvePreviousRevisedArtifact(ref: ArtifactRef): Promise<ArtifactRevision | undefined> {
+    const result = await this.bus.requestOptional(ArtifactSubjects.resolve, { ref });
+    if (!result.handled || result.data.artifact === null) {
       return undefined;
     }
 

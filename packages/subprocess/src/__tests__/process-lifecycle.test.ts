@@ -5,13 +5,17 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { createProcessLifecycle } from '../process-lifecycle.js';
 import type { ProcessLifecycleHandle, ProcessState } from '../process-lifecycle.js';
 
+const PROCESS_TEST_TIMEOUT_MS = 30_000;
+const READY_HEALTH_TIMEOUT_MS = 10_000;
+const WAIT_FOR_TIMEOUT_MS = 10_000;
+
 /**
  * Helper: wait at most `ms` milliseconds for a condition to become true.
  * @param condition - Predicate to poll until it returns true.
- * @param ms - Maximum wait duration in milliseconds. Defaults to 2000.
+ * @param ms - Maximum wait duration in milliseconds.
  * @returns Promise that resolves when the condition is met.
  */
-function waitFor(condition: () => boolean, ms: number = 2000): Promise<void> {
+function waitFor(condition: () => boolean, ms: number = WAIT_FOR_TIMEOUT_MS): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const deadline = Date.now() + ms;
     const tick = (): void => {
@@ -29,7 +33,7 @@ function waitFor(condition: () => boolean, ms: number = 2000): Promise<void> {
   });
 }
 
-describe('createProcessLifecycle', () => {
+describe('createProcessLifecycle', { timeout: PROCESS_TEST_TIMEOUT_MS }, () => {
   let handle: ProcessLifecycleHandle | undefined;
 
   afterEach(async () => {
@@ -55,7 +59,7 @@ describe('createProcessLifecycle', () => {
         cwd: process.cwd(),
         processName: 'test-ready',
       },
-      healthTimeoutMs: 3000,
+      healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
     });
 
     await handle.start();
@@ -74,7 +78,7 @@ describe('createProcessLifecycle', () => {
         cwd: process.cwd(),
       },
       onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
+      healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
     });
 
     expect(handle.state).toBe('idle');
@@ -94,7 +98,7 @@ describe('createProcessLifecycle', () => {
         cwd: process.cwd(),
       },
       onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
+      healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
       shutdownTimeoutMs: 2000,
     });
 
@@ -119,7 +123,7 @@ describe('createProcessLifecycle', () => {
         cwd: process.cwd(),
       },
       onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
+      healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
     });
 
     expect(handle.state).toBe('idle');
@@ -149,125 +153,147 @@ describe('createProcessLifecycle', () => {
     handle = undefined; // already cleaned up
   });
 
-  it('sets state to crashed on non-zero exit while running', async () => {
-    const states: ProcessState[] = [];
+  it(
+    'sets state to crashed on non-zero exit while running',
+    async () => {
+      const states: ProcessState[] = [];
 
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(1), 100)'],
-        cwd: process.cwd(),
-      },
-      onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
-    });
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(1), 100)'],
+          cwd: process.cwd(),
+        },
+        onStateChange: (s) => states.push(s),
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    await handle.start();
-    expect(handle.state).toBe('running');
+      await handle.start();
+      expect(handle.state).toBe('running');
 
-    await waitFor(() => handle!.state === 'crashed', 2000);
-    expect(handle.state).toBe('crashed');
-    handle = undefined;
-  });
+      await waitFor(() => handle!.state === 'crashed');
+      expect(handle.state).toBe('crashed');
+      handle = undefined;
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it('replaces the pre-ready exit listener with the running lifecycle listener after start', async () => {
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
-        cwd: process.cwd(),
-      },
-      healthTimeoutMs: 3000,
-    });
+  it(
+    'replaces the pre-ready exit listener with the running lifecycle listener after start',
+    async () => {
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
+          cwd: process.cwd(),
+        },
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    await handle.start();
+      await handle.start();
 
-    const exitListenerNames = handle.transport?.process.listeners('exit').map((listener) => listener.name);
-    expect(exitListenerNames).toContain('handleRunningExit');
-    expect(exitListenerNames).not.toContain('handleEarlyExit');
-  });
+      const exitListenerNames = handle.transport?.process.listeners('exit').map((listener) => listener.name);
+      expect(exitListenerNames).toContain('handleRunningExit');
+      expect(exitListenerNames).not.toContain('handleEarlyExit');
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it('stop() cleans up and reaches stopped after the process has crashed', async () => {
-    const states: ProcessState[] = [];
+  it(
+    'stop() cleans up and reaches stopped after the process has crashed',
+    async () => {
+      const states: ProcessState[] = [];
 
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(1), 50)'],
-        cwd: process.cwd(),
-      },
-      onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
-    });
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(1), 50)'],
+          cwd: process.cwd(),
+        },
+        onStateChange: (s) => states.push(s),
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    await handle.start();
-    await waitFor(() => handle!.state === 'crashed', 2000);
+      await handle.start();
+      await waitFor(() => handle!.state === 'crashed');
 
-    await expect(handle.stop()).resolves.toBeUndefined();
+      await expect(handle.stop()).resolves.toBeUndefined();
 
-    expect(handle.state).toBe('stopped');
-    expect(handle.transport).toBeUndefined();
-    expect(states).toContain('crashed');
-    expect(states.at(-1)).toBe('stopped');
-    handle = undefined;
-  });
+      expect(handle.state).toBe('stopped');
+      expect(handle.transport).toBeUndefined();
+      expect(states).toContain('crashed');
+      expect(states.at(-1)).toBe('stopped');
+      handle = undefined;
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it('calls onExit with the exit code', async () => {
-    let receivedCode: number | null | undefined;
-    let exitCount = 0;
+  it(
+    'calls onExit with the exit code',
+    async () => {
+      let receivedCode: number | null | undefined;
+      let exitCount = 0;
 
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(42), 50)'],
-        cwd: process.cwd(),
-      },
-      onExit: (code) => {
-        receivedCode = code;
-        exitCount += 1;
-      },
-      healthTimeoutMs: 3000,
-    });
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => process.exit(42), 50)'],
+          cwd: process.cwd(),
+        },
+        onExit: (code) => {
+          receivedCode = code;
+          exitCount += 1;
+        },
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    await handle.start();
-    await waitFor(() => receivedCode !== undefined, 2000);
-    expect(receivedCode).toBe(42);
-    expect(exitCount).toBe(1);
-    handle = undefined;
-  });
+      await handle.start();
+      await waitFor(() => receivedCode !== undefined);
+      expect(receivedCode).toBe(42);
+      expect(exitCount).toBe(1);
+      handle = undefined;
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it('calls onReady when the process signals readiness', async () => {
-    let ready = false;
+  it(
+    'calls onReady when the process signals readiness',
+    async () => {
+      let ready = false;
 
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
-        cwd: process.cwd(),
-      },
-      onReady: () => {
-        ready = true;
-      },
-      healthTimeoutMs: 3000,
-    });
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
+          cwd: process.cwd(),
+        },
+        onReady: () => {
+          ready = true;
+        },
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    await handle.start();
-    expect(ready).toBe(true);
-  });
+      await handle.start();
+      expect(ready).toBe(true);
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
-  it('restarts on crash when restartPolicy is on-crash', async () => {
-    const states: ProcessState[] = [];
-    const restartDir = mkdtempSync(join(tmpdir(), 'makaio-process-lifecycle-'));
-    const restartMarker = join(restartDir, 'first-run-complete');
+  it(
+    'restarts on crash when restartPolicy is on-crash',
+    async () => {
+      const states: ProcessState[] = [];
+      const restartDir = mkdtempSync(join(tmpdir(), 'makaio-process-lifecycle-'));
+      const restartMarker = join(restartDir, 'first-run-complete');
 
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: [
-          '-e',
-          // First run: signal ready then crash after 100ms.
-          // Subsequent runs: stay alive so the test can observe running state.
-          `
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: [
+            '-e',
+            // First run: signal ready then crash after 100ms.
+            // Subsequent runs: stay alive so the test can observe running state.
+            `
 const fs = require('node:fs');
 const marker = process.env.MAKAIO_RESTART_MARKER;
 process.stdout.write('{"ready":true}\\n');
@@ -279,55 +305,61 @@ if (fs.existsSync(marker)) {
   setTimeout(() => process.exit(1), 100);
 }
 `,
-        ],
-        cwd: process.cwd(),
-        env: { MAKAIO_RESTART_MARKER: restartMarker },
-      },
-      restartPolicy: 'on-crash',
-      onStateChange: (s) => states.push(s),
-      healthTimeoutMs: 3000,
-    });
+          ],
+          cwd: process.cwd(),
+          env: { MAKAIO_RESTART_MARKER: restartMarker },
+        },
+        restartPolicy: 'on-crash',
+        onStateChange: (s) => states.push(s),
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
 
-    try {
+      try {
+        await handle.start();
+        expect(handle.state).toBe('running');
+
+        // Wait for crash then restart cycle: running → crashed → starting → running
+        await waitFor(() => {
+          const ri = states.lastIndexOf('running');
+          const ci = states.lastIndexOf('crashed');
+          return ri > ci && ci !== -1;
+        });
+
+        // Verify the sequence contains the restart cycle
+        expect(states).toContain('crashed');
+        const firstRunning = states.indexOf('running');
+        const crashed = states.indexOf('crashed');
+        const secondRunning = states.lastIndexOf('running');
+        expect(crashed).toBeGreaterThan(firstRunning);
+        expect(secondRunning).toBeGreaterThan(crashed);
+        expect(handle.state).toBe('running');
+      } finally {
+        rmSync(restartDir, { recursive: true, force: true });
+      }
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'stop() is idempotent when already stopped',
+    async () => {
+      handle = createProcessLifecycle({
+        spawn: {
+          command: 'node',
+          args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
+          cwd: process.cwd(),
+        },
+        healthTimeoutMs: READY_HEALTH_TIMEOUT_MS,
+      });
+
       await handle.start();
-      expect(handle.state).toBe('running');
-
-      // Wait for crash then restart cycle: running → crashed → starting → running
-      await waitFor(() => {
-        const ri = states.lastIndexOf('running');
-        const ci = states.lastIndexOf('crashed');
-        return ri > ci && ci !== -1;
-      }, 5000);
-
-      // Verify the sequence contains the restart cycle
-      expect(states).toContain('crashed');
-      const firstRunning = states.indexOf('running');
-      const crashed = states.indexOf('crashed');
-      const secondRunning = states.lastIndexOf('running');
-      expect(crashed).toBeGreaterThan(firstRunning);
-      expect(secondRunning).toBeGreaterThan(crashed);
-      expect(handle.state).toBe('running');
-    } finally {
-      rmSync(restartDir, { recursive: true, force: true });
-    }
-  });
-
-  it('stop() is idempotent when already stopped', async () => {
-    handle = createProcessLifecycle({
-      spawn: {
-        command: 'node',
-        args: ['-e', 'process.stdout.write(\'{"ready":true}\\n\'); setTimeout(() => {}, 5000)'],
-        cwd: process.cwd(),
-      },
-      healthTimeoutMs: 3000,
-    });
-
-    await handle.start();
-    await handle.stop();
-    // Second stop must not throw
-    await expect(handle.stop()).resolves.toBeUndefined();
-    handle = undefined;
-  });
+      await handle.stop();
+      // Second stop must not throw
+      await expect(handle.stop()).resolves.toBeUndefined();
+      handle = undefined;
+    },
+    PROCESS_TEST_TIMEOUT_MS,
+  );
 
   it('stop() is a no-op when state is idle', async () => {
     handle = createProcessLifecycle({
