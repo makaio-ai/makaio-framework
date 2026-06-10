@@ -14,7 +14,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@makaio/build-tooling": "workspace:*"
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*"

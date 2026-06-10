@@ -5,7 +5,8 @@
   "type": "module",
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@makaio/test-utils": "workspace:*"
+    "@makaio/test-utils": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "scripts": {
     "build": "tsdown",

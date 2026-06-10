@@ -24,7 +24,8 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@makaio/build-tooling": "workspace:*"
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "inlinedDependencies": {
     "type-fest": "5.3.1"

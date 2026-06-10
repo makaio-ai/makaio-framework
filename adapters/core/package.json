@@ -32,7 +32,8 @@
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/bus-core": "workspace:*",
-    "@makaio/subsystem-adapter": "workspace:*"
+    "@makaio/subsystem-adapter": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "inlinedDependencies": {
     "drizzle-orm": "0.45.2",

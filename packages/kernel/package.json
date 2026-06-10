@@ -28,7 +28,8 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@makaio/service-base": "workspace:*"
+    "@makaio/service-base": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "publishConfig": {
     "exports": {
