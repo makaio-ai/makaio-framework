@@ -13,7 +13,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@makaio/build-tooling": "workspace:*"
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0"

@@ -11,7 +11,8 @@
     "./package.json": "./package.json"
   },
   "devDependencies": {
-    "@makaio/build-tooling": "workspace:*"
+    "@makaio/build-tooling": "workspace:*",
+    "tsdown": "0.22.0"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
