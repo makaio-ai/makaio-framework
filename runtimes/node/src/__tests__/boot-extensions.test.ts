@@ -473,7 +473,7 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
 describe('workflow-level runner boot composition', () => {
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
     });
 
@@ -483,7 +483,7 @@ describe('workflow-level runner boot composition', () => {
   it('creates an InProcessWorkflowRunner for in-process mode when a bus is provided', () => {
     const bus = createBusInstance();
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: { mode: 'in-process' },
       bus,
@@ -495,7 +495,7 @@ describe('workflow-level runner boot composition', () => {
   it('creates a WorkerNodeRunner for worker-node mode', () => {
     const dispatch = vi.fn();
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
         mode: 'worker-node',
@@ -510,7 +510,7 @@ describe('workflow-level runner boot composition', () => {
   it('creates a WorkerNodeRunner with optional requirements forwarded', () => {
     const dispatch = vi.fn();
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
         mode: 'worker-node',
@@ -536,7 +536,7 @@ describe('workflow-level runner boot composition', () => {
       });
     });
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: { mode: 'worker-node' },
       bus,
@@ -568,7 +568,7 @@ describe('workflow-level runner boot composition', () => {
       };
     };
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {
         mode: 'worker-node',
@@ -592,7 +592,7 @@ describe('workflow-level runner boot composition', () => {
   it('creates an InProcessWorkflowRunner when runner mode is omitted but a runner object is present', () => {
     const bus = createBusInstance();
     const runner = createNodeWorkflowRunner({
-      packageRoot: '/runtime',
+      moduleDir: '/runtime/src',
       defaultWorkerEntryMode: 'source',
       runner: {},
       bus,
@@ -604,7 +604,7 @@ describe('workflow-level runner boot composition', () => {
   it('throws when in-process mode is configured but no bus is provided', () => {
     expect(() =>
       createNodeWorkflowRunner({
-        packageRoot: '/runtime',
+        moduleDir: '/runtime/src',
         defaultWorkerEntryMode: 'source',
         runner: { mode: 'in-process' },
         // bus intentionally omitted

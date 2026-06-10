@@ -51,10 +51,20 @@ export function awaitSubagentTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.await, {
-          subagentId: input.subagentId,
-          timeoutMs: input.timeoutMs,
-        });
+        // `timeout: 0` disables the bus envelope's 60s default request
+        // timeout. The await deadline is owned by the SubagentService
+        // handler, which resolves `{ status: 'timeout' }` after
+        // `timeoutMs` (or `constraints.defaultAwaitTimeoutMs`, default
+        // 300s) — without this, every await longer than 60s would die in
+        // the RPC envelope regardless of the requested timeoutMs.
+        const result = await context.bus.request(
+          SubagentSubjects.await,
+          {
+            subagentId: input.subagentId,
+            timeoutMs: input.timeoutMs,
+          },
+          { timeout: 0 },
+        );
         return toolSuccess(result);
       } catch (err) {
         // Service throws if subagent not found
