@@ -67,6 +67,12 @@ export {
   type ParsedMakaioConfig,
   type WorkflowRunnerConfig,
 } from './makaio-config.js';
+export {
+  initializeNodeDatabase,
+  type InitializeNodeDatabaseOptions,
+  type InitializeNodeDatabaseResult,
+} from './initialize-node-database.js';
+export { BusServerTransportProvider, type BusServerTransportOptions } from './bus-server-transport.js';
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
 export { readFrameworkVersion } from './read-framework-version.js';
 export { FileRegistryCache } from './model-registry/file-registry-cache.js';

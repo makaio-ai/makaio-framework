@@ -167,11 +167,23 @@ export const frameworkReactPreset = {
  *
  * Inlines all `@makaio/*` deps (only `@makaio/core`) with no external rewrites,
  * since bus-core IS the singleton root.
+ *
+ * `dts.eager` is required here because bus-core bundles `@makaio/core` types
+ * inline via `alwaysBundle`. rolldown-plugin-dts in non-eager mode only
+ * includes the package's own entry files in the TypeScript program's
+ * `rootNames`, so it cannot emit declarations for cross-package source files
+ * (e.g. `@makaio/core`'s `bus-namespace-definition.ts`). Eager mode passes
+ * `entries: undefined`, which causes rolldown-plugin-dts to use the full
+ * `fileNames` list from the parsed tsconfig, giving the TypeScript compiler
+ * enough context to emit declarations for every inlined dependency.
+ *
+ * This is the same approach used by {@link adapterPreset} in
+ * `tsdown-adapter-preset.ts` and by `@makaio/subsystem-workflow-engine`.
  */
 export const frameworkBusPreset = {
   ...packageManifestSourcePolicy,
   format: 'esm',
-  dts: true,
+  dts: { eager: true },
   minify: true,
   deps: {
     ...dependencyDiagnosticPolicy,

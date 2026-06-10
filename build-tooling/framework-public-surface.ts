@@ -97,6 +97,20 @@ export const FRAMEWORK_DIST_SUBPATHS = [
   { subpath: 'ui-components', sourceDist: 'ui/components/dist', packageName: '@makaio/ui-components' },
   { subpath: 'ui-hooks', sourceDist: 'ui/hooks/dist', packageName: '@makaio/ui-hooks' },
   { subpath: 'ui-views', sourceDist: 'ui/views/dist', packageName: '@makaio/ui-views' },
+  { subpath: 'runtime-node', sourceDist: 'runtimes/node/dist', packageName: '@makaio/runtime-node' },
+  { subpath: 'runtime-bun', sourceDist: 'runtimes/bun/dist', packageName: '@makaio/runtime-bun' },
+  { subpath: 'rules', sourceDist: 'packages/rules/dist', packageName: '@makaio/rules' },
+  { subpath: 'expression', sourceDist: 'packages/expression/dist', packageName: '@makaio/expression' },
+  {
+    subpath: 'mcp-http-server',
+    sourceDist: 'subsystems/mcp-http-server/dist',
+    packageName: '@makaio/subsystem-mcp-http-server',
+  },
+  {
+    subpath: 'workflow-engine',
+    sourceDist: 'subsystems/workflow-engine/dist',
+    packageName: '@makaio/subsystem-workflow-engine',
+  },
 ] as const satisfies readonly FrameworkDistSubpath[];
 
 /**
@@ -137,6 +151,12 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/ui-hooks',
   '@makaio/ui-components',
   '@makaio/ui-views',
+  '@makaio/runtime-node',
+  '@makaio/runtime-bun',
+  '@makaio/rules',
+  '@makaio/expression',
+  '@makaio/subsystem-mcp-http-server',
+  '@makaio/subsystem-workflow-engine',
 ] as const;
 
 /**
@@ -206,6 +226,20 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
   { packageName: '@makaio/ui-components', frameworkSubpath: 'ui-components', packageRoot: 'ui/components' },
   { packageName: '@makaio/ui-hooks', frameworkSubpath: 'ui-hooks', packageRoot: 'ui/hooks' },
   { packageName: '@makaio/ui-views', frameworkSubpath: 'ui-views', packageRoot: 'ui/views' },
+  { packageName: '@makaio/runtime-node', frameworkSubpath: 'runtime-node', packageRoot: 'runtimes/node' },
+  { packageName: '@makaio/runtime-bun', frameworkSubpath: 'runtime-bun', packageRoot: 'runtimes/bun' },
+  { packageName: '@makaio/rules', frameworkSubpath: 'rules', packageRoot: 'packages/rules' },
+  { packageName: '@makaio/expression', frameworkSubpath: 'expression', packageRoot: 'packages/expression' },
+  {
+    packageName: '@makaio/subsystem-mcp-http-server',
+    frameworkSubpath: 'mcp-http-server',
+    packageRoot: 'subsystems/mcp-http-server',
+  },
+  {
+    packageName: '@makaio/subsystem-workflow-engine',
+    frameworkSubpath: 'workflow-engine',
+    packageRoot: 'subsystems/workflow-engine',
+  },
 ] as const satisfies readonly FrameworkPublicPackageSubpath[];
 
 let distSubpathMapCache: ReadonlyMap<string, FrameworkDistSubpath> | undefined;

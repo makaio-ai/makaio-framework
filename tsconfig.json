@@ -89,6 +89,7 @@
       "@makaio/sdk": ["./sdks/typescript/src/index.ts"],
       "@makaio/hooks": ["./packages/hooks/src/index.ts"],
       "@makaio/inbound-hooks": ["./packages/inbound-hooks/src/index.ts"],
+      "@makaio/subsystem-adapter": ["./subsystems/adapter/src/index.ts"],
       "@makaio/subsystem-mcp-http-server": ["./subsystems/mcp-http-server/src/index.ts"],
       "@makaio/test-utils": ["./packages/test-utils/src/index.ts"],
       "@makaio/expression": ["./packages/expression/src/index.ts"],

@@ -13,8 +13,11 @@ describe('framework import map', () => {
     expect(rewriteFrameworkImportSpecifier('@makaio/subsystem-client')).toBe('@makaio/framework/clients');
   });
 
-  it('does not rewrite standalone public runtime packages to umbrella subpaths', () => {
-    expect(rewriteFrameworkImportSpecifier('@makaio/runtime-node')).toBeUndefined();
+  it('rewrites bundled runtime and subsystem packages to umbrella subpaths', () => {
+    expect(rewriteFrameworkImportSpecifier('@makaio/runtime-node')).toBe('@makaio/framework/runtime-node');
+    expect(rewriteFrameworkImportSpecifier('@makaio/subsystem-workflow-engine')).toBe(
+      '@makaio/framework/workflow-engine',
+    );
   });
 
   it('rewrites framework-owned package subpaths', () => {

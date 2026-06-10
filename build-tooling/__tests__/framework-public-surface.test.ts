@@ -151,8 +151,39 @@ describe('getFrameworkPublicPackageByName', () => {
     expect(entry?.packageRoot).toBe('subsystems/git');
   });
 
-  it('does not assemble the public Node runtime into the framework umbrella', () => {
-    expect(getFrameworkPublicPackageByName('@makaio/runtime-node')).toBeUndefined();
-    expect(FRAMEWORK_DIST_SUBPATHS.map((e) => e.packageName as string)).not.toContain('@makaio/runtime-node');
+  it('resolves @makaio/runtime-node to the runtime-node subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/runtime-node');
+    expect(entry?.frameworkSubpath).toBe('runtime-node');
+    expect(entry?.packageRoot).toBe('runtimes/node');
+  });
+
+  it('resolves @makaio/runtime-bun to the runtime-bun subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/runtime-bun');
+    expect(entry?.frameworkSubpath).toBe('runtime-bun');
+    expect(entry?.packageRoot).toBe('runtimes/bun');
+  });
+
+  it('resolves @makaio/rules to the rules subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/rules');
+    expect(entry?.frameworkSubpath).toBe('rules');
+    expect(entry?.packageRoot).toBe('packages/rules');
+  });
+
+  it('resolves @makaio/expression to the expression subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/expression');
+    expect(entry?.frameworkSubpath).toBe('expression');
+    expect(entry?.packageRoot).toBe('packages/expression');
+  });
+
+  it('resolves @makaio/subsystem-mcp-http-server to the mcp-http-server subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/subsystem-mcp-http-server');
+    expect(entry?.frameworkSubpath).toBe('mcp-http-server');
+    expect(entry?.packageRoot).toBe('subsystems/mcp-http-server');
+  });
+
+  it('resolves @makaio/subsystem-workflow-engine to the workflow-engine subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/subsystem-workflow-engine');
+    expect(entry?.frameworkSubpath).toBe('workflow-engine');
+    expect(entry?.packageRoot).toBe('subsystems/workflow-engine');
   });
 });
