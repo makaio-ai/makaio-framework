@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path';
+import { basename } from 'node:path';
 import type {
   IWorkflowRunner,
   StepRunnerBusAuth,
@@ -73,11 +73,10 @@ function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
 export function createNodeWorkflowRunnerPackageOptions(
   params: CreateNodeWorkflowRunnerPackageOptionsParams,
 ): NodeWorkflowRunnerPackageOptions {
-  const packageRoot = resolve(params.runtimeModuleDir, '..');
   const defaultWorkerEntryMode: WorkflowWorkerEntryMode =
     basename(params.runtimeModuleDir) === 'src' ? 'source' : 'dist';
   const workflowRunner = createNodeWorkflowRunner({
-    packageRoot,
+    moduleDir: params.runtimeModuleDir,
     defaultWorkerEntryMode,
     runner: params.workflowRunner,
     bus: params.bus,
@@ -96,8 +95,11 @@ export function createNodeWorkflowRunnerPackageOptions(
 
 /** Internal parameters for creating a Node workflow-level runner. */
 interface CreateNodeWorkflowRunnerParams {
-  /** Absolute path to the package root directory. */
-  readonly packageRoot: string;
+  /**
+   * Absolute path to the directory that contains the running boot module.
+   * Passed directly to `resolveWorkflowWorkerEntry` as `moduleDir`.
+   */
+  readonly moduleDir: string;
   /** Default worker entry mode (`'source'` in dev, `'dist'` in builds). */
   readonly defaultWorkerEntryMode: WorkflowWorkerEntryMode;
   /** Optional boot-level workflow runner configuration. */
@@ -118,7 +120,7 @@ interface CreateNodeWorkflowRunnerParams {
  * Returns `undefined` when no runner is configured, letting the workflow engine
  * fall back to its built-in DAG scheduler. Explicit runner modes create the
  * matching workflow-level execution strategy.
- * @param params - Package root, entry mode, optional runner configuration, and optional bus.
+ * @param params - Module directory, entry mode, optional runner configuration, and optional bus.
  * @returns A workflow runner instance, or `undefined` to use the engine default.
  */
 export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams): IWorkflowRunner | undefined {
@@ -173,7 +175,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       const workerEntry =
         runner.workerEntry ??
         resolveWorkflowWorkerEntry({
-          packageRoot: params.packageRoot,
+          moduleDir: params.moduleDir,
           mode: runner.workerEntryMode ?? params.defaultWorkerEntryMode,
         });
 

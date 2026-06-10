@@ -530,7 +530,7 @@ export async function bootMakaioRuntimeCore(
     // workflow-level runner.
     // -----------------------------------------------------------------------
     const piscinaWorkerEntry = resolveWorkflowWorkerEntry({
-      packageRoot: path.resolve(srcDir, '..'),
+      moduleDir: srcDir,
       mode: path.basename(srcDir) === 'src' ? 'source' : 'dist',
     });
     const piscinaRunner = new ThinWorkflowPiscinaRunner({

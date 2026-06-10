@@ -34,6 +34,8 @@
   "workspaces": [
     "build-tooling",
     "packages/**/*",
+    "!packages/framework/dist",
+    "!packages/framework/dist/**",
     "runtimes/*",
     "platforms/*",
     "adapters/**/*",

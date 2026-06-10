@@ -383,6 +383,70 @@
       "types": "./dist/ui-views/index.d.mts",
       "default": "./dist/ui-views/index.mjs"
     },
+    "./runtime-node": {
+      "types": "./dist/runtime-node/index.d.mts",
+      "default": "./dist/runtime-node/index.mjs"
+    },
+    "./runtime-node/extension-discovery": {
+      "types": "./dist/runtime-node/extension-discovery.d.mts",
+      "default": "./dist/runtime-node/extension-discovery.mjs"
+    },
+    "./runtime-node/extension-validation": {
+      "types": "./dist/runtime-node/extension-validation.d.mts",
+      "default": "./dist/runtime-node/extension-validation.mjs"
+    },
+    "./runtime-node/makaio-config": {
+      "types": "./dist/runtime-node/makaio-config.d.mts",
+      "default": "./dist/runtime-node/makaio-config.mjs"
+    },
+    "./runtime-node/runtime/schemas": {
+      "types": "./dist/runtime-node/bus/runtime/schemas.d.mts",
+      "default": "./dist/runtime-node/bus/runtime/schemas.mjs"
+    },
+    "./runtime-node/runtime/namespace": {
+      "types": "./dist/runtime-node/bus/runtime/namespace.d.mts",
+      "default": "./dist/runtime-node/bus/runtime/namespace.mjs"
+    },
+    "./runtime-node/workflow-worker": {
+      "types": "./dist/runtime-node/workflow-worker/index.d.mts",
+      "default": "./dist/runtime-node/workflow-worker/index.mjs"
+    },
+    "./runtime-node/workflow-worker/worker-entry": {
+      "types": "./dist/runtime-node/workflow-worker/worker-entry.d.mts",
+      "default": "./dist/runtime-node/workflow-worker/worker-entry.mjs"
+    },
+    "./runtime-bun": {
+      "types": "./dist/runtime-bun/index.d.mts",
+      "default": "./dist/runtime-bun/index.mjs"
+    },
+    "./rules": {
+      "types": "./dist/rules/index.d.mts",
+      "default": "./dist/rules/index.mjs"
+    },
+    "./rules/schemas": {
+      "types": "./dist/rules/schemas.d.mts",
+      "default": "./dist/rules/schemas.mjs"
+    },
+    "./expression": {
+      "types": "./dist/expression/index.d.mts",
+      "default": "./dist/expression/index.mjs"
+    },
+    "./mcp-http-server": {
+      "types": "./dist/mcp-http-server/index.d.mts",
+      "default": "./dist/mcp-http-server/index.mjs"
+    },
+    "./workflow-engine": {
+      "types": "./dist/workflow-engine/index.d.mts",
+      "default": "./dist/workflow-engine/index.mjs"
+    },
+    "./workflow-engine/package": {
+      "types": "./dist/workflow-engine/package.d.mts",
+      "default": "./dist/workflow-engine/package.mjs"
+    },
+    "./workflow-engine/workflow-orchestrator": {
+      "types": "./dist/workflow-engine/workflow-orchestrator.d.mts",
+      "default": "./dist/workflow-engine/workflow-orchestrator.mjs"
+    },
     "./utils/health-probe": {
       "types": "./dist/utils/health-probe.d.mts",
       "default": "./dist/utils/health-probe.mjs"

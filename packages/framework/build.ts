@@ -14,7 +14,7 @@
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
 
-import { cpSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { build, type UserConfig } from 'tsdown';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
@@ -177,6 +177,14 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// Copy runtime assets into dist/
+// ---------------------------------------------------------------------------
+
+// Central drizzle migrations — consumed at boot via `CoreBootOptions.centralMigrationsDir`
+// (and the bundled default `dist/runtime-node/../drizzle` lookup).
+cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'), { recursive: true });
+
+// ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)
 // ---------------------------------------------------------------------------
 
@@ -188,6 +196,23 @@ cpSync(DIST, LIB, {
   recursive: true,
   filter: (src) => !src.endsWith('.d.mts'),
 });
+
+// Minimal manifest so the bundled runtime can resolve its own version via
+// `readFrameworkVersion` (`dist/runtime-node/../package.json`). Intentionally
+// not a full package.json copy to avoid a second exports map inside dist/,
+// and written after the lib/ assembly so lib/ stays manifest-free. Every
+// enclosing workspace root excludes this directory from its `workspaces`
+// globs (`!…packages/framework/dist`), so the manifest is not picked up as a
+// duplicate @makaio/framework workspace regardless of repository layout.
+const frameworkPkg = JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8')) as {
+  name: string;
+  version: string;
+};
+writeFileSync(
+  join(DIST, 'package.json'),
+  `${JSON.stringify({ name: frameworkPkg.name, version: frameworkPkg.version, type: 'module' }, null, 2)}\n`,
+  'utf8',
+);
 
 writeFrameworkDistBuildStamp();
 

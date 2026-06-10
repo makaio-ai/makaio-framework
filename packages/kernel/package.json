@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./cli": "./src/cli/index.ts",
+    "./cli/register": "./src/cli/register.ts",
     "./cli/schemas": "./src/cli/schemas.ts",
     "./extension": "./src/extension/index.ts",
     "./namespace": "./src/namespace/index.ts",
@@ -33,6 +34,7 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./cli": "./dist/cli/index.mjs",
+      "./cli/register": "./dist/cli/register.mjs",
       "./cli/schemas": "./dist/cli/schemas.mjs",
       "./extension": "./dist/extension/index.mjs",
       "./namespace": "./dist/namespace/index.mjs",
