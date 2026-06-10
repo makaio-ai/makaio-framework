@@ -5737,7 +5737,7 @@ __metadata:
     "@makaio/service-base": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    "@types/picomatch": "npm:^3.0.2"
+    "@types/picomatch": "npm:^4.0.3"
     picomatch: "npm:^4.0.3"
     simple-git: "npm:^3.28.0"
     tsdown: "npm:0.22.0"
@@ -10292,10 +10292,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/picomatch@npm:^3.0.2":
-  version: 3.0.2
-  resolution: "@types/picomatch@npm:3.0.2"
-  checksum: 10c0/f35d16fe10a6e13ead6499dd7d7d317e4fd78e48260398104e837e5ca83d393024bdc6f432cb644c0a69b0726a071fcc6eb09befbbcfafb3c3c5f71dbbfde487
+"@types/picomatch@npm:^4.0.3":
+  version: 4.0.3
+  resolution: "@types/picomatch@npm:4.0.3"
+  checksum: 10c0/974107ec98ea9a8b437f36bdf6ac9c57772fd66d9d746e43f6da2a7b97f6e03bc48226e5cdf2beb0b73b7a843cf486e7336ae15ab9017e47287dcb49d78499a2
   languageName: node
   linkType: hard
 
