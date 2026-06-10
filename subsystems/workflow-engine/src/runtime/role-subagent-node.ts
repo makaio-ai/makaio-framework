@@ -373,10 +373,24 @@ async function awaitResolvedSubagent(
     return 'aborted';
   }
 
-  const awaitPromise = ctx.bus.requestOptional(SubagentSubjects.await, {
-    subagentId,
-    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
-  });
+  // `timeout: 0` disables the bus request envelope's 60s default
+  // (DEFAULT_REQUEST_TIMEOUT_MS), which would otherwise kill every await
+  // longer than 60s regardless of `params.timeoutMs`. The await deadline
+  // belongs to the subagent service: the handler resolves with
+  // `{ status: 'timeout' }` after `payload.timeoutMs` (or
+  // `constraints.defaultAwaitTimeoutMs`, default 300s), so the request never
+  // dangles. Workflow cancellation stays covered by the abort race below.
+  // `0` is honored end-to-end: in-process (awaitWithTimeoutAndSignal), relay
+  // hops (`message.timeout ?? DEFAULT` preserves 0), and transport
+  // correlation tracking (CorrelationTracker skips the timer for 0).
+  const awaitPromise = ctx.bus.requestOptional(
+    SubagentSubjects.await,
+    {
+      subagentId,
+      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    },
+    { timeout: 0 },
+  );
   if (ctx.signal.aborted) {
     await killResolvedSubagent(params, ctx, subagentId);
     return 'aborted';

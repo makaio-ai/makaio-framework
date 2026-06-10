@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SubagentErrorCode, SubagentSubjects } from '@makaio/contracts';
 import { awaitSubagentTool } from '../tools/parent/index.js';
 import { createMockBus, createParentContext } from './test-helpers.js';
@@ -124,6 +124,26 @@ describe('await_subagent tool', () => {
       subagentId: 'sub-1',
       timeoutMs: 5000,
     });
+  });
+
+  it('opts out of the bus envelope timeout so the service owns the await deadline', async () => {
+    mockBus.onRequest(SubagentSubjects.await.subject, () => ({
+      status: 'completed',
+      result: 'Done!',
+    }));
+
+    const tool = awaitSubagentTool();
+    const context = createParentContext({ bus: mockBus.bus });
+    await tool.execute({ subagentId: 'sub-1', timeoutMs: 120_000 }, context);
+
+    // Without `timeout: 0`, the bus request envelope defaults to 60s and
+    // kills every await longer than that regardless of the requested
+    // timeoutMs (the semantic deadline enforced by the SubagentService).
+    expect(vi.mocked(mockBus.bus.request)).toHaveBeenCalledWith(
+      SubagentSubjects.await,
+      { subagentId: 'sub-1', timeoutMs: 120_000 },
+      { timeout: 0 },
+    );
   });
 
   it('requires bus in context', async () => {

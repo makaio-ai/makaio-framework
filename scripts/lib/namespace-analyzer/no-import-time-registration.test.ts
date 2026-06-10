@@ -57,10 +57,24 @@ describe('namespace registration side effects', () => {
   it('does not expose side-effect-only register entrypoints for namespace registration', () => {
     // Pure re-export barrels that happen to use "register" in their subpath
     // for domain reasons (e.g., "register CLI commands"), not namespace side-effects.
-    const allowedRegisterExports = new Set(['./kernel/cli/register']);
+    // Allowances are scoped per package.json so no other package can adopt a
+    // "/register" subpath unnoticed:
+    // - packages/kernel `./cli/register` → src/cli/register.ts, a pure barrel
+    //   re-exporting CliNamespace/CliRpcSubjects (createBusNamespace performs no
+    //   bus registration at import time). The umbrella build derives its dist
+    //   entries from this exports map (packages/framework/build.ts), so the key
+    //   must exist here for the published `./kernel/cli/register` subpath.
+    // - packages/framework `./kernel/cli/register` → the umbrella republication
+    //   of that same kernel barrel.
+    const allowedRegisterExports = new Map<string, ReadonlySet<string>>([
+      ['packages/kernel/package.json', new Set(['./cli/register'])],
+      ['packages/framework/package.json', new Set(['./kernel/cli/register'])],
+    ]);
     const packageFiles = listPackageFiles(frameworkRoot);
 
     const violations = packageFiles.flatMap((file) => {
+      const relPath = relative(frameworkRoot, file);
+      const allowedKeys = allowedRegisterExports.get(relPath);
       const source = readFileSync(file, 'utf8');
       const pkg = JSON.parse(source) as {
         exports?: Record<string, unknown>;
@@ -68,12 +82,12 @@ describe('namespace registration side effects', () => {
         sideEffects?: unknown;
       };
       const exportKeys = [...Object.keys(pkg.exports ?? {}), ...Object.keys(pkg.publishConfig?.exports ?? {})].filter(
-        (key) => (key === './register' || key.endsWith('/register')) && !allowedRegisterExports.has(key),
+        (key) => (key === './register' || key.endsWith('/register')) && allowedKeys?.has(key) !== true,
       );
       const sideEffects =
         Array.isArray(pkg.sideEffects) && pkg.sideEffects.some((entry) => String(entry).includes('namespace'));
 
-      return exportKeys.length > 0 || sideEffects ? [relative(frameworkRoot, file)] : [];
+      return exportKeys.length > 0 || sideEffects ? [relPath] : [];
     });
 
     expect(violations).toEqual([]);

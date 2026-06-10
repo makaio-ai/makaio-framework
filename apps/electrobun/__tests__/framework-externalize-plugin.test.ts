@@ -34,12 +34,14 @@ describe('frameworkExternalPackageNames', () => {
     expect(names).toContain('@makaio/kernel');
     expect(names).toContain('@makaio/services-core');
     expect(names).toContain('@makaio/ui-kernel');
+    // Public surface since bundle round 2 (#1069): exported as
+    // `@makaio/framework/runtime-bun` and externalized in the app bundle.
+    expect(names).toContain('@makaio/runtime-bun');
   });
 
   it('does not include non-framework-surface packages', () => {
     const names = frameworkExternalPackageNames();
     expect(names).not.toContain('@makaio/host-shared');
-    expect(names).not.toContain('@makaio/runtime-bun');
     expect(names).not.toContain('@makaio/cli');
   });
 

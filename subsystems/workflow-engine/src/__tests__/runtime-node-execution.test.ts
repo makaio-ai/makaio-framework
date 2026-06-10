@@ -870,6 +870,55 @@ describe('executeStationNode', () => {
     }
   });
 
+  it('issues the subagent await request without the bus envelope timeout', async () => {
+    const ctx = makeCtx({});
+    const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
+    const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'test-adapter' });
+    });
+    const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      requestCtx.setResult({ subagentId: 'subagent-await-options', status: 'spawning' });
+    });
+    const cleanupAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'long-running done' });
+    });
+
+    try {
+      await expect(
+        executeRoleSubagentNode(
+          {
+            nodeId: 'await-options',
+            nodeLabel: 'Station node',
+            roleId: 'reviewer',
+            prompt: 'Analyze',
+            timeoutMs: 90_000,
+            unresolvedRoleError: 'role missing',
+            unavailableRuntimeError: 'runtime missing',
+            unavailableAwaitError: 'await missing',
+            cancellationLabel: 'station',
+          },
+          ctx,
+          emptyExpressionCtx,
+        ),
+      ).resolves.toEqual({ status: 'completed', output: 'long-running done' });
+
+      // The await RPC must opt out of the bus envelope's 60s default
+      // (`timeout: 0`); the semantic deadline travels in the payload and is
+      // enforced by the subagent service handler. Without the option, every
+      // delegate turn longer than 60s dies regardless of node.timeoutMs.
+      expect(requestOptionalSpy).toHaveBeenCalledWith(
+        SubagentSubjects.await,
+        { subagentId: 'subagent-await-options', timeoutMs: 90_000 },
+        { timeout: 0 },
+      );
+    } finally {
+      requestOptionalSpy.mockRestore();
+      cleanupAwait();
+      cleanupSpawn();
+      cleanupRole();
+    }
+  });
+
   it('stops frame session polling immediately when aborted between attempts', async () => {
     vi.useFakeTimers();
 
