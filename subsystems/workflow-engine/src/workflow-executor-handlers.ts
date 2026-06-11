@@ -73,10 +73,22 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
       });
       ctx.setResult(result);
     }),
-    bus.on(WorkflowSubjects.listGateInstances, async (ctx) => {
-      const result = await bus.request(WorkflowStorageSubjects.listGateInstances, {
+    bus.on(WorkflowSubjects.listFrames, async (ctx) => {
+      const result = await bus.request(WorkflowStorageSubjects.listFrames, {
         executionId: ctx.payload.executionId,
       });
+      ctx.setResult(result);
+    }),
+    bus.on(WorkflowSubjects.listGateInstances, async (ctx) => {
+      const result = await bus.request(WorkflowStorageSubjects.listGateInstances, ctx.payload);
+      ctx.setResult(result);
+    }),
+    bus.on(WorkflowSubjects.setExecutionLink, async (ctx) => {
+      const result = await bus.request(WorkflowStorageSubjects.setExecutionLink, { link: ctx.payload.link });
+      ctx.setResult(result);
+    }),
+    bus.on(WorkflowSubjects.listExecutionLinks, async (ctx) => {
+      const result = await bus.request(WorkflowStorageSubjects.listExecutionLinks, ctx.payload);
       ctx.setResult(result);
     }),
     bus.on(WorkflowSubjects.getRunContext, async (ctx) => {

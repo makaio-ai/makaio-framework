@@ -212,6 +212,38 @@ export const WorkLogUsageSummarySchema = z.object({
 export type WorkLogUsageSummary = z.infer<typeof WorkLogUsageSummarySchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Stats
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Aggregated WorkLog statistics over an optional time window.
+ * All token/cost totals treat missing telemetry as zero.
+ */
+export const WorkLogStatsSchema = z.object({
+  /** Number of executions matching the query. */
+  total: z.number().int().nonnegative(),
+  /** Execution counts per status (statuses without matches are 0). */
+  byStatus: z.object({
+    pending: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    paused: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+  }),
+  /** Sum of wall-clock durations (terminal executions only). */
+  totalDurationMs: z.number().nonnegative(),
+  /** Sum of input tokens across matching executions. */
+  totalInputTokens: z.number().int().nonnegative(),
+  /** Sum of output tokens across matching executions. */
+  totalOutputTokens: z.number().int().nonnegative(),
+  /** Sum of estimated cost in USD across matching executions. */
+  totalEstimatedCost: z.number().nonnegative(),
+});
+
+export type WorkLogStats = z.infer<typeof WorkLogStatsSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // Dynamic Node Materialization Event
 // ─────────────────────────────────────────────────────────────
 

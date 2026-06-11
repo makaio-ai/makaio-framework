@@ -7,6 +7,7 @@ export {
   EXECUTION_LIST_MAX_LIMIT,
   EXECUTION_LIST_MIN_LIMIT,
   ExtensionWorkflowTriggerSchema,
+  GateInstanceListQuerySchema,
   WorkflowArtifactBindingSchema,
   WorkflowArtifactWriteDeclarationSchema,
   WorkflowConditionSchema,
@@ -20,6 +21,7 @@ export {
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowGateNodeSchema,
+  WorkflowGateStatusSchema,
   WorkflowIterateChainNodeSchema,
   WorkflowIterateNodeSchema,
   WorkflowListQuerySchema,
@@ -41,6 +43,7 @@ export type {
   ExecutionListQuery,
   ExecutionStatus,
   ExtensionWorkflowTrigger as ExtensionWorkflowTriggerShape,
+  GateInstanceListQuery,
   WorkflowArtifactBinding,
   WorkflowArtifactWriteDeclaration,
   WorkflowCondition,
@@ -54,6 +57,7 @@ export type {
   WorkflowFrameState,
   WorkflowGateInstance,
   WorkflowGateNode,
+  WorkflowGateStatus,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowListQuery,
@@ -100,8 +104,14 @@ export type {
   StepRunResult,
   IStepRunner,
 } from './step-runner.js';
-export { SpanStatusSchema, SpanRecordSchema, ExecutionLinkTypeSchema, ExecutionLinkSchema } from './span.js';
-export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink } from './span.js';
+export {
+  SpanStatusSchema,
+  SpanRecordSchema,
+  ExecutionLinkTypeSchema,
+  ExecutionLinkSchema,
+  ExecutionLinkListQuerySchema,
+} from './span.js';
+export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink, ExecutionLinkListQuery } from './span.js';
 export {
   ArtifactQuerySourceSchema,
   BusRequestSourceSchema,
@@ -136,6 +146,7 @@ export type {
 } from './blocks.js';
 export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowArtifactRefSchema } from './artifact-ref.js';
+export type { WorkflowArtifactRef } from './artifact-ref.js';
 export { WorkflowRunContextSchema } from './run-context.js';
 export type { WorkflowRunContext } from './run-context.js';
 export {
@@ -162,6 +173,7 @@ export {
   WorkLogArtifactWriteSchema,
   WorkLogGateEventSchema,
   WorkLogUsageSummarySchema,
+  WorkLogStatsSchema,
   WorkLogDynamicNodeMaterializationSchema,
 } from './worklog.js';
 export type {
@@ -170,6 +182,7 @@ export type {
   WorkLogArtifactWrite,
   WorkLogGateEvent,
   WorkLogUsageSummary,
+  WorkLogStats,
   WorkLogDynamicNodeMaterialization,
 } from './worklog.js';
 export {

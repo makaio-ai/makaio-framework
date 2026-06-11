@@ -8,6 +8,8 @@ import {
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
   ExecutionLinkSchema,
+  ExecutionLinkListQuerySchema,
+  GateInstanceListQuerySchema,
   SpanRecordSchema,
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
@@ -26,15 +28,6 @@ import {
   worklogArtifactWrites,
   worklogGateEvents,
 } from './schema.js';
-
-const ExecutionLinkListQuerySchema = z
-  .object({
-    sourceExecutionId: z.string().min(1).optional(),
-    targetExecutionId: z.string().min(1).optional(),
-  })
-  .refine((query) => query.sourceExecutionId !== undefined || query.targetExecutionId !== undefined, {
-    message: 'Either sourceExecutionId or targetExecutionId is required.',
-  });
 
 const ExecutionUpdateSchema = z.object({
   executionId: z.string().min(1),
@@ -224,10 +217,10 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     },
 
     /**
-     * List all gate instances for a given execution.
+     * List gate instances by execution and/or status (bounded query).
      */
     listGateInstances: {
-      request: z.object({ executionId: z.string().min(1) }),
+      request: GateInstanceListQuerySchema,
       response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
     },
 
@@ -316,4 +309,4 @@ export type { WorkflowDefinition } from '@makaio/contracts';
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
 export type WorkflowListQuery = z.infer<typeof WorkflowListQuerySchema>;
 export type { ExecutionListQuery } from '@makaio/contracts';
-export type ExecutionLinkListQuery = z.infer<typeof ExecutionLinkListQuerySchema>;
+export type { ExecutionLinkListQuery } from '@makaio/contracts';

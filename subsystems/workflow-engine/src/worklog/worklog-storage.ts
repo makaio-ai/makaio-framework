@@ -1,6 +1,6 @@
-import { eq, and, desc, count, sum } from 'drizzle-orm';
+import { eq, and, desc, gte, lte, count, sum } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
-import type { WorkLogExecutionSummary, JsonValue, WorkflowArtifactBinding } from '@makaio/contracts';
+import type { WorkLogExecutionSummary, WorkLogStats, JsonValue, WorkflowArtifactBinding } from '@makaio/contracts';
 import {
   worklogSummaries,
   worklogFrameEntries,
@@ -284,6 +284,87 @@ export async function aggregateTokenTotals(
     totalInputTokens: row?.totalInputTokens !== null ? Number(row?.totalInputTokens) : 0,
     totalOutputTokens: row?.totalOutputTokens !== null ? Number(row?.totalOutputTokens) : 0,
     totalEstimatedCost: row?.totalEstimatedCost !== null ? Number(row?.totalEstimatedCost) : 0,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Stats aggregation
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Query options for aggregating WorkLog statistics.
+ */
+export interface AggregateWorklogStatsOptions {
+  /** Filter by workflow definition ID. */
+  workflowId?: string;
+  /** Inclusive lower bound on execution `startedAt` (epoch ms). */
+  since?: number;
+  /** Inclusive upper bound on execution `startedAt` (epoch ms). */
+  until?: number;
+}
+
+/**
+ * Aggregate WorkLog execution statistics over an optional time window.
+ *
+ * Runs two SQL aggregate queries over `worklog_summaries` (per-status counts
+ * and duration/token/cost sums) instead of loading rows into JS memory.
+ * Missing telemetry values are treated as zero.
+ * @param db - Drizzle database instance.
+ * @param options - Workflow and time-window filters (all optional).
+ * @returns Aggregated counts per status, total, and duration/token/cost sums.
+ */
+export async function aggregateWorklogStats(
+  db: MakaioDatabase,
+  options: AggregateWorklogStatsOptions = {},
+): Promise<WorkLogStats> {
+  const { workflowId, since, until } = options;
+
+  const predicates = [
+    ...(workflowId !== undefined ? [eq(worklogSummaries.workflowId, workflowId)] : []),
+    ...(since !== undefined ? [gte(worklogSummaries.startedAt, since)] : []),
+    ...(until !== undefined ? [lte(worklogSummaries.startedAt, until)] : []),
+  ];
+  const where = predicates.length > 0 ? and(...predicates) : undefined;
+
+  const [statusRows, totalRows] = await Promise.all([
+    db
+      .select({ status: worklogSummaries.status, count: count() })
+      .from(worklogSummaries)
+      .where(where)
+      .groupBy(worklogSummaries.status),
+    db
+      .select({
+        totalDurationMs: sum(worklogSummaries.durationMs),
+        totalInputTokens: sum(worklogSummaries.totalInputTokens),
+        totalOutputTokens: sum(worklogSummaries.totalOutputTokens),
+        totalEstimatedCost: sum(worklogSummaries.totalEstimatedCost),
+      })
+      .from(worklogSummaries)
+      .where(where),
+  ]);
+
+  const byStatus: WorkLogStats['byStatus'] = {
+    pending: 0,
+    running: 0,
+    paused: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  };
+  let total = 0;
+  for (const row of statusRows) {
+    byStatus[row.status] = row.count;
+    total += row.count;
+  }
+
+  const sums = totalRows[0];
+  return {
+    total,
+    byStatus,
+    totalDurationMs: Number(sums?.totalDurationMs ?? 0),
+    totalInputTokens: Number(sums?.totalInputTokens ?? 0),
+    totalOutputTokens: Number(sums?.totalOutputTokens ?? 0),
+    totalEstimatedCost: Number(sums?.totalEstimatedCost ?? 0),
   };
 }
 

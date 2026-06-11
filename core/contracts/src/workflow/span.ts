@@ -85,3 +85,20 @@ export const ExecutionLinkSchema = z.object({
 });
 
 export type ExecutionLink = z.infer<typeof ExecutionLinkSchema>;
+
+/**
+ * Query parameters for listing execution links.
+ * At least one of `sourceExecutionId` or `targetExecutionId` is required to avoid unbounded scans.
+ */
+export const ExecutionLinkListQuerySchema = z
+  .object({
+    /** Filter by link source execution. */
+    sourceExecutionId: z.string().min(1).optional(),
+    /** Filter by link target execution. */
+    targetExecutionId: z.string().min(1).optional(),
+  })
+  .refine((query) => query.sourceExecutionId !== undefined || query.targetExecutionId !== undefined, {
+    message: 'Either sourceExecutionId or targetExecutionId is required.',
+  });
+
+export type ExecutionLinkListQuery = z.infer<typeof ExecutionLinkListQuerySchema>;

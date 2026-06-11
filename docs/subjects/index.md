@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 100 |
-| Subjects | 894 (397 events, 497 RPCs) |
-| framework | 96 |
+| Namespaces | 97 |
+| Subjects | 889 (391 events, 498 RPCs) |
+| framework | 93 |
 | extension | 4 |
-| kind: bus | 74 |
+| kind: bus | 71 |
 | kind: adapter | 9 |
 | kind: client | 2 |
 | kind: extension | 2 |
@@ -72,7 +72,6 @@ next: false
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
 | [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
-| [`pages`](./pages.md) | bus | 1 | 0E / 1R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
@@ -84,15 +83,13 @@ next: false
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
 | [`tool`](./tool.md) | bus | 7 | 5E / 2R |
-| [`ui`](./ui.md) | bus | 4 | 2E / 2R |
 | [`vcs`](./vcs.md) | bus | 11 | 0E / 11R |
 | [`vcs:events`](./vcs-events.md) | bus | 2 | 2E / 0R |
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
-| [`workflow`](./workflow.md) | bus | 44 | 25E / 19R |
+| [`workflow`](./workflow.md) | bus | 48 | 25E / 23R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

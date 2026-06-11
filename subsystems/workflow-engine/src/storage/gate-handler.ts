@@ -1,6 +1,12 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { JsonValue, WorkflowGateInstance } from '@makaio/contracts';
+import {
+  EXECUTION_LIST_DEFAULT_LIMIT,
+  EXECUTION_LIST_MAX_LIMIT,
+  EXECUTION_LIST_MIN_LIMIT,
+  type JsonValue,
+  type WorkflowGateInstance,
+} from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowExecutions, workflowGateInstances, type InsertWorkflowGateInstance } from './schema.js';
@@ -61,6 +67,39 @@ export function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateIn
 }
 
 /**
+ * Validates and resolves the list-gates request payload into safe query parameters.
+ * @param executionId - Optional execution ID filter from request payload.
+ * @param status - Optional status filter from request payload.
+ * @param limit - Optional limit from request payload.
+ * @returns Resolved limit and drizzle predicate expressions.
+ */
+function resolveListGatesParams(
+  executionId: string | undefined,
+  status: WorkflowGateInstance['status'] | undefined,
+  limit: number | undefined,
+) {
+  // Guard: schema refine runs in dev/test but is skipped in production.
+  if (executionId === undefined && status === undefined) {
+    throw new Error('Either executionId or status is required to list gate instances.');
+  }
+  const resolvedLimit = limit ?? EXECUTION_LIST_DEFAULT_LIMIT;
+  if (
+    !Number.isInteger(resolvedLimit) ||
+    resolvedLimit < EXECUTION_LIST_MIN_LIMIT ||
+    resolvedLimit > EXECUTION_LIST_MAX_LIMIT
+  ) {
+    throw new Error(
+      `Gate instance list limit must be an integer between ${EXECUTION_LIST_MIN_LIMIT} and ${EXECUTION_LIST_MAX_LIMIT}.`,
+    );
+  }
+  const predicates = [
+    ...(executionId !== undefined ? [eq(workflowGateInstances.executionId, executionId)] : []),
+    ...(status !== undefined ? [eq(workflowGateInstances.status, status)] : []),
+  ];
+  return { resolvedLimit, predicates };
+}
+
+/**
  * Registers all gate instance bus handlers.
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
@@ -104,10 +143,14 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
   });
 
   const unsubListGates = bus.on(WorkflowStorageSubjects.listGateInstances, async (ctx) => {
+    const { executionId, status, limit } = ctx.payload;
+    const { resolvedLimit, predicates } = resolveListGatesParams(executionId, status, limit);
     const rows = await db
       .select()
       .from(workflowGateInstances)
-      .where(eq(workflowGateInstances.executionId, ctx.payload.executionId));
+      .where(and(...predicates))
+      .orderBy(desc(workflowGateInstances.createdAt), desc(workflowGateInstances.id))
+      .limit(resolvedLimit);
     ctx.setResult({ gates: rows.map(mapGateInstance) });
   });
 
@@ -123,7 +166,6 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
           isNotNull(workflowGateInstances.timeoutMs),
         ),
       );
-
     ctx.setResult({ gates: rows.map((row) => mapGateInstance(row.gate)) });
   });
 

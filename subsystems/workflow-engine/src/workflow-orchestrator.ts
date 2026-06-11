@@ -250,6 +250,7 @@ async function buildRunningExecution(bus: IMakaioBus, config: WorkflowWorkerConf
     config: config.config ?? {},
     startedAt: (await loadPersistedExecutionStartedAt(bus, config.executionId)) ?? Date.now(),
     triggerPayload: config.triggerPayload,
+    ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
     scope: config.scope,
   };
 }
@@ -278,6 +279,7 @@ async function buildPreRuntimeTerminalExecution(
     startedAt: (await loadPersistedExecutionStartedAt(bus, config.executionId)) ?? completedAt,
     completedAt,
     triggerPayload: config.triggerPayload,
+    ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
     scope: config.scope,
   };
 }

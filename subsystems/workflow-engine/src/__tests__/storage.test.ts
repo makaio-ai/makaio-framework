@@ -76,6 +76,12 @@ describe('ExecutionListQuerySchema', () => {
   it('rejects limit above 500', () => {
     expect(() => ExecutionListQuerySchema.parse({ workflowId: 'wf-1', limit: EXECUTION_LIST_MAX_LIMIT + 1 })).toThrow();
   });
+
+  it('accepts an artifactRef-only filter', () => {
+    const result = ExecutionListQuerySchema.parse({ artifactRef: { kind: 'workpiece', id: 'wp-1' } });
+    expect(result.artifactRef).toEqual({ kind: 'workpiece', id: 'wp-1' });
+    expect(result.limit).toBe(EXECUTION_LIST_DEFAULT_LIMIT);
+  });
 });
 
 describe('workflow storage handlers', () => {
@@ -277,6 +283,21 @@ describe('workflow storage handlers', () => {
     expect(completedOnly.map((item) => item.id)).toEqual([completedExecution.id]);
   });
 
+  it('round-trips the execution artifactRef through storage', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-artifact-ref' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({
+      id: 'execution-artifact-ref',
+      workflowId: workflow.id,
+      artifactRef: { kind: 'workpiece', id: 'wp-1' },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    const { execution: stored } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
+      executionId: execution.id,
+    });
+    expect(stored?.artifactRef).toEqual({ kind: 'workpiece', id: 'wp-1' });
+  });
+
   it('stores execution start and run context in one storage request', async () => {
     const workflow = createWorkflowDefinition({ id: 'workflow-execution-start' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
@@ -453,9 +474,9 @@ describe('workflow storage handlers', () => {
     expect(page2.map((e) => e.id)).toEqual(['exec-same-timestamp-a']);
   });
 
-  it('rejects listExecutions when neither workflowId nor scope is provided', async () => {
+  it('rejects listExecutions when neither workflowId, scope, nor artifactRef is provided', async () => {
     await expect(MakaioBus.request(WorkflowStorageSubjects.listExecutions, {})).rejects.toThrow(
-      'Either workflowId or scope is required',
+      'Either workflowId, scope, or artifactRef is required',
     );
   });
 
@@ -744,6 +765,51 @@ describe('workflow storage handlers', () => {
     expect(nullResumeGate?.timeoutMs).toBe(5000);
     expect(gates.find((gate) => gate.nodeId === 'waiting-gate')).not.toHaveProperty('resumeData');
     expect(gates.find((gate) => gate.nodeId === 'null-gate')?.resumeData).toBeNull();
+  });
+
+  it('lists waiting gates across executions by status filter', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-gate-inbox' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const waitingExecution = createWorkflowExecution({ id: 'execution-gate-inbox-waiting', workflowId: workflow.id });
+    const resumedExecution = createWorkflowExecution({ id: 'execution-gate-inbox-resumed', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: waitingExecution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: resumedExecution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        executionId: waitingExecution.id,
+        nodeId: 'inbox-waiting-gate',
+        frameId: 'frame-inbox-waiting',
+        schema: {},
+        status: 'waiting',
+        autoAction: 'reject',
+        timeoutMs: null,
+        createdAt: 1000,
+      },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      gate: {
+        executionId: resumedExecution.id,
+        nodeId: 'inbox-resumed-gate',
+        frameId: 'frame-inbox-resumed',
+        schema: {},
+        status: 'resumed',
+        autoAction: 'reject',
+        timeoutMs: null,
+        createdAt: 2000,
+      },
+    });
+
+    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listGateInstances, { status: 'waiting' });
+
+    expect(gates.map((gate) => gate.status)).toEqual(['waiting']);
+    expect(gates[0]?.executionId).toBe(waitingExecution.id);
+  });
+
+  it('rejects gate instance listing without any filter', async () => {
+    await expect(MakaioBus.request(WorkflowStorageSubjects.listGateInstances, {} as never)).rejects.toThrow(
+      'Either executionId or status is required',
+    );
   });
 
   it('resolves a waiting gate instance only once', async () => {
