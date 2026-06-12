@@ -10,7 +10,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { getMigrationsFolder } from '@makaio/storage-migrations';
-import type { StorageDialect } from '@makaio/storage-drizzle';
+import { getStorageEngine, type StorageDialect } from '@makaio/storage-drizzle';
 
 /**
  * Returns `true` when the given directory contains a valid Drizzle migration
@@ -38,7 +38,7 @@ function hasJournal(dir: string): boolean {
 export interface BundledMigrationsProbes {
   /**
    * Base directory of the built-layout probe; the candidate is
-   * `<moduleDir>/../drizzle[-postgres]`. Defaults to this module's directory.
+   * `<moduleDir>/../<chainDirName>`. Defaults to this module's directory.
    */
   readonly moduleDir?: string;
   /**
@@ -54,12 +54,18 @@ export interface BundledMigrationsProbes {
  * Resolve the bundled Drizzle migrations directory for a dialect.
  *
  * Probe order:
- * 1. `path.resolve(moduleDir, '..', dialect === 'postgres' ? 'drizzle-postgres' : 'drizzle')`
- *    — the published package layout, where this module is built into
- *    `dist/runtime-node` and the migration chains are copied alongside.
+ * 1. `path.resolve(moduleDir, '..', <chainDirName>)` — the published package
+ *    layout, where this module is built into `dist/runtime-node` and the
+ *    bundled chain is copied alongside under the engine-provided chain
+ *    directory name (`StorageEngine.migrations.chainDirName`). Only the
+ *    SQLite chain (`drizzle`) ships in the published framework layout; chains
+ *    owned by engine packages (e.g. the Postgres chain of
+ *    `@makaio/storage-pg`) are not found here and resolve through probe 2.
  * 2. `getMigrationsFolder(dialect)` from `@makaio/storage-migrations`, wrapped
- *    in try/catch — bundled hosts replace the module with a stub that throws;
- *    treat a throw as a failed probe and carry its message into the final error.
+ *    in try/catch — engines whose chain ships in their own package resolve
+ *    here via `StorageEngine.migrations.resolveSourceChainDir`. Bundled hosts
+ *    replace the module with a stub that throws; treat a throw as a failed
+ *    probe and carry its message into the final error.
  *
  * A candidate is valid iff `<candidate>/meta/_journal.json` exists. Returns the
  * first valid candidate.
@@ -78,11 +84,11 @@ export interface BundledMigrationsProbes {
  */
 export function resolveBundledMigrationsDir(dialect: StorageDialect, probes: BundledMigrationsProbes = {}): string {
   const { moduleDir = import.meta.dirname, getMigrationsFolder: probeSourceChain = getMigrationsFolder } = probes;
-  const chainDirName = dialect === 'postgres' ? 'drizzle-postgres' : 'drizzle';
+  const chainDirName = getStorageEngine(dialect).migrations.chainDirName;
   const probeNotes: string[] = [];
 
   // Probe 1 — built package layout: this module ships inside dist/runtime-node,
-  // so the chain copied next to it resolves as ../drizzle[-postgres].
+  // so the chain copied next to it resolves as ../<chainDirName>.
   const bundledCandidate = path.resolve(moduleDir, '..', chainDirName);
   if (hasJournal(bundledCandidate)) return bundledCandidate;
   probeNotes.push(bundledCandidate);

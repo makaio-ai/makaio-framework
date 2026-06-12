@@ -10,7 +10,10 @@ import { normalizePackageExports, type PackageExportsField } from '../../build-t
 
 /** A framework dist verification finding. */
 export interface FrameworkDistIssue {
-  /** Exports-map key, dist import specifier, or migration chain directory the issue is about. */
+  /**
+   * Exports-map key, dist import specifier, forbidden Postgres literal or SQL
+   * marker, or migration chain directory the issue is about.
+   */
   readonly exportKey: string;
   readonly kind:
     | 'export-target-not-file'
@@ -18,6 +21,7 @@ export interface FrameworkDistIssue {
     | 'migration-journal-mismatch'
     | 'missing-export-target'
     | 'missing-migration-chain'
+    | 'postgres-code-in-dist'
     | 'undeclared-dist-dependency'
     | 'unexported-dist-specifier';
   readonly message: string;
@@ -35,19 +39,76 @@ export interface FrameworkDistResult {
 
 /**
  * Bundled migration chain directories every framework distribution must ship,
- * relative to the package root. Consumed at boot by the dialect-aware bundled
- * migrations lookup, so a missing chain only surfaces at a consumer's first
- * boot against that backend.
+ * relative to the package root. The SQLite chain is the only chain bundled
+ * with the framework distribution — engine packages (such as
+ * `@makaio/storage-pg`) ship their own chains and resolve them through
+ * `StorageEngine.migrations.resolveSourceChainDir`. Consumed at boot by the
+ * bundled migrations lookup, so a missing chain only surfaces at a consumer's
+ * first boot.
  */
-export const BUNDLED_MIGRATION_CHAINS: readonly string[] = ['dist/drizzle', 'dist/drizzle-postgres'];
+export const BUNDLED_MIGRATION_CHAINS: readonly string[] = ['dist/drizzle'];
 
 /**
- * Packages the distribution loads at runtime that are deliberately never
- * declared in the framework manifest: a consumer installs them to opt into a
- * backend (`pg` activates the Postgres driver path), and declaring them would
- * force the install on every consumer regardless of the backend in use.
+ * Import specifiers that must never appear in built framework dist modules.
+ *
+ * The Postgres driver and engine ship exclusively with `@makaio/storage-pg`:
+ * a `pg` or `drizzle-orm/node-postgres` import in the framework distribution
+ * means engine code was inlined into the core artifact, and an
+ * `@makaio/storage-pg` import means the core artifact hard-depends on the
+ * optional engine package (sanctioned engine attachment is the registry plus
+ * runtime resolution, never an import). `drizzle-orm/pg-core` is deliberately
+ * NOT forbidden — hand-written Postgres twin schemas and the core-owned
+ * column bundle (`./storage/drizzle/columns/postgres`) legitimately keep
+ * pg-core column builders in the core artifact; they are schema declarations,
+ * not driver or engine code. This allowance is safe only because framework
+ * sources cannot reach pg-core THROUGH the engine package: a lint ban rejects
+ * every `@makaio/storage-pg` import in framework code, and this specifier ban
+ * backstops it at the artifact level.
  */
-export const CONSUMER_PROVIDED_DIST_DEPENDENCIES: readonly string[] = ['pg'];
+export const FORBIDDEN_DIST_IMPORT_SPECIFIERS: readonly string[] = [
+  'pg',
+  'drizzle-orm/node-postgres',
+  '@makaio/storage-pg',
+];
+
+/**
+ * Postgres-engine-exclusive SQL fragments that survive minification inside
+ * template literals. Their presence in a built module means engine SQL was
+ * inlined into the core artifact. Core sources mention these only in doc
+ * comments, which minified `.mjs` output drops — if such a mention ever
+ * survives into dist, reword the comment instead of weakening this check.
+ */
+export const FORBIDDEN_DIST_CONTENT_MARKERS: readonly string[] = ['pg_advisory_xact_lock', 'websearch_to_tsquery'];
+
+/**
+ * Matches forbidden specifiers appearing as quoted string literals anywhere
+ * in built module content. This catches runtime-resolved driver loading
+ * (e.g. `importRuntimeModule('pg')`) that defeats import-specifier scans,
+ * even after a minifier renames the loading helper.
+ *
+ * `@makaio/storage-pg` is banned in import position but deliberately absent
+ * here: the quoted literal is the sanctioned attachment mechanism — the
+ * engine auto-resolve hint table and `importRuntimeModule`-based registration
+ * carry it by design, and neither pulls engine code into the artifact.
+ */
+const POSTGRES_DIST_LITERAL_PATTERN = /['"`](pg|drizzle-orm\/node-postgres)['"`]/g;
+
+/** An evidence-verified false positive of the quoted-literal scan. */
+export interface PostgresLiteralAllowlistEntry {
+  /** Built module path relative to the package root (e.g. `dist/core/index.mjs`). */
+  readonly module: string;
+  /** The exact literal text the entry allows (`pg` or `drizzle-orm/node-postgres`). */
+  readonly literal: string;
+}
+
+/**
+ * Allowlist for evidence-verified false positives of the quoted-literal scan.
+ * Every entry MUST carry a justification comment proving the literal is not
+ * runtime Postgres driver or engine code. Never widen this list to silence a
+ * finding without that evidence — weaken nothing, reword the offending source
+ * instead.
+ */
+export const POSTGRES_DIST_LITERAL_ALLOWLIST: readonly PostgresLiteralAllowlistEntry[] = [];
 
 /** Options for {@link verifyFrameworkDist}. */
 export interface VerifyFrameworkDistOptions {
@@ -125,11 +186,14 @@ function isLocalFileTarget(target: string): boolean {
  *    importing entry at load time for every consumer).
  * 3. Every bare external package imported by built `dist/` modules is declared
  *    in the manifest's dependencies, peer dependencies, or optional
- *    dependencies — or is explicitly consumer-provided
- *    ({@link CONSUMER_PROVIDED_DIST_DEPENDENCIES}). Node resolves bare
- *    externals from the consumer's install, so an undeclared one crashes the
- *    importing entry at load time.
- * 4. Every bundled migration chain ships with a journal that matches its
+ *    dependencies. Node resolves bare externals from the consumer's install,
+ *    so an undeclared one crashes the importing entry at load time.
+ * 4. No built `dist/` module contains Postgres driver or engine code: `pg` /
+ *    `drizzle-orm/node-postgres` / `@makaio/storage-pg` imports, quoted
+ *    driver-loading literals that defeat import-specifier scans, or
+ *    engine-exclusive SQL markers. The Postgres engine ships exclusively
+ *    with `@makaio/storage-pg`.
+ * 5. Every bundled migration chain ships with a journal that matches its
  *    `.sql` migration files.
  * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
  * @param options - Optional overrides for the verified migration chains.
@@ -194,7 +258,6 @@ export function verifyFrameworkDist(
     ...Object.keys(manifest.dependencies ?? {}),
     ...Object.keys(manifest.peerDependencies ?? {}),
     ...Object.keys(manifest.optionalDependencies ?? {}),
-    ...CONSUMER_PROVIDED_DIST_DEPENDENCIES,
   ]);
   const scannedModules = checkDistImports(root, new Set(Object.keys(exportsMap)), declaredDependencies, issues);
   checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
@@ -238,11 +301,12 @@ function toBarePackageName(specifier: string): string | undefined {
 
 /**
  * Scans built `dist/` modules for `@makaio/framework/*` self-import specifiers
- * that the exports map does not expose and for bare external imports that the
- * manifest does not declare.
+ * that the exports map does not expose, for bare external imports that the
+ * manifest does not declare, and for Postgres driver or engine code that must
+ * ship exclusively with `@makaio/storage-pg`.
  * @param root - Absolute framework package root.
  * @param exportKeys - Normalized exports-map keys (e.g. `./storage/drizzle`).
- * @param declaredDependencies - Manifest-declared and consumer-provided package names.
+ * @param declaredDependencies - Manifest-declared package names.
  * @param issues - Issue sink to append findings to.
  * @returns Number of `.mjs` modules scanned.
  */
@@ -261,10 +325,31 @@ function checkDistImports(
   for (const modulePath of collectModuleFiles(distDir)) {
     scannedModules += 1;
     const content = readFileSync(modulePath, 'utf8');
+    const moduleRelativePath = relative(root, modulePath);
+    const reportedPostgresLiterals = new Set<string>();
+
     for (const match of content.matchAll(IMPORT_SPECIFIER_PATTERN)) {
       const specifier = match[1];
       if (specifier === '@makaio/framework' || specifier.startsWith('@makaio/framework/')) {
-        checkSelfImport(specifier, exportKeys, reported, relative(root, modulePath), issues);
+        checkSelfImport(specifier, exportKeys, reported, moduleRelativePath, issues);
+        continue;
+      }
+
+      const forbidden = FORBIDDEN_DIST_IMPORT_SPECIFIERS.find(
+        (name) => specifier === name || specifier.startsWith(`${name}/`),
+      );
+      if (forbidden !== undefined) {
+        if (!reportedPostgresLiterals.has(forbidden)) {
+          reportedPostgresLiterals.add(forbidden);
+          issues.push({
+            exportKey: forbidden,
+            kind: 'postgres-code-in-dist',
+            message:
+              `Built module "${moduleRelativePath}" imports "${specifier}" — the Postgres driver and engine ` +
+              'ship exclusively with @makaio/storage-pg, never inside the framework distribution',
+            target: moduleRelativePath,
+          });
+        }
         continue;
       }
 
@@ -276,14 +361,70 @@ function checkDistImports(
         exportKey: packageName,
         kind: 'undeclared-dist-dependency',
         message:
-          `Built module "${relative(root, modulePath)}" imports "${specifier}" but "${packageName}" is neither ` +
-          'declared in the framework manifest nor listed as consumer-provided',
-        target: relative(root, modulePath),
+          `Built module "${moduleRelativePath}" imports "${specifier}" but "${packageName}" is not ` +
+          'declared in the framework manifest',
+        target: moduleRelativePath,
       });
     }
+
+    checkPostgresContent(content, moduleRelativePath, reportedPostgresLiterals, issues);
   }
 
   return scannedModules;
+}
+
+/**
+ * Scans a built module's raw content for quoted Postgres driver literals and
+ * engine-exclusive SQL markers.
+ *
+ * The quoted-literal scan defeats `importRuntimeModule('pg')`-style
+ * indirection: the specifier never appears in import position, but the quoted
+ * literal survives bundling and minification. The marker scan catches engine
+ * SQL embedded in template literals the same way.
+ * @param content - Raw `.mjs` module content.
+ * @param moduleRelativePath - Module path relative to the package root.
+ * @param reportedLiterals - Literals already reported for this module by the
+ * import-specifier ban; shared so one offending specifier yields one issue.
+ * @param issues - Issue sink to append findings to.
+ */
+function checkPostgresContent(
+  content: string,
+  moduleRelativePath: string,
+  reportedLiterals: Set<string>,
+  issues: FrameworkDistIssue[],
+): void {
+  for (const match of content.matchAll(POSTGRES_DIST_LITERAL_PATTERN)) {
+    const literal = match[1];
+    if (reportedLiterals.has(literal)) continue;
+    if (
+      POSTGRES_DIST_LITERAL_ALLOWLIST.some((entry) => entry.module === moduleRelativePath && entry.literal === literal)
+    ) {
+      continue;
+    }
+
+    reportedLiterals.add(literal);
+    issues.push({
+      exportKey: literal,
+      kind: 'postgres-code-in-dist',
+      message:
+        `Built module "${moduleRelativePath}" contains the quoted literal "${literal}" — runtime-resolved ` +
+        'Postgres driver loading must ship with @makaio/storage-pg, never inside the framework distribution',
+      target: moduleRelativePath,
+    });
+  }
+
+  for (const marker of FORBIDDEN_DIST_CONTENT_MARKERS) {
+    if (!content.includes(marker)) continue;
+
+    issues.push({
+      exportKey: marker,
+      kind: 'postgres-code-in-dist',
+      message:
+        `Built module "${moduleRelativePath}" contains the Postgres-only SQL marker "${marker}" — engine SQL ` +
+        'ships exclusively with @makaio/storage-pg, never inside the framework distribution',
+      target: moduleRelativePath,
+    });
+  }
 }
 
 /**

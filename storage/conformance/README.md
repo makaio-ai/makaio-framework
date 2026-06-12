@@ -53,6 +53,6 @@ Each suite receives its own isolated database:
 
 If qualified DDL ever enters the migration chain (e.g. `public.sessions`), the Postgres isolation model must fall back to `CREATE DATABASE` per suite. Report such cases immediately.
 
-## `pg` as a devDependency
+## How `pg` resolves
 
-`pg` is listed as a `devDependency` here precisely because it is consumer-provided: published framework manifests never declare it as a dependency. This private, never-published package is the sanctioned location where `pg` is installed so that the dynamic `import('pg')` inside `@makaio/storage-drizzle`'s Postgres client resolves at test time.
+The Postgres suites drive the real node-postgres driver, but `pg` is not declared here: it arrives transitively through this package's `@makaio/storage-pg` dependency, where it is a regular dependency. That is the same resolution path a Postgres host application uses — installing the engine package provides the driver.

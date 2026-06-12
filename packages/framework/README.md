@@ -69,14 +69,14 @@ Switch `adapterName` and the same code runs against any supported provider.
 
 ## PostgreSQL Backend
 
-SQLite is the default backend and needs no configuration. To run against PostgreSQL instead, install the `pg` driver in your application and point the runtime at your server:
+SQLite is the default backend and needs no configuration. To run against PostgreSQL instead, install the `@makaio/storage-pg` engine package in your application and point the runtime at your server:
 
 ```bash
-npm install pg
+npm install @makaio/storage-pg
 export MAKAIO_DATABASE_URL=postgres://user:password@host:5432/makaio
 ```
 
-`pg` is consumer-provided by design — it is not listed in this package's dependencies or peer dependencies, so selecting SQLite never pulls in a Postgres driver and SQLite-only installs add nothing extra. Any `pg` ^8.x works; the driver is pure JavaScript and runs under both Node.js and Bun.
+The node-postgres driver (`pg` ^8.x) is a regular dependency of `@makaio/storage-pg` — neither is listed in this package's dependencies or peer dependencies, so selecting SQLite never pulls in a Postgres driver and SQLite-only installs add nothing extra. The driver is pure JavaScript and runs under both Node.js and Bun.
 
 **Selecting the backend.** The connection target resolves in this order (empty and whitespace-only values count as unset):
 
@@ -86,15 +86,15 @@ export MAKAIO_DATABASE_URL=postgres://user:password@host:5432/makaio
 4. The `MAKAIO_DATABASE_PATH` environment variable (SQLite file path)
 5. `<makaioHome>/makaio.db` (SQLite default)
 
-A `postgres://` or `postgresql://` URL from the first two sources selects PostgreSQL; any other URL scheme there is rejected with an error rather than falling through to SQLite. The connection pool defaults to 4 connections; tune it with the `database.poolMax` boot option.
+A `postgres://` or `postgresql://` URL from the first two sources selects PostgreSQL — Node and Bun runtime hosts recognize the scheme and auto-register the installed `@makaio/storage-pg` engine before any database client is created (the `database.engines` boot option stays the explicit registration path). Any other URL scheme there is rejected with an error rather than falling through to SQLite. The connection pool defaults to 4 connections; tune it with the `database.poolMax` boot option.
 
-**Migrations.** The package bundles migration chains for both backends (`dist/drizzle/` and `dist/drizzle-postgres/`); boot applies the chain matching the selected backend automatically. Concurrent boots against the same Postgres database are safe — migration runs are serialized with a transaction-scoped advisory lock.
+**Migrations.** The package bundles only the SQLite migration chain (`dist/drizzle/`); the Postgres chain ships inside `@makaio/storage-pg` and is resolved through its storage engine. Boot applies the chain matching the selected backend automatically. Concurrent boots against the same Postgres database are safe — migration runs are serialized with a transaction-scoped advisory lock.
 
 **Full-text search** works on both backends through the same contracts: FTS5 on SQLite, `tsvector` on Postgres (web-search query syntax via `websearch_to_tsquery`). Relevance scores are positive on both backends but not comparable across them.
 
 **Supported version.** CI runs the storage conformance suite against PostgreSQL 18 (`postgres:18-alpine`); use 18 or newer.
 
-**Switching an existing SQLite install.** Install `pg` and set `MAKAIO_DATABASE_URL`; delete any custom `dbPath` wiring (a URL outranks it, so leftover path configuration is inert). Data is not migrated across backends — the Postgres database starts empty.
+**Switching an existing SQLite install.** Install `@makaio/storage-pg` and set `MAKAIO_DATABASE_URL`; delete any custom `dbPath` wiring (a URL outranks it, so leftover path configuration is inert). Data is not migrated across backends — the Postgres database starts empty.
 
 ## Documentation
 

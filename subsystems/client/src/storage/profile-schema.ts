@@ -7,8 +7,9 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { bool, epochMs } from '@makaio/storage-drizzle/columns/sqlite';
+import { uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { uniqueIndex as pgUniqueIndex } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
 
 /**
  * Persistent store for named client configuration profiles.
@@ -19,23 +20,23 @@ import { bool, epochMs } from '@makaio/storage-drizzle/columns/sqlite';
  * `isDefault = true`; storage enforces this with a partial unique index so
  * concurrent promotions cannot persist multiple defaults.
  */
-export const clientProfiles = sqliteTable(
+export const clientProfilesDual = defineDualTable(
   'client_profiles',
-  {
+  (c) => ({
     /** Stable row identifier (UUID v4). */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
 
     /** Stable client identifier (e.g. `'claude-code'`). */
-    clientId: text('client_id').notNull(),
+    clientId: c.text('client_id').notNull(),
 
     /** Human-readable profile name (unique per client). */
-    name: text('name').notNull(),
+    name: c.text('name').notNull(),
 
     /** Optional description of the profile's purpose. */
-    description: text('description'),
+    description: c.text('description'),
 
     /** Absolute path to the directory used as the configuration home for this profile. */
-    configDir: text('config_dir').notNull(),
+    configDir: c.text('config_dir').notNull(),
 
     /**
      * Whether this profile is the default for its client.
@@ -44,19 +45,28 @@ export const clientProfiles = sqliteTable(
      * given time. A partial unique index and the storage `setDefault`
      * operation enforce that invariant.
      */
-    isDefault: bool('is_default').notNull().default(false),
+    isDefault: c.bool('is_default').notNull().default(false),
 
     /** Unix epoch timestamp in milliseconds when this row was created. */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
 
     /** Unix epoch timestamp in milliseconds when this row was last updated. */
-    updatedAt: epochMs('updated_at').notNull(),
+    updatedAt: c.epochMs('updated_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [
+      uniqueIndex('uq_client_profiles_client_name').on(t.clientId, t.name),
+      uniqueIndex('uq_client_profiles_default').on(t.clientId).where(sql`${t.isDefault} = 1`),
+    ],
+    postgres: (t) => [
+      pgUniqueIndex('uq_client_profiles_client_name').on(t.clientId, t.name),
+      pgUniqueIndex('uq_client_profiles_default').on(t.clientId).where(sql`${t.isDefault} = true`),
+    ],
   },
-  (table) => [
-    uniqueIndex('uq_client_profiles_client_name').on(table.clientId, table.name),
-    uniqueIndex('uq_client_profiles_default').on(table.clientId).where(sql`${table.isDefault} = 1`),
-  ],
 );
+
+/** SQLite face of the `client_profiles` table (canonical schema). */
+export const clientProfiles = clientProfilesDual.sqlite;
 
 /** Inferred insert type for the `client_profiles` table. */
 export type InsertClientProfile = typeof clientProfiles.$inferInsert;

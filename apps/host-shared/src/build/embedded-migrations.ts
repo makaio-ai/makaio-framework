@@ -302,6 +302,15 @@ export function renderEmbeddedMigrationsModule(
  *
  * Scans the workspace for `drizzle/meta/_journal.json` files while excluding
  * generated build trees such as `dist/` and `release/`.
+ *
+ * Only directories literally named `drizzle` are embedded. Packaged hosts are
+ * SQLite-only, and the SQLite migration chain always lives in a `drizzle/`
+ * directory, so this is exactly the chain a bundled host needs. An extension
+ * that also ships a Postgres chain must emit it into a differently named
+ * directory (by convention `drizzle-postgres`, matching the central chain) so
+ * the Postgres chain is never swept into a SQLite-only embedded host. This
+ * function performs no dialect validation; the non-`drizzle` directory name is
+ * the guard.
  * @param workspaceRoot - Absolute workspace root.
  * @returns Sorted unique migration sources.
  */
@@ -336,6 +345,9 @@ export function discoverBundledMigrationSources(workspaceRoot: string): Embedded
       }
 
       const fullPath = path.join(current, entry.name);
+      // Embed only `drizzle/` chains: packaged hosts are SQLite-only and the
+      // SQLite chain always lives here. A Postgres chain must use a non-`drizzle`
+      // directory (convention: `drizzle-postgres`) so it stays out of this sweep.
       if (entry.name === 'drizzle' && existsSync(path.join(fullPath, 'meta', '_journal.json'))) {
         discovered.add(normalizeMigrationDir(fullPath));
         continue;

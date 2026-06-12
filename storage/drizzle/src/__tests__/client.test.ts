@@ -3,21 +3,23 @@
  *
  * All tests use real in-memory or temporary file-based SQLite databases
  * via runtime-selected SQLite drivers (`bun:sqlite` under Bun, `@libsql/client` under Node.js) — no mocks.
- * The single exception is the missing-pg fault-injection test, which makes the
- * `pg` module resolution throw so the real error-wrap path in the Postgres
- * branch can be exercised in a workspace where `pg` is installed.
+ * The Postgres driver glue moved to `@makaio/storage-pg` and is tested there;
+ * registry dispatch to a claiming engine is exercised here via an engine double.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { brandDatabase, createDatabaseClient } from '../client';
-import type { DatabaseClient } from '../client';
-import { getRawSqlExecutor } from '../raw-sql';
+import { createDatabaseClient } from '../client';
+import type { DatabaseClient, DatabaseClientConfig } from '../client';
+import { registerStorageEngine } from '../engine/registry';
+import type { StorageEngine } from '../engine/types';
+import { brandDatabase, getRawSqlExecutor } from '../raw-sql';
 import { DATABASE_DIALECT, getDatabaseDialect } from '../types';
-import type { MakaioDatabase } from '../types';
+import type { MakaioDatabase, StorageDialect } from '../types';
+import { buildPostgresEngineDouble } from './postgres-engine-double';
 
 // ---------------------------------------------------------------------------
 // Helper — extract the scalar value from a single-column PRAGMA result row.
@@ -76,6 +78,14 @@ function deleteSqliteArtifacts(dbFilePath: string): void {
       // Files may not exist if SQLite/libsql deferred creation — ignore.
     }
   }
+}
+
+/** The registry's documented `globalThis` storage key (used for test cleanup). */
+const ENGINE_REGISTRY: unique symbol = Symbol.for('makaio.storage.engineRegistry');
+
+/** View of `globalThis` exposing the registry map for test cleanup. */
+interface EngineRegistryCarrier {
+  [ENGINE_REGISTRY]?: Map<StorageDialect, StorageEngine>;
 }
 
 type AssertFalse<T extends false> = T;
@@ -348,54 +358,44 @@ describe('createDatabaseClient', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Postgres dispatch — pg is installed in this workspace (the storage
-  // conformance package depends on it). Pool construction is lazy, so the
-  // dispatch seam is exercised for real without a running server: a
-  // postgres:// URL must produce a postgres-branded client, never libsql.
+  // Engine registry dispatch — URL recognition itself is pinned by the
+  // engine-registry and hint tests; here the factory's dispatch decisions are
+  // exercised: claimed URLs go to the claiming engine, recognized-but-
+  // unregistered URLs fail actionably, everything else stays on SQLite.
   // -------------------------------------------------------------------------
 
-  describe('postgres dispatch', () => {
-    it('dispatches postgres:// to the PG branch — resolves to postgres dialect without connecting', async () => {
-      const client = track(await createDatabaseClient({ url: 'postgres://user:pw@localhost:5432/makaio' }));
-
-      expect(client.dialect).toBe('postgres');
-      expect(getDatabaseDialect(client.db)).toBe('postgres');
+  describe('engine registry dispatch', () => {
+    afterEach(() => {
+      // Remove the postgres entry a test registered; the seeded sqlite
+      // default engine stays.
+      (globalThis as EngineRegistryCarrier)[ENGINE_REGISTRY]?.delete('postgres');
     });
 
-    it('dispatches postgresql:// (long scheme) to the PG branch', async () => {
-      const client = track(await createDatabaseClient({ url: 'postgresql://user:pw@localhost:5432/makaio' }));
-
-      expect(client.dialect).toBe('postgres');
+    it('throws the actionable install error for postgres URLs when no engine is registered', async () => {
+      await expect(createDatabaseClient({ url: 'postgres://user:pw@localhost:5432/makaio' })).rejects.toThrow(
+        /@makaio\/storage-pg/,
+      );
     });
 
-    it('dispatches POSTGRES:// (uppercase) to the PG branch (/i flag)', async () => {
-      const client = track(await createDatabaseClient({ url: 'POSTGRES://user:pw@localhost:5432/makaio' }));
-
-      expect(client.dialect).toBe('postgres');
-    });
-
-    it('wraps a failing pg import in an actionable error with the cause attached', async () => {
-      // Fault injection: simulate a host application without the
-      // consumer-provided 'pg' package by making its module resolution throw.
-      // The real catch block in createNodePgClient must wrap the failure with
-      // the actionable install hint and preserve the underlying cause.
-      vi.doMock('pg', () => {
-        throw new Error('simulated missing pg module');
+    it('routes URLs claimed by a registered engine to that engine', async () => {
+      const stubClient: DatabaseClient = { db: {} as MakaioDatabase, dialect: 'postgres', close: () => undefined };
+      const receivedConfigs: DatabaseClientConfig[] = [];
+      const engine = buildPostgresEngineDouble({
+        createClient: (config) => {
+          receivedConfigs.push(config);
+          return Promise.resolve(stubClient);
+        },
       });
-      try {
-        await expect(createDatabaseClient({ url: 'postgres://user:pw@localhost:5432/makaio' })).rejects.toSatisfy(
-          (error: unknown) =>
-            error instanceof Error &&
-            error.message.includes("consumer-provided 'pg' package") &&
-            error.cause !== undefined,
-        );
-      } finally {
-        vi.doUnmock('pg');
-      }
+      registerStorageEngine(engine);
+
+      const client = await createDatabaseClient({ url: 'postgresql://user:pw@localhost:5432/makaio' });
+
+      expect(client).toBe(stubClient);
+      expect(receivedConfigs).toHaveLength(1);
+      expect(receivedConfigs[0]?.url).toBe('postgresql://user:pw@localhost:5432/makaio');
     });
 
-    it('does not dispatch file: URLs to the PG branch — resolves to sqlite dialect', async () => {
-      // The Postgres branch must not intercept SQLite-style URLs.
+    it('does not dispatch sqlite-shaped URLs to a non-default engine — resolves to sqlite dialect', async () => {
       const client = track(await createDatabaseClient({ url: ':memory:' }));
 
       expect(client.dialect).toBe('sqlite');

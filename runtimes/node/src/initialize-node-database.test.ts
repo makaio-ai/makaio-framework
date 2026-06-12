@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { findStorageEngine, type StorageDialect, type StorageEngine } from '@makaio/storage-drizzle';
 import type { DatabaseClient } from '@makaio/storage-drizzle/client';
 import { initializeNodeDatabase } from './initialize-node-database.js';
 
@@ -15,7 +16,7 @@ const { closeMock, createDatabaseClientMock, runMigrationsMock, resolveBundledMi
 }));
 
 vi.mock('@makaio/storage-drizzle/client', async (importOriginal) => {
-  // Keep the real isPostgresUrl predicate — only client creation is mocked, so
+  // Only client creation is mocked — the engine registry stays real, so URL
   // target discrimination runs against the actual dispatch rule.
   const actual = await importOriginal<typeof import('@makaio/storage-drizzle/client')>();
   return {
@@ -32,14 +33,121 @@ vi.mock('./resolve-bundled-migrations-dir.js', () => ({
   resolveBundledMigrationsDir: resolveBundledMigrationsDirMock,
 }));
 
+/** The registry's documented `globalThis` storage key (used for test cleanup). */
+const ENGINE_REGISTRY = Symbol.for('makaio.storage.engineRegistry');
+
+/**
+ * View of `globalThis` exposing the registry map for test cleanup. Keyed by a
+ * `symbol` index signature rather than the computed `ENGINE_REGISTRY` key,
+ * because `Symbol.for` returns a shared (non-`unique`) symbol.
+ */
+interface EngineRegistryCarrier {
+  [key: symbol]: Map<StorageDialect, StorageEngine> | undefined;
+}
+
+/**
+ * Build a minimal but structurally complete postgres engine for the explicit
+ * `database.engines` registration path. Client creation never runs in these
+ * tests — `createDatabaseClient` is mocked — so the engine only has to claim
+ * postgres URLs.
+ * @returns A fresh engine object claiming postgres URLs.
+ */
+function buildExplicitPostgresEngine(): StorageEngine {
+  return {
+    dialect: 'postgres',
+    matchesUrl: (url) => /^postgres(ql)?:\/\//i.test(url),
+    createClient: () => Promise.reject(new Error('test engine does not create clients')),
+    errors: {
+      isDuplicateObjectError: () => false,
+      isUniqueViolationError: () => false,
+    },
+    capabilities: {
+      binaryColumnType: 'bytea',
+      maxCounterAssignmentRaces: true,
+      tableExists: () => Promise.resolve(false),
+    },
+    migrations: {
+      defaultLedgerTable: '__makaio_migrations',
+      journalDialect: 'postgresql',
+      chainDirName: 'drizzle-postgres',
+      buildLedgerDdl: (tableName) => `CREATE TABLE IF NOT EXISTS "${tableName}" (hash text)`,
+      beginTransactionStatement: 'BEGIN',
+      extensionLedgerName: (sourceHash) => `__makaio_migrations_${sourceHash}`,
+    },
+    fts: {
+      dialect: 'postgres',
+      provisionSearchIndex: () => Promise.resolve(),
+      searchMessages: () => Promise.reject(new Error('test engine does not search')),
+      searchMessageExcerpts: () => Promise.reject(new Error('test engine does not search')),
+      searchSessionRows: () => Promise.reject(new Error('test engine does not search')),
+      countSessionMatches: () => Promise.reject(new Error('test engine does not search')),
+      fetchFirstUserMessagePreviews: () => Promise.reject(new Error('test engine does not search')),
+    },
+  };
+}
+
+/**
+ * Create a host-local `@makaio/storage-pg` fixture package whose identity can
+ * only be discovered by resolving from the supplied host root.
+ * @param hostRoot - Temporary host install root.
+ * @returns Promise resolved after the package fixture has been written.
+ */
+async function writeHostStoragePgFixture(hostRoot: string): Promise<void> {
+  const packageRoot = path.join(hostRoot, 'node_modules', '@makaio', 'storage-pg');
+  await fs.mkdir(packageRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(packageRoot, 'package.json'),
+    JSON.stringify({ name: '@makaio/storage-pg', version: '0.0.0-test', type: 'module', exports: './index.mjs' }),
+  );
+  await fs.writeFile(
+    path.join(packageRoot, 'index.mjs'),
+    `
+export const storageEngine = {
+  dialect: 'postgres',
+  matchesUrl: (url) => /^postgres(ql)?:\\/\\//i.test(url),
+  createClient: () => Promise.reject(new Error('fixture engine does not create clients')),
+  errors: {
+    isDuplicateObjectError: () => false,
+    isUniqueViolationError: () => false,
+  },
+  capabilities: {
+    binaryColumnType: 'fixture-bytea',
+    maxCounterAssignmentRaces: true,
+    tableExists: () => Promise.resolve(false),
+  },
+  migrations: {
+    defaultLedgerTable: '__fixture_migrations',
+    journalDialect: 'postgresql',
+    chainDirName: 'fixture-drizzle-postgres',
+    buildLedgerDdl: (tableName) => \`CREATE TABLE "\${tableName}" (hash text)\`,
+    beginTransactionStatement: 'BEGIN',
+    extensionLedgerName: (sourceHash) => \`__fixture_migrations_\${sourceHash}\`,
+  },
+  fts: {
+    dialect: 'postgres',
+    provisionSearchIndex: () => Promise.resolve(),
+    searchMessages: () => Promise.reject(new Error('fixture engine does not search')),
+    searchMessageExcerpts: () => Promise.reject(new Error('fixture engine does not search')),
+    searchSessionRows: () => Promise.reject(new Error('fixture engine does not search')),
+    countSessionMatches: () => Promise.reject(new Error('fixture engine does not search')),
+    fetchFirstUserMessagePreviews: () => Promise.reject(new Error('fixture engine does not search')),
+  },
+};
+`,
+  );
+}
+
 describe('initializeNodeDatabase', () => {
   let tempDir: string;
   let dbPath: string;
   let savedDatabaseUrl: string | undefined;
   let savedDatabasePath: string | undefined;
+  let savedPostgresEngine: StorageEngine | undefined;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    savedPostgresEngine = findStorageEngine('postgres');
+    (globalThis as EngineRegistryCarrier)[ENGINE_REGISTRY]?.delete('postgres');
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-db-init-'));
     dbPath = path.join(tempDir, 'makaio.db');
     await fs.writeFile(dbPath, '');
@@ -58,6 +166,15 @@ describe('initializeNodeDatabase', () => {
   });
 
   afterEach(async () => {
+    // Remove the postgres entry a test registered (explicitly or via URL
+    // auto-resolve), or restore a caller-seeded engine if this worker already
+    // had one, so the suite only rolls back its own registry changes.
+    const registry = (globalThis as EngineRegistryCarrier)[ENGINE_REGISTRY];
+    if (savedPostgresEngine === undefined) {
+      registry?.delete('postgres');
+    } else {
+      registry?.set('postgres', savedPostgresEngine);
+    }
     await fs.rm(tempDir, { recursive: true, force: true });
     if (savedDatabaseUrl === undefined) {
       delete process.env.MAKAIO_DATABASE_URL;
@@ -105,7 +222,11 @@ describe('initializeNodeDatabase', () => {
 
     const result = await initializeNodeDatabase({
       makaioHome: tempDir,
-      database: { url: 'postgres://u:p@localhost:5432/makaio', poolMax: 7 },
+      database: {
+        url: 'postgres://u:p@localhost:5432/makaio',
+        poolMax: 7,
+        engines: [buildExplicitPostgresEngine()],
+      },
     });
 
     expect(createDatabaseClientMock).toHaveBeenCalledWith({
@@ -122,6 +243,44 @@ describe('initializeNodeDatabase', () => {
     chmodSpy.mockRestore();
   });
 
+  it('registers engines passed via database.engines before resolving the target', async () => {
+    const engine = buildExplicitPostgresEngine();
+
+    const result = await initializeNodeDatabase({
+      makaioHome: tempDir,
+      database: { url: 'postgres://u:p@localhost:5432/makaio', engines: [engine] },
+    });
+
+    // The explicitly passed engine claimed the URL — no auto-resolve import
+    // ran, and the registry holds exactly that object.
+    expect(findStorageEngine('postgres')).toBe(engine);
+    expect(createDatabaseClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({ url: 'postgres://u:p@localhost:5432/makaio' }),
+    );
+    expect(result.dbPath).toBeUndefined();
+  });
+
+  it('auto-registers the hinted engine package for unregistered postgres URLs', async () => {
+    const hostRoot = path.join(tempDir, 'host-app');
+    await writeHostStoragePgFixture(hostRoot);
+    expect(findStorageEngine('postgres')).toBeUndefined();
+
+    await initializeNodeDatabase({
+      makaioHome: tempDir,
+      database: { url: 'postgres://u:p@localhost:5432/makaio', enginePackageImportBasePath: hostRoot },
+    });
+
+    const engine = findStorageEngine('postgres');
+    if (engine === undefined) {
+      throw new Error('Expected host-resolved postgres engine to be registered');
+    }
+    if (engine.matchesUrl === undefined) {
+      throw new Error('Expected host-resolved postgres engine to claim URL targets');
+    }
+    expect(engine.migrations.chainDirName).toBe('fixture-drizzle-postgres');
+    expect(engine.matchesUrl('postgres://fixture')).toBe(true);
+  });
+
   it('MAKAIO_DATABASE_URL outranks dbPath and MAKAIO_DATABASE_PATH', async () => {
     process.env.MAKAIO_DATABASE_URL = 'postgres://env:url@localhost:5432/env';
     process.env.MAKAIO_DATABASE_PATH = path.join(tempDir, 'from-path-env.db');
@@ -130,6 +289,7 @@ describe('initializeNodeDatabase', () => {
     const result = await initializeNodeDatabase({
       makaioHome: tempDir,
       dbPath: path.join(tempDir, 'explicit.db'),
+      database: { engines: [buildExplicitPostgresEngine()] },
     });
 
     expect(createDatabaseClientMock).toHaveBeenCalledWith(
@@ -144,7 +304,10 @@ describe('initializeNodeDatabase', () => {
 
     const result = await initializeNodeDatabase({
       makaioHome: tempDir,
-      database: { url: 'postgres://options:url@localhost:5432/opts' },
+      database: {
+        url: 'postgres://options:url@localhost:5432/opts',
+        engines: [buildExplicitPostgresEngine()],
+      },
     });
 
     expect(createDatabaseClientMock).toHaveBeenCalledWith(
@@ -159,21 +322,32 @@ describe('initializeNodeDatabase', () => {
     await initializeNodeDatabase({
       makaioHome: tempDir,
       migrationsDir: explicitMigrationsDir,
-      database: { url: 'postgres://u:p@localhost:5432/makaio' },
+      database: {
+        url: 'postgres://u:p@localhost:5432/makaio',
+        engines: [buildExplicitPostgresEngine()],
+      },
     });
 
     expect(resolveBundledMigrationsDirMock).not.toHaveBeenCalled();
     expect(runMigrationsMock).toHaveBeenCalledWith(expect.anything(), { migrationsDir: explicitMigrationsDir });
   });
 
-  it('rejects unsupported database URL schemes', async () => {
-    await expect(
-      initializeNodeDatabase({
+  it('rejects unsupported database URL schemes, naming the source and the hinted engine example', async () => {
+    let thrown: unknown;
+    try {
+      await initializeNodeDatabase({
         makaioHome: tempDir,
         database: { url: 'libsql://remote.example' },
-      }),
-    ).rejects.toThrow('postgres://');
+      });
+    } catch (error) {
+      thrown = error;
+    }
 
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain('postgres://');
+    expect(message).toContain('@makaio/storage-pg');
+    expect(message).toContain("'database.url' boot option");
     expect(createDatabaseClientMock).not.toHaveBeenCalled();
   });
 
@@ -270,7 +444,10 @@ describe('initializeNodeDatabase', () => {
     await expect(
       initializeNodeDatabase({
         makaioHome: tempDir,
-        database: { url: 'postgres://u:p@localhost:5432/makaio' },
+        database: {
+          url: 'postgres://u:p@localhost:5432/makaio',
+          engines: [buildExplicitPostgresEngine()],
+        },
       }),
     ).rejects.toThrow('resolver probe failed');
 

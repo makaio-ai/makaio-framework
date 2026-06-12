@@ -5,16 +5,25 @@
  * barrel files in `.generated/` that Drizzle Kit uses to produce SQL migration
  * files.
  *
- * - `schema.ts` — SQLite dialect barrel (always generated)
- * - `schema.postgres.ts` — Postgres dialect barrel (generated when the
- *   `'postgres'` dialect is included in `options.dialects`)
+ * - `schema.ts` — SQLite (baseline) dialect barrel (always generated)
+ * - `schema.postgres.ts` — Postgres dialect barrel
+ *
+ * When run as the CLI entrypoint, the barrels generated are selected by which
+ * engine packages are present: the SQLite baseline barrel is always emitted,
+ * and each non-baseline dialect barrel (e.g. Postgres) is emitted only when its
+ * engine package resolves. A checkout without the Postgres engine therefore
+ * generates the SQLite barrel alone and never feeds a stale `schema.postgres.ts`
+ * to a drizzle-kit config that is absent. `generateSchema` itself still honours
+ * an explicit `options.dialects` list unchanged — only the entrypoint's dialect
+ * selection is engine-driven.
  *
  * Usage: tsx src/generate-schema.ts
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import type { StorageDialect } from '@makaio/storage-drizzle';
+import { NON_BASELINE_GENERATION_LEGS, type StorageDialect } from '@makaio/storage-drizzle';
 import { discoverSchemas } from './discover-schemas.js';
 
 /** Barrel file name for each storage dialect. */
@@ -118,7 +127,35 @@ function isMainModule(): boolean {
   return pathToFileURL(entry).href === import.meta.url;
 }
 
-// Run if executed directly — the framework chain always regenerates both barrels.
+/**
+ * Resolve the dialects whose barrels the CLI entrypoint should generate.
+ *
+ * Starts from the SQLite baseline, then appends each non-baseline dialect whose
+ * engine package is installed in this workspace. Presence is probed by resolving
+ * the engine's `package.json`: a `MODULE_NOT_FOUND` rejection means the engine is
+ * absent and its barrel is skipped, so a framework-only checkout generates the
+ * SQLite barrel alone. Any other resolution error is rethrown.
+ * @returns Baseline plus every present non-baseline dialect, in descriptor order.
+ */
+export function resolvePresentDialects(): StorageDialect[] {
+  const require = createRequire(import.meta.url);
+  const dialects: StorageDialect[] = ['sqlite'];
+  for (const leg of NON_BASELINE_GENERATION_LEGS) {
+    try {
+      require.resolve(`${leg.enginePackageName}/package.json`);
+    } catch (err) {
+      if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'MODULE_NOT_FOUND') {
+        continue;
+      }
+      throw err;
+    }
+    dialects.push(leg.dialect);
+  }
+  return dialects;
+}
+
+// Run if executed directly — generate the baseline barrel plus a barrel for each
+// present non-baseline engine, so absent engines never receive a stale barrel.
 if (isMainModule()) {
-  void generateSchema({ dialects: ['sqlite', 'postgres'] });
+  void generateSchema({ dialects: resolvePresentDialects() });
 }

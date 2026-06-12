@@ -2,15 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { sql, type SQL } from 'drizzle-orm';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
-import { getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, getStorageEngine } from '@makaio/storage-drizzle';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import {
-  applyMigrations,
-  buildBeginTransactionStatement,
-  buildLedgerTableDdl,
-  migrationAdvisoryLockKey,
-  resolveDefaultMigrationsTable,
-} from '../apply-migrations.js';
+import { applyMigrations, resolveDefaultMigrationsTable } from '../apply-migrations.js';
 
 describe('applyMigrations', () => {
   it('rolls back the whole migration when one statement fails', async () => {
@@ -403,11 +397,12 @@ describe('applyMigrations statement flow (SQLite)', () => {
       ]);
 
       // Pins the SQLite statement sequence: snapshot in autocommit (no
-      // advisory lock, no extra transaction, no in-lock ledger recheck), then
-      // one BEGIN/COMMIT holding both the migration statement and its ledger
-      // row.
+      // cross-process lock, no extra transaction, no in-lock ledger recheck),
+      // then one BEGIN/COMMIT holding both the migration statement and its
+      // ledger row. DDL text is anchored on the engine seam — its byte pin
+      // lives in storage-drizzle's sqlite-engine tests.
       expect(statements).toEqual([
-        buildLedgerTableDdl('sqlite', '__drizzle_migrations'),
+        getStorageEngine('sqlite').migrations.buildLedgerDdl('__drizzle_migrations'),
         'SELECT hash FROM "__drizzle_migrations"',
         'BEGIN',
         'CREATE TABLE recorded_happy (id INTEGER PRIMARY KEY)',
@@ -437,12 +432,13 @@ describe('applyMigrations statement flow (SQLite)', () => {
       ]);
 
       // The failed CREATE poisons an open Postgres transaction, so the
-      // dialect-independent adoption flow must ROLLBACK before recording the
+      // engine-independent adoption flow must ROLLBACK before recording the
       // adopted hash in a fresh BEGIN/COMMIT on the same session. The fresh
-      // transaction performs no ledger recheck on SQLite — that re-read is
-      // Postgres-only, where the ROLLBACK released the advisory lock.
+      // transaction performs no ledger recheck on SQLite — that re-read
+      // exists only on engines with a cross-process lock, where the ROLLBACK
+      // released it.
       expect(statements).toEqual([
-        buildLedgerTableDdl('sqlite', '__drizzle_migrations'),
+        getStorageEngine('sqlite').migrations.buildLedgerDdl('__drizzle_migrations'),
         'SELECT hash FROM "__drizzle_migrations"',
         'BEGIN',
         'CREATE TABLE adoption_flow_test (id INTEGER PRIMARY KEY)',
@@ -462,43 +458,13 @@ describe('applyMigrations statement flow (SQLite)', () => {
   });
 });
 
-describe('postgres ledger shape (string-level pins until live conformance coverage)', () => {
-  it('derives the default ledger table name per dialect', () => {
+describe('resolveDefaultMigrationsTable', () => {
+  // The per-engine ledger byte pins (DDL shape, BEGIN flavor, advisory lock
+  // key) live with the engines: storage-drizzle's sqlite-engine tests and
+  // @makaio/storage-pg's engine tests. This suite only pins that the helper
+  // delegates to the registered engine.
+  it('delegates to the registered engine for the dialect', () => {
     expect(resolveDefaultMigrationsTable('sqlite')).toBe('__drizzle_migrations');
-    expect(resolveDefaultMigrationsTable('postgres')).toBe('__makaio_migrations');
-  });
-
-  it('pins the sqlite ledger DDL to the historical Drizzle shape', () => {
-    expect(buildLedgerTableDdl('sqlite', '__drizzle_migrations')).toBe(
-      'CREATE TABLE IF NOT EXISTS "__drizzle_migrations" (\n' +
-        '      id INTEGER PRIMARY KEY AUTOINCREMENT,\n' +
-        '      hash text NOT NULL,\n' +
-        '      created_at numeric\n' +
-        '    )',
-    );
-  });
-
-  it('pins the postgres ledger DDL: identity primary key and UNIQUE hash', () => {
-    expect(buildLedgerTableDdl('postgres', '__makaio_migrations')).toBe(
-      'CREATE TABLE IF NOT EXISTS "__makaio_migrations" (\n' +
-        '      id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,\n' +
-        '      hash text NOT NULL UNIQUE,\n' +
-        '      created_at numeric\n' +
-        '    )',
-    );
-  });
-
-  it('pins the BEGIN statement per dialect: postgres pins READ COMMITTED for the in-lock recheck', () => {
-    // Inheriting default_transaction_isolation would let an ambient
-    // REPEATABLE READ default snapshot the transaction at the lock SELECT —
-    // before the lock wait completes — blinding the in-lock ledger recheck.
-    expect(buildBeginTransactionStatement('sqlite')).toBe('BEGIN');
-    expect(buildBeginTransactionStatement('postgres')).toBe('BEGIN ISOLATION LEVEL READ COMMITTED');
-  });
-
-  it('pins the advisory lock key derivation as a cross-version contract', () => {
-    // First 8 bytes (big-endian, signed) of SHA-256("makaio:migrations:<table>").
-    expect(migrationAdvisoryLockKey('__makaio_migrations')).toBe(-9176243337112485871n);
-    expect(migrationAdvisoryLockKey('__drizzle_migrations')).toBe(-8697586541560377660n);
+    expect(resolveDefaultMigrationsTable('sqlite')).toBe(getStorageEngine('sqlite').migrations.defaultLedgerTable);
   });
 });

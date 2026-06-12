@@ -3,5 +3,5 @@
  * @packageDocumentation
  */
 
-export { importCursors, type InsertImportCursor, type SelectImportCursor } from './schema.js';
+export { importCursors, importCursorsDual, type InsertImportCursor, type SelectImportCursor } from './schema.js';
 export { registerDrizzleImportCursorStorage } from './drizzle-handler.js';

@@ -1,16 +1,24 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
-import { brandDatabase, createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import {
+  brandDatabase,
+  findStorageEngine,
   getRawSqlExecutor,
+  registerStorageEngine,
   type MakaioDatabase,
   type RawSqlExecutor,
   type RawSqlSession,
+  type StorageEngine,
 } from '@makaio/storage-drizzle';
 import { beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+const requireFromTestUtils = createRequire(import.meta.url);
 
 export interface TestDbContext {
   /** Drizzle database instance */
@@ -190,18 +198,50 @@ export interface PgBrandedTestDbContext {
 }
 
 /**
+ * Import the Postgres storage engine from `@makaio/test-utils`' package graph.
+ *
+ * This helper owns the `@makaio/storage-pg` dev dependency. Resolving from
+ * `import.meta.url` keeps strict package managers from treating the optional
+ * engine as a dependency of `@makaio/storage-drizzle`, while the file-URL
+ * dynamic import avoids a static engine import in framework artifacts.
+ * @returns The Postgres storage engine exported by `@makaio/storage-pg`.
+ */
+async function importTestUtilsPostgresEngine(): Promise<StorageEngine> {
+  const engineEntryPath = requireFromTestUtils.resolve('@makaio/storage-pg');
+  const { storageEngine } = (await import(/* @vite-ignore */ pathToFileURL(engineEntryPath).href)) as {
+    storageEngine: StorageEngine;
+  };
+  return storageEngine;
+}
+
+/**
  * Create a Postgres-branded test database without a Postgres server.
  *
- * The `pg` driver is an optional peer dependency and is typically absent from
- * test environments, so dialect-gating suites use this double: the handle is
- * a real (unbranded) in-memory libsql instance that exists only to satisfy
- * `MakaioDatabase` — it is never queried directly — while the attached
- * executor carries the `'postgres'` dialect and records every statement
- * instead of executing it. Everything above the executor seam (migration
- * gating, handler registration branches, bus dispatch) runs real code.
+ * Registers the REAL Postgres engine (set-if-absent) by dynamically resolving
+ * and importing `@makaio/storage-pg` from this package's dependency graph —
+ * never via a static import: this package ships bundled, and a static engine
+ * import would be silently inlined into the core dist. With the real engine
+ * registered, everything above the executor seam (migration gating,
+ * engine-owned ledger naming and DDL, handler registration branches, bus
+ * dispatch) runs real code; only the executor is a double — it carries the
+ * `'postgres'` dialect and records every statement instead of executing it.
+ * The handle itself is a real (unbranded) in-memory libsql instance that
+ * exists only to satisfy `MakaioDatabase` and is never queried directly.
  * @returns Postgres-branded handle plus the recorded statement array.
  */
-export function createPgBrandedTestDb(): PgBrandedTestDbContext {
+export async function createPgBrandedTestDb(): Promise<PgBrandedTestDbContext> {
+  if (!findStorageEngine('postgres')) {
+    let storageEngine: StorageEngine;
+    try {
+      storageEngine = await importTestUtilsPostgresEngine();
+    } catch (cause) {
+      throw new Error('createPgBrandedTestDb requires @makaio/storage-pg to be resolvable from @makaio/test-utils.', {
+        cause,
+      });
+    }
+    registerStorageEngine(storageEngine);
+  }
+
   const statements: string[] = [];
 
   const session: RawSqlSession = {

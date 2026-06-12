@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
-import { epochMs, bool } from '@makaio/storage-drizzle/columns/sqlite';
+import { index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { index as pgIndex, uniqueIndex as pgUniqueIndex, check as pgCheck } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
 
 /**
  * Sessions table schema.
@@ -11,26 +12,26 @@ import { epochMs, bool } from '@makaio/storage-drizzle/columns/sqlite';
  * SEAM: The `sessionId` column is the primary key that extensions can
  * reference for their own decorator tables (e.g., `extension_chat_messages`).
  */
-export const sessions = sqliteTable(
+export const sessionsDual = defineDualTable(
   'sessions',
-  {
+  (c) => ({
     /**
      * Unique session identifier.
      * Primary key, referenced by agents and future plugin tables.
      */
-    sessionId: text('session_id').primaryKey(),
+    sessionId: c.text('session_id').primaryKey(),
 
     /**
      * Timestamp when the session was created.
      * Stored as Unix timestamp in milliseconds.
      */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
 
     /**
      * Timestamp of last activity in the session.
      * Stored as Unix timestamp in milliseconds.
      */
-    lastActivityAt: epochMs('last_activity_at').notNull(),
+    lastActivityAt: c.epochMs('last_activity_at').notNull(),
 
     /**
      * Current session status.
@@ -39,26 +40,26 @@ export const sessions = sqliteTable(
      * - 'archived': Session is hidden from default views, pending purge
      * - 'discovered': Stub from log discovery; full import not yet done
      */
-    status: text('status', { enum: ['active', 'closed', 'archived', 'discovered'] }).notNull(),
+    status: c.textEnum('status', { enum: ['active', 'closed', 'archived', 'discovered'] as const }).notNull(),
 
     /**
      * Lead agent ID (receives messages by default).
      * Null if no agents have been added yet.
      */
-    leadAgentId: text('lead_agent_id'),
+    leadAgentId: c.text('lead_agent_id'),
 
     /**
      * Parent session ID for forked sessions.
      * Null for root sessions.
      */
-    parentSessionId: text('parent_session_id'),
+    parentSessionId: c.text('parent_session_id'),
 
     /**
      * Controls whether a child session inherits parent conversation history.
      * Null preserves legacy behavior for existing sessions.
      */
-    contextInheritance: text('context_inheritance', {
-      enum: ['parent-history', 'none'],
+    contextInheritance: c.textEnum('context_inheritance', {
+      enum: ['parent-history', 'none'] as const,
     }),
 
     /**
@@ -66,14 +67,14 @@ export const sessions = sqliteTable(
      * Denormalized for efficient "find all sessions in family" queries.
      * Null for root sessions (they ARE the root).
      */
-    rootSessionId: text('root_session_id'),
+    rootSessionId: c.text('root_session_id'),
 
     /**
      * Message ID where this session forked from parent.
      * The last message that was copied from parent to this fork.
      * Null for root sessions.
      */
-    forkPointMessageId: text('fork_point_message_id'),
+    forkPointMessageId: c.text('fork_point_message_id'),
 
     /**
      * Type of branch this session represents.
@@ -86,109 +87,109 @@ export const sessions = sqliteTable(
      * - 'aside': Ephemeral read-only Q&A, rendered inline in parent
      * Null for root sessions (not created from another session).
      */
-    branchKind: text('branch_kind', {
-      enum: ['fork', 'branch', 'subagent', 'compress', 'rewrite', 'coordinator', 'aside'],
+    branchKind: c.textEnum('branch_kind', {
+      enum: ['fork', 'branch', 'subagent', 'compress', 'rewrite', 'coordinator', 'aside'] as const,
     }),
 
     /**
      * Adapter type name (e.g., 'claude-code', 'codex-mcp').
      * Identifies the source adapter for native imports.
      */
-    adapterName: text('adapter_name'),
+    adapterName: c.text('adapter_name'),
 
     /**
      * Provider's session ID.
      * For native imports, this is the external tool's session identifier.
      */
-    adapterSessionId: text('adapter_session_id'),
+    adapterSessionId: c.text('adapter_session_id'),
 
     /**
      * Adapter instance ID (machine/installation specific).
      * Used to determine if native resume is possible.
      */
-    adapterId: text('adapter_id'),
+    adapterId: c.text('adapter_id'),
 
     /**
      * Client application this session is linked to (for example `claude-code`).
      */
-    clientId: text('client_id'),
+    clientId: c.text('client_id'),
 
     /**
      * Canonical client account linked to this session.
      */
-    clientAccountId: text('client_account_id'),
+    clientAccountId: c.text('client_account_id'),
 
     /**
      * Latest raw client identity observation persisted for the session.
      * Stored as a JSON string.
      */
-    lastClientIdentityObservation: text('last_client_identity_observation'),
+    lastClientIdentityObservation: c.text('last_client_identity_observation'),
 
     /**
      * Whether this session has been modified by Makaio orchestration.
      * False = native session, can use adapter's native resume.
      * True = Makaio modified history, must inject context.
      */
-    isOrchestrated: bool('is_orchestrated').default(false),
+    isOrchestrated: c.bool('is_orchestrated').default(false),
 
     /**
      * Session title for sidebar display.
      * Generated after conversation develops. NULL until generated.
      */
-    title: text('title'),
+    title: c.text('title'),
 
     /**
      * Session summary for search and context.
      * Generated after conversation develops. NULL until generated.
      */
-    summary: text('summary'),
+    summary: c.text('summary'),
 
     /**
      * Timestamp when summary was last updated.
      * Used to detect staleness for regeneration.
      */
-    summaryUpdatedAt: epochMs('summary_updated_at'),
+    summaryUpdatedAt: c.epochMs('summary_updated_at'),
 
     /**
      * Whether this session was imported from external source.
      * - true: Imported (allow incremental re-imports)
      * - false/null: Created by Makaio runtime (skip on import)
      */
-    isImported: bool('is_imported').default(false),
+    isImported: c.bool('is_imported').default(false),
 
     /**
      * Fork transforms (JSON string).
      * Stored on fork sessions for getFullConversation() context projection.
      * Contains removedMessageIds and appliedPipeline configuration.
      */
-    forkTransforms: text('fork_transforms'),
+    forkTransforms: c.text('fork_transforms'),
 
     /**
      * Target working directory for this session.
      * Used to override the default working directory for forked sessions.
      */
-    targetWorkingDirectory: text('target_working_directory'),
+    targetWorkingDirectory: c.text('target_working_directory'),
 
     /**
      * Stamped execution target ID.
      * Set during first startAgent resolution. Null until resolved.
      */
-    executionTargetId: text('execution_target_id'),
+    executionTargetId: c.text('execution_target_id'),
 
     /**
      * User-set approval policy override for this session.
      * When set, takes precedence over the persona → profile → harness cascade.
      * Null (default) means "use the cascade defaults".
      */
-    approvalPolicyOverride: text('approval_policy_override', {
-      enum: ['reject', 'always-ask', 'full-access'],
+    approvalPolicyOverride: c.textEnum('approval_policy_override', {
+      enum: ['reject', 'always-ask', 'full-access'] as const,
     }),
 
     /**
      * Tool call ID of the Agent/spawn_subagent invocation that spawned this session.
      * Only set for subagent sessions. Null for root/fork sessions.
      */
-    spawningToolCallId: text('spawning_tool_call_id'),
+    spawningToolCallId: c.text('spawning_tool_call_id'),
 
     // ─── Import provenance fields ───────────────────────────────────────
 
@@ -197,26 +198,26 @@ export const sessions = sqliteTable(
      * For live sessions this is null; for imports it identifies the source
      * (e.g., 'claude-code', 'codex', 'opencode').
      */
-    source: text('source'),
+    source: c.text('source'),
 
     /**
      * Parent session's external ID (soft reference for import lineage).
      * May reference a session not yet imported — resolves when parent is imported.
      * Null for root sessions or live sessions.
      */
-    parentExternalSessionId: text('parent_external_session_id'),
+    parentExternalSessionId: c.text('parent_external_session_id'),
 
     /**
      * Absolute path to the source log file on disk.
      * Only set for imported sessions. Used for cursor resumption and deduplication.
      */
-    logFilePath: text('log_file_path'),
+    logFilePath: c.text('log_file_path'),
 
     /**
      * Monotonic timestamp (ms) when this session was first discovered during import.
      * Used for created-detection in upsert logic. Null for live sessions.
      */
-    discoveredAt: epochMs('discovered_at'),
+    discoveredAt: c.epochMs('discovered_at'),
 
     /**
      * Import-specific lifecycle status. Null for live sessions.
@@ -224,27 +225,48 @@ export const sessions = sqliteTable(
      * - 'imported': All messages imported successfully
      * - 'tracking': Imported but source file is still actively being written to
      */
-    importStatus: text('import_status', {
-      enum: ['discovered', 'imported', 'tracking'],
+    importStatus: c.textEnum('import_status', {
+      enum: ['discovered', 'imported', 'tracking'] as const,
     }),
+  }),
+  {
+    sqlite: (t) => [
+      uniqueIndex('uniq_sessions_source_adapter_session_id').on(t.source, t.adapterSessionId),
+      uniqueIndex('uniq_sessions_log_file_path').on(t.logFilePath),
+      index('sessions_adapter_session_id_idx').on(t.adapterSessionId),
+      index('idx_sessions_import_status').on(t.importStatus),
+      index('sessions_execution_target_id_idx').on(t.executionTargetId),
+      index('idx_sessions_parent_session_id').on(t.parentSessionId),
+      check(
+        'sessions_import_status_check',
+        sql`${t.importStatus} IS NULL OR ${t.importStatus} IN ('discovered', 'imported', 'tracking')`,
+      ),
+      check(
+        'sessions_context_inheritance_check',
+        sql`${t.contextInheritance} IS NULL OR ${t.contextInheritance} IN ('parent-history', 'none')`,
+      ),
+    ],
+    postgres: (t) => [
+      pgUniqueIndex('uniq_sessions_source_adapter_session_id').on(t.source, t.adapterSessionId),
+      pgUniqueIndex('uniq_sessions_log_file_path').on(t.logFilePath),
+      pgIndex('sessions_adapter_session_id_idx').on(t.adapterSessionId),
+      pgIndex('idx_sessions_import_status').on(t.importStatus),
+      pgIndex('sessions_execution_target_id_idx').on(t.executionTargetId),
+      pgIndex('idx_sessions_parent_session_id').on(t.parentSessionId),
+      pgCheck(
+        'sessions_import_status_check',
+        sql`${t.importStatus} IS NULL OR ${t.importStatus} IN ('discovered', 'imported', 'tracking')`,
+      ),
+      pgCheck(
+        'sessions_context_inheritance_check',
+        sql`${t.contextInheritance} IS NULL OR ${t.contextInheritance} IN ('parent-history', 'none')`,
+      ),
+    ],
   },
-  (table) => [
-    uniqueIndex('uniq_sessions_source_adapter_session_id').on(table.source, table.adapterSessionId),
-    uniqueIndex('uniq_sessions_log_file_path').on(table.logFilePath),
-    index('sessions_adapter_session_id_idx').on(table.adapterSessionId),
-    index('idx_sessions_import_status').on(table.importStatus),
-    index('sessions_execution_target_id_idx').on(table.executionTargetId),
-    index('idx_sessions_parent_session_id').on(table.parentSessionId),
-    check(
-      'sessions_import_status_check',
-      sql`${table.importStatus} IS NULL OR ${table.importStatus} IN ('discovered', 'imported', 'tracking')`,
-    ),
-    check(
-      'sessions_context_inheritance_check',
-      sql`${table.contextInheritance} IS NULL OR ${table.contextInheritance} IN ('parent-history', 'none')`,
-    ),
-  ],
 );
+
+/** SQLite face of the `sessions` table (canonical schema). */
+export const sessions = sessionsDual.sqlite;
 
 /**
  * Agents table schema.
@@ -255,52 +277,53 @@ export const sessions = sqliteTable(
  * Replaces the former `session_agents` join table. The relationship
  * between agent and session is 1:1, modeled via session_id FK.
  */
-export const agents = sqliteTable(
+export const agentsDual = defineDualTable(
   'agents',
-  {
+  (c) => ({
     /** Unique agent identifier (stable across connector swaps and restarts) */
-    agentId: text('agent_id').primaryKey(),
+    agentId: c.text('agent_id').primaryKey(),
 
     /** Adapter instance that owns this agent */
-    adapterId: text('adapter_id').notNull(),
+    adapterId: c.text('adapter_id').notNull(),
 
     /** Adapter type name (e.g., 'claude-code', 'gemini-sdk') */
-    adapterName: text('adapter_name').notNull(),
+    adapterName: c.text('adapter_name').notNull(),
 
     /** Makaio session this agent belongs to */
-    sessionId: text('session_id')
+    sessionId: c
+      .text('session_id')
       .notNull()
-      .references(() => sessions.sessionId, { onDelete: 'cascade' }),
+      .references(() => sessionsDual.columnPair('sessionId'), { onDelete: 'cascade' }),
 
     /** Provider's session ID for native resume support */
-    adapterSessionId: text('adapter_session_id'),
+    adapterSessionId: c.text('adapter_session_id'),
 
     /** Current model identifier */
-    model: text('model'),
+    model: c.text('model'),
 
     /** Current working directory */
-    cwd: text('cwd'),
+    cwd: c.text('cwd'),
 
     /** Provider config UUID for credential/endpoint resolution */
-    providerConfigId: text('provider_config_id'),
+    providerConfigId: c.text('provider_config_id'),
 
     /** Persona used to configure this agent (if any). */
-    personaId: text('persona_id'),
+    personaId: c.text('persona_id'),
 
     /** Profile used to configure this agent (if any). */
-    profileId: text('profile_id'),
+    profileId: c.text('profile_id'),
 
     /** Resolved harness ID for this agent. */
-    harnessId: text('harness_id'),
+    harnessId: c.text('harness_id'),
 
     /** Client identifier for the client application this agent runs under (e.g., 'claude-code', 'codex'). */
-    clientId: text('client_id'),
+    clientId: c.text('client_id'),
 
     /** Resolved compression mode for this agent. */
-    compressionMode: text('compression_mode'),
+    compressionMode: c.text('compression_mode'),
 
     /** Agent role in session */
-    role: text('role', { enum: ['lead', 'member'] }).notNull(),
+    role: c.textEnum('role', { enum: ['lead', 'member'] as const }).notNull(),
 
     /**
      * Agent lifecycle status.
@@ -309,21 +332,32 @@ export const agents = sqliteTable(
      * - 'dead': Connector lost, awaiting rehydration
      * - 'disposed': Agent replaced (cross-adapter switch) — retained for message metadata
      */
-    status: text('status', { enum: ['idle', 'active', 'dead', 'disposed'] }).notNull(),
+    status: c.textEnum('status', { enum: ['idle', 'active', 'dead', 'disposed'] as const }).notNull(),
 
     /** Timestamp when agent was created (= when added to session) */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
 
     /** Timestamp of last activity (message sent/received) */
-    lastActivityAt: epochMs('last_activity_at').notNull(),
+    lastActivityAt: c.epochMs('last_activity_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [
+      index('agents_session_id_idx').on(t.sessionId),
+      index('agents_adapter_name_idx').on(t.adapterName),
+      index('agents_status_idx').on(t.status),
+      index('agents_client_id_idx').on(t.clientId),
+    ],
+    postgres: (t) => [
+      pgIndex('agents_session_id_idx').on(t.sessionId),
+      pgIndex('agents_adapter_name_idx').on(t.adapterName),
+      pgIndex('agents_status_idx').on(t.status),
+      pgIndex('agents_client_id_idx').on(t.clientId),
+    ],
   },
-  (table) => [
-    index('agents_session_id_idx').on(table.sessionId),
-    index('agents_adapter_name_idx').on(table.adapterName),
-    index('agents_status_idx').on(table.status),
-    index('agents_client_id_idx').on(table.clientId),
-  ],
 );
+
+/** SQLite face of the `agents` table (canonical schema). */
+export const agents = agentsDual.sqlite;
 
 /**
  * Type for inserting a new session.

@@ -4,8 +4,9 @@
  * Single table storing key-value preferences with composite key.
  */
 
-import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
+import { uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { uniqueIndex as pgUniqueIndex } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
 
 /**
  * Preferences table for persistent key-value storage.
@@ -13,28 +14,32 @@ import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
  * Composite key: scope + surface + context + viewport + category
  * Value is stored as JSON string.
  */
-export const preferences = sqliteTable(
+export const preferencesDual = defineDualTable(
   'preferences',
-  {
+  (c) => ({
     /** Ownership scope: 'global' or projectId */
-    scope: text('scope').notNull(),
+    scope: c.text('scope').notNull(),
     /** Surface isolation: 'ui', 'app', or 'any' for unset */
-    surface: text('surface').notNull().default('any'),
+    surface: c.text('surface').notNull().default('any'),
     /** Focus context for layout */
-    context: text('context').notNull().default('any'),
+    context: c.text('context').notNull().default('any'),
     /** Viewport breakpoint */
-    viewport: text('viewport').notNull().default('any'),
+    viewport: c.text('viewport').notNull().default('any'),
     /** Category of the preference */
-    category: text('category').notNull(),
+    category: c.text('category').notNull(),
     /** JSON-serialized value */
-    value: text('value').notNull(),
+    value: c.text('value').notNull(),
     /** Last update timestamp (Unix ms) */
-    updatedAt: epochMs('updated_at').notNull(),
+    updatedAt: c.epochMs('updated_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [uniqueIndex('preferences_pk').on(t.scope, t.surface, t.context, t.viewport, t.category)],
+    postgres: (t) => [pgUniqueIndex('preferences_pk').on(t.scope, t.surface, t.context, t.viewport, t.category)],
   },
-  (table) => [
-    uniqueIndex('preferences_pk').on(table.scope, table.surface, table.context, table.viewport, table.category),
-  ],
 );
+
+/** SQLite face of the `preferences` table (canonical schema). */
+export const preferences = preferencesDual.sqlite;
 
 export type PreferenceRow = typeof preferences.$inferSelect;
 export type NewPreferenceRow = typeof preferences.$inferInsert;

@@ -95,11 +95,15 @@ SQLite is the default backend; a Postgres URL opts into PostgreSQL. The
 connection target resolves in this order (empty and whitespace-only values
 count as unset): `database.url` boot option → `MAKAIO_DATABASE_URL` →
 `dbPath` (direct `initializeNodeDatabase` callers only) →
-`MAKAIO_DATABASE_PATH` → `<makaioHome>/makaio.db`. A non-Postgres URL from
-the first two sources is rejected with an error instead of falling through. Pool size is tuned with `database.poolMax`
-(`DatabaseBootOptions`). Migrations for the selected backend are applied
-automatically during boot. See the `@makaio/framework` README for the
-consumer-facing PostgreSQL guide (the `pg` driver is consumer-provided).
+`MAKAIO_DATABASE_PATH` → `<makaioHome>/makaio.db`. URL targets resolve
+through the storage engine registry: engines passed via `database.engines`
+are registered before the target is resolved, and a recognized Postgres URL
+auto-registers the `@makaio/storage-pg` engine. A URL no engine claims is
+rejected with an error instead of falling through. Pool size is tuned with
+`database.poolMax` (`DatabaseBootOptions`). Migrations for the selected
+backend are applied automatically during boot. See the `@makaio/framework`
+README for the consumer-facing PostgreSQL guide (the `pg` driver ships as a
+regular dependency of `@makaio/storage-pg`).
 
 ## Named Exports
 
@@ -169,7 +173,7 @@ consumer-facing PostgreSQL guide (the `pg` driver is consumer-provided).
 |------|-------------|
 | `BootMakaioRuntimeOptions` | Options for `bootMakaioRuntime` (adds `httpServer`) |
 | `CoreBootOptions` | Platform-agnostic boot options shared by Node and Bun |
-| `DatabaseBootOptions` | `database` boot option: connection `url` (Postgres opt-in) and `poolMax` |
+| `DatabaseBootOptions` | `database` boot option: connection `url` (Postgres opt-in), `poolMax`, and explicit `engines` registration |
 | `MakaioRuntime` | Handle returned on successful boot (`port`, `host`, `machineId`, `shutdown`) |
 | `ServerTransportProvider` | Transport provider interface with optional `dispatchingAuth` |
 | `TransportReadyInfo` | `{ port, host }` passed to `onTransportReady` |

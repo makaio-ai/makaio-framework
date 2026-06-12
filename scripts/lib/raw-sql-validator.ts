@@ -50,9 +50,9 @@ export const RAW_SQL_SUPPRESSION_TOKEN = 'raw-sql-validator-allow';
  * Paths are relative to the scanned root, POSIX-separated.
  */
 export const RAW_SQL_ALLOWLIST: readonly string[] = [
-  // Driver factory: applies connection PRAGMAs on the concrete driver handle
-  // before it is cast to MakaioDatabase and branded with its executor.
-  'storage/drizzle/src/client.ts',
+  // SQLite driver factory: applies connection PRAGMAs on the concrete driver
+  // handle before it is cast to MakaioDatabase and branded with its executor.
+  'storage/drizzle/src/engine/sqlite/client.ts',
   // The executor implementation itself delegates to the native driver API.
   'storage/drizzle/src/raw-sql.ts',
 ];

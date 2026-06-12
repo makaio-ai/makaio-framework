@@ -6,9 +6,10 @@
  * @packageDocumentation
  */
 import { sql } from 'drizzle-orm';
-import { getRawSqlExecutor } from '@makaio/storage-drizzle';
+import { findStorageEngine, getRawSqlExecutor, registerStorageEngine } from '@makaio/storage-drizzle';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { applyMigrations } from '@makaio/storage-migrations';
+import { postgresStorageEngine } from '@makaio/storage-pg';
 import type {
   CreateDatabaseContextOptions,
   SiblingClient,
@@ -30,6 +31,24 @@ import { collectRejections, rethrowCleanupFailures } from './cleanup-failures.js
 const POSTGRES_CAPABILITIES: StorageConformanceCapabilities = {
   fts: true,
 };
+
+/**
+ * Idempotently register the Postgres storage engine.
+ *
+ * The conformance harness is its own composition root: it creates database
+ * clients directly through `createDatabaseClient`, so it owns explicit engine
+ * registration (the runtime hosts' URL auto-resolve never runs here). Called
+ * first in every client-creating entry point of this module so no code path
+ * can reach the registry-dispatched factory before the engine is registered.
+ * Exported for suites that use engine-owned migration mechanics (ledger
+ * naming, journal-dialect guard, chain folders) before any database context
+ * exists.
+ */
+export function ensurePostgresEngineRegistered(): void {
+  if (findStorageEngine('postgres') === undefined) {
+    registerStorageEngine(postgresStorageEngine);
+  }
+}
 
 /**
  * Build a Postgres connection URL that appends GUC settings via the `options`
@@ -69,6 +88,7 @@ export function buildPostgresOptionsUrl(baseUrl: string, settings: Readonly<Reco
  * @param schemaName - Name of the isolation schema to drop.
  */
 async function dropIsolationSchema(baseUrl: string, schemaName: string): Promise<void> {
+  ensurePostgresEngineRegistered();
   const admin = await createDatabaseClient({ url: baseUrl });
   try {
     await getRawSqlExecutor(admin.db).run(sql`DROP SCHEMA ${sql.identifier(schemaName)} CASCADE`);
@@ -89,6 +109,7 @@ async function createPostgresDatabaseContext(
   schemaName: string,
   options: CreateDatabaseContextOptions,
 ): Promise<StorageDatabaseContext> {
+  ensurePostgresEngineRegistered();
   // The harness-owned schema pin is spread LAST so it always supersedes
   // caller settings: a caller-provided search_path would silently escape the
   // per-context isolation schema and bleed data across contexts.
@@ -123,6 +144,7 @@ async function createPostgresDatabaseContext(
   const siblings: SiblingClient[] = [];
 
   const createSiblingClient = async (siblingOptions?: SiblingClientOptions): Promise<SiblingClient> => {
+    ensurePostgresEngineRegistered();
     // Same pin-wins ordering as the primary URL: the isolation schema is
     // harness-owned and never overridable by sibling settings.
     const siblingUrl = buildPostgresOptionsUrl(baseUrl, {
@@ -205,6 +227,7 @@ export function createPostgresConfig(baseUrl: string): StorageConformanceConfig 
     dialect: 'postgres',
     capabilities: POSTGRES_CAPABILITIES,
     async createDatabaseContext(options: CreateDatabaseContextOptions = {}): Promise<StorageDatabaseContext> {
+      ensurePostgresEngineRegistered();
       // Generate a unique schema name: conformance_ + 12 lowercase hex chars from UUID.
       const schemaName = 'conformance_' + crypto.randomUUID().replaceAll('-', '').slice(0, 12);
 

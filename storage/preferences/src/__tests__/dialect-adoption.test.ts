@@ -32,8 +32,8 @@ import { preferences } from '../storage/schema.js';
 const preferencesSubjects = Object.values(PreferencesSubjects).filter((subject) => subject.subject !== '*');
 
 describe('preferences dialect adoption', () => {
-  it('resolves the postgres twins for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twins for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, preferencesSchema);
     expect(resolved).toBe(preferencesSchema.postgres);
     expect(is(resolved.preferences, PgTable)).toBe(true);
@@ -49,17 +49,17 @@ describe('preferences dialect adoption', () => {
   // handle on buses isolated from the process-global singleton; see the file
   // header for where behavioral and real-Postgres coverage lives.
 
-  it('registers exactly one hybrid handler per subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one hybrid handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
 
     expectSubjectHandlerLifecycle(bus, preferencesSubjects, () => registerHybridPreferencesStorage(bus, db, ctx));
   });
 
-  it('registers exactly one drizzle handler per subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one drizzle handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
 
     expectSubjectHandlerLifecycle(bus, preferencesSubjects, () => registerDrizzlePreferencesStorage(bus, db));
   });

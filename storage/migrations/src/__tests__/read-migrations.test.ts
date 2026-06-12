@@ -2,7 +2,15 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { registerStorageEngine } from '@makaio/storage-drizzle';
+import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
 import { MigrationDialectMismatchError, readMigrations } from '../read-migrations.js';
+
+// The journal-dialect guard and the default chain folder resolve through the
+// engine registry; register the Postgres engine so the 'postgres' paths under
+// test are served by the real engine (same-reference re-registration is a
+// no-op).
+registerStorageEngine(postgresStorageEngine);
 
 const tempDirs: string[] = [];
 

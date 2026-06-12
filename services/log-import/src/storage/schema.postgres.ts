@@ -1,24 +1,11 @@
-import { pgTable, text } from 'drizzle-orm/pg-core';
-import { epochMs } from '@makaio/storage-drizzle/columns/postgres';
-
 /**
- * Postgres twin for the `log_import_settings` table.
+ * Postgres face of the log import settings table.
  *
- * Column layout mirrors the canonical SQLite schema exactly; only the
- * underlying column builders differ (epochMs → bigint, text stays text).
+ * Derived from the dual definition in `schema.ts`; the Postgres-discovered
+ * barrel exposes the Postgres table object under the canonical name. Row types
+ * are owned exclusively by `schema.ts`.
  */
-export const logImportSettings = pgTable('log_import_settings', {
-  /** Adapter name (e.g., 'claude-code'). Primary key. */
-  adapterName: text('adapter_name').primaryKey(),
+import { logImportSettingsDual } from './schema.js';
 
-  /** Import mode: 'disabled' | 'discover' | 'import'. */
-  mode: text('mode', { enum: ['disabled', 'discover', 'import'] })
-    .notNull()
-    .default('disabled'),
-
-  /** Timestamp in milliseconds when the row was first created. */
-  createdAt: epochMs('created_at').notNull(),
-
-  /** Timestamp in milliseconds when the row was last updated. */
-  updatedAt: epochMs('updated_at').notNull(),
-});
+/** Postgres face of the `log_import_settings` table. */
+export const logImportSettings = logImportSettingsDual.postgres;

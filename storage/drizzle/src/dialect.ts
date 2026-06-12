@@ -59,10 +59,12 @@ export type PostgresTwinSchema<
 };
 
 /**
- * A schema declared for both storage dialects. `postgres` is intentionally
- * typed as `TSqlite`: at runtime it holds real `pgTable` twins, presented
- * through the canonical SQLite-typed face (the same documented honesty model
- * as the driver cast in `client.ts`). Congruence is compiler-enforced by
+ * A schema declared for both storage dialects — a per-dialect table registry
+ * whose keys ARE the closed `StorageDialect` union, so {@link resolveSchema}
+ * resolves by plain key lookup. `postgres` is intentionally typed as
+ * `TSqlite`: at runtime it holds real `pgTable` twins, presented through the
+ * canonical SQLite-typed face (the same documented honesty model as the
+ * driver cast in `client.ts`). Congruence is compiler-enforced by
  * {@link PostgresTwinSchema} at construction and by the structural parity test.
  */
 export interface DialectSchema<TSqlite extends Record<string, SQLiteTable>> {
@@ -92,9 +94,13 @@ export function defineDialectSchema<
 }
 
 /**
- * Resolve the dialect-correct table objects for a database handle. Returns
- * the SQLite-typed view in both cases; under Postgres the runtime objects are
- * the congruent twins, so drizzle compiles correct SQL and value mappings.
+ * Resolve the dialect-correct table objects for a database handle.
+ *
+ * {@link DialectSchema} is a per-dialect table registry keyed by
+ * `StorageDialect` — its keys ARE the closed dialect union — so resolution is
+ * a branch-free registry lookup by the handle's dialect brand. Returns the
+ * SQLite-typed view in both cases; under Postgres the runtime objects are the
+ * congruent twins, so drizzle compiles correct SQL and value mappings.
  * @param db - Database handle (brand read via `getDatabaseDialect`; unbranded
  *   handles resolve to SQLite). The brand is schema-independent, so handles of
  *   any schema generic are accepted (plain `MakaioDatabase` is assignable to
@@ -106,5 +112,5 @@ export function resolveSchema<TSqlite extends Record<string, SQLiteTable>>(
   db: MakaioDatabase<Record<string, unknown>>,
   schema: DialectSchema<TSqlite>,
 ): TSqlite {
-  return getDatabaseDialect(db) === 'postgres' ? schema.postgres : schema.sqlite;
+  return schema[getDatabaseDialect(db)];
 }

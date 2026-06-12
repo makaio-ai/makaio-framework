@@ -23,8 +23,8 @@ import {
 } from '../schema.js';
 
 describe('workflow-engine dialect adoption', () => {
-  it('resolves the postgres twins for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twins for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, workflowEngineSchema);
     expect(resolved).toBe(workflowEngineSchema.postgres);
     expect(is(resolved.workflowDefinitions, PgTable)).toBe(true);
@@ -56,9 +56,10 @@ describe('workflow-engine dialect adoption', () => {
     expect(resolved.worklogGateEvents).toBe(worklogGateEvents);
   });
 
-  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', () => {
-    // createPgBrandedTestDb carries no Postgres engine, so a live set/get
-    // round-trip is impossible here. Full round-trip coverage lives in
+  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', async () => {
+    // createPgBrandedTestDb's executor records statements instead of
+    // executing them, so a live set/get round-trip is impossible here. Full
+    // round-trip coverage lives in
     // src/__tests__/workflow-run-context.test.ts (SQLite) and in the storage
     // conformance suite, which runs these handlers against live Postgres in
     // CI. This case proves the registration path adopts the pg-branded
@@ -66,7 +67,7 @@ describe('workflow-engine dialect adoption', () => {
     // the real resolveSchema seam and subscribes every workflow storage
     // subject on a bus isolated from the process-global singleton.
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     // Every concrete subject in the namespace is registered by
     // registerDrizzleWorkflowStorage; only the $all wildcard accessor is not

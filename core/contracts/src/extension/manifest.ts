@@ -284,6 +284,24 @@ export const CliManifestSchema = z.object({
 // ---------------------------------------------------------------------------
 
 /**
+ * Single source of truth for the supported storage backend dialects.
+ *
+ * An identity vocabulary, not a runtime dialect branch: extensions declare
+ * which dialect a migration chain targets. SQLite is the default dialect;
+ * Postgres is opt-in. Consumers that need to enumerate every dialect (build
+ * tooling, validators) iterate this list rather than re-typing the keys.
+ */
+export const STORAGE_DIALECTS = ['sqlite', 'postgres'] as const;
+
+/**
+ * Storage backend dialect identifier used in serializable manifests.
+ *
+ * Derived from {@link STORAGE_DIALECTS} so the type and the runtime list can
+ * never drift.
+ */
+export type StorageDialect = (typeof STORAGE_DIALECTS)[number];
+
+/**
  * Describes the storage requirements of an extension.
  *
  * Serializable metadata that the runtime uses to run migrations before
@@ -294,16 +312,26 @@ export const CliManifestSchema = z.object({
  */
 export interface StorageManifest {
   /**
-   * Path to the Drizzle migration folder, relative to the extension root.
+   * Drizzle migration chain(s) for this extension, relative to the extension root.
    *
-   * The runtime resolves this to an absolute path and passes it to the
-   * host-supplied `runMigrations` callback
-   * before any extension services are started. The callback is responsible for
-   * applying pending migrations against the shared database using a
-   * per-extension tracking table to avoid filename collisions.
+   * Two forms are accepted, mirroring the `makaio.drizzleSchema` object-form
+   * precedent:
+   *
+   * - A bare string declares a single, dialect-agnostic chain that is applied
+   *   on every active dialect (e.g. `'drizzle'`).
+   * - An object maps a {@link StorageDialect} to the chain folder for that
+   *   dialect (e.g. `{ sqlite: 'drizzle', postgres: 'drizzle-postgres' }`),
+   *   letting an extension ship dialect-specific migration text.
+   *
+   * Each declared path is relative to the extension root; the composition root
+   * resolves it to an absolute path per dialect and passes it to the
+   * host-supplied `runMigrations` callback before any extension services are
+   * started. The callback applies pending migrations against the shared
+   * database using a per-extension tracking table to avoid filename collisions.
    * @example 'drizzle'
+   * @example `{ sqlite: 'drizzle', postgres: 'drizzle-postgres' }`
    */
-  readonly migrations?: string;
+  readonly migrations?: string | Partial<Record<StorageDialect, string>>;
   /**
    * Stable runtime identity for the migration bundle.
    *
@@ -312,6 +340,58 @@ export interface StorageManifest {
    * resolved migration folder path remains the identity.
    */
   readonly migrationSourceId?: string;
+}
+
+/**
+ * Resolve the dialect-agnostic primary migration chain folder from a declared
+ * {@link StorageManifest.migrations} value.
+ *
+ * This collapses the widened declaration to the single chain folder a
+ * dialect-agnostic consumer should use:
+ *
+ * - The bare-string form is returned verbatim.
+ * - The object form prefers the `sqlite` entry (the baseline dialect), falling
+ *   back to the first declared per-dialect entry so a single chain is still
+ *   surfaced when only a non-default dialect is declared.
+ * - An empty object form yields `undefined`, meaning "no chain declared".
+ *
+ * Composition roots that resolve every per-dialect path independently read the
+ * object form directly; this helper exists for consumers that only need one
+ * representative chain folder.
+ * @param migrations - The declared `storage.migrations` value, or `undefined`.
+ * @returns The relative chain folder, or `undefined` when no chain is declared.
+ */
+export function primaryMigrationsPath(migrations: StorageManifest['migrations']): string | undefined {
+  if (migrations === undefined) return undefined;
+  if (typeof migrations === 'string') return migrations;
+  return migrations.sqlite ?? Object.values(migrations).find((value) => value !== undefined);
+}
+
+/**
+ * Enumerate every distinct migration chain folder declared by a
+ * {@link StorageManifest.migrations} value.
+ *
+ * Where {@link primaryMigrationsPath} collapses the declaration to a single
+ * representative folder, this surfaces all of them — the bare-string form
+ * yields its one folder, the object form yields each declared per-dialect
+ * folder (deduplicated, so a chain shared across dialects is copied once).
+ *
+ * Bundlers use this to copy every chain the host may resolve at boot: the host
+ * keeps the declaration intact and selects the active dialect's chain at apply
+ * time, so a build that copied only the primary chain would strand the other
+ * declared dialects with a missing migration journal.
+ * @param migrations - The declared `storage.migrations` value, or `undefined`.
+ * @returns The distinct relative chain folders in declaration order; empty when
+ *   no chain is declared.
+ */
+export function allMigrationsPaths(migrations: StorageManifest['migrations']): readonly string[] {
+  if (migrations === undefined) return [];
+  if (typeof migrations === 'string') return [migrations];
+  const seen = new Set<string>();
+  for (const value of Object.values(migrations)) {
+    if (value !== undefined) seen.add(value);
+  }
+  return [...seen];
 }
 
 const RelativeManifestPathSchema = z
@@ -325,7 +405,25 @@ const RelativeManifestPathSchema = z
 
 /** Zod schema for {@link StorageManifest}. */
 export const StorageManifestSchema = z.object({
-  migrations: RelativeManifestPathSchema.optional(),
+  migrations: z
+    .union([
+      RelativeManifestPathSchema,
+      z
+        .object({
+          sqlite: RelativeManifestPathSchema.optional(),
+          postgres: RelativeManifestPathSchema.optional(),
+        })
+        .strict()
+        // An empty object declares the migrations field while supplying no
+        // chain, which the host would silently treat as "no migrations" — a
+        // generation bug or typo must fail validation rather than quietly drop
+        // an extension's schema.
+        .refine(
+          (value) => Object.values(value).some((chain) => chain !== undefined),
+          'Per-dialect storage.migrations must declare at least one chain',
+        ),
+    ])
+    .optional(),
   migrationSourceId: z.string().min(1).optional(),
 }) satisfies z.ZodType<StorageManifest>;
 

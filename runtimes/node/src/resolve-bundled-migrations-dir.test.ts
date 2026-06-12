@@ -5,9 +5,9 @@
  * - Source-checkout probe chain (default probes; the real
  *   `@makaio/storage-migrations` is available). Probe-1 (built package layout)
  *   misses because this module is imported directly from src/, not from a
- *   built dist/ tree. Probe-2 (source-checkout getMigrationsFolder) succeeds
- *   for 'sqlite' and, once the schema-twins tooling step has generated and
- *   committed the drizzle-postgres chain, for 'postgres' as well.
+ *   built dist/ tree. Probe-2 (getMigrationsFolder) succeeds for 'sqlite' via
+ *   the package-local default and for 'postgres' via the engine's
+ *   `resolveSourceChainDir` (the chain ships with `@makaio/storage-pg`).
  * - Controlled probe environments (injected probes) against real on-disk
  *   fixtures: the published built-package layout and the bundled-host stub
  *   scenario, neither of which exists in a source checkout.
@@ -21,8 +21,16 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { registerStorageEngine } from '@makaio/storage-drizzle';
 import { getMigrationsFolder } from '@makaio/storage-migrations';
+import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
 import { resolveBundledMigrationsDir } from './resolve-bundled-migrations-dir.js';
+
+// Chain directory names resolve through the engine registry; register the
+// Postgres engine before the module-scope chain probe below so the 'postgres'
+// paths under test are served by the real engine (same-reference
+// re-registration is a no-op).
+registerStorageEngine(postgresStorageEngine);
 
 const pgChainExists = existsSync(path.join(getMigrationsFolder('postgres'), 'meta', '_journal.json'));
 
@@ -42,7 +50,8 @@ describe('resolveBundledMigrationsDir', () => {
     () => {
       const result = resolveBundledMigrationsDir('postgres');
 
-      // Probe-2 succeeds once the drizzle-postgres chain is committed.
+      // Probe-2 succeeds through the engine's resolveSourceChainDir — the
+      // committed chain ships with @makaio/storage-pg.
       expect(result).toBe(getMigrationsFolder('postgres'));
 
       // The returned path must be a valid drizzle migrations directory.
@@ -95,7 +104,9 @@ describe('resolveBundledMigrationsDir (controlled probe environments)', () => {
   beforeEach(() => {
     fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'makaio-bundled-migrations-'));
     // Mirrors the published layout: this module ships in dist/runtime-node and
-    // the migration chains are copied alongside as dist/drizzle[-postgres].
+    // the bundled chain is copied alongside (dist/drizzle in the published
+    // framework distribution; the fixtures below also exercise the probe
+    // mechanics for other engine-provided chain directory names).
     moduleDir = path.join(fixtureRoot, 'runtime-node');
     mkdirSync(moduleDir, { recursive: true });
   });
@@ -125,7 +136,11 @@ describe('resolveBundledMigrationsDir (controlled probe environments)', () => {
     expect(resolveBundledMigrationsDir('sqlite', { moduleDir })).toBe(chainDir);
   });
 
-  it('resolves the postgres chain via probe-1 from a real built-package layout fixture', () => {
+  it('probe-1 mechanics: resolves a chain staged alongside the module under any engine chain dir name', () => {
+    // The published framework layout no longer stages a postgres chain next to
+    // the module (the chain ships with @makaio/storage-pg), but probe-1 must
+    // keep honoring whatever chain directory the active engine names — hosts
+    // that stage chains themselves rely on exactly this mechanic.
     const chainDir = createChainFixture('drizzle-postgres');
 
     expect(resolveBundledMigrationsDir('postgres', { moduleDir })).toBe(chainDir);

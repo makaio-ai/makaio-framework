@@ -18,8 +18,8 @@ import { registerParentResolver } from '../../import/parent-resolver.js';
 
 describe('session storage dialect adoption', () => {
   describe('sessionStorageSchema resolution', () => {
-    it('resolves postgres twins for a pg-branded handle', () => {
-      const { db } = createPgBrandedTestDb();
+    it('resolves postgres twins for a pg-branded handle', async () => {
+      const { db } = await createPgBrandedTestDb();
       const resolved = resolveSchema(db, sessionStorageSchema);
       expect(resolved).toBe(sessionStorageSchema.postgres);
       expect(is(resolved.sessions, PgTable)).toBe(true);
@@ -35,8 +35,8 @@ describe('session storage dialect adoption', () => {
   });
 
   describe('messagesSchema resolution', () => {
-    it('resolves postgres twins for a pg-branded handle', () => {
-      const { db } = createPgBrandedTestDb();
+    it('resolves postgres twins for a pg-branded handle', async () => {
+      const { db } = await createPgBrandedTestDb();
       const resolved = resolveSchema(db, messagesSchema);
       expect(resolved).toBe(messagesSchema.postgres);
       expect(is(resolved.messages, PgTable)).toBe(true);
@@ -55,9 +55,9 @@ describe('session storage dialect adoption', () => {
   // CI. These cases prove the registration path adopts the pg-branded handle
   // on buses isolated from the process-global singleton.
   describe('PG-brand registration lifecycle', () => {
-    it('registers exactly one session storage handler per subject on an isolated bus', () => {
+    it('registers exactly one session storage handler per subject on an isolated bus', async () => {
       const bus = createTestBusInstance();
-      const { db } = createPgBrandedTestDb();
+      const { db } = await createPgBrandedTestDb();
       const ctx = makeStubExtensionContext(bus);
       const subjects = [
         SessionStorageSubjects.get,
@@ -71,9 +71,9 @@ describe('session storage dialect adoption', () => {
       expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleSessionStorage(bus, db, ctx));
     });
 
-    it('registers exactly one agent storage handler per subject on an isolated bus', () => {
+    it('registers exactly one agent storage handler per subject on an isolated bus', async () => {
       const bus = createTestBusInstance();
-      const { db } = createPgBrandedTestDb();
+      const { db } = await createPgBrandedTestDb();
       const ctx = makeStubExtensionContext(bus);
       const subjects = [
         AgentStorageSubjects.get,
@@ -89,9 +89,9 @@ describe('session storage dialect adoption', () => {
       expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleAgentStorage(bus, db, ctx));
     });
 
-    it('registers the parent resolver on the import-completed event of an isolated bus', () => {
+    it('registers the parent resolver on the import-completed event of an isolated bus', async () => {
       const bus = createTestBusInstance();
-      const { db } = createPgBrandedTestDb();
+      const { db } = await createPgBrandedTestDb();
 
       expectSubjectHandlerLifecycle(bus, [SessionSubjects.import.completed], () => registerParentResolver(bus, db));
     });

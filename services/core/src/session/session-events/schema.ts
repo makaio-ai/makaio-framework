@@ -1,7 +1,8 @@
-import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
-import { epochMs, autoPk } from '@makaio/storage-drizzle/columns/sqlite';
-import { messages } from '../messages/schema.js';
-import { sessions } from '../storage/schema.js';
+import { index } from 'drizzle-orm/sqlite-core';
+import { index as pgIndex } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
+import { messageIdColumnPair } from '../messages/schema.variants.js';
+import { sessionsDual } from '../storage/schema.js';
 
 /**
  * Session events table schema.
@@ -22,35 +23,40 @@ import { sessions } from '../storage/schema.js';
  *
  * SEAM: The `sessionId` FK enables cascade delete when sessions are purged.
  * Future embeddings table can reference `eventId` for vector search.
+ *
+ * The `messages` table stays a hand-written twin (it carries a Postgres-only
+ * `content_tsv` generated column), so the `messageId` FK target comes from the
+ * twin's `messageIdColumnPair` thunk rather than a `columnPair` on a dual table.
  */
-export const sessionEvents = sqliteTable(
+export const sessionEventsDual = defineDualTable(
   'session_events',
-  {
+  (c) => ({
     /**
      * Auto-increment ID for stable cursor-based pagination.
      * Opaque to consumers — use eventId for external references.
      */
-    id: autoPk('id'),
+    id: c.autoPk('id'),
 
     /**
      * Makaio session ID (FK to sessions table).
      * All events for a session are deleted when session is purged.
      */
-    sessionId: text('session_id')
+    sessionId: c
+      .text('session_id')
       .notNull()
-      .references(() => sessions.sessionId, { onDelete: 'cascade' }),
+      .references(() => sessionsDual.columnPair('sessionId'), { onDelete: 'cascade' }),
 
     /**
      * Unique event identifier (UUID).
      * Used for deduplication and external references.
      */
-    eventId: text('event_id').notNull().unique(),
+    eventId: c.text('event_id').notNull().unique(),
 
     /**
      * Event timestamp (Unix ms).
      * Used for ordering and time-based queries.
      */
-    timestamp: epochMs('timestamp').notNull(),
+    timestamp: c.epochMs('timestamp').notNull(),
 
     /**
      * Event type discriminator.
@@ -61,33 +67,33 @@ export const sessionEvents = sqliteTable(
      * - 'turn.completed': Turn finished
      * - 'user_message.sent/acknowledged/completed': User message lifecycle
      */
-    type: text('type').notNull(),
+    type: c.text('type').notNull(),
 
     /**
      * Agent ID (nullable).
      * Populated for agent.added events.
      */
-    agentId: text('agent_id'),
+    agentId: c.text('agent_id'),
 
     /**
      * Adapter ID (nullable).
      * Populated for agent.added events.
      */
-    adapterId: text('adapter_id'),
+    adapterId: c.text('adapter_id'),
 
     /**
      * Originating message ID for correlation.
      * References the user message that triggered this event.
      * NOT a FK to messages table - purely for correlation/grouping.
      */
-    originatingMessageId: text('originating_message_id'),
+    originatingMessageId: c.text('originating_message_id'),
 
     /**
      * Reference to messages table.
      * Populated for type='message' events.
      * FK enables cascade delete when message is removed.
      */
-    messageId: text('message_id').references(() => messages.messageId, {
+    messageId: c.text('message_id').references(messageIdColumnPair, {
       onDelete: 'cascade',
     }),
 
@@ -95,31 +101,46 @@ export const sessionEvents = sqliteTable(
      * Turn ID for grouping.
      * Groups all events within a single turn (user message → agent responses).
      */
-    turnId: text('turn_id'),
+    turnId: c.text('turn_id'),
 
     /**
      * Extracted text content for search/embeddings.
      * Populated for text-bearing events (messages, reasoning).
      * NULL for structural events (tool.use, complete).
      */
-    contentText: text('content_text'),
+    contentText: c.text('content_text'),
 
     /**
      * Full event payload as JSON string.
      * Contains complete data for exact API reconstruction.
      */
-    payload: text('payload').notNull(),
+    payload: c.text('payload').notNull(),
+  }),
+  {
+    sqlite: (t) => [
+      index('idx_events_session_ts').on(t.sessionId, t.timestamp),
+      index('idx_events_session_type').on(t.sessionId, t.type),
+      index('idx_events_turn').on(t.turnId),
+      index('idx_events_originating_message').on(t.originatingMessageId),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_events_session_ts').on(t.sessionId, t.timestamp),
+      pgIndex('idx_events_session_type').on(t.sessionId, t.type),
+      pgIndex('idx_events_turn').on(t.turnId),
+      pgIndex('idx_events_originating_message').on(t.originatingMessageId),
+    ],
   },
-  (table) => [
-    index('idx_events_session_ts').on(table.sessionId, table.timestamp),
-    index('idx_events_session_type').on(table.sessionId, table.type),
-    index('idx_events_turn').on(table.turnId),
-    index('idx_events_originating_message').on(table.originatingMessageId),
-  ],
 );
+
+/** SQLite face of the `session_events` table (canonical schema). */
+export const sessionEvents = sessionEventsDual.sqlite;
 
 /**
  * Type for inserting a new session event.
+ *
+ * Derived from the SQLite face: SQLite keeps the auto-increment `id` optional,
+ * while the Postgres `GENERATED ALWAYS AS IDENTITY` face omits it. The insert
+ * path never supplies `id`, so the SQLite face is the canonical insert shape.
  */
 export type InsertSessionEvent = typeof sessionEvents.$inferInsert;
 

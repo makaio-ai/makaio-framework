@@ -144,7 +144,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('wraps dialect mismatches into an actionable per-extension error', async () => {
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
 
     await expect(
       runBootExtensionMigrations(db, [
@@ -191,7 +191,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('selects migrationsPathByDialect.postgres over migrationsPath on a postgres handle', async () => {
-    const { db, statements } = createPgBrandedTestDb();
+    const { db, statements } = await createPgBrandedTestDb();
     const pgDir = createPostgresExtensionFixture();
     try {
       // migrationsPath points at the SQLite chain — if the per-dialect
@@ -206,7 +206,17 @@ describe('runBootExtensionMigrations', () => {
         },
       ]);
 
-      expect(statements.join('\n')).toContain('CREATE TABLE ext_demo_pg');
+      const joined = statements.join('\n');
+      expect(joined).toContain('CREATE TABLE ext_demo_pg');
+
+      // D11: the Postgres engine names extension ledgers
+      // __makaio_migrations_<sha256-16>. The rename is unobservable in any
+      // installed database — Postgres hosts hard-failed SQLite extension
+      // chains at the journal-dialect guard before any ledger DDL ran.
+      const expectedPgLedger =
+        '__makaio_migrations_' + createHash('sha256').update('demo-src').digest('hex').slice(0, 16);
+      expect(joined).toContain(expectedPgLedger);
+      expect(joined).not.toContain('__drizzle_migrations_');
     } finally {
       removeTmpDir(pgDir);
     }
@@ -233,6 +243,115 @@ describe('runBootExtensionMigrations', () => {
       `);
       expect(extTable).toHaveLength(1);
     } finally {
+      await close();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // End-to-end production path: a manifest object form
+  // ({ sqlite, postgres }) flows through the kernel into the boot callback,
+  // and the active dialect picks its own chain and engine-owned ledger. These
+  // assert the full object form on each host — distinct from the partial
+  // single-entry cases above.
+  // -------------------------------------------------------------------------
+
+  it('object-form: sqlite host applies the sqlite chain and keeps the historical ledger', async () => {
+    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const pgDir = createPostgresExtensionFixture();
+    try {
+      // Both dialects are declared; on a sqlite handle the runner must select
+      // the sqlite entry and ignore the postgres one.
+      await runBootExtensionMigrations(db, [
+        {
+          name: 'demo-ext',
+          migrationsPath: tmpDir,
+          migrationSourceId: 'demo-src',
+          migrationsPathByDialect: { sqlite: tmpDir, postgres: pgDir },
+        },
+      ]);
+
+      const rawSql = getRawSqlExecutor(db);
+
+      // The sqlite chain's table — not the postgres chain's ext_demo_pg.
+      const extTable = await rawSql.all<{ name: string }>(sql`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'ext_demo'
+      `);
+      expect(extTable).toHaveLength(1);
+
+      // The historical __drizzle_migrations_<sha256-16> ledger — renaming this
+      // would break every installed sqlite database.
+      const expectedLedger =
+        '__drizzle_migrations_' + createHash('sha256').update('demo-src').digest('hex').slice(0, 16);
+      const ledgerTable = await rawSql.all<{ name: string }>(sql`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = ${expectedLedger}
+      `);
+      expect(ledgerTable).toHaveLength(1);
+    } finally {
+      removeTmpDir(pgDir);
+      await close();
+    }
+  });
+
+  it('object-form: postgres host applies the postgres chain and the engine-owned __makaio_migrations ledger', async () => {
+    const { db, statements } = await createPgBrandedTestDb();
+    const pgDir = createPostgresExtensionFixture();
+    try {
+      // Both dialects are declared; on a postgres handle the runner must select
+      // the postgres entry and ignore the sqlite one (migrationsPath/tmpDir).
+      await runBootExtensionMigrations(db, [
+        {
+          name: 'demo-ext',
+          migrationsPath: tmpDir,
+          migrationSourceId: 'demo-src',
+          migrationsPathByDialect: { sqlite: tmpDir, postgres: pgDir },
+        },
+      ]);
+
+      const joined = statements.join('\n');
+      expect(joined).toContain('CREATE TABLE ext_demo_pg');
+
+      // The Postgres engine names extension ledgers
+      // __makaio_migrations_<sha256-16> and never the SQLite ledger.
+      const expectedPgLedger =
+        '__makaio_migrations_' + createHash('sha256').update('demo-src').digest('hex').slice(0, 16);
+      expect(joined).toContain(expectedPgLedger);
+      expect(joined).not.toContain('__drizzle_migrations_');
+    } finally {
+      removeTmpDir(pgDir);
+    }
+  });
+
+  it('object-form without a sqlite entry on a sqlite host falls back to migrationsPath and fails loud at the journal-dialect guard', async () => {
+    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const pgDir = createPostgresExtensionFixture();
+    try {
+      // No sqlite entry; the singular fallback points at the postgres chain.
+      // On a sqlite handle the runner falls back to migrationsPath (the
+      // postgres chain) and the journal-dialect guard must fail loud with the
+      // actionable per-extension wrapper instead of silently skipping.
+      await expect(
+        runBootExtensionMigrations(db, [
+          {
+            name: 'demo-ext',
+            migrationsPath: pgDir,
+            migrationSourceId: 'demo-src',
+            migrationsPathByDialect: { postgres: pgDir },
+          },
+        ]),
+      ).rejects.toSatisfy((err: unknown) => {
+        if (!(err instanceof Error)) return false;
+        return (
+          err.message.includes("Extension 'demo-ext'") &&
+          err.message.includes("'sqlite'") &&
+          err.message.includes('Disable this extension') &&
+          err.cause instanceof Error &&
+          (err.cause as Error).name === 'MigrationDialectMismatchError'
+        );
+      });
+    } finally {
+      removeTmpDir(pgDir);
       await close();
     }
   });

@@ -72,6 +72,7 @@
       "@makaio/storage-core": ["./storage/core/src/index.ts"],
       "@makaio/storage-drizzle": ["./storage/drizzle/src/index.ts"],
       "@makaio/storage-handlers": ["./storage/handlers/src/index.ts"],
+      "@makaio/storage-pg": ["./storage/pg/src/index.ts"],
       "@makaio/services-log-import": ["./services/log-import/src/index.ts"],
       "@makaio/services-log-import/log-import": ["./services/log-import/src/log-import.ts"],
       "@makaio/services-log-import/namespace": ["./services/log-import/src/namespace.ts"],

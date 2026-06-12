@@ -40,8 +40,8 @@ import { ClientProfileStorageNamespace, registerDrizzleProfileStorage } from '..
 // ---------------------------------------------------------------------------
 
 describe('clientRuntimesSchema dialect adoption', () => {
-  it('resolves the postgres twin for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twin for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, clientRuntimesSchema);
     expect(resolved).toBe(clientRuntimesSchema.postgres);
     expect(is(resolved.clientRuntimes, PgTable)).toBe(true);
@@ -59,8 +59,8 @@ describe('clientRuntimesSchema dialect adoption', () => {
 // ---------------------------------------------------------------------------
 
 describe('clientBinarySchema dialect adoption', () => {
-  it('resolves the postgres twins for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twins for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, clientBinarySchema);
     expect(resolved).toBe(clientBinarySchema.postgres);
     expect(is(resolved.clientBinaryVersions, PgTable)).toBe(true);
@@ -80,8 +80,8 @@ describe('clientBinarySchema dialect adoption', () => {
 // ---------------------------------------------------------------------------
 
 describe('clientProfilesSchema dialect adoption', () => {
-  it('resolves the postgres twin for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twin for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, clientProfilesSchema);
     expect(resolved).toBe(clientProfilesSchema.postgres);
     expect(is(resolved.clientProfiles, PgTable)).toBe(true);
@@ -106,27 +106,27 @@ describe('clientProfilesSchema dialect adoption', () => {
 // ---------------------------------------------------------------------------
 
 describe('client subsystem handler registration against a pg-branded handle', () => {
-  it('registers exactly one runtime handler per subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one runtime handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     const subjects = Object.values(ClientRuntimeStorageSubjects).filter((subject) => subject.subject !== '*');
 
     expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleRuntimeStorage(bus, db, ctx));
   });
 
-  it('registers exactly one client-binary handler per subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one client-binary handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     const subjects = Object.values(ClientBinaryStorageSubjects).filter((subject) => subject.subject !== '*');
 
     expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleClientBinaryStorage(bus, db, ctx));
   });
 
-  it('registers exactly one profile handler per subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one profile handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     bus.registerNamespace(ClientProfileStorageNamespace);
     const subjects = Object.values(ClientProfileStorageSubjects).filter((subject) => subject.subject !== '*');

@@ -1,12 +1,5 @@
-/* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
-import { eq, asc, desc, gt, lt, gte, lte, and, or, sql, count } from 'drizzle-orm';
-import {
-  getDatabaseDialect,
-  getRawSqlExecutor,
-  resolveSchema,
-  sanitizeFtsQuery,
-  type MakaioDatabase,
-} from '@makaio/storage-drizzle';
+import { eq, asc, desc, gt, lt, gte, lte, and, or } from 'drizzle-orm';
+import { resolveSchema, resolveStorageEngine, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext, SessionMessage, SessionMessageBlock } from '@makaio/contracts';
 import { MessageStorageSubjects } from './namespace.js';
@@ -186,117 +179,33 @@ function registerGetHandler(deps: MessageHandlerDeps): () => void {
 /**
  * Register handler for storage:message.search.
  *
- * On SQLite the search is performed via FTS5 with bm25 relevance ranking.
- * On Postgres the search uses the `content_tsv` stored generated tsvector column
- * and a GIN index, with ts_rank relevance ordering.
+ * The ranked search itself is engine-owned (`StorageEngine.fts`): FTS5 with
+ * bm25 relevance on SQLite, the `content_tsv` tsvector column with ts_rank
+ * ordering on Postgres. The handler keeps payload defaults, the empty-query
+ * short-circuit, and the row mapping.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
-// eslint-disable-next-line max-lines-per-function -- carries both full dialect implementations behind one registration seam
 function registerSearchHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
-
-  const dialect = getDatabaseDialect(db);
-  if (dialect === 'postgres') {
-    return bus.on(MessageStorageSubjects.search, async (ctx) => {
-      const { query, sessionId, limit } = ctx.payload;
-      const pageLimit = limit ?? 50;
-
-      // Short-circuit on empty/whitespace queries without a DB roundtrip.
-      if (!query.trim()) {
-        ctx.setResult({ messages: [], total: 0 });
-        return;
-      }
-
-      // websearch_to_tsquery performs its own query parsing, so the FTS5
-      // sanitizer is deliberately not applied on the Postgres path.
-      const { messages } = resolveSchema(db, messagesSchema);
-      const tsQuery = sql`websearch_to_tsquery('english', ${query})`;
-      const matches = sql`content_tsv @@ ${tsQuery}`;
-      const where = sessionId ? and(eq(messages.sessionId, sessionId), matches) : matches;
-
-      const rows = await db
-        .select()
-        .from(messages)
-        .where(where)
-        .orderBy(sql`ts_rank(content_tsv, ${tsQuery}) DESC`, asc(messages.timestamp), asc(messages.messageId))
-        .limit(pageLimit);
-
-      const [countRow] = await db.select({ total: count() }).from(messages).where(where);
-
-      ctx.setResult({
-        messages: rows.map(rowToMessage),
-        total: countRow?.total ?? 0,
-      });
-    });
-  }
+  const { messages } = resolveSchema(db, messagesSchema);
+  const fts = resolveStorageEngine(db).fts;
 
   return bus.on(MessageStorageSubjects.search, async (ctx) => {
     const { query, sessionId, limit } = ctx.payload;
     const pageLimit = limit ?? 50;
 
-    // Short-circuit on empty/whitespace queries — sanitizeFtsQuery would
-    // produce a quoted empty phrase that triggers invalid FTS5 MATCH.
+    // Short-circuit on empty/whitespace queries without a DB roundtrip.
     if (!query.trim()) {
       ctx.setResult({ messages: [], total: 0 });
       return;
     }
 
-    const sanitized = sanitizeFtsQuery(query);
-
-    // Use FTS5 content-backed table (joins via rowid, order by bm25 relevance).
-    // Columns are aliased to camelCase to match SelectMessage / rowToMessage expectations.
-    const SELECT_ALIASED = sql`
-      m.message_id       AS messageId,
-      m.turn_id          AS turnId,
-      m.session_id       AS sessionId,
-      m.role             AS role,
-      m.content_text     AS contentText,
-      m.blocks           AS blocks,
-      m.agent_id         AS agentId,
-      m.adapter_session_id AS adapterSessionId,
-      m.adapter_message_id AS adapterMessageId,
-      m.timestamp        AS timestamp,
-      m.edit_of          AS editOf,
-      m.origin           AS origin
-    `;
-
-    const ftsQuery = sessionId
-      ? sql`
-          SELECT ${SELECT_ALIASED}
-          FROM messages m
-          JOIN messages_fts fts ON m.rowid = fts.rowid
-          WHERE messages_fts MATCH ${sanitized}
-          AND fts.session_id = ${sessionId}
-          ORDER BY bm25(messages_fts)
-          LIMIT ${pageLimit}
-        `
-      : sql`
-          SELECT ${SELECT_ALIASED}
-          FROM messages m
-          JOIN messages_fts fts ON m.rowid = fts.rowid
-          WHERE messages_fts MATCH ${sanitized}
-          ORDER BY bm25(messages_fts)
-          LIMIT ${pageLimit}
-        `;
-
-    const rawSql = getRawSqlExecutor(db);
-    const rows = await rawSql.all<SelectMessage>(ftsQuery);
-
-    // Get total count
-    const countQuery = sessionId
-      ? sql`
-          SELECT COUNT(*) as count FROM messages_fts
-          WHERE messages_fts MATCH ${sanitized}
-          AND session_id = ${sessionId}
-        `
-      : sql`
-          SELECT COUNT(*) as count FROM messages_fts
-          WHERE messages_fts MATCH ${sanitized}
-        `;
-
-    const [countRow] = await rawSql.all<{ count: number }>(countQuery);
-    const total = countRow?.count ?? 0;
+    const { rows, total } = await fts.searchMessages<SelectMessage>(db, messages, {
+      query,
+      sessionId,
+      limit: pageLimit,
+    });
 
     ctx.setResult({
       messages: rows.map(rowToMessage),
@@ -305,155 +214,33 @@ function registerSearchHandler(deps: MessageHandlerDeps): () => void {
   });
 }
 
-type MessageFtsRow = {
-  message_id: string;
-  session_id: string;
-  score: number;
-  excerpt: string;
-};
-
-/**
- * Executes a BM25-ranked FTS5 search over messages.
- *
- * Supports optional scoping by `sessionId` (direct FTS column).
- * @param db - Drizzle database instance
- * @param sanitized - Already-sanitized FTS5 query string
- * @param limit - Maximum number of rows to return
- * @param sessionId - Optional session scope filter
- * @returns Ranked message FTS rows
- */
-async function fetchFtsRows(
-  db: MakaioDatabase,
-  sanitized: string,
-  limit: number,
-  sessionId: string | undefined,
-): Promise<MessageFtsRow[]> {
-  const SELECT_COLS = sql`
-    m.message_id AS message_id,
-    fts.session_id AS session_id,
-    -bm25(messages_fts) AS score,
-    snippet(messages_fts, 1, '<mark>', '</mark>', '...', 40) AS excerpt
-  FROM messages_fts fts
-  JOIN messages m ON m.rowid = fts.rowid`;
-
-  const rawSql = getRawSqlExecutor(db);
-  if (sessionId !== undefined) {
-    return rawSql.all<MessageFtsRow>(sql`
-      SELECT ${SELECT_COLS}
-      WHERE messages_fts MATCH ${sanitized}
-        AND fts.session_id = ${sessionId}
-      ORDER BY score DESC
-      LIMIT ${limit}
-    `);
-  }
-  return rawSql.all<MessageFtsRow>(sql`
-    SELECT ${SELECT_COLS}
-    WHERE messages_fts MATCH ${sanitized}
-    ORDER BY score DESC
-    LIMIT ${limit}
-  `);
-}
-
-/**
- * Counts total FTS5 matches for a query, with optional scoping.
- * @param db - Drizzle database instance
- * @param sanitized - Already-sanitized FTS5 query string
- * @param sessionId - Optional session scope filter
- * @returns Total number of matching rows
- */
-async function fetchFtsTotal(db: MakaioDatabase, sanitized: string, sessionId: string | undefined): Promise<number> {
-  const rawSql = getRawSqlExecutor(db);
-  const countRow = await (sessionId !== undefined
-    ? rawSql.all<{ total: number }>(sql`
-        SELECT COUNT(*) AS total
-        FROM messages_fts
-        WHERE messages_fts MATCH ${sanitized}
-          AND session_id = ${sessionId}
-      `)
-    : rawSql.all<{ total: number }>(sql`
-        SELECT COUNT(*) AS total
-        FROM messages_fts
-        WHERE messages_fts MATCH ${sanitized}
-      `));
-  return countRow[0]?.total ?? 0;
-}
-
 /**
  * Register handler for storage:message.ftsSearch with ranked excerpts.
  *
- * On SQLite the search uses FTS5 with bm25 scoring and the `snippet()` function.
- * On Postgres the search uses the `content_tsv` stored generated tsvector column
- * and a GIN index, with ts_rank scoring and ts_headline for excerpt generation.
+ * Excerpt generation is engine-owned (`StorageEngine.fts`): bm25 scoring with
+ * `snippet()` on SQLite, ts_rank scoring with ts_headline on Postgres. The
+ * handler keeps payload defaults and the empty-query short-circuit; excerpt
+ * hits pass through unchanged.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
 function registerFtsSearchHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
-
-  const dialect = getDatabaseDialect(db);
-  if (dialect === 'postgres') {
-    return bus.on(MessageStorageSubjects.ftsSearch, async (ctx) => {
-      const { query, sessionId, limit = 20 } = ctx.payload;
-
-      const trimmed = query.trim();
-      // Short-circuit on empty/whitespace queries without a DB roundtrip.
-      if (!trimmed) {
-        ctx.setResult({ results: [], total: 0 });
-        return;
-      }
-
-      // websearch_to_tsquery performs its own query parsing, so the FTS5
-      // sanitizer is deliberately not applied on the Postgres path.
-      const { messages } = resolveSchema(db, messagesSchema);
-      const tsQuery = sql`websearch_to_tsquery('english', ${trimmed})`;
-      const matches = sql`content_tsv @@ ${tsQuery}`;
-      const where = sessionId !== undefined ? and(eq(messages.sessionId, sessionId), matches) : matches;
-
-      const rows = await db
-        .select({
-          messageId: messages.messageId,
-          sessionId: messages.sessionId,
-          score: sql<number>`ts_rank(content_tsv, ${tsQuery})`,
-          excerpt: sql<string>`ts_headline('english', content_text, ${tsQuery}, 'StartSel=<mark>, StopSel=</mark>, MaxWords=40, MinWords=15')`,
-        })
-        .from(messages)
-        .where(where)
-        .orderBy(sql`ts_rank(content_tsv, ${tsQuery}) DESC`, asc(messages.timestamp), asc(messages.messageId))
-        .limit(limit);
-
-      const [countRow] = await db.select({ total: count() }).from(messages).where(where);
-
-      ctx.setResult({
-        results: rows,
-        total: countRow?.total ?? 0,
-      });
-    });
-  }
+  const { messages } = resolveSchema(db, messagesSchema);
+  const fts = resolveStorageEngine(db).fts;
 
   return bus.on(MessageStorageSubjects.ftsSearch, async (ctx) => {
     const { query, sessionId, limit = 20 } = ctx.payload;
 
-    const trimmed = query.trim();
-    if (!trimmed) {
+    // Short-circuit on empty/whitespace queries without a DB roundtrip.
+    if (!query.trim()) {
       ctx.setResult({ results: [], total: 0 });
       return;
     }
 
-    const sanitized = sanitizeFtsQuery(trimmed);
-    const [rows, total] = await Promise.all([
-      fetchFtsRows(db, sanitized, limit, sessionId),
-      fetchFtsTotal(db, sanitized, sessionId),
-    ]);
+    const { results, total } = await fts.searchMessageExcerpts(db, messages, { query, sessionId, limit });
 
-    ctx.setResult({
-      results: rows.map((row) => ({
-        messageId: row.message_id,
-        sessionId: row.session_id,
-        score: row.score,
-        excerpt: row.excerpt,
-      })),
-      total,
-    });
+    ctx.setResult({ results, total });
   });
 }
 

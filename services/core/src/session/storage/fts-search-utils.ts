@@ -8,8 +8,8 @@
  * Host handlers run their own FTS+JOIN SQL queries and pass the raw row
  * results through these utilities to produce the final `IMakaioSession` shapes.
  */
-import { count, inArray, sql } from 'drizzle-orm';
-import { getDatabaseDialect, getRawSqlExecutor, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { count, inArray } from 'drizzle-orm';
+import { resolveSchema, resolveStorageEngine, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { ForkTransforms, IMakaioSession } from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
 import { messagesSchema } from '../messages/schema.variants.js';
@@ -85,52 +85,17 @@ export async function fetchAgentsBySession(
 /**
  * Resolves first-user-message previews for matched sessions.
  *
- * The tie-breaker for same-timestamp messages is dialect-specific:
- * - SQLite uses `rowid` (a physical insertion-order surrogate available on every SQLite table).
- * - Postgres has no rowid; `message_id` provides a deterministic lexicographic tie-break
- *   that mirrors the (timestamp, message_id) ordering used by the Postgres search queries.
+ * The same-timestamp tie-break is engine-owned (`StorageEngine.fts`): rowid
+ * insertion order on SQLite, lexicographic message_id order on Postgres.
  * @param db - Drizzle database instance
  * @param sessionIds - Matched session IDs
- * @param dialect - Active storage dialect, controls the tie-break predicate
  * @returns First user message text keyed by session ID
  */
 export async function fetchPreviewBySession(
   db: MakaioDatabase,
   sessionIds: string[],
-  dialect = getDatabaseDialect(db),
 ): Promise<Map<string, string | null>> {
-  if (sessionIds.length === 0) {
-    return new Map<string, string | null>();
-  }
-  const uniqueIds = [...new Set(sessionIds)];
-
-  // Tie-break same-timestamp messages deterministically.
-  // SQLite: rowid is a physical insertion-order surrogate (not available on Postgres).
-  // Postgres: message_id provides a stable lexicographic tie-break.
-  const tieBreaker = dialect === 'postgres' ? sql`m2.message_id < m.message_id` : sql`m2.rowid < m.rowid`;
-
-  const previewRows = await getRawSqlExecutor(db).all<{ sessionId: string; preview: string | null }>(sql`
-    SELECT m.session_id as "sessionId", m.content_text as preview
-    FROM messages m
-    WHERE m.role = 'user'
-      AND m.session_id IN (${sql.join(
-        uniqueIds.map((sessionId) => sql`${sessionId}`),
-        sql`, `,
-      )})
-      AND NOT EXISTS (
-        SELECT 1
-        FROM messages m2
-        WHERE m2.session_id = m.session_id
-          AND m2.role = 'user'
-          AND (m2.timestamp < m.timestamp OR (m2.timestamp = m.timestamp AND ${tieBreaker}))
-      )
-  `);
-
-  const previewBySession = new Map<string, string | null>();
-  for (const row of previewRows) {
-    previewBySession.set(row.sessionId, row.preview);
-  }
-  return previewBySession;
+  return resolveStorageEngine(db).fts.fetchFirstUserMessagePreviews(db, sessionIds);
 }
 
 /**

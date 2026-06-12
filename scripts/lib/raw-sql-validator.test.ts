@@ -108,7 +108,8 @@ describe('isInScope', () => {
     expect(isInScope('services/core/src/session/storage/__tests__/search.test.ts')).toBe(false);
     expect(isInScope('services/core/src/session/storage/inline.test.ts')).toBe(false);
     expect(isInScope('scripts/lib/raw-sql-validator.ts')).toBe(false);
-    expect(isInScope('storage/drizzle/src/client.ts')).toBe(false);
+    expect(isInScope('storage/drizzle/src/engine/sqlite/client.ts')).toBe(false);
+    expect(isInScope('storage/drizzle/src/client.ts')).toBe(true);
     expect(isInScope('storage/drizzle/src/raw-sql.ts')).toBe(false);
   });
 });

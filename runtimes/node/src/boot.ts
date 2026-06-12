@@ -250,6 +250,16 @@ export async function bootMakaioRuntimeCore(
     // 4. Storage — initialize the database (SQLite file or Postgres URL)
     //    and expose it through RuntimeSubjects.database for consumers that
     //    need the concrete handle.
+    //
+    //    Boot-ordering contract: storage engine registration precedes database
+    //    creation and migrations by construction — initializeNodeDatabase
+    //    first registers every engine passed via `database.engines`, then
+    //    resolves URL targets against the engine registry, auto-resolving
+    //    hinted engine packages (e.g. @makaio/storage-pg for postgres:// /
+    //    postgresql:// URLs) before any client is created. Direct
+    //    initializeNodeDatabase callers and the Bun runtime (which delegates
+    //    to bootMakaioRuntimeCore) inherit the same contract; the storage
+    //    conformance harness registers its engines explicitly instead.
     // -----------------------------------------------------------------------
     const { databaseClient } = await initializeNodeDatabase({
       makaioHome,
