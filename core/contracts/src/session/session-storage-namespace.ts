@@ -242,7 +242,8 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
     },
 
     /**
-     * Search sessions by content using FTS5.
+     * Search sessions by message content (full-text: FTS5 on SQLite,
+     * tsvector on Postgres) and session title (LIKE on both dialects).
      *
      * Subject: `storage:session.search`
      * Type: Request (RPC)

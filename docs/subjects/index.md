@@ -11,15 +11,15 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 97 |
-| Subjects | 889 (391 events, 498 RPCs) |
-| framework | 93 |
+| Namespaces | 101 |
+| Subjects | 922 (392 events, 530 RPCs) |
+| framework | 97 |
 | extension | 4 |
 | kind: bus | 71 |
 | kind: adapter | 9 |
 | kind: client | 2 |
 | kind: extension | 2 |
-| kind: storage | 11 |
+| kind: storage | 15 |
 | kind: extension-storage | 2 |
 
 ## Directories
@@ -77,6 +77,10 @@ next: false
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
 | [`session`](./session.md) | bus | 55 | 29E / 26R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
+| [`storage:message`](./storage-message.md) | storage | 9 | 1E / 8R |
+| [`storage:session`](./storage-session.md) | storage | 14 | 0E / 14R |
+| [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
+| [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
 | [`storage:workflow`](./storage-workflow.md) | storage | 25 | 0E / 25R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |

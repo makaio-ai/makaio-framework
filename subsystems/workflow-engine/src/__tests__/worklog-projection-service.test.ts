@@ -169,6 +169,14 @@ describe('WorkLog projection service', () => {
   });
 
   it('aggregates worklog stats within a time window', async () => {
+    // worklog_summaries.execution_id references workflow_executions.id, so the
+    // execution rows must exist before lifecycle events can project summaries.
+    for (const executionId of ['wfx-stats-1', 'wfx-stats-2', 'wfx-stats-old']) {
+      await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+        execution: createWorkflowExecution({ id: executionId, workflowId: 'wf-stats' }),
+      });
+    }
+
     await MakaioBus.emit(WorkflowSubjects.execution.started, {
       executionId: 'wfx-stats-1',
       workflowId: 'wf-stats',

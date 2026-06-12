@@ -1,16 +1,27 @@
 /**
  * CLI entry point for generating aggregated Drizzle schema.
  *
- * Discovers all schema files from workspace packages and generates a consolidated
- * .generated/schema.ts file that re-exports all schemas. This is used by drizzle-kit
- * for migration generation.
+ * Discovers all schema files from workspace packages and generates consolidated
+ * barrel files in `.generated/` that Drizzle Kit uses to produce SQL migration
+ * files.
+ *
+ * - `schema.ts` — SQLite dialect barrel (always generated)
+ * - `schema.postgres.ts` — Postgres dialect barrel (generated when the
+ *   `'postgres'` dialect is included in `options.dialects`)
  *
  * Usage: tsx src/generate-schema.ts
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { StorageDialect } from '@makaio/storage-drizzle';
 import { discoverSchemas } from './discover-schemas.js';
+
+/** Barrel file name for each storage dialect. */
+const BARREL_FILE_NAME: Readonly<Record<StorageDialect, string>> = {
+  sqlite: 'schema.ts',
+  postgres: 'schema.postgres.ts',
+};
 
 export interface GenerateSchemaOptions {
   /** Absolute path to the workspace root directory */
@@ -24,51 +35,71 @@ export interface GenerateSchemaOptions {
    * patterns are used instead of the patterns from the root package.json workspaces field.
    */
   patterns?: string[];
+  /**
+   * Dialects to emit aggregated barrels for. Defaults to `['sqlite']` —
+   * SQLite is the baseline dialect; additional dialects are opt-in per runner.
+   * When provided, the list must contain at least one dialect: an empty list
+   * is rejected because it would write no barrels and leave any previously
+   * generated schema in place, silently feeding stale schema to Drizzle Kit.
+   * Barrel file names: `'sqlite'` → `schema.ts`, `'postgres'` → `schema.postgres.ts`.
+   */
+  dialects?: readonly StorageDialect[];
 }
 
 /**
- * Generate aggregated schema file from discovered workspace schemas.
+ * Generate aggregated schema barrel files from discovered workspace schemas.
  *
- * 1. Determines workspace root (defaults to 3 levels up from src/)
- * 2. Discovers all schemas via makaio.drizzleSchema declarations
- * 3. Creates .generated/ directory if needed
- * 4. Writes .generated/schema.ts with export statements
- * 5. Logs discovered schemas for visibility
+ * For each requested dialect:
+ * 1. Runs `discoverSchemas` for that dialect to collect declared schema paths.
+ * 2. Creates `.generated/` if it does not exist.
+ * 3. Writes the dialect barrel with `export * from '<absolute posix path>';` lines.
+ * 4. Logs discovered schemas for visibility.
  * @param options - Generation options
- * @returns Promise that resolves once the schema is written
+ * @returns Promise that resolves once all barrels are written
+ * @throws Error when `options.dialects` is provided but empty
  */
 export async function generateSchema(options: GenerateSchemaOptions = {}): Promise<void> {
   const logger = options.logger ?? console;
   // Workspace root is 3 levels up from src/: src -> migrations -> storage -> repository root.
   const workspaceRoot = options.workspaceRoot ?? path.resolve(import.meta.dirname, '../../..');
+  if (options.dialects && options.dialects.length === 0) {
+    throw new Error(
+      'generateSchema: options.dialects must contain at least one dialect when provided — ' +
+        'an empty list would write no barrels and leave stale generated schema in place.',
+    );
+  }
+  const dialects: readonly StorageDialect[] = options.dialects ?? ['sqlite'];
+
   logger.info(`Workspace root: ${workspaceRoot}`);
 
-  // Discover schemas
-  const schemas = await discoverSchemas(workspaceRoot, options.patterns);
-  logger.info(`\nDiscovered ${schemas.length} schema(s):`);
-
-  for (const schema of schemas) {
-    logger.info(`  - ${schema.packageName}`);
-    logger.info(`    ${schema.schemaPath}`);
-  }
-
-  // Create .generated directory
+  // Create .generated directory once, before any dialect writes.
   const generatedDir = options.generatedDir ?? path.resolve(import.meta.dirname, '../.generated');
   fs.mkdirSync(generatedDir, { recursive: true });
 
-  // Generate schema.ts with export statements
-  // Use forward slashes for cross-platform compatibility
-  const schemaContent = schemas
-    .map((schema) => {
-      const normalizedPath = schema.schemaPath.replace(/\\/g, '/');
-      return `export * from '${normalizedPath}';`;
-    })
-    .join('\n');
+  for (const dialect of dialects) {
+    const schemas = await discoverSchemas(workspaceRoot, options.patterns, dialect);
+    logger.info(`\nDiscovered ${schemas.length} ${dialect} schema(s):`);
 
-  const schemaPath = path.join(generatedDir, 'schema.ts');
-  fs.writeFileSync(schemaPath, schemaContent + '\n', 'utf-8');
+    for (const schema of schemas) {
+      logger.info(`  - ${schema.packageName}`);
+      logger.info(`    ${schema.schemaPath}`);
+    }
 
-  logger.info(`\n✓ Generated: ${schemaPath}`);
+    // Generate the barrel with export statements.
+    // Use forward slashes for cross-platform compatibility.
+    const barrelContent = schemas
+      .map((schema) => {
+        const normalizedPath = schema.schemaPath.replace(/\\/g, '/');
+        return `export * from '${normalizedPath}';`;
+      })
+      .join('\n');
+
+    const barrelFileName = BARREL_FILE_NAME[dialect];
+    const barrelPath = path.join(generatedDir, barrelFileName);
+    fs.writeFileSync(barrelPath, barrelContent + '\n', 'utf-8');
+
+    logger.info(`\n✓ Generated: ${barrelPath}`);
+  }
 }
 
 /**
@@ -87,7 +118,7 @@ function isMainModule(): boolean {
   return pathToFileURL(entry).href === import.meta.url;
 }
 
-// Run if executed directly
+// Run if executed directly — the framework chain always regenerates both barrels.
 if (isMainModule()) {
-  void generateSchema();
+  void generateSchema({ dialects: ['sqlite', 'postgres'] });
 }

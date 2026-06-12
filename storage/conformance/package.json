@@ -1,0 +1,33 @@
+{
+  "name": "@makaio/storage-conformance",
+  "description": "Dual-dialect conformance suites asserting the public storage contracts on live SQLite and Postgres databases.",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/storage-migrations": "workspace:*",
+    "drizzle-orm": "0.45.2"
+  },
+  "devDependencies": {
+    "@makaio/ai-adapters-core": "workspace:*",
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/preferences": "workspace:*",
+    "@makaio/services-core": "workspace:*",
+    "@makaio/services-log-import": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
+    "@makaio/subsystem-native-session-supervisor": "workspace:*",
+    "@makaio/subsystem-workflow-engine": "workspace:*",
+    "@makaio/test-utils": "workspace:*",
+    "@types/node": "^24.3.0",
+    "pg": "^8.21.0"
+  },
+  "license": "MIT"
+}

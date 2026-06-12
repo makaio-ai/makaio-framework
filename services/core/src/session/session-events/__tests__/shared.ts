@@ -3,7 +3,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioSessionEvent, SessionEventType, SessionEventTypeMap } from '@makaio/contracts';
 import { makeStubExtensionContext } from '@makaio/test-utils';
@@ -136,14 +136,15 @@ export interface TestDbContext {
  */
 export async function createTestDb(): Promise<TestDbContext> {
   const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const rawSql = getRawSqlExecutor(db);
 
   // Create tables in order (sessions first due to FK)
-  await db.run(CREATE_SESSIONS_TABLE_SQL);
-  await db.run(CREATE_SESSION_EVENTS_TABLE_SQL);
+  await rawSql.run(CREATE_SESSIONS_TABLE_SQL);
+  await rawSql.run(CREATE_SESSION_EVENTS_TABLE_SQL);
 
   // Create indexes
   for (const indexSql of CREATE_INDEXES_SQL) {
-    await db.run(indexSql);
+    await rawSql.run(indexSql);
   }
 
   // Register the storage handler
@@ -168,7 +169,7 @@ export async function createTestDb(): Promise<TestDbContext> {
  */
 export async function insertTestSession(db: MakaioDatabase, sessionId: string): Promise<void> {
   const now = Date.now();
-  await db.run(
+  await getRawSqlExecutor(db).run(
     sql`INSERT OR IGNORE INTO sessions (session_id, created_at, last_activity_at, status)
         VALUES (${sessionId}, ${now}, ${now}, 'active')`,
   );

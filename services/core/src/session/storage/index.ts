@@ -22,3 +22,4 @@ export {
   type SearchFilters,
 } from './fts-search-utils.js';
 export { mapToSession, mapAgentsBySession, fetchSessionPreviewMaps, type SessionPreviewMaps } from './drizzle-utils.js';
+export { getSessionAncestorChain } from './ancestor-query.js';

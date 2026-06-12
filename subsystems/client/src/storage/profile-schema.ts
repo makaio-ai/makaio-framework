@@ -7,7 +7,8 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { bool, epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Persistent store for named client configuration profiles.
@@ -43,13 +44,13 @@ export const clientProfiles = sqliteTable(
      * given time. A partial unique index and the storage `setDefault`
      * operation enforce that invariant.
      */
-    isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+    isDefault: bool('is_default').notNull().default(false),
 
     /** Unix epoch timestamp in milliseconds when this row was created. */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
 
     /** Unix epoch timestamp in milliseconds when this row was last updated. */
-    updatedAt: integer('updated_at').notNull(),
+    updatedAt: epochMs('updated_at').notNull(),
   },
   (table) => [
     uniqueIndex('uq_client_profiles_client_name').on(table.clientId, table.name),

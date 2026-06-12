@@ -99,6 +99,15 @@ describe('embedded build migrations', () => {
         sql: ['CREATE TABLE `trusted_devices` (`id` text PRIMARY KEY NOT NULL);'],
       }),
     ]);
+    // Object inputs may carry fields beyond the source identity (for example
+    // the `expectedDialect` boot passes for journal validation); the bundled
+    // reader resolves by source identity and ignores the rest.
+    expect(mod.readMigrations({ migrationsDir: trustedDevicesDir, expectedDialect: 'postgres' })).toEqual([
+      expect.objectContaining({
+        tag: '0000_trusted_devices',
+        folderMillis: 2,
+      }),
+    ]);
     expect(mod.readMigrations(path.join(trustedDevicesDir, '..', path.basename(trustedDevicesDir)))).toEqual([
       expect.objectContaining({
         tag: '0000_trusted_devices',

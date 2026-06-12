@@ -11,10 +11,11 @@
  */
 
 import { eq, and, isNull } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
-import { SessionStorageSubjects, SessionStorageNamespace } from '../storage/namespace.js';
+import { SessionStorageSubjects } from '../storage/namespace.js';
+import { sessionStorageSchema } from '../storage/schema.variants.js';
 
 /**
  * Register handler to resolve parent relationships when sessions are imported.
@@ -39,7 +40,7 @@ import { SessionStorageSubjects, SessionStorageNamespace } from '../storage/name
  * ```
  */
 export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () => void {
-  const { sessions } = SessionStorageNamespace.extensions.drizzle;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   /**
    * Recursively update rootSessionId for all descendants of a session.

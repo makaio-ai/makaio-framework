@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 /**
  * SQL statements that install the canonical session-storage schema used by
@@ -88,7 +88,87 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
  * @param db - Database to initialize
  */
 export async function installSessionStorageTestSchema(db: MakaioDatabase): Promise<void> {
+  const rawSql = getRawSqlExecutor(db);
   for (const statement of SESSION_STORAGE_TEST_SCHEMA_SQL) {
-    await db.run(statement);
+    await rawSql.run(statement);
+  }
+}
+
+/**
+ * SQL statements that install the messages tier of the session-storage test
+ * schema: `turns`, `messages` (canonical column set including
+ * `adapter_message_id` and a nullable `turn_id`), the content-backed
+ * `messages_fts` FTS5 virtual table, and the FTS sync triggers. Mirrors the
+ * FTS5 setup the runtime's migration step applies on SQLite.
+ */
+export const MESSAGES_FTS_TEST_SCHEMA_SQL: SQL[] = [
+  sql`
+    CREATE TABLE IF NOT EXISTS turns (
+      turn_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+      started_at INTEGER NOT NULL,
+      completed_at INTEGER,
+      status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'error')),
+      error TEXT
+    )
+  `,
+  sql`
+    CREATE TABLE IF NOT EXISTS messages (
+      message_id TEXT PRIMARY KEY,
+      turn_id TEXT REFERENCES turns(turn_id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content_text TEXT NOT NULL,
+      blocks TEXT NOT NULL DEFAULT '[]',
+      agent_id TEXT,
+      adapter_session_id TEXT,
+      adapter_message_id TEXT,
+      timestamp INTEGER NOT NULL,
+      edit_of TEXT,
+      origin TEXT
+    )
+  `,
+  sql`
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      session_id,
+      content_text,
+      content='messages',
+      content_rowid='rowid',
+      tokenize='porter unicode61'
+    )
+  `,
+  sql`
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, session_id, content_text)
+      VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
+    END
+  `,
+  sql`
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
+      VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
+    END
+  `,
+  sql`
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
+      VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
+      INSERT INTO messages_fts(rowid, session_id, content_text)
+      VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
+    END
+  `,
+];
+
+/**
+ * Install the messages tier of the session-storage test schema on top of
+ * {@link installSessionStorageTestSchema} (the `turns` and `messages` tables
+ * reference `sessions`). FTS-backed search tests call this before inserting
+ * message fixtures; the triggers keep `messages_fts` in sync automatically.
+ * @param db - Database to initialize
+ */
+export async function installMessagesFtsTestSchema(db: MakaioDatabase): Promise<void> {
+  const rawSql = getRawSqlExecutor(db);
+  for (const statement of MESSAGES_FTS_TEST_SCHEMA_SQL) {
+    await rawSql.run(statement);
   }
 }

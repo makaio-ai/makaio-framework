@@ -5,7 +5,7 @@
 
 import { sql } from 'drizzle-orm';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 /**
  * Context returned by {@link createTestDb}.
@@ -35,8 +35,9 @@ export interface TestDbContext {
  */
 export async function createTestDb(): Promise<TestDbContext> {
   const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const rawSql = getRawSqlExecutor(db);
 
-  await db.run(sql`
+  await rawSql.run(sql`
     CREATE TABLE IF NOT EXISTS supervisor_runtimes (
       supervisor_session_id TEXT PRIMARY KEY,
       client_id             TEXT NOT NULL,
@@ -54,17 +55,17 @@ export async function createTestDb(): Promise<TestDbContext> {
     )
   `);
 
-  await db.run(sql`
+  await rawSql.run(sql`
     CREATE INDEX IF NOT EXISTS supervisor_runtimes_session_id_idx
     ON supervisor_runtimes(session_id)
   `);
 
-  await db.run(sql`
+  await rawSql.run(sql`
     CREATE INDEX IF NOT EXISTS supervisor_runtimes_adapter_session_id_idx
     ON supervisor_runtimes(adapter_session_id)
   `);
 
-  await db.run(sql`
+  await rawSql.run(sql`
     CREATE INDEX IF NOT EXISTS supervisor_runtimes_status_idx
     ON supervisor_runtimes(status)
   `);

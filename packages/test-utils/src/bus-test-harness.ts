@@ -18,8 +18,13 @@
  * ```
  */
 
-import { vi, type Mock } from 'vitest';
-import { createBusInstance, type IMakaioBus, type ScopedBus } from '@makaio/bus-core';
+import { expect, vi, type Mock } from 'vitest';
+import {
+  createBusInstance,
+  getFullSubjectForSubjectDefinition,
+  type IMakaioBus,
+  type ScopedBus,
+} from '@makaio/bus-core';
 
 /**
  * Full structural shape required by `IMakaioBus` for test doubles.
@@ -378,4 +383,59 @@ export function createMockScopedBus(namespace = 'test'): MockScopedBusResult {
  */
 export function createTestBusInstance(): IMakaioBus {
   return createBusInstance();
+}
+
+/**
+ * Subject definition shape accepted by {@link countSubjectHandlers}.
+ *
+ * Derived from the real `getFullSubjectForSubjectDefinition` signature so any
+ * concrete namespace subject is accepted without an extra type dependency.
+ */
+export type BusSubjectRef = Parameters<typeof getFullSubjectForSubjectDefinition>[0];
+
+/**
+ * Count the handlers currently registered for one subject on a bus instance.
+ *
+ * Reads the bus context's request- and event-handler registries directly so
+ * registration tests can assert real subscription state (register adds exactly
+ * one handler per subject; cleanup removes it) instead of only checking that a
+ * register function returned a cleanup callback.
+ * @param bus - Bus instance whose context to inspect.
+ * @param subject - Subject definition to count handlers for.
+ * @returns Number of request plus event handlers registered for the subject.
+ */
+export function countSubjectHandlers(bus: IMakaioBus, subject: BusSubjectRef): number {
+  const fullSubject = getFullSubjectForSubjectDefinition(subject);
+  const context = bus.getContext();
+  return (
+    (context.requestHandlers.get(fullSubject)?.length ?? 0) + (context.eventHandlers.get(fullSubject)?.length ?? 0)
+  );
+}
+
+/**
+ * Assert the register-to-cleanup lifecycle of bus handler registration.
+ *
+ * Runs `register`, asserts every given subject gained exactly one handler on
+ * the bus, then invokes the returned cleanup and asserts every subject
+ * dropped back to zero handlers. Use with an isolated bus from
+ * {@link createTestBusInstance} so the assertions observe only the
+ * registration under test.
+ * @param bus - Bus instance the registration subscribes on.
+ * @param subjects - Subjects the registration must cover exactly once each.
+ * @param register - Registration function under test, returning its cleanup.
+ */
+export function expectSubjectHandlerLifecycle(
+  bus: IMakaioBus,
+  subjects: readonly BusSubjectRef[],
+  register: () => () => void,
+): void {
+  const cleanup = register();
+  for (const subject of subjects) {
+    expect(countSubjectHandlers(bus, subject), `expected one handler for '${String(subject.subject)}'`).toBe(1);
+  }
+
+  cleanup();
+  for (const subject of subjects) {
+    expect(countSubjectHandlers(bus, subject), `expected cleanup to unsubscribe '${String(subject.subject)}'`).toBe(0);
+  }
 }

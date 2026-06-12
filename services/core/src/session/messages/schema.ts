@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 import { sessions } from '../storage/schema.js';
 import { turns } from '../turns/schema.js';
 
@@ -80,7 +81,7 @@ export const messages = sqliteTable(
     /**
      * Message timestamp (Unix ms).
      */
-    timestamp: integer('timestamp').notNull(),
+    timestamp: epochMs('timestamp').notNull(),
 
     /**
      * If this is an edited message, references the original.

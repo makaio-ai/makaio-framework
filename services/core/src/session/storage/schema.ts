@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
+import { epochMs, bool } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Sessions table schema.
@@ -23,13 +24,13 @@ export const sessions = sqliteTable(
      * Timestamp when the session was created.
      * Stored as Unix timestamp in milliseconds.
      */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
 
     /**
      * Timestamp of last activity in the session.
      * Stored as Unix timestamp in milliseconds.
      */
-    lastActivityAt: integer('last_activity_at').notNull(),
+    lastActivityAt: epochMs('last_activity_at').notNull(),
 
     /**
      * Current session status.
@@ -128,7 +129,7 @@ export const sessions = sqliteTable(
      * False = native session, can use adapter's native resume.
      * True = Makaio modified history, must inject context.
      */
-    isOrchestrated: integer('is_orchestrated', { mode: 'boolean' }).default(false),
+    isOrchestrated: bool('is_orchestrated').default(false),
 
     /**
      * Session title for sidebar display.
@@ -146,14 +147,14 @@ export const sessions = sqliteTable(
      * Timestamp when summary was last updated.
      * Used to detect staleness for regeneration.
      */
-    summaryUpdatedAt: integer('summary_updated_at'),
+    summaryUpdatedAt: epochMs('summary_updated_at'),
 
     /**
      * Whether this session was imported from external source.
      * - true: Imported (allow incremental re-imports)
      * - false/null: Created by Makaio runtime (skip on import)
      */
-    isImported: integer('is_imported', { mode: 'boolean' }).default(false),
+    isImported: bool('is_imported').default(false),
 
     /**
      * Fork transforms (JSON string).
@@ -215,7 +216,7 @@ export const sessions = sqliteTable(
      * Monotonic timestamp (ms) when this session was first discovered during import.
      * Used for created-detection in upsert logic. Null for live sessions.
      */
-    discoveredAt: integer('discovered_at'),
+    discoveredAt: epochMs('discovered_at'),
 
     /**
      * Import-specific lifecycle status. Null for live sessions.
@@ -233,6 +234,7 @@ export const sessions = sqliteTable(
     index('sessions_adapter_session_id_idx').on(table.adapterSessionId),
     index('idx_sessions_import_status').on(table.importStatus),
     index('sessions_execution_target_id_idx').on(table.executionTargetId),
+    index('idx_sessions_parent_session_id').on(table.parentSessionId),
     check(
       'sessions_import_status_check',
       sql`${table.importStatus} IS NULL OR ${table.importStatus} IN ('discovered', 'imported', 'tracking')`,
@@ -310,10 +312,10 @@ export const agents = sqliteTable(
     status: text('status', { enum: ['idle', 'active', 'dead', 'disposed'] }).notNull(),
 
     /** Timestamp when agent was created (= when added to session) */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
 
     /** Timestamp of last activity (message sent/received) */
-    lastActivityAt: integer('last_activity_at').notNull(),
+    lastActivityAt: epochMs('last_activity_at').notNull(),
   },
   (table) => [
     index('agents_session_id_idx').on(table.sessionId),

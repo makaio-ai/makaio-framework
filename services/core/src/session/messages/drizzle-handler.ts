@@ -1,10 +1,17 @@
-import { eq, asc, desc, gt, lt, gte, lte, and, or, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+/* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
+import { eq, asc, desc, gt, lt, gte, lte, and, or, sql, count } from 'drizzle-orm';
+import {
+  getDatabaseDialect,
+  getRawSqlExecutor,
+  resolveSchema,
+  sanitizeFtsQuery,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext, SessionMessage, SessionMessageBlock } from '@makaio/contracts';
-import { sanitizeFtsQuery } from '@makaio/storage-drizzle';
 import { MessageStorageSubjects } from './namespace.js';
-import { messages, type SelectMessage } from './schema.js';
+import type { SelectMessage } from './schema.js';
+import { messagesSchema } from './schema.variants.js';
 import { emitMessageSessionEvent } from './shared.js';
 import { messageToCursor } from '@makaio/contracts';
 
@@ -45,6 +52,7 @@ function rowToMessage(row: SelectMessage): SessionMessage {
  */
 function registerAppendHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.append, async (ctx) => {
     const { message: input, emitEvent } = ctx.payload;
@@ -86,6 +94,7 @@ function registerAppendHandler(deps: MessageHandlerDeps): () => void {
  */
 function registerGetBySessionHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.getBySession, async (ctx) => {
     const { sessionId, limit, after, includeAfter = false, order = 'asc' } = ctx.payload;
@@ -145,6 +154,7 @@ function registerGetBySessionHandler(deps: MessageHandlerDeps): () => void {
  */
 function registerGetByTurnHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.getByTurn, async (ctx) => {
     const { turnId } = ctx.payload;
@@ -162,6 +172,7 @@ function registerGetByTurnHandler(deps: MessageHandlerDeps): () => void {
  */
 function registerGetHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.get, async (ctx) => {
     const { messageId } = ctx.payload;
@@ -173,12 +184,52 @@ function registerGetHandler(deps: MessageHandlerDeps): () => void {
 }
 
 /**
- * Register handler for storage:message.search using FTS5.
+ * Register handler for storage:message.search.
+ *
+ * On SQLite the search is performed via FTS5 with bm25 relevance ranking.
+ * On Postgres the search uses the `content_tsv` stored generated tsvector column
+ * and a GIN index, with ts_rank relevance ordering.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
+// eslint-disable-next-line max-lines-per-function -- carries both full dialect implementations behind one registration seam
 function registerSearchHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+
+  const dialect = getDatabaseDialect(db);
+  if (dialect === 'postgres') {
+    return bus.on(MessageStorageSubjects.search, async (ctx) => {
+      const { query, sessionId, limit } = ctx.payload;
+      const pageLimit = limit ?? 50;
+
+      // Short-circuit on empty/whitespace queries without a DB roundtrip.
+      if (!query.trim()) {
+        ctx.setResult({ messages: [], total: 0 });
+        return;
+      }
+
+      // websearch_to_tsquery performs its own query parsing, so the FTS5
+      // sanitizer is deliberately not applied on the Postgres path.
+      const { messages } = resolveSchema(db, messagesSchema);
+      const tsQuery = sql`websearch_to_tsquery('english', ${query})`;
+      const matches = sql`content_tsv @@ ${tsQuery}`;
+      const where = sessionId ? and(eq(messages.sessionId, sessionId), matches) : matches;
+
+      const rows = await db
+        .select()
+        .from(messages)
+        .where(where)
+        .orderBy(sql`ts_rank(content_tsv, ${tsQuery}) DESC`, asc(messages.timestamp), asc(messages.messageId))
+        .limit(pageLimit);
+
+      const [countRow] = await db.select({ total: count() }).from(messages).where(where);
+
+      ctx.setResult({
+        messages: rows.map(rowToMessage),
+        total: countRow?.total ?? 0,
+      });
+    });
+  }
 
   return bus.on(MessageStorageSubjects.search, async (ctx) => {
     const { query, sessionId, limit } = ctx.payload;
@@ -229,7 +280,8 @@ function registerSearchHandler(deps: MessageHandlerDeps): () => void {
           LIMIT ${pageLimit}
         `;
 
-    const rows = await db.all<SelectMessage>(ftsQuery);
+    const rawSql = getRawSqlExecutor(db);
+    const rows = await rawSql.all<SelectMessage>(ftsQuery);
 
     // Get total count
     const countQuery = sessionId
@@ -243,7 +295,7 @@ function registerSearchHandler(deps: MessageHandlerDeps): () => void {
           WHERE messages_fts MATCH ${sanitized}
         `;
 
-    const [countRow] = await db.all<{ count: number }>(countQuery);
+    const [countRow] = await rawSql.all<{ count: number }>(countQuery);
     const total = countRow?.count ?? 0;
 
     ctx.setResult({
@@ -253,12 +305,12 @@ function registerSearchHandler(deps: MessageHandlerDeps): () => void {
   });
 }
 
-interface MessageFtsRow {
+type MessageFtsRow = {
   message_id: string;
   session_id: string;
   score: number;
   excerpt: string;
-}
+};
 
 /**
  * Executes a BM25-ranked FTS5 search over messages.
@@ -284,8 +336,9 @@ async function fetchFtsRows(
   FROM messages_fts fts
   JOIN messages m ON m.rowid = fts.rowid`;
 
+  const rawSql = getRawSqlExecutor(db);
   if (sessionId !== undefined) {
-    return db.all<MessageFtsRow>(sql`
+    return rawSql.all<MessageFtsRow>(sql`
       SELECT ${SELECT_COLS}
       WHERE messages_fts MATCH ${sanitized}
         AND fts.session_id = ${sessionId}
@@ -293,7 +346,7 @@ async function fetchFtsRows(
       LIMIT ${limit}
     `);
   }
-  return db.all<MessageFtsRow>(sql`
+  return rawSql.all<MessageFtsRow>(sql`
     SELECT ${SELECT_COLS}
     WHERE messages_fts MATCH ${sanitized}
     ORDER BY score DESC
@@ -309,14 +362,15 @@ async function fetchFtsRows(
  * @returns Total number of matching rows
  */
 async function fetchFtsTotal(db: MakaioDatabase, sanitized: string, sessionId: string | undefined): Promise<number> {
+  const rawSql = getRawSqlExecutor(db);
   const countRow = await (sessionId !== undefined
-    ? db.all<{ total: number }>(sql`
+    ? rawSql.all<{ total: number }>(sql`
         SELECT COUNT(*) AS total
         FROM messages_fts
         WHERE messages_fts MATCH ${sanitized}
           AND session_id = ${sessionId}
       `)
-    : db.all<{ total: number }>(sql`
+    : rawSql.all<{ total: number }>(sql`
         SELECT COUNT(*) AS total
         FROM messages_fts
         WHERE messages_fts MATCH ${sanitized}
@@ -325,12 +379,56 @@ async function fetchFtsTotal(db: MakaioDatabase, sanitized: string, sessionId: s
 }
 
 /**
- * Register handler for storage:message.ftsSearch using FTS5 with BM25 scoring.
+ * Register handler for storage:message.ftsSearch with ranked excerpts.
+ *
+ * On SQLite the search uses FTS5 with bm25 scoring and the `snippet()` function.
+ * On Postgres the search uses the `content_tsv` stored generated tsvector column
+ * and a GIN index, with ts_rank scoring and ts_headline for excerpt generation.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
 function registerFtsSearchHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+
+  const dialect = getDatabaseDialect(db);
+  if (dialect === 'postgres') {
+    return bus.on(MessageStorageSubjects.ftsSearch, async (ctx) => {
+      const { query, sessionId, limit = 20 } = ctx.payload;
+
+      const trimmed = query.trim();
+      // Short-circuit on empty/whitespace queries without a DB roundtrip.
+      if (!trimmed) {
+        ctx.setResult({ results: [], total: 0 });
+        return;
+      }
+
+      // websearch_to_tsquery performs its own query parsing, so the FTS5
+      // sanitizer is deliberately not applied on the Postgres path.
+      const { messages } = resolveSchema(db, messagesSchema);
+      const tsQuery = sql`websearch_to_tsquery('english', ${trimmed})`;
+      const matches = sql`content_tsv @@ ${tsQuery}`;
+      const where = sessionId !== undefined ? and(eq(messages.sessionId, sessionId), matches) : matches;
+
+      const rows = await db
+        .select({
+          messageId: messages.messageId,
+          sessionId: messages.sessionId,
+          score: sql<number>`ts_rank(content_tsv, ${tsQuery})`,
+          excerpt: sql<string>`ts_headline('english', content_text, ${tsQuery}, 'StartSel=<mark>, StopSel=</mark>, MaxWords=40, MinWords=15')`,
+        })
+        .from(messages)
+        .where(where)
+        .orderBy(sql`ts_rank(content_tsv, ${tsQuery}) DESC`, asc(messages.timestamp), asc(messages.messageId))
+        .limit(limit);
+
+      const [countRow] = await db.select({ total: count() }).from(messages).where(where);
+
+      ctx.setResult({
+        results: rows,
+        total: countRow?.total ?? 0,
+      });
+    });
+  }
 
   return bus.on(MessageStorageSubjects.ftsSearch, async (ctx) => {
     const { query, sessionId, limit = 20 } = ctx.payload;
@@ -366,6 +464,7 @@ function registerFtsSearchHandler(deps: MessageHandlerDeps): () => void {
  */
 function registerGetByAdapterMessageIdHandler(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.getByAdapterMessageId, async (ctx) => {
     const { adapterMessageId } = ctx.payload;
@@ -385,6 +484,7 @@ function registerGetByAdapterMessageIdHandler(deps: MessageHandlerDeps): () => v
  */
 function registerUpsertByAdapterMessageId(deps: MessageHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { messages } = resolveSchema(db, messagesSchema);
 
   return bus.on(MessageStorageSubjects.upsertByAdapterMessageId, async (ctx) => {
     const {
@@ -454,7 +554,7 @@ function registerUpsertByAdapterMessageId(deps: MessageHandlerDeps): () => void 
 /**
  * Register Drizzle-based message storage handlers.
  *
- * Manages message persistence in SQLite/libSQL via Drizzle ORM.
+ * Manages message persistence via Drizzle ORM.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)

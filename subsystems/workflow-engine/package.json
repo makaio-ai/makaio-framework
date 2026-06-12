@@ -46,7 +46,14 @@
     }
   },
   "makaio": {
-    "drizzleSchema": "./src/storage/schema.ts"
+    "drizzleSchema": {
+      "sqlite": [
+        "./src/storage/schema.ts"
+      ],
+      "postgres": [
+        "./src/storage/schema.postgres.ts"
+      ]
+    }
   },
   "license": "MIT"
 }

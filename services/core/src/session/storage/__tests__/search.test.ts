@@ -5,96 +5,34 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
+import { installMessagesFtsTestSchema } from '../../testing/storage-test-schema.js';
 import { SessionStorageSubjects } from '../namespace.js';
 import { createTestDb, type TestDbContext } from './shared.js';
 
 describe('search', () => {
   let ctx: TestDbContext;
-  let db: MakaioDatabase;
+  let exec: TestDbContext['exec'];
 
   beforeEach(async () => {
     ctx = await createTestDb();
-    db = ctx.db;
+    exec = ctx.exec;
 
-    // Create turns table (messages depends on it)
-    await db.run(sql`
-      CREATE TABLE IF NOT EXISTS turns (
-        turn_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-        started_at INTEGER NOT NULL,
-        completed_at INTEGER,
-        status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'error')),
-        error TEXT
-      )
-    `);
-
-    // Create messages table
-    await db.run(sql`
-      CREATE TABLE IF NOT EXISTS messages (
-        message_id TEXT PRIMARY KEY,
-        turn_id TEXT NOT NULL REFERENCES turns(turn_id) ON DELETE CASCADE,
-        session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-        role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-        content_text TEXT NOT NULL,
-        blocks TEXT NOT NULL DEFAULT '[]',
-        agent_id TEXT,
-        adapter_session_id TEXT,
-        timestamp INTEGER NOT NULL,
-        edit_of TEXT,
-        origin TEXT
-      )
-    `);
-
-    // Create content-backed FTS5 table
-    await db.run(sql`
-      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        session_id,
-        content_text,
-        content='messages',
-        content_rowid='rowid',
-        tokenize='porter unicode61'
-      )
-    `);
-
-    // Create triggers for FTS sync
-    await db.run(sql`
-      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-        INSERT INTO messages_fts(rowid, session_id, content_text)
-        VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
-      END
-    `);
-
-    await db.run(sql`
-      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
-        VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
-      END
-    `);
-
-    await db.run(sql`
-      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-        INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
-        VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
-        INSERT INTO messages_fts(rowid, session_id, content_text)
-        VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
-      END
-    `);
+    await installMessagesFtsTestSchema(ctx.db);
 
     // Create session and turn
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-1', 1000, 2000, 'active', 'Authentication Flow')
     `);
 
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO turns (turn_id, session_id, started_at, status)
       VALUES ('turn-1', 'session-1', 1000, 'completed')
     `);
 
     // Insert messages (FTS auto-syncs via triggers)
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, turn_id, session_id, role, content_text, timestamp)
       VALUES
         ('msg-1', 'turn-1', 'session-1', 'user', 'How do I implement JWT authentication?', 1001),
@@ -118,7 +56,7 @@ describe('search', () => {
       query: 'nonexistent topic',
     });
 
-    expect(result.sessions).toHaveLength(0);
+    expect(result).toMatchObject({ sessions: [], total: 0 });
   });
 
   it('should support partial word matching with wildcard', async () => {
@@ -147,15 +85,15 @@ describe('search', () => {
 
   it('should respect limit parameter', async () => {
     // Create another session with turn and message
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-2', 2000, 3000, 'active', 'Token Management')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO turns (turn_id, session_id, started_at, status)
       VALUES ('turn-2', 'session-2', 2000, 'completed')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, turn_id, session_id, role, content_text, timestamp)
       VALUES ('msg-3', 'turn-2', 'session-2', 'user', 'How do JWT tokens expire?', 2001)
     `);
@@ -170,15 +108,15 @@ describe('search', () => {
   });
 
   it('should filter search results by status', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-2', 2000, 3000, 'archived', 'Archived JWT Notes')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO turns (turn_id, session_id, started_at, status)
       VALUES ('turn-2', 'session-2', 2000, 'completed')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, turn_id, session_id, role, content_text, timestamp)
       VALUES ('msg-3', 'turn-2', 'session-2', 'user', 'JWT cleanup checklist', 2001)
     `);
@@ -194,15 +132,15 @@ describe('search', () => {
   });
 
   it('should pick first inserted user message preview when timestamps collide', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-collision', 4000, 5000, 'active', 'Collision Session')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO turns (turn_id, session_id, started_at, status)
       VALUES ('turn-collision', 'session-collision', 4000, 'completed')
     `);
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, turn_id, session_id, role, content_text, timestamp)
       VALUES
         ('msg-collision-a', 'turn-collision', 'session-collision', 'user', 'Collision first', 5001),

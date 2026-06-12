@@ -16,7 +16,7 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/skill/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/skill/storage-namespace.ts) |
+| Defined in | [`core/contracts/src/skill/storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/skill/storage-namespace.ts) |
 
 ## Subjects
 
@@ -62,7 +62,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `skill` | `{ name: string; description: string; activationMode: "auto" \| "manual"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; } \| null` | yes |
+| `skill` | `{ name: string; description: string; activationMode: "manual" \| "auto"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; } \| null` | yes |
 
 ### <a id="storage:skill.getEffective"></a>`storage:skill.getEffective` (rpc)
 
@@ -84,7 +84,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `skills` | `{ name: string; description: string; activationMode: "auto" \| "manual"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
+| `skills` | `{ name: string; description: string; activationMode: "manual" \| "auto"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
 
 ### <a id="storage:skill.list"></a>`storage:skill.list` (rpc)
 
@@ -106,7 +106,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `skills` | `{ name: string; description: string; activationMode: "auto" \| "manual"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
+| `skills` | `{ name: string; description: string; activationMode: "manual" \| "auto"; enabled: boolean; id: string; source: "filesystem" \| "database"; scope: "session" \| "global" \| "project"; content: string; createdAt: number; updatedAt: number; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; location?: string \| undefined; baseDir?: string \| undefined; }[]` | yes |
 
 ### <a id="storage:skill.set"></a>`storage:skill.set` (rpc)
 
@@ -117,7 +117,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `skill` | `{ name: string; description: string; activationMode: "auto" \| "manual"; enabled: boolean; id: string; scope: "session" \| "global" \| "project"; content: string; source: "database"; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; }` | yes |
+| `skill` | `{ name: string; description: string; id: string; scope: "session" \| "global" \| "project"; content: string; license?: string \| undefined; compatibility?: string \| undefined; metadata?: Record<string, string> \| undefined; allowedTools?: string \| undefined; category?: string \| undefined; tags?: string[] \| undefined; adapters?: string[] \| null \| undefined; activationMode?: "manual" \| "auto" \| undefined; reinjection?: { maxTurns?: number \| undefined; } \| undefined; enabled?: boolean \| undefined; projectId?: string \| undefined; sessionId?: string \| undefined; source?: "database" \| undefined; }` | yes |
 
 **Response:**
 

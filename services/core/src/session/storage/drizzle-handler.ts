@@ -1,5 +1,5 @@
 import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
-import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionStorageSetRequestSchema,
@@ -9,8 +9,7 @@ import {
 } from '@makaio/contracts';
 import type { z } from 'zod';
 import { SessionStorageSubjects, type SessionWithPreview } from './namespace.js';
-import { messages } from '../messages/schema.js';
-import { sessions, agents } from './schema.js';
+import { sessionStorageSchema } from './schema.variants.js';
 import {
   buildClientAccountBaselinePredicate,
   CLIENT_ACCOUNT_WRITE_RETRY_LIMIT,
@@ -22,6 +21,7 @@ import {
 } from './client-account-change-events.js';
 import { buildNextSessionClientAccountState, touchesClientAccountState } from './client-account-update-state.js';
 import { registerGetByAdapterSessionIdHandler } from './drizzle-get-by-adapter-session-id-handler.js';
+import { registerGetChildrenHandler } from './drizzle-get-children-handler.js';
 import { registerDrizzleSessionImportHandlers } from './drizzle-import-handlers.js';
 
 /**
@@ -32,7 +32,9 @@ export interface SessionHandlerDeps {
   db: MakaioDatabase;
 }
 
-type SessionInsertValues = typeof sessions.$inferInsert;
+/** Canonical column shape of the sessions table, resolved through the dialect seam. */
+type SessionsTable = typeof sessionStorageSchema.sqlite.sessions;
+type SessionInsertValues = SessionsTable['$inferInsert'];
 type SessionUpdateFields = Partial<Omit<SessionInsertValues, 'spawningToolCallId'>> & {
   spawningToolCallId?: SessionInsertValues['spawningToolCallId'] | SQL;
 };
@@ -142,9 +144,10 @@ function assignNullableField<K extends keyof SessionInsertValues>(
 /**
  * Build the partial update object for storage:session.update.
  * @param payload - Session update payload
+ * @param sessions - Dialect-resolved sessions table object.
  * @returns Drizzle-compatible update fields
  */
-function buildSessionUpdateFields(payload: SessionUpdatePayload): SessionUpdateFields {
+function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: SessionsTable): SessionUpdateFields {
   const updateFields: SessionUpdateFields = {};
 
   assignDefinedField(updateFields, 'status', payload.status);
@@ -184,6 +187,7 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload): SessionUpdateF
  */
 function registerGetHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.get, async (ctx) => {
     const [sessionRow] = await db.select().from(sessions).where(eq(sessions.sessionId, ctx.payload.sessionId)).limit(1);
@@ -203,6 +207,7 @@ function registerGetHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerSetHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.set, async (ctx) => {
     const { sessionId, session, ifAbsent } = SessionStorageSetRequestSchema.parse(ctx.payload);
@@ -231,7 +236,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
         .onConflictDoUpdate({
           target: sessions.sessionId,
           set: dbValues,
-          setWhere: buildClientAccountBaselinePredicate(previousRow),
+          setWhere: buildClientAccountBaselinePredicate(previousRow, sessions),
         });
 
       if (!didAffectRows(result)) {
@@ -256,6 +261,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerDeleteHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.delete, async (ctx) => {
     await db.delete(sessions).where(eq(sessions.sessionId, ctx.payload.sessionId));
@@ -272,11 +278,12 @@ function registerDeleteHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.update, async (ctx) => {
     const payload = SessionStorageUpdateSchema.request.parse(ctx.payload);
     const { sessionId } = payload;
-    const updateFields = buildSessionUpdateFields(payload);
+    const updateFields = buildSessionUpdateFields(payload, sessions);
     const updatesClientAccountState = touchesClientAccountState(payload);
     // Skip if no fields to update
     if (Object.keys(updateFields).length === 0) {
@@ -300,7 +307,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
       const result = await db
         .update(sessions)
         .set(updateFields)
-        .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow)));
+        .where(and(eq(sessions.sessionId, sessionId), buildClientAccountBaselinePredicate(previousRow, sessions)));
       if (!didAffectRows(result)) {
         continue;
       }
@@ -318,12 +325,16 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
 /**
  * Builds filter predicates for session list queries.
  * @param filters - Filter criteria
+ * @param sessions - Dialect-resolved sessions table object.
  * @returns Combined SQL predicate, or undefined when no filters apply
  */
-function buildListPredicates(filters: {
-  status: 'active' | 'closed' | 'archived' | 'discovered' | 'all';
-  executionTargetId?: string;
-}): SQL | undefined {
+function buildListPredicates(
+  filters: {
+    status: 'active' | 'closed' | 'archived' | 'discovered' | 'all';
+    executionTargetId?: string;
+  },
+  sessions: SessionsTable,
+): SQL | undefined {
   const predicates: SQL[] = [];
   if (filters.status !== 'all') {
     predicates.push(eq(sessions.status, filters.status));
@@ -343,13 +354,17 @@ function buildListPredicates(filters: {
  */
 function registerListHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.list, async (ctx) => {
     const { status = 'all', limit, offset = 0, includePreview = false, executionTargetId } = ctx.payload;
-    const whereClause = buildListPredicates({
-      status,
-      executionTargetId,
-    });
+    const whereClause = buildListPredicates(
+      {
+        status,
+        executionTargetId,
+      },
+      sessions,
+    );
 
     // Build base query with optional filters
     const baseQuery = whereClause ? db.select().from(sessions).where(whereClause) : db.select().from(sessions);
@@ -399,88 +414,6 @@ function registerListHandler(deps: SessionHandlerDeps): () => void {
 }
 
 /**
- * Register handler for storage:session.getChildren - direct children with enriched data.
- * @param deps - Handler dependencies (bus and db)
- * @returns Cleanup function to unsubscribe the handler
- */
-function registerGetChildrenHandler(deps: SessionHandlerDeps): () => void {
-  const { bus, db } = deps;
-
-  return bus.on(SessionStorageSubjects.getChildren, async (ctx) => {
-    const { sessionId } = ctx.payload;
-
-    const childRows = await db.select().from(sessions).where(eq(sessions.parentSessionId, sessionId));
-    if (childRows.length === 0) {
-      ctx.setResult({ children: [] });
-      return;
-    }
-
-    const childIds = childRows.map((row) => row.sessionId);
-
-    const messageCountRows = await db
-      .select({ sessionId: messages.sessionId, count: count() })
-      .from(messages)
-      .where(inArray(messages.sessionId, childIds))
-      .groupBy(messages.sessionId);
-
-    const messageCountBySession = new Map<string, number>();
-    for (const row of messageCountRows) {
-      messageCountBySession.set(row.sessionId, row.count);
-    }
-
-    const hasChildrenRows = await db
-      .select({ parentSessionId: sessions.parentSessionId, count: count() })
-      .from(sessions)
-      .where(inArray(sessions.parentSessionId, childIds))
-      .groupBy(sessions.parentSessionId);
-
-    const hasChildrenSet = new Set<string>();
-    for (const row of hasChildrenRows) {
-      if (row.parentSessionId) {
-        hasChildrenSet.add(row.parentSessionId);
-      }
-    }
-
-    // Translate adapter fork point IDs to Makaio message IDs
-    // The sessions table stores adapter_message_id as forkPointMessageId (from imports)
-    // but the UI needs the Makaio message_id to match against turn.id
-    const adapterForkPointIds = childRows.map((c) => c.forkPointMessageId).filter((id): id is string => id !== null);
-    const forkPointMapping = new Map<string, string>();
-
-    if (adapterForkPointIds.length > 0) {
-      const forkPointRows = await db
-        .select({ messageId: messages.messageId, adapterMessageId: messages.adapterMessageId })
-        .from(messages)
-        .where(inArray(messages.adapterMessageId, adapterForkPointIds));
-
-      for (const row of forkPointRows) {
-        if (row.adapterMessageId) {
-          forkPointMapping.set(row.adapterMessageId, row.messageId);
-        }
-      }
-    }
-
-    const children = childRows.map((child) => {
-      // Translate adapter forkPointMessageId to Makaio messageId
-      const adapterForkPoint = child.forkPointMessageId;
-      const makaioForkPoint = adapterForkPoint ? (forkPointMapping.get(adapterForkPoint) ?? adapterForkPoint) : null;
-
-      return {
-        sessionId: child.sessionId,
-        title: child.title ?? null,
-        forkPointMessageId: makaioForkPoint,
-        branchKind: child.branchKind ?? null,
-        messageCount: messageCountBySession.get(child.sessionId) ?? 0,
-        hasChildren: hasChildrenSet.has(child.sessionId),
-        spawningToolCallId: child.spawningToolCallId ?? undefined,
-      };
-    });
-
-    ctx.setResult({ children });
-  });
-}
-
-/**
  * Register handler for storage:session.getStatusCounts.
  *
  * Efficiently counts sessions by status using GROUP BY.
@@ -489,6 +422,7 @@ function registerGetChildrenHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerGetStatusCountsHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.getStatusCounts, async (ctx) => {
     void ctx.payload;
@@ -533,7 +467,7 @@ function registerGetStatusCountsHandler(deps: SessionHandlerDeps): () => void {
 /**
  * Register Drizzle-based session storage handlers.
  *
- * Persists sessions to SQLite/libSQL via Drizzle ORM.
+ * Persists sessions via Drizzle ORM.
  * Provides durable storage suitable for production deployments.
  *
  * CONCURRENCY INVARIANT: All handlers must use single-statement operations only.
@@ -543,7 +477,7 @@ function registerGetStatusCountsHandler(deps: SessionHandlerDeps): () => void {
  * deadlocks on the same connection. Single statements serialize automatically
  * via SQLite's busy_timeout + WAL mode.
  * @param bus - The bus instance to register handlers on
- * @param db - The Drizzle database instance (any libSQL database)
+ * @param db - The Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example

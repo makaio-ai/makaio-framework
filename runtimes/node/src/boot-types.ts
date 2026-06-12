@@ -23,6 +23,7 @@ import type {
 } from '@makaio/kernel';
 import type { ShutdownStep } from './boot-phase.js';
 import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
+import type { DatabaseBootOptions } from './initialize-node-database.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
@@ -247,6 +248,17 @@ export interface CoreBootOptions {
    * not exist in the deployed image.
    */
   readonly centralMigrationsDir?: string;
+
+  /**
+   * Database backend configuration. Resolution order for the connection target
+   * (empty and whitespace-only values count as unset):
+   * 1. `database.url`  2. env `MAKAIO_DATABASE_URL`  3. the `dbPath` option of
+   * direct `initializeNodeDatabase` callers  4. env `MAKAIO_DATABASE_PATH`
+   * 5. `<makaioHome>/makaio.db`
+   *
+   * A `postgres://` / `postgresql://` URL selects the Postgres backend.
+   */
+  readonly database?: DatabaseBootOptions;
 
   /**
    * Host launcher command embedded into client wiring installed from warning actions.

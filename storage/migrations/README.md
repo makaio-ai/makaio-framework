@@ -4,20 +4,22 @@ Centralized Drizzle migration management: schema discovery, aggregation, and run
 
 ## What This Is
 
-Framework central runner for SQLite schema migrations. Provides:
+Framework central runner for schema migrations. Provides:
 
-- **Schema discovery** — Scans workspace `package.json` files for `makaio.drizzleSchema` declarations and resolves them to absolute paths
-- **Schema aggregation** — Generates a combined `.generated/schema.ts` that Drizzle Kit uses to produce SQL migration files
-- **Runtime migration application** — `readMigrations()` and `applyMigrations()` apply pre-resolved SQL migrations at startup without Drizzle's `migrate()` helper
+- **Schema discovery** — Scans workspace `package.json` files for `makaio.drizzleSchema` declarations and resolves them to absolute paths per dialect.
+- **Schema aggregation** — Generates combined `.generated/schema.ts` (SQLite) and `.generated/schema.postgres.ts` (Postgres) barrels that Drizzle Kit uses to produce SQL migration files.
+- **Runtime migration application** — `readMigrations()` and `applyMigrations()` apply pre-resolved SQL migrations at startup without Drizzle's `migrate()` helper.
 
 ## Migration Tiers
 
-Makaio has two runtime migration tiers that share the same SQLite database but use separate ledgers:
+There are two runtime migration tiers that share the same database but use separate ledgers:
 
-- **Central tier** — Framework central migrations from this package use `__drizzle_migrations`.
-  Hosts may provide their own host-owned central migration bundle through an explicit composition
-  seam; this framework package does not discover or apply host-owned schemas by filesystem
-  convention.
+- **Central tier** — Framework central migrations from this package use `__drizzle_migrations` on
+  SQLite (Drizzle's historical name, so existing ledgers keep matching) and `__makaio_migrations`
+  on Postgres (a name that never collides with a consumer-owned Drizzle ledger sharing the same
+  database). Hosts may provide their own host-owned central migration bundle through an explicit
+  composition seam; this framework package does not discover or apply host-owned schemas by
+  filesystem convention.
 - **Extension tier** — Extension-owned schemas declare `storage.migrations` on their package
   manifest. The runtime resolves those folders using `storage.packageRoot` and keys each bundle
   with `storage.migrationSourceId` when provided, applying them to hashed tracking tables named
@@ -25,41 +27,127 @@ Makaio has two runtime migration tiers that share the same SQLite database but u
 
 ## Key Exports
 
-- `getMigrationsFolder()` — Absolute path to the `drizzle/` migration folder (used by `NodeRuntime`)
-- `readMigrations(source?)` — Reads `_journal.json` plus SQL files into ordered migration entries
-- `applyMigrations(db, migrations, migrationsTable?)` — Applies ordered entries with a configurable tracking table
-- `discoverSchemas(workspaceRoot, patterns?)` — Returns `DiscoveredSchema[]` sorted by package name
-- `generateSchema(options?)` — Writes the aggregated `.generated/schema.ts`; accepts optional `workspaceRoot`, `generatedDir`, `logger`, and `patterns` overrides
+- `getMigrationsFolder(dialect?)` — Absolute path to the `drizzle/` (SQLite) or `drizzle-postgres/` (Postgres) migration folder.
+- `readMigrations(source?)` — Reads `_journal.json` plus SQL files into ordered migration entries; validates `expectedDialect` against the journal.
+- `applyMigrations(db, migrations, migrationsTable?)` — Applies ordered entries with a configurable tracking table.
+- `discoverSchemas(workspaceRoot, patterns?, dialect?)` — Returns `DiscoveredSchema[]` sorted by package name then path. `dialect` defaults to `'sqlite'`.
+- `generateSchema(options?)` — Writes the aggregated dialect barrels; accepts optional `workspaceRoot`, `generatedDir`, `logger`, `patterns`, and `dialects` overrides. Defaults to `['sqlite']` — additional dialects are opt-in.
 - `DiscoveredSchema` — `{ packageName: string; schemaPath: string }`
 
-## Dev-time Workflow
+## Declaring a Schema
 
-Framework central packages declare their Drizzle schema file in `package.json`:
+### Legacy form (sqlite-only, backward compatible)
 
 ```json
 {
   "name": "@makaio/my-framework-package",
   "makaio": {
+    "drizzleSchema": "./src/storage/schema.ts"
+  }
+}
+```
+
+Array form:
+
+```json
+{
+  "makaio": {
     "drizzleSchema": [
-      "./src/storage/schema.ts"
+      "./src/session/storage/schema.ts",
+      "./src/session/turns/schema.ts"
     ]
   }
 }
 ```
 
-Extension-owned schemas should not use `makaio.drizzleSchema`; declare `storage.migrations`
-with `storage.packageRoot` and, for bundled hosts, `storage.migrationSourceId` on the extension
-manifest instead.
+Legacy forms (bare string or string array) are treated as sqlite-only declarations and remain
+fully supported.
 
-Then run the workspace commands from the repository root:
+### Object form (both dialects)
+
+For packages that participate in the Postgres migration chain, use the object form to declare
+both dialect chains. SQLite is always the baseline:
+
+```json
+{
+  "makaio": {
+    "drizzleSchema": {
+      "sqlite": ["./src/storage/schema.ts"],
+      "postgres": ["./src/storage/schema.postgres.ts"]
+    }
+  }
+}
+```
+
+The two lists are positionally paired by convention (`postgres[i]` is the twin of `sqlite[i]`).
+
+**Invariants enforced by `discoverSchemas`:**
+- Declaring `postgres` entries without `sqlite` entries is a declaration error (every dialect run).
+- On the `'postgres'` run, any package with `sqlite` entries but zero `postgres` entries is a
+  generation-time strictness error — all central-tier packages must declare Postgres twins before
+  the Postgres chain can be generated.
+- Every declared path in **both** lists is existence-checked regardless of the requested dialect;
+  a missing Postgres twin file fails even the `sqlite` run.
+
+## Committed Migration Chains
+
+Two chains are committed in this package and both are regenerated by `db:generate`:
+
+| Directory | Dialect | Consumed by |
+|-----------|---------|-------------|
+| `drizzle/` | SQLite | `getMigrationsFolder('sqlite')`, bundled dist layout |
+| `drizzle-postgres/` | Postgres | `getMigrationsFolder('postgres')`, bundled dist layout |
+
+Both chains are copied into the framework distribution bundle by the build step and are located
+by `resolveBundledMigrationsDir` at runtime.
+
+**Unqualified-DDL invariant (Postgres chain):** every statement in `drizzle-postgres/` must use
+unqualified identifiers — never `"public"."sessions"`, always `"sessions"`. The chain lands in
+whichever schema leads the connection's `search_path`: consumers choose their own schema, and the
+storage conformance harness provisions one isolated schema per suite (see
+`storage/conformance/README.md`). drizzle-kit qualifies foreign-key references with `"public".`,
+so the `db:generate` pipeline ends with `src/normalize-postgres-migrations.ts`, which strips the
+qualifier mechanically; `src/__tests__/postgres-chain-ddl.test.ts` pins the invariant against any
+path that bypasses the script. If qualified DDL can ever not be normalized away, the per-schema
+isolation model must fall back to one database per consumer/suite.
+
+Rewriting a landed migration file changes its content hash — the ledger identity used by
+`applyMigrations` — so databases provisioned from a pre-rewrite chain must be re-created.
+
+**Identifier-length note (Postgres chain):** a few Drizzle-derived constraint names (the
+`workflow_execution_links` composite PK and the `workflow_execution_*` foreign keys) exceed
+PostgreSQL's 63-byte identifier limit; PostgreSQL truncates them with a NOTICE on apply. This is
+accepted: the truncated names stay pairwise distinct, and drizzle-kit re-derives the same
+over-length names for future `ALTER`/`DROP` statements, which truncate to the same identifiers.
+Tooling that compares constraint names against live catalog data (for example
+`information_schema`) must normalize names to their 63-byte truncation rather than compare raw
+snapshot names.
+
+## Dev-time Workflow
+
+Run from the repository root:
 
 ```bash
+# Regenerate both chains (SQLite and Postgres)
 yarn workspace @makaio/storage-migrations db:generate
+
+# Regenerate both chains from scratch (resets accumulated migration history)
 yarn workspace @makaio/storage-migrations db:generate:fresh
+
+# SQLite-only interactive commands
 yarn workspace @makaio/storage-migrations db:push
 yarn workspace @makaio/storage-migrations db:studio
 yarn workspace @makaio/storage-migrations db:reset
 ```
+
+`db:generate` pipeline:
+1. `tsx src/generate-schema.ts` — discovers schemas for both dialects, writes `.generated/schema.ts` and `.generated/schema.postgres.ts`.
+2. `tsx $(yarn bin drizzle-kit) generate` — diffs the SQLite barrel against the existing `drizzle/` chain.
+3. `tsx $(yarn bin drizzle-kit) generate --config drizzle.config.postgres.ts` — diffs the Postgres barrel against the existing `drizzle-postgres/` chain.
+4. `tsx src/normalize-postgres-migrations.ts` — strips `"public".` qualifiers from the Postgres chain (see the unqualified-DDL invariant above).
+
+Note: `db:push`, `db:studio`, and `db:reset` are SQLite-only by design; Postgres targets receive
+migrations at runtime through the standard `applyMigrations` path, not through Drizzle Kit push.
 
 ## Runtime Usage
 

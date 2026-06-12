@@ -1,4 +1,4 @@
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { eq, and } from 'drizzle-orm';
 import { PreferenceValueSchema, type PreferenceKey, type PreferenceItem } from '@makaio/services-core/preferences';
 import type { StoredPreference } from './types.js';
@@ -6,7 +6,7 @@ import type { ConflictResolver } from './conflict-resolvers.js';
 import { lastWriteWinsResolver } from './conflict-resolvers.js';
 import { getStorageKey, parseStoredPreference, keyToRow } from './utils-common.js';
 import { queryPreferenceItems, getPreferenceRow } from './utils-drizzle.js';
-import { preferences } from './schema.js';
+import { preferencesSchema } from './schema.variants.js';
 
 /**
  * Configuration for hybrid storage coordinator.
@@ -122,6 +122,7 @@ export class StorageCoordinator {
    * @param timestamp - Unix timestamp in milliseconds
    */
   private async writeToDb(key: PreferenceKey, category: string, value: string, timestamp: number): Promise<void> {
+    const { preferences } = resolveSchema(this.db, preferencesSchema);
     const rowKey = keyToRow(key);
 
     await this.db
@@ -144,8 +145,7 @@ export class StorageCoordinator {
           value,
           updatedAt: timestamp,
         },
-      })
-      .run();
+      });
   }
 
   /**
@@ -256,8 +256,11 @@ export class StorageCoordinator {
    * @param category - Preference category
    */
   private async deleteFromDb(key: PreferenceKey, category: string): Promise<void> {
+    const { preferences } = resolveSchema(this.db, preferencesSchema);
     const rowKey = keyToRow(key);
 
+    // Awaiting the Drizzle builder executes the statement (builders are QueryPromise thenables on
+    // every dialect); no driver-specific terminal such as `.run()` is needed.
     await this.db
       .delete(preferences)
       .where(
@@ -268,7 +271,6 @@ export class StorageCoordinator {
           eq(preferences.viewport, rowKey.viewport),
           eq(preferences.category, category),
         ),
-      )
-      .run();
+      );
   }
 }

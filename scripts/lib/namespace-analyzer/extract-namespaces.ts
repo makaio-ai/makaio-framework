@@ -66,6 +66,16 @@ const FACTORY_REGISTRY: Record<string, FactorySpec> = {
     schemasInConfig: true,
     kind: 'storage',
   },
+  // Core storage namespaces (e.g. storage:message, storage:session) are
+  // declared through this pure factory; it wraps createBusNamespace with a
+  // template-literal prefix the call-site scan cannot resolve, so it needs its
+  // own registry entry.
+  createContractStorageNamespace: {
+    prefixTemplate: 'storage:{name}',
+    schemasArgIndex: 1,
+    schemasInConfig: true,
+    kind: 'storage',
+  },
   createAdapterNamespace: {
     prefixTemplate: '{name}',
     schemasArgIndex: 1,

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 /**
  * Get the ancestor chain for a session (self, parent, grandparent, ..., root).
@@ -15,7 +15,7 @@ import type { MakaioDatabase } from '@makaio/storage-drizzle';
  * ```
  */
 export async function getSessionAncestorChain(db: MakaioDatabase, sessionId: string): Promise<string[]> {
-  const result = await db.run(sql`
+  const rows = await getRawSqlExecutor(db).all<{ session_id: string }>(sql`
     WITH RECURSIVE ancestors AS (
       SELECT session_id, parent_session_id
       FROM sessions
@@ -30,5 +30,5 @@ export async function getSessionAncestorChain(db: MakaioDatabase, sessionId: str
     SELECT session_id FROM ancestors
   `);
 
-  return result.rows.map((row) => row.session_id as string);
+  return rows.map((row) => row.session_id);
 }

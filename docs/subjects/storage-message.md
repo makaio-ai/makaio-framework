@@ -16,7 +16,7 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/session/message-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/session/message-storage-namespace.ts) |
+| Defined in | [`core/contracts/src/session/message-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/message-storage-namespace.ts) |
 
 ## Subjects
 
@@ -46,7 +46,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `emitEvent` | `boolean \| undefined` | no |
-| `message` | `{ role: "user" \| "assistant"; blocks: ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; sessionId: string; timestamp: number; turnId: string \| null; contentText: string; origin?: "text" \| "voice" \| "compact" \| undefined; adapterSessionId?: string \| undefined; agentId?: string \| undefined; adapterMessageId?: string \| undefined; editOf?: string \| undefined; messageId?: string \| undefined; }` | yes |
+| `message` | `{ timestamp: number; role: "user" \| "assistant"; blocks: ({ type: "text"; content: string; } \| { type: "image"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "document"; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; } \| { type: "attachment"; fileName: string; filePath: string; source: { type: "base64"; data: string; mimeType: string; } \| { type: "url"; url: string; mimeType?: string \| undefined; }; attachmentType: "file" \| "directory"; displayName?: string \| undefined; } \| { type: "reasoning"; content: string; metadata?: Record<string, unknown> \| undefined; } \| { type: "tool_call"; toolCallId: string; name: string; args: Record<string, unknown>; } \| { type: "tool_output"; toolCallId: string; output: string; isError?: boolean \| undefined; })[]; sessionId: string; turnId: string \| null; contentText: string; origin?: "text" \| "voice" \| "compact" \| undefined; adapterSessionId?: string \| undefined; agentId?: string \| undefined; adapterMessageId?: string \| undefined; editOf?: string \| undefined; messageId?: string \| undefined; }` | yes |
 
 **Response:**
 
@@ -56,7 +56,9 @@ Type: Request (RPC)
 
 ### <a id="storage:message.ftsSearch"></a>`storage:message.ftsSearch` (rpc)
 
-Full-text search over messages using FTS5 with BM25 scores and excerpts.
+Full-text search over messages with relevance scores and highlighted
+excerpts (FTS5/bm25 on SQLite; tsvector/ts_rank with ts_headline on
+Postgres).
 
 Subject: `storage:message.ftsSearch`
 Type: Request (RPC)
@@ -68,7 +70,7 @@ excerpts — suitable for ranking and display in search UIs.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `limit` | `number` | yes |
+| `limit` | `number \| undefined` | no |
 | `query` | `string` | yes |
 | `sessionId` | `string \| undefined` | no |
 
@@ -162,7 +164,8 @@ Type: Request (RPC)
 
 ### <a id="storage:message.search"></a>`storage:message.search` (rpc)
 
-Search messages using FTS5.
+Full-text search over messages, ordered by relevance
+(FTS5/bm25 on SQLite; tsvector/ts_rank on Postgres).
 
 Subject: `storage:message.search`
 Type: Request (RPC)

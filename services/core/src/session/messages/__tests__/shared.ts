@@ -57,18 +57,18 @@ export type { TestDbContextWithCleanup as TestDbContext };
  * @returns Test database context with cleanup that removes temp file
  */
 export async function createTestMessageDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('msg');
+  const { db, close, dbPath, exec } = await createTempDb('msg');
 
   // Create tables
-  await db.run(CREATE_SESSIONS_TABLE_SQL);
-  await db.run(CREATE_TURNS_TABLE_SQL);
-  await db.run(CREATE_MESSAGES_TABLE_SQL);
+  await exec(CREATE_SESSIONS_TABLE_SQL);
+  await exec(CREATE_TURNS_TABLE_SQL);
+  await exec(CREATE_MESSAGES_TABLE_SQL);
 
   // Insert a test session for FK
-  await db.run(sql`INSERT INTO sessions (session_id) VALUES ('session-1')`);
+  await exec(sql`INSERT INTO sessions (session_id) VALUES ('session-1')`);
 
   // No handler cleanup needed for this test context
   const cleanup = createDbCleanup(() => {}, close, dbPath);
 
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }

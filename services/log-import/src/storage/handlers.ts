@@ -1,11 +1,11 @@
 import { eq } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { LogImportSubjects } from '../namespace.js';
 import type { LogImportSettings } from '../schemas/index.js';
-import { logImportSettings } from './schema.js';
 import type { SelectLogImportSettings } from './schema.js';
+import { logImportSettingsSchema } from './schema.variants.js';
 
 /** Shared dependencies for log-import storage handlers. */
 interface LogImportHandlerDeps {
@@ -42,6 +42,7 @@ export function rowToSettings(row: SelectLogImportSettings): LogImportSettings {
  */
 function registerGetModeHandler(deps: LogImportHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { logImportSettings } = resolveSchema(db, logImportSettingsSchema);
 
   return bus.on(LogImportSubjects.getMode, async (ctx) => {
     const { adapterName } = ctx.payload;
@@ -67,6 +68,7 @@ function registerGetModeHandler(deps: LogImportHandlerDeps): () => void {
  */
 function registerSetModeHandler(deps: LogImportHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { logImportSettings } = resolveSchema(db, logImportSettingsSchema);
 
   return bus.on(LogImportSubjects.setMode, async (ctx) => {
     const { adapterName, mode } = ctx.payload;
@@ -104,6 +106,7 @@ function registerSetModeHandler(deps: LogImportHandlerDeps): () => void {
  */
 function registerListSettingsHandler(deps: LogImportHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { logImportSettings } = resolveSchema(db, logImportSettingsSchema);
 
   return bus.on(LogImportSubjects.listSettings, async (ctx) => {
     const rows = await db.select().from(logImportSettings);

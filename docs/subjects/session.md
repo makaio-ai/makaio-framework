@@ -860,7 +860,8 @@ Emitted when: A closed session is resumed to active state
 
 ### <a id="session.search"></a>`session.search` (rpc)
 
-Search sessions by content using FTS5 full-text search.
+Search sessions by content using full-text search
+(FTS5 on SQLite, tsvector on Postgres).
 
 Subject: `session.search`
 Type: Request (RPC)

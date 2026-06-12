@@ -1,9 +1,31 @@
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, isUniqueViolationError, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { TurnUsageSchema, type ExtensionContext, type Turn, type TurnStatus, type TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../../turn/namespace.js';
-import { turns, type SelectTurn } from './schema.js';
+import type { SelectTurn } from './schema.js';
+import { turnsSchema } from './schema.variants.js';
+
+/**
+ * The canonical `turns` table type. {@link resolveSchema} returns the
+ * SQLite-typed face for both dialects, so `.sqlite` names the type of the
+ * resolved table under either dialect — it is not a SQLite-only assumption.
+ */
+type TurnsTable = typeof turnsSchema.sqlite.turns;
+
+/**
+ * Unique index enforcing one turn number per session — the retry target of
+ * the turn-create statement (declared in the turns schema on both dialects).
+ */
+const TURN_NUMBER_UNIQUE_INDEX = 'uniq_turns_session_number';
+
+/**
+ * Bound for the turn-create retry loop. Every retry implies a concurrent
+ * create for the same session committed in between (global progress is
+ * guaranteed: each conflicting round has exactly one winner), so the bound
+ * is effectively the number of simultaneously in-flight creates per session.
+ */
+const TURN_CREATE_MAX_ATTEMPTS = 32;
 
 /**
  * Parse stored usage JSON into a TurnUsage object.
@@ -45,7 +67,7 @@ function rowToTurn(row: SelectTurn): Turn {
 /**
  * Register Drizzle-based turn storage handlers.
  *
- * Manages turn lifecycle in SQLite/libSQL via Drizzle ORM.
+ * Manages turn lifecycle via Drizzle ORM.
  *
  * CONCURRENCY INVARIANT: All handlers must use single-statement operations only.
  * Storage handlers share a single DB connection. Fire-and-forget bus events
@@ -79,27 +101,52 @@ export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase, 
  * @returns Cleanup function to unregister the handler
  */
 function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const rawSql = getRawSqlExecutor(db);
+  const { turns } = resolveSchema(db, turnsSchema);
+
   return bus.on(TurnStorageSubjects.create, async (ctx) => {
     const { sessionId, turnId } = ctx.payload;
     const now = Date.now();
     const id = turnId ?? crypto.randomUUID();
 
-    // Atomic turn number assignment via CTE-based INSERT (single statement).
-    // Eliminates the SELECT MAX + INSERT race: concurrent inserts for the same
-    // session both read the MAX before either inserts, producing duplicate turnNumbers.
-    // libsql does not support subqueries in INSERT VALUES position; a CTE-based
-    // INSERT...SELECT is the equivalent single-statement form.
-    // The unique index on (sessionId, turnNumber) enforces the invariant at the DB level.
-    await db.run(sql`
-      WITH next_num AS (
-        SELECT COALESCE(MAX(turn_number), 0) + 1 AS n
-        FROM turns
-        WHERE session_id = ${sessionId}
-      )
-      INSERT INTO turns (turn_id, session_id, turn_number, started_at, status)
-      SELECT ${id}, ${sessionId}, n, ${now}, ${'active'}
-      FROM next_num
-    `);
+    // Turn number assignment via CTE-based INSERT (single statement) plus a
+    // bounded retry on unique-violation:
+    // - SQLite: the statement is atomic under the single-writer model, so the
+    //   first attempt always succeeds and the statement stream is unchanged.
+    //   (libsql does not support subqueries in INSERT VALUES position; the
+    //   CTE-based INSERT...SELECT is the equivalent single-statement form.)
+    // - Postgres: under READ COMMITTED, two concurrent statements evaluate
+    //   MAX against snapshots that exclude each other's uncommitted rows and
+    //   compute the same number. The unique index on (sessionId, turnNumber)
+    //   converts that race into SQLSTATE 23505, which is retried with a fresh
+    //   MAX — preserving a contiguous 1..N sequence without a transaction or
+    //   per-session lock.
+    // The retry is Postgres-only and scoped to the turn-number index: on
+    // SQLite the race is impossible, so any unique violation there (e.g. a
+    // caller-supplied duplicate turnId) rethrows immediately.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await rawSql.run(sql`
+          WITH next_num AS (
+            SELECT COALESCE(MAX(turn_number), 0) + 1 AS n
+            FROM turns
+            WHERE session_id = ${sessionId}
+          )
+          INSERT INTO turns (turn_id, session_id, turn_number, started_at, status)
+          SELECT ${id}, ${sessionId}, n, ${now}, ${'active'}
+          FROM next_num
+        `);
+        break;
+      } catch (error) {
+        if (
+          attempt >= TURN_CREATE_MAX_ATTEMPTS ||
+          rawSql.dialect !== 'postgres' ||
+          !isUniqueViolationError(error, rawSql.dialect, TURN_NUMBER_UNIQUE_INDEX)
+        ) {
+          throw error;
+        }
+      }
+    }
 
     // Read back the assigned turnNumber — the CTE result isn't returned by INSERT.
     const [inserted] = await db.select({ turnNumber: turns.turnNumber }).from(turns).where(eq(turns.turnId, id));
@@ -123,10 +170,11 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
  * @returns Cleanup function to unregister the handler
  */
 function registerCompleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.complete, async (ctx) => {
     const { turnId, status, expectedStatus, error, usage } = ctx.payload;
     const now = Date.now();
-    const updateFields: Partial<typeof turns.$inferInsert> = {
+    const updateFields: Partial<TurnsTable['$inferInsert']> = {
       completedAt: now,
       status,
       error: error ?? null,
@@ -164,9 +212,10 @@ function registerCompleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => voi
  * @returns Cleanup function to unregister the handler
  */
 function registerSetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.set, async (ctx) => {
     const { turn } = ctx.payload;
-    const values: typeof turns.$inferInsert = {
+    const values: TurnsTable['$inferInsert'] = {
       turnId: turn.turnId,
       sessionId: turn.sessionId,
       turnNumber: turn.turnNumber,
@@ -190,6 +239,7 @@ function registerSetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
  * @returns Cleanup function to unregister the handler
  */
 function registerGetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.get, async (ctx) => {
     const { turnId } = ctx.payload;
 
@@ -206,6 +256,7 @@ function registerGetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
  * @returns Cleanup function to unregister the handler
  */
 function registerGetBySessionHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.getBySession, async (ctx) => {
     const { sessionId, limit, status } = ctx.payload;
 
@@ -235,6 +286,7 @@ function registerGetBySessionHandler(bus: IMakaioBus, db: MakaioDatabase): () =>
  * @returns Cleanup function to unregister the handler
  */
 function registerGetActiveHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.getActive, async (ctx) => {
     const { sessionId } = ctx.payload;
 
@@ -262,6 +314,7 @@ function registerGetActiveHandler(bus: IMakaioBus, db: MakaioDatabase): () => vo
  * @returns Cleanup function to unregister the handler
  */
 function registerListActiveHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { turns } = resolveSchema(db, turnsSchema);
   return bus.on(TurnStorageSubjects.listActive, async (ctx) => {
     const rows = await db.select().from(turns).where(eq(turns.status, 'active')).orderBy(asc(turns.startedAt));
     ctx.setResult({ turns: rows.map(rowToTurn) });

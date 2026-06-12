@@ -88,15 +88,26 @@
     "./package.json": "./package.json"
   },
   "makaio": {
-    "drizzleSchema": [
-      "./src/session/storage/schema.ts",
-      "./src/session/session-events/schema.ts",
-      "./src/session/turns/schema.ts",
-      "./src/session/messages/schema.ts",
-      "./src/session/message-routing/schema.ts",
-      "./src/session/import-cursors/schema.ts",
-      "./src/harness/storage/schema.ts"
-    ]
+    "drizzleSchema": {
+      "sqlite": [
+        "./src/session/storage/schema.ts",
+        "./src/session/session-events/schema.ts",
+        "./src/session/turns/schema.ts",
+        "./src/session/messages/schema.ts",
+        "./src/session/message-routing/schema.ts",
+        "./src/session/import-cursors/schema.ts",
+        "./src/harness/storage/schema.ts"
+      ],
+      "postgres": [
+        "./src/session/storage/schema.postgres.ts",
+        "./src/session/session-events/schema.postgres.ts",
+        "./src/session/turns/schema.postgres.ts",
+        "./src/session/messages/schema.postgres.ts",
+        "./src/session/message-routing/schema.postgres.ts",
+        "./src/session/import-cursors/schema.postgres.ts",
+        "./src/harness/storage/schema.postgres.ts"
+      ]
+    }
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

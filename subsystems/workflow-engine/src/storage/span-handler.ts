@@ -1,12 +1,14 @@
 import { and, asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExecutionLink, SpanRecord, WorkflowStepType } from '@makaio/contracts';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowExecutionLinks, workflowStepSpans } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 
-type DbSpanRow = typeof workflowStepSpans.$inferSelect;
-type DbExecutionLinkRow = typeof workflowExecutionLinks.$inferSelect;
+type WorkflowStepSpansTable = typeof workflowEngineSchema.sqlite.workflowStepSpans;
+type WorkflowExecutionLinksTable = typeof workflowEngineSchema.sqlite.workflowExecutionLinks;
+type DbSpanRow = WorkflowStepSpansTable['$inferSelect'];
+type DbExecutionLinkRow = WorkflowExecutionLinksTable['$inferSelect'];
 
 /**
  * Map nullable DB columns to optional API fields.
@@ -57,6 +59,8 @@ function mapExecutionLink(row: DbExecutionLinkRow): ExecutionLink {
  * @returns Cleanup function to unregister handlers
  */
 export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowStepSpans, workflowExecutionLinks } = resolveSchema(db, workflowEngineSchema);
+
   const unsubSetSpan = bus.on(WorkflowStorageSubjects.setSpan, async (ctx) => {
     const { span } = ctx.payload;
     await db

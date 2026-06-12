@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { createTempDb } from '@makaio/test-utils/drizzle-harness';
+import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
 import { sql } from 'drizzle-orm';
@@ -20,16 +20,15 @@ async function applyAccountManagerSchema(db: MakaioDatabase): Promise<void> {
 describe('registerDrizzleAccountManagerStorage', () => {
   let bus: IMakaioBus;
   let db: MakaioDatabase;
-  let cleanupDb: () => void;
+  let dbContext: TestDbContext;
   let cleanupHandlers: () => void;
   let metadataStore: BusAccountMetadataStore;
   let usageSnapshotStore: BusAccountUsageSnapshotStore;
 
   beforeEach(async () => {
     bus = createBusInstance();
-    const dbContext = await createTempDb('account-manager-storage');
+    dbContext = await createTempDb('account-manager-storage');
     db = dbContext.db;
-    cleanupDb = dbContext.cleanup;
     await applyAccountManagerSchema(db);
     cleanupHandlers = registerDrizzleAccountManagerStorage(bus, db, makeStubExtensionContext(bus));
     metadataStore = new BusAccountMetadataStore(bus);
@@ -38,7 +37,7 @@ describe('registerDrizzleAccountManagerStorage', () => {
 
   afterEach(() => {
     cleanupHandlers();
-    cleanupDb();
+    dbContext.cleanup();
   });
 
   it('returns null before the first timeline row and resolves the most recent account switch at or before the timestamp', async () => {
@@ -126,10 +125,12 @@ describe('registerDrizzleAccountManagerStorage', () => {
       lastSeenAt: 2_000,
     });
 
-    const rows = await db.run(sql.raw("SELECT * FROM accounts WHERE id = 'acc-public'"));
-    expect(rows.rows).toHaveLength(1);
-    expect(rows.rows[0]).not.toHaveProperty('credential');
-    expect(rows.rows[0]).not.toHaveProperty('fingerprint');
+    const rows = await getRawSqlExecutor(db).all<Record<string, unknown>>(
+      sql.raw("SELECT * FROM accounts WHERE id = 'acc-public'"),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toHaveProperty('credential');
+    expect(rows[0]).not.toHaveProperty('fingerprint');
   });
 
   it('persists linkedClientAccountId as part of the public account row', async () => {
@@ -188,7 +189,7 @@ describe('registerDrizzleAccountManagerStorage', () => {
   });
 
   it('returns the most recently seen active account, breaking ties by id', async () => {
-    await db.run(sql.raw('DROP INDEX uniq_accounts_active_client'));
+    await dbContext.exec(sql.raw('DROP INDEX uniq_accounts_active_client'));
 
     await metadataStore.upsert(CLIENT_ID, {
       id: 'acc-a',

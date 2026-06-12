@@ -29,6 +29,7 @@ import {
   resolvePackageExportSourceTarget,
   type PackageExportsField,
 } from '@makaio/build-tooling/package-exports';
+import { verifyFrameworkDist } from '../../scripts/lib/framework-dist-verifier.js';
 import { writeFrameworkDistBuildStamp } from './build-fingerprint.js';
 
 /** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
@@ -184,6 +185,12 @@ try {
 // (and the bundled default `dist/runtime-node/../drizzle` lookup).
 cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'), { recursive: true });
 
+// Central drizzle migrations, Postgres chain — consumed at boot when the
+// database target is Postgres (dialect-aware bundled default).
+cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle-postgres'), join(DIST, 'drizzle-postgres'), {
+  recursive: true,
+});
+
 // ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)
 // ---------------------------------------------------------------------------
@@ -215,6 +222,27 @@ writeFileSync(
 );
 
 writeFrameworkDistBuildStamp();
+
+// ---------------------------------------------------------------------------
+// Verify the assembled distribution
+// ---------------------------------------------------------------------------
+
+// Fail the build when an exports-map target is missing, a built module
+// self-imports a subpath the exports map does not expose, a built module
+// imports a bare external the manifest does not declare ('pg' alone is
+// consumer-provided by design), or a bundled migration chain is missing or
+// inconsistent. These defects only surface at a consumer's boot otherwise.
+const verification = verifyFrameworkDist(PACKAGE_DIR);
+if (!verification.ok) {
+  console.error('[build] framework distribution verification failed:');
+  for (const issue of verification.issues) {
+    console.error(`  [${issue.kind}] ${issue.message}`);
+  }
+  process.exit(1);
+}
+console.info(
+  `[build] distribution verified (${verification.checkedTargets} export targets, ${verification.scannedModules} modules scanned, migration chains ok)`,
+);
 
 const totalElapsed = ((performance.now() - totalStart) / 1000).toFixed(1);
 console.info(`\n[build] Framework distribution built in ${totalElapsed}s`);

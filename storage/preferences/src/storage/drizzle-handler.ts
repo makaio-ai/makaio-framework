@@ -1,15 +1,15 @@
 /**
  * Drizzle-based handlers for preferences subjects.
  *
- * Provides persistent storage for Node.js runtime using SQLite.
+ * Provides persistent database-backed storage for the Node.js runtime.
  * Mirrors browser-handler.ts API but uses Drizzle ORM.
  */
 
 import { eq, and } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { PreferencesSubjects } from '@makaio/services-core/preferences';
-import { preferences } from './schema.js';
+import { preferencesSchema } from './schema.variants.js';
 import { keyToRow } from './utils-common.js';
 import { queryPreferenceItems, getPreferenceRow } from './utils-drizzle.js';
 
@@ -20,6 +20,7 @@ import { queryPreferenceItems, getPreferenceRow } from './utils-drizzle.js';
  * @returns Cleanup function to unregister all handlers
  */
 export function registerDrizzlePreferencesStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { preferences } = resolveSchema(db, preferencesSchema);
   const unsubGet = bus.on(PreferencesSubjects.get, async (ctx) => {
     const { key, category } = ctx.payload;
     const row = await getPreferenceRow(db, key, category);
@@ -62,8 +63,7 @@ export function registerDrizzlePreferencesStorage(bus: IMakaioBus, db: MakaioDat
           value: serializedValue,
           updatedAt: now,
         },
-      })
-      .run();
+      });
 
     ctx.setResult({ success: true });
   });
@@ -82,8 +82,7 @@ export function registerDrizzlePreferencesStorage(bus: IMakaioBus, db: MakaioDat
           eq(preferences.viewport, rowKey.viewport),
           eq(preferences.category, category),
         ),
-      )
-      .run();
+      );
 
     ctx.setResult({ success: true });
   });

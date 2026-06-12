@@ -3,5 +3,5 @@ import { frameworkPreset } from '@makaio/build-tooling/tsdown-framework-preset';
 
 export default defineConfig({
   ...frameworkPreset,
-  entry: ['./src/index.ts', './src/client.ts'],
+  entry: ['./src/index.ts', './src/client.ts', './src/columns/sqlite.ts', './src/columns/postgres.ts'],
 });

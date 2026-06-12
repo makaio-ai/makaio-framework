@@ -24,7 +24,7 @@ describe('getStatusCounts', () => {
 
   it('should count sessions by status', async () => {
     // Create 3 active, 2 closed, and 1 archived sessions
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES
         ('active-1', 1000, 1000, 'active'),
@@ -47,7 +47,7 @@ describe('getStatusCounts', () => {
   });
 
   it('should handle all active sessions', async () => {
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES
         ('active-1', 1000, 1000, 'active'),
@@ -66,7 +66,7 @@ describe('getStatusCounts', () => {
   });
 
   it('should handle all closed sessions', async () => {
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES
         ('closed-1', 1000, 1000, 'closed'),

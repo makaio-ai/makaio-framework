@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { StorageCoordinator } from '../storage-coordinator.js';
 import type { PreferenceKey } from '@makaio/services-core/preferences';
 import { createLocalStorageMock, createPreferencesTestDb } from './test-helpers.js';
@@ -48,7 +49,7 @@ describe('StorageCoordinator', () => {
       const category = 'broken';
 
       // Insert invalid JSON directly into database
-      await db.run(sql`
+      await getRawSqlExecutor(db).run(sql`
         INSERT INTO preferences (scope, surface, context, viewport, category, value, updated_at)
         VALUES ('global', 'any', 'any', 'any', 'broken', 'invalid json{', ${Date.now()})
       `);
@@ -159,7 +160,7 @@ describe('StorageCoordinator', () => {
       const afterWrite = Date.now();
 
       // Check database timestamp by querying directly
-      const result = await db.get<{ updated_at: number }>(
+      const [result] = await getRawSqlExecutor(db).all<{ updated_at: number }>(
         sql`SELECT updated_at FROM preferences WHERE scope = 'global' AND category = 'theme'`,
       );
 
@@ -311,7 +312,7 @@ describe('StorageCoordinator', () => {
 
     it('handles malformed JSON in list results', async () => {
       // Insert invalid JSON directly
-      await db.run(sql`
+      await getRawSqlExecutor(db).run(sql`
         INSERT INTO preferences (scope, surface, context, viewport, category, value, updated_at)
         VALUES ('broken', 'any', 'any', 'any', 'test', 'invalid{json', ${Date.now()})
       `);
@@ -328,13 +329,14 @@ describe('StorageCoordinator', () => {
       await coordinator.set(key, 'test', { value: 1 });
 
       // Query database directly
-      const row = await db.run(sql`
+      const [row] = await getRawSqlExecutor(db).all<{ surface: string; context: string; viewport: string }>(sql`
         SELECT surface, context, viewport
         FROM preferences
         WHERE scope = 'global' AND category = 'test'
       `);
 
       expect(row).toBeDefined();
+      expect(row).toEqual({ surface: 'any', context: 'any', viewport: 'any' });
     });
 
     it('restores "any" to undefined when reading', async () => {

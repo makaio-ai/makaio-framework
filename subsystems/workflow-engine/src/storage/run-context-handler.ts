@@ -1,10 +1,13 @@
 import { eq } from 'drizzle-orm';
-import type { MakaioDatabase, TransactionCallback } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase, type TransactionCallback } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowRunContext, WorkflowWorkerSource } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowRunContexts, type InsertWorkflowRunContext } from './schema.js';
+import type { InsertWorkflowRunContext } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 import { toScopeColumns, fromScopeColumns } from './scope-helpers.js';
+
+type WorkflowRunContextsTable = typeof workflowEngineSchema.sqlite.workflowRunContexts;
 
 // ─────────────────────────────────────────────────────────────
 // Source column helpers
@@ -56,7 +59,7 @@ function fromSourceColumns(
 // Row mappers
 // ─────────────────────────────────────────────────────────────
 
-type DbRunContextRow = typeof workflowRunContexts.$inferSelect;
+type DbRunContextRow = WorkflowRunContextsTable['$inferSelect'];
 type RunContextStorageExecutor = MakaioDatabase | Parameters<TransactionCallback<void>>[0];
 
 /**
@@ -127,10 +130,14 @@ function toRunContextDbValues(runContext: WorkflowRunContext): InsertWorkflowRun
  * Upsert a workflow run-context snapshot.
  * @param db - Database or transaction executor.
  * @param runContext - Run context to persist.
+ * @param workflowRunContexts - Dialect-resolved table object. Callers must
+ *   resolve this from a real branded handle via `resolveSchema` because
+ *   transaction objects carry no dialect brand.
  */
 export async function upsertWorkflowRunContext(
   db: RunContextStorageExecutor,
   runContext: WorkflowRunContext,
+  workflowRunContexts: WorkflowRunContextsTable,
 ): Promise<void> {
   const dbValues = toRunContextDbValues(runContext);
   await db
@@ -150,9 +157,11 @@ export async function upsertWorkflowRunContext(
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 export function registerRunContextHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowRunContexts } = resolveSchema(db, workflowEngineSchema);
+
   const unsubSet = bus.on(WorkflowStorageSubjects.setRunContext, async (ctx) => {
     const runContext = ctx.payload.runContext as WorkflowRunContext;
-    await upsertWorkflowRunContext(db, runContext);
+    await upsertWorkflowRunContext(db, runContext, workflowRunContexts);
     ctx.setResult({ executionId: runContext.executionId });
   });
 

@@ -1,14 +1,16 @@
 import { eq } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { ApprovalPolicySchema, ToolCapabilitySchema, HarnessSubjects } from '@makaio/contracts';
 import { z } from 'zod';
 import { createDrizzleCrudHandlers, createDrizzleListHandler } from '@makaio/storage-handlers';
 import { HarnessStorageSubjects, type HarnessInput, type Harness, type HarnessListQuery } from './namespace.js';
-import { harnessDefinitions } from './schema.js';
+import { harnessStorageSchema } from './schema.variants.js';
 
-type DbRow = typeof harnessDefinitions.$inferSelect;
+/** Type alias for the harness definitions table, used to type local variables. */
+type HarnessDefinitionsTable = typeof harnessStorageSchema.sqlite.harnessDefinitions;
+type DbRow = HarnessDefinitionsTable['$inferSelect'];
 
 /**
  * Maps database row to Harness API type.
@@ -87,45 +89,6 @@ function toDbValues(harness: HarnessInput): Partial<DbRow> {
   };
 }
 
-const registerCrud = createDrizzleCrudHandlers({
-  table: harnessDefinitions,
-  subjects: {
-    get: HarnessStorageSubjects.get,
-    set: HarnessStorageSubjects.set,
-    delete: HarnessStorageSubjects.delete,
-  },
-  idField: 'id',
-  singularKey: 'harness',
-  mapper: mapHarness,
-  toDbValues,
-  lifecycle: {
-    created: HarnessSubjects.created,
-    updated: HarnessSubjects.updated,
-    deleted: HarnessSubjects.deleted,
-  },
-});
-
-const registerList = createDrizzleListHandler({
-  table: harnessDefinitions,
-  subject: HarnessStorageSubjects.list,
-  pluralKey: 'harnesses',
-  mapper: mapHarness,
-  buildPredicates: (payload: HarnessListQuery, table) => {
-    const predicates = [];
-    if (payload.adapterName) {
-      predicates.push(eq(table.adapterName, payload.adapterName));
-    }
-    if (payload.clientId) {
-      predicates.push(eq(table.clientId, payload.clientId));
-    }
-    if (payload.name) {
-      predicates.push(eq(table.name, payload.name));
-    }
-
-    return predicates;
-  },
-});
-
 /**
  * Registers all Drizzle-based harness storage handlers with the bus.
  * @param bus - MakaioBus instance for message handling
@@ -134,6 +97,47 @@ const registerList = createDrizzleListHandler({
  * @returns Cleanup function to unregister all handlers
  */
 export function registerDrizzleHarnessStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+  const { harnessDefinitions } = resolveSchema(db, harnessStorageSchema);
+
+  const registerCrud = createDrizzleCrudHandlers({
+    table: harnessDefinitions,
+    subjects: {
+      get: HarnessStorageSubjects.get,
+      set: HarnessStorageSubjects.set,
+      delete: HarnessStorageSubjects.delete,
+    },
+    idField: 'id',
+    singularKey: 'harness',
+    mapper: mapHarness,
+    toDbValues,
+    lifecycle: {
+      created: HarnessSubjects.created,
+      updated: HarnessSubjects.updated,
+      deleted: HarnessSubjects.deleted,
+    },
+  });
+
+  const registerList = createDrizzleListHandler({
+    table: harnessDefinitions,
+    subject: HarnessStorageSubjects.list,
+    pluralKey: 'harnesses',
+    mapper: mapHarness,
+    buildPredicates: (payload: HarnessListQuery, table) => {
+      const predicates = [];
+      if (payload.adapterName) {
+        predicates.push(eq(table.adapterName, payload.adapterName));
+      }
+      if (payload.clientId) {
+        predicates.push(eq(table.clientId, payload.clientId));
+      }
+      if (payload.name) {
+        predicates.push(eq(table.name, payload.name));
+      }
+
+      return predicates;
+    },
+  });
+
   const crudCleanup = registerCrud(bus, db);
   const listCleanup = registerList(bus, db);
   return () => {

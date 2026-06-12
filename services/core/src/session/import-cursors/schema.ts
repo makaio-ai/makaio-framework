@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Import cursors table schema.
@@ -16,6 +17,8 @@ export const importCursors = sqliteTable('import_cursors', {
   /**
    * Number of bytes successfully read and processed.
    * Import resumes from this offset on next run.
+   * SQLite INTEGER is int8-capable — the Postgres twin mirrors this with
+   * `bigint` so large log files keep their resume cursor on both dialects.
    */
   bytesRead: integer('bytes_read').notNull(),
 
@@ -29,7 +32,7 @@ export const importCursors = sqliteTable('import_cursors', {
    * Timestamp when this cursor was last updated.
    * Stored as Unix timestamp in milliseconds.
    */
-  updatedAt: integer('updated_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
 });
 
 /**

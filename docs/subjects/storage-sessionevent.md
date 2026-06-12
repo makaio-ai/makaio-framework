@@ -16,7 +16,7 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/session/session-event-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/session/session-event-storage-namespace.ts) |
+| Defined in | [`core/contracts/src/session/session-event-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/session-event-storage-namespace.ts) |
 
 ## Subjects
 

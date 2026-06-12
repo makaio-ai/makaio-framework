@@ -7,7 +7,8 @@
  * @packageDocumentation
  */
 
-import { integer, sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, unique } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Persistent store for individual installed version records.
@@ -33,10 +34,10 @@ export const clientBinaryVersions = sqliteTable(
     installPath: text('install_path').notNull(),
 
     /** Unix epoch timestamp in milliseconds when the binary was installed. */
-    installedAt: integer('installed_at').notNull(),
+    installedAt: epochMs('installed_at').notNull(),
 
     /** Unix epoch timestamp in milliseconds when this row was created. */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
   },
   (table) => [unique('uq_client_binary_versions_client_version').on(table.clientId, table.version)],
 );
@@ -67,7 +68,7 @@ export const clientBinaryState = sqliteTable('client_binary_state', {
   activeVersion: text('active_version'),
 
   /** Unix epoch timestamp in milliseconds of the last mutation. */
-  updatedAt: integer('updated_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
 });
 
 /** Inferred insert type for the `client_binary_state` table. */

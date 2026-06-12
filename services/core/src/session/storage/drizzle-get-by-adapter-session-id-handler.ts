@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
+import { resolveSchema } from '@makaio/storage-drizzle';
 import { SessionStorageSubjects } from './namespace.js';
-import { agents, sessions } from './schema.js';
+import { sessionStorageSchema } from './schema.variants.js';
 import { mapToSession } from './drizzle-utils.js';
 import type { SessionHandlerDeps } from './drizzle-handler.js';
 
@@ -11,6 +12,7 @@ import type { SessionHandlerDeps } from './drizzle-handler.js';
  */
 export function registerGetByAdapterSessionIdHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.getByAdapterSessionId, async (ctx) => {
     const { adapterSessionId, source } = ctx.payload;

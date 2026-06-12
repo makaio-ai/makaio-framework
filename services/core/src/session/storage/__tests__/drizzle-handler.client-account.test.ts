@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../namespace.js';
@@ -32,15 +33,19 @@ describe('registerDrizzleSessionStorage - client account state', () => {
       session,
     });
 
-    const rowResult = await ctx.db.run(sql`
+    const rows = await getRawSqlExecutor(ctx.db).all<{
+      client_id: unknown;
+      client_account_id: unknown;
+      last_client_identity_observation: unknown;
+    }>(sql`
       SELECT client_id, client_account_id, last_client_identity_observation
       FROM sessions
       WHERE session_id = 'client-account-roundtrip'
     `);
 
-    expect(rowResult.rows[0]?.client_id).toBe('claude-code');
-    expect(rowResult.rows[0]?.client_account_id).toBe('client-account-1');
-    expect(JSON.parse(String(rowResult.rows[0]?.last_client_identity_observation))).toEqual(initialObservation);
+    expect(rows[0]?.client_id).toBe('claude-code');
+    expect(rows[0]?.client_account_id).toBe('client-account-1');
+    expect(JSON.parse(String(rows[0]?.last_client_identity_observation))).toEqual(initialObservation);
 
     const retrieved = await MakaioBus.request(SessionStorageSubjects.get, {
       sessionId: session.sessionId,
@@ -52,7 +57,7 @@ describe('registerDrizzleSessionStorage - client account state', () => {
   });
 
   it('drops malformed persisted identity observations when hydrating a session', async () => {
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (
         session_id,
         created_at,
@@ -137,13 +142,13 @@ describe('registerDrizzleSessionStorage - client account state', () => {
 
     expect(updateResult.success).toBe(true);
 
-    const rowResult = await ctx.db.run(sql`
+    const rows = await getRawSqlExecutor(ctx.db).all<{ last_client_identity_observation: unknown }>(sql`
       SELECT last_client_identity_observation
       FROM sessions
       WHERE session_id = 'client-account-observation-overwrite'
     `);
 
-    expect(JSON.parse(String(rowResult.rows[0]?.last_client_identity_observation))).toEqual(nextObservation);
+    expect(JSON.parse(String(rows[0]?.last_client_identity_observation))).toEqual(nextObservation);
 
     const retrieved = await MakaioBus.request(SessionStorageSubjects.get, {
       sessionId: session.sessionId,

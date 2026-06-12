@@ -9,11 +9,18 @@
     "./package.json": "./package.json"
   },
   "makaio": {
-    "drizzleSchema": [
-      "./src/storage/runtime-schema.ts",
-      "./src/storage/client-binary-schema.ts",
-      "./src/storage/profile-schema.ts"
-    ]
+    "drizzleSchema": {
+      "sqlite": [
+        "./src/storage/runtime-schema.ts",
+        "./src/storage/client-binary-schema.ts",
+        "./src/storage/profile-schema.ts"
+      ],
+      "postgres": [
+        "./src/storage/runtime-schema.postgres.ts",
+        "./src/storage/client-binary-schema.postgres.ts",
+        "./src/storage/profile-schema.postgres.ts"
+      ]
+    }
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",

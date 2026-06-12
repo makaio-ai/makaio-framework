@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
 import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
@@ -39,11 +40,11 @@ const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
 /**
  * Enables SQLite concurrency pragmas used by storage handlers.
- * @param db - Drizzle database instance
+ * @param exec - Raw SQL statement executor of the test database
  */
-async function configureConcurrencyPragmas(db: TestDbContextWithCleanup['db']): Promise<void> {
-  await db.run(sql`PRAGMA journal_mode = WAL`);
-  await db.run(sql.raw(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`));
+async function configureConcurrencyPragmas(exec: TestDbContextWithCleanup['exec']): Promise<void> {
+  await exec(sql`PRAGMA journal_mode = WAL`);
+  await exec(sql.raw(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`));
 }
 
 /**
@@ -66,11 +67,11 @@ function getPragmaValue(row: Record<string, unknown> | undefined): unknown {
  * @returns Test database context with cleanup that removes temp file
  */
 async function createTestDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('concurrent-writes');
-  await configureConcurrencyPragmas(db);
+  const { db, close, dbPath, exec } = await createTempDb('concurrent-writes');
+  await configureConcurrencyPragmas(exec);
 
   await installSessionStorageTestSchema(db);
-  await db.run(CREATE_TURNS_TABLE_SQL);
+  await exec(CREATE_TURNS_TABLE_SQL);
 
   // Register all storage handlers on the same db instance
   const stubCtx = makeStubExtensionContext(MakaioBus);
@@ -89,7 +90,7 @@ async function createTestDb(): Promise<TestDbContextWithCleanup> {
     dbPath,
   );
 
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }
 
 describe('concurrent single-statement writes', () => {
@@ -104,11 +105,11 @@ describe('concurrent single-statement writes', () => {
   afterEach(() => cleanup());
 
   it('should configure SQLite concurrency pragmas for contention tests', async () => {
-    const journalModeRows = await ctx.db.all<Record<string, unknown>>(sql`PRAGMA journal_mode`);
+    const journalModeRows = await getRawSqlExecutor(ctx.db).all<Record<string, unknown>>(sql`PRAGMA journal_mode`);
     const configuredJournalMode = String(getPragmaValue(journalModeRows[0])).toLowerCase();
     expect(configuredJournalMode).toBe('wal');
 
-    const busyTimeoutRows = await ctx.db.all<Record<string, unknown>>(sql`PRAGMA busy_timeout`);
+    const busyTimeoutRows = await getRawSqlExecutor(ctx.db).all<Record<string, unknown>>(sql`PRAGMA busy_timeout`);
     const configuredBusyTimeout = Number(getPragmaValue(busyTimeoutRows[0]));
     expect(configuredBusyTimeout).toBe(SQLITE_BUSY_TIMEOUT_MS);
   });

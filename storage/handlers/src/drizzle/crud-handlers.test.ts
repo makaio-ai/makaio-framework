@@ -95,7 +95,7 @@ describe('createDrizzleCrudHandlers', () => {
     ctx = await createTempDb('crud-handlers');
 
     // Create test table
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       CREATE TABLE test_entities (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -445,7 +445,7 @@ const defaultConflictTargetFixtureConfig: ConflictTargetFixtureConfig = {
 async function createConflictTargetDb(dbName: string): Promise<TestDbContext> {
   const ctx = await createTempDb(dbName);
 
-  await ctx.db.run(sql`
+  await ctx.exec(sql`
     CREATE TABLE conflict_target_entities (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -455,7 +455,7 @@ async function createConflictTargetDb(dbName: string): Promise<TestDbContext> {
     )
   `);
 
-  await ctx.db.run(sql`
+  await ctx.exec(sql`
     CREATE UNIQUE INDEX uniq_conflict_target_entities_name_scope
     ON conflict_target_entities (name, scope)
   `);

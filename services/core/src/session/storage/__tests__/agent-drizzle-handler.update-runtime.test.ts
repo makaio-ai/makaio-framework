@@ -39,12 +39,12 @@ const CREATE_AGENTS_TABLE_SQL = sql`
 `;
 
 async function createTestDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('agent-storage-update-runtime');
-  await db.run(CREATE_SESSIONS_TABLE_SQL);
-  await db.run(CREATE_AGENTS_TABLE_SQL);
+  const { db, close, dbPath, exec } = await createTempDb('agent-storage-update-runtime');
+  await exec(CREATE_SESSIONS_TABLE_SQL);
+  await exec(CREATE_AGENTS_TABLE_SQL);
   const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
   const cleanup = createDbCleanup(() => handlerCleanup(), close, dbPath);
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }
 
 describe('registerDrizzleAgentStorage.updateRuntime', () => {
@@ -54,7 +54,7 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
     const ctx = await createTestDb();
     cleanup = ctx.cleanup;
 
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES ('session-1', ${Date.now()}, ${Date.now()}, 'active')
     `);

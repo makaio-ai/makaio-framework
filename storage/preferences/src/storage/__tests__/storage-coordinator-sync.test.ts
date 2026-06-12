@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { StorageCoordinator } from '../storage-coordinator.js';
 import type { PreferenceKey } from '@makaio/services-core/preferences';
 import type { StoredPreference } from '../types.js';
@@ -38,7 +39,7 @@ describe('StorageCoordinator sync behavior', () => {
 
     expect(result).toEqual(value);
 
-    const row = await db.get<{ value: string; updated_at: number }>(
+    const [row] = await getRawSqlExecutor(db).all<{ value: string; updated_at: number }>(
       sql`SELECT value, updated_at FROM preferences WHERE scope = 'global' AND category = 'theme'`,
     );
     expect(row).toBeDefined();
@@ -53,7 +54,7 @@ describe('StorageCoordinator sync behavior', () => {
     const localValue = { color: 'local' };
     const storageKey = 'makaio:prefs:global:any:any:any:theme';
 
-    await db.run(sql`
+    await getRawSqlExecutor(db).run(sql`
       INSERT INTO preferences (scope, surface, context, viewport, category, value, updated_at)
       VALUES ('global', 'any', 'any', 'any', 'theme', ${JSON.stringify(dbValue)}, 2000)
     `);

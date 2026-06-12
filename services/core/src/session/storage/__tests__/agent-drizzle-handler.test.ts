@@ -1,7 +1,7 @@
 /* eslint max-lines: ["error", { "max": 500 }] */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
@@ -82,12 +82,12 @@ function createTestAgent(overrides: Partial<MakaioSessionAgent> = {}): MakaioSes
  * @returns Test database context with cleanup that removes temp file
  */
 async function createTestDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('agent-storage');
+  const { db, close, dbPath, exec } = await createTempDb('agent-storage');
 
-  // Create tables using drizzle's db.run for DDL statements
-  await db.run(CREATE_SESSIONS_TABLE_SQL);
-  await db.run(CREATE_AGENTS_TABLE_SQL);
-  await db.run(CREATE_AGENTS_INDEX_SQL);
+  // Create tables through the dialect-portable raw SQL executor
+  await exec(CREATE_SESSIONS_TABLE_SQL);
+  await exec(CREATE_AGENTS_TABLE_SQL);
+  await exec(CREATE_AGENTS_INDEX_SQL);
 
   // Register handlers
   const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
@@ -95,20 +95,22 @@ async function createTestDb(): Promise<TestDbContextWithCleanup> {
   // Combined cleanup: unsubscribe handlers, close connection, delete temp file
   const cleanup = createDbCleanup(() => handlerCleanup(), close, dbPath);
 
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }
 
 describe('registerDrizzleAgentStorage', () => {
   let cleanup: () => void;
   let db: MakaioDatabase;
+  let exec: TestDbContextWithCleanup['exec'];
 
   beforeEach(async () => {
     const ctx = await createTestDb();
     db = ctx.db;
+    exec = ctx.exec;
     cleanup = ctx.cleanup;
 
     // Insert a parent session row since agents FK requires it
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES ('session-1', ${Date.now()}, ${Date.now()}, 'active')
     `);
@@ -188,9 +190,11 @@ describe('registerDrizzleAgentStorage', () => {
       expect(result.success).toBe(true);
 
       // Verify in DB
-      const rows = await db.run(sql`SELECT * FROM agents WHERE agent_id = 'insert-test'`);
-      expect(rows.rows).toHaveLength(1);
-      expect(rows.rows[0].agent_id).toBe('insert-test');
+      const rows = await getRawSqlExecutor(db).all<{ agent_id: unknown }>(
+        sql`SELECT * FROM agents WHERE agent_id = 'insert-test'`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.agent_id).toBe('insert-test');
     });
 
     it('updates an existing agent (upsert)', async () => {
@@ -376,7 +380,7 @@ describe('registerDrizzleAgentStorage', () => {
   describe('listBySession', () => {
     it('returns agents in the session', async () => {
       // Insert second session for isolation testing
-      await db.run(sql`
+      await exec(sql`
         INSERT INTO sessions (session_id, created_at, last_activity_at, status)
         VALUES ('session-2', ${Date.now()}, ${Date.now()}, 'active')
       `);

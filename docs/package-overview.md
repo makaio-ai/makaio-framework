@@ -111,7 +111,8 @@ Read the relevant policy before changing storage, migrations, or transports. For
 | Path                  | Package                      | Description                                                                   |
 | --------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
 | `storage/core`        | `@makaio/storage-core`       | Factory for creating bus-integrated storage namespaces.                       |
-| `storage/drizzle`     | `@makaio/storage-drizzle`    | Drizzle ORM extension with runtime SQLite client.                             |
+| `storage/conformance` | `@makaio/storage-conformance` | Cross-dialect storage conformance suites run against real SQLite and Postgres servers (private, never published). |
+| `storage/drizzle`     | `@makaio/storage-drizzle`    | Drizzle ORM extension with runtime-selected SQLite/Postgres client.           |
 | `storage/handlers`    | `@makaio/storage-handlers`   | Factory functions for Drizzle-backed bus storage handlers.                    |
 | `storage/migrations`  | `@makaio/storage-migrations` | Drizzle migration management: schema discovery, aggregation, and application. |
 | `storage/preferences` | `@makaio/preferences`        | User preference storage with localStorage, Drizzle, and hybrid backends.      |

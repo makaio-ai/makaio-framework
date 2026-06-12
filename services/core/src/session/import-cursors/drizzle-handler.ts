@@ -1,16 +1,16 @@
 /**
- * Drizzle/SQLite handler for import cursor storage.
+ * Drizzle handler for import cursor storage.
  *
  * Provides persistent cursor tracking for log import resume.
  * @packageDocumentation
  */
 
 import { eq } from 'drizzle-orm';
-import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
-import { importCursors } from './schema.js';
+import { importCursorsSchema } from './schema.variants.js';
 
 /**
  * Register Drizzle-backed import cursor storage handlers.
@@ -36,6 +36,7 @@ export function registerDrizzleImportCursorStorage(
   db: MakaioDatabase,
   _ctx: ExtensionContext,
 ): () => void {
+  const { importCursors } = resolveSchema(db, importCursorsSchema);
   const unsubs: Array<() => void> = [];
 
   // storage:importCursor.get

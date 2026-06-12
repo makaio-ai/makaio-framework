@@ -1,5 +1,47 @@
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import {
+  getRawSqlExecutor,
+  type MakaioDatabase,
+  type RawSqlExecutor,
+  type StorageDialect,
+} from '@makaio/storage-drizzle';
+
+/**
+ * Decode a raw embedding value returned by the database driver into a Float32Array.
+ *
+ * - SQLite (libsql/bun-sqlite): returns an `ArrayBuffer` — wrap directly.
+ * - Postgres (node-postgres): returns a Node.js `Buffer` (a `Uint8Array` subclass).
+ *   Driver Buffers are frequently views into a shared allocation pool, so
+ *   `byteOffset` is arbitrary — `Float32Array` construction over the underlying
+ *   `ArrayBuffer` requires `byteOffset % 4 === 0` and throws a `RangeError`
+ *   otherwise. Aligned views are reinterpreted in place (zero-copy); unaligned
+ *   views are copied to a fresh zero-offset allocation first.
+ *
+ * Module-level (not a class method) so the decoding contract stays unit-testable
+ * without a live Postgres driver.
+ * @param raw - Value from the `embedding` column (ArrayBuffer on SQLite, Buffer on pg).
+ * @returns Float32Array reinterpreting the raw bytes as IEEE-754 f32 values.
+ * @throws Error when `raw.byteLength` is not a multiple of 4 — such a value
+ *   cannot encode IEEE-754 f32 lanes and indicates a corrupt or foreign blob.
+ */
+export function decodeEmbedding(raw: ArrayBuffer | Uint8Array): Float32Array {
+  if (raw.byteLength % 4 !== 0) {
+    throw new Error(
+      `Invalid embedding blob: byte length ${raw.byteLength} is not a multiple of 4 (IEEE-754 f32 lanes)`,
+    );
+  }
+  if (raw instanceof ArrayBuffer) {
+    return new Float32Array(raw);
+  }
+  if (raw.byteOffset % 4 === 0) {
+    // Aligned view: reinterpret the underlying bytes in place without copying.
+    return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+  }
+  // Unaligned view — node-postgres bytea Buffers are sliced from the shared
+  // Buffer pool at arbitrary offsets. Copy into a fresh zero-offset allocation
+  // before reinterpreting.
+  return new Float32Array(Uint8Array.from(raw).buffer);
+}
 
 /**
  * Manages dynamic embedding index tables per model.
@@ -47,7 +89,11 @@ import type { MakaioDatabase } from '@makaio/storage-drizzle';
  * ```
  */
 export class EmbeddingIndexManager {
-  private readonly db: MakaioDatabase;
+  /** Raw SQL executor for all dynamic (non-schema) table operations. */
+  private readonly rawSql: RawSqlExecutor;
+
+  /** Active storage dialect, used for dialect-aware catalog queries. */
+  private readonly dialect: StorageDialect;
 
   /**
    * Cache of known tables to avoid redundant CREATE TABLE checks.
@@ -58,7 +104,8 @@ export class EmbeddingIndexManager {
    * @param db - Drizzle database instance for all dynamic table operations.
    */
   public constructor(db: MakaioDatabase) {
-    this.db = db;
+    this.rawSql = getRawSqlExecutor(db);
+    this.dialect = this.rawSql.dialect;
   }
 
   /**
@@ -102,7 +149,8 @@ export class EmbeddingIndexManager {
   /**
    * Ensure index table exists for a model.
    *
-   * Creates table with BLOB column for vector storage if not exists.
+   * Creates the table with a binary column for vector storage if not exists
+   * (`BLOB` on SQLite, `bytea` on Postgres).
    * Uses in-memory cache to avoid redundant CREATE TABLE statements.
    *
    * Note: In production with libsql, F32_BLOB would be used for native
@@ -118,18 +166,20 @@ export class EmbeddingIndexManager {
       return tableName;
     }
 
-    // Create table with BLOB for vector storage
-    // Note: F32_BLOB would be used in production libsql for native vector ops
-    // Standard SQLite falls back to BLOB storage
-    await this.db.run(
-      sql.raw(`
-        CREATE TABLE IF NOT EXISTS ${tableName} (
+    // Create the table with a dialect-appropriate binary column for vector
+    // storage: SQLite has BLOB (libsql would use F32_BLOB for native vector
+    // ops), Postgres has bytea.
+    // The table name cannot be a bound parameter in DDL; it is self-synthesized
+    // (slugify + hash, [a-z0-9_] only) and rendered as a quoted identifier.
+    const tableId = sql.identifier(tableName);
+    const binaryType = this.dialect === 'postgres' ? sql.raw('bytea') : sql.raw('BLOB');
+    await this.rawSql.run(
+      sql`CREATE TABLE IF NOT EXISTS ${tableId} (
           entity_type TEXT NOT NULL,
           entity_id TEXT NOT NULL,
-          embedding BLOB NOT NULL,
+          embedding ${binaryType} NOT NULL,
           PRIMARY KEY (entity_type, entity_id)
-        )
-      `),
+        )`,
     );
 
     this.knownTables.add(tableName);
@@ -157,7 +207,7 @@ export class EmbeddingIndexManager {
     const buffer = new Uint8Array(embedding.buffer, embedding.byteOffset, embedding.byteLength);
 
     const tableId = sql.identifier(tableName);
-    await this.db.run(
+    await this.rawSql.run(
       sql`INSERT INTO ${tableId} (entity_type, entity_id, embedding)
         VALUES (${entityType}, ${entityId}, ${buffer})
         ON CONFLICT(entity_type, entity_id) DO UPDATE SET
@@ -185,10 +235,7 @@ export class EmbeddingIndexManager {
 
     // Check if table exists
     if (!this.knownTables.has(tableName)) {
-      const tables = await this.db.all<{ name: string }>(
-        sql.raw(`SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`),
-      );
-      if (tables.length === 0) {
+      if (!(await this.tableExists(tableName))) {
         return [];
       }
       this.knownTables.add(tableName);
@@ -197,7 +244,7 @@ export class EmbeddingIndexManager {
     // Fetch all embeddings and compute distance in JS
     // Note: Production libsql would use native vector_distance_cos or <-> operator
     const tableId = sql.identifier(tableName);
-    const rows = await this.db.all<{ entity_type: string; entity_id: string; embedding: ArrayBuffer }>(
+    const rows = await this.rawSql.all<{ entity_type: string; entity_id: string; embedding: ArrayBuffer | Uint8Array }>(
       sql`SELECT entity_type, entity_id, embedding FROM ${tableId}`,
     );
 
@@ -207,7 +254,7 @@ export class EmbeddingIndexManager {
 
     // Calculate Euclidean distance for each embedding
     const results = rows.map((row) => {
-      const stored = new Float32Array(row.embedding);
+      const stored = decodeEmbedding(row.embedding);
       const distance = this.euclideanDistance(queryEmbedding, stored);
       return {
         entityType: row.entity_type,
@@ -230,17 +277,37 @@ export class EmbeddingIndexManager {
     const tableName = this.getTableName(model);
 
     if (!this.knownTables.has(tableName)) {
-      const tables = await this.db.all<{ name: string }>(
-        sql.raw(`SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`),
-      );
-      if (tables.length === 0) {
+      if (!(await this.tableExists(tableName))) {
         return;
       }
       this.knownTables.add(tableName);
     }
 
     const tableId = sql.identifier(tableName);
-    await this.db.run(sql`DELETE FROM ${tableId} WHERE entity_type = ${entityType} AND entity_id = ${entityId}`);
+    await this.rawSql.run(sql`DELETE FROM ${tableId} WHERE entity_type = ${entityType} AND entity_id = ${entityId}`);
+  }
+
+  /**
+   * Check whether a dynamic embedding index table exists in the database catalog.
+   *
+   * SQLite exposes `sqlite_master`; Postgres exposes `information_schema.tables`.
+   * The check is dialect-aware so callers never reach the table-specific queries
+   * on a missing table, and the `knownTables` cache is populated on first confirmation.
+   * @param tableName - Unqualified table name to probe.
+   * @returns `true` when the table exists.
+   */
+  private async tableExists(tableName: string): Promise<boolean> {
+    if (this.dialect === 'postgres') {
+      const rows = await this.rawSql.all<{ table_name: string }>(
+        sql`SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ${tableName}`,
+      );
+      return rows.length > 0;
+    }
+    // SQLite
+    const rows = await this.rawSql.all<{ name: string }>(
+      sql`SELECT name FROM sqlite_master WHERE type='table' AND name=${tableName}`,
+    );
+    return rows.length > 0;
   }
 
   /**

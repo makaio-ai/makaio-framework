@@ -123,7 +123,8 @@ export const MessageStorageNamespace = createContractStorageNamespace('message',
     },
 
     /**
-     * Search messages using FTS5.
+     * Full-text search over messages, ordered by relevance
+     * (FTS5/bm25 on SQLite; tsvector/ts_rank on Postgres).
      *
      * Subject: `storage:message.search`
      * Type: Request (RPC)
@@ -141,7 +142,9 @@ export const MessageStorageNamespace = createContractStorageNamespace('message',
     },
 
     /**
-     * Full-text search over messages using FTS5 with BM25 scores and excerpts.
+     * Full-text search over messages with relevance scores and highlighted
+     * excerpts (FTS5/bm25 on SQLite; tsvector/ts_rank with ts_headline on
+     * Postgres).
      *
      * Subject: `storage:message.ftsSearch`
      * Type: Request (RPC)
@@ -151,7 +154,12 @@ export const MessageStorageNamespace = createContractStorageNamespace('message',
      */
     ftsSearch: {
       request: z.object({
-        /** FTS5 query string (sanitized: each token is quoted, AND semantics) */
+        /**
+         * Search query. Query semantics are dialect-specific: on SQLite each
+         * token is sanitized into a quoted FTS5 term with AND semantics; on
+         * Postgres the query is parsed by `websearch_to_tsquery` (web-search
+         * syntax: quoted phrases, OR, and `-` negation).
+         */
         query: z.string(),
         /** Restrict results to a single session */
         sessionId: z.string().optional(),
@@ -165,7 +173,12 @@ export const MessageStorageNamespace = createContractStorageNamespace('message',
             messageId: z.string(),
             /** Session the message belongs to */
             sessionId: z.string(),
-            /** BM25 relevance score (higher = more relevant) */
+            /**
+             * Relevance score (higher = more relevant). The scale is
+             * dialect-specific (negated bm25 on SQLite, ts_rank on Postgres);
+             * scores are positive on both dialects but never comparable
+             * across dialects.
+             */
             score: z.number(),
             /** Snippet with matched terms highlighted using `<mark>` tags */
             excerpt: z.string(),

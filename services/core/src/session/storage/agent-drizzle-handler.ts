@@ -1,11 +1,13 @@
 import { eq, and } from 'drizzle-orm';
-import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CompressionModeSchema, type ExtensionContext, type MakaioSessionAgent } from '@makaio/contracts';
-import { AgentStorageNamespace, AgentStorageSubjects } from './agent-namespace.js';
+import { AgentStorageSubjects } from './agent-namespace.js';
+import { sessionStorageSchema } from './schema.variants.js';
 
-const { agents } = AgentStorageNamespace.extensions.drizzle!;
-type AgentRow = typeof agents.$inferSelect;
+/** Canonical column shape of the agents table, resolved through the dialect seam. */
+type AgentsTable = typeof sessionStorageSchema.sqlite.agents;
+type AgentRow = AgentsTable['$inferSelect'];
 
 /**
  * Handler dependencies for agent storage handlers.
@@ -47,7 +49,7 @@ export function mapAgent(row: AgentRow): MakaioSessionAgent {
  * @param agent - The agent to convert
  * @returns DB column values for insert/update operations
  */
-function toDbValues(agent: MakaioSessionAgent): typeof agents.$inferInsert {
+function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
   return {
     agentId: agent.agentId,
     adapterId: agent.adapterId,
@@ -94,6 +96,7 @@ function cleanupHandlers(cleanups: ReadonlyArray<() => void>): void {
  */
 function registerGetHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.get, async (ctx) => {
     const [row] = await db.select().from(agents).where(eq(agents.agentId, ctx.payload.agentId)).limit(1);
@@ -109,6 +112,7 @@ function registerGetHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerSetHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.set, async (ctx) => {
     const { agent } = ctx.payload;
@@ -130,6 +134,7 @@ function registerSetHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerDeleteHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.delete, async (ctx) => {
     const result = await db.delete(agents).where(eq(agents.agentId, ctx.payload.agentId));
@@ -145,6 +150,7 @@ function registerDeleteHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerListByAdapterHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.listByAdapter, async (ctx) => {
     const { adapterName, status } = ctx.payload;
@@ -171,6 +177,7 @@ function registerListByAdapterHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerListBySessionHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.listBySession, async (ctx) => {
     const { sessionId } = ctx.payload;
@@ -187,6 +194,7 @@ function registerListBySessionHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerUpdateStatusHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateStatus, async (ctx) => {
     const { agentId, status } = ctx.payload;
@@ -205,6 +213,7 @@ function registerUpdateStatusHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerUpdateActivityHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateActivity, async (ctx) => {
     const { agentId, lastActivityAt } = ctx.payload;
@@ -222,11 +231,12 @@ function registerUpdateActivityHandler(deps: AgentHandlerDeps): () => void {
  */
 function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateRuntime, async (ctx) => {
     const { agentId, cwd, model, providerConfigId } = ctx.payload;
     const now = Date.now();
-    const updateFields: Partial<typeof agents.$inferInsert> = {
+    const updateFields: Partial<AgentsTable['$inferInsert']> = {
       lastActivityAt: now,
     };
 
@@ -243,7 +253,7 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
 /**
  * Register Drizzle-based agent storage handlers.
  *
- * Persists agents to SQLite/libSQL via Drizzle ORM.
+ * Persists agents via Drizzle ORM.
  * Provides durable storage suitable for production deployments.
  * @param bus - The bus instance to register handlers on
  * @param db - The MakaioDatabase instance

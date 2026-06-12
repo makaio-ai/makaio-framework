@@ -18,7 +18,9 @@ const frameworkPackageRoot = join(dirname(fileURLToPath(import.meta.url)), '..',
 const result = verifyFrameworkDist(frameworkPackageRoot);
 
 if (result.ok) {
-  console.info(`framework-dist: ok (${result.checkedTargets} export targets)`);
+  console.info(
+    `framework-dist: ok (${result.checkedTargets} export targets, ${result.scannedModules} modules scanned, migration chains verified)`,
+  );
   process.exit(0);
 }
 

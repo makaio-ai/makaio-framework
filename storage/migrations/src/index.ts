@@ -6,7 +6,7 @@
  * ## Runtime API (this barrel)
  * - getMigrationsFolder() - Path to SQL migration files for NodeRuntime
  * - readMigrations() - Reads migration entries from the co-located drizzle/ folder
- * - applyMigrations() - Applies pre-resolved migrations to a libsql database
+ * - applyMigrations() - Applies pre-resolved migrations through the dialect-portable raw SQL executor
  *
  * ## Dev-time CLI
  * - discover-schemas.ts - Scans workspace for makaio.drizzleSchema declarations (source-local helper)
@@ -15,6 +15,7 @@
 
 export { getMigrationsFolder } from './run-migrations.js';
 export {
+  MigrationDialectMismatchError,
   readMigrations,
   type MigrationMeta,
   type MigrationReadInput,

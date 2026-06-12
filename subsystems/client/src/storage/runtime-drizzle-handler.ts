@@ -9,13 +9,16 @@
  */
 
 import { and, eq, gt, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { CLIENT_RUNTIME_STATUSES } from '../client-runtime-registry-types.js';
 import type { ClientRuntimeRecord, ClientRuntimeStatus } from '../client-runtime-registry-types.js';
-import { clientRuntimes } from './runtime-schema.js';
+import { clientRuntimesSchema } from './runtime-schema.variants.js';
 import { ClientRuntimeStorageSubjects } from './runtime-storage-namespace.js';
+
+/** Resolved type alias for the `client_runtimes` table, dialect-independent. */
+type ClientRuntimesTable = typeof clientRuntimesSchema.sqlite.clientRuntimes;
 
 export { ClientRuntimeStorageNamespace, ClientRuntimeStorageSubjects } from './runtime-storage-namespace.js';
 
@@ -23,7 +26,7 @@ export { ClientRuntimeStorageNamespace, ClientRuntimeStorageSubjects } from './r
 // DB row mapper
 // ---------------------------------------------------------------------------
 
-type DbRow = typeof clientRuntimes.$inferSelect;
+type DbRow = ClientRuntimesTable['$inferSelect'];
 
 /** All valid {@link ClientRuntimeStatus} values, used to guard DB reads. */
 const VALID_STATUSES: ReadonlySet<string> = new Set(CLIENT_RUNTIME_STATUSES);
@@ -76,6 +79,7 @@ function mapRow(row: DbRow): ClientRuntimeRecord {
  * @returns Cleanup function to unregister all handlers
  */
 export function registerDrizzleRuntimeStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+  const { clientRuntimes } = resolveSchema(db, clientRuntimesSchema);
   const upsertCleanup = bus.on(ClientRuntimeStorageSubjects.upsert, async (ctx) => {
     const record = ctx.payload;
 
@@ -145,6 +149,7 @@ export async function selectRuntimeById(
   db: MakaioDatabase,
   clientRuntimeId: string,
 ): Promise<ClientRuntimeRecord | undefined> {
+  const { clientRuntimes } = resolveSchema(db, clientRuntimesSchema);
   const [row] = await db.select().from(clientRuntimes).where(eq(clientRuntimes.id, clientRuntimeId)).limit(1);
   return row ? mapRow(row) : undefined;
 }
@@ -161,6 +166,7 @@ export async function selectRuntimeBySupervisorSessionId(
   db: MakaioDatabase,
   supervisorSessionId: string,
 ): Promise<ClientRuntimeRecord[]> {
+  const { clientRuntimes } = resolveSchema(db, clientRuntimesSchema);
   const rows = await db
     .select()
     .from(clientRuntimes)
@@ -182,6 +188,7 @@ export async function selectRuntimeByPidAndClientId(
   pid: number,
   clientId: string,
 ): Promise<ClientRuntimeRecord | undefined> {
+  const { clientRuntimes } = resolveSchema(db, clientRuntimesSchema);
   const [row] = await db
     .select()
     .from(clientRuntimes)

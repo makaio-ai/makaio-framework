@@ -9,10 +9,13 @@
  * results through these utilities to produce the final `IMakaioSession` shapes.
  */
 import { count, inArray, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getDatabaseDialect, getRawSqlExecutor, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { ForkTransforms, IMakaioSession } from '@makaio/contracts';
-import { agents } from './schema.js';
-import { messages } from '../messages/schema.js';
+import { sessionStorageSchema } from './schema.variants.js';
+import { messagesSchema } from '../messages/schema.variants.js';
+
+/** Canonical column shape of the agents table, resolved through the dialect seam. */
+type AgentsTable = typeof sessionStorageSchema.sqlite.agents;
 
 /**
  * Row shape returned by FTS session search queries.
@@ -22,7 +25,7 @@ import { messages } from '../messages/schema.js';
  * managed by the host-owned junction table after the sealed-sessions
  * refactor.
  */
-export interface SearchSessionRow {
+export type SearchSessionRow = {
   session_id: string;
   created_at: number;
   last_activity_at: number;
@@ -42,7 +45,7 @@ export interface SearchSessionRow {
   summary_updated_at: number | null;
   fork_transforms: string | null;
   target_working_directory: string | null;
-}
+};
 
 /**
  * Filter parameters accepted by FTS search queries.
@@ -65,11 +68,12 @@ export interface SearchFilters {
 export async function fetchAgentsBySession(
   db: MakaioDatabase,
   sessionIds: string[],
-): Promise<Map<string, Array<typeof agents.$inferSelect>>> {
+): Promise<Map<string, Array<AgentsTable['$inferSelect']>>> {
   if (sessionIds.length === 0) return new Map();
+  const { agents } = resolveSchema(db, sessionStorageSchema);
   const uniqueIds = [...new Set(sessionIds)];
   const agentRows = await db.select().from(agents).where(inArray(agents.sessionId, uniqueIds));
-  const agentsBySession = new Map<string, Array<typeof agents.$inferSelect>>();
+  const agentsBySession = new Map<string, Array<AgentsTable['$inferSelect']>>();
   for (const agent of agentRows) {
     const list = agentsBySession.get(agent.sessionId) ?? [];
     list.push(agent);
@@ -80,23 +84,33 @@ export async function fetchAgentsBySession(
 
 /**
  * Resolves first-user-message previews for matched sessions.
+ *
+ * The tie-breaker for same-timestamp messages is dialect-specific:
+ * - SQLite uses `rowid` (a physical insertion-order surrogate available on every SQLite table).
+ * - Postgres has no rowid; `message_id` provides a deterministic lexicographic tie-break
+ *   that mirrors the (timestamp, message_id) ordering used by the Postgres search queries.
  * @param db - Drizzle database instance
  * @param sessionIds - Matched session IDs
+ * @param dialect - Active storage dialect, controls the tie-break predicate
  * @returns First user message text keyed by session ID
  */
 export async function fetchPreviewBySession(
   db: MakaioDatabase,
   sessionIds: string[],
+  dialect = getDatabaseDialect(db),
 ): Promise<Map<string, string | null>> {
   if (sessionIds.length === 0) {
     return new Map<string, string | null>();
   }
   const uniqueIds = [...new Set(sessionIds)];
 
-  // Tie-break same-timestamp messages with rowid so preview selection stays deterministic
-  // without depending on UUID lexicographic order.
-  const previewRows = await db.all<{ sessionId: string; preview: string | null }>(sql`
-    SELECT m.session_id as sessionId, m.content_text as preview
+  // Tie-break same-timestamp messages deterministically.
+  // SQLite: rowid is a physical insertion-order surrogate (not available on Postgres).
+  // Postgres: message_id provides a stable lexicographic tie-break.
+  const tieBreaker = dialect === 'postgres' ? sql`m2.message_id < m.message_id` : sql`m2.rowid < m.rowid`;
+
+  const previewRows = await getRawSqlExecutor(db).all<{ sessionId: string; preview: string | null }>(sql`
+    SELECT m.session_id as "sessionId", m.content_text as preview
     FROM messages m
     WHERE m.role = 'user'
       AND m.session_id IN (${sql.join(
@@ -108,7 +122,7 @@ export async function fetchPreviewBySession(
         FROM messages m2
         WHERE m2.session_id = m.session_id
           AND m2.role = 'user'
-          AND (m2.timestamp < m.timestamp OR (m2.timestamp = m.timestamp AND m2.rowid < m.rowid))
+          AND (m2.timestamp < m.timestamp OR (m2.timestamp = m.timestamp AND ${tieBreaker}))
       )
   `);
 
@@ -130,6 +144,7 @@ export async function fetchMessageCountsBySession(
   sessionIds: string[],
 ): Promise<Map<string, number>> {
   if (sessionIds.length === 0) return new Map();
+  const { messages } = resolveSchema(db, messagesSchema);
   const uniqueIds = [...new Set(sessionIds)];
   const messageCountRows = await db
     .select({
@@ -181,7 +196,7 @@ export function parseForkTransforms(raw: string | null): ForkTransforms | undefi
  */
 export function mapRowToSession(
   row: SearchSessionRow,
-  sessionAgents: Array<typeof agents.$inferSelect>,
+  sessionAgents: Array<AgentsTable['$inferSelect']>,
   previewBySession: Map<string, string | null>,
   countBySession: Map<string, number>,
 ): IMakaioSession & { preview: { messageCount: number; firstUserMessage: string | null } } {

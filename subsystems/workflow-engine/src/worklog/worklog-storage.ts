@@ -1,19 +1,16 @@
 import { eq, and, desc, gte, lte, count, sum } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { WorkLogExecutionSummary, WorkLogStats, JsonValue, WorkflowArtifactBinding } from '@makaio/contracts';
-import {
-  worklogSummaries,
-  worklogFrameEntries,
-  worklogArtifactWrites,
-  worklogGateEvents,
-  type InsertWorklogSummary,
-  type SelectWorklogSummary,
-  type InsertWorklogFrameEntry,
-  type SelectWorklogFrameEntry,
-  type InsertWorklogArtifactWrite,
-  type InsertWorklogGateEvent,
-  type SelectWorklogGateEvent,
+import type {
+  InsertWorklogSummary,
+  SelectWorklogSummary,
+  InsertWorklogFrameEntry,
+  SelectWorklogFrameEntry,
+  InsertWorklogArtifactWrite,
+  InsertWorklogGateEvent,
+  SelectWorklogGateEvent,
 } from '../storage/schema.js';
+import { workflowEngineSchema } from '../storage/schema.variants.js';
 
 // ─────────────────────────────────────────────────────────────
 // Row → domain mappers
@@ -55,6 +52,7 @@ function mapSummary(row: SelectWorklogSummary): WorkLogExecutionSummary {
  * @param summary - The summary values to insert or update.
  */
 export async function upsertWorklogSummary(db: MakaioDatabase, summary: InsertWorklogSummary): Promise<void> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
   await db.insert(worklogSummaries).values(summary).onConflictDoUpdate({
     target: worklogSummaries.executionId,
     set: summary,
@@ -71,6 +69,7 @@ export async function getWorklogSummary(
   db: MakaioDatabase,
   executionId: string,
 ): Promise<WorkLogExecutionSummary | null> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
   const rows = await db.select().from(worklogSummaries).where(eq(worklogSummaries.executionId, executionId)).limit(1);
   return rows[0] ? mapSummary(rows[0]) : null;
 }
@@ -101,6 +100,7 @@ export async function listWorklogSummaries(
   db: MakaioDatabase,
   options: ListWorklogSummariesOptions = {},
 ): Promise<{ items: WorkLogExecutionSummary[]; total: number }> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
   const { workflowId, status, limit = 50, offset = 0 } = options;
 
   const predicates = [
@@ -140,6 +140,7 @@ export async function listWorklogSummaries(
  * @param entry - Frame entry values to insert or update.
  */
 export async function upsertWorklogFrameEntry(db: MakaioDatabase, entry: InsertWorklogFrameEntry): Promise<void> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   await db.insert(worklogFrameEntries).values(entry).onConflictDoUpdate({
     target: worklogFrameEntries.frameId,
     set: entry,
@@ -160,6 +161,7 @@ export async function getWorklogFrameEntry(
   db: MakaioDatabase,
   frameId: string,
 ): Promise<SelectWorklogFrameEntry | null> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   const rows = await db.select().from(worklogFrameEntries).where(eq(worklogFrameEntries.frameId, frameId)).limit(1);
   return rows[0] ?? null;
 }
@@ -177,6 +179,7 @@ export async function getWorklogFrameEntry(
  * @param write - Artifact write event values to insert.
  */
 export async function insertWorklogArtifactWrite(db: MakaioDatabase, write: InsertWorklogArtifactWrite): Promise<void> {
+  const { worklogArtifactWrites } = resolveSchema(db, workflowEngineSchema);
   await db.insert(worklogArtifactWrites).values(write).onConflictDoUpdate({
     target: worklogArtifactWrites.id,
     set: write,
@@ -219,6 +222,7 @@ export function buildArtifactWriteId(
  * @param event - Gate event values to insert or update.
  */
 export async function upsertWorklogGateEvent(db: MakaioDatabase, event: InsertWorklogGateEvent): Promise<void> {
+  const { worklogGateEvents } = resolveSchema(db, workflowEngineSchema);
   await db.insert(worklogGateEvents).values(event).onConflictDoUpdate({
     target: worklogGateEvents.id,
     set: event,
@@ -235,6 +239,7 @@ export async function upsertWorklogGateEvent(db: MakaioDatabase, event: InsertWo
  * @returns The gate event row, or `null` when not found.
  */
 export async function getWorklogGateEvent(db: MakaioDatabase, id: string): Promise<SelectWorklogGateEvent | null> {
+  const { worklogGateEvents } = resolveSchema(db, workflowEngineSchema);
   const rows = await db.select().from(worklogGateEvents).where(eq(worklogGateEvents.id, id)).limit(1);
   return rows[0] ?? null;
 }
@@ -271,6 +276,7 @@ export async function aggregateTokenTotals(
   db: MakaioDatabase,
   executionId: string,
 ): Promise<{ totalInputTokens: number; totalOutputTokens: number; totalEstimatedCost: number }> {
+  const { worklogFrameEntries } = resolveSchema(db, workflowEngineSchema);
   const [row] = await db
     .select({
       totalInputTokens: sum(worklogFrameEntries.inputTokens),
@@ -317,6 +323,7 @@ export async function aggregateWorklogStats(
   db: MakaioDatabase,
   options: AggregateWorklogStatsOptions = {},
 ): Promise<WorkLogStats> {
+  const { worklogSummaries } = resolveSchema(db, workflowEngineSchema);
   const { workflowId, since, until } = options;
 
   const predicates = [
