@@ -1,6 +1,7 @@
-import { sqliteTable, text, index, primaryKey } from 'drizzle-orm/sqlite-core';
-import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
-import { messages } from '../messages/schema.js';
+import { index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { index as pgIndex, primaryKey as pgPrimaryKey } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
+import { messageIdColumnPair } from '../messages/schema.variants.js';
 
 /**
  * Message routing table schema.
@@ -14,22 +15,26 @@ import { messages } from '../messages/schema.js';
  * - Composite primary key allows multiple status entries per message-agent pair
  * - Enables tracking of delivery lifecycle for each target agent
  * - Supports querying "which agents have completed for this message?"
+ *
+ * The `messages` table stays a hand-written twin (it carries a Postgres-only
+ * `content_tsv` generated column), so the FK target comes from the twin's
+ * `messageIdColumnPair` thunk rather than a `columnPair` on a dual table.
  */
-export const messageRouting = sqliteTable(
+export const messageRoutingDual = defineDualTable(
   'message_routing',
-  {
+  (c) => ({
     /**
      * Foreign key to the message being routed.
      * Cascade deletes when message is removed.
      */
-    messageId: text('message_id')
-      .notNull()
-      .references(() => messages.messageId, { onDelete: 'cascade' }),
+    messageId: c.text('message_id').notNull().references(messageIdColumnPair, {
+      onDelete: 'cascade',
+    }),
 
     /**
      * Target agent ID.
      */
-    agentId: text('agent_id').notNull(),
+    agentId: c.text('agent_id').notNull(),
 
     /**
      * Routing status.
@@ -37,33 +42,42 @@ export const messageRouting = sqliteTable(
      * - 'acknowledged': Agent received and started processing
      * - 'completed': Agent finished responding
      */
-    status: text('status', { enum: ['sent', 'acknowledged', 'completed'] }).notNull(),
+    status: c.textEnum('status', { enum: ['sent', 'acknowledged', 'completed'] as const }).notNull(),
 
     /**
      * Status change timestamp (Unix ms).
      */
-    timestamp: epochMs('timestamp').notNull(),
+    timestamp: c.epochMs('timestamp').notNull(),
 
     /**
      * Error message if routing failed.
      * NULL for successful routing.
      */
-    error: text('error'),
-  },
-  (table) => [
-    /**
-     * Composite primary key for message-agent-status.
-     * Allows tracking multiple status transitions per message-agent pair.
-     */
-    primaryKey({ columns: [table.messageId, table.agentId, table.status] }),
+    error: c.text('error'),
+  }),
+  {
+    sqlite: (t) => [
+      /**
+       * Composite primary key for message-agent-status.
+       * Allows tracking multiple status transitions per message-agent pair.
+       */
+      primaryKey({ columns: [t.messageId, t.agentId, t.status] }),
 
-    /**
-     * Index for agent-scoped queries.
-     * Used for "what messages are pending for this agent?"
-     */
-    index('idx_routing_agent').on(table.agentId, table.timestamp),
-  ],
+      /**
+       * Index for agent-scoped queries.
+       * Used for "what messages are pending for this agent?"
+       */
+      index('idx_routing_agent').on(t.agentId, t.timestamp),
+    ],
+    postgres: (t) => [
+      pgPrimaryKey({ columns: [t.messageId, t.agentId, t.status] }),
+      pgIndex('idx_routing_agent').on(t.agentId, t.timestamp),
+    ],
+  },
 );
+
+/** SQLite face of the `message_routing` table (canonical schema). */
+export const messageRouting = messageRoutingDual.sqlite;
 
 /**
  * Type for inserting a new routing entry.

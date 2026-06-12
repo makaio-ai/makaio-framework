@@ -133,7 +133,7 @@ describe('runMigrations (postgres dialect gating)', () => {
   });
 
   it('skips FTS5 setup on postgres handles', async () => {
-    const { db, statements } = createPgBrandedTestDb();
+    const { db, statements } = await createPgBrandedTestDb();
 
     await runMigrations(db, { migrationsDir: tmpDir });
 
@@ -148,7 +148,7 @@ describe('runMigrations (postgres dialect gating)', () => {
   });
 
   it('applies the bundled postgres chain when no migrationsDir is given', async () => {
-    const { db, statements } = createPgBrandedTestDb();
+    const { db, statements } = await createPgBrandedTestDb();
 
     // Zero options: the reader's filesystem default must be the bundled chain
     // matching the handle's dialect — not the SQLite chain, whose journal the
@@ -163,7 +163,7 @@ describe('runMigrations (postgres dialect gating)', () => {
   });
 
   it('rejects a sqlite journal on postgres handles with MigrationDialectMismatchError', async () => {
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
 
     // Point the PG-branded handle at the real SQLite chain.
     const sqliteMigrationsDir = getMigrationsFolder('sqlite');

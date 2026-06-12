@@ -1,12 +1,15 @@
 import type { LibSQLDatabase } from 'drizzle-orm/libsql';
+import type { StorageDialect } from '@makaio/contracts';
 
 /**
  * Storage backend dialect identifier.
  *
- * Postgres is opt-in via connection URL; SQLite is the default dialect and the
- * fallback for unbranded handles (see {@link getDatabaseDialect}).
+ * Re-exported from `@makaio/contracts` — the single source of truth for the
+ * dialect vocabulary. Postgres is opt-in via connection URL; SQLite is the
+ * default dialect and the fallback for unbranded handles (see
+ * {@link getDatabaseDialect}).
  */
-export type StorageDialect = 'sqlite' | 'postgres';
+export type { StorageDialect };
 
 /**
  * Brand key attached to database handles by `createDatabaseClient`.

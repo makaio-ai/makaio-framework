@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rm, readFile, access } from 'node:fs/promises';
 import path from 'node:path';
-import { generateSchema } from '../generate-schema.js';
+import { generateSchema, resolvePresentDialects } from '../generate-schema.js';
 import { createTestWorkspace, createDualDialectWorkspace } from './shared.js';
 
 let tempDir: string | null = null;
@@ -100,5 +100,16 @@ describe('generateSchema', () => {
 
     expect(secondSqlite).toBe(firstSqlite);
     expect(secondPg).toBe(firstPg);
+  });
+});
+
+describe('resolvePresentDialects', () => {
+  it('includes the postgres dialect because @makaio/storage-pg is present in this workspace', () => {
+    const dialects = resolvePresentDialects();
+
+    // The SQLite baseline is always present, and the Postgres engine package is
+    // a workspace member here, so its barrel dialect must be selected.
+    expect(dialects).toContain('sqlite');
+    expect(dialects).toContain('postgres');
   });
 });

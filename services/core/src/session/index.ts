@@ -76,6 +76,7 @@ export { SessionExtensionContextImpl, createSessionExtensionContext } from './ex
 // Session storage (CRUD)
 export {
   agents,
+  agentsDual,
   AgentStorageNamespace,
   AgentStorageSubjects,
   fetchAgentsBySession,
@@ -93,6 +94,7 @@ export {
   registerMemoryAgentStorage,
   registerMemorySessionStorage,
   sessions,
+  sessionsDual,
   SessionStorageNamespace,
   SessionStorageSubjects,
 } from './storage/index.js';
@@ -103,6 +105,7 @@ export {
   registerDrizzleSessionEventStorage,
   registerMemorySessionEventStorage,
   sessionEvents,
+  sessionEventsDual,
   SessionEventStorageNamespace,
   SessionEventStorageSubjects,
 } from './session-events/index.js';
@@ -113,7 +116,7 @@ export { SessionLogger, type EventTransform, type SessionLoggerOptions } from '.
 
 // Import cursor storage handlers (for log import)
 export { registerDrizzleImportCursorStorage } from './import-cursors/index.js';
-export { importCursors } from './import-cursors/schema.js';
+export { importCursors, importCursorsDual } from './import-cursors/schema.js';
 
 // Deliberately no re-export of platform-only session import/snapshot wiring.
 // Those handlers moved to dedicated platform packages so this core barrel stays
@@ -131,6 +134,7 @@ export {
   registerDrizzleTurnStorage,
   registerMemoryTurnStorage,
   turns,
+  turnsDual,
   TurnStorageNamespace,
   TurnStorageSubjects,
 } from './turns/index.js';
@@ -145,6 +149,7 @@ export {
 export type { InsertMessage, SelectMessage } from './messages/index.js';
 export {
   messageRouting,
+  messageRoutingDual,
   MessageRoutingNamespace,
   MessageRoutingSubjects,
   registerDrizzleMessageRoutingStorage,

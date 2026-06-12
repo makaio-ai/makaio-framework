@@ -7,13 +7,21 @@
  * schema per suite). A single `"public".`-qualified identifier silently
  * breaks that model the first time the chain is applied outside `public`.
  *
- * `db:generate` enforces the invariant mechanically via
- * `normalize-postgres-migrations.ts`; this test pins it against any path that
- * bypasses the script (hand edits, tooling changes, drizzle-kit upgrades).
+ * The Postgres `db:generate` leg enforces the invariant mechanically via the
+ * normalize script shipped with `@makaio/storage-pg`; this test pins it
+ * against any path that bypasses the script (hand edits, tooling changes,
+ * drizzle-kit upgrades) by reading the chain through the engine seam.
  */
 import { describe, expect, it } from 'vitest';
+import { registerStorageEngine } from '@makaio/storage-drizzle';
+import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
 import { readMigrations } from '../read-migrations.js';
 import { getMigrationsFolder } from '../run-migrations.js';
+
+// getMigrationsFolder and the journal-dialect guard resolve through the engine
+// registry; register the Postgres engine so the chain under test is served by
+// the real engine (same-reference re-registration is a no-op).
+registerStorageEngine(postgresStorageEngine);
 
 describe('postgres migration chain DDL', () => {
   it('contains no schema-qualified identifiers (unqualified-DDL invariant)', () => {
@@ -32,8 +40,8 @@ describe('postgres migration chain DDL', () => {
     expect(
       offending,
       'Schema-qualified DDL found in the Postgres chain. Run the db:generate pipeline ' +
-        '(it ends with normalize-postgres-migrations.ts) or strip the "public". qualifiers — ' +
-        "see the unqualified-DDL section in this package's README.",
+        '(its Postgres leg ends with the @makaio/storage-pg normalize script) or strip the ' +
+        '"public". qualifiers — see the unqualified-DDL section in this package\'s README.',
     ).toEqual([]);
   });
 });

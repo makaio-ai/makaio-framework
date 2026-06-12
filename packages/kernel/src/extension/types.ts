@@ -5,6 +5,7 @@ import type {
   ExtensionIdentity,
   ExtensionService,
   NodeExtensionContext,
+  StorageDialect,
   VersionLiteral,
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -129,11 +130,12 @@ export interface ExtensionCoordinatorOptions {
    *
    * The coordinator collects all packages whose `StorageManifest.migrations`
    * field is set and passes them as an array of
-   * `{ name, migrationsPath, migrationSourceId }` objects to this callback in topological
-   * (dependency) order. The callback is responsible for applying pending
-   * migrations — typically via Drizzle `migrate()` or the bundled
-   * `applyMigrations()` helper — using a tracking table keyed to the migration
-   * bundle identity so packages that share one folder share one ledger.
+   * `{ name, migrationsPath, migrationSourceId, migrationsPathByDialect? }`
+   * objects to this callback in topological (dependency) order. The callback is
+   * responsible for applying pending migrations — typically via Drizzle
+   * `migrate()` or the bundled `applyMigrations()` helper — using a tracking
+   * table keyed to the migration bundle identity so packages that share one
+   * folder share one ledger.
    *
    * When absent, declared migrations are silently skipped and storage tables
    * that depend on them will not be created at runtime.
@@ -143,12 +145,25 @@ export interface ExtensionCoordinatorOptions {
    * plus executable `storage.packageRoot` metadata when needed.
    * `migrationSourceId` is the stable runtime identity used for bundled hosts;
    * when a package does not declare one, it falls back to `migrationsPath`.
+   *
+   * When a package declares the object form of `StorageManifest.migrations`,
+   * the coordinator additionally passes `migrationsPathByDialect` — an
+   * absolute, containment-checked map of every declared per-dialect chain. The
+   * coordinator stays dialect-agnostic; the host runtime selects the active
+   * dialect's chain from this map and falls back to `migrationsPath` when the
+   * map has no entry for that dialect.
    * @param sources - Migration sources in dependency order, each carrying the
-   *   package name, absolute migration folder path, and stable source id.
+   *   package name, absolute migration folder path, stable source id, and an
+   *   optional per-dialect chain map.
    * @returns A promise that resolves when all migrations have been applied.
    */
   runMigrations?: (
-    sources: ReadonlyArray<{ name: string; migrationsPath: string; migrationSourceId: string }>,
+    sources: ReadonlyArray<{
+      name: string;
+      migrationsPath: string;
+      migrationSourceId: string;
+      migrationsPathByDialect?: Partial<Record<StorageDialect, string>>;
+    }>,
   ) => Promise<void>;
 }
 

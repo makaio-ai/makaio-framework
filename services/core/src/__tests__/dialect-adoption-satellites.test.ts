@@ -58,8 +58,8 @@ function makeUnbrandedDb() {
 // ---------------------------------------------------------------------------
 
 describe('messagesSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, messagesSchema);
     expect(resolved).toBe(messagesSchema.postgres);
     expect(is(resolved.messages, PgTable)).toBe(true);
@@ -77,8 +77,8 @@ describe('messagesSchema dialect resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('sessionEventsSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, sessionEventsSchema);
     expect(resolved).toBe(sessionEventsSchema.postgres);
     expect(is(resolved.sessionEvents, PgTable)).toBe(true);
@@ -96,8 +96,8 @@ describe('sessionEventsSchema dialect resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('turnsSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, turnsSchema);
     expect(resolved).toBe(turnsSchema.postgres);
     expect(is(resolved.turns, PgTable)).toBe(true);
@@ -115,8 +115,8 @@ describe('turnsSchema dialect resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('messageRoutingSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, messageRoutingSchema);
     expect(resolved).toBe(messageRoutingSchema.postgres);
     expect(is(resolved.messageRouting, PgTable)).toBe(true);
@@ -134,8 +134,8 @@ describe('messageRoutingSchema dialect resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('importCursorsSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, importCursorsSchema);
     expect(resolved).toBe(importCursorsSchema.postgres);
     expect(is(resolved.importCursors, PgTable)).toBe(true);
@@ -153,8 +153,8 @@ describe('importCursorsSchema dialect resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('harnessStorageSchema dialect resolution', () => {
-  it('resolves to the postgres record for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves to the postgres record for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, harnessStorageSchema);
     expect(resolved).toBe(harnessStorageSchema.postgres);
     expect(is(resolved.harnessDefinitions, PgTable)).toBe(true);
@@ -179,43 +179,43 @@ describe('PG-brand handler registration', () => {
     cleanup = undefined;
   });
 
-  it('registers all message handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all message handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleMessageStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');
   });
 
-  it('registers all session-event handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all session-event handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleSessionEventStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');
   });
 
-  it('registers all turn handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all turn handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleTurnStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');
   });
 
-  it('registers all message-routing handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all message-routing handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleMessageRoutingStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');
   });
 
-  it('registers all import-cursor handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all import-cursor handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleImportCursorStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');
   });
 
-  it('registers all harness handlers against a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('registers all harness handlers against a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(MakaioBus);
     cleanup = registerDrizzleHarnessStorage(MakaioBus, db, ctx);
     expect(typeof cleanup).toBe('function');

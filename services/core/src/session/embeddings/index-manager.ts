@@ -1,9 +1,10 @@
 import { sql } from 'drizzle-orm';
 import {
   getRawSqlExecutor,
+  getStorageEngine,
   type MakaioDatabase,
   type RawSqlExecutor,
-  type StorageDialect,
+  type StorageEngine,
 } from '@makaio/storage-drizzle';
 
 /**
@@ -55,7 +56,11 @@ export function decodeEmbedding(raw: ArrayBuffer | Uint8Array): Float32Array {
  * Each table (`embeddings_idx_<model_slug>`) contains:
  * - `entity_type`: Type of entity (e.g., 'session', 'message')
  * - `entity_id`: ID of the entity
- * - `embedding`: Vector data as BLOB (F32_BLOB in libsql production)
+ * - `embedding`: Vector data in the engine's binary column type
+ *   (`BLOB` on SQLite — F32_BLOB in libsql production — `bytea` on Postgres)
+ *
+ * Everything dialect-specific (binary column type, catalog existence probes)
+ * is delegated to the storage engine serving the handle's dialect.
  *
  * ## Design Rationale
  *
@@ -92,8 +97,8 @@ export class EmbeddingIndexManager {
   /** Raw SQL executor for all dynamic (non-schema) table operations. */
   private readonly rawSql: RawSqlExecutor;
 
-  /** Active storage dialect, used for dialect-aware catalog queries. */
-  private readonly dialect: StorageDialect;
+  /** Engine serving the handle's dialect — binary column type and catalog probes. */
+  private readonly engine: StorageEngine;
 
   /**
    * Cache of known tables to avoid redundant CREATE TABLE checks.
@@ -105,7 +110,7 @@ export class EmbeddingIndexManager {
    */
   public constructor(db: MakaioDatabase) {
     this.rawSql = getRawSqlExecutor(db);
-    this.dialect = this.rawSql.dialect;
+    this.engine = getStorageEngine(this.rawSql.dialect);
   }
 
   /**
@@ -166,13 +171,13 @@ export class EmbeddingIndexManager {
       return tableName;
     }
 
-    // Create the table with a dialect-appropriate binary column for vector
-    // storage: SQLite has BLOB (libsql would use F32_BLOB for native vector
-    // ops), Postgres has bytea.
+    // Create the table with the engine's binary column type for vector
+    // storage ('BLOB' on SQLite — libsql would use F32_BLOB for native vector
+    // ops — 'bytea' on Postgres).
     // The table name cannot be a bound parameter in DDL; it is self-synthesized
     // (slugify + hash, [a-z0-9_] only) and rendered as a quoted identifier.
     const tableId = sql.identifier(tableName);
-    const binaryType = this.dialect === 'postgres' ? sql.raw('bytea') : sql.raw('BLOB');
+    const binaryType = sql.raw(this.engine.capabilities.binaryColumnType);
     await this.rawSql.run(
       sql`CREATE TABLE IF NOT EXISTS ${tableId} (
           entity_type TEXT NOT NULL,
@@ -235,7 +240,7 @@ export class EmbeddingIndexManager {
 
     // Check if table exists
     if (!this.knownTables.has(tableName)) {
-      if (!(await this.tableExists(tableName))) {
+      if (!(await this.engine.capabilities.tableExists(this.rawSql, tableName))) {
         return [];
       }
       this.knownTables.add(tableName);
@@ -277,7 +282,7 @@ export class EmbeddingIndexManager {
     const tableName = this.getTableName(model);
 
     if (!this.knownTables.has(tableName)) {
-      if (!(await this.tableExists(tableName))) {
+      if (!(await this.engine.capabilities.tableExists(this.rawSql, tableName))) {
         return;
       }
       this.knownTables.add(tableName);
@@ -285,29 +290,6 @@ export class EmbeddingIndexManager {
 
     const tableId = sql.identifier(tableName);
     await this.rawSql.run(sql`DELETE FROM ${tableId} WHERE entity_type = ${entityType} AND entity_id = ${entityId}`);
-  }
-
-  /**
-   * Check whether a dynamic embedding index table exists in the database catalog.
-   *
-   * SQLite exposes `sqlite_master`; Postgres exposes `information_schema.tables`.
-   * The check is dialect-aware so callers never reach the table-specific queries
-   * on a missing table, and the `knownTables` cache is populated on first confirmation.
-   * @param tableName - Unqualified table name to probe.
-   * @returns `true` when the table exists.
-   */
-  private async tableExists(tableName: string): Promise<boolean> {
-    if (this.dialect === 'postgres') {
-      const rows = await this.rawSql.all<{ table_name: string }>(
-        sql`SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ${tableName}`,
-      );
-      return rows.length > 0;
-    }
-    // SQLite
-    const rows = await this.rawSql.all<{ name: string }>(
-      sql`SELECT name FROM sqlite_master WHERE type='table' AND name=${tableName}`,
-    );
-    return rows.length > 0;
   }
 
   /**

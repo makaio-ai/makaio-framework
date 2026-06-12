@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { getDatabaseDialect, type MakaioDatabase, type StorageDialect } from '@makaio/storage-drizzle';
+import {
+  resolveStorageEngine,
+  type MakaioDatabase,
+  type StorageDialect,
+  type StorageEngine,
+} from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
 
@@ -12,10 +17,14 @@ export interface BootExtensionMigrationSource {
   /** Stable identity for the migration bundle. */
   readonly migrationSourceId: string;
   /**
-   * Optional per-dialect migration chains, mirroring the manifest
-   * `drizzleSchema` object form. When the entry for the active dialect is
-   * present it overrides `migrationsPath`; otherwise the runner falls back to
-   * `migrationsPath`.
+   * Optional per-dialect migration chains, mirroring the extension
+   * `storage.migrations` object form (an extension-tier declaration, distinct
+   * from the central-tier `makaio.drizzleSchema`). `storage.migrations` is the
+   * extension's own migration chain applied to the extension tier, whereas
+   * `makaio.drizzleSchema` contributes schema to the central framework chain —
+   * two independent mechanisms, neither a subset of the other. When the entry
+   * for the active dialect is present it overrides `migrationsPath`; otherwise
+   * the runner falls back to `migrationsPath`.
    */
   readonly migrationsPathByDialect?: Partial<Record<StorageDialect, string>>;
 }
@@ -37,14 +46,16 @@ export async function runBootExtensionMigrations(
   db: MakaioDatabase,
   sources: ReadonlyArray<BootExtensionMigrationSource>,
 ): Promise<void> {
-  // Derived from the handle so the extension tier gets the same always-on
-  // journal-dialect guard as the central tier in runMigrations.
-  const expectedDialect = getDatabaseDialect(db);
+  // Resolved from the handle so the extension tier gets the same always-on
+  // journal-dialect guard as the central tier in runMigrations, and so the
+  // engine owns the extension ledger naming scheme.
+  const engine = resolveStorageEngine(db);
+  const expectedDialect = engine.dialect;
   const seenSourceIds = new Set<string>();
   for (const source of sources) {
     if (seenSourceIds.has(source.migrationSourceId)) continue;
     seenSourceIds.add(source.migrationSourceId);
-    const migrationsTable = buildMigrationsTableName(source.migrationSourceId);
+    const migrationsTable = buildMigrationsTableName(source.migrationSourceId, engine);
     if (process.env['MAKAIO_DEBUG'] === 'true') {
       console.info(`[boot] Running migrations for package: ${source.name}`);
     }
@@ -77,17 +88,19 @@ export async function runBootExtensionMigrations(
  *
  * Keyed by source id so that all packages sharing the same migration bundle
  * use one tracking table, independent of package load order and packaged host
- * filesystem layout.
- *
- * Note: the `__drizzle_migrations_<hash>` prefix is the established SQLite
- * ledger naming convention and must not be renamed — installed databases
- * depend on it. Extension ledgers currently use this name on every dialect;
- * the `__makaio_migrations_<hash>` naming stays reserved for a future
- * dedicated Postgres extension ledger format.
+ * filesystem layout. The naming scheme is owned by the engine
+ * (`StorageEngine.migrations.extensionLedgerName`): SQLite keeps the
+ * installed-base `__drizzle_migrations_<sha256-16>` convention, which must
+ * never change — installed databases depend on it. The Postgres engine names
+ * extension ledgers `__makaio_migrations_<sha256-16>` (adopted with the
+ * engine seam — no installed Postgres extension ledgers can predate it,
+ * because Postgres hosts hard-fail SQLite extension chains at the
+ * journal-dialect guard before any ledger DDL runs).
  * @param migrationSourceId - Stable migration bundle identity.
+ * @param engine - Engine serving the target database; owns the naming scheme.
  * @returns Stable migration ledger table name.
  */
-function buildMigrationsTableName(migrationSourceId: string): string {
-  const pathHash = createHash('sha256').update(migrationSourceId).digest('hex').slice(0, 16);
-  return `__drizzle_migrations_${pathHash}`;
+function buildMigrationsTableName(migrationSourceId: string, engine: StorageEngine): string {
+  const sourceHash = createHash('sha256').update(migrationSourceId).digest('hex').slice(0, 16);
+  return engine.migrations.extensionLedgerName(sourceHash);
 }

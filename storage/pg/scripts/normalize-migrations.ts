@@ -12,7 +12,8 @@
  * This script strips every `"public".` qualifier from the generated SQL files
  * so the invariant holds mechanically on each `db:generate` run. It runs as
  * the final step of `db:generate` / `db:generate:fresh` and is idempotent.
- * The invariant itself is pinned by `__tests__/postgres-chain-ddl.test.ts`.
+ * The invariant itself is pinned by the `postgres-chain-ddl` test of
+ * `@makaio/storage-migrations`, which reads this chain through the engine seam.
  *
  * NOTE: rewriting a landed migration file changes its content hash, which is
  * the ledger identity used by `applyMigrations`. Databases provisioned from
@@ -27,7 +28,7 @@ const PUBLIC_QUALIFIER = '"public".';
 const migrationsDir = path.resolve(import.meta.dirname, '../drizzle-postgres');
 
 if (!fs.existsSync(migrationsDir)) {
-  console.info('[storage-migrations] No drizzle-postgres directory found — nothing to normalize.');
+  console.info('[storage-pg] No drizzle-postgres directory found — nothing to normalize.');
 } else {
   const sqlFiles = fs
     .readdirSync(migrationsDir)
@@ -43,10 +44,10 @@ if (!fs.existsSync(migrationsDir)) {
     }
     fs.writeFileSync(filePath, content.replaceAll(PUBLIC_QUALIFIER, ''));
     rewritten++;
-    console.info(`[storage-migrations] Stripped ${PUBLIC_QUALIFIER} qualifiers from ${name}`);
+    console.info(`[storage-pg] Stripped ${PUBLIC_QUALIFIER} qualifiers from ${name}`);
   }
 
   if (rewritten === 0) {
-    console.info(`[storage-migrations] Postgres chain is fully unqualified (${sqlFiles.length} file(s) checked).`);
+    console.info(`[storage-pg] Postgres chain is fully unqualified (${sqlFiles.length} file(s) checked).`);
   }
 }

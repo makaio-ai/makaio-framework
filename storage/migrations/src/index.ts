@@ -11,9 +11,16 @@
  * ## Dev-time CLI
  * - discover-schemas.ts - Scans workspace for makaio.drizzleSchema declarations (source-local helper)
  * - `@makaio/storage-migrations/generate-schema` - Generates aggregated .generated/schema.ts
+ * - `@makaio/storage-migrations/generate-migrations` - One-command chain generator for every present dialect
  */
 
 export { getMigrationsFolder } from './run-migrations.js';
+export {
+  generateMigrations,
+  type GenerateMigrationsOptions,
+  type GenerateMigrationsResult,
+  type GenerateMigrationsLegResult,
+} from './generate-migrations.js';
 export {
   MigrationDialectMismatchError,
   readMigrations,

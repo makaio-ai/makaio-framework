@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allMigrationsPaths,
   CliArgManifestSchema,
   CliManifestSchema,
   CliSubcommandManifestSchema,
   ExtensionDependencySchema,
   ExtensionManifestSchema,
+  primaryMigrationsPath,
   RuntimeRequirementSchema,
   WindowManifestSchema,
   WindowParamSpecSchema,
@@ -129,6 +131,54 @@ describe('ExtensionManifestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('accepts the per-dialect object form for storage migrations', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: { sqlite: 'drizzle', postgres: 'drizzle-postgres' } },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a partial per-dialect object form for storage migrations', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: { postgres: 'drizzle-postgres' } },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an empty per-dialect object form for storage migrations', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: {} },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an absolute path inside the per-dialect object form', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: { postgres: '/abs' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a parent-escape path inside the per-dialect object form', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: { sqlite: '../x' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown dialect keys in the per-dialect object form', () => {
+    const result = ExtensionManifestSchema.safeParse({
+      ...baseManifest,
+      storage: { migrations: { mysql: 'drizzle' } },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('accepts storage migrations without migrationSourceId', () => {
     const result = ExtensionManifestSchema.safeParse({
       ...baseManifest,
@@ -199,6 +249,45 @@ describe('ExtensionManifestSchema', () => {
       requires: ['node'],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('primaryMigrationsPath', () => {
+  it('returns undefined for an undefined declaration', () => {
+    expect(primaryMigrationsPath(undefined)).toBeUndefined();
+  });
+
+  it('returns the bare-string chain verbatim', () => {
+    expect(primaryMigrationsPath('drizzle')).toBe('drizzle');
+  });
+
+  it('prefers the sqlite chain in the object form', () => {
+    expect(primaryMigrationsPath({ sqlite: 'drizzle', postgres: 'drizzle-postgres' })).toBe('drizzle');
+  });
+
+  it('falls back to the first declared chain when sqlite is absent', () => {
+    expect(primaryMigrationsPath({ postgres: 'drizzle-postgres' })).toBe('drizzle-postgres');
+  });
+});
+
+describe('allMigrationsPaths', () => {
+  it('returns an empty list for an undefined declaration', () => {
+    expect(allMigrationsPaths(undefined)).toEqual([]);
+  });
+
+  it('returns the single bare-string chain', () => {
+    expect(allMigrationsPaths('drizzle')).toEqual(['drizzle']);
+  });
+
+  it('returns every declared per-dialect chain', () => {
+    expect(allMigrationsPaths({ sqlite: 'drizzle', postgres: 'drizzle-postgres' })).toEqual([
+      'drizzle',
+      'drizzle-postgres',
+    ]);
+  });
+
+  it('deduplicates a chain shared across dialects', () => {
+    expect(allMigrationsPaths({ sqlite: 'drizzle', postgres: 'drizzle' })).toEqual(['drizzle']);
   });
 });
 

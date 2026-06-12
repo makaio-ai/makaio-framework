@@ -1,7 +1,7 @@
 import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
 import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
-import { sessions } from '../storage/schema.js';
-import { turns } from '../turns/schema.js';
+import { sessionsDual } from '../storage/schema.js';
+import { turnsDual } from '../turns/schema.js';
 
 /**
  * Messages table schema.
@@ -29,7 +29,7 @@ export const messages = sqliteTable(
      * NULL for native imports (no turn tracking needed).
      * Cascade deletes when turn is removed.
      */
-    turnId: text('turn_id').references(() => turns.turnId, { onDelete: 'cascade' }),
+    turnId: text('turn_id').references(() => turnsDual.sqlite.turnId, { onDelete: 'cascade' }),
 
     /**
      * Foreign key to the parent session.
@@ -38,7 +38,7 @@ export const messages = sqliteTable(
      */
     sessionId: text('session_id')
       .notNull()
-      .references(() => sessions.sessionId, { onDelete: 'cascade' }),
+      .references(() => sessionsDual.sqlite.sessionId, { onDelete: 'cascade' }),
 
     /**
      * Message role.

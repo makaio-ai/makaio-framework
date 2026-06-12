@@ -33,6 +33,17 @@ export type DrizzleSchemaDeclaration =
   | { readonly sqlite?: string | string[]; readonly postgres?: string | string[] };
 
 /**
+ * Baseline dialect of the central migration chain.
+ *
+ * An identity declaration, not a branch over dialects: every central-tier
+ * schema package must declare baseline schema files (legacy bare-string and
+ * array declarations are interpreted as baseline-only), and the
+ * generation-time strictness check below compares the requested dialect
+ * against this identity.
+ */
+const BASELINE_DIALECT: StorageDialect = 'sqlite';
+
+/**
  * Resolve workspace package globs from the root package.json.
  * @param workspaceRoot - Absolute path to the workspace root directory
  * @returns Array of workspace glob patterns
@@ -79,10 +90,10 @@ function toStringArray(value: string | string[] | undefined): string[] {
  * - Every declared path in **both** dialect lists is existence-checked
  *   regardless of the requested dialect.
  *
- * When `dialect` is `'postgres'`, any package that has SQLite entries but zero
- *   Postgres entries triggers a generation-time strictness error — all
- *   central-tier packages must declare Postgres twins before the Postgres chain
- *   can be generated.
+ * When `dialect` is not the baseline dialect, any package that has baseline
+ *   entries but zero entries for the requested dialect triggers a
+ *   generation-time strictness error — central-tier schema packages must
+ *   declare schema files for every dialect being generated.
  * @param workspaceRoot - Absolute path to the workspace root directory.
  * @param patterns - Optional workspace glob patterns override. When provided,
  *   these patterns are used instead of the patterns from the root package.json
@@ -95,8 +106,9 @@ function toStringArray(value: string | string[] | undefined): string[] {
  * @throws Error if `patterns` is provided as an empty array.
  * @throws Error if a package declares `postgres` entries but no `sqlite`
  *   entries (declaration error, every dialect run).
- * @throws Error if `dialect` is `'postgres'` and any package has `sqlite`
- *   entries but zero `postgres` entries (generation-time strictness).
+ * @throws Error if `dialect` is not the baseline dialect and any package has
+ *   baseline entries but zero entries for the requested dialect
+ *   (generation-time strictness).
  */
 export async function discoverSchemas(
   workspaceRoot: string,
@@ -146,6 +158,10 @@ export async function discoverSchemas(
       postgresPaths = toStringArray(declaration.postgres);
     }
 
+    // Index the normalized lists by dialect so all downstream checks select by
+    // identity instead of branching on dialect literals.
+    const pathsByDialect: Record<StorageDialect, string[]> = { sqlite: sqlitePaths, postgres: postgresPaths };
+
     // Declaration error (every dialect run): postgres entries without sqlite entries.
     if (postgresPaths.length > 0 && sqlitePaths.length === 0) {
       throw new Error(
@@ -154,12 +170,16 @@ export async function discoverSchemas(
       );
     }
 
-    // Generation-time strictness (postgres run only): sqlite entries with no postgres entries.
-    if (dialect === 'postgres' && sqlitePaths.length > 0 && postgresPaths.length === 0) {
+    // Generation-time strictness (non-baseline runs only): baseline entries
+    // with no entries for the requested dialect.
+    if (
+      dialect !== BASELINE_DIALECT &&
+      pathsByDialect[BASELINE_DIALECT].length > 0 &&
+      pathsByDialect[dialect].length === 0
+    ) {
       throw new Error(
-        `Package "${packageName}" declares makaio.drizzleSchema without a 'postgres' entry. ` +
-          `Central-tier schema packages must declare Postgres twins ({ "sqlite": [...], "postgres": [...] }) ` +
-          `before the postgres chain can be generated.`,
+        `Package "${packageName}" declares makaio.drizzleSchema without a '${dialect}' entry. ` +
+          `Central-tier schema packages must declare schema files for every dialect being generated.`,
       );
     }
 
@@ -179,7 +199,7 @@ export async function discoverSchemas(
     }
 
     // Return only the requested dialect's entries.
-    const dialectPaths = dialect === 'postgres' ? postgresPaths : sqlitePaths;
+    const dialectPaths = pathsByDialect[dialect];
     for (const schemaPath of dialectPaths) {
       const absolutePath = path.resolve(packageDir, schemaPath);
       discovered.push({ packageName, schemaPath: absolutePath });

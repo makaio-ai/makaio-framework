@@ -11,8 +11,8 @@ import { registerDrizzleSupervisorRuntimeStorage } from '../drizzle-handler.js';
 import { supervisorRuntimes } from '../schema.js';
 
 describe('native-session-supervisor dialect adoption', () => {
-  it('resolves the postgres twins for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twins for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, supervisorRuntimesSchema);
     expect(resolved).toBe(supervisorRuntimesSchema.postgres);
     expect(is(resolved.supervisorRuntimes, PgTable)).toBe(true);
@@ -24,14 +24,14 @@ describe('native-session-supervisor dialect adoption', () => {
     expect(resolved.supervisorRuntimes).toBe(supervisorRuntimes);
   });
 
-  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', () => {
-    // createPgBrandedTestDb carries no Postgres engine, so a live round-trip
-    // is impossible here; the storage conformance suite runs these handlers
-    // against live Postgres in CI. This case proves the registration path
-    // adopts the pg-branded handle on a bus isolated from the process-global
-    // singleton.
+  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', async () => {
+    // createPgBrandedTestDb's executor records statements instead of
+    // executing them, so a live round-trip is impossible here; the storage
+    // conformance suite runs these handlers against live Postgres in CI.
+    // This case proves the registration path adopts the pg-branded handle on
+    // a bus isolated from the process-global singleton.
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     // Every concrete subject in the namespace is registered; only the $all
     // wildcard accessor is not an individually subscribable storage subject.

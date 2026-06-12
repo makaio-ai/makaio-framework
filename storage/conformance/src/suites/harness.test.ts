@@ -13,10 +13,16 @@ import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { getMigrationsFolder, readMigrations } from '@makaio/storage-migrations';
 import { resolveDefaultMigrationsTable } from '@makaio/storage-migrations/apply-migrations';
 import { describeStorageConformance, STORAGE_TEST_URL_ENV } from '../harness/env.js';
+import { ensurePostgresEngineRegistered } from '../harness/postgres-config.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 import { readCentralChain } from '../harness/chains.js';
 import { fixtureKv, fixtureKvDdl } from '../harness/fixture-table.js';
 import type { StorageConformanceConfig } from '../harness/config.js';
+
+// The dialect-guard cases below exercise the 'postgres' chain folder and
+// journal guard on BOTH dialect legs; those mechanics resolve through the
+// engine registry, so register the Postgres engine eagerly (idempotent).
+ensurePostgresEngineRegistered();
 
 /**
  * Query `information_schema.schemata` for one schema name via a short-lived

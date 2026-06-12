@@ -13,8 +13,9 @@
  * 4. Migrations auto-apply on startup via runtimes/node
  */
 
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
-import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
+import { index } from 'drizzle-orm/sqlite-core';
+import { index as pgIndex } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
 
 /**
  * Supervisor runtimes table.
@@ -24,97 +25,122 @@ import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
  * `adapter_session_id` are secondary correlation fields used for lookups
  * across the adapter and framework session boundaries.
  */
-export const supervisorRuntimes = sqliteTable(
+export const supervisorRuntimesDual = defineDualTable(
   'supervisor_runtimes',
-  {
+  (c) => ({
     /**
      * Supervisor-assigned session ID.
      * Primary key — canonical runtime identity, never changes after creation.
      */
-    supervisorSessionId: text('supervisor_session_id').primaryKey(),
+    supervisorSessionId: c.text('supervisor_session_id').primaryKey(),
 
     /**
      * Stable client package identifier (e.g. `'claude-code'`).
      */
-    clientId: text('client_id').notNull(),
+    clientId: c.text('client_id').notNull(),
 
     /**
      * OS process ID of the spawned process.
      * NULL when the process has exited or is unknown.
      */
-    pid: integer('pid'),
+    pid: c.int4('pid'),
 
     /**
      * Current lifecycle status.
      * One of: 'running' | 'stopped' | 'exited' | 'unknown'
      */
-    status: text('status', { enum: ['running', 'stopped', 'exited', 'unknown'] }).notNull(),
+    status: c.textEnum('status', { enum: ['running', 'stopped', 'exited', 'unknown'] as const }).notNull(),
 
     /**
      * Working directory the process was launched with.
      */
-    cwd: text('cwd').notNull(),
+    cwd: c.text('cwd').notNull(),
 
     /**
      * Executable command that was run.
      */
-    command: text('command').notNull(),
+    command: c.text('command').notNull(),
 
     /**
      * JSON-serialized argument list (`string[]`).
+     * Stored as plain `text` — the handler stringifies and parses manually;
+     * jsonb would double-encode the value.
      */
-    argsJson: text('args_json').notNull(),
+    argsJson: c.text('args_json').notNull(),
 
     /**
      * JSON-serialized extra environment variables (`Record<string, string>`).
      * NULL when no extra env was provided at launch.
+     * Stored as plain `text` — see `args_json` note above.
      */
-    envJson: text('env_json'),
+    envJson: c.text('env_json'),
 
     /**
      * Makaio framework session ID, if the runtime was linked to a session.
      */
-    sessionId: text('session_id'),
+    sessionId: c.text('session_id'),
 
     /**
      * Adapter-assigned session ID, if available.
      */
-    adapterSessionId: text('adapter_session_id'),
+    adapterSessionId: c.text('adapter_session_id'),
 
     /**
      * Unix epoch timestamp (milliseconds) when the process was started.
      */
-    startedAt: epochMs('started_at').notNull(),
+    startedAt: c.epochMs('started_at').notNull(),
 
     /**
      * Unix epoch timestamp (milliseconds) when the process stopped.
      * NULL while the process is still running.
      */
-    stoppedAt: epochMs('stopped_at'),
+    stoppedAt: c.epochMs('stopped_at'),
 
     /**
      * JSON-serialized arbitrary pass-through metadata (`Record<string, unknown>`).
      * NULL when no metadata was provided.
+     * Stored as plain `text` — see `args_json` note above.
      */
-    metadataJson: text('metadata_json'),
+    metadataJson: c.text('metadata_json'),
+  }),
+  {
+    sqlite: (t) => [
+      /**
+       * Index for efficient lookups by framework session ID.
+       */
+      index('supervisor_runtimes_session_id_idx').on(t.sessionId),
+
+      /**
+       * Index for efficient lookups by adapter session ID.
+       */
+      index('supervisor_runtimes_adapter_session_id_idx').on(t.adapterSessionId),
+
+      /**
+       * Index for efficient status-based filtering.
+       */
+      index('supervisor_runtimes_status_idx').on(t.status),
+    ],
+    postgres: (t) => [
+      /**
+       * Index for efficient lookups by framework session ID.
+       */
+      pgIndex('supervisor_runtimes_session_id_idx').on(t.sessionId),
+
+      /**
+       * Index for efficient lookups by adapter session ID.
+       */
+      pgIndex('supervisor_runtimes_adapter_session_id_idx').on(t.adapterSessionId),
+
+      /**
+       * Index for efficient status-based filtering.
+       */
+      pgIndex('supervisor_runtimes_status_idx').on(t.status),
+    ],
   },
-  (table) => [
-    /**
-     * Index for efficient lookups by framework session ID.
-     */
-    index('supervisor_runtimes_session_id_idx').on(table.sessionId),
-
-    /**
-     * Index for efficient lookups by adapter session ID.
-     */
-    index('supervisor_runtimes_adapter_session_id_idx').on(table.adapterSessionId),
-
-    /**
-     * Index for efficient status-based filtering.
-     */
-    index('supervisor_runtimes_status_idx').on(table.status),
-  ],
 );
+
+/** SQLite face of the `supervisor_runtimes` table (canonical schema). */
+export const supervisorRuntimes = supervisorRuntimesDual.sqlite;
 
 /**
  * Type for a full supervisor runtime row selected from the database.

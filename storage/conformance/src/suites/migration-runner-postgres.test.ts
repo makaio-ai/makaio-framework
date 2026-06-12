@@ -24,16 +24,18 @@
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { MigrationMeta } from '@makaio/storage-migrations';
-import {
-  applyMigrations,
-  buildBeginTransactionStatement,
-  migrationAdvisoryLockKey,
-  resolveDefaultMigrationsTable,
-} from '@makaio/storage-migrations/apply-migrations';
+import { applyMigrations, resolveDefaultMigrationsTable } from '@makaio/storage-migrations/apply-migrations';
+import { migrationAdvisoryLockKey, POSTGRES_MIGRATION_BEGIN } from '@makaio/storage-pg';
 import type { SiblingClient, StorageDatabaseContext } from '../harness/config.js';
 import { describeStorageConformance } from '../harness/env.js';
+import { ensurePostgresEngineRegistered } from '../harness/postgres-config.js';
 import { useSuiteDatabaseContext } from '../harness/suite-context.js';
 import { fixtureMigration } from '../harness/fixture-migrations.js';
+
+// resolveDefaultMigrationsTable delegates to the engine registry; register the
+// Postgres engine eagerly so the helpers below work independently of harness
+// context creation order.
+ensurePostgresEngineRegistered();
 
 // ---------------------------------------------------------------------------
 // Helper: walk the cause chain collecting non-standard `code` properties
@@ -119,7 +121,7 @@ async function raceRunnersBehindHeldLock(
   });
 
   const holderPromise = sibHolder.executor.withSession(async (s) => {
-    await s.run(sql.raw(buildBeginTransactionStatement('postgres')));
+    await s.run(sql.raw(POSTGRES_MIGRATION_BEGIN));
     await s.run(sql`SELECT pg_advisory_xact_lock(CAST(${lockKeyStr} AS bigint))`);
     // The lock statement resolving IS the synchronization point.
     resolveLockHeld();
@@ -360,7 +362,7 @@ describeStorageConformance('migration-runner-postgres', (config) => {
 
       // H acquires the advisory lock and holds it until waitForRelease resolves.
       const holderPromise = sibH.executor.withSession(async (s) => {
-        await s.run(sql.raw(buildBeginTransactionStatement('postgres')));
+        await s.run(sql.raw(POSTGRES_MIGRATION_BEGIN));
         await s.run(sql`SELECT pg_advisory_xact_lock(CAST(${lockKeyStr} AS bigint))`);
         // The lock statement resolving IS the synchronization point: once it
         // returns, W's lock wait is guaranteed to contend. No wall-clock guess.

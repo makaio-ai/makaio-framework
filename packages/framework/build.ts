@@ -181,15 +181,12 @@ try {
 // Copy runtime assets into dist/
 // ---------------------------------------------------------------------------
 
-// Central drizzle migrations — consumed at boot via `CoreBootOptions.centralMigrationsDir`
-// (and the bundled default `dist/runtime-node/../drizzle` lookup).
+// Central drizzle migrations (SQLite chain) — consumed at boot via
+// `CoreBootOptions.centralMigrationsDir` (and the bundled default
+// `dist/runtime-node/../drizzle` lookup). The Postgres chain ships with
+// `@makaio/storage-pg`, whose engine resolves it through
+// `StorageEngine.migrations.resolveSourceChainDir`.
 cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'), { recursive: true });
-
-// Central drizzle migrations, Postgres chain — consumed at boot when the
-// database target is Postgres (dialect-aware bundled default).
-cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle-postgres'), join(DIST, 'drizzle-postgres'), {
-  recursive: true,
-});
 
 // ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)
@@ -229,9 +226,9 @@ writeFrameworkDistBuildStamp();
 
 // Fail the build when an exports-map target is missing, a built module
 // self-imports a subpath the exports map does not expose, a built module
-// imports a bare external the manifest does not declare ('pg' alone is
-// consumer-provided by design), or a bundled migration chain is missing or
-// inconsistent. These defects only surface at a consumer's boot otherwise.
+// imports a bare external the manifest does not declare, or a bundled
+// migration chain is missing or inconsistent. These defects only surface at
+// a consumer's boot otherwise.
 const verification = verifyFrameworkDist(PACKAGE_DIR);
 if (!verification.ok) {
   console.error('[build] framework distribution verification failed:');

@@ -6,8 +6,8 @@ describe('@makaio/storage-drizzle main entry', () => {
     expect('createDatabaseClient' in storageDrizzle).toBe(false);
   });
 
-  it('does not expose createPostgresRawSqlExecutor (kept off the barrel, mirrors createSqliteRawSqlExecutor)', () => {
-    expect('createPostgresRawSqlExecutor' in storageDrizzle).toBe(false);
+  it('does not expose createSqliteRawSqlExecutor (engine-internal, kept off the barrel)', () => {
+    expect('createSqliteRawSqlExecutor' in storageDrizzle).toBe(false);
   });
 
   it('exports cross-driver write-result helpers', () => {

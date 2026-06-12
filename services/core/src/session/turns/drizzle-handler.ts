@@ -1,5 +1,5 @@
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
-import { getRawSqlExecutor, isUniqueViolationError, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, getStorageEngine, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { TurnUsageSchema, type ExtensionContext, type Turn, type TurnStatus, type TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../../turn/namespace.js';
@@ -102,6 +102,7 @@ export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase, 
  */
 function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const rawSql = getRawSqlExecutor(db);
+  const engine = getStorageEngine(rawSql.dialect);
   const { turns } = resolveSchema(db, turnsSchema);
 
   return bus.on(TurnStorageSubjects.create, async (ctx) => {
@@ -111,19 +112,23 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
 
     // Turn number assignment via CTE-based INSERT (single statement) plus a
     // bounded retry on unique-violation:
-    // - SQLite: the statement is atomic under the single-writer model, so the
-    //   first attempt always succeeds and the statement stream is unchanged.
-    //   (libsql does not support subqueries in INSERT VALUES position; the
-    //   CTE-based INSERT...SELECT is the equivalent single-statement form.)
-    // - Postgres: under READ COMMITTED, two concurrent statements evaluate
+    // - Engines whose writes serialize at the connection level (SQLite) make
+    //   the statement atomic, so the first attempt always succeeds and the
+    //   statement stream is unchanged. (libsql does not support subqueries in
+    //   INSERT VALUES position; the CTE-based INSERT...SELECT is the
+    //   equivalent single-statement form.)
+    // - Engines whose concurrency model lets MAX-based assignment race report
+    //   it via capabilities.maxCounterAssignmentRaces. The concrete instance
+    //   is Postgres under READ COMMITTED: two concurrent statements evaluate
     //   MAX against snapshots that exclude each other's uncommitted rows and
     //   compute the same number. The unique index on (sessionId, turnNumber)
-    //   converts that race into SQLSTATE 23505, which is retried with a fresh
-    //   MAX — preserving a contiguous 1..N sequence without a transaction or
-    //   per-session lock.
-    // The retry is Postgres-only and scoped to the turn-number index: on
-    // SQLite the race is impossible, so any unique violation there (e.g. a
-    // caller-supplied duplicate turnId) rethrows immediately.
+    //   converts that race into a unique violation, which is retried with a
+    //   fresh MAX — preserving a contiguous 1..N sequence without a
+    //   transaction or per-session lock.
+    // The retry is gated on the capability and scoped to the turn-number
+    // index via the engine's classifier: where the race is impossible, any
+    // unique violation (e.g. a caller-supplied duplicate turnId) rethrows
+    // immediately.
     for (let attempt = 1; ; attempt++) {
       try {
         await rawSql.run(sql`
@@ -140,8 +145,8 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
       } catch (error) {
         if (
           attempt >= TURN_CREATE_MAX_ATTEMPTS ||
-          rawSql.dialect !== 'postgres' ||
-          !isUniqueViolationError(error, rawSql.dialect, TURN_NUMBER_UNIQUE_INDEX)
+          !engine.capabilities.maxCounterAssignmentRaces ||
+          !engine.errors.isUniqueViolationError(error, TURN_NUMBER_UNIQUE_INDEX)
         ) {
           throw error;
         }

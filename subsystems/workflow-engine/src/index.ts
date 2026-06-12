@@ -17,3 +17,10 @@ export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/nam
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
 export { runShellStep } from './executor-helpers.js';
 export { buildWorkflowExpressionContextFromResolvedInputs } from './workflow-expression-context.js';
+export {
+  workflowDefinitionsDual,
+  workflowExecutionsDual,
+  workflowStepSpansDual,
+  worklogSummariesDual,
+  worklogFrameEntriesDual,
+} from './storage/schema.js';

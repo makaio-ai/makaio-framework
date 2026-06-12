@@ -1,152 +1,90 @@
 /**
- * Tests for dialect-aware error classification:
- * {@link isDuplicateObjectError} and {@link isUniqueViolationError}.
+ * Tests for the SQLite error classifiers backing the built-in engine:
+ * {@link isSqliteDuplicateObjectError} and {@link isSqliteUniqueViolationError}.
+ *
+ * The Postgres classifiers live in `@makaio/storage-pg` and are pinned by
+ * that package's engine tests.
  */
 import { describe, it, expect } from 'vitest';
-import { isDuplicateObjectError, isUniqueViolationError } from '../errors';
+import { sqliteStorageEngine } from '../engine/sqlite/engine';
+import { isSqliteDuplicateObjectError, isSqliteUniqueViolationError } from '../errors';
 
 // ---------------------------------------------------------------------------
-// isDuplicateObjectError
+// isSqliteDuplicateObjectError
 // ---------------------------------------------------------------------------
 
-describe('isDuplicateObjectError', () => {
-  describe('postgres dialect', () => {
-    it('matches SQLSTATE 42P07 (duplicate_table)', () => {
-      const error = Object.assign(new Error('duplicate table'), { code: '42P07' });
+describe('isSqliteDuplicateObjectError', () => {
+  it('matches the "already exists" message text', () => {
+    const error = new Error('table foo already exists');
 
-      expect(isDuplicateObjectError(error, 'postgres')).toBe(true);
-    });
-
-    it('matches SQLSTATE 42710 (duplicate_object)', () => {
-      const error = Object.assign(new Error('duplicate object'), { code: '42710' });
-
-      expect(isDuplicateObjectError(error, 'postgres')).toBe(true);
-    });
-
-    it('matches the code anywhere in the cause chain', () => {
-      const inner = Object.assign(new Error('original pg error'), { code: '42P07' });
-      const outer = new Error('wrapped', { cause: inner });
-
-      expect(isDuplicateObjectError(outer, 'postgres')).toBe(true);
-    });
-
-    it('returns false for an unrelated Postgres error code', () => {
-      const error = Object.assign(new Error('syntax error'), { code: '42601' });
-
-      expect(isDuplicateObjectError(error, 'postgres')).toBe(false);
-    });
-
-    it('returns false when no code property is present', () => {
-      const error = new Error('already exists');
-
-      // Postgres branch checks code, not message — should not match.
-      expect(isDuplicateObjectError(error, 'postgres')).toBe(false);
-    });
+    expect(isSqliteDuplicateObjectError(error)).toBe(true);
   });
 
-  describe('sqlite dialect', () => {
-    it('matches the "already exists" message text', () => {
-      const error = new Error('table foo already exists');
+  it('matches case-insensitively', () => {
+    const error = new Error('Table already exists');
 
-      expect(isDuplicateObjectError(error, 'sqlite')).toBe(true);
-    });
-
-    it('matches case-insensitively', () => {
-      const error = new Error('Table already exists');
-
-      expect(isDuplicateObjectError(error, 'sqlite')).toBe(true);
-    });
-
-    it('matches via cause chain', () => {
-      const inner = new Error('table bar already exists');
-      const outer = new Error('wrapped', { cause: inner });
-
-      expect(isDuplicateObjectError(outer, 'sqlite')).toBe(true);
-    });
-
-    it('returns false for an unrelated SQLite error message', () => {
-      const error = new Error('no such table: foo');
-
-      expect(isDuplicateObjectError(error, 'sqlite')).toBe(false);
-    });
+    expect(isSqliteDuplicateObjectError(error)).toBe(true);
   });
 
-  describe('non-error inputs', () => {
-    it('returns false for a plain string', () => {
-      expect(isDuplicateObjectError('already exists', 'sqlite')).toBe(false);
-    });
+  it('matches via cause chain', () => {
+    const inner = new Error('table bar already exists');
+    const outer = new Error('wrapped', { cause: inner });
 
-    it('returns false for null', () => {
-      expect(isDuplicateObjectError(null, 'postgres')).toBe(false);
-    });
+    expect(isSqliteDuplicateObjectError(outer)).toBe(true);
+  });
 
-    it('returns false for undefined', () => {
-      expect(isDuplicateObjectError(undefined, 'sqlite')).toBe(false);
-    });
+  it('returns false for an unrelated SQLite error message', () => {
+    const error = new Error('no such table: foo');
+
+    expect(isSqliteDuplicateObjectError(error)).toBe(false);
+  });
+
+  it('returns false for non-error inputs', () => {
+    expect(isSqliteDuplicateObjectError('already exists')).toBe(false);
+    expect(isSqliteDuplicateObjectError(null)).toBe(false);
+    expect(isSqliteDuplicateObjectError(undefined)).toBe(false);
+  });
+
+  it('is wired as the engine error classifier', () => {
+    expect(sqliteStorageEngine.errors.isDuplicateObjectError).toBe(isSqliteDuplicateObjectError);
   });
 });
 
 // ---------------------------------------------------------------------------
-// isUniqueViolationError
+// isSqliteUniqueViolationError
 // ---------------------------------------------------------------------------
 
-describe('isUniqueViolationError', () => {
-  describe('postgres dialect', () => {
-    it('matches SQLSTATE 23505 (unique_violation)', () => {
-      const error = Object.assign(new Error('duplicate key value'), { code: '23505' });
+describe('isSqliteUniqueViolationError', () => {
+  it('matches the "UNIQUE constraint failed" message text', () => {
+    const error = new Error('UNIQUE constraint failed: turns.session_id, turns.turn_number');
 
-      expect(isUniqueViolationError(error, 'postgres')).toBe(true);
-    });
-
-    it('matches the code anywhere in the cause chain', () => {
-      const inner = Object.assign(new Error('original pg error'), { code: '23505' });
-      const outer = new Error('wrapped', { cause: inner });
-
-      expect(isUniqueViolationError(outer, 'postgres')).toBe(true);
-    });
-
-    it('scopes the match to the given constraint name', () => {
-      const error = Object.assign(new Error('duplicate key value'), {
-        code: '23505',
-        constraint: 'turns_session_id_turn_number_unique',
-      });
-
-      expect(isUniqueViolationError(error, 'postgres', 'turns_session_id_turn_number_unique')).toBe(true);
-      expect(isUniqueViolationError(error, 'postgres', 'some_other_constraint')).toBe(false);
-    });
-
-    it('returns false for an unrelated Postgres error code', () => {
-      const error = Object.assign(new Error('syntax error'), { code: '42601' });
-
-      expect(isUniqueViolationError(error, 'postgres')).toBe(false);
-    });
+    expect(isSqliteUniqueViolationError(error)).toBe(true);
   });
 
-  describe('sqlite dialect', () => {
-    it('matches the "UNIQUE constraint failed" message text', () => {
-      const error = new Error('UNIQUE constraint failed: turns.session_id, turns.turn_number');
+  it('matches via cause chain', () => {
+    const inner = new Error('UNIQUE constraint failed: sessions.session_id');
+    const outer = new Error('wrapped', { cause: inner });
 
-      expect(isUniqueViolationError(error, 'sqlite')).toBe(true);
-    });
-
-    it('matches via cause chain', () => {
-      const inner = new Error('UNIQUE constraint failed: sessions.session_id');
-      const outer = new Error('wrapped', { cause: inner });
-
-      expect(isUniqueViolationError(outer, 'sqlite')).toBe(true);
-    });
-
-    it('returns false for an unrelated SQLite error message', () => {
-      const error = new Error('no such table: foo');
-
-      expect(isUniqueViolationError(error, 'sqlite')).toBe(false);
-    });
+    expect(isSqliteUniqueViolationError(outer)).toBe(true);
   });
 
-  describe('non-error inputs', () => {
-    it('returns false for null and undefined', () => {
-      expect(isUniqueViolationError(null, 'postgres')).toBe(false);
-      expect(isUniqueViolationError(undefined, 'sqlite')).toBe(false);
-    });
+  it('returns false for an unrelated SQLite error message', () => {
+    const error = new Error('no such table: foo');
+
+    expect(isSqliteUniqueViolationError(error)).toBe(false);
+  });
+
+  it('returns false for non-error inputs', () => {
+    expect(isSqliteUniqueViolationError(null)).toBe(false);
+    expect(isSqliteUniqueViolationError(undefined)).toBe(false);
+  });
+
+  it('backs the engine classifier with the constraint scope ignored', () => {
+    // SQLite errors carry the violated column list, not constraint names —
+    // the engine's classifier ignores the optional scope when delegating here.
+    const violation = new Error('UNIQUE constraint failed: turns.session_id, turns.turn_number');
+
+    expect(sqliteStorageEngine.errors.isUniqueViolationError(violation, 'uniq_turns_session_number')).toBe(true);
+    expect(sqliteStorageEngine.errors.isUniqueViolationError(violation)).toBe(true);
   });
 });

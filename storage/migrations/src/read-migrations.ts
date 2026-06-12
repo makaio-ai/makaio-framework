@@ -10,16 +10,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { StorageDialect } from '@makaio/storage-drizzle';
+import { getStorageEngine, type StorageDialect } from '@makaio/storage-drizzle';
 import { getMigrationsFolder } from './run-migrations.js';
-
-/**
- * Journal `dialect` values drizzle-kit writes, keyed by storage dialect.
- */
-const JOURNAL_DIALECTS: Readonly<Record<StorageDialect, string>> = {
-  sqlite: 'sqlite',
-  postgres: 'postgresql',
-};
 
 /**
  * Raised when a migration journal targets a different SQL dialect than the
@@ -44,14 +36,21 @@ export class MigrationDialectMismatchError extends Error {
   /**
    * Create a dialect-mismatch error for a migration journal.
    * @param expectedDialect - Storage dialect of the target database.
+   * @param expectedJournalDialect - Journal `dialect` value the target
+   *   database's engine expects (`StorageEngine.migrations.journalDialect`).
    * @param journalDialect - `dialect` value recorded in the journal, if any.
    * @param journalPath - Path of the journal that failed validation.
    */
-  public constructor(expectedDialect: StorageDialect, journalDialect: string | undefined, journalPath: string) {
+  public constructor(
+    expectedDialect: StorageDialect,
+    expectedJournalDialect: string,
+    journalDialect: string | undefined,
+    journalPath: string,
+  ) {
     super(
       `Migration journal at ${journalPath} declares dialect '${journalDialect ?? 'unknown'}', ` +
         `but the target database speaks '${expectedDialect}'. Point the runner at a migrations ` +
-        `directory generated for '${expectedDialect}' (journal dialect '${JOURNAL_DIALECTS[expectedDialect]}').`,
+        `directory generated for '${expectedDialect}' (journal dialect '${expectedJournalDialect}').`,
     );
     this.name = 'MigrationDialectMismatchError';
     this.expectedDialect = expectedDialect;
@@ -94,8 +93,9 @@ export interface MigrationReadSource {
   readonly migrationSourceId?: string;
   /**
    * Storage dialect of the database the migrations will be applied to.
-   * When set, the journal's `dialect` field is validated against it
-   * (`sqlite` ↔ `sqlite`, `postgres` ↔ `postgresql`) and a
+   * When set, the journal's `dialect` field is validated against the
+   * dialect's engine (`StorageEngine.migrations.journalDialect`, e.g.
+   * `sqlite` ↔ `sqlite`, `postgres` ↔ `postgresql`) and a
    * {@link MigrationDialectMismatchError} is thrown on mismatch.
    *
    * Also selects the filesystem default when `migrationsDir` is omitted: the
@@ -145,8 +145,11 @@ export function readMigrations(source: MigrationReadInput = {}): MigrationMeta[]
     entries: Array<{ when: number; tag: string; breakpoints: boolean }>;
   };
 
-  if (expectedDialect !== undefined && journal.dialect !== JOURNAL_DIALECTS[expectedDialect]) {
-    throw new MigrationDialectMismatchError(expectedDialect, journal.dialect, journalPath);
+  if (expectedDialect !== undefined) {
+    const expectedJournalDialect = getStorageEngine(expectedDialect).migrations.journalDialect;
+    if (journal.dialect !== expectedJournalDialect) {
+      throw new MigrationDialectMismatchError(expectedDialect, expectedJournalDialect, journal.dialect, journalPath);
+    }
   }
 
   return journal.entries.map((entry) => {

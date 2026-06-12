@@ -8,7 +8,14 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { registerStorageEngine } from '@makaio/storage-drizzle';
+import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
 import { getMigrationsFolder } from '../run-migrations.js';
+
+// getMigrationsFolder resolves chain directory names through the engine
+// registry; register the Postgres engine so the 'postgres' paths under test
+// are served by the real engine (same-reference re-registration is a no-op).
+registerStorageEngine(postgresStorageEngine);
 
 describe('getMigrationsFolder', () => {
   it('zero-arg call returns the same path as getMigrationsFolder("sqlite")', () => {

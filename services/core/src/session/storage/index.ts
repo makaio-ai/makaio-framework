@@ -6,7 +6,7 @@
 
 export { SessionStorageNamespace, SessionStorageSubjects } from './namespace.js';
 export { AgentStorageNamespace, AgentStorageSubjects } from './agent-namespace.js';
-export { sessions, agents } from './schema.js';
+export { sessions, sessionsDual, agents, agentsDual } from './schema.js';
 export { registerMemorySessionStorage } from './memory-handler.js';
 export { registerDrizzleSessionStorage } from './drizzle-handler.js';
 export { registerMemoryAgentStorage } from './agent-memory-handler.js';

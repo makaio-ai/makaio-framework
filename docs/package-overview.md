@@ -115,6 +115,7 @@ Read the relevant policy before changing storage, migrations, or transports. For
 | `storage/drizzle`     | `@makaio/storage-drizzle`    | Drizzle ORM extension with runtime-selected SQLite/Postgres client.           |
 | `storage/handlers`    | `@makaio/storage-handlers`   | Factory functions for Drizzle-backed bus storage handlers.                    |
 | `storage/migrations`  | `@makaio/storage-migrations` | Drizzle migration management: schema discovery, aggregation, and application. |
+| `storage/pg`          | `@makaio/storage-pg`         | Postgres storage engine add-on: node-postgres driver glue, error classification, tsvector FTS, and the bundled Postgres migration chain, attached through the storage engine registry (published package; the core distribution stays SQLite-only). |
 | `storage/preferences` | `@makaio/preferences`        | User preference storage with localStorage, Drizzle, and hybrid backends.      |
 
 ### `transports/`

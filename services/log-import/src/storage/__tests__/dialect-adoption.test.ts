@@ -24,8 +24,8 @@ import { registerDrizzleLogImportStorage } from '../handlers.js';
 import { logImportSettings } from '../schema.js';
 
 describe('log-import storage dialect adoption', () => {
-  it('resolves the postgres twins for a pg-branded handle', () => {
-    const { db } = createPgBrandedTestDb();
+  it('resolves the postgres twins for a pg-branded handle', async () => {
+    const { db } = await createPgBrandedTestDb();
     const resolved = resolveSchema(db, logImportSettingsSchema);
     expect(resolved).toBe(logImportSettingsSchema.postgres);
     expect(is(resolved.logImportSettings, PgTable)).toBe(true);
@@ -37,9 +37,9 @@ describe('log-import storage dialect adoption', () => {
     expect(resolved.logImportSettings).toBe(logImportSettings);
   });
 
-  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', () => {
+  it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
-    const { db } = createPgBrandedTestDb();
+    const { db } = await createPgBrandedTestDb();
     const ctx = makeStubExtensionContext(bus);
     // The storage registration owns exactly these subjects of the wider
     // log-import namespace; the remaining subjects belong to the import

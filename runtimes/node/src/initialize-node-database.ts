@@ -1,7 +1,16 @@
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createDatabaseClient, isPostgresUrl, type DatabaseClient } from '@makaio/storage-drizzle/client';
+import {
+  findStorageEngine,
+  registerStorageEngine,
+  resolveStorageEngineForUrl,
+  STORAGE_ENGINE_URL_HINTS,
+  type StorageDialect,
+  type StorageEngine,
+} from '@makaio/storage-drizzle';
+import { createDatabaseClient, type DatabaseClient } from '@makaio/storage-drizzle/client';
 import { runMigrations } from './db-migrations.js';
 import { resolveBundledMigrationsDir } from './resolve-bundled-migrations-dir.js';
 
@@ -13,8 +22,10 @@ export interface DatabaseBootOptions {
   /**
    * Connection URL.
    *
-   * A `postgres://` / `postgresql://` URL selects the Postgres backend and
-   * outranks every file-path source (`dbPath`, `MAKAIO_DATABASE_PATH`).
+   * A URL claimed by a registered storage engine — or recognized by the
+   * engine hint table (`postgres://` / `postgresql://` via
+   * `@makaio/storage-pg`) — selects that engine's backend and outranks every
+   * file-path source (`dbPath`, `MAKAIO_DATABASE_PATH`).
    */
   readonly url?: string;
   /**
@@ -23,6 +34,24 @@ export interface DatabaseBootOptions {
    * Ignored for SQLite targets.
    */
   readonly poolMax?: number;
+  /**
+   * Filesystem directory used as the module-resolution base when auto-loading
+   * hinted engine packages such as `@makaio/storage-pg`.
+   *
+   * Defaults to `process.cwd()`, which matches normal host entrypoints. Hosts
+   * launched from another working directory can pass their install root here
+   * instead of manually preloading `database.engines`.
+   */
+  readonly enginePackageImportBasePath?: string;
+  /**
+   * Storage engines to register explicitly.
+   *
+   * Registration happens first inside {@link initializeNodeDatabase} — before
+   * the database target is resolved — so listed engines are always visible to
+   * URL target resolution and client creation. Same-reference re-registration
+   * is a no-op, making repeated boots with the same engine objects safe.
+   */
+  readonly engines?: ReadonlyArray<StorageEngine>;
 }
 
 /**
@@ -93,7 +122,9 @@ function shouldIgnoreChmodError(error: unknown): boolean {
 // Internal target discrimination
 // ---------------------------------------------------------------------------
 
-type DatabaseTarget = { kind: 'file'; dbPath: string; url: string } | { kind: 'url'; url: string; dialect: 'postgres' };
+type DatabaseTarget =
+  | { kind: 'file'; dbPath: string; url: string }
+  | { kind: 'url'; url: string; dialect: StorageDialect };
 
 /**
  * Normalize an optional configuration string: empty and whitespace-only
@@ -139,6 +170,66 @@ function redactDatabaseUrl(url: string): string {
 }
 
 /**
+ * Module surface the URL auto-resolve expects from a storage engine package:
+ * a well-known `storageEngine` export carrying the engine definition.
+ */
+interface StorageEngineModule {
+  readonly storageEngine?: StorageEngine;
+}
+
+/**
+ * Import and register the hinted engine package for a recognized database URL.
+ *
+ * Auto-resolve fallback of the explicit-first registration contract: when a
+ * URL is recognized by the engine hint table but no engine is registered for
+ * the hinted dialect, the hinted package is resolved from the host install
+ * root and its well-known `storageEngine` export is registered set-if-absent.
+ *
+ * Resolution is intentionally rooted at the host application, not this
+ * framework module: hinted engine packages are optional host dependencies, so
+ * strict package managers must see the host as the issuer. Bundled hosts still
+ * keep the engine out of the framework bundle because resolution happens at
+ * runtime before the resulting file URL is dynamically imported.
+ * @param hint - Hinted dialect and the package expected to provide its engine.
+ * @param enginePackageImportBasePath - Host install root used to resolve the
+ *   hinted package.
+ * @param source - Human-readable name of the configuration source that
+ *   supplied the database URL, for error messages.
+ * @throws Error when the package cannot be loaded (with the import failure as
+ *   `cause`) or does not export a matching `storageEngine`.
+ */
+async function autoRegisterHintedEngine(
+  hint: { readonly dialect: StorageDialect; readonly packageName: string },
+  enginePackageImportBasePath: string,
+  source: string,
+): Promise<void> {
+  let engineModule: StorageEngineModule;
+  try {
+    const requireFromHost = createRequire(path.resolve(enginePackageImportBasePath, 'package.json'));
+    const engineEntryPath = requireFromHost.resolve(hint.packageName);
+    engineModule = (await import(/* @vite-ignore */ pathToFileURL(engineEntryPath).href)) as StorageEngineModule;
+  } catch (error) {
+    throw new Error(
+      `initializeNodeDatabase: the database URL from ${source} targets the '${hint.dialect}' storage engine, ` +
+        `but '${hint.packageName}' could not be loaded. Install ${hint.packageName} in the host application, ` +
+        `or pass its already-loaded storageEngine via the 'database.engines' boot option.`,
+      { cause: error },
+    );
+  }
+  const engine = engineModule.storageEngine;
+  if (engine === undefined || engine.dialect !== hint.dialect) {
+    throw new Error(
+      `initializeNodeDatabase: '${hint.packageName}' does not provide a storage engine for dialect ` +
+        `'${hint.dialect}'. Auto-resolved engine packages must export 'storageEngine: StorageEngine' ` +
+        `with a matching dialect.`,
+    );
+  }
+  if (findStorageEngine(hint.dialect) === undefined) {
+    registerStorageEngine(engine);
+  }
+}
+
+/**
  * Resolve the database target from the provided options and environment.
  *
  * Precedence (empty and whitespace-only values count as unset):
@@ -148,31 +239,44 @@ function redactDatabaseUrl(url: string): string {
  * 4. `process.env.MAKAIO_DATABASE_PATH`
  * 5. `path.join(options.makaioHome, 'makaio.db')`
  *
- * When a URL candidate (steps 1–2) is present and matches a
- * `postgres://` / `postgresql://` scheme, a `kind: 'url'` target is
- * returned. When a URL candidate is present but does NOT match, an error is
- * thrown naming the source that supplied it (credentials redacted). Steps
- * 3–5 are only evaluated when no URL candidate exists and always produce a
- * `kind: 'file'` target whose path is resolved to an absolute path against
- * the working directory.
+ * When a URL candidate (steps 1–2) is present, it is resolved against the
+ * storage engine registry: a registered engine that claims the URL yields a
+ * `kind: 'url'` target carrying the engine's dialect; a URL recognized by the
+ * engine hint table without a registered engine triggers the
+ * {@link autoRegisterHintedEngine} fallback first. When no engine claims the
+ * candidate, an error is thrown naming the source that supplied it
+ * (credentials redacted). Steps 3–5 are only evaluated when no URL candidate
+ * exists and always produce a `kind: 'file'` target whose path is resolved to
+ * an absolute path against the working directory.
  * @param options - Initialization options.
  * @returns Resolved database target.
- * @throws Error when a URL candidate is present but uses an unsupported scheme.
+ * @throws Error when a URL candidate is present but no engine serves it.
  */
-function resolveDatabaseTarget(options: InitializeNodeDatabaseOptions): DatabaseTarget {
+async function resolveDatabaseTarget(options: InitializeNodeDatabaseOptions): Promise<DatabaseTarget> {
   const optionUrl = nonEmpty(options.database?.url);
   const urlCandidate = optionUrl ?? nonEmpty(process.env.MAKAIO_DATABASE_URL);
   if (urlCandidate !== undefined) {
-    if (!isPostgresUrl(urlCandidate)) {
-      const source =
-        optionUrl !== undefined ? "the 'database.url' boot option" : 'the MAKAIO_DATABASE_URL environment variable';
+    const source =
+      optionUrl !== undefined ? "the 'database.url' boot option" : 'the MAKAIO_DATABASE_URL environment variable';
+    let resolution = resolveStorageEngineForUrl(urlCandidate);
+    if (resolution.kind === 'missing-engine') {
+      await autoRegisterHintedEngine(
+        resolution,
+        options.database?.enginePackageImportBasePath ?? process.cwd(),
+        source,
+      );
+      resolution = resolveStorageEngineForUrl(urlCandidate);
+    }
+    if (resolution.kind !== 'engine') {
+      const hintedPackages = STORAGE_ENGINE_URL_HINTS.map((hint) => hint.packageName).join(', ');
       throw new Error(
         `initializeNodeDatabase: unsupported database URL '${redactDatabaseUrl(urlCandidate)}' from ${source}. ` +
-          `Only postgres:// and postgresql:// URLs are supported here; SQLite targets are configured via ` +
+          `URL targets require a storage engine that claims the URL ` +
+          `(e.g. postgres:// / postgresql:// via ${hintedPackages}); SQLite targets are configured via ` +
           `the dbPath option or MAKAIO_DATABASE_PATH.`,
       );
     }
-    return { kind: 'url', url: urlCandidate, dialect: 'postgres' };
+    return { kind: 'url', url: urlCandidate, dialect: resolution.engine.dialect };
   }
   // Resolved against the working directory so the returned dbPath honors the
   // documented absolute-path contract even when the option or environment
@@ -197,11 +301,17 @@ function resolveDatabaseTarget(options: InitializeNodeDatabaseOptions): Database
  * 4. `process.env.MAKAIO_DATABASE_PATH`
  * 5. `path.join(options.makaioHome, 'makaio.db')`
  *
- * URL targets (`postgres://` / `postgresql://`) perform no filesystem work
- * (no mkdir, no chmod, no `file:` conversion). The bundled-layout migrations
- * resolver is applied only for URL targets because SQLite (file) targets
- * resolve their default inside the migrations reader — bundled hosts replace
- * that reader entirely — so the resolver probe applies only where it is safe.
+ * Engine registration precedes target resolution by construction: engines
+ * passed via `database.engines` are registered first, and URL candidates that
+ * are recognized but unregistered auto-resolve their hinted engine package
+ * ({@link autoRegisterHintedEngine}) before the target is classified.
+ *
+ * URL targets (engine-served, e.g. `postgres://` / `postgresql://`) perform
+ * no filesystem work (no mkdir, no chmod, no `file:` conversion). The
+ * bundled-layout migrations resolver is applied only for URL targets because
+ * SQLite (file) targets resolve their default inside the migrations reader —
+ * bundled hosts replace that reader entirely — so the resolver probe applies
+ * only where it is safe.
  * @param options - Configuration; see {@link InitializeNodeDatabaseOptions}.
  * @returns Initialized database client and resolved database path (absent for
  *   URL-backed targets).
@@ -209,7 +319,13 @@ function resolveDatabaseTarget(options: InitializeNodeDatabaseOptions): Database
 export async function initializeNodeDatabase(
   options: InitializeNodeDatabaseOptions,
 ): Promise<InitializeNodeDatabaseResult> {
-  const target = resolveDatabaseTarget(options);
+  // Explicit engine registration always precedes target resolution and client
+  // creation, on every entry surface that flows through this function.
+  for (const engine of options.database?.engines ?? []) {
+    registerStorageEngine(engine);
+  }
+
+  const target = await resolveDatabaseTarget(options);
 
   if (target.kind === 'url') {
     const databaseClient = await createDatabaseClient({

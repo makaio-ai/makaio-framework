@@ -8,11 +8,12 @@
     ".": "./src/index.ts",
     "./apply-migrations": "./src/apply-migrations.ts",
     "./discover-schemas": "./src/discover-schemas.ts",
-    "./generate-schema": "./src/generate-schema.ts"
+    "./generate-schema": "./src/generate-schema.ts",
+    "./generate-migrations": "./src/generate-migrations.ts"
   },
   "scripts": {
-    "db:generate": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) generate && tsx $(yarn bin drizzle-kit) generate --config drizzle.config.postgres.ts && tsx src/normalize-postgres-migrations.ts",
-    "db:generate:fresh": "rm -rf drizzle drizzle-postgres && tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) generate && tsx $(yarn bin drizzle-kit) generate --config drizzle.config.postgres.ts && tsx src/normalize-postgres-migrations.ts",
+    "db:generate": "tsx src/generate-migrations.ts",
+    "db:generate:fresh": "tsx src/generate-migrations.ts --fresh",
     "db:push": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) push",
     "db:studio": "tsx src/generate-schema.ts && tsx $(yarn bin drizzle-kit) studio",
     "db:reset": "rm -f ~/.makaio/makaio.db ~/.makaio/makaio.db-wal ~/.makaio/makaio.db-shm && echo '✓ Database deleted. Fresh schema will apply on next startup.'",
@@ -24,6 +25,7 @@
     "drizzle-orm": "0.45.2"
   },
   "devDependencies": {
+    "@makaio/storage-pg": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
     "tsx": "^4.22.3"

@@ -70,14 +70,16 @@ describe('initializeNodeDatabase integration', () => {
     // beforeEach cleared the var and afterEach restores it — no local juggling.
     process.env.MAKAIO_DATABASE_URL = 'postgres://u:p@localhost:5432/makaio';
 
-    // Fault injection (same pattern as the storage client tests): the test
-    // workspace makes 'pg' resolvable, so simulate a host application without
-    // the consumer-provided package by making its module resolution throw.
+    // Fault injection (same pattern as the storage-pg driver-glue tests): the
+    // test workspace makes 'pg' resolvable, so simulate a broken or
+    // hoisting-damaged install by making its module resolution throw.
     vi.doMock('pg', () => {
       throw new Error('simulated missing pg module');
     });
     try {
-      await expect(initializeNodeDatabase({ makaioHome: tempDir })).rejects.toThrow(/consumer-provided 'pg' package/);
+      await expect(initializeNodeDatabase({ makaioHome: tempDir })).rejects.toThrow(
+        /dependency of @makaio\/storage-pg/,
+      );
       // URL targets perform no filesystem work — no makaio.db should be created
       await expect(fs.access(path.join(tempDir, 'makaio.db'))).rejects.toThrow();
     } finally {

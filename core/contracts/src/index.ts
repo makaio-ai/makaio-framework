@@ -887,7 +887,10 @@ export {
   isDetachedDescriptor,
   parseExtensionConfig,
   parseExtensionDescriptor,
+  allMigrationsPaths,
+  primaryMigrationsPath,
   safeParseExtensionDescriptor,
+  STORAGE_DIALECTS,
 } from './extension/index.js';
 export type {
   ActionCategory,
@@ -961,6 +964,8 @@ export type {
   SessionEventActionContext,
   SessionEventActionDeclaration,
   SessionEventActionOptions,
+  StorageDialect,
+  StorageManifest,
   StructuralEventFilter,
   TileDeclaration,
   TileProps,

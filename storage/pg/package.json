@@ -1,0 +1,52 @@
+{
+  "name": "@makaio/storage-pg",
+  "description": "Postgres storage engine for the Makaio framework: driver glue, error classification, and migration behavior registered through the storage engine seam.",
+  "version": "1.0.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "storage/pg"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "drizzle-postgres",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build.ts",
+    "db:generate": "tsx $(yarn bin drizzle-kit) generate && tsx scripts/normalize-migrations.ts",
+    "db:generate:fresh": "rm -rf drizzle-postgres && tsx $(yarn bin drizzle-kit) generate && tsx scripts/normalize-migrations.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@makaio/storage-drizzle": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "pg": "^8.21.0"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "drizzle-kit": "^0.31.8",
+    "tsdown": "0.22.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "directory": "node_modules/.makaio-publish",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "license": "MIT"
+}

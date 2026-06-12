@@ -56,16 +56,59 @@ export type { MakaioDatabase } from './types';
 // Storage dialect brand — attached by the client factory, read via getDatabaseDialect
 export { DATABASE_DIALECT, getDatabaseDialect, type StorageDialect } from './types';
 
-// Dialect-portable raw SQL executor — the only sanctioned path for raw statements
-export { getRawSqlExecutor, type RawSqlExecutor, type RawSqlSession } from './raw-sql';
+// Dialect-portable raw SQL executor — the only sanctioned path for raw statements —
+// and the brand/executor attachment used by client factories and test harnesses
+export { brandDatabase, getRawSqlExecutor, type RawSqlExecutor, type RawSqlSession } from './raw-sql';
 
-// Dialect-aware error classification
-export { isDuplicateObjectError, isUniqueViolationError } from './errors';
+// Bundler-opaque dynamic import — lets runtime hosts load optional engine packages
+export { importRuntimeModule } from './import-runtime-module';
+
+// Storage engine seam — contract, global registry, URL hints, and the built-in default engine
+export {
+  quoteSqlIdentifier,
+  type StorageEngine,
+  type StorageEngineCapabilities,
+  type StorageEngineErrorClassifiers,
+  type StorageEngineMigrationBehavior,
+} from './engine/types';
+export {
+  findStorageEngine,
+  getStorageEngine,
+  registerStorageEngine,
+  resolveStorageEngine,
+  resolveStorageEngineForUrl,
+  type StorageEngineUrlResolution,
+} from './engine/registry';
+export { describeMissingStorageEngine, STORAGE_ENGINE_URL_HINTS, type StorageEngineUrlHint } from './engine/hints';
+export {
+  findGenerationLegForDialect,
+  NON_BASELINE_GENERATION_LEGS,
+  type StorageEngineGenerationLeg,
+} from './engine/generation';
+export { sqliteStorageEngine } from './engine/sqlite/engine';
+
+// Engine-owned error classification: the SQLite classifiers backing the
+// built-in engine, plus the cause-chain inspection helpers engine packages
+// build their own classifiers from. Consumers go through StorageEngine.errors.
+export { isSqliteDuplicateObjectError, isSqliteUniqueViolationError, readErrorCode, someInCauseChain } from './errors';
 
 export { executeTransaction, type TransactionCallback } from './transaction';
 
 // FTS5 query utilities
-export { sanitizeFtsQuery } from './fts';
+export { sanitizeFtsQuery } from './fts/sanitize';
+
+// Engine-owned full-text search: the strategy contract, the shared preview
+// query both built-in strategies build on, and the SQLite default strategy
+// backing the built-in engine. Consumers go through StorageEngine.fts.
+export type {
+  FtsMessageExcerptHit,
+  FtsMessageSearchInput,
+  FtsSearchStrategy,
+  FtsSessionCountInput,
+  FtsSessionSearchInput,
+} from './fts/strategy';
+export { buildFirstUserMessagePreviewQuery } from './fts/preview-query';
+export { sqliteFtsSearchStrategy } from './engine/sqlite/fts-strategy';
 
 // Cross-driver write-result normalisation
 export { didAffectRows, affectedRowCount, type DrizzleWriteResult } from './result';
@@ -75,3 +118,16 @@ export { registerDrizzleHandlers, type DrizzleHandlerRegistration } from './regi
 
 // Dialect schema variants — twins resolved per handle at registration time
 export { defineDialectSchema, resolveSchema, type DialectSchema, type PostgresTwinSchema, type Equal } from './dialect';
+
+// Dual-table factory — one column definition builds both dialect table objects,
+// replacing hand-written twin schema files
+export {
+  defineDualTable,
+  type DualColumnBundle,
+  type DualColumnBuilderBase,
+  type DualBuilder,
+  type DualTable,
+  type DualTableExtras,
+  type DualColumnRef,
+  type DualReferenceActions,
+} from './dual-table';

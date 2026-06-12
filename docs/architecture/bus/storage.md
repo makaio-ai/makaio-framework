@@ -131,8 +131,10 @@ implementation.
 ## Why Bus-Mediated Storage
 
 **Swappable backends.** Tests run against in-memory handlers. Production runs
-against SQLite/Drizzle. A future extension could register a PostgreSQL handler
-at higher priority and transparently replace the default backend.
+against Drizzle (SQLite or PostgreSQL, selected by connection URL). An
+extension could register an alternative backend — for example an in-memory
+store for ephemeral hosts — at higher priority and transparently replace the
+default.
 
 **Cross-process transparency.** When a transport bridges the bus across
 processes, storage requests route through the same dispatch mechanism as any

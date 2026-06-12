@@ -54,7 +54,8 @@ describe('desktop embed scan — dialect chain isolation', () => {
       'CREATE TABLE t (id TEXT);',
     );
 
-    // postgres chain at storage/migrations/drizzle-postgres — must stay invisible
+    // a postgres chain staged under its engine-owned directory name — must
+    // stay invisible to the drizzle-only scan wherever it sits
     writeJournalDir(
       root,
       path.join('storage', 'migrations', 'drizzle-postgres'),

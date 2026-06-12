@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { primaryMigrationsPath, type StorageDialect } from '@makaio/contracts';
 import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
 /** Extension migration source passed from the coordinator to the host runtime. */
@@ -9,6 +10,8 @@ export interface ExtensionMigrationSource {
   readonly migrationsPath: string;
   /** Stable identity for the migration bundle. */
   readonly migrationSourceId: string;
+  /** Optional per-dialect chains, mirroring the extension `storage.migrations` object form; resolved to absolute paths. Empty when the manifest declared a bare-string chain. */
+  readonly migrationsPathByDialect?: Partial<Record<StorageDialect, string>>;
 }
 
 /** Host callback that applies extension-declared migrations. */
@@ -33,11 +36,36 @@ export async function runExtensionMigrations(options: {
     }
     const migrations = entry.pkg.storage?.migrations;
     if (!migrations) continue;
-    const migrationsPath = resolveMigrationPath(name, entry.pkg, migrations);
+
+    let migrationsPath: string;
+    let migrationsPathByDialect: Partial<Record<StorageDialect, string>> | undefined;
+    if (typeof migrations === 'string') {
+      migrationsPath = resolveMigrationPath(name, entry.pkg, migrations);
+    } else {
+      // Object form: resolve and containment-check every declared per-dialect
+      // path. The coordinator stays dialect-agnostic — the host runtime selects
+      // the active dialect's chain from the map at apply time.
+      const resolved: Partial<Record<StorageDialect, string>> = {};
+      for (const [dialect, value] of Object.entries(migrations) as [StorageDialect, string | undefined][]) {
+        if (value === undefined) continue;
+        resolved[dialect] = resolveMigrationPath(name, entry.pkg, value);
+      }
+      // Keep the singular path populated so the runtime fallback
+      // (`migrationsPathByDialect?.[dialect] ?? migrationsPath`) always has a
+      // real chain. `primaryMigrationsPath` applies the same precedence on the
+      // resolved map as on the raw manifest: prefer sqlite, else the first
+      // declared entry. An empty object yields `undefined` — nothing to apply.
+      const primary = primaryMigrationsPath(resolved);
+      if (primary === undefined) continue;
+      migrationsPath = primary;
+      migrationsPathByDialect = resolved;
+    }
+
     sources.push({
       name,
       migrationsPath,
       migrationSourceId: entry.pkg.storage?.migrationSourceId ?? migrationsPath,
+      ...(migrationsPathByDialect ? { migrationsPathByDialect } : {}),
     });
   }
 

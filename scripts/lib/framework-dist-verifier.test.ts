@@ -218,7 +218,11 @@ describe('verifyFrameworkDist', () => {
     });
     writeBuiltFile(
       join(root, 'dist/core/index.mjs'),
-      'import{z}from"zod";import{drizzle}from"drizzle-orm/libsql";import("hono");',
+      // 'pg' pins the check precedence: a Postgres driver import is reported
+      // as forbidden engine code in dist, not merely as an undeclared
+      // external — drivers ship with their engine packages, never inside the
+      // framework distribution.
+      'import{z}from"zod";import{drizzle}from"drizzle-orm/libsql";import("hono");await import("pg");',
     );
 
     const result = verifyFrameworkDist(root, { migrationChains: [] });
@@ -235,17 +239,168 @@ describe('verifyFrameworkDist', () => {
         kind: 'undeclared-dist-dependency',
         target: 'dist/core/index.mjs',
       }),
+      expect.objectContaining({
+        exportKey: 'pg',
+        kind: 'postgres-code-in-dist',
+        target: 'dist/core/index.mjs',
+      }),
     ]);
   });
 
-  it('accepts externals declared as peer or optional dependencies and consumer-provided packages', () => {
+  it('flags Postgres driver imports in dist even when the manifest declares them', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+      dependencies: { 'drizzle-orm': '0.45.2', pg: '^8.21.0' },
+    });
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      'import pg from"pg";import{drizzle}from"drizzle-orm/node-postgres";import"pg/lib/native";',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    // One issue per forbidden specifier per module: the second `pg/...`
+    // import and the quoted-literal scan must not double-report.
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'pg',
+        kind: 'postgres-code-in-dist',
+        message: expect.stringContaining('imports "pg"'),
+        target: 'dist/core/index.mjs',
+      }),
+      expect.objectContaining({
+        exportKey: 'drizzle-orm/node-postgres',
+        kind: 'postgres-code-in-dist',
+        message: expect.stringContaining('imports "drizzle-orm/node-postgres"'),
+        target: 'dist/core/index.mjs',
+      }),
+    ]);
+  });
+
+  it('flags quoted driver literals that defeat import-specifier scans', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+    });
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      // Minified importRuntimeModule('pg') shape: the specifier never appears
+      // in import position, only as an argument to a renamed loading helper.
+      'async function e(t){return await import(t)}let r;({default:r}=await e(`pg`));',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'pg',
+        kind: 'postgres-code-in-dist',
+        message: expect.stringContaining('quoted literal "pg"'),
+        target: 'dist/core/index.mjs',
+      }),
+    ]);
+  });
+
+  it('flags engine-exclusive SQL markers embedded in template literals', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+    });
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      'const a=s`SELECT pg_advisory_xact_lock(${k})`;const b=s`@@ websearch_to_tsquery(${l},${q})`;',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'pg_advisory_xact_lock',
+        kind: 'postgres-code-in-dist',
+        target: 'dist/core/index.mjs',
+      }),
+      expect.objectContaining({
+        exportKey: 'websearch_to_tsquery',
+        kind: 'postgres-code-in-dist',
+        target: 'dist/core/index.mjs',
+      }),
+    ]);
+  });
+
+  it('accepts drizzle-orm/pg-core imports in dist (twin schema column builders)', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+      dependencies: { 'drizzle-orm': '0.45.2' },
+    });
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      'import{bigint,boolean,jsonb}from"drizzle-orm/pg-core";import{sql}from"drizzle-orm";',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('flags engine-package imports in dist even when the manifest declares them', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+      dependencies: { '@makaio/storage-pg': '1.0.0' },
+    });
+    // Engine attachment goes through the registry plus runtime resolution —
+    // an import of the engine package (root or subpath) makes the core
+    // artifact hard-depend on it, so both forms collapse into one issue.
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      'import{storageEngine}from"@makaio/storage-pg";await import("@makaio/storage-pg/columns");',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '@makaio/storage-pg',
+        kind: 'postgres-code-in-dist',
+        message: expect.stringContaining('imports "@makaio/storage-pg"'),
+        target: 'dist/core/index.mjs',
+      }),
+    ]);
+  });
+
+  it('accepts quoted engine-package literals outside import position (auto-resolve seams)', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), {
+      exports: { './core': './dist/core/index.mjs' },
+    });
+    // The auto-resolve hint table and minified importRuntimeModule
+    // registration carry the engine package name as a quoted literal by
+    // design — runtime resolution never pulls engine code into the artifact.
+    writeBuiltFile(
+      join(root, 'dist/core/index.mjs'),
+      'const h=[{dialect:`postgres`,packageName:`@makaio/storage-pg`}];' +
+        'async function e(t){return await import(t)}let r;({storageEngine:r}=await e(`@makaio/storage-pg`));',
+    );
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('accepts externals declared as peer or optional dependencies', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), {
       exports: { './core': './dist/core/index.mjs' },
       peerDependencies: { react: '^19.0.0' },
       optionalDependencies: { ws: '^8.21.0' },
     });
-    writeBuiltFile(join(root, 'dist/core/index.mjs'), 'import"react";import"ws";await import("pg");');
+    writeBuiltFile(join(root, 'dist/core/index.mjs'), 'import"react";import"ws";');
 
     const result = verifyFrameworkDist(root, { migrationChains: [] });
 
@@ -267,24 +422,24 @@ describe('verifyFrameworkDist', () => {
     expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
   });
 
-  it('verifies the default bundled migration chains when no override is given', () => {
+  it('verifies the default bundled migration chain when no override is given', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {} });
 
     const result = verifyFrameworkDist(root);
 
     expect(result.ok).toBe(false);
+    // The SQLite chain is the only chain bundled with the framework
+    // distribution; engine packages ship their own chains.
     expect(result.issues).toEqual([
       expect.objectContaining({ exportKey: 'dist/drizzle', kind: 'missing-migration-chain' }),
-      expect.objectContaining({ exportKey: 'dist/drizzle-postgres', kind: 'missing-migration-chain' }),
     ]);
   });
 
-  it('passes when bundled migration chains match their journals', () => {
+  it('passes when the bundled migration chain matches its journal', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {} });
     writeMigrationChain(join(root, 'dist/drizzle'), 3);
-    writeMigrationChain(join(root, 'dist/drizzle-postgres'), 2);
 
     const result = verifyFrameworkDist(root);
 

@@ -1,6 +1,8 @@
+/* eslint max-lines: ["error", { "max": 450, "skipBlankLines": true, "skipComments": true }] */
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
-import { epochMs, bool, jsonCol, float8 } from '@makaio/storage-drizzle/columns/sqlite';
+import { uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { uniqueIndex as pgUniqueIndex, index as pgIndex, primaryKey as pgPrimaryKey } from 'drizzle-orm/pg-core';
+import { defineDualTable } from '@makaio/storage-drizzle';
 import type {
   WorkflowDefinition,
   WorkflowExecutionScope,
@@ -18,20 +20,22 @@ import type {
   ExecutionHints,
   WorkflowDefinitionProvenance,
 } from '@makaio/contracts';
+import type { DualColumnBundle } from '@makaio/storage-drizzle';
 
 /**
  * Scope columns shared by `workflowDefinitions` and `workflowExecutions`.
- * @returns Column definitions for `scopeType`, `scopeKind`, and `scopeId`
+ * Returns DualBuilders for use inside a `defineDualTable` colsFn.
+ * @param c - The dual column bundle provided by `defineDualTable`.
+ * @returns Column definitions for `scopeType`, `scopeKind`, and `scopeId`.
  */
-function scopeColumns() {
+function scopeColumns(c: DualColumnBundle) {
   return {
-    scopeType: text('scope_type', {
-      enum: ['global', 'workspace', 'session', 'external'],
-    })
+    scopeType: c
+      .textEnum('scope_type', { enum: ['global', 'workspace', 'session', 'external'] as const })
       .notNull()
       .$type<WorkflowExecutionScope['type']>(),
-    scopeKind: text('scope_kind').notNull().default(''),
-    scopeId: text('scope_id').notNull().default(''),
+    scopeKind: c.text('scope_kind').notNull().default(''),
+    scopeId: c.text('scope_id').notNull().default(''),
   } as const;
 }
 
@@ -39,105 +43,126 @@ function scopeColumns() {
  * Workflow definitions table.
  * Stores pipeline-primitive workflow definitions with a `root` sequence node tree.
  */
-export const workflowDefinitions = sqliteTable(
+export const workflowDefinitionsDual = defineDualTable(
   'workflow_definitions',
-  {
+  (c) => ({
     /** Unique workflow identifier. */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
     /** Workflow name. */
-    name: text('name').notNull(),
+    name: c.text('name').notNull(),
     /** Human-readable description. */
-    description: text('description'),
+    description: c.text('description'),
     /**
      * Root sequence node tree (JSON).
      * Replaces the old flat `steps` DAG with a structured `WorkflowSequenceNode` tree.
      */
-    root: jsonCol<WorkflowDefinition['root']>('root').notNull(),
+    root: c.jsonCol<WorkflowDefinition['root']>('root').notNull(),
     /** JSON Schema for workflow input parameters (JSON object). */
-    inputSchema: jsonCol<Record<string, JsonValue>>('input_schema'),
+    inputSchema: c.jsonCol<Record<string, JsonValue>>('input_schema'),
     /** JSON Schema for static workflow configuration (JSON object). */
-    configSchema: jsonCol<Record<string, JsonValue>>('config_schema'),
+    configSchema: c.jsonCol<Record<string, JsonValue>>('config_schema'),
     /** JSON Schema for the workflow's primary output (JSON object). */
-    outputSchema: jsonCol<Record<string, JsonValue>>('output_schema'),
+    outputSchema: c.jsonCol<Record<string, JsonValue>>('output_schema'),
     /** Primary artifact binding for workflow output/state (JSON object). */
-    artifact: jsonCol<WorkflowDefinition['artifact']>('artifact'),
+    artifact: c.jsonCol<WorkflowDefinition['artifact']>('artifact'),
     /** Trigger configuration (JSON array). Null means manual-only default. */
-    triggers: jsonCol<WorkflowTrigger[]>('triggers'),
-    ...scopeColumns(),
+    triggers: c.jsonCol<WorkflowTrigger[]>('triggers'),
+    ...scopeColumns(c),
     /** Creation timestamp. */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
     /** Last update timestamp. */
-    updatedAt: epochMs('updated_at').notNull(),
+    updatedAt: c.epochMs('updated_at').notNull(),
     /** Canvas layout hints for the visual editor (JSON object). */
-    canvasLayout: jsonCol<Record<string, JsonValue>>('canvas_layout'),
+    canvasLayout: c.jsonCol<Record<string, JsonValue>>('canvas_layout'),
     /**
      * Provenance record for extension-synced definitions (JSON).
      * Absent on locally-authored definitions.
      */
-    source: jsonCol<WorkflowDefinitionProvenance>('source'),
+    source: c.jsonCol<WorkflowDefinitionProvenance>('source'),
     /**
      * Advisory execution hints for worker provisioning (JSON).
      * Merged with per-call hints at execution start.
      */
-    executionHints: jsonCol<ExecutionHints>('execution_hints'),
+    executionHints: c.jsonCol<ExecutionHints>('execution_hints'),
+  }),
+  {
+    sqlite: (t) => [
+      // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.
+      uniqueIndex('uniq_workflow_definitions_name_scope').on(t.name, t.scopeType, t.scopeKind, t.scopeId),
+      // Index on scope columns for efficient filtering.
+      index('idx_workflow_definitions_scope').on(t.scopeType, t.scopeKind, t.scopeId),
+    ],
+    postgres: (t) => [
+      pgUniqueIndex('uniq_workflow_definitions_name_scope').on(t.name, t.scopeType, t.scopeKind, t.scopeId),
+      pgIndex('idx_workflow_definitions_scope').on(t.scopeType, t.scopeKind, t.scopeId),
+    ],
   },
-  (table) => [
-    // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.
-    uniqueIndex('uniq_workflow_definitions_name_scope').on(table.name, table.scopeType, table.scopeKind, table.scopeId),
-    // Index on scope columns for efficient filtering.
-    index('idx_workflow_definitions_scope').on(table.scopeType, table.scopeKind, table.scopeId),
-  ],
 );
+
+/** SQLite face of the `workflow_definitions` table (canonical schema). */
+export const workflowDefinitions = workflowDefinitionsDual.sqlite;
+
+export type InsertWorkflowDefinition = typeof workflowDefinitions.$inferInsert;
+export type SelectWorkflowDefinition = typeof workflowDefinitions.$inferSelect;
 
 /**
  * Workflow executions table.
  * Stores runtime state of workflow executions.
  */
-export const workflowExecutions = sqliteTable(
+export const workflowExecutionsDual = defineDualTable(
   'workflow_executions',
-  {
+  (c) => ({
     /** Unique execution identifier. */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
     /** Workflow definition or ephemeral source execution identifier. */
-    workflowId: text('workflow_id').notNull(),
+    workflowId: c.text('workflow_id').notNull(),
     /** Coordinator session ID for this execution. */
-    coordinatorSessionId: text('coordinator_session_id'),
+    coordinatorSessionId: c.text('coordinator_session_id'),
     /** Current execution status. */
-    status: text('status', {
-      enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'],
-    }).notNull(),
+    status: c
+      .textEnum('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'] as const })
+      .notNull(),
     /** Bound workflow input value (JSON). */
-    inputs: jsonCol<JsonValue>('inputs'),
+    inputs: c.jsonCol<JsonValue>('inputs'),
     /** Error message if execution failed. */
-    error: text('error'),
+    error: c.text('error'),
     /** Cancellation reason if execution was cancelled. */
-    reason: text('reason'),
+    reason: c.text('reason'),
     /** Execution start timestamp. */
-    startedAt: epochMs('started_at').notNull(),
+    startedAt: c.epochMs('started_at').notNull(),
     /** Execution completion timestamp. */
-    completedAt: epochMs('completed_at'),
+    completedAt: c.epochMs('completed_at'),
     /** Trigger payload from the firing trigger (JSON object). */
-    triggerPayload: jsonCol<Record<string, JsonValue>>('trigger_payload'),
+    triggerPayload: c.jsonCol<Record<string, JsonValue>>('trigger_payload'),
     /** Artifact kind the execution is bound to (flat for indexed filtering). */
-    artifactKind: text('artifact_kind'),
+    artifactKind: c.text('artifact_kind'),
     /** Artifact identifier within its kind. */
-    artifactId: text('artifact_id'),
-    ...scopeColumns(),
+    artifactId: c.text('artifact_id'),
+    ...scopeColumns(c),
+  }),
+  {
+    sqlite: (t) => [
+      // Index on status for efficient filtering.
+      index('idx_workflow_executions_status').on(t.status),
+      // Index on scope columns + startedAt for bounded scope listing with ordering.
+      index('idx_workflow_executions_scope_started').on(t.scopeType, t.scopeKind, t.scopeId, t.startedAt),
+      // Index on workflowId + startedAt for per-workflow listing with ordering.
+      index('idx_workflow_executions_workflow_started').on(t.workflowId, t.startedAt),
+      // Index for artifact-bound execution listing with ordering.
+      index('idx_workflow_executions_artifact').on(t.artifactKind, t.artifactId, t.startedAt),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_workflow_executions_status').on(t.status),
+      pgIndex('idx_workflow_executions_scope_started').on(t.scopeType, t.scopeKind, t.scopeId, t.startedAt),
+      pgIndex('idx_workflow_executions_workflow_started').on(t.workflowId, t.startedAt),
+      pgIndex('idx_workflow_executions_artifact').on(t.artifactKind, t.artifactId, t.startedAt),
+    ],
   },
-  (table) => [
-    // Index on status for efficient filtering.
-    index('idx_workflow_executions_status').on(table.status),
-    // Index on scope columns + startedAt for bounded scope listing with ordering.
-    index('idx_workflow_executions_scope_started').on(table.scopeType, table.scopeKind, table.scopeId, table.startedAt),
-    // Index on workflowId + startedAt for per-workflow listing with ordering.
-    index('idx_workflow_executions_workflow_started').on(table.workflowId, table.startedAt),
-    // Index for artifact-bound execution listing with ordering.
-    index('idx_workflow_executions_artifact').on(table.artifactKind, table.artifactId, table.startedAt),
-  ],
 );
 
-export type InsertWorkflowDefinition = typeof workflowDefinitions.$inferInsert;
-export type SelectWorkflowDefinition = typeof workflowDefinitions.$inferSelect;
+/** SQLite face of the `workflow_executions` table (canonical schema). */
+export const workflowExecutions = workflowExecutionsDual.sqlite;
+
 export type InsertWorkflowExecution = typeof workflowExecutions.$inferInsert;
 export type SelectWorkflowExecution = typeof workflowExecutions.$inferSelect;
 
@@ -150,61 +175,71 @@ export type SelectWorkflowExecution = typeof workflowExecutions.$inferSelect;
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const workflowExecutionFrames = sqliteTable(
+export const workflowExecutionFramesDual = defineDualTable(
   'workflow_execution_frames',
-  {
+  (c) => ({
     /** Unique frame identifier within the execution. */
-    frameId: text('frame_id').primaryKey(),
+    frameId: c.text('frame_id').primaryKey(),
     /** Execution this frame belongs to. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Node identifier from the workflow definition. */
-    nodeId: text('node_id').notNull(),
+    nodeId: c.text('node_id').notNull(),
     /** Node type discriminant for routing and display. */
-    nodeType: text('node_type').notNull().$type<WorkflowFrameState['nodeType']>(),
+    nodeType: c.text('node_type').notNull().$type<WorkflowFrameState['nodeType']>(),
     /**
      * Ordered path of frame IDs from the root frame to this frame (inclusive).
      * Used for tree traversal, log correlation, and UI breadcrumb display.
      */
-    path: jsonCol<string[]>('path').notNull(),
+    path: c.jsonCol<string[]>('path').notNull(),
     /** Parent frame ID. Absent for the root frame. */
-    parentFrameId: text('parent_frame_id'),
+    parentFrameId: c.text('parent_frame_id'),
     /** Current frame execution status. */
-    status: text('status').notNull().default('pending').$type<WorkflowFrameState['status']>(),
+    status: c.text('status').notNull().default('pending').$type<WorkflowFrameState['status']>(),
     /**
      * Number of execution attempts for this frame (zero-based).
      * Incremented each time the frame is retried after failure.
      */
-    attempt: integer('attempt').notNull().default(0),
+    attempt: c.int4('attempt').notNull().default(0),
     /**
      * Zero-based iteration index when this frame belongs to an `iterate` or
      * `iterate-chain` expansion. Absent for non-iteration frames.
      */
-    iteration: integer('iteration'),
+    iteration: c.int4('iteration'),
     /**
      * Branch key when this frame is a child of a `parallel` node.
      * Matches a key in `WorkflowParallelNode.branches`.
      */
-    branchKey: text('branch_key'),
+    branchKey: c.text('branch_key'),
     /** JSON-serializable output produced by the node on completion. */
-    output: jsonCol<JsonValue>('output'),
+    output: c.jsonCol<JsonValue>('output'),
     /** Whether `output` was explicitly produced, including JSON null. */
-    outputPresent: bool('output_present').notNull().default(false),
+    outputPresent: c.bool('output_present').notNull().default(false),
     /** Human-readable error message when status is `failed`. */
-    error: text('error'),
+    error: c.text('error'),
     /** Epoch milliseconds when the frame started executing. */
-    startedAt: epochMs('started_at'),
+    startedAt: c.epochMs('started_at'),
     /** Epoch milliseconds when the frame reached a terminal status. */
-    completedAt: epochMs('completed_at'),
+    completedAt: c.epochMs('completed_at'),
+  }),
+  {
+    sqlite: (t) => [
+      // Efficient per-execution frame lookup.
+      index('idx_workflow_execution_frames_execution').on(t.executionId),
+      // Parent-frame traversal.
+      index('idx_workflow_execution_frames_parent').on(t.parentFrameId),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_workflow_execution_frames_execution').on(t.executionId),
+      pgIndex('idx_workflow_execution_frames_parent').on(t.parentFrameId),
+    ],
   },
-  (table) => [
-    // Efficient per-execution frame lookup.
-    index('idx_workflow_execution_frames_execution').on(table.executionId),
-    // Parent-frame traversal.
-    index('idx_workflow_execution_frames_parent').on(table.parentFrameId),
-  ],
 );
+
+/** SQLite face of the `workflow_execution_frames` table (canonical schema). */
+export const workflowExecutionFrames = workflowExecutionFramesDual.sqlite;
 
 export type InsertWorkflowExecutionFrame = typeof workflowExecutionFrames.$inferInsert;
 export type SelectWorkflowExecutionFrame = typeof workflowExecutionFrames.$inferSelect;
@@ -218,53 +253,64 @@ export type SelectWorkflowExecutionFrame = typeof workflowExecutionFrames.$infer
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const workflowGateInstances = sqliteTable(
+export const workflowGateInstancesDual = defineDualTable(
   'workflow_gate_instances',
-  {
+  (c) => ({
     /** Unique gate instance identifier. */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
     /** Execution this gate belongs to. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Node ID of the gate in the workflow definition. */
-    nodeId: text('node_id').notNull(),
+    nodeId: c.text('node_id').notNull(),
     /** Frame ID of the gate's execution frame. */
-    frameId: text('frame_id').notNull(),
+    frameId: c.text('frame_id').notNull(),
     /**
      * JSON Schema describing the expected resume data payload.
      * Callers must satisfy this schema when responding to the gate.
      */
-    schema: jsonCol<Record<string, unknown>>('schema').notNull(),
+    schema: c.jsonCol<Record<string, unknown>>('schema').notNull(),
     /**
      * Optional prompt shown to the reviewer after template interpolation.
      * Populated from the gate node's `prompt` field at execution time.
      */
-    prompt: text('prompt'),
+    prompt: c.text('prompt'),
     /** Current gate status. */
-    status: text('status').notNull().default('waiting').$type<WorkflowGateInstance['status']>(),
+    status: c.text('status').notNull().default('waiting').$type<WorkflowGateInstance['status']>(),
     /** Effective timeout action captured when the gate opened. */
-    autoAction: text('auto_action', { enum: ['approve', 'reject'] })
+    autoAction: c
+      .textEnum('auto_action', { enum: ['approve', 'reject'] as const })
       .notNull()
       .default('reject'),
     /** Effective timeout in milliseconds captured when the gate opened. */
-    timeoutMs: integer('timeout_ms'),
+    timeoutMs: c.int4('timeout_ms'),
     /** JSON-serializable resume data submitted by the approver. */
-    resumeData: jsonCol<JsonValue>('resume_data'),
+    resumeData: c.jsonCol<JsonValue>('resume_data'),
     /** Whether `resume_data` was explicitly submitted, including JSON null. */
-    resumeDataPresent: bool('resume_data_present').notNull().default(false),
+    resumeDataPresent: c.bool('resume_data_present').notNull().default(false),
     /** Epoch milliseconds when the gate was created (node entered). */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
     /** Epoch milliseconds when the gate left the `waiting` status. */
-    resolvedAt: epochMs('resolved_at'),
+    resolvedAt: c.epochMs('resolved_at'),
+  }),
+  {
+    sqlite: (t) => [
+      // Efficient per-execution gate lookup.
+      index('idx_workflow_gate_instances_execution').on(t.executionId),
+      // Frame-based gate lookup for iterate-expanded gates.
+      index('idx_workflow_gate_instances_frame').on(t.frameId),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_workflow_gate_instances_execution').on(t.executionId),
+      pgIndex('idx_workflow_gate_instances_frame').on(t.frameId),
+    ],
   },
-  (table) => [
-    // Efficient per-execution gate lookup.
-    index('idx_workflow_gate_instances_execution').on(table.executionId),
-    // Frame-based gate lookup for iterate-expanded gates.
-    index('idx_workflow_gate_instances_frame').on(table.frameId),
-  ],
 );
+
+/** SQLite face of the `workflow_gate_instances` table (canonical schema). */
+export const workflowGateInstances = workflowGateInstancesDual.sqlite;
 
 export type InsertWorkflowGateInstance = typeof workflowGateInstances.$inferInsert;
 export type SelectWorkflowGateInstance = typeof workflowGateInstances.$inferSelect;
@@ -273,74 +319,96 @@ export type SelectWorkflowGateInstance = typeof workflowGateInstances.$inferSele
  * Workflow step spans table.
  * Stores OTel-inspired telemetry for each node execution.
  */
-export const workflowStepSpans = sqliteTable(
+export const workflowStepSpansDual = defineDualTable(
   'workflow_step_spans',
-  {
+  (c) => ({
     /** Workflow execution this span belongs to. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Runtime frame this span represents within the execution. */
-    frameId: text('frame_id').notNull(),
+    frameId: c.text('frame_id').notNull(),
     /** Step identifier within the workflow definition. */
-    stepId: text('step_id').notNull(),
+    stepId: c.text('step_id').notNull(),
     /** Step type discriminant. */
-    stepType: text('step_type').notNull(),
+    stepType: c.text('step_type').notNull(),
     /** Current span status. */
-    status: text('status').$type<SpanStatus>().notNull(),
+    status: c.text('status').$type<SpanStatus>().notNull(),
     /** Step start timestamp (epoch ms). */
-    startedAt: epochMs('started_at'),
+    startedAt: c.epochMs('started_at'),
     /** Step completion timestamp (epoch ms). */
-    completedAt: epochMs('completed_at'),
+    completedAt: c.epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. */
-    durationMs: integer('duration_ms'),
+    durationMs: c.int4('duration_ms'),
     /** Input tokens consumed (agent steps). */
-    inputTokens: integer('input_tokens'),
+    inputTokens: c.int4('input_tokens'),
     /** Output tokens produced (agent steps). */
-    outputTokens: integer('output_tokens'),
+    outputTokens: c.int4('output_tokens'),
     /** Estimated cost in USD (agent steps). */
-    estimatedCost: float8('estimated_cost'),
+    estimatedCost: c.float8('estimated_cost'),
     /** Number of tool calls (agent steps). */
-    toolCallCount: integer('tool_call_count'),
+    toolCallCount: c.int4('tool_call_count'),
     /** Serialized step input (JSON string). */
-    input: text('input'),
+    input: c.text('input'),
     /** Serialized step output (JSON string). */
-    output: text('output'),
+    output: c.text('output'),
+  }),
+  {
+    sqlite: (t) => [
+      primaryKey({ columns: [t.executionId, t.frameId] }),
+      index('idx_workflow_step_spans_status').on(t.status),
+    ],
+    postgres: (t) => [
+      pgPrimaryKey({ columns: [t.executionId, t.frameId] }),
+      pgIndex('idx_workflow_step_spans_status').on(t.status),
+    ],
   },
-  (table) => [
-    primaryKey({ columns: [table.executionId, table.frameId] }),
-    index('idx_workflow_step_spans_status').on(table.status),
-  ],
 );
+
+/** SQLite face of the `workflow_step_spans` table (canonical schema). */
+export const workflowStepSpans = workflowStepSpansDual.sqlite;
+
+export type InsertWorkflowStepSpan = typeof workflowStepSpans.$inferInsert;
+export type SelectWorkflowStepSpan = typeof workflowStepSpans.$inferSelect;
 
 /**
  * Workflow execution links table.
  * Stores cross-execution references for pipeline tracing.
  */
-export const workflowExecutionLinks = sqliteTable(
+export const workflowExecutionLinksDual = defineDualTable(
   'workflow_execution_links',
-  {
+  (c) => ({
     /** Execution that caused the link. */
-    sourceExecutionId: text('source_execution_id')
+    sourceExecutionId: c
+      .text('source_execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Execution that was created as a result. */
-    targetExecutionId: text('target_execution_id')
+    targetExecutionId: c
+      .text('target_execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Relationship type. */
-    linkType: text('link_type').$type<ExecutionLinkType>().notNull(),
+    linkType: c.text('link_type').$type<ExecutionLinkType>().notNull(),
     /** Optional metadata (e.g., reason, target station). */
-    metadata: jsonCol<Record<string, unknown>>('metadata'),
+    metadata: c.jsonCol<Record<string, unknown>>('metadata'),
+  }),
+  {
+    sqlite: (t) => [
+      primaryKey({ columns: [t.sourceExecutionId, t.targetExecutionId] }),
+      index('idx_workflow_execution_links_target').on(t.targetExecutionId),
+    ],
+    postgres: (t) => [
+      pgPrimaryKey({ columns: [t.sourceExecutionId, t.targetExecutionId] }),
+      pgIndex('idx_workflow_execution_links_target').on(t.targetExecutionId),
+    ],
   },
-  (table) => [
-    primaryKey({ columns: [table.sourceExecutionId, table.targetExecutionId] }),
-    index('idx_workflow_execution_links_target').on(table.targetExecutionId),
-  ],
 );
 
-export type InsertWorkflowStepSpan = typeof workflowStepSpans.$inferInsert;
-export type SelectWorkflowStepSpan = typeof workflowStepSpans.$inferSelect;
+/** SQLite face of the `workflow_execution_links` table (canonical schema). */
+export const workflowExecutionLinks = workflowExecutionLinksDual.sqlite;
+
 export type InsertWorkflowExecutionLink = typeof workflowExecutionLinks.$inferInsert;
 export type SelectWorkflowExecutionLink = typeof workflowExecutionLinks.$inferSelect;
 
@@ -357,69 +425,71 @@ export type SelectWorkflowExecutionLink = typeof workflowExecutionLinks.$inferSe
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const workflowRunContexts = sqliteTable(
+export const workflowRunContextsDual = defineDualTable(
   'workflow_run_contexts',
-  {
+  (c) => ({
     /** Unique execution identifier (1:1 with workflow_executions.id). */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .primaryKey()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Workflow definition identifier. */
-    workflowId: text('workflow_id').notNull(),
+    workflowId: c.text('workflow_id').notNull(),
     /** Coordinator session that owns this execution. */
-    coordinatorSessionId: text('coordinator_session_id').notNull(),
+    coordinatorSessionId: c.text('coordinator_session_id').notNull(),
     /** Workflow source kind discriminant (`path`, `source`, `definition`). */
-    sourceKind: text('source_kind').notNull(),
+    sourceKind: c.text('source_kind').notNull(),
     /** Absolute file path (for `kind === 'path'`). */
-    sourcePath: text('source_path'),
+    sourcePath: c.text('source_path'),
     /** Virtual filename (for `kind === 'source'`). */
-    sourceFilename: text('source_filename'),
+    sourceFilename: c.text('source_filename'),
     /** Inline source code (for `kind === 'source'`). */
-    sourceCode: text('source_code'),
+    sourceCode: c.text('source_code'),
     /** Serialized definition snapshot (JSON). Present for `kind === 'definition'`. */
-    definitionSnapshot: jsonCol<WorkflowDefinition>('definition_snapshot'),
+    definitionSnapshot: c.jsonCol<WorkflowDefinition>('definition_snapshot'),
     /** Resolved worker contribution manifest (JSON). */
-    workerManifest: jsonCol<WorkerContributionManifest>('worker_manifest').notNull(),
+    workerManifest: c.jsonCol<WorkerContributionManifest>('worker_manifest').notNull(),
     /** Bound workflow input value (JSON). */
-    inputs: jsonCol<JsonValue>('inputs'),
+    inputs: c.jsonCol<JsonValue>('inputs'),
     /** Bound workflow configuration values (JSON object). */
-    config: jsonCol<Record<string, JsonValue>>('config').notNull().default(sql`'{}'`),
+    config: c.jsonCol<Record<string, JsonValue>>('config').notNull().default(sql`'{}'`),
     /** Trigger payload from the firing trigger (JSON object). */
-    triggerPayload: jsonCol<Record<string, JsonValue>>('trigger_payload').notNull(),
+    triggerPayload: c.jsonCol<Record<string, JsonValue>>('trigger_payload').notNull(),
     /** Explicit artifact reference supplied by the execution starter. */
-    artifactRef: jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
+    artifactRef: c.jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
     /** Advisory worker provisioning hints supplied by the start request. */
-    executionHints: jsonCol<WorkflowRunContext['executionHints']>('execution_hints'),
+    executionHints: c.jsonCol<WorkflowRunContext['executionHints']>('execution_hints'),
     /** Opaque dispatch metadata that must survive pause/resume boundaries. */
-    dispatchMetadata: jsonCol<WorkflowRunContext['dispatchMetadata']>('dispatch_metadata'),
+    dispatchMetadata: c.jsonCol<WorkflowRunContext['dispatchMetadata']>('dispatch_metadata'),
     /** Scope type discriminant. */
-    scopeType: text('scope_type', {
-      enum: ['global', 'workspace', 'session', 'external'],
-    })
+    scopeType: c
+      .textEnum('scope_type', { enum: ['global', 'workspace', 'session', 'external'] as const })
       .notNull()
       .default('global')
       .$type<WorkflowExecutionScope['type']>(),
     /** Scope kind (for `type === 'external'`; empty string otherwise). */
-    scopeKind: text('scope_kind').notNull().default(''),
+    scopeKind: c.text('scope_kind').notNull().default(''),
     /** Scope identifier (for `workspace`/`session`/`external`; empty string for `global`). */
-    scopeId: text('scope_id').notNull().default(''),
+    scopeId: c.text('scope_id').notNull().default(''),
     /** Bus subject for cancellation signals. */
-    cancelSubject: text('cancel_subject').notNull(),
+    cancelSubject: c.text('cancel_subject').notNull(),
     /**
      * Platform/workspace context (JSON).
      * Contains `repoPath`, `makaioHome`, `os`, `arch`, and optional `worktree`.
      */
-    context: jsonCol<{
-      repoPath: string;
-      makaioHome: string;
-      os: 'darwin' | 'linux' | 'win32';
-      arch: string;
-      worktree?: string;
-    }>('context').notNull(),
+    context: c
+      .jsonCol<{
+        repoPath: string;
+        makaioHome: string;
+        os: 'darwin' | 'linux' | 'win32';
+        arch: string;
+        worktree?: string;
+      }>('context')
+      .notNull(),
     /** Extra non-secret environment variables (JSON object). */
-    env: jsonCol<Record<string, string>>('env').notNull(),
+    env: c.jsonCol<Record<string, string>>('env').notNull(),
     /** Snapshot creation timestamp (epoch ms). */
-    createdAt: epochMs('created_at').notNull(),
+    createdAt: c.epochMs('created_at').notNull(),
     /**
      * Durable record of the suspension strategy selected for this execution.
      *
@@ -427,10 +497,16 @@ export const workflowRunContexts = sqliteTable(
      * without re-resolving provider capabilities. Null for rows created before
      * this column was introduced — callers should fall back to `'wait-in-process'`.
      */
-    suspensionStrategy: text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
+    suspensionStrategy: c.text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
+  }),
+  {
+    sqlite: (t) => [index('idx_run_contexts_workflow').on(t.workflowId)],
+    postgres: (t) => [pgIndex('idx_run_contexts_workflow').on(t.workflowId)],
   },
-  (table) => [index('idx_run_contexts_workflow').on(table.workflowId)],
 );
+
+/** SQLite face of the `workflow_run_contexts` table (canonical schema). */
+export const workflowRunContexts = workflowRunContextsDual.sqlite;
 
 export type InsertWorkflowRunContext = typeof workflowRunContexts.$inferInsert;
 export type SelectWorkflowRunContext = typeof workflowRunContexts.$inferSelect;
@@ -451,47 +527,57 @@ export type SelectWorkflowRunContext = typeof workflowRunContexts.$inferSelect;
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const worklogSummaries = sqliteTable(
+export const worklogSummariesDual = defineDualTable(
   'worklog_summaries',
-  {
+  (c) => ({
     /** Unique execution identifier (1:1 with workflow_executions.id). */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .primaryKey()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Workflow definition identifier. */
-    workflowId: text('workflow_id').notNull(),
+    workflowId: c.text('workflow_id').notNull(),
     /** Human-readable workflow name at execution start. */
-    workflowName: text('workflow_name'),
+    workflowName: c.text('workflow_name'),
     /**
      * Current execution status. Kept in sync via event projection.
      */
-    status: text('status', {
-      enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'],
-    }).notNull(),
+    status: c
+      .textEnum('status', { enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'] as const })
+      .notNull(),
     /** Epoch milliseconds when the execution started. */
-    startedAt: epochMs('started_at').notNull(),
+    startedAt: c.epochMs('started_at').notNull(),
     /** Epoch milliseconds when the execution reached a terminal status. */
-    completedAt: epochMs('completed_at'),
+    completedAt: c.epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. Present once execution completes. */
-    durationMs: integer('duration_ms'),
+    durationMs: c.int4('duration_ms'),
     /** Aggregated input tokens across all station frames. */
-    totalInputTokens: integer('total_input_tokens'),
+    totalInputTokens: c.int4('total_input_tokens'),
     /** Aggregated output tokens across all station frames. */
-    totalOutputTokens: integer('total_output_tokens'),
+    totalOutputTokens: c.int4('total_output_tokens'),
     /** Aggregated estimated cost in USD across all station frames. */
-    totalEstimatedCost: float8('total_estimated_cost'),
+    totalEstimatedCost: c.float8('total_estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
-    error: text('error'),
+    error: c.text('error'),
     /** Identifier of the node that caused failure. */
-    failedNodeId: text('failed_node_id'),
+    failedNodeId: c.text('failed_node_id'),
+  }),
+  {
+    sqlite: (t) => [
+      // Index on workflowId + startedAt for per-workflow listing with ordering.
+      index('idx_worklog_summaries_workflow_started').on(t.workflowId, t.startedAt),
+      // Index on status for dashboard filtering.
+      index('idx_worklog_summaries_status').on(t.status),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_worklog_summaries_workflow_started').on(t.workflowId, t.startedAt),
+      pgIndex('idx_worklog_summaries_status').on(t.status),
+    ],
   },
-  (table) => [
-    // Index on workflowId + startedAt for per-workflow listing with ordering.
-    index('idx_worklog_summaries_workflow_started').on(table.workflowId, table.startedAt),
-    // Index on status for dashboard filtering.
-    index('idx_worklog_summaries_status').on(table.status),
-  ],
 );
+
+/** SQLite face of the `worklog_summaries` table (canonical schema). */
+export const worklogSummaries = worklogSummariesDual.sqlite;
 
 export type InsertWorklogSummary = typeof worklogSummaries.$inferInsert;
 export type SelectWorklogSummary = typeof worklogSummaries.$inferSelect;
@@ -504,54 +590,63 @@ export type SelectWorklogSummary = typeof worklogSummaries.$inferSelect;
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const worklogFrameEntries = sqliteTable(
+export const worklogFrameEntriesDual = defineDualTable(
   'worklog_frame_entries',
-  {
+  (c) => ({
     /** Unique frame identifier within the execution. */
-    frameId: text('frame_id').primaryKey(),
+    frameId: c.text('frame_id').primaryKey(),
     /** Execution this frame belongs to. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Node identifier from the workflow definition. */
-    nodeId: text('node_id').notNull(),
+    nodeId: c.text('node_id').notNull(),
     /** Node type discriminant. */
-    nodeType: text('node_type').notNull().$type<WorkflowNodeType>(),
+    nodeType: c.text('node_type').notNull().$type<WorkflowNodeType>(),
     /**
      * Ordered path of frame IDs from the root frame to this frame (inclusive).
      * Stored as a JSON array for tree correlation.
      */
-    path: jsonCol<string[]>('path').notNull(),
+    path: c.jsonCol<string[]>('path').notNull(),
     /** Current or terminal frame status. */
-    status: text('status', {
-      enum: ['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled'],
-    }).notNull(),
+    status: c
+      .textEnum('status', {
+        enum: ['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled'] as const,
+      })
+      .notNull(),
     /** Zero-based attempt index. 0 for first attempt, incremented on retry. */
-    attempt: integer('attempt').notNull().default(0),
+    attempt: c.int4('attempt').notNull().default(0),
     /** Zero-based iteration index for frames inside an iterate node. */
-    iteration: integer('iteration'),
+    iteration: c.int4('iteration'),
     /** Branch key for frames inside a parallel node. */
-    branchKey: text('branch_key'),
+    branchKey: c.text('branch_key'),
     /** Epoch milliseconds when the frame started executing. */
-    startedAt: epochMs('started_at'),
+    startedAt: c.epochMs('started_at'),
     /** Epoch milliseconds when the frame reached a terminal status. */
-    completedAt: epochMs('completed_at'),
+    completedAt: c.epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. */
-    durationMs: integer('duration_ms'),
+    durationMs: c.int4('duration_ms'),
     /** Input tokens consumed (station frames with LLM execution). */
-    inputTokens: integer('input_tokens'),
+    inputTokens: c.int4('input_tokens'),
     /** Output tokens produced (station frames with LLM execution). */
-    outputTokens: integer('output_tokens'),
+    outputTokens: c.int4('output_tokens'),
     /** Estimated cost in USD (station frames with LLM execution). */
-    estimatedCost: float8('estimated_cost'),
+    estimatedCost: c.float8('estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
-    error: text('error'),
+    error: c.text('error'),
+  }),
+  {
+    sqlite: (t) => [
+      // Efficient per-execution frame lookup.
+      index('idx_worklog_frame_entries_execution').on(t.executionId),
+    ],
+    postgres: (t) => [pgIndex('idx_worklog_frame_entries_execution').on(t.executionId)],
   },
-  (table) => [
-    // Efficient per-execution frame lookup.
-    index('idx_worklog_frame_entries_execution').on(table.executionId),
-  ],
 );
+
+/** SQLite face of the `worklog_frame_entries` table (canonical schema). */
+export const worklogFrameEntries = worklogFrameEntriesDual.sqlite;
 
 export type InsertWorklogFrameEntry = typeof worklogFrameEntries.$inferInsert;
 export type SelectWorklogFrameEntry = typeof worklogFrameEntries.$inferSelect;
@@ -564,37 +659,44 @@ export type SelectWorklogFrameEntry = typeof worklogFrameEntries.$inferSelect;
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const worklogArtifactWrites = sqliteTable(
+export const worklogArtifactWritesDual = defineDualTable(
   'worklog_artifact_writes',
-  {
+  (c) => ({
     /** Auto-generated surrogate key (executionId:frameId:artifactKind:artifactId). */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
     /** Execution that triggered the artifact write. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Frame that produced the artifact write. */
-    frameId: text('frame_id').notNull(),
+    frameId: c.text('frame_id').notNull(),
     /** Node identifier that declared the write. */
-    nodeId: text('node_id').notNull(),
+    nodeId: c.text('node_id').notNull(),
     /**
      * Artifact binding (kind, schemaVersion, scope) as a JSON object.
      * Describes what the artifact is, not its content.
      */
-    artifact: jsonCol<WorkflowArtifactBinding>('artifact').notNull(),
+    artifact: c.jsonCol<WorkflowArtifactBinding>('artifact').notNull(),
     /**
      * Artifact revision identifier assigned by the artifact service on write.
      * Absent if the write is still in-flight or failed.
      */
-    revision: text('revision'),
+    revision: c.text('revision'),
     /** Epoch milliseconds when the write was recorded. */
-    writtenAt: epochMs('written_at').notNull(),
+    writtenAt: c.epochMs('written_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [
+      // Efficient per-execution artifact write lookup.
+      index('idx_worklog_artifact_writes_execution').on(t.executionId),
+    ],
+    postgres: (t) => [pgIndex('idx_worklog_artifact_writes_execution').on(t.executionId)],
   },
-  (table) => [
-    // Efficient per-execution artifact write lookup.
-    index('idx_worklog_artifact_writes_execution').on(table.executionId),
-  ],
 );
+
+/** SQLite face of the `worklog_artifact_writes` table (canonical schema). */
+export const worklogArtifactWrites = worklogArtifactWritesDual.sqlite;
 
 export type InsertWorklogArtifactWrite = typeof worklogArtifactWrites.$inferInsert;
 export type SelectWorklogArtifactWrite = typeof worklogArtifactWrites.$inferSelect;
@@ -607,47 +709,56 @@ export type SelectWorklogArtifactWrite = typeof worklogArtifactWrites.$inferSele
  *
  * CENTRAL tier — migrated alongside `workflow_executions`.
  */
-export const worklogGateEvents = sqliteTable(
+export const worklogGateEventsDual = defineDualTable(
   'worklog_gate_events',
-  {
+  (c) => ({
     /** Auto-generated surrogate key (executionId:nodeId:frameId). */
-    id: text('id').primaryKey(),
+    id: c.text('id').primaryKey(),
     /** Execution this gate belongs to. */
-    executionId: text('execution_id')
+    executionId: c
+      .text('execution_id')
       .notNull()
-      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Node identifier of the gate in the workflow definition. */
-    nodeId: text('node_id').notNull(),
+    nodeId: c.text('node_id').notNull(),
     /** Frame identifier for the gate's execution frame. */
-    frameId: text('frame_id').notNull(),
+    frameId: c.text('frame_id').notNull(),
     /**
      * Latest gate status. Updated on each gate state transition event.
      * Mirrors `WorkLogGateEvent.status`.
      */
-    status: text('status', {
-      enum: ['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled'],
-    })
+    status: c
+      .textEnum('status', { enum: ['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled'] as const })
       .notNull()
       .$type<WorkLogGateEvent['status']>(),
     /**
      * Prompt shown to the reviewer, after template interpolation.
      * Populated when the gate entered `waiting` status.
      */
-    prompt: text('prompt'),
+    prompt: c.text('prompt'),
     /** Epoch milliseconds when the gate entered `waiting`. */
-    openedAt: epochMs('opened_at').notNull(),
+    openedAt: c.epochMs('opened_at').notNull(),
     /** Epoch milliseconds when the gate left `waiting`. */
-    resolvedAt: epochMs('resolved_at'),
+    resolvedAt: c.epochMs('resolved_at'),
     /** JSON-serializable resume data submitted by the approver. */
-    resumeData: jsonCol<JsonValue>('resume_data'),
+    resumeData: c.jsonCol<JsonValue>('resume_data'),
+  }),
+  {
+    sqlite: (t) => [
+      // Efficient per-execution gate lookup.
+      index('idx_worklog_gate_events_execution').on(t.executionId),
+      // Index on status for "pending gates" queries.
+      index('idx_worklog_gate_events_status').on(t.status),
+    ],
+    postgres: (t) => [
+      pgIndex('idx_worklog_gate_events_execution').on(t.executionId),
+      pgIndex('idx_worklog_gate_events_status').on(t.status),
+    ],
   },
-  (table) => [
-    // Efficient per-execution gate lookup.
-    index('idx_worklog_gate_events_execution').on(table.executionId),
-    // Index on status for "pending gates" queries.
-    index('idx_worklog_gate_events_status').on(table.status),
-  ],
 );
+
+/** SQLite face of the `worklog_gate_events` table (canonical schema). */
+export const worklogGateEvents = worklogGateEventsDual.sqlite;
 
 export type InsertWorklogGateEvent = typeof worklogGateEvents.$inferInsert;
 export type SelectWorklogGateEvent = typeof worklogGateEvents.$inferSelect;

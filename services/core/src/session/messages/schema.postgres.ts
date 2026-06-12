@@ -1,15 +1,28 @@
 /**
  * Postgres twin schema for the messages table.
  *
- * Congruent twin of `schema.ts` — identical SQL names, column types mapped to
- * Postgres equivalents via the shared column bundles. Row types are exclusively
- * owned by the canonical `schema.ts`; this file exports table objects only.
+ * This is the framework's single deliberate hand-written twin — the
+ * full-text-search escape hatch. Every other storage table is defined once via
+ * `defineDualTable` and exposes both dialect faces from one declaration; the
+ * `messages` table opts out because Postgres needs a `content_tsv` `tsvector`
+ * column with a `GENERATED ALWAYS AS ... STORED` expression plus a GIN index
+ * that has no SQLite equivalent (SQLite full-text search lives in a separate
+ * FTS5 virtual table). That column is the registered exemption recorded as
+ * `PostgresOnlyGeneratedColumnKey = 'contentTsv'`, which the schema-parity net
+ * tolerates on this table and no other.
+ *
+ * Congruent twin of `schema.ts` for every shared column — identical SQL names,
+ * column types mapped to Postgres equivalents via the shared column bundles.
+ * Row types are exclusively owned by the canonical `schema.ts`; this file
+ * exports table objects only. Its `session_id` / `turn_id` foreign keys point
+ * at the Postgres faces of the dual `sessions` / `turns` tables, so the twin
+ * stays wired to the single-definition tables it depends on.
  */
 import { pgTable, text, index, customType, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { epochMs } from '@makaio/storage-drizzle/columns/postgres';
-import { sessions } from '../storage/schema.postgres.js';
-import { turns } from '../turns/schema.postgres.js';
+import { sessionsDual } from '../storage/schema.js';
+import { turnsDual } from '../turns/schema.js';
 
 /**
  * Postgres custom column type wrapping the native `tsvector` type.
@@ -39,7 +52,7 @@ export const messages = pgTable(
      * NULL for native imports (no turn tracking needed).
      * Cascade deletes when turn is removed.
      */
-    turnId: text('turn_id').references(() => turns.turnId, { onDelete: 'cascade' }),
+    turnId: text('turn_id').references(() => turnsDual.postgres.turnId, { onDelete: 'cascade' }),
 
     /**
      * Foreign key to the parent session.
@@ -48,7 +61,7 @@ export const messages = pgTable(
      */
     sessionId: text('session_id')
       .notNull()
-      .references(() => sessions.sessionId, { onDelete: 'cascade' }),
+      .references(() => sessionsDual.postgres.sessionId, { onDelete: 'cascade' }),
 
     /**
      * Message role.
