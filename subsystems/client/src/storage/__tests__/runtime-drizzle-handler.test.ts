@@ -5,7 +5,6 @@ import {
   usePluginStorageTestLifecycle,
   type PluginTestDbContext,
 } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import {
   registerDrizzleRuntimeStorage,
   ClientRuntimeStorageSubjects,
@@ -25,7 +24,7 @@ async function createTestDb(): Promise<PluginTestDbContext> {
     name: 'client-runtimes',
     schemas: CLIENT_RUNTIME_DDL,
     tables: ['client_runtimes'],
-    registerHandlers: (db) => registerDrizzleRuntimeStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus)),
+    registerHandlers: (db) => registerDrizzleRuntimeStorage(MakaioBus, db),
   });
 }
 

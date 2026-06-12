@@ -1,7 +1,7 @@
 import { eq, and } from 'drizzle-orm';
 import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { CompressionModeSchema, type ExtensionContext, type MakaioSessionAgent } from '@makaio/contracts';
+import { CompressionModeSchema, type MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from './agent-namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
 
@@ -257,7 +257,6 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
  * Provides durable storage suitable for production deployments.
  * @param bus - The bus instance to register handlers on
  * @param db - The MakaioDatabase instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example
  * ```typescript
@@ -267,13 +266,13 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
  *
  * const client = createClient({ url: 'file:./makaio.db' });
  * const db = drizzle(client);
- * const cleanup = registerDrizzleAgentStorage(bus, db, ctx);
+ * const cleanup = registerDrizzleAgentStorage(bus, db);
  *
  * // Later, when shutting down:
  * cleanup();
  * ```
  */
-export function registerDrizzleAgentStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleAgentStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const deps: AgentHandlerDeps = { bus, db };
   const cleanups = [
     registerGetHandler(deps),

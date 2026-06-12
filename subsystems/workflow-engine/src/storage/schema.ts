@@ -288,6 +288,8 @@ export const workflowGateInstancesDual = defineDualTable(
     timeoutMs: c.int4('timeout_ms'),
     /** JSON-serializable resume data submitted by the approver. */
     resumeData: c.jsonCol<JsonValue>('resume_data'),
+    /** Human-readable rationale supplied by the responder. */
+    reason: c.text('reason'),
     /** Whether `resume_data` was explicitly submitted, including JSON null. */
     resumeDataPresent: c.bool('resume_data_present').notNull().default(false),
     /** Epoch milliseconds when the gate was created (node entered). */

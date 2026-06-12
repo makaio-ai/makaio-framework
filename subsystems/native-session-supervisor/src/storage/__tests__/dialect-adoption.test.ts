@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
-import { createTestBusInstance, expectSubjectHandlerLifecycle, makeStubExtensionContext } from '@makaio/test-utils';
+import { createTestBusInstance, expectSubjectHandlerLifecycle } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { supervisorRuntimesSchema } from '../schema.variants.js';
@@ -32,11 +32,10 @@ describe('native-session-supervisor dialect adoption', () => {
     // a bus isolated from the process-global singleton.
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     // Every concrete subject in the namespace is registered; only the $all
     // wildcard accessor is not an individually subscribable storage subject.
     const subjects = Object.values(SupervisorRuntimeStorageSubjects).filter((subject) => subject.subject !== '*');
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleSupervisorRuntimeStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleSupervisorRuntimeStorage(bus, db));
   });
 });

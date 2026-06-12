@@ -8,7 +8,6 @@
 import { eq } from 'drizzle-orm';
 import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
 import { importCursorsSchema } from './schema.variants.js';
 
@@ -19,23 +18,18 @@ import { importCursorsSchema } from './schema.variants.js';
  * On restart, import continues from the last processed byte offset.
  * @param bus - The bus instance to register handlers on
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example
  * ```typescript
  * import { registerDrizzleImportCursorStorage } from '@makaio/services-core/session';
  *
- * const cleanup = registerDrizzleImportCursorStorage(bus, db, ctx);
+ * const cleanup = registerDrizzleImportCursorStorage(bus, db);
  *
  * // Later, when shutting down:
  * cleanup();
  * ```
  */
-export function registerDrizzleImportCursorStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleImportCursorStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { importCursors } = resolveSchema(db, importCursorsSchema);
   const unsubs: Array<() => void> = [];
 

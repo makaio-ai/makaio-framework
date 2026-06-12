@@ -11,7 +11,6 @@
 import { and, eq, gt, sql } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { CLIENT_RUNTIME_STATUSES } from '../client-runtime-registry-types.js';
 import type { ClientRuntimeRecord, ClientRuntimeStatus } from '../client-runtime-registry-types.js';
 import { clientRuntimesSchema } from './runtime-schema.variants.js';
@@ -75,10 +74,9 @@ function mapRow(row: DbRow): ClientRuntimeRecord {
  * map.
  * @param bus - Bus instance to register handlers on
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleRuntimeStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleRuntimeStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { clientRuntimes } = resolveSchema(db, clientRuntimesSchema);
   const upsertCleanup = bus.on(ClientRuntimeStorageSubjects.upsert, async (ctx) => {
     const record = ctx.payload;

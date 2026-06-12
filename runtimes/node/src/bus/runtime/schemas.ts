@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { SchemaRecord } from '@makaio/core';
+import { localSubject, type SchemaRecord } from '@makaio/core';
 
 /**
  * Runtime resource schemas.
@@ -13,31 +13,37 @@ export const RuntimeSchemas = {
    * Query for database handle.
    * Registered by NodeRuntime. Absent in memory-only runtimes.
    *
+   * Local-only: the response carries a live database handle that cannot be
+   * serialized across a transport. Use `getRuntimeDatabase` for typed access.
+   *
    * Subject: `runtime.database`
    * Type: Request (RPC)
    */
-  database: {
+  database: localSubject({
     request: z.object({}),
     response: z.object({
       /** Drizzle database instance (opaque — consumer casts to MakaioDatabase). */
       db: z.unknown(),
     }),
-  },
+  }),
 
   /**
    * Query for machine identity (E2E encryption keys).
    * Registered by NodeRuntime. Absent in memory-only runtimes.
    *
+   * Local-only: the response carries private key material that must never
+   * cross a transport.
+   *
    * Subject: `runtime.machineIdentity`
    * Type: Request (RPC)
    */
-  machineIdentity: {
+  machineIdentity: localSubject({
     request: z.object({}),
     response: z.object({
       /** MachineIdentity (opaque — consumer casts). */
       identity: z.unknown(),
     }),
-  },
+  }),
 
   /**
    * Query for the bus server WebSocket port.

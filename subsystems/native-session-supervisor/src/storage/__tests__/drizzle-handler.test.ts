@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { registerDrizzleSupervisorRuntimeStorage } from '../drizzle-handler.js';
 import { SupervisorRuntimeStorageSubjects } from '../namespace.js';
@@ -41,7 +40,7 @@ describe('registerDrizzleSupervisorRuntimeStorage', () => {
 
   beforeEach(async () => {
     ({ db, close } = await createTestDb());
-    cleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+    cleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db);
   });
 
   afterEach(() => {

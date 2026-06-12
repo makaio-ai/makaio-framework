@@ -59,6 +59,7 @@ next: false
 | `merging` | [`session.merging`](#session.merging) | event | [`lifecycle-events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/lifecycle-events.ts) |
 | `purge` | [`session.purge`](#session.purge) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `purged` | [`session.purged`](#session.purged) | event | [`events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/events.ts) |
+| `registerExternal` | [`session.registerExternal`](#session.registerExternal) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `resolveAgentConfig` | [`session.resolveAgentConfig`](#session.resolveAgentConfig) | rpc | [`resolve-agent-config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/resolve-agent-config.ts) |
 | `resolveSystemPrompt` | [`session.resolveSystemPrompt`](#session.resolveSystemPrompt) | rpc | [`resolve-system-prompt.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/resolve-system-prompt.ts) |
 | `resume` | [`session.resume`](#session.resume) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
@@ -73,7 +74,6 @@ next: false
 | `turn.started` | [`session.turn.started`](#session.turn.started) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `update` | [`session.update`](#session.update) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `updated` | [`session.updated`](#session.updated) | event | [`lifecycle-events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/lifecycle-events.ts) |
-| `usage` | [`session.usage`](#session.usage) | rpc | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `user_message.acknowledged` | [`session.user_message.acknowledged`](#session.user_message.acknowledged) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `user_message.completed` | [`session.user_message.completed`](#session.user_message.completed) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `user_message.sent` | [`session.user_message.sent`](#session.user_message.sent) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
@@ -776,6 +776,60 @@ Emitted when: A session is permanently deleted (via purge request)
 |-------|------|----------|
 | `sessionId` | `string` | yes |
 
+### <a id="session.registerExternal"></a>`session.registerExternal` (rpc)
+
+Register a session for an externally-running adapter session.
+
+Subject: `session.registerExternal`
+Type: Request (RPC)
+
+This is the **only** public path that accepts adapter identity (`adapterName`,
+`adapterSessionId`, `lastClientIdentityObservation`) at session-creation time.
+It exists exclusively for hosts that front an externally-running agent — for
+example a CLI command that exposes the framework as an MCP server, or an HTTP
+endpoint that creates a session on behalf of a token-authenticated external
+client — where the normal `session.agent.attach` pipeline never runs.
+
+**The attach pipeline remains authoritative for all in-runtime sessions.**
+Do not use this subject for sessions that will be managed by an adapter
+running inside this process; use `session.agent.attach` instead, which
+stamps adapter identity through the canonical path.
+
+Registration is idempotent and keyed by (`adapterName`, `adapterSessionId`).
+If a session with that adapter identity already exists, the existing session
+is returned with `created: false`. Hosts that restart (e.g., a CLI that
+re-exposes the same external session) can therefore call this subject on
+every startup without creating duplicate records.
+
+`adapterId` is intentionally absent from this RPC. That field identifies an
+in-runtime adapter instance; external sessions have no such instance.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string` | yes |
+| `adapterSessionId` | `string` | yes |
+| `branchKind` | `"fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined` | no |
+| `contextInheritance` | `"none" \| "parent-history" \| undefined` | no |
+| `executionTargetId` | `string \| undefined` | no |
+| `forkPointMessageId` | `string \| undefined` | no |
+| `forkTransforms` | `{ removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined` | no |
+| `lastClientIdentityObservation` | `{ clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined` | no |
+| `originWindowId` | `string \| undefined` | no |
+| `parentSessionId` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `spawningToolCallId` | `string \| undefined` | no |
+| `targetWorkingDirectory` | `string \| undefined` | no |
+| `title` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `created` | `boolean` | yes |
+| `sessionId` | `string` | yes |
+
 ### <a id="session.resolveAgentConfig"></a>`session.resolveAgentConfig` (rpc)
 
 Resolve the concrete adapter configuration for a given agent selection.
@@ -1095,38 +1149,6 @@ Entity cache subscribes to re-fetch updated session data.
 |-------|------|----------|
 | `changedProperties` | `string[]` | yes |
 | `sessionId` | `string` | yes |
-
-### <a id="session.usage"></a>`session.usage` (rpc)
-
-Aggregated session-level token usage.
-
-Subject: `session.usage`
-Type: Event (fire-and-forget)
-Emitted when: UsageAggregator receives adapter.session.usage events
-
-Aggregates token usage across all adapters in a session.
-UsageAggregator listens to adapter.session.usage events, aggregates them
-per-session (keyed by adapterSessionId to avoid collisions), and emits
-this canonical session-level usage event.
-
-ContextTracker consumes this to track context window usage against thresholds.
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `adapterCount` | `number` | yes |
-| `sessionId` | `string` | yes |
-| `totalCalls` | `number` | yes |
-| `totalInputTokens` | `number` | yes |
-| `totalOutputTokens` | `number` | yes |
-| `totalTokens` | `number` | yes |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `acknowledged` | `true` | yes |
 
 ### <a id="session.user_message.acknowledged"></a>`session.user_message.acknowledged` (event)
 

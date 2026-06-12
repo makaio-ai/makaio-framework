@@ -54,9 +54,7 @@ import {
  */
 export class WorkflowExecutor extends BaseService {
   /** Drizzle storage handler registration for the composition root. */
-  public static readonly storage = {
-    drizzle: registerDrizzleWorkflowStorage,
-  } as const;
+  public static readonly storage = { drizzle: registerDrizzleWorkflowStorage } as const;
 
   private readonly config: ExecutorConfig;
   private readonly activeExecutions = new Map<string, ActiveExecution>();
@@ -310,13 +308,14 @@ export class WorkflowExecutor extends BaseService {
       this.bus.on(
         WorkflowSubjects.gate.respond,
         async (ctx) => {
-          const { executionId, gateId, frameId, action, resumeData } = ctx.payload;
+          const { executionId, gateId, frameId, action, resumeData, reason } = ctx.payload;
           const accepted = await this.respondToPausedGate({
             executionId,
             gateId,
             frameId,
             action,
             resumeData: resumeData as JsonValue,
+            reason,
           });
           ctx.setResult({ accepted });
         },
@@ -443,33 +442,32 @@ export class WorkflowExecutor extends BaseService {
     readonly frameId?: string;
     readonly action: 'approve' | 'reject';
     readonly resumeData: JsonValue;
+    readonly reason?: string;
   }): Promise<boolean> {
-    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: payload.executionId,
-    });
+    const { executionId, gateId, frameId, resumeData, reason } = payload;
+    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
     if (!isPausedWorkflowExecution(execution)) return false;
 
-    const gate = await loadUniqueWaitingGateInstance(this.bus, {
-      executionId: payload.executionId,
-      nodeId: payload.gateId,
-      frameId: payload.frameId,
-    });
+    const gate = await loadUniqueWaitingGateInstance(this.bus, { executionId, nodeId: gateId, frameId });
     if (gate === null) return false;
 
-    const validation = validateGateResumeDataForSchema(payload.gateId, gate.schema, payload.resumeData);
+    const validation = validateGateResumeDataForSchema(gateId, gate.schema, resumeData);
     if (!validation.valid) return false;
 
-    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, {
-      executionId: payload.executionId,
-    });
+    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     if (runContext === null) {
-      throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${payload.executionId}`);
+      throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
     }
     await assertDurableResumeFramesPresent(this.bus, runContext);
 
-    const status = payload.action === 'reject' ? 'rejected' : 'resumed';
     const { accepted } = await this.bus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
-      gate: { ...gate, status, resumeData: payload.resumeData, resolvedAt: Date.now() },
+      gate: {
+        ...gate,
+        status: payload.action === 'reject' ? 'rejected' : 'resumed',
+        resumeData,
+        ...(reason !== undefined ? { reason } : {}),
+        resolvedAt: Date.now(),
+      },
     });
     if (!accepted) return false;
 
@@ -483,12 +481,12 @@ export class WorkflowExecutor extends BaseService {
         this.workflowAbortControllers,
         execution,
         gate,
-        payload.gateId,
+        gateId,
       );
       throw error;
     }
 
-    this.gateTimeoutScheduler.clear(payload.executionId, payload.gateId, gate.frameId);
+    this.gateTimeoutScheduler.clear(executionId, gateId, gate.frameId);
     return true;
   }
 

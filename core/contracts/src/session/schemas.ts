@@ -123,8 +123,6 @@ export type {
   SendMessageResponse,
   SessionForkRequest,
   SessionForkResponse,
-  SessionUsagePayload,
-  SessionUsageResponse,
   TurnCompleted,
   TurnInitiator,
   TurnStarted,

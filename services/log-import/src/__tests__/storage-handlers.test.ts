@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { LogImportSubjects } from '../namespace.js';
 import { createTempDb } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleLogImportStorage } from '../storage/handlers.js';
 
 const CREATE_LOG_IMPORT_SETTINGS_TABLE_SQL = sql`
@@ -37,7 +36,7 @@ async function createTestDb(): Promise<() => void> {
 
   await exec(CREATE_LOG_IMPORT_SETTINGS_TABLE_SQL);
 
-  const handlerCleanup = registerDrizzleLogImportStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const handlerCleanup = registerDrizzleLogImportStorage(MakaioBus, db);
   return () => {
     handlerCleanup();
     cleanupDb();

@@ -292,6 +292,9 @@ jobs:
       - name: Check SDK codegen drift
         run: bun ${{ inputs.framework_root }}/scripts/generate-sdk-bindings.ts --check
 
+      - name: Check CI shard coverage
+        run: bun ${{ inputs.framework_root }}/scripts/validate-ci-test-shards.ts
+
       - name: Save ESLint cache
         if: always() && steps.eslint-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5

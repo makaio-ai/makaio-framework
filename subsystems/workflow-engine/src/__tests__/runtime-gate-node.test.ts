@@ -525,6 +525,91 @@ describe('executeGateNode — resume', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// Gate reason threading (in-process path)
+// ─────────────────────────────────────────────────────────────
+
+describe('executeGateNode — reason (in-process)', () => {
+  it('carries reason through gate instance and gate.resolved when respond includes it', async () => {
+    const { ctx, bus } = makeCtx();
+    const node = makeGateNode({ id: 'gate-reason-present' });
+    const frameId = makeGateFrame(ctx, 'gate-reason-present');
+
+    const persistedGates: unknown[] = [];
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedGates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.nodeId });
+    });
+    const resolvedPayloads: unknown[] = [];
+    bus.on(WorkflowSubjects.gate.resolved, (c) => {
+      resolvedPayloads.push(c.payload);
+    });
+
+    setImmediate(() => {
+      void bus.request(WorkflowSubjects.gate.respond, {
+        executionId: 'exec-gate-test',
+        gateId: 'gate-reason-present',
+        action: 'approve',
+        resumeData: { decision: 'ok' },
+        reason: 'Reviewed and approved by the team',
+      });
+    });
+
+    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+
+    expect(outcome.status).toBe('completed');
+    // Persisted gate instance carries the reason.
+    expect(persistedGates).toContainEqual(
+      expect.objectContaining({ status: 'resumed', reason: 'Reviewed and approved by the team' }),
+    );
+    // gate.resolved event carries the reason.
+    expect(resolvedPayloads).toEqual([
+      expect.objectContaining({
+        executionId: 'exec-gate-test',
+        stepId: 'gate-reason-present',
+        action: 'approve',
+        source: 'user',
+        reason: 'Reviewed and approved by the team',
+      }),
+    ]);
+  });
+
+  it('does not set reason on gate instance or gate.resolved when respond omits it', async () => {
+    const { ctx, bus } = makeCtx();
+    const node = makeGateNode({ id: 'gate-reason-absent' });
+    const frameId = makeGateFrame(ctx, 'gate-reason-absent');
+
+    const persistedGates: unknown[] = [];
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedGates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.nodeId });
+    });
+    const resolvedPayloads: unknown[] = [];
+    bus.on(WorkflowSubjects.gate.resolved, (c) => {
+      resolvedPayloads.push(c.payload);
+    });
+
+    setImmediate(() => {
+      void bus.request(WorkflowSubjects.gate.respond, {
+        executionId: 'exec-gate-test',
+        gateId: 'gate-reason-absent',
+        action: 'approve',
+        resumeData: null,
+      });
+    });
+
+    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+
+    expect(outcome.status).toBe('completed');
+    // Persisted gate instance should not have a reason field.
+    expect(persistedGates).toContainEqual(expect.objectContaining({ status: 'resumed' }));
+    const resolvedGate = (persistedGates as Record<string, unknown>[]).find((g) => g.status === 'resumed');
+    expect(resolvedGate).not.toHaveProperty('reason');
+    // gate.resolved event should not carry reason.
+    expect(resolvedPayloads[0]).not.toHaveProperty('reason');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // Gate timeout tests
 // ─────────────────────────────────────────────────────────────
 
@@ -1266,5 +1351,80 @@ describe('executeGateNode — parking (exit-and-redispatch)', () => {
         resumeData: { action: 'approve', source: 'timeout' },
       }),
     );
+  });
+
+  it('carries reason through gate.resolved on redispatch when persisted gate row includes it', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-parked-reason' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-parked-reason');
+    const resolvedPayloads: unknown[] = [];
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-parked-reason',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'resumed',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'approved' },
+          reason: 'Signed off after security review',
+          createdAt: 1,
+          resolvedAt: 2,
+        },
+      });
+    });
+    bus.on(WorkflowSubjects.gate.resolved, (c) => {
+      resolvedPayloads.push(c.payload);
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
+    expect(resolvedPayloads).toEqual([
+      expect.objectContaining({
+        executionId: runtimeCtx.executionId,
+        stepId: 'gate-parked-reason',
+        action: 'approve',
+        source: 'user',
+        reason: 'Signed off after security review',
+      }),
+    ]);
+  });
+
+  it('does not include reason in gate.resolved on redispatch when persisted gate row omits it', async () => {
+    const { ctx: runtimeCtx, bus } = makeCtx({ suspensionStrategy: 'exit-and-redispatch' });
+    const node = makeGateNode({ id: 'gate-parked-no-reason' });
+    const frameId = makeGateFrame(runtimeCtx, 'gate-parked-no-reason');
+    const resolvedPayloads: unknown[] = [];
+
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: runtimeCtx.executionId,
+          nodeId: 'gate-parked-no-reason',
+          frameId,
+          schema: {},
+          prompt: 'Approve this action?',
+          status: 'resumed',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'approved' },
+          createdAt: 1,
+          resolvedAt: 2,
+        },
+      });
+    });
+    bus.on(WorkflowSubjects.gate.resolved, (c) => {
+      resolvedPayloads.push(c.payload);
+    });
+
+    const outcome = await executeGateNode(node, runtimeCtx, emptyExpressionCtx, frameId);
+
+    expect(outcome).toEqual({ status: 'completed', output: { resumeData: { decision: 'approved' } } });
+    expect(resolvedPayloads[0]).not.toHaveProperty('reason');
   });
 });

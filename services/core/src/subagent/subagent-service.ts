@@ -5,6 +5,7 @@ import { BaseService } from '@makaio/service-base';
 import type { BaseMessageContext, ExtractSubjectPayload } from '@makaio/core';
 import { isPeerAuthorizedToDelegate, type SpawnDelegationAllowSet } from './spawn-delegation.js';
 import {
+  AgentSubjects,
   SubagentSubjects,
   SessionSubjects,
   AdapterSubjects,
@@ -58,6 +59,7 @@ type SpawnedPayload = ExtractSubjectPayload<typeof SubagentSubjects.spawned>;
 type ExecuteSubagentPayload = ExtractSubjectPayload<typeof SubagentSubjects.execute>;
 type ToChildPayload = ExtractSubjectPayload<typeof SubagentSubjects.toChild>;
 type ChildSessionCreatePayload = ExtractSubjectPayload<typeof SessionSubjects.create>;
+type AgentCompletePayload = ExtractSubjectPayload<typeof AgentSubjects.complete>;
 
 /**
  * Orchestrates subagent execution lifecycle.
@@ -156,6 +158,11 @@ export class SubagentService extends BaseService {
     // Detect dead child adapter processes
     this.registerHandler(AdapterSubjects.session.closed, (ctx) => {
       this.handleAdapterSessionClosed(ctx.payload.sessionId);
+    });
+
+    // Terminalize turn-mode subagents when their first agent turn completes
+    this.registerHandler(AgentSubjects.complete, async (ctx) => {
+      await this.handleAgentComplete(ctx.payload);
     });
 
     // Register state operation RPCs
@@ -622,6 +629,77 @@ export class SubagentService extends BaseService {
         this.manager.markFailed(subagent.subagentId, 'adapter-session-closed');
         return;
       }
+    }
+  }
+
+  /**
+   * Handle `agent.complete` events for turn-mode subagents.
+   *
+   * Scans non-terminal subagents for one whose `childSessionId` matches the
+   * event's `sessionId`. If found and the subagent was spawned with
+   * `completion: 'turn'`, terminalizes it based on the turn outcome:
+   *
+   * - `'completed'` or absent (legacy emitters) → marks completed; result is
+   *   `payload.message`.
+   * - `'error'` → marks failed with `payload.error`.
+   * - `'superseded'`, `'merged'`, `'cancelled'`, `'rejected'` → ignored; these
+   *   are not the subagent's final result.
+   *
+   * Guards applied before transitioning:
+   * - Skips when `sessionId` is absent (malformed event from legacy emitter).
+   * - Skips when the subagent is currently in `waiting_input` — the completed
+   *   turn is the question, not the result.
+   * - Skips when `manager.markCompleted` / `manager.markFailed` would throw
+   *   (subagent already terminal — first-terminal-wins).
+   *
+   * Both terminal branches emit `subagent.completed` (with `success` set
+   * accordingly), the same announcement `completeTask` makes. That event is
+   * what drives child-session cleanup (`handleCompleted`) — terminalizing
+   * only the manager state would leak the child session and its adapter.
+   * @param payload - Payload from the `agent.complete` bus event
+   */
+  private async handleAgentComplete(payload: AgentCompletePayload): Promise<void> {
+    const { sessionId, outcome, message, error } = payload;
+
+    // sessionId is optional on BaseAgentEventSchema — guard for legacy emitters
+    if (!sessionId) return;
+
+    for (const subagent of this.manager.getAllNonTerminal()) {
+      if (subagent.childSessionId !== sessionId) continue;
+
+      // Tool-mode subagents must not be affected by turn completion
+      if ((subagent.config.completion ?? 'tool') !== 'turn') return;
+
+      // A completed turn during a pending requestInput round-trip is the
+      // question being asked, not the final result — skip it.
+      if (subagent.status === 'waiting_input') return;
+
+      const effectiveOutcome = outcome ?? 'completed';
+
+      if (effectiveOutcome === 'completed') {
+        try {
+          this.manager.markCompleted(subagent.subagentId, message ?? '', undefined, 'turn');
+        } catch {
+          // Already terminal (first-terminal-wins) — ignore
+          return;
+        }
+        await this.bus.emit(SubagentSubjects.completed, {
+          subagentId: subagent.subagentId,
+          success: true,
+          result: message ?? '',
+        });
+      } else if (effectiveOutcome === 'error') {
+        const failureReason = error ?? 'agent turn error';
+        this.manager.markFailed(subagent.subagentId, failureReason);
+        await this.bus.emit(SubagentSubjects.completed, {
+          subagentId: subagent.subagentId,
+          success: false,
+          error: failureReason,
+        });
+      }
+      // superseded / merged / cancelled / rejected: not the subagent's result — ignore
+
+      return;
     }
   }
 

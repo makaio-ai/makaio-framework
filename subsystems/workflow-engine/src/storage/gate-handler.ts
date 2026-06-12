@@ -40,6 +40,7 @@ export function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
     autoAction: row.autoAction,
     timeoutMs: row.timeoutMs ?? null,
     ...(row.resumeDataPresent ? { resumeData: row.resumeData as JsonValue } : {}),
+    ...(row.reason !== null ? { reason: row.reason } : {}),
     createdAt: row.createdAt,
     resolvedAt: row.resolvedAt ?? undefined,
   };
@@ -62,6 +63,7 @@ export function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateIn
     autoAction: gate.autoAction,
     timeoutMs: gate.timeoutMs,
     resumeData: gate.resumeData === undefined ? null : gate.resumeData,
+    reason: gate.reason ?? null,
     resumeDataPresent: gate.resumeData !== undefined,
     createdAt: gate.createdAt,
     resolvedAt: gate.resolvedAt ?? null,

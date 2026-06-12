@@ -2,13 +2,7 @@ import { eq, and, desc, lt, or } from 'drizzle-orm';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
-import type {
-  ExtensionContext,
-  JsonValue,
-  WorkflowExecution,
-  WorkflowGateInstance,
-  WorkflowRunContext,
-} from '@makaio/contracts';
+import type { JsonValue, WorkflowExecution, WorkflowGateInstance, WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecution } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
@@ -377,14 +371,9 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
  * - WorkLog projection: worklog.get, worklog.list, worklog.changed (event-driven)
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleWorkflowStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const definitionCleanup = registerDefinitionHandlers(bus, db);
   const executionCleanup = registerExecutionHandlers(bus, db);
   const frameCleanup = registerFrameHandlers(bus, db);

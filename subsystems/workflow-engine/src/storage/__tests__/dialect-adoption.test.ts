@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
-import { createTestBusInstance, expectSubjectHandlerLifecycle, makeStubExtensionContext } from '@makaio/test-utils';
+import { createTestBusInstance, expectSubjectHandlerLifecycle } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { workflowEngineSchema } from '../schema.variants.js';
@@ -68,12 +68,11 @@ describe('workflow-engine dialect adoption', () => {
     // subject on a bus isolated from the process-global singleton.
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     // Every concrete subject in the namespace is registered by
     // registerDrizzleWorkflowStorage; only the $all wildcard accessor is not
     // an individually subscribable storage subject.
     const subjects = Object.values(WorkflowStorageSubjects).filter((subject) => subject.subject !== '*');
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleWorkflowStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleWorkflowStorage(bus, db));
   });
 });

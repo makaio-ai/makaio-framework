@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { startMcpBridge } from './mcp-bridge.js';
@@ -60,6 +61,23 @@ describe('startMcpBridge', () => {
     controller.abort();
 
     await expect(bridgePromise).resolves.toBeUndefined();
+  });
+
+  it('rejects when abort-triggered close fails', async () => {
+    const { bus } = setupBridgeFixture();
+    const closeError = new Error('close failed');
+    vi.spyOn(Server.prototype, 'close').mockRejectedValue(closeError);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const controller = new AbortController();
+    const bridgePromise = startMcpBridge(bus, { signal: controller.signal });
+
+    await vi.waitFor(() => {
+      expect(StdioServerTransport.prototype.start).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+
+    await expect(bridgePromise).rejects.toThrow('close failed');
   });
 
   it('resolves when stdin emits close', async () => {

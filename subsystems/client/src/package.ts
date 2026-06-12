@@ -221,11 +221,11 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
        * @param db - Drizzle database instance
        * @returns Cleanup function that unregisters all storage handlers
        */
-      registerHandlers: registerDrizzleHandlers((bus, db, _ctx) => {
+      registerHandlers: registerDrizzleHandlers((bus, db) => {
         return registerStorageHandlersWithRollback([
-          () => registerDrizzleRuntimeStorage(bus, db, _ctx),
-          () => registerDrizzleClientBinaryStorage(bus, db, _ctx),
-          () => registerDrizzleProfileStorage(bus, db, _ctx),
+          () => registerDrizzleRuntimeStorage(bus, db),
+          () => registerDrizzleClientBinaryStorage(bus, db),
+          () => registerDrizzleProfileStorage(bus, db),
         ]);
       }),
     },

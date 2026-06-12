@@ -3,6 +3,7 @@ import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  applyDevManifestStamp,
   buildAnnotatedTag,
   buildDevVersion,
   buildPublishArgs,
@@ -11,6 +12,7 @@ import {
   renderSummary,
   resolveDevPublishPlan,
   stripPrerelease,
+  type DevStampManifest,
 } from './dev-publish.js';
 
 const REPOSITORY_URL = 'git+https://github.com/makaio-ai/makaio-framework.git';
@@ -71,6 +73,26 @@ describe('dev snapshot versions', () => {
 
   it('replaces an existing prerelease suffix before applying the dev timestamp', () => {
     expect(stripPrerelease('1.0.0-dev-1779051654000')).toBe('1.0.0');
+  });
+});
+
+describe('applyDevManifestStamp', () => {
+  it('stamps the snapshot version and widens the framework peer to a prerelease-inclusive range', () => {
+    const manifest: DevStampManifest = {
+      version: '0.1.0',
+      peerDependencies: { '@makaio/framework': '^1.0.0', react: '^19.0.0' },
+    };
+    applyDevManifestStamp(manifest, '0.1.0-dev-1780000000000', '1.0.0-dev-1780000000000');
+    expect(manifest.version).toBe('0.1.0-dev-1780000000000');
+    expect(manifest.peerDependencies?.['@makaio/framework']).toBe('>=1.0.0-0 <2.0.0');
+    expect(manifest.peerDependencies?.react).toBe('^19.0.0');
+  });
+
+  it('leaves manifests without a framework peer untouched apart from the version', () => {
+    const manifest: DevStampManifest = { version: '1.0.0' };
+    applyDevManifestStamp(manifest, '1.0.0-dev-1780000000000', '1.0.0-dev-1780000000000');
+    expect(manifest.version).toBe('1.0.0-dev-1780000000000');
+    expect(manifest.peerDependencies).toBeUndefined();
   });
 });
 

@@ -16,7 +16,6 @@ import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 
@@ -181,43 +180,37 @@ describe('PG-brand handler registration', () => {
 
   it('registers all message handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleMessageStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleMessageStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 
   it('registers all session-event handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleSessionEventStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleSessionEventStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 
   it('registers all turn handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleTurnStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleTurnStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 
   it('registers all message-routing handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleMessageRoutingStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleMessageRoutingStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 
   it('registers all import-cursor handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleImportCursorStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleImportCursorStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 
   it('registers all harness handlers against a pg-branded handle', async () => {
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(MakaioBus);
-    cleanup = registerDrizzleHarnessStorage(MakaioBus, db, ctx);
+    cleanup = registerDrizzleHarnessStorage(MakaioBus, db);
     expect(typeof cleanup).toBe('function');
   });
 });

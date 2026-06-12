@@ -871,7 +871,7 @@ Type: Event (fire-and-forget)
 Emitted when: Usage metrics are available from an AI provider API call
 
 This event contains delta metrics for a single API call.
-For session-level cumulative totals, see `session.usage`.
+For adapter-level cumulative totals, see `adapter.session.usage`.
 
 | Field | Type | Required |
 |-------|------|----------|

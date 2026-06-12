@@ -169,3 +169,11 @@ export function inferCategory(filePath: string): TestCategory {
   if (filePath.endsWith('.test.tsx')) return 'ui';
   return 'unit';
 }
+
+/**
+ * Project names for Vitest projects that are defined inline in the framework
+ * vitest config but are not part of the standard shard table.
+ * These projects handle special execution requirements (process isolation,
+ * serial execution) that the shard-based projects cannot express.
+ */
+export const FRAMEWORK_SPECIAL_PROJECT_NAMES: readonly string[] = ['forks-required', 'git-serial'];

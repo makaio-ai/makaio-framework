@@ -7,7 +7,6 @@
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleSessionStorage } from '../../storage/drizzle-handler.js';
 
@@ -61,8 +60,7 @@ export function useImportResolverTestLifecycle(
 
     await installSessionStorageTestSchema(db);
 
-    const stubCtx = makeStubExtensionContext(MakaioBus);
-    const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db, stubCtx);
+    const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db);
     const additionalCleanup = options?.additionalHandlers?.(db);
 
     _db = db;

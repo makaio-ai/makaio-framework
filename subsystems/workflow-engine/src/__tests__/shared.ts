@@ -1,6 +1,5 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
 import type {
@@ -188,7 +187,7 @@ export async function createTestDbForBus(bus: IMakaioBus): Promise<TestDbContext
 
   await applyMigrations(db, readMigrations(), TEST_MIGRATIONS_TABLE);
 
-  const handlerCleanup = registerDrizzleWorkflowStorage(bus, db, makeStubExtensionContext(bus));
+  const handlerCleanup = registerDrizzleWorkflowStorage(bus, db);
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
 
   return { db, close, dbPath, exec, cleanup };

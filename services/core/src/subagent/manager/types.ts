@@ -1,4 +1,4 @@
-import type { PendingRequest, SubagentConfig, SubagentStatus } from '@makaio/contracts';
+import type { CompletionMode, PendingRequest, SubagentConfig, SubagentStatus } from '@makaio/contracts';
 import type { RingBuffer } from '../utils/ring-buffer.js';
 
 /**
@@ -41,6 +41,13 @@ export interface TrackedSubagent {
   summary?: string;
   /** Error message if failed. */
   error?: string;
+  /**
+   * Which mechanism terminalized this subagent.
+   * Present only when status is `'completed'`.
+   * - `'tool'` — child called `completeTask`.
+   * - `'turn'` — first completed agent turn was used as the result.
+   */
+  completionSource?: CompletionMode;
   /** Timestamp when the subagent was spawned. */
   startTime: number;
   /** Timestamp when the subagent reached a terminal state. */
@@ -69,4 +76,11 @@ export interface AwaitResult {
   pendingRequest?: PendingRequest;
   /** Error message if failed. */
   error?: string;
+  /**
+   * Which mechanism terminalized the subagent.
+   * Present when status is `'completed'`.
+   * - `'tool'` — child called `completeTask`.
+   * - `'turn'` — first completed agent turn was used as the result.
+   */
+  completionSource?: CompletionMode;
 }

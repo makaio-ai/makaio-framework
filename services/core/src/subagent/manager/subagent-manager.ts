@@ -1,4 +1,4 @@
-import type { SubagentConstraints, SubagentStatus, SubagentConfig } from '@makaio/contracts';
+import type { CompletionMode, SubagentConstraints, SubagentStatus, SubagentConfig } from '@makaio/contracts';
 import { SubagentError, SubagentErrorCode } from '@makaio/contracts';
 import { RingBuffer } from '../utils/ring-buffer.js';
 import type { TrackedSubagent, InternalPendingRequest, AwaitResult } from './types.js';
@@ -223,9 +223,10 @@ export class SubagentManager {
    * @param subagentId - ID of the subagent
    * @param result - Result string
    * @param summary - Optional summary of the result
+   * @param completionSource - Which mechanism produced the completion (`'tool'` or `'turn'`)
    * @throws SubagentError if subagent not found or already in terminal state
    */
-  public markCompleted(subagentId: string, result: string, summary?: string): void {
+  public markCompleted(subagentId: string, result: string, summary?: string, completionSource?: CompletionMode): void {
     const subagent = this.subagents.get(subagentId);
     if (!subagent) {
       throw new SubagentError(SubagentErrorCode.NOT_FOUND, `Subagent ${subagentId} not found`);
@@ -241,6 +242,7 @@ export class SubagentManager {
     subagent.status = 'completed';
     subagent.result = result;
     subagent.summary = summary;
+    subagent.completionSource = completionSource;
     subagent.endTime = now;
     subagent.lastActivityAt = now;
     this.resolveAwaiters(subagentId);
@@ -336,6 +338,7 @@ export class SubagentManager {
       status: subagent.status as AwaitResult['status'],
       result: subagent.result,
       error: subagent.error,
+      completionSource: subagent.completionSource,
     };
 
     for (const callback of awaiters) {

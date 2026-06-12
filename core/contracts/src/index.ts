@@ -574,6 +574,7 @@ export type {
 } from './skill/index.js';
 export type { ActionIntent, FocusContext, SurfaceType } from './common/index.js';
 export {
+  CompletionModeSchema,
   ContextModeSchema,
   DEFAULT_CONSTRAINTS,
   PendingRequestSchema,
@@ -589,6 +590,7 @@ export type {
   AwaitSubagentResponse,
   CompleteTaskRequest,
   CompleteTaskResponse,
+  CompletionMode,
   ContextMode,
   ExecuteSubagentResponse,
   KillSubagentRequest,

@@ -3,7 +3,7 @@ import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
 import { SessionSubjects } from '@makaio/contracts';
-import { createTestBusInstance, expectSubjectHandlerLifecycle, makeStubExtensionContext } from '@makaio/test-utils';
+import { createTestBusInstance, expectSubjectHandlerLifecycle } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { sessionStorageSchema } from '../schema.variants.js';
@@ -58,7 +58,6 @@ describe('session storage dialect adoption', () => {
     it('registers exactly one session storage handler per subject on an isolated bus', async () => {
       const bus = createTestBusInstance();
       const { db } = await createPgBrandedTestDb();
-      const ctx = makeStubExtensionContext(bus);
       const subjects = [
         SessionStorageSubjects.get,
         SessionStorageSubjects.set,
@@ -68,13 +67,12 @@ describe('session storage dialect adoption', () => {
         SessionStorageSubjects.getStatusCounts,
       ];
 
-      expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleSessionStorage(bus, db, ctx));
+      expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleSessionStorage(bus, db));
     });
 
     it('registers exactly one agent storage handler per subject on an isolated bus', async () => {
       const bus = createTestBusInstance();
       const { db } = await createPgBrandedTestDb();
-      const ctx = makeStubExtensionContext(bus);
       const subjects = [
         AgentStorageSubjects.get,
         AgentStorageSubjects.set,
@@ -86,7 +84,7 @@ describe('session storage dialect adoption', () => {
         AgentStorageSubjects.updateRuntime,
       ];
 
-      expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleAgentStorage(bus, db, ctx));
+      expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleAgentStorage(bus, db));
     });
 
     it('registers the parent resolver on the import-completed event of an isolated bus', async () => {

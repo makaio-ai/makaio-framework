@@ -19,7 +19,7 @@ const extensionFactoryFiles = {
 } as const;
 const extensionFactoryNames = ['createExtensionNamespace', 'createExtensionStorageNamespace'] as const;
 const sourceSkipDirs = new Set(['dist', 'node_modules', '__tests__']);
-const packageSkipDirs = new Set(['dist', 'node_modules']);
+const packageSkipDirs = new Set(['dist', 'node_modules', 'release']);
 
 function listSourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

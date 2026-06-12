@@ -835,6 +835,7 @@ describe('workflow storage handlers', () => {
         ...waitingGate,
         status: 'resumed',
         resumeData: { decision: 'first' },
+        reason: 'approved after review',
         resolvedAt: 2000,
       },
     });
@@ -859,6 +860,7 @@ describe('workflow storage handlers', () => {
       ...waitingGate,
       status: 'resumed',
       resumeData: { decision: 'first' },
+      reason: 'approved after review',
       resolvedAt: 2000,
     });
   });

@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleAgentStorage } from '../agent-drizzle-handler.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
 
@@ -42,7 +41,7 @@ async function createTestDb(): Promise<TestDbContextWithCleanup> {
   const { db, close, dbPath, exec } = await createTempDb('agent-storage-update-runtime');
   await exec(CREATE_SESSIONS_TABLE_SQL);
   await exec(CREATE_AGENTS_TABLE_SQL);
-  const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db);
   const cleanup = createDbCleanup(() => handlerCleanup(), close, dbPath);
   return { db, close, dbPath, exec, cleanup };
 }

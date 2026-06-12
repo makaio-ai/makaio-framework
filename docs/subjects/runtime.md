@@ -52,6 +52,9 @@ _Empty object._
 Query for database handle.
 Registered by NodeRuntime. Absent in memory-only runtimes.
 
+Local-only: the response carries a live database handle that cannot be
+serialized across a transport. Use `getRuntimeDatabase` for typed access.
+
 Subject: `runtime.database`
 Type: Request (RPC)
 
@@ -69,6 +72,9 @@ _Empty object._
 
 Query for machine identity (E2E encryption keys).
 Registered by NodeRuntime. Absent in memory-only runtimes.
+
+Local-only: the response carries private key material that must never
+cross a transport.
 
 Subject: `runtime.machineIdentity`
 Type: Request (RPC)

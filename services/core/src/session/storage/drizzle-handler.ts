@@ -1,12 +1,7 @@
 import { eq, desc, count, inArray, and, sql, type SQL } from 'drizzle-orm';
 import { didAffectRows, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import {
-  SessionStorageSetRequestSchema,
-  SessionStorageUpdateSchema,
-  type ExtensionContext,
-  type IMakaioSession,
-} from '@makaio/contracts';
+import { SessionStorageSetRequestSchema, SessionStorageUpdateSchema, type IMakaioSession } from '@makaio/contracts';
 import type { z } from 'zod';
 import { SessionStorageSubjects, type SessionWithPreview } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
@@ -478,7 +473,6 @@ function registerGetStatusCountsHandler(deps: SessionHandlerDeps): () => void {
  * via SQLite's busy_timeout + WAL mode.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example
  * ```typescript
@@ -488,13 +482,13 @@ function registerGetStatusCountsHandler(deps: SessionHandlerDeps): () => void {
  *
  * const client = createClient({ url: 'file:./makaio.db' });
  * const db = drizzle(client);
- * const cleanup = registerDrizzleSessionStorage(bus, db, ctx);
+ * const cleanup = registerDrizzleSessionStorage(bus, db);
  *
  * // Later, when shutting down:
  * cleanup();
  * ```
  */
-export function registerDrizzleSessionStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleSessionStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const deps: SessionHandlerDeps = { bus, db };
   const cleanups = [
     registerGetHandler(deps),

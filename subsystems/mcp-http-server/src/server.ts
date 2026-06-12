@@ -56,6 +56,17 @@ export interface McpServerOptions {
   agentContext?: McpAgentContext;
   /** Optional MCP tool discovery customization. */
   toolDiscovery?: McpToolDiscoveryOptions;
+  /**
+   * Optional callback invoked exactly once when the stdio transport closes.
+   *
+   * Fired on whichever of these happens first: the client detaches (stdin EOF),
+   * the SDK transport fires its own `onclose` hook, or an explicit
+   * {@link StdioMcpServerHandle.close} call completes. Subsequent triggers are
+   * suppressed so the callback is guaranteed to fire at most once.
+   *
+   * Only consulted for `transport: 'stdio'`; ignored for HTTP.
+   */
+  onclose?: () => void;
 }
 
 /**
@@ -107,24 +118,70 @@ export interface CreateMcpServerOptions {
 }
 
 /**
- * Options accepted by {@link startHttpMcpServer}.
- *
- * Extends the transport-agnostic {@link McpServerOptions} fields (minus
- * `transport`, which is always `'http'` for this function) with an optional
- * callback for resolving session-stable context overrides at tool-call time.
+ * Transport-agnostic options shared by {@link createHttpMcpHandler} and
+ * {@link startHttpMcpServer}.  These fields configure the MCP server and its
+ * attached transport without prescribing how the resulting handler is mounted
+ * onto an HTTP stack.
  */
-export interface HttpMcpServerOptions extends Omit<McpServerOptions, 'transport'> {
-  /** Optional callback for session-stable context override resolution. */
-  resolveContextOverrides?: ResolveContextOverrides;
+export interface HttpMcpHandlerOptions {
+  /** Agent context for HTTP transport routing. */
+  agentContext?: McpAgentContext;
+  /** Optional MCP tool discovery customization. */
+  toolDiscovery?: McpToolDiscoveryOptions;
   /**
-   * Optional callback invoked when the HTTP transport closes.
+   * Optional callback invoked when the underlying MCP transport closes.
    *
    * Called synchronously by the MCP SDK's transport `onclose` hook — that is,
-   * when {@link HttpMcpServerHandle.close} has been called and the transport
-   * has finished closing. Intended for best-effort resource cleanup (e.g.
-   * flushing session registries) without blocking the close path.
+   * after {@link HttpMcpHandlerHandle.close} (or {@link HttpMcpServerHandle.close})
+   * has been called and the transport has finished tearing down.  Intended for
+   * best-effort resource cleanup (e.g. flushing session registries) without
+   * blocking the close path.
+   *
+   * When used via {@link startHttpMcpServer}, the callback fires after the MCP
+   * transport closes, which occurs during the combined server-and-transport
+   * teardown initiated by {@link HttpMcpServerHandle.close}.
    */
   onclose?: () => void;
+  /** Optional callback for session-stable context override resolution. */
+  resolveContextOverrides?: ResolveContextOverrides;
+}
+
+/**
+ * Options accepted by {@link startHttpMcpServer}.
+ *
+ * Extends {@link HttpMcpHandlerOptions} with `port`, which controls which
+ * TCP port the internally-created `http.Server` listens on.
+ */
+export interface HttpMcpServerOptions extends HttpMcpHandlerOptions {
+  /** Port for HTTP transport. When omitted or 0, OS assigns an available port. */
+  port?: number;
+}
+
+/**
+ * Result returned by {@link createHttpMcpHandler}.
+ *
+ * Provides a Node.js-compatible request handler that can be mounted on any
+ * HTTP stack that exposes the raw `IncomingMessage` / `ServerResponse` pair,
+ * plus lifecycle handles for the underlying MCP server. See
+ * {@link createHttpMcpHandler} for usage and mounting examples.
+ */
+export interface HttpMcpHandlerHandle {
+  /**
+   * Mount this on any Node-compatible HTTP stack.
+   *
+   * The handler parses the raw request body internally; do not pre-read or
+   * pre-parse the body before passing the request to this function.
+   */
+  readonly handler: (req: IncomingMessage, res: ServerResponse) => void;
+  /** Context registry for registering and unregistering agent sessions. */
+  readonly contextRegistry: IMcpContextRegistry;
+  /**
+   * Gracefully close the MCP server and its transport.
+   *
+   * Idempotent: repeated calls await the same underlying close operation and
+   * do not trigger a second teardown.
+   */
+  close(): Promise<void>;
 }
 
 /**
@@ -328,9 +385,14 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
  * Create a framework-agnostic HTTP request handler that delegates to
  * {@link StreamableHTTPServerTransport.handleRequest}.
  *
- * This is the seam for attaching MCP to a shared HTTP server in the future.
- * The transport handles body parsing internally and we do not pre-parse the body,
- * otherwise the request stream would be consumed before MCP can read it.
+ * **External consumers should prefer {@link createHttpMcpHandler}**, which
+ * constructs the transport internally so no MCP SDK type needs to appear in
+ * caller code.  This lower-level function is exposed for internal composition
+ * and testing.
+ *
+ * The transport handles body parsing internally; do not pre-parse the body
+ * before calling this handler, as that would consume the request stream before
+ * MCP can read it.
  * @param transport - Streamable HTTP transport instance connected to the server.
  * @param onBeforeDispatch - Optional hook called synchronously before request dispatch.
  * @returns Node.js-compatible request handler.
@@ -413,17 +475,54 @@ async function listenForHttpPort(
 }
 
 /**
- * Start a standalone HTTP MCP server on a new `http.Server`.
- * @param bus - Bus instance.
- * @param options - Server options; `port` defaults to 0 (OS-assigned).
- *   Pass `resolveContextOverrides` to supply session-stable context overrides
- *   at tool-call time (used by {@link McpServerBridgeService}).
- * @returns Handle exposing the OS-assigned port, context registry, and a close function.
+ * Create a mountable MCP handler without starting a dedicated HTTP server.
+ *
+ * Use this when you want to embed MCP into an existing HTTP application rather
+ * than running MCP on its own port.  The returned {@link HttpMcpHandlerHandle.handler}
+ * is a plain Node.js `(req, res) => void` function that you can wire into any
+ * framework exposing the raw `IncomingMessage` / `ServerResponse` pair (e.g.
+ * Hono's Node adapter via `(c) => { handler(c.env.incoming, c.env.outgoing); }`).
+ *
+ * The MCP SDK transport is constructed and managed internally — no MCP SDK
+ * types appear in the public API.
+ *
+ * **Auth / middleware is the consumer's responsibility.** Run authentication,
+ * rate limiting, or logging in the surrounding HTTP stack *before* delegating
+ * to the returned handler.
+ *
+ * Closing the handle shuts down the MCP server and its transport; active
+ * HTTP connections are left to the caller's HTTP stack.
+ * @param bus - Bus instance for tool execution and approval RPC.
+ * @param options - Handler options; all fields are optional.
+ * @returns Handle with the request handler function, context registry, and
+ *   an idempotent `close()` method.
+ * @example
+ * ```ts
+ * import * as http from 'node:http';
+ * import { createHttpMcpHandler } from '@makaio/subsystem-mcp-http-server';
+ *
+ * const { handler, close } = await createHttpMcpHandler(bus);
+ *
+ * const httpServer = http.createServer((req, res) => {
+ *   if (req.url?.startsWith('/mcp')) {
+ *     handler(req, res);
+ *   } else {
+ *     res.writeHead(404).end();
+ *   }
+ * });
+ *
+ * httpServer.listen(3000);
+ *
+ * process.once('SIGTERM', async () => {
+ *   httpServer.close();
+ *   await close();
+ * });
+ * ```
  */
-export async function startHttpMcpServer(
+export async function createHttpMcpHandler(
   bus: IMakaioBus,
-  options: HttpMcpServerOptions = {},
-): Promise<HttpMcpServerHandle> {
+  options: HttpMcpHandlerOptions = {},
+): Promise<HttpMcpHandlerHandle> {
   const contextRegistry = new McpContextRegistry();
 
   const sessionId = options.agentContext?.adapterSessionId ?? crypto.randomUUID();
@@ -436,12 +535,17 @@ export async function startHttpMcpServer(
     toolDiscovery: options.toolDiscovery,
     resolveContextOverrides: options.resolveContextOverrides,
   });
+
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
   if (options.onclose) {
     transport.onclose = options.onclose;
   }
   await mcpServer.connect(transport);
 
+  // adapterSessionId query-param → x-adapter-session-id header shim.
+  // This is a protocol contract (not a listener detail): adapters pass the
+  // session ID as a query param because some HTTP clients cannot set custom
+  // headers on SSE GET requests.
   const handler = createMcpRequestHandler(transport, (req) => {
     const rawUrl = req.url ?? '/';
     const queryStart = rawUrl.indexOf('?');
@@ -457,24 +561,59 @@ export async function startHttpMcpServer(
     }
   });
 
-  const httpServer = http.createServer(handler);
+  // Idempotent close: all callers await the same promise so the underlying
+  // MCP server teardown is never duplicated (mirrors the stdio closeOnce pattern).
+  let closePromise: Promise<void> | undefined;
+
+  return {
+    handler,
+    contextRegistry,
+    close(): Promise<void> {
+      if (!closePromise) {
+        closePromise = mcpServer.close();
+      }
+      return closePromise;
+    },
+  };
+}
+
+/**
+ * Start a standalone HTTP MCP server on a new `http.Server`.
+ *
+ * This is a convenience wrapper around {@link createHttpMcpHandler} that also
+ * creates an `http.Server`, binds it to a TCP port, and manages connection
+ * draining on close.  Use {@link createHttpMcpHandler} directly when you need
+ * to embed MCP into an existing HTTP application.
+ * @param bus - Bus instance.
+ * @param options - Server options; `port` defaults to 0 (OS-assigned).
+ *   Pass `resolveContextOverrides` to supply session-stable context overrides
+ *   at tool-call time (used by {@link McpServerBridgeService}).
+ * @returns Handle exposing the OS-assigned port, context registry, and a close function.
+ */
+export async function startHttpMcpServer(
+  bus: IMakaioBus,
+  options: HttpMcpServerOptions = {},
+): Promise<HttpMcpServerHandle> {
+  const handle = await createHttpMcpHandler(bus, options);
+
+  const httpServer = http.createServer(handle.handler);
 
   const port = await listenForHttpPort(httpServer, options.port ?? 0, async () => {
-    await Promise.allSettled([mcpServer.close(), closeHttpServerSafely(httpServer)]);
+    await Promise.allSettled([handle.close(), closeHttpServerSafely(httpServer)]);
   });
 
   console.error(`[MCP Server] HTTP transport listening on port ${port}`);
 
   return {
     port,
-    contextRegistry,
+    contextRegistry: handle.contextRegistry,
     close: async () => {
       // Force-close idle keep-alive connections so httpServer.close() resolves promptly.
       // Without this, connections held by the Claude Agent SDK subprocess
       // prevent the server from draining within the test timeout.
       httpServer.closeAllConnections();
       const results = await Promise.allSettled([
-        mcpServer.close(),
+        handle.close(),
         new Promise<void>((resolve, reject) => httpServer.close((err) => (err ? reject(err) : resolve()))),
       ]);
       const errors = results
@@ -491,9 +630,11 @@ export async function startHttpMcpServer(
  * Start MCP server with the configured transport.
  *
  * For the stdio transport, returns a {@link StdioMcpServerHandle} whose
- * `close()` method gracefully tears down the MCP server. Signal handling
- * is intentionally left to the composition root — library code must not
- * own process-global resources such as `process.on('SIGINT')`.
+ * `close()` method gracefully tears down the MCP server. Pass
+ * `options.onclose` to receive a single callback when the transport closes for
+ * any reason (client detach via stdin EOF, or explicit `handle.close()`).
+ * Signal handling is intentionally left to the composition root — library code
+ * must not own process-global resources such as `process.on('SIGINT')`.
  * @param bus - Bus instance.
  * @param sessionId - Session identifier (used for stdio transport).
  * @param options - Server options; defaults to stdio transport.
@@ -514,13 +655,67 @@ export async function startMcpServer(
     toolDiscovery: options.toolDiscovery,
   });
   const transport = new StdioServerTransport();
+
+  const stdin = process.stdin;
+
+  // Single close-in-progress promise shared between the stdin-EOF path and
+  // the explicit close() path. Both paths funnel through server.close() once;
+  // concurrent callers await the same promise so the underlying SDK call is
+  // never duplicated.
+  let closePromise: Promise<void> | undefined;
+  const closeOnce = (): Promise<void> => {
+    if (!closePromise) {
+      stdin.off('end', onStdinEnd);
+      stdin.off('close', onStdinEnd);
+      // `finally` guarantees the caller's onclose even when teardown fails
+      // before the transport's own onclose hook runs (rejected server.close()).
+      closePromise = server.close().finally(fireOnce);
+    }
+    return closePromise;
+  };
+
+  // Guard ensuring `onclose` fires at most once regardless of which event
+  // (stdin EOF or explicit handle.close) triggers the close.
+  let onceFired = false;
+  const fireOnce = (): void => {
+    if (onceFired) return;
+    onceFired = true;
+    options.onclose?.();
+  };
+
+  // Detect client detach: stdin reaching EOF without an explicit close().
+  // Initiates server shutdown so the transport fires its own onclose hook
+  // which then delivers fireOnce. Do not call fireOnce directly here so
+  // teardown always runs before notifying the caller.
+  const onStdinEnd = (): void => {
+    void closeOnce().catch((error: unknown) => {
+      console.error('[MCP Server] Error closing server on stdin EOF:', error);
+    });
+  };
+
+  // Mirror the HTTP path: wire the transport's own onclose hook so that
+  // server.close() cascades into the caller's onclose callback and cleans
+  // up the stdin listeners in one place.
+  transport.onclose = (): void => {
+    // closeOnce already removed the stdin listeners; remove again as a
+    // safety net for any future code path that calls transport.close() directly.
+    stdin.off('end', onStdinEnd);
+    stdin.off('close', onStdinEnd);
+    fireOnce();
+  };
+
+  // Attach stdin EOF listeners after wiring transport.onclose so that any
+  // EOF arriving during or after connect() is routed through closeOnce().
+  stdin.once('end', onStdinEnd);
+  stdin.once('close', onStdinEnd);
+
   await server.connect(transport);
 
   console.error('[MCP Server] Started and listening on stdio');
 
   return {
     close: async () => {
-      await server.close();
+      await closeOnce();
     },
   };
 }

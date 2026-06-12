@@ -11,7 +11,6 @@
 import { and, eq } from 'drizzle-orm';
 import { didAffectRows, executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { clientProfilesSchema } from './profile-schema.variants.js';
 import { ClientProfileStorageSubjects } from './profile-storage-namespace.js';
 import type { SelectClientProfile } from './profile-schema.js';
@@ -106,10 +105,9 @@ async function setDefaultProfile(
  * - `client-profile:storage.setDefault` — atomically promote one profile to default.
  * @param bus - Bus instance to register handlers on
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleProfileStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleProfileStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { clientProfiles } = resolveSchema(db, clientProfilesSchema);
   const cleanups = [
     bus.on(ClientProfileStorageSubjects.get, async (ctx) => {

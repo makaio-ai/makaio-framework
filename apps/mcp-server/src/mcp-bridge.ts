@@ -40,40 +40,62 @@ export async function startMcpBridge(bus: IMakaioBus, opts?: McpBridgeOptions): 
 
   const sessionId = opts?.sessionId ?? crypto.randomUUID();
 
+  // Deferred promise resolved by the onclose seam (stdin EOF or explicit
+  // handle.close). Captured before the async gap so it is already set when
+  // onclose fires, even if stdin ends during server startup.
+  let resolveLifetime!: () => void;
+  let rejectLifetime!: (error: unknown) => void;
+  const lifetime = new Promise<void>((resolve, reject) => {
+    resolveLifetime = resolve;
+    rejectLifetime = reject;
+  });
+
+  let terminatingViaAbort = false;
+
+  // onclose is called by startMcpServer exactly once when the transport closes
+  // for any reason. Stdin EOF uses it as the primary termination seam. Abort
+  // shutdown resolves from handle.close() instead, so a close rejection cannot
+  // be hidden by the onclose callback that startMcpServer fires from finally().
   const handle: StdioMcpServerHandle = await startMcpServer(bus, sessionId, {
     transport: 'stdio',
+    onclose: () => {
+      if (terminatingViaAbort) return;
+      resolveLifetime();
+    },
   });
 
   // Re-check after the async startMcpServer gap: the signal may have been
   // aborted while the server was starting, and addEventListener('abort')
   // does not fire retroactively for an already-aborted signal. Stdin terminal
-  // events are the same shape: once() listeners cannot observe events that
-  // fired while the MCP server was starting.
+  // events are handled inside startMcpServer via the onclose seam; only the
+  // abort-signal race requires a post-start check here.
   if (opts?.signal?.aborted || isStdinTerminated(stdin)) {
     await handle.close();
+    await lifetime;
     return;
   }
 
-  await new Promise<void>((resolve, reject) => {
-    let terminating = false;
-    const onTerminate = (): void => {
-      if (terminating) return;
-      terminating = true;
-      opts?.signal?.removeEventListener('abort', onTerminate);
-      stdin.off('end', onTerminate);
-      stdin.off('close', onTerminate);
-      handle.close().then(resolve, reject);
-    };
+  const onAbort = (): void => {
+    if (terminatingViaAbort) return;
+    terminatingViaAbort = true;
+    opts?.signal?.removeEventListener('abort', onAbort);
+    void handle.close().then(resolveLifetime, (error: unknown) => {
+      console.error('[MCP Bridge] Error closing server on abort:', error);
+      rejectLifetime(error);
+    });
+  };
 
-    opts?.signal?.addEventListener('abort', onTerminate, { once: true });
-    stdin.once('end', onTerminate);
-    stdin.once('close', onTerminate);
+  opts?.signal?.addEventListener('abort', onAbort, { once: true });
 
-    // EventEmitter once() listeners do not fire for events that happened
-    // before registration. Check stream state after subscribing so shutdown
-    // still runs if stdin ended during the async server startup gap.
-    if (opts?.signal?.aborted || isStdinTerminated(stdin)) {
-      onTerminate();
-    }
-  });
+  // Check abort/stdin state after subscribing so shutdown still runs if
+  // abort fired during the async server startup gap.
+  if (opts?.signal?.aborted || isStdinTerminated(stdin)) {
+    onAbort();
+  }
+
+  try {
+    await lifetime;
+  } finally {
+    opts?.signal?.removeEventListener('abort', onAbort);
+  }
 }

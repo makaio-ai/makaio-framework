@@ -59,6 +59,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `completionSource` | `"tool" \| "turn" \| undefined` | no |
 | `error` | `string \| undefined` | no |
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `result` | `string \| undefined` | no |
@@ -123,7 +124,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; completion?: "tool" \| "turn" \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `subagentId` | `string` | yes |
@@ -295,7 +296,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; completion?: "tool" \| "turn" \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |
@@ -319,7 +320,7 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; }` | yes |
+| `config` | `{ task: string; adapterName?: string \| undefined; providerConfigId?: string \| undefined; providerContext?: { providerConfigId: string; definitionId: string; credentialRefs: Record<string, string>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined; harnessId?: string \| undefined; model?: string \| undefined; contextMode?: "fork" \| "fresh" \| undefined; tools?: string[] \| undefined; disallowedTools?: string[] \| undefined; allowedDirectories?: string[] \| undefined; systemPrompt?: string \| undefined; maxDepth?: number \| undefined; responseSchema?: { schema: Record<string, JsonValue>; name?: string \| undefined; strict?: boolean \| undefined; } \| undefined; executionTargetId?: string \| undefined; completion?: "tool" \| "turn" \| undefined; }` | yes |
 | `depth` | `number` | yes |
 | `parentSessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| undefined` | no |

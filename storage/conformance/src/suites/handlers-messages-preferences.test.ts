@@ -13,7 +13,6 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import {
   registerDrizzleSessionStorage,
   registerDrizzleMessageStorage,
@@ -82,10 +81,9 @@ describeStorageConformance('handlers-messages-preferences', (config) => {
   const cleanups: Array<() => void> = [];
 
   beforeAll(() => {
-    const extCtx = makeStubExtensionContext(MakaioBus);
     // Message handlers require session FK to be satisfied
-    cleanups.push(registerDrizzleSessionStorage(MakaioBus, getCtx().db, extCtx));
-    cleanups.push(registerDrizzleMessageStorage(MakaioBus, getCtx().db, extCtx));
+    cleanups.push(registerDrizzleSessionStorage(MakaioBus, getCtx().db));
+    cleanups.push(registerDrizzleMessageStorage(MakaioBus, getCtx().db));
     // Preferences have their own isolated table; no session FK
     cleanups.push(registerDrizzlePreferencesStorage(MakaioBus, getCtx().db));
   });

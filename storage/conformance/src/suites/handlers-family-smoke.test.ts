@@ -14,7 +14,6 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleWorkflowStorage, WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import {
   registerDrizzleSupervisorRuntimeStorage,
@@ -40,7 +39,6 @@ import {
 } from '@makaio/services-core/session';
 import { HarnessStorageSubjects, registerDrizzleHarnessStorage } from '@makaio/services-core/harness';
 import { ImportCursorStorageSubjects } from '@makaio/ai-adapters-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import type { StorageConformanceConfig } from '../harness/config.js';
 import { describeStorageConformance } from '../harness/env.js';
@@ -59,15 +57,12 @@ import { makeSession } from '../harness/fixture-session.js';
  * @param register - Registers the family's handlers on the global bus and
  *   returns their cleanup functions in registration order.
  */
-function useFamilyContext(
-  config: StorageConformanceConfig,
-  register: (db: MakaioDatabase, extCtx: ExtensionContext) => Array<() => void>,
-): void {
+function useFamilyContext(config: StorageConformanceConfig, register: (db: MakaioDatabase) => Array<() => void>): void {
   const getCtx = useSuiteDatabaseContext(config);
   let cleanups: Array<() => void> = [];
 
   beforeAll(() => {
-    cleanups = register(getCtx().db, makeStubExtensionContext(MakaioBus));
+    cleanups = register(getCtx().db);
   });
 
   afterAll(() => {
@@ -111,7 +106,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Workflow Engine ────────────────────────────────────────────────────
 
   describe('workflow engine — registerDrizzleWorkflowStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleWorkflowStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleWorkflowStorage(MakaioBus, db)]);
 
     it('set+get workflow definition round-trips', async () => {
       const workflow = makeWorkflowDefinition();
@@ -128,7 +123,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Supervisor Runtime ─────────────────────────────────────────────────
 
   describe('native session supervisor — registerDrizzleSupervisorRuntimeStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleSupervisorRuntimeStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleSupervisorRuntimeStorage(MakaioBus, db)]);
 
     it('set+get supervisor runtime round-trips', async () => {
       const supervisorSessionId = `sup-${crypto.randomUUID()}`;
@@ -155,7 +150,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Client: Runtime Storage ─────────────────────────────────────────────
 
   describe('client subsystem — registerDrizzleRuntimeStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleRuntimeStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleRuntimeStorage(MakaioBus, db)]);
 
     it('upsert+loadAll client runtime round-trips', async () => {
       const now = Date.now();
@@ -182,7 +177,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Client: Profile Storage ─────────────────────────────────────────────
 
   describe('client subsystem — registerDrizzleProfileStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleProfileStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleProfileStorage(MakaioBus, db)]);
 
     it('set+get client profile round-trips', async () => {
       const now = Date.now();
@@ -213,7 +208,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Client: Binary Storage ──────────────────────────────────────────────
 
   describe('client subsystem — registerDrizzleClientBinaryStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleClientBinaryStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleClientBinaryStorage(MakaioBus, db)]);
 
     it('upsertState+getState client binary state round-trips', async () => {
       const clientId = `client-bin-${crypto.randomUUID()}`;
@@ -235,7 +230,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Log Import Storage ──────────────────────────────────────────────────
 
   describe('log import — registerDrizzleLogImportStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleLogImportStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleLogImportStorage(MakaioBus, db)]);
 
     it('setMode+getMode log import round-trips', async () => {
       const adapterName = `adapter-smoke-${crypto.randomUUID()}`;
@@ -250,7 +245,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Harness Storage ─────────────────────────────────────────────────────
 
   describe('harness — registerDrizzleHarnessStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleHarnessStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleHarnessStorage(MakaioBus, db)]);
 
     it('set+get harness definition round-trips', async () => {
       const harnessId = `harness-${crypto.randomUUID()}`;
@@ -277,7 +272,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   // ─── Import Cursor Storage ───────────────────────────────────────────────
 
   describe('import cursor — registerDrizzleImportCursorStorage', () => {
-    useFamilyContext(config, (db, extCtx) => [registerDrizzleImportCursorStorage(MakaioBus, db, extCtx)]);
+    useFamilyContext(config, (db) => [registerDrizzleImportCursorStorage(MakaioBus, db)]);
 
     it('set+get import cursor round-trips', async () => {
       const filePath = `/tmp/smoke-${crypto.randomUUID()}.jsonl`;
@@ -300,10 +295,10 @@ describeStorageConformance('handlers-family-smoke', (config) => {
   describe('message routing — registerDrizzleMessageRoutingStorage', () => {
     // message_routing.message_id has an FK to messages, which in turn has an
     // FK to sessions — both parents must be persisted through their handlers.
-    useFamilyContext(config, (db, extCtx) => [
-      registerDrizzleSessionStorage(MakaioBus, db, extCtx),
-      registerDrizzleMessageStorage(MakaioBus, db, extCtx),
-      registerDrizzleMessageRoutingStorage(MakaioBus, db, extCtx),
+    useFamilyContext(config, (db) => [
+      registerDrizzleSessionStorage(MakaioBus, db),
+      registerDrizzleMessageStorage(MakaioBus, db),
+      registerDrizzleMessageRoutingStorage(MakaioBus, db),
     ]);
 
     it('record+getByMessage message routing round-trips', async () => {

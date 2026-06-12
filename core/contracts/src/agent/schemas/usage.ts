@@ -9,7 +9,7 @@ import { BaseAgentEventSchema } from './base-event.js';
  * Emitted when: Usage metrics are available from an AI provider API call
  *
  * This event contains delta metrics for a single API call.
- * For session-level cumulative totals, see `session.usage`.
+ * For adapter-level cumulative totals, see `adapter.session.usage`.
  */
 export const UsageSchema = BaseAgentEventSchema.extend({
   provider: z.string(),

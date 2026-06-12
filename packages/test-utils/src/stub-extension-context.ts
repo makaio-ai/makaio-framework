@@ -1,17 +1,18 @@
 /**
- * Stub {@link ExtensionContext} for storage handler tests.
+ * Stub {@link ExtensionContext} factory for tests.
  *
- * Storage handler registration functions require an {@link ExtensionContext}
- * parameter to match the {@link DrizzleHandlerRegistration} contract, even
- * though the parameter is unused (prefixed `_ctx`). This factory builds a
- * minimal stub that satisfies the type without pulling in a real coordinator.
+ * Builds a minimal context that satisfies the {@link ExtensionContext}
+ * interface without pulling in a real coordinator. Useful wherever a test
+ * needs an extension context — for example when constructing extension
+ * packages, wiring lifecycle services, or seeding a
+ * {@link NodeExtensionContext}.
  * @example
  * ```ts
  * import { makeStubExtensionContext } from '@makaio/test-utils';
  * import { MakaioBus } from '@makaio/bus-core';
  *
  * const ctx = makeStubExtensionContext(MakaioBus);
- * const cleanup = registerDrizzleSessionStorage(MakaioBus, db, ctx);
+ * const nodeCtx: NodeExtensionContext = { ...ctx, bus: MakaioBus, platform: process.platform, homedir: '/tmp', makaioHome: '/tmp/.makaio', username: 'test' };
  * ```
  */
 

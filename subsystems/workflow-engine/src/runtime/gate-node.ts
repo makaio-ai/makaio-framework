@@ -1,3 +1,4 @@
+/* eslint max-lines: ["error", { "max": 410, "skipBlankLines": true, "skipComments": true }] */
 import { NoHandlerError } from '@makaio/bus-core';
 import { resolveTemplate } from '@makaio/expression';
 import type { ValidateFunction } from 'ajv';
@@ -42,12 +43,16 @@ interface GateRaceResult {
   readonly resumeData: JsonValue;
   readonly timedOut: boolean;
   readonly wasCancelled: boolean;
+  /** Human-readable rationale supplied by the responder; absent for timeout and cancellation paths. */
+  readonly reason?: string;
 }
 
 /** User response payload accepted by the gate suspension race. */
 interface GateUserResponse {
   readonly action: 'approve' | 'reject';
   readonly resumeData: JsonValue;
+  /** Human-readable rationale supplied by the responder. */
+  readonly reason?: string;
 }
 
 interface GatePersistenceOptions {
@@ -56,6 +61,19 @@ interface GatePersistenceOptions {
 
 /** Resume payload produced when a gate timeout auto-approves. */
 const AUTO_APPROVE_TIMEOUT_RESUME_DATA = { action: 'approve', source: 'timeout' } as const satisfies JsonValue;
+
+/**
+ * Return `{ reason }` when `reason` is defined, or an empty object otherwise.
+ *
+ * Used for conditional spreading so callers keep a flat object literal without
+ * introducing an inline ternary that would inflate cyclomatic complexity.
+ * @param reason - Optional rationale string.
+ * @returns An object with a `reason` key, or an empty object.
+ */
+function maybeReason(reason: string | undefined): { reason: string } | Record<never, never> {
+  if (reason !== undefined) return { reason };
+  return {};
+}
 
 /**
  * Race the gate resume promise against an optional timeout and abort signal.
@@ -103,11 +121,17 @@ async function raceGateSuspension(
     const response = await Promise.race(racePromises);
     signal.removeEventListener('abort', abortHandler);
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
-    return { action: response.action, resumeData: response.resumeData, timedOut: false, wasCancelled: false };
-  } catch (reason) {
+    return {
+      action: response.action,
+      resumeData: response.resumeData,
+      timedOut: false,
+      wasCancelled: false,
+      reason: response.reason,
+    };
+  } catch (raceError) {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     signal.removeEventListener('abort', abortHandler);
-    if (reason === 'timed-out') {
+    if (raceError === 'timed-out') {
       return { action: 'reject', resumeData: null, timedOut: true, wasCancelled: false };
     }
     return { action: 'reject', resumeData: null, timedOut: false, wasCancelled: true };
@@ -178,6 +202,7 @@ async function settleGateOutcome(
       ...gateInstance,
       status: raceResult.action === 'reject' ? 'rejected' : 'resumed',
       resumeData: raceResult.resumeData,
+      ...maybeReason(raceResult.reason),
       resolvedAt,
     },
     gatePersistence,
@@ -192,7 +217,11 @@ async function settleGateOutcome(
     // User reject is lifecycle metadata for approval surfaces. The gate still
     // resumes with typed domain data so workflows can handle rejections in
     // ordinary downstream logic instead of forcing every reject to fail.
-    await emitGateResolved(ctx, node.id, frameId, { action: raceResult.action, source: 'user' });
+    await emitGateResolved(ctx, node.id, frameId, {
+      action: raceResult.action,
+      source: 'user',
+      ...maybeReason(raceResult.reason),
+    });
   } catch (emitError) {
     console.error(`[GateNode] gate.resumed emit failed for '${node.id}':`, emitError);
   }
@@ -329,7 +358,7 @@ async function suspendGateInProcess(
   const deferred = buildDeferred<GateUserResponse>();
 
   const unsubRespond = ctx.bus.on(WorkflowSubjects.gate.respond, async (respondCtx) => {
-    const { executionId, gateId, frameId: respondFrameId, action, resumeData } = respondCtx.payload;
+    const { executionId, gateId, frameId: respondFrameId, action, resumeData, reason } = respondCtx.payload;
     if (
       executionId !== ctx.executionId ||
       gateId !== node.id ||
@@ -354,7 +383,7 @@ async function suspendGateInProcess(
     }
     pending.value = false;
     respondCtx.setResult({ accepted: true });
-    deferred.resolve({ action, resumeData: resumeData as JsonValue });
+    deferred.resolve({ action, resumeData: resumeData as JsonValue, reason });
   });
 
   await emitGateSuspended(ctx, node, frameId, schema, prompt, gateInstance.createdAt);
@@ -514,6 +543,7 @@ async function resolvePersistedGate(
     await emitGateResolved(ctx, node.id, frameId, {
       action: persistedGate.status === 'rejected' ? 'reject' : 'approve',
       source: 'user',
+      ...maybeReason(persistedGate.reason),
     });
     return { status: 'completed', output: { resumeData: persistedGate.resumeData } };
   }
@@ -599,7 +629,8 @@ async function emitGateResolved(
   gateId: string,
   frameId: string,
   resolution:
-    | { readonly action: 'approve' | 'reject'; readonly source: 'user' | 'timeout' }
+    | { readonly action: 'approve' | 'reject'; readonly source: 'user'; readonly reason?: string }
+    | { readonly action: 'approve' | 'reject'; readonly source: 'timeout' }
     | { readonly source: 'cancelled' },
 ): Promise<void> {
   try {
