@@ -1,7 +1,7 @@
 import { eq, asc, desc, gt, lt, gte, lte, and, or } from 'drizzle-orm';
 import { resolveSchema, resolveStorageEngine, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext, SessionMessage, SessionMessageBlock } from '@makaio/contracts';
+import type { SessionMessage, SessionMessageBlock } from '@makaio/contracts';
 import { MessageStorageSubjects } from './namespace.js';
 import type { SelectMessage } from './schema.js';
 import { messagesSchema } from './schema.variants.js';
@@ -344,10 +344,9 @@ function registerUpsertByAdapterMessageId(deps: MessageHandlerDeps): () => void 
  * Manages message persistence via Drizzle ORM.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  */
-export function registerDrizzleMessageStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleMessageStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const deps: MessageHandlerDeps = { bus, db };
   const cleanups = [
     registerAppendHandler(deps),

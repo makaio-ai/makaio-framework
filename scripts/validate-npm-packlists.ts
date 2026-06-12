@@ -17,10 +17,14 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
+  checkDeclarationDependencies,
   checkDescriptorEntrypointFiles,
   checkManifestExportTargets,
   checkPacklist,
   checkRuntimeWorkspaceDependencies,
+  extractBareImportSpecifiers,
+  type DeclarationImportsByFile,
+  type PackedPackageManifest,
 } from './lib/npm-packlist-policy.js';
 import { resolveNpmPublishDirectory } from './lib/npm-publish-staging.js';
 import { findPublicPackageDirs, readPackageJson } from './lib/public-package-discovery.js';
@@ -70,9 +74,15 @@ function getPacklist(packageDir: string): NpmPackEntry {
  * @param packageName - Package name for reporting.
  * @param packDir - Directory being packed.
  * @param files - File paths from npm pack.
+ * @param manifest - Packed manifest whose exports map backs the entrypoint checks.
  * @returns Human-readable issues.
  */
-function checkDescriptorPackageFiles(packageName: string, packDir: string, files: readonly string[]): string[] {
+function checkDescriptorPackageFiles(
+  packageName: string,
+  packDir: string,
+  files: readonly string[],
+  manifest: PackedPackageManifest,
+): string[] {
   const descriptorPath = join(packDir, 'descriptor.json');
   if (!existsSync(descriptorPath)) {
     return [];
@@ -88,8 +98,34 @@ function checkDescriptorPackageFiles(packageName: string, packDir: string, files
   });
   return [
     ...missing.map((file) => `${packageName}: missing descriptor package file: ${file}`),
-    ...checkDescriptorEntrypointFiles(packageName, descriptor, files),
+    ...checkDescriptorEntrypointFiles(packageName, descriptor, files, manifest),
   ];
+}
+
+/**
+ * Read every shipped declaration file in the pack directory and extract its
+ * bare import specifiers, returning a map keyed by packlist-relative path.
+ *
+ * Only `.d.ts`, `.d.mts`, and `.d.cts` files are considered; all other
+ * entries in `files` are ignored.
+ * @param packDir - Absolute path to the directory being packed.
+ * @param files - Packlist-relative paths from `npm pack --dry-run --json`.
+ * @returns Declaration imports map suitable for {@link checkDeclarationDependencies}.
+ */
+function buildDeclarationImports(packDir: string, files: readonly string[]): DeclarationImportsByFile {
+  const result: Record<string, readonly string[]> = {};
+  for (const filePath of files) {
+    if (!filePath.endsWith('.d.ts') && !filePath.endsWith('.d.mts') && !filePath.endsWith('.d.cts')) {
+      continue;
+    }
+    const absolutePath = join(packDir, filePath);
+    if (!existsSync(absolutePath)) {
+      continue;
+    }
+    const source = readFileSync(absolutePath, 'utf8');
+    result[filePath] = extractBareImportSpecifiers(source);
+  }
+  return result;
 }
 
 const packageDirs = findPublicPackageDirs(FRAMEWORK_ROOT);
@@ -115,9 +151,10 @@ for (const dir of packageDirs) {
     if (result.forbidden.length > 0) {
       issues.push(`${result.packageName}: forbidden files: ${result.forbidden.join(', ')}`);
     }
-    issues.push(...checkDescriptorPackageFiles(packageName, packDir, files));
+    issues.push(...checkDescriptorPackageFiles(packageName, packDir, files, packedManifest));
     issues.push(...checkManifestExportTargets(packedManifest, files));
-    issues.push(...checkRuntimeWorkspaceDependencies(packedManifest));
+    issues.push(...checkRuntimeWorkspaceDependencies(packedManifest, { includeDevDependencies: packDir !== dir }));
+    issues.push(...checkDeclarationDependencies(packedManifest, buildDeclarationImports(packDir, files)));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const stderrValue =

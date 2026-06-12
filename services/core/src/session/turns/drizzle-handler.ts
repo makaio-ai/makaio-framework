@@ -1,7 +1,7 @@
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { getRawSqlExecutor, getStorageEngine, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { TurnUsageSchema, type ExtensionContext, type Turn, type TurnStatus, type TurnUsage } from '@makaio/contracts';
+import { TurnUsageSchema, type Turn, type TurnStatus, type TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../../turn/namespace.js';
 import type { SelectTurn } from './schema.js';
 import { turnsSchema } from './schema.variants.js';
@@ -77,10 +77,9 @@ function rowToTurn(row: SelectTurn): Turn {
  * via SQLite's busy_timeout + WAL mode.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  */
-export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const unsubs = [
     registerCreateHandler(bus, db),
     registerCompleteHandler(bus, db),

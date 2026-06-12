@@ -34,6 +34,22 @@ export const SubagentStatusSchema = z.enum([
 export type SubagentStatus = z.infer<typeof SubagentStatusSchema>;
 
 /**
+ * Completion mode for a spawned subagent.
+ *
+ * - `'tool'` — the child must call `completeTask` to terminate (default, existing semantics).
+ * - `'turn'` — the first completed agent turn terminalizes the subagent with the final
+ *   assistant message as its result. Use this for single-shot subagents that produce prose
+ *   or structured output without needing to call a completion tool.
+ *
+ * Conceptual note: subagents are conversations, not one-shot calls — the parent can send
+ * follow-ups and the child can ask questions. "The agent stopped talking" does not generally
+ * mean "the task is done", which is why `'tool'` is the default. Declare `'turn'` only when
+ * the subagent's first response IS the result.
+ */
+export const CompletionModeSchema = z.enum(['tool', 'turn']);
+export type CompletionMode = z.infer<typeof CompletionModeSchema>;
+
+/**
  * Configuration for spawning a subagent.
  */
 export const SubagentConfigSchema = z.object({
@@ -74,6 +90,18 @@ export const SubagentConfigSchema = z.object({
   responseSchema: ResponseSchemaDescriptorSchema.optional(),
   /** Execution target override. Resolved via ExecutionTargetSubjects.resolve if omitted. */
   executionTargetId: z.string().optional(),
+  /**
+   * Completion mode for this subagent. Defaults to `'tool'` when omitted.
+   *
+   * - `'tool'` — child must call `completeTask` (default, existing semantics).
+   * - `'turn'` — the first completed agent turn terminalizes the subagent; use for
+   *   single-shot agents without tools that produce their result in one response.
+   *
+   * Kept `.optional()` rather than `.default()` so the inferred config type does
+   * not force every construction site to spell out the default; readers apply
+   * `config.completion ?? 'tool'`.
+   */
+  completion: CompletionModeSchema.optional(),
 });
 export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
 
@@ -217,6 +245,13 @@ export const AwaitSubagentResponseSchema = z.object({
   result: z.string().optional(),
   error: z.string().optional(),
   pendingRequest: PendingRequestSchema.optional(),
+  /**
+   * Which mechanism terminalized the subagent.
+   * Present when `status === 'completed'`.
+   * - `'tool'` — child called `completeTask`.
+   * - `'turn'` — first completed agent turn was treated as the result (`completion: 'turn'` mode).
+   */
+  completionSource: CompletionModeSchema.optional(),
 });
 export type AwaitSubagentResponse = z.infer<typeof AwaitSubagentResponseSchema>;
 

@@ -1,7 +1,7 @@
 import { eq, and, gt, lt, inArray, asc, desc } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext, MakaioSessionEvent, SessionEventPayload, SessionEventType } from '@makaio/contracts';
+import type { MakaioSessionEvent, SessionEventPayload, SessionEventType } from '@makaio/contracts';
 import { SessionEventStorageSubjects } from './namespace.js';
 import type { SelectSessionEvent } from './schema.js';
 import { sessionEventsSchema } from './schema.variants.js';
@@ -338,7 +338,6 @@ function registerGetEventsBySessionsHandler({ bus, db, sessionEvents }: SessionE
  * extraction for future FTS/embedding support.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example
  * ```typescript
@@ -348,17 +347,13 @@ function registerGetEventsBySessionsHandler({ bus, db, sessionEvents }: SessionE
  *
  * const client = createClient({ url: 'file:./makaio.db' });
  * const db = drizzle(client);
- * const cleanup = registerDrizzleSessionEventStorage(bus, db, ctx);
+ * const cleanup = registerDrizzleSessionEventStorage(bus, db);
  *
  * // Later, when shutting down:
  * cleanup();
  * ```
  */
-export function registerDrizzleSessionEventStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleSessionEventStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   // Resolve the dialect schema once; every handler shares the same table.
   const { sessionEvents } = resolveSchema(db, sessionEventsSchema);
   const deps: SessionEventHandlerDeps = { bus, db, sessionEvents };

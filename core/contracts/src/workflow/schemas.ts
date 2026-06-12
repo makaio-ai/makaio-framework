@@ -958,6 +958,8 @@ export const WorkflowGateInstanceSchema = z.object({
   timeoutMs: z.number().int().positive().nullable(),
   /** JSON-serializable resume data submitted by the approver. */
   resumeData: JsonValueSchema.optional(),
+  /** Human-readable rationale supplied by the responder when settling the gate. */
+  reason: z.string().optional(),
   /** Epoch milliseconds when the gate was created (node entered). */
   createdAt: z.number(),
   /** Epoch milliseconds when the gate left the `waiting` status. */

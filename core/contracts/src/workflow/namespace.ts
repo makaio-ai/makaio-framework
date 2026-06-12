@@ -81,10 +81,23 @@ const GateResolvedPayloadSchema = z.discriminatedUnion('source', [
      * Gate node IDs are not unique across dynamic/iterated frames.
      */
     frameId: z.string(),
-    /** Approval action recorded for user and timeout settlements. */
+    /** Approval action recorded for the user settlement. */
     action: z.enum(['approve', 'reject']),
     /** Source that produced the approval action. */
-    source: z.enum(['user', 'timeout']),
+    source: z.literal('user'),
+    /** Human-readable rationale supplied by the responder. */
+    reason: z.string().optional(),
+  }),
+  GateLifecycleBaseSchema.extend({
+    /**
+     * Runtime frame ID of the resolved gate instance.
+     * Gate node IDs are not unique across dynamic/iterated frames.
+     */
+    frameId: z.string(),
+    /** Approval action recorded for the timeout settlement. */
+    action: z.enum(['approve', 'reject']),
+    /** Source that produced the approval action. */
+    source: z.literal('timeout'),
   }),
   GateLifecycleBaseSchema.extend({
     /**

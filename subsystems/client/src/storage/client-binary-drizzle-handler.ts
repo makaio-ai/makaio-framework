@@ -17,7 +17,6 @@ import {
   type TransactionCallback,
 } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { clientBinarySchema } from './client-binary-schema.variants.js';
 import { ClientBinaryStorageSubjects } from './client-binary-storage-namespace.js';
 import type {
@@ -403,14 +402,9 @@ async function handleRemoveVersionAndClearActive(
  * - `client-binary:storage.removeVersionAndClearActive` — atomic uninstall in one transaction.
  * @param bus - Bus instance to register handlers on
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleClientBinaryStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleClientBinaryStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   const cleanups = [
     bus.on(ClientBinaryStorageSubjects.insertVersion, async (ctx) => {

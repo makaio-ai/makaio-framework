@@ -12,7 +12,7 @@
  *
  * The `createPluginTestDb` utility is used for DB lifecycle (schema creation,
  * data clearing, file cleanup) only. Storage handlers are registered manually
- * via `registerDrizzleRuntimeStorage(bus, db, ctx)` so the bus reference is the
+ * via `registerDrizzleRuntimeStorage(bus, db)` so the bus reference is the
  * same isolated instance that the service uses — not the global `MakaioBus`
  * singleton.
  * @packageDocumentation
@@ -22,7 +22,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { ClientRuntimeRegistry } from '../client-runtime-registry.js';
 import { ClientRuntimeService } from '../client-runtime-service.js';
 import { registerDrizzleRuntimeStorage, selectRuntimeById } from '../storage/runtime-drizzle-handler.js';
@@ -70,7 +69,7 @@ let storageCleanup: () => void;
  */
 async function bootService(localBus: IMakaioBus): Promise<ClientRuntimeService> {
   storageCleanup?.();
-  storageCleanup = registerDrizzleRuntimeStorage(localBus, dbCtx.db, makeStubExtensionContext(localBus));
+  storageCleanup = registerDrizzleRuntimeStorage(localBus, dbCtx.db);
   service = new ClientRuntimeService(localBus);
   await service.init();
   return service;
@@ -236,7 +235,7 @@ describe('RO-6: ClientRuntimeRegistry — Drizzle persistence + loadFromStorage 
   beforeEach(async () => {
     await dbCtx.clearData();
     ro6Bus = createBusInstance();
-    ro6StorageCleanup = registerDrizzleRuntimeStorage(ro6Bus, dbCtx.db, makeStubExtensionContext(ro6Bus));
+    ro6StorageCleanup = registerDrizzleRuntimeStorage(ro6Bus, dbCtx.db);
   });
 
   afterEach(() => {

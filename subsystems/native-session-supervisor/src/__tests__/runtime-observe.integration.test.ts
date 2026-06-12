@@ -10,7 +10,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects, type ClientRuntimeObserveRequest } from '@makaio/contracts';
@@ -66,7 +65,7 @@ describe('SupervisorService — client.runtime.observe on launch', () => {
   beforeEach(async () => {
     runtimeObserveCleanups = [];
     ({ db, close: dbClose } = await createTestDb());
-    storageCleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+    storageCleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db);
 
     const { backend } = createMockBackend();
     const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(backend, handlers);

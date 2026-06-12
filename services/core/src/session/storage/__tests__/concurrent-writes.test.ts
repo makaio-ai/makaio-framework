@@ -9,7 +9,6 @@ import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { SessionStorageSubjects } from '../namespace.js';
 import { TurnStorageSubjects } from '../../../turn/namespace.js';
@@ -74,10 +73,9 @@ async function createTestDb(): Promise<TestDbContextWithCleanup> {
   await exec(CREATE_TURNS_TABLE_SQL);
 
   // Register all storage handlers on the same db instance
-  const stubCtx = makeStubExtensionContext(MakaioBus);
-  const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db, stubCtx);
-  const turnCleanup = registerDrizzleTurnStorage(MakaioBus, db, stubCtx);
-  const agentCleanup = registerDrizzleAgentStorage(MakaioBus, db, stubCtx);
+  const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db);
+  const turnCleanup = registerDrizzleTurnStorage(MakaioBus, db);
+  const agentCleanup = registerDrizzleAgentStorage(MakaioBus, db);
 
   // Combined cleanup: unsubscribe handlers, close connection, delete temp file
   const cleanup = createDbCleanup(

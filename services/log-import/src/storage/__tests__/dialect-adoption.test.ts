@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
-import { createTestBusInstance, expectSubjectHandlerLifecycle, makeStubExtensionContext } from '@makaio/test-utils';
+import { createTestBusInstance, expectSubjectHandlerLifecycle } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { LogImportSubjects } from '../../namespace.js';
@@ -40,12 +40,11 @@ describe('log-import storage dialect adoption', () => {
   it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     // The storage registration owns exactly these subjects of the wider
     // log-import namespace; the remaining subjects belong to the import
     // service, not to Drizzle storage.
     const subjects = [LogImportSubjects.getMode, LogImportSubjects.setMode, LogImportSubjects.listSettings];
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleLogImportStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleLogImportStorage(bus, db));
   });
 });

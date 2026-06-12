@@ -46,7 +46,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `routing` | `{ messageId: string; agentId: string; status: "completed" \| "acknowledged" \| "sent"; timestamp: number; error?: string \| undefined; }[]` | yes |
+| `routing` | `{ messageId: string; agentId: string; status: "completed" \| "sent" \| "acknowledged"; timestamp: number; error?: string \| undefined; }[]` | yes |
 
 ### <a id="storage:messageRouting.getCompleted"></a>`storage:messageRouting.getCompleted` (rpc)
 
@@ -103,7 +103,7 @@ Type: Request (RPC)
 | `agentId` | `string` | yes |
 | `error` | `string \| undefined` | no |
 | `messageId` | `string` | yes |
-| `status` | `"completed" \| "acknowledged" \| "sent"` | yes |
+| `status` | `"completed" \| "sent" \| "acknowledged"` | yes |
 | `timestamp` | `number` | yes |
 
 **Response:**

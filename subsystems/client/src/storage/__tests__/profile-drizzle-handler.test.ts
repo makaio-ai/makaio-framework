@@ -5,7 +5,6 @@ import {
   type PluginTestDbContext,
   usePluginStorageTestLifecycle,
 } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { CLIENT_PROFILES_DDL } from '../../__tests__/test-ddl.js';
 import {
   ClientProfileStorageNamespace,
@@ -24,7 +23,7 @@ async function createTestDb(): Promise<PluginTestDbContext> {
     tables: ['client_profiles'],
     registerHandlers: (db) => {
       MakaioBus.registerNamespace(ClientProfileStorageNamespace);
-      return registerDrizzleProfileStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+      return registerDrizzleProfileStorage(MakaioBus, db);
     },
   });
 }

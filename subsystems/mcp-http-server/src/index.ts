@@ -9,10 +9,13 @@
 export {
   createMcpServer,
   createMcpRequestHandler,
+  createHttpMcpHandler,
   startHttpMcpServer,
   startMcpServer,
   type CreateMcpServerOptions,
   type McpServerOptions,
+  type HttpMcpHandlerHandle,
+  type HttpMcpHandlerOptions,
   type HttpMcpServerHandle,
   type StdioMcpServerHandle,
   type HttpMcpServerOptions,

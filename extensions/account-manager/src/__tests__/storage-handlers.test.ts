@@ -2,7 +2,6 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { createTempDb, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
@@ -30,7 +29,7 @@ describe('registerDrizzleAccountManagerStorage', () => {
     dbContext = await createTempDb('account-manager-storage');
     db = dbContext.db;
     await applyAccountManagerSchema(db);
-    cleanupHandlers = registerDrizzleAccountManagerStorage(bus, db, makeStubExtensionContext(bus));
+    cleanupHandlers = registerDrizzleAccountManagerStorage(bus, db);
     metadataStore = new BusAccountMetadataStore(bus);
     usageSnapshotStore = new BusAccountUsageSnapshotStore(bus);
   });

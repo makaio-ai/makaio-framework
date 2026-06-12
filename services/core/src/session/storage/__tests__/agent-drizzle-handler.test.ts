@@ -4,7 +4,6 @@ import { sql } from 'drizzle-orm';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { MakaioSessionAgent } from '@makaio/contracts';
 import { registerDrizzleAgentStorage } from '../agent-drizzle-handler.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
@@ -90,7 +89,7 @@ async function createTestDb(): Promise<TestDbContextWithCleanup> {
   await exec(CREATE_AGENTS_INDEX_SQL);
 
   // Register handlers
-  const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const handlerCleanup = registerDrizzleAgentStorage(MakaioBus, db);
 
   // Combined cleanup: unsubscribe handlers, close connection, delete temp file
   const cleanup = createDbCleanup(() => handlerCleanup(), close, dbPath);

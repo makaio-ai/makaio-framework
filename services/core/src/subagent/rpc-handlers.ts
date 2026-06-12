@@ -172,6 +172,7 @@ export async function handleAwaitRpc(
       status: subagent.status as AwaitSubagentResponse['status'],
       result: subagent.result,
       error: subagent.error,
+      completionSource: subagent.completionSource,
     };
   }
 
@@ -197,6 +198,7 @@ export async function handleAwaitRpc(
       result?: string;
       error?: string;
       pendingRequest?: { messageId: string; question: string; context?: string };
+      completionSource?: AwaitSubagentResponse['completionSource'];
     }) => {
       if (resolved) return;
       resolved = true;
@@ -206,6 +208,7 @@ export async function handleAwaitRpc(
         result: result.result,
         error: result.error,
         pendingRequest: result.pendingRequest,
+        completionSource: result.completionSource,
       });
     };
 
@@ -389,7 +392,7 @@ export async function handleCompleteTaskRpc(
   payload: CompleteTaskRequest,
 ): Promise<CompleteTaskResponse> {
   const { subagentId, result, summary } = payload;
-  ctx.manager.markCompleted(subagentId, result, summary);
+  ctx.manager.markCompleted(subagentId, result, summary, 'tool');
 
   // Emit completed event with summary if provided
   await ctx.bus.emit(SubagentSubjects.completed, {

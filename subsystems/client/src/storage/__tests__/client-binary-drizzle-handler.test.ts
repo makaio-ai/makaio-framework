@@ -5,7 +5,6 @@ import {
   usePluginStorageTestLifecycle,
   type PluginTestDbContext,
 } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import {
   registerDrizzleClientBinaryStorage,
   ClientBinaryStorageSubjects,
@@ -23,7 +22,7 @@ async function createTestDb(): Promise<PluginTestDbContext> {
     name: 'client-binary',
     schemas: CLIENT_BINARY_DDL,
     tables: ['client_binary_versions', 'client_binary_state'],
-    registerHandlers: (db) => registerDrizzleClientBinaryStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus)),
+    registerHandlers: (db) => registerDrizzleClientBinaryStorage(MakaioBus, db),
   });
 }
 

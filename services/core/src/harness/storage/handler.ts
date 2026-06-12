@@ -1,7 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { ApprovalPolicySchema, ToolCapabilitySchema, HarnessSubjects } from '@makaio/contracts';
 import { z } from 'zod';
 import { createDrizzleCrudHandlers, createDrizzleListHandler } from '@makaio/storage-handlers';
@@ -93,10 +92,9 @@ function toDbValues(harness: HarnessInput): Partial<DbRow> {
  * Registers all Drizzle-based harness storage handlers with the bus.
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleHarnessStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+export function registerDrizzleHarnessStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { harnessDefinitions } = resolveSchema(db, harnessStorageSchema);
 
   const registerCrud = createDrizzleCrudHandlers({

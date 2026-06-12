@@ -36,7 +36,6 @@ import type {
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleClientBinaryStorage } from '../storage/client-binary-drizzle-handler.js';
 import { ClientBinaryManager } from '../client-binary-manager.js';
 import { isPathWithinBase, type ClientDefinitionLookup } from '../client-binary-manager-types.js';
@@ -353,7 +352,7 @@ describe('ClientBinaryManager', () => {
     await dbCtx.clearData();
     testBasePath = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-client-binaries-'));
     bus = createBusInstance();
-    storageCleanup = registerDrizzleClientBinaryStorage(bus, dbCtx.db, makeStubExtensionContext(bus));
+    storageCleanup = registerDrizzleClientBinaryStorage(bus, dbCtx.db);
   });
 
   afterEach(async () => {

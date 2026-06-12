@@ -403,47 +403,6 @@ export const OrchestratorSchemas = {
       sessionId: z.string(),
     }),
   },
-
-  /**
-   * Aggregated session-level token usage.
-   *
-   * Subject: `session.usage`
-   * Type: Event (fire-and-forget)
-   * Emitted when: UsageAggregator receives adapter.session.usage events
-   *
-   * Aggregates token usage across all adapters in a session.
-   * UsageAggregator listens to adapter.session.usage events, aggregates them
-   * per-session (keyed by adapterSessionId to avoid collisions), and emits
-   * this canonical session-level usage event.
-   *
-   * ContextTracker consumes this to track context window usage against thresholds.
-   * @example
-   * ```typescript
-   * bus.on(SessionSubjects.usage, (ctx) => {
-   *   console.debug(
-   *     `Session ${ctx.payload.sessionId}: ${ctx.payload.totalTokens} tokens ` +
-   *     `(${ctx.payload.adapterCount} adapters)`
-   *   );
-   * });
-   * ```
-   */
-  usage: {
-    request: z.object({
-      /** Session ID */
-      sessionId: z.string(),
-      /** Total input tokens across all adapters */
-      totalInputTokens: z.number(),
-      /** Total output tokens across all adapters */
-      totalOutputTokens: z.number(),
-      /** Total tokens (input + output) */
-      totalTokens: z.number(),
-      /** Total API calls across all adapters */
-      totalCalls: z.number(),
-      /** Number of adapters contributing to this total */
-      adapterCount: z.number(),
-    }),
-    response: z.object({ acknowledged: z.literal(true) }),
-  },
 } satisfies SchemaRecord;
 
 // ── Type Exports ─────────────────────────────────────────────────────────────
@@ -459,5 +418,3 @@ export type UserMessageAcknowledged = z.infer<(typeof OrchestratorSchemas)['user
 export type UserMessageCompleted = z.infer<(typeof OrchestratorSchemas)['user_message.completed']>;
 export type SessionForkRequest = z.infer<(typeof OrchestratorSchemas)['fork']['request']>;
 export type SessionForkResponse = z.infer<(typeof OrchestratorSchemas)['fork']['response']>;
-export type SessionUsagePayload = z.infer<typeof OrchestratorSchemas.usage.request>;
-export type SessionUsageResponse = z.infer<typeof OrchestratorSchemas.usage.response>;

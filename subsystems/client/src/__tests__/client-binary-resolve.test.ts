@@ -25,7 +25,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createBusInstance, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects, createClientDefinition, type ClientDefinition } from '@makaio/contracts/client';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { BinaryNotFoundError } from '../client-binary-errors.js';
 import { registerDrizzleClientBinaryStorage } from '../storage/client-binary-drizzle-handler.js';
 import { ClientBinaryManager } from '../client-binary-manager.js';
@@ -137,7 +136,7 @@ describe('ClientBinaryManager — client.resolveBinary', () => {
     testBasePath = await fsp.mkdtemp(path.join(os.tmpdir(), 'makaio-resolve-test-'));
     testConfigBasePath = await fsp.mkdtemp(path.join(os.tmpdir(), 'makaio-config-test-'));
     bus = createBusInstance();
-    storageCleanup = registerDrizzleClientBinaryStorage(bus, dbCtx.db, makeStubExtensionContext(bus));
+    storageCleanup = registerDrizzleClientBinaryStorage(bus, dbCtx.db);
   });
 
   afterEach(async () => {

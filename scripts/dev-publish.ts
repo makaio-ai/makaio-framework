@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { checkSourceManifestMakaioReferences, type PackedPackageManifest } from './lib/npm-packlist-policy.js';
+import { buildFrameworkPeerRange } from './lib/npm-publish-staging.js';
 
 const PACKAGE_NAME_PATTERN = /^@makaio\/[a-z0-9][a-z0-9._-]*$/u;
 const SNAPSHOT_SELECTORS = new Set(['all', 'changed']);
@@ -246,15 +247,56 @@ function assertManifestsPublishableWithoutStaging(packages: readonly DevPublishP
   }
 }
 
+/** Manifest fields rewritten when stamping a dev snapshot. */
+export interface DevStampManifest {
+  version?: string;
+  peerDependencies?: Record<string, string>;
+}
+
+/**
+ * Resolve the dev snapshot version for the public framework package.
+ * @param workspaces - Discovered publishable workspace metadata.
+ * @param timestamp - Shared millisecond timestamp for this publish run.
+ * @returns Dev snapshot version for `@makaio/framework`.
+ */
+function resolveFrameworkDevVersion(workspaces: readonly WorkspacePackage[], timestamp: string): string {
+  const framework = workspaces.find((workspace) => workspace.name === '@makaio/framework');
+  if (framework === undefined) {
+    throw new Error('Cannot prepare dev packages without publishable @makaio/framework metadata.');
+  }
+  return buildDevVersion(framework.version, timestamp);
+}
+
+/**
+ * Apply the dev snapshot stamp to a parsed workspace manifest.
+ *
+ * Besides setting the snapshot version, an existing `@makaio/framework` peer
+ * range is widened to the prerelease-inclusive range for the framework's
+ * stamped version.
+ * Dev publishes pack workspace manifests as-is, so without this rewrite the
+ * authored stable range (e.g. `^1.0.0`) would exclude dev-published framework
+ * prereleases under strict semver resolution.
+ * @param manifest - Parsed workspace package.json content (mutated in place).
+ * @param version - Dev snapshot version to stamp.
+ * @param frameworkVersion - Dev snapshot version of `@makaio/framework`.
+ */
+export function applyDevManifestStamp(manifest: DevStampManifest, version: string, frameworkVersion: string): void {
+  manifest.version = version;
+  if (manifest.peerDependencies?.['@makaio/framework'] !== undefined) {
+    manifest.peerDependencies['@makaio/framework'] = buildFrameworkPeerRange(frameworkVersion);
+  }
+}
+
 /**
  * Writes dev snapshot versions to selected package.json files.
  * @param packages - Selected packages with target dev versions.
+ * @param frameworkVersion - Dev snapshot version of `@makaio/framework`.
  */
-function writePackageVersions(packages: readonly DevPublishPackage[]): void {
+function writePackageVersions(packages: readonly DevPublishPackage[], frameworkVersion: string): void {
   for (const pkg of packages) {
     const packageJsonPath = join(pkg.location, 'package.json');
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: string };
-    packageJson.version = pkg.version;
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as DevStampManifest;
+    applyDevManifestStamp(packageJson, pkg.version, frameworkVersion);
     writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
   }
 }
@@ -410,13 +452,10 @@ function main(argv: readonly string[]): void {
 
   if (command === 'prepare') {
     const timestamp = flags.get('timestamp') ?? Date.now().toString();
-    const packages = resolveDevPublishPlan(
-      discoverWorkspacePackages(),
-      parsePackageNames(requireFlag(flags, 'packages')),
-      timestamp,
-    );
+    const workspaces = discoverWorkspacePackages();
+    const packages = resolveDevPublishPlan(workspaces, parsePackageNames(requireFlag(flags, 'packages')), timestamp);
     assertManifestsPublishableWithoutStaging(packages);
-    writePackageVersions(packages);
+    writePackageVersions(packages, resolveFrameworkDevVersion(workspaces, timestamp));
     writeFileSync(requireFlag(flags, 'out'), `${JSON.stringify(packages, null, 2)}\n`);
     console.log(`Prepared ${packages.length} dev package(s):`);
     for (const pkg of packages) {

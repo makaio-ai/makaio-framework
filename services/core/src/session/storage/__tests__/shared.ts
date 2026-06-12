@@ -5,7 +5,6 @@ import { beforeEach, afterEach } from 'vitest';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
 import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleSessionStorage } from '../drizzle-handler.js';
@@ -75,10 +74,9 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
     await installSessionStorageTestSchema(db);
 
     // Register handlers
-    const ctx = makeStubExtensionContext(MakaioBus);
-    handlerCleanups.push(registerDrizzleSessionStorage(MakaioBus, db, ctx));
+    handlerCleanups.push(registerDrizzleSessionStorage(MakaioBus, db));
     handlerCleanups.push(registerFtsSearchHandler(MakaioBus, db));
-    handlerCleanups.push(registerDrizzleAgentStorage(MakaioBus, db, ctx));
+    handlerCleanups.push(registerDrizzleAgentStorage(MakaioBus, db));
 
     // Combined cleanup: unsubscribe handlers, close client, delete temp file
     const cleanup = createDbCleanup(cleanupHandlers, close, dbPath);

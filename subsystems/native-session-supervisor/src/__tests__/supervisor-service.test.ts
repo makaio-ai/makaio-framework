@@ -8,7 +8,6 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects } from '@makaio/contracts/client';
@@ -111,7 +110,7 @@ describe('SupervisorService', () => {
 
   beforeEach(async () => {
     ({ db, close: dbClose } = await createTestDb());
-    storageCleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+    storageCleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db);
 
     const mock = createMockBackend();
     getLastProcess = mock.getLastProcess;

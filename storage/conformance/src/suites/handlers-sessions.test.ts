@@ -18,7 +18,6 @@
  */
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
 import {
   registerDrizzleSessionStorage,
@@ -64,9 +63,8 @@ describeStorageConformance('handlers-sessions', (config) => {
   const cleanups: Array<() => void> = [];
 
   beforeAll(() => {
-    const extCtx = makeStubExtensionContext(MakaioBus);
-    cleanups.push(registerDrizzleSessionStorage(MakaioBus, getCtx().db, extCtx));
-    cleanups.push(registerDrizzleAgentStorage(MakaioBus, getCtx().db, extCtx));
+    cleanups.push(registerDrizzleSessionStorage(MakaioBus, getCtx().db));
+    cleanups.push(registerDrizzleAgentStorage(MakaioBus, getCtx().db));
   });
 
   afterAll(() => {

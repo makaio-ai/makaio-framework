@@ -2,7 +2,6 @@
 import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { didAffectRows, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import type { Account } from '../bus/schemas.js';
 import type { UsageEntry } from '../bus/usage-entry.js';
 import { metadataPatchChanges } from '../utils/json-merge-patch.js';
@@ -370,14 +369,9 @@ function registerSnapshotHandlers({ bus, db }: AccountManagerStorageHandlerDeps)
  * Registers all Drizzle-backed account-manager storage handlers.
  * @param bus - Bus used for handler registration
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function that unregisters every handler
  */
-export function registerDrizzleAccountManagerStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleAccountManagerStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const deps: AccountManagerStorageHandlerDeps = { bus, db };
   const cleanups = [
     ...registerMetadataReadHandlers(deps),

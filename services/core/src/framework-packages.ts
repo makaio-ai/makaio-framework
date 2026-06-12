@@ -128,7 +128,7 @@ export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
      * @param db - Database handle supplied by the coordinator.
      * @returns Cleanup function for all registered handlers.
      */
-    registerHandlers: registerDrizzleHandlers((bus, db, _ctx) => {
+    registerHandlers: registerDrizzleHandlers((bus, db) => {
       const cleanups: Array<() => void> = [];
       const runCleanups = (phase: 'rollback' | 'shutdown'): void => {
         for (let index = cleanups.length - 1; index >= 0; index -= 1) {
@@ -141,13 +141,13 @@ export const sessionStoragePackage: MakaioNodeExtension<IMakaioBus> = {
         cleanups.length = 0;
       };
       try {
-        cleanups.push(registerDrizzleSessionStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleSessionEventStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleMessageStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleMessageRoutingStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleTurnStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleAgentStorage(bus, db, _ctx));
-        cleanups.push(registerDrizzleImportCursorStorage(bus, db, _ctx));
+        cleanups.push(registerDrizzleSessionStorage(bus, db));
+        cleanups.push(registerDrizzleSessionEventStorage(bus, db));
+        cleanups.push(registerDrizzleMessageStorage(bus, db));
+        cleanups.push(registerDrizzleMessageRoutingStorage(bus, db));
+        cleanups.push(registerDrizzleTurnStorage(bus, db));
+        cleanups.push(registerDrizzleAgentStorage(bus, db));
+        cleanups.push(registerDrizzleImportCursorStorage(bus, db));
         cleanups.push(registerFtsSearchHandler(bus, db));
         cleanups.push(registerParentResolver(bus, db));
         cleanups.push(registerCompressLineageResolver(bus));

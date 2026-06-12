@@ -19,7 +19,6 @@
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import {
   SessionStorageSubjects,
   MessageStorageSubjects,
@@ -123,8 +122,6 @@ describeStorageConformance('capability-fts', (config) => {
 
     beforeAll(async () => {
       const ctx = getCtx();
-      const extCtx = makeStubExtensionContext(MakaioBus);
-
       if (config.dialect === 'sqlite') {
         // FTS5 virtual table and sync triggers are SQLite's storage mechanism.
         // Postgres gets content_tsv from the central chain applied above.
@@ -133,10 +130,10 @@ describeStorageConformance('capability-fts', (config) => {
 
       // Register the handlers that serve the three subjects under test.
       // Order: session before FTS search handler.
-      cleanups.push(registerDrizzleSessionStorage(MakaioBus, ctx.db, extCtx));
-      cleanups.push(registerDrizzleAgentStorage(MakaioBus, ctx.db, extCtx));
-      cleanups.push(registerDrizzleTurnStorage(MakaioBus, ctx.db, extCtx));
-      cleanups.push(registerDrizzleMessageStorage(MakaioBus, ctx.db, extCtx));
+      cleanups.push(registerDrizzleSessionStorage(MakaioBus, ctx.db));
+      cleanups.push(registerDrizzleAgentStorage(MakaioBus, ctx.db));
+      cleanups.push(registerDrizzleTurnStorage(MakaioBus, ctx.db));
+      cleanups.push(registerDrizzleMessageStorage(MakaioBus, ctx.db));
       // storage:session.search is served by the dedicated FTS handler.
       cleanups.push(registerFtsSearchHandler(MakaioBus, ctx.db));
     });

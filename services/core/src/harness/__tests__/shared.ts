@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { createDbCleanup, createTempDb, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import type { HarnessInput } from '../storage/namespace.js';
 import { registerDrizzleHarnessStorage } from '../storage/handler.js';
 
@@ -71,7 +70,7 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
 
   await exec(CREATE_HARNESS_TABLE_SQL);
 
-  const handlerCleanup = registerDrizzleHarnessStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const handlerCleanup = registerDrizzleHarnessStorage(MakaioBus, db);
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
 
   return { db, close, dbPath, exec, cleanup };

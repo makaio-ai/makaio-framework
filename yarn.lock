@@ -5098,6 +5098,7 @@ __metadata:
     drizzle-orm: "npm:^0.45.2"
     glob: "npm:13.0.6"
     hono: "npm:^4.12.23"
+    type-fest: "npm:^5.2.0"
     ws: "npm:^8.21.0"
     zod: "npm:^4.1.13"
   peerDependencies:

@@ -6,7 +6,6 @@ import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioSessionEvent, SessionEventType, SessionEventTypeMap } from '@makaio/contracts';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { registerDrizzleSessionEventStorage } from '../drizzle-handler.js';
 
 // Test-only event type extension
@@ -148,7 +147,7 @@ export async function createTestDb(): Promise<TestDbContext> {
   }
 
   // Register the storage handler
-  const deregister = registerDrizzleSessionEventStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const deregister = registerDrizzleSessionEventStorage(MakaioBus, db);
 
   const cleanup = (): void => {
     try {

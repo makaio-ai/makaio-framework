@@ -13,7 +13,6 @@
 import { eq, type SQL } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { SupervisorRuntimeStorageSubjects } from './namespace.js';
 import { supervisorRuntimesSchema } from './schema.variants.js';
 import { runtimeToRow, rowToRuntime } from './map-runtime.js';
@@ -179,14 +178,9 @@ function registerListHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
  * - `list` — list all (or status-filtered) runtimes as full records
  * @param bus - The Makaio bus instance.
  * @param db - Drizzle database instance.
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function that unregisters all handlers.
  */
-export function registerDrizzleSupervisorRuntimeStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleSupervisorRuntimeStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const unsubGet = registerGetHandler(bus, db);
   const unsubSet = registerSetHandler(bus, db);
   const unsubUpdate = registerUpdateHandler(bus, db);

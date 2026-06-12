@@ -14,6 +14,30 @@ import { createPortablePackageJson, type PackageJsonLike } from '@makaio/build-t
 /** Directory, relative to each package root, used as the npm publish root. */
 export const NPM_PUBLISH_DIRECTORY = 'node_modules/.makaio-publish';
 
+/**
+ * Derive the `@makaio/framework` peer dependency range from a publish version.
+ *
+ * Prerelease versions (those with a `-` component, e.g. `1.0.0-dev-123`) need
+ * a range that explicitly includes prerelease identifiers because npm/pnpm
+ * exclude them from `^X.Y.Z` by default. Stable versions keep the normal caret
+ * form so consumers get compatible patch/minor updates.
+ * @param version - The exact version string being published (e.g. `1.0.0` or
+ *   `1.0.0-dev-1781260968078`).
+ * @returns A semver range string suitable for `peerDependencies`.
+ */
+export function buildFrameworkPeerRange(version: string): string {
+  const match = /^(\d+)\.(\d+\.\d+)(?:-([\s\S]+))?$/u.exec(version);
+  if (!match) {
+    throw new Error(`Cannot derive peer range from unsupported version format: "${version}"`);
+  }
+  const major = Number(match[1]);
+  const isPrerelease = match[3] !== undefined;
+  if (isPrerelease) {
+    return `>=${major}.0.0-0 <${major + 1}.0.0`;
+  }
+  return `^${version}`;
+}
+
 /** Minimal manifest shape needed to resolve a publish staging directory. */
 export interface PublishDirectoryPackageJson {
   readonly publishConfig?: {
@@ -43,16 +67,27 @@ export function resolveNpmPublishDirectory(packageDir: string, packageJson: Publ
 
 /**
  * Build the manifest written into the staged npm publish directory.
+ *
+ * `devDependencies` are always omitted from the staged manifest: published
+ * packages have no use for them, and workspace-protocol entries in that field
+ * would otherwise survive into the tarball.
  * @param packageJson - Source workspace package manifest.
  * @param frameworkVersion - Version of the public `@makaio/framework` package.
- * @returns Publish manifest with dist exports and staging-only config removed.
+ * @returns Publish manifest with dist exports, devDependencies, and
+ *   staging-only config removed.
  */
 export function createStagedPackageJson(
   packageJson: PublishablePackageJson,
   frameworkVersion: string,
 ): PublishablePackageJson {
-  const portablePackageJson = createPortablePackageJson(packageJson, { frameworkVersion }) as PublishablePackageJson;
-  const { publishConfig, ...manifest } = portablePackageJson;
+  const frameworkPeerRange = buildFrameworkPeerRange(frameworkVersion);
+  const portablePackageJson = createPortablePackageJson(packageJson, {
+    frameworkVersion,
+    frameworkPeerRange,
+  }) as PublishablePackageJson;
+  // devDependencies have no meaning in a published package and may contain
+  // raw workspace: specifiers that cannot resolve outside this repository.
+  const { publishConfig, devDependencies: _devDependencies, ...manifest } = portablePackageJson;
   const publishSettings = Object.fromEntries(
     Object.entries(publishConfig ?? {}).filter(([key]) => !['directory', 'exports', 'main', 'types'].includes(key)),
   );

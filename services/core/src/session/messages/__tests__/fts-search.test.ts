@@ -10,7 +10,6 @@ import { sql } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { installMessagesFtsTestSchema, installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleMessageStorage } from '../drizzle-handler.js';
 import { MessageStorageSubjects } from '../namespace.js';
@@ -45,7 +44,7 @@ async function createFtsTestDb(): Promise<FtsTestContext> {
     VALUES ('session-1', 1000, 1000, 'active')
   `);
 
-  const handlerCleanup = registerDrizzleMessageStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
+  const handlerCleanup = registerDrizzleMessageStorage(MakaioBus, db);
 
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
   return { db, exec, cleanup };

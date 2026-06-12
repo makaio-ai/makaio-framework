@@ -1,7 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
 import { LogImportSubjects } from '../namespace.js';
 import type { LogImportSettings } from '../schemas/index.js';
 import type { SelectLogImportSettings } from './schema.js';
@@ -121,14 +120,9 @@ function registerListSettingsHandler(deps: LogImportHandlerDeps): () => void {
  * `log_import_settings` table.
  * @param bus - MakaioBus instance for message handling
  * @param db - Drizzle database instance
- * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unregister all handlers
  */
-export function registerDrizzleLogImportStorage(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  _ctx: ExtensionContext,
-): () => void {
+export function registerDrizzleLogImportStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const deps: LogImportHandlerDeps = { bus, db };
   const cleanups = [registerGetModeHandler(deps), registerSetModeHandler(deps), registerListSettingsHandler(deps)];
   return () => cleanups.forEach((fn) => fn());

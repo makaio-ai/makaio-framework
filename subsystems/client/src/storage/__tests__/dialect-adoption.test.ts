@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { is } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { PgTable } from 'drizzle-orm/pg-core';
-import { createTestBusInstance, expectSubjectHandlerLifecycle, makeStubExtensionContext } from '@makaio/test-utils';
+import { createTestBusInstance, expectSubjectHandlerLifecycle } from '@makaio/test-utils';
 import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { clientRuntimesSchema } from '../runtime-schema.variants.js';
@@ -109,28 +109,25 @@ describe('client subsystem handler registration against a pg-branded handle', ()
   it('registers exactly one runtime handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     const subjects = Object.values(ClientRuntimeStorageSubjects).filter((subject) => subject.subject !== '*');
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleRuntimeStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleRuntimeStorage(bus, db));
   });
 
   it('registers exactly one client-binary handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     const subjects = Object.values(ClientBinaryStorageSubjects).filter((subject) => subject.subject !== '*');
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleClientBinaryStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleClientBinaryStorage(bus, db));
   });
 
   it('registers exactly one profile handler per subject on an isolated bus and cleanup removes them', async () => {
     const bus = createTestBusInstance();
     const { db } = await createPgBrandedTestDb();
-    const ctx = makeStubExtensionContext(bus);
     bus.registerNamespace(ClientProfileStorageNamespace);
     const subjects = Object.values(ClientProfileStorageSubjects).filter((subject) => subject.subject !== '*');
 
-    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleProfileStorage(bus, db, ctx));
+    expectSubjectHandlerLifecycle(bus, subjects, () => registerDrizzleProfileStorage(bus, db));
   });
 });

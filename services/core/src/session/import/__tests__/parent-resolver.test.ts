@@ -12,7 +12,6 @@ import { SessionSubjects, type IMakaioSession } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../../storage/namespace.js';
 import { registerParentResolver } from '../parent-resolver.js';
 import { createTempDb, createDbCleanup } from '@makaio/test-utils/drizzle-harness';
-import { makeStubExtensionContext } from '@makaio/test-utils';
 import { installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleSessionStorage } from '../../storage/drizzle-handler.js';
 
@@ -88,8 +87,7 @@ describe('registerParentResolver', () => {
 
     await installSessionStorageTestSchema(db);
 
-    const stubCtx = makeStubExtensionContext(MakaioBus);
-    const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db, stubCtx);
+    const sessionCleanup = registerDrizzleSessionStorage(MakaioBus, db);
     const resolverCleanup = registerParentResolver(MakaioBus, db);
 
     _cleanup = createDbCleanup(

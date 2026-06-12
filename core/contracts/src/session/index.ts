@@ -18,8 +18,6 @@ export { AgentRoleSchema, type AgentRole } from './schemas.js';
 export { AgentStatusSchema, type AgentStatus } from './schemas.js';
 export { BranchKindSchema, type BranchKind } from './schemas.js';
 export type {
-  SessionUsagePayload,
-  SessionUsageResponse,
   SessionSnapshot,
   SnapshotExportOptions,
   SnapshotPreviewData,
@@ -166,3 +164,9 @@ export {
   ImportStatusSchema,
   type ImportStatus,
 } from './session-storage-namespace.js';
+
+// Register-external RPC (adapter identity at session level, external-session path only)
+export {
+  SessionCreateBaseSchema,
+  type SessionCreateBase,
+} from './schemas/crud.js';
