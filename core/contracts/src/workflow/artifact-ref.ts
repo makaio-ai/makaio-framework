@@ -7,3 +7,5 @@ export const WorkflowArtifactRefSchema = z.object({
   /** Artifact identifier within its kind. */
   id: z.string().min(1),
 });
+
+export type WorkflowArtifactRef = z.infer<typeof WorkflowArtifactRefSchema>;

@@ -39,6 +39,9 @@ function mapExecution(row: DbExecutionRow): WorkflowExecution {
     startedAt: row.startedAt,
     completedAt: row.completedAt ?? undefined,
     triggerPayload: row.triggerPayload ?? undefined,
+    ...(row.artifactKind !== null && row.artifactId !== null
+      ? { artifactRef: { kind: row.artifactKind, id: row.artifactId } }
+      : {}),
     scope: fromScopeColumns(row),
   };
 }
@@ -61,6 +64,8 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
     startedAt: execution.startedAt,
     completedAt: execution.completedAt ?? null,
     triggerPayload: (execution.triggerPayload as Record<string, JsonValue> | undefined) ?? null,
+    artifactKind: execution.artifactRef?.kind ?? null,
+    artifactId: execution.artifactRef?.id ?? null,
     ...scopeColumns,
   };
 }
@@ -71,6 +76,7 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
  * @param scope - Optional execution scope filter.
  * @param status - Optional execution status filter.
  * @param cursor - Optional pagination cursor.
+ * @param artifactRef - Optional bound artifact reference filter (exact kind + id match).
  * @returns Array of SQL predicates for use in a `.where(and(...predicates))` clause.
  */
 function buildExecutionListPredicates(
@@ -78,10 +84,14 @@ function buildExecutionListPredicates(
   scope: Parameters<typeof buildScopePredicates>[1] | undefined,
   status: InsertWorkflowExecution['status'] | undefined,
   cursor: { startedAt: number; id: string } | undefined,
+  artifactRef: { kind: string; id: string } | undefined,
 ) {
   const predicates = [
     ...(workflowId ? [eq(workflowExecutions.workflowId, workflowId)] : []),
     ...(status ? [eq(workflowExecutions.status, status)] : []),
+    ...(artifactRef !== undefined
+      ? [eq(workflowExecutions.artifactKind, artifactRef.kind), eq(workflowExecutions.artifactId, artifactRef.id)]
+      : []),
   ];
   if (scope) {
     predicates.push(...buildScopePredicates(workflowExecutions, scope));
@@ -294,15 +304,15 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
   });
 
   const unsubListExecutions = bus.on(WorkflowStorageSubjects.listExecutions, async (ctx) => {
-    const { workflowId, scope, status, limit, cursor } = ctx.payload;
+    const { workflowId, scope, status, limit, cursor, artifactRef } = ctx.payload;
 
     // Guard: schema refine runs in dev/test but is skipped in production.
     // Re-validate the constraint here to ensure bounded listing in all environments.
-    if (workflowId === undefined && scope === undefined) {
-      throw new Error('Either workflowId or scope is required to list executions.');
+    if (workflowId === undefined && scope === undefined && artifactRef === undefined) {
+      throw new Error('Either workflowId, scope, or artifactRef is required to list executions.');
     }
 
-    const predicates = buildExecutionListPredicates(workflowId, scope, status, cursor);
+    const predicates = buildExecutionListPredicates(workflowId, scope, status, cursor, artifactRef);
     // Limits are declared with ExecutionListQuerySchema, but production bus dispatch
     // does not parse schemas, so enforce the bounded-list invariant here as well.
     const resolvedLimit = limit ?? EXECUTION_LIST_DEFAULT_LIMIT;

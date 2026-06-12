@@ -415,6 +415,42 @@ describe('workflow public subjects', () => {
     const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
 
     expect(runContext?.artifactRef).toEqual(artifactRef);
+
+    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
+    expect(execution?.artifactRef).toEqual(artifactRef);
+  });
+
+  it('emits artifactRef on execution.started and filters listExecutions by artifactRef', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-artifact-ref-filter',
+      name: 'Artifact Ref Filter',
+      steps: [],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const artifactRef = { kind: 'workpiece', id: 'wp-filter-1' };
+    const startedRefs: Array<unknown> = [];
+    const unsub = MakaioBus.on(WorkflowSubjects.execution.started, (ctx) => {
+      startedRefs.push(ctx.payload.artifactRef);
+    });
+    try {
+      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+        workflowId: workflow.id,
+        artifactRef,
+      });
+      await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id }); // no ref — must not match
+
+      const { executions } = await MakaioBus.request(WorkflowSubjects.listExecutions, { artifactRef });
+
+      expect(executions.map((execution) => execution.id)).toEqual([executionId]);
+      expect(startedRefs).toContainEqual(artifactRef);
+    } finally {
+      unsub();
+    }
   });
 
   it('passes start artifact references through isolated runner configuration', async () => {
@@ -980,6 +1016,82 @@ describe('workflow public subjects', () => {
         status: 'waiting',
       }),
     ]);
+  });
+
+  it('round-trips execution links through the public link subjects', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-execution-links',
+      name: 'Public Execution Links',
+      steps: [],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const { executionId: sourceExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
+    const { executionId: targetExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
+
+    const link = {
+      sourceExecutionId,
+      targetExecutionId,
+      linkType: 'triggered-by' as const,
+      metadata: { reason: 'test' },
+    };
+    const { id } = await MakaioBus.request(WorkflowSubjects.setExecutionLink, { link });
+    expect(id).toBe(`${sourceExecutionId}:${targetExecutionId}`);
+
+    const { links } = await MakaioBus.request(WorkflowSubjects.listExecutionLinks, { sourceExecutionId });
+    expect(links).toEqual([link]);
+  });
+
+  it('returns execution frames through the public listFrames subject', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    // An empty sequence run persists no frames, so use a station node that
+    // starts a frame in the primitive runtime before failing on the missing
+    // in-process handler — the frame rows are persisted either way.
+    const workflow = createWorkflowDefinition({
+      id: 'public-list-frames',
+      name: 'Public List Frames',
+      root: {
+        id: 'public-list-frames-root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'frame-producing-station',
+            type: 'station',
+            prompt: 'This node fails after frame start in the primitive runtime',
+          } as WorkflowStationNode,
+        ],
+      },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    // Wait for the in-process run to finish so the runtime frame store has
+    // flushed its persistence tasks before the public read.
+    const failedPromise = new Promise<string>((resolve) => {
+      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+        unsubscribe();
+        resolve(ctx.payload.executionId);
+      });
+    });
+
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await expect(failedPromise).resolves.toBe(executionId);
+
+    const { frames } = await MakaioBus.request(WorkflowSubjects.listFrames, { executionId });
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames[0]?.frameId).toBeDefined();
+    expect(frames.every((frame) => frame.path.length > 0)).toBe(true);
   });
 
   it('returns primitive runtime frame spans through the public listSpans subject', async () => {

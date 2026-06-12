@@ -638,6 +638,7 @@ export {
   ExecutionStatusSchema,
   ExtensionWorkflowTriggerSchema,
   ExecutionListQuerySchema,
+  GateInstanceListQuerySchema,
   WorkflowDefinitionProvenanceSchema,
   WorkflowDefinitionSchema,
   WorkflowDelegateAgentNodeSchema,
@@ -647,6 +648,7 @@ export {
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowGateNodeSchema,
+  WorkflowGateStatusSchema,
   WorkflowIterateChainNodeSchema,
   WorkflowIterateNodeSchema,
   WorkflowListQuerySchema,
@@ -673,6 +675,7 @@ export {
   SpanRecordSchema,
   ExecutionLinkTypeSchema,
   ExecutionLinkSchema,
+  ExecutionLinkListQuerySchema,
   ArtifactQuerySourceSchema,
   BusRequestSourceSchema,
   ContextSourceSchema,
@@ -688,6 +691,7 @@ export type {
   ContextSource,
   ExecutionLink,
   ExecutionLinkType,
+  ExecutionLinkListQuery,
   ExtensionWorkflowTriggerShape,
   IStepRunner,
   IWorkflowTriggerTypeRegistry,
@@ -710,6 +714,7 @@ export type {
   TokenUsage,
   ExecutionListCursor,
   ExecutionListQuery,
+  GateInstanceListQuery,
   WorkflowDefinition,
   WorkflowDefinitionProvenance,
   WorkflowDelegateAgentNode,
@@ -719,6 +724,7 @@ export type {
   WorkflowFrameState,
   WorkflowGateInstance,
   WorkflowGateNode,
+  WorkflowGateStatus,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowListQuery,
@@ -752,6 +758,7 @@ export {
   WorkflowRunContextSchema,
 } from './workflow/index.js';
 export { WorkflowArtifactRefSchema } from './workflow/index.js';
+export type { WorkflowArtifactRef } from './workflow/index.js';
 export type { WorkflowRunContext } from './workflow/index.js';
 export {
   WorkflowWorkerBusAuthSchema,
@@ -841,6 +848,7 @@ export {
   WorkLogArtifactWriteSchema,
   WorkLogGateEventSchema,
   WorkLogUsageSummarySchema,
+  WorkLogStatsSchema,
   WorkLogDynamicNodeMaterializationSchema,
   WorkflowArtifactBindingSchema,
 } from './workflow/index.js';
@@ -850,6 +858,7 @@ export type {
   WorkLogArtifactWrite,
   WorkLogGateEvent,
   WorkLogUsageSummary,
+  WorkLogStats,
   WorkLogDynamicNodeMaterialization,
   WorkflowArtifactBinding,
 } from './workflow/index.js';

@@ -117,6 +117,10 @@ export const workflowExecutions = sqliteTable(
     completedAt: integer('completed_at'),
     /** Trigger payload from the firing trigger (JSON object). */
     triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    /** Artifact kind the execution is bound to (flat for indexed filtering). */
+    artifactKind: text('artifact_kind'),
+    /** Artifact identifier within its kind. */
+    artifactId: text('artifact_id'),
     ...scopeColumns(),
   },
   (table) => [
@@ -126,6 +130,8 @@ export const workflowExecutions = sqliteTable(
     index('idx_workflow_executions_scope_started').on(table.scopeType, table.scopeKind, table.scopeId, table.startedAt),
     // Index on workflowId + startedAt for per-workflow listing with ordering.
     index('idx_workflow_executions_workflow_started').on(table.workflowId, table.startedAt),
+    // Index for artifact-bound execution listing with ordering.
+    index('idx_workflow_executions_artifact').on(table.artifactKind, table.artifactId, table.startedAt),
   ],
 );
 

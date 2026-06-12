@@ -4,6 +4,7 @@ import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { ContextModeSchema } from '../subagent/schemas.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
+import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Trigger
@@ -853,6 +854,11 @@ export const WorkflowExecutionSchema = z.object({
    * by the caller via the `start` bus subject.
    */
   scope: WorkflowExecutionScopeSchema,
+  /**
+   * Artifact this execution is bound to, when the starter supplied one.
+   * Mirrors the `artifactRef` accepted by the `start` subject.
+   */
+  artifactRef: WorkflowArtifactRefSchema.optional(),
 });
 
 export type WorkflowExecution = z.infer<typeof WorkflowExecutionSchema>;
@@ -915,6 +921,11 @@ export type WorkflowFrameState = z.infer<typeof WorkflowFrameStateSchema>;
 // Gate Instance State
 // ─────────────────────────────────────────────────────────────
 
+/** Gate instance status values. */
+export const WorkflowGateStatusSchema = z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']);
+
+export type WorkflowGateStatus = z.infer<typeof WorkflowGateStatusSchema>;
+
 /**
  * Persisted state of a gate node instance.
  *
@@ -940,7 +951,7 @@ export const WorkflowGateInstanceSchema = z.object({
    */
   prompt: z.string().optional(),
   /** Current gate status. */
-  status: z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']),
+  status: WorkflowGateStatusSchema,
   /** Effective timeout action captured when the gate opened. */
   autoAction: z.enum(['approve', 'reject']),
   /** Effective timeout in milliseconds captured when the gate opened; `null` blocks indefinitely. */
@@ -1037,8 +1048,9 @@ export const EXECUTION_LIST_DEFAULT_LIMIT = 50;
 /**
  * Query parameters for listing workflow executions.
  *
- * At least one of `workflowId` or `scope` is required to avoid unbounded scans.
- * Results are ordered by `startedAt desc, id desc` and always limited.
+ * At least one of `workflowId`, `scope`, or `artifactRef` is required to avoid
+ * unbounded scans. Results are ordered by `startedAt desc, id desc` and always
+ * limited.
  */
 export const ExecutionListQuerySchema = z
   .object({
@@ -1048,6 +1060,8 @@ export const ExecutionListQuerySchema = z
     scope: WorkflowExecutionScopeSchema.optional(),
     /** Filter by execution status. */
     status: ExecutionStatusSchema.optional(),
+    /** Filter by bound artifact reference (exact kind + id match). */
+    artifactRef: WorkflowArtifactRefSchema.optional(),
     /** Maximum number of executions to return. Defaults to 50, max 500. */
     limit: z
       .number()
@@ -1058,8 +1072,34 @@ export const ExecutionListQuerySchema = z
     /** Keyset pagination cursor from the previous page. */
     cursor: ExecutionListCursorSchema.optional(),
   })
-  .refine((query) => query.workflowId !== undefined || query.scope !== undefined, {
-    message: 'Either workflowId or scope is required.',
+  .refine((query) => query.workflowId !== undefined || query.scope !== undefined || query.artifactRef !== undefined, {
+    message: 'Either workflowId, scope, or artifactRef is required.',
   });
 
 export type ExecutionListQuery = z.infer<typeof ExecutionListQuerySchema>;
+
+/**
+ * Query parameters for listing gate instances.
+ *
+ * At least one of `executionId` or `status` is required to avoid unbounded
+ * scans. Results are ordered by `createdAt desc, id desc` and always limited.
+ */
+export const GateInstanceListQuerySchema = z
+  .object({
+    /** Filter by owning execution. */
+    executionId: z.string().min(1).optional(),
+    /** Filter by gate status (e.g. `'waiting'` for an approval inbox). */
+    status: WorkflowGateStatusSchema.optional(),
+    /** Maximum number of gates to return. Defaults to 50, max 500. */
+    limit: z
+      .number()
+      .int()
+      .min(EXECUTION_LIST_MIN_LIMIT)
+      .max(EXECUTION_LIST_MAX_LIMIT)
+      .default(EXECUTION_LIST_DEFAULT_LIMIT),
+  })
+  .refine((query) => query.executionId !== undefined || query.status !== undefined, {
+    message: 'Either executionId or status is required.',
+  });
+
+export type GateInstanceListQuery = z.infer<typeof GateInstanceListQuerySchema>;

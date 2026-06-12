@@ -168,6 +168,41 @@ describe('WorkLog projection service', () => {
     expect(cancelled?.resolvedAt).toBeGreaterThanOrEqual(waiting?.openedAt ?? 0);
   });
 
+  it('aggregates worklog stats within a time window', async () => {
+    await MakaioBus.emit(WorkflowSubjects.execution.started, {
+      executionId: 'wfx-stats-1',
+      workflowId: 'wf-stats',
+      startedAt: 1_000,
+    });
+    await MakaioBus.emit(WorkflowSubjects.execution.completed, {
+      executionId: 'wfx-stats-1',
+      workflowId: 'wf-stats',
+      totalDuration: 500,
+      completedAt: 1_500,
+    });
+    await MakaioBus.emit(WorkflowSubjects.execution.started, {
+      executionId: 'wfx-stats-2',
+      workflowId: 'wf-stats',
+      startedAt: 2_000,
+    });
+    await MakaioBus.emit(WorkflowSubjects.execution.started, {
+      executionId: 'wfx-stats-old',
+      workflowId: 'wf-stats',
+      startedAt: 10,
+    });
+
+    const { stats } = await MakaioBus.request(WorkflowSubjects.worklog.stats, {
+      workflowId: 'wf-stats',
+      since: 1_000,
+      until: 3_000,
+    });
+
+    expect(stats.total).toBe(2);
+    expect(stats.byStatus.completed).toBe(1);
+    expect(stats.byStatus.running).toBe(1);
+    expect(stats.totalDurationMs).toBe(500);
+  });
+
   it('records artifact writes with node and artifact metadata resolved from current contracts', async () => {
     const artifact: ArtifactRevision = {
       kind: 'implementation-plan',

@@ -53,6 +53,9 @@ describe('WorkflowNamespace', () => {
   it('exposes public execution trace read subjects', () => {
     expect(WorkflowSubjects.listSpans.subject).toBe('listSpans');
     expect(WorkflowSubjects.listGateInstances.subject).toBe('listGateInstances');
+    expect(WorkflowSubjects.setExecutionLink.subject).toBe('setExecutionLink');
+    expect(WorkflowSubjects.listExecutionLinks.subject).toBe('listExecutionLinks');
+    expect(WorkflowSubjects.listFrames.subject).toBe('listFrames');
   });
 
   it('exposes dynamic and artifact subjects', () => {
@@ -63,6 +66,7 @@ describe('WorkflowNamespace', () => {
   it('exposes worklog RPC and event subjects', () => {
     expect(WorkflowSubjects.worklog.get.subject).toBe('worklog.get');
     expect(WorkflowSubjects.worklog.list.subject).toBe('worklog.list');
+    expect(WorkflowSubjects.worklog.stats.subject).toBe('worklog.stats');
     expect(WorkflowSubjects.worklog.changed.subject).toBe('worklog.changed');
   });
 });
@@ -78,6 +82,7 @@ describe('execution lifecycle events', () => {
       workflowId: 'wf-1',
       coordinatorSessionId: 'sess-coordinator',
       startedAt: 1000,
+      artifactRef: { kind: 'workpiece', id: 'wp-1' },
     });
     const completed = WorkflowSchemas['execution.completed'].parse({
       executionId: 'wfx-1',
@@ -99,6 +104,7 @@ describe('execution lifecycle events', () => {
     });
 
     expect(started.startedAt).toBe(1000);
+    expect(started.artifactRef).toEqual({ kind: 'workpiece', id: 'wp-1' });
     expect(completed.completedAt).toBe(2500);
     expect(failed.completedAt).toBe(3000);
     expect(cancelled.completedAt).toBe(4000);
@@ -1370,6 +1376,16 @@ describe('listGateInstances subject', () => {
 
     expect(response.gates[0]?.frameId).toBe('frame-gate');
     expect(response.gates[0]?.status).toBe('waiting');
+  });
+
+  it('accepts a status-only gate inbox query', () => {
+    const query = WorkflowSchemas.listGateInstances.request.parse({ status: 'waiting' });
+    expect(query.status).toBe('waiting');
+    expect(query.limit).toBe(50);
+  });
+
+  it('rejects an empty gate instance query', () => {
+    expect(WorkflowSchemas.listGateInstances.request.safeParse({}).success).toBe(false);
   });
 });
 

@@ -3,9 +3,11 @@ import { createBusNamespace, observability, type SchemaRecord } from '@makaio/co
 import {
   ExecutionListQuerySchema,
   ExecutionStatusSchema,
+  GateInstanceListQuerySchema,
   WorkflowDefinitionSchema,
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
+  WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowListQuerySchema,
   WorkflowNodeTypeSchema,
@@ -13,10 +15,10 @@ import {
   WorkflowResolvedRoleSchema,
 } from './schemas.js';
 import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
-import { SpanRecordSchema } from './span.js';
+import { ExecutionLinkListQuerySchema, ExecutionLinkSchema, SpanRecordSchema } from './span.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowRunContextSchema } from './run-context.js';
-import { WorkLogExecutionSummarySchema } from './worklog.js';
+import { WorkLogExecutionSummarySchema, WorkLogStatsSchema } from './worklog.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 
 /**
@@ -194,14 +196,49 @@ export const WorkflowSchemas = {
     response: z.object({ spans: z.array(SpanRecordSchema) }),
   },
   /**
-   * List persisted gate instances for a workflow execution.
+   * List persisted gate instances by execution and/or status.
    *
-   * This is the public read API for pending and resolved gate state.
-   * Storage subjects remain internal to the workflow subsystem.
+   * This is the public read API for pending and resolved gate state — either
+   * per execution via `executionId`, or a cross-execution gate inbox via the
+   * `status` filter (e.g. `'waiting'`). At least one filter is required and
+   * results are always limited. Storage subjects remain internal to the
+   * workflow subsystem.
    */
   listGateInstances: {
-    request: z.object({ executionId: z.string() }),
+    request: GateInstanceListQuerySchema,
     response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
+  },
+  /**
+   * Record a directed link between two workflow executions.
+   *
+   * Public write API for cross-execution tracing (e.g. feedback loops,
+   * trigger chains). Both executions must already exist — links are
+   * foreign-keyed to `workflow_executions`. Upserts on (source, target).
+   */
+  setExecutionLink: {
+    request: z.object({ link: ExecutionLinkSchema }),
+    response: z.object({ id: z.string() }),
+  },
+  /**
+   * List links between workflow executions.
+   *
+   * Public read API for pipeline-level traces. Storage subjects remain
+   * internal to the workflow subsystem.
+   */
+  listExecutionLinks: {
+    request: ExecutionLinkListQuerySchema,
+    response: z.object({ links: z.array(ExecutionLinkSchema) }),
+  },
+  /**
+   * List persisted execution frames for a workflow execution.
+   *
+   * This is the public read API for the runtime frame tree (per-node state,
+   * tree paths, attempts, outputs). Note: `output` payloads can be large.
+   * Storage subjects remain internal to the workflow subsystem.
+   */
+  listFrames: {
+    request: z.object({ executionId: z.string().min(1) }),
+    response: z.object({ frames: z.array(WorkflowFrameStateSchema) }),
   },
   listTriggerTypes: {
     request: z.object({}),
@@ -293,6 +330,8 @@ export const WorkflowSchemas = {
     workflowId: z.string(),
     coordinatorSessionId: z.string().optional(),
     startedAt: z.number().nonnegative().optional(),
+    /** Artifact the execution is bound to, when the starter supplied one. */
+    artifactRef: WorkflowArtifactRefSchema.optional(),
   }),
   'execution.completed': z.object({
     executionId: z.string(),
@@ -657,6 +696,27 @@ export const WorkflowSchemas = {
       items: z.array(WorkLogExecutionSummarySchema),
       /** Total number of matching records (before limit/offset). */
       total: z.number().int().nonnegative(),
+    }),
+  },
+
+  /**
+   * Aggregate WorkLog execution statistics over an optional time window (RPC).
+   *
+   * Filters apply to the execution `startedAt` timestamp; `since`/`until` are
+   * inclusive epoch-millisecond bounds. All filters optional.
+   */
+  'worklog.stats': {
+    request: z.object({
+      /** Filter by workflow definition ID. */
+      workflowId: z.string().min(1).optional(),
+      /** Inclusive lower bound on execution startedAt (epoch ms). */
+      since: z.number().int().nonnegative().optional(),
+      /** Inclusive upper bound on execution startedAt (epoch ms). */
+      until: z.number().int().nonnegative().optional(),
+    }),
+    response: z.object({
+      /** Aggregated statistics for the matching executions. */
+      stats: WorkLogStatsSchema,
     }),
   },
 

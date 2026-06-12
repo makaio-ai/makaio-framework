@@ -7,6 +7,7 @@ import {
   type ExecutionHints,
   type IWorkflowRunner,
   type JsonValue,
+  type WorkflowArtifactRef,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowExecutionScope,
@@ -92,7 +93,13 @@ export interface StartExecutionDeps {
  */
 async function emitExecutionStarted(
   bus: IMakaioBus,
-  payload: { executionId: string; workflowId: string; coordinatorSessionId: string; startedAt: number },
+  payload: {
+    executionId: string;
+    workflowId: string;
+    coordinatorSessionId: string;
+    startedAt: number;
+    artifactRef?: WorkflowArtifactRef;
+  },
 ): Promise<void> {
   try {
     await bus.emit(WorkflowSubjects.execution.started, payload);
@@ -145,6 +152,7 @@ function seedDefinitionExecution(
     config: boundConfig,
     startedAt: Date.now(),
     triggerPayload: sanitizedTriggerPayload,
+    ...(runContext.artifactRef !== undefined ? { artifactRef: runContext.artifactRef } : {}),
     scope: resolvedScope,
   };
   // Definition-backed executions have no in-process station handlers.
@@ -443,7 +451,13 @@ export async function startExecution(
     await persistExecutionStart(bus, execution, runContext);
 
     const startedAt = execution.startedAt;
-    const startedEventTask = emitExecutionStarted(bus, { executionId, workflowId, coordinatorSessionId, startedAt });
+    const startedEventTask = emitExecutionStarted(bus, {
+      executionId,
+      workflowId,
+      coordinatorSessionId,
+      startedAt,
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+    });
     const executionTask = launchDefinitionExecutionTask(deps, {
       executionId,
       workflowId,
