@@ -4,6 +4,7 @@ import {
   checkManifestExportTargets,
   checkPacklist,
   checkRuntimeWorkspaceDependencies,
+  checkSourceManifestMakaioReferences,
 } from './npm-packlist-policy.js';
 
 describe('npm packlist policy', () => {
@@ -111,6 +112,44 @@ describe('npm packlist policy', () => {
     expect(issues).toEqual([
       '@makaio/extension-test: runtime dependency uses workspace protocol: dependencies.@makaio/kernel',
     ]);
+  });
+
+  it('rejects @makaio packages in the runtime dependencies of unstaged manifests', () => {
+    const issues = checkSourceManifestMakaioReferences({
+      name: '@makaio/storage-pg',
+      dependencies: {
+        '@makaio/storage-drizzle': 'workspace:*',
+        pg: '^8.21.0',
+      },
+      devDependencies: {
+        '@makaio/build-tooling': 'workspace:*',
+      },
+      peerDependencies: {
+        '@makaio/framework': '^1.0.0',
+      },
+    });
+
+    expect(issues).toEqual([
+      '@makaio/storage-pg: unpublishable @makaio package in dependencies: @makaio/storage-drizzle (bundled workspace packages belong in devDependencies; runtime framework coupling goes through the @makaio/framework peer dependency)',
+    ]);
+  });
+
+  it('accepts dev-only @makaio references plus the framework peer, rejects other @makaio peers', () => {
+    expect(
+      checkSourceManifestMakaioReferences({
+        name: '@makaio/storage-pg',
+        dependencies: { pg: '^8.21.0' },
+        devDependencies: { '@makaio/storage-drizzle': 'workspace:*' },
+        peerDependencies: { '@makaio/framework': '^1.0.0' },
+      }),
+    ).toEqual([]);
+
+    expect(
+      checkSourceManifestMakaioReferences({
+        name: '@makaio/storage-pg',
+        peerDependencies: { '@makaio/storage-drizzle': '^1.0.0' },
+      }),
+    ).toEqual(['@makaio/storage-pg: @makaio peer dependency other than @makaio/framework: @makaio/storage-drizzle']);
   });
 
   it('requires descriptor entrypoint stems to exist as dist files in the packlist', () => {

@@ -141,6 +141,49 @@ export function checkRuntimeWorkspaceDependencies(manifest: PackedPackageManifes
 }
 
 /**
+ * Validate that a manifest published WITHOUT portable staging references
+ * `@makaio/*` packages only where publishing allows it. Internal workspace
+ * packages are never published: their code is bundled or import-rewritten to
+ * `@makaio/framework/*` subpaths at build time, so they may appear in
+ * `devDependencies` only, and runtime framework coupling is expressed
+ * exclusively through the `@makaio/framework` peer dependency. Anything else
+ * ships a manifest whose install fails on a nonexistent registry package.
+ *
+ * The release lane reshapes manifests through the portable-package staging
+ * step, so source manifests checked there may still carry workspace
+ * dependencies. The dev publish lane packs workspace manifests as-is and
+ * must gate on this check before publishing.
+ * @param manifest - Manifest content that will be packed without staging.
+ * @returns Human-readable issues.
+ */
+export function checkSourceManifestMakaioReferences(manifest: PackedPackageManifest): string[] {
+  const packageName = manifest.name ?? '<unknown>';
+  const issues: string[] = [];
+
+  const runtimeFields = {
+    dependencies: manifest.dependencies,
+    optionalDependencies: manifest.optionalDependencies,
+  };
+  for (const [fieldName, dependencies] of Object.entries(runtimeFields)) {
+    for (const dependencyName of Object.keys(dependencies ?? {})) {
+      if (dependencyName.startsWith('@makaio/')) {
+        issues.push(
+          `${packageName}: unpublishable @makaio package in ${fieldName}: ${dependencyName} (bundled workspace packages belong in devDependencies; runtime framework coupling goes through the @makaio/framework peer dependency)`,
+        );
+      }
+    }
+  }
+
+  for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
+    if (dependencyName.startsWith('@makaio/') && dependencyName !== '@makaio/framework') {
+      issues.push(`${packageName}: @makaio peer dependency other than @makaio/framework: ${dependencyName}`);
+    }
+  }
+
+  return issues;
+}
+
+/**
  * Validate that explicit descriptor entrypoint stems resolve to production dist
  * files in the packed artifact. Boolean convention entrypoints are intentionally
  * left to runtime convention tests; this check catches descriptor strings such

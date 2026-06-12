@@ -25,12 +25,15 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@makaio/storage-drizzle": "workspace:*",
     "drizzle-orm": "0.45.2",
     "pg": "^8.21.0"
   },
+  "peerDependencies": {
+    "@makaio/framework": "^1.0.0"
+  },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/storage-drizzle": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
     "tsdown": "0.22.0",

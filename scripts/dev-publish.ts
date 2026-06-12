@@ -11,6 +11,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { checkSourceManifestMakaioReferences, type PackedPackageManifest } from './lib/npm-packlist-policy.js';
 
 const PACKAGE_NAME_PATTERN = /^@makaio\/[a-z0-9][a-z0-9._-]*$/u;
 const SNAPSHOT_SELECTORS = new Set(['all', 'changed']);
@@ -222,6 +223,30 @@ function discoverWorkspacePackages(): WorkspacePackage[] {
 }
 
 /**
+ * Fails the prepare step when a selected package's workspace manifest cannot
+ * be published as-is. The dev lane packs workspace manifests without the
+ * portable-package staging of the release lane, so `@makaio/*` references
+ * must already be publish-shaped (bundled packages dev-only, framework
+ * coupling as the `@makaio/framework` peer).
+ * @param packages - Selected packages with workspace locations.
+ */
+function assertManifestsPublishableWithoutStaging(packages: readonly DevPublishPackage[]): void {
+  const issues = packages.flatMap((pkg) =>
+    checkSourceManifestMakaioReferences(
+      JSON.parse(readFileSync(join(pkg.location, 'package.json'), 'utf8')) as PackedPackageManifest,
+    ),
+  );
+  if (issues.length > 0) {
+    throw new Error(
+      [
+        'Dev publishes pack workspace manifests as-is; fix the manifests before publishing:',
+        ...issues.map((issue) => `  ${issue}`),
+      ].join('\n'),
+    );
+  }
+}
+
+/**
  * Writes dev snapshot versions to selected package.json files.
  * @param packages - Selected packages with target dev versions.
  */
@@ -390,6 +415,7 @@ function main(argv: readonly string[]): void {
       parsePackageNames(requireFlag(flags, 'packages')),
       timestamp,
     );
+    assertManifestsPublishableWithoutStaging(packages);
     writePackageVersions(packages);
     writeFileSync(requireFlag(flags, 'out'), `${JSON.stringify(packages, null, 2)}\n`);
     console.log(`Prepared ${packages.length} dev package(s):`);
