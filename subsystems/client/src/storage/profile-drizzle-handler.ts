@@ -9,10 +9,10 @@
  */
 
 import { and, eq } from 'drizzle-orm';
-import { didAffectRows, executeTransaction, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { didAffectRows, executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
-import { clientProfiles } from './profile-schema.js';
+import { clientProfilesSchema } from './profile-schema.variants.js';
 import { ClientProfileStorageSubjects } from './profile-storage-namespace.js';
 import type { SelectClientProfile } from './profile-schema.js';
 import type { ClientProfileRecord } from './profile-storage-namespace.js';
@@ -56,6 +56,10 @@ async function setDefaultProfile(
   clientId: string,
   name: string,
 ): Promise<ClientProfileRecord | null> {
+  // Resolved from the handle rather than passed in: a helper that owns the transaction derives its
+  // tables from the same handle it transacts against, so a mismatched (handle, table) pair cannot
+  // be constructed. resolveSchema is a constant-time dialect-brand read.
+  const { clientProfiles } = resolveSchema(db, clientProfilesSchema);
   const now = Date.now();
   return executeTransaction(db, async (tx) => {
     const [existing] = await tx
@@ -106,6 +110,7 @@ async function setDefaultProfile(
  * @returns Cleanup function to unregister all handlers
  */
 export function registerDrizzleProfileStorage(bus: IMakaioBus, db: MakaioDatabase, _ctx: ExtensionContext): () => void {
+  const { clientProfiles } = resolveSchema(db, clientProfilesSchema);
   const cleanups = [
     bus.on(ClientProfileStorageSubjects.get, async (ctx) => {
       const { clientId, name } = ctx.payload;

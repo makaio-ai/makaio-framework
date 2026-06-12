@@ -12,7 +12,12 @@ import { SessionStorageSubjects } from '../storage/namespace.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
 import { DEFAULT_TEST_MACHINE_ID, registerMockAdapterIdentityHandlers } from './mock-adapter-identity-registry.js';
-export { SESSION_STORAGE_TEST_SCHEMA_SQL, installSessionStorageTestSchema } from './storage-test-schema.js';
+export {
+  SESSION_STORAGE_TEST_SCHEMA_SQL,
+  MESSAGES_FTS_TEST_SCHEMA_SQL,
+  installSessionStorageTestSchema,
+  installMessagesFtsTestSchema,
+} from './storage-test-schema.js';
 
 /**
  * Register mock storage handlers for framework-core storage subjects.

@@ -3,14 +3,20 @@
  *
  * All tests use real in-memory or temporary file-based SQLite databases
  * via runtime-selected SQLite drivers (`bun:sqlite` under Bun, `@libsql/client` under Node.js) — no mocks.
+ * The single exception is the missing-pg fault-injection test, which makes the
+ * `pg` module resolution throw so the real error-wrap path in the Postgres
+ * branch can be exercised in a workspace where `pg` is installed.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/libsql';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createDatabaseClient } from '../client';
+import { brandDatabase, createDatabaseClient } from '../client';
 import type { DatabaseClient } from '../client';
+import { getRawSqlExecutor } from '../raw-sql';
+import { DATABASE_DIALECT, getDatabaseDialect } from '../types';
 import type { MakaioDatabase } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -19,7 +25,7 @@ import type { MakaioDatabase } from '../types';
 
 /**
  * Reads the first column value from a PRAGMA result row.
- * @param row - Single PRAGMA result row returned by drizzle's `db.all`.
+ * @param row - Single PRAGMA result row returned by the raw SQL executor.
  * @returns The scalar value of the first column, or `undefined` when the row is absent.
  */
 function pragmaValue(row: Record<string, unknown> | undefined): unknown {
@@ -41,7 +47,7 @@ function pragmaValue(row: Record<string, unknown> | undefined): unknown {
  * @returns The scalar value from the single PRAGMA row.
  */
 async function readPragmaValue(db: DatabaseClient['db'], pragma: string): Promise<unknown> {
-  const rows = await db.all<Record<string, unknown>>(sql.raw(`PRAGMA ${pragma}`));
+  const rows = await getRawSqlExecutor(db).all<Record<string, unknown>>(sql.raw(`PRAGMA ${pragma}`));
   expect(rows).toHaveLength(1);
   return pragmaValue(rows[0]);
 }
@@ -76,6 +82,10 @@ type AssertFalse<T extends false> = T;
 type _NoBatchOnMakaioDatabase = AssertFalse<MakaioDatabase extends { batch: unknown } ? true : false>;
 type _NoClientOnMakaioDatabase = AssertFalse<MakaioDatabase extends { $client: unknown } ? true : false>;
 type _NoResultKindOnMakaioDatabase = AssertFalse<MakaioDatabase extends { resultKind: unknown } ? true : false>;
+type _NoRunOnMakaioDatabase = AssertFalse<MakaioDatabase extends { run: unknown } ? true : false>;
+type _NoAllOnMakaioDatabase = AssertFalse<MakaioDatabase extends { all: unknown } ? true : false>;
+type _NoGetOnMakaioDatabase = AssertFalse<MakaioDatabase extends { get: unknown } ? true : false>;
+type _NoValuesOnMakaioDatabase = AssertFalse<MakaioDatabase extends { values: unknown } ? true : false>;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -86,12 +96,12 @@ describe('createDatabaseClient', () => {
   let openClients: DatabaseClient[] = [];
   let filesToCleanup: string[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     const closeErrors: unknown[] = [];
 
     for (const client of openClients) {
       try {
-        client.close();
+        await client.close();
       } catch (error) {
         closeErrors.push(error);
       }
@@ -136,7 +146,7 @@ describe('createDatabaseClient', () => {
     it('returns a db instance that can execute a simple SQL statement', async () => {
       const { db } = track(await createDatabaseClient({ url: ':memory:' }));
 
-      const rows = await db.all<{ val: number }>(sql`SELECT 1 AS val`);
+      const rows = await getRawSqlExecutor(db).all<{ val: number }>(sql`SELECT 1 AS val`);
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.val).toBe(1);
@@ -180,7 +190,7 @@ describe('createDatabaseClient', () => {
       const { client } = await createTrackedFileClient();
       const { db } = client;
 
-      const rows = await db.all<{ val: number }>(sql`SELECT 1 AS val`);
+      const rows = await getRawSqlExecutor(db).all<{ val: number }>(sql`SELECT 1 AS val`);
 
       expect(rows).toHaveLength(1);
       expect(rows[0]?.val).toBe(1);
@@ -228,8 +238,8 @@ describe('createDatabaseClient', () => {
       // remote URL does not throw.
       const client = track(await createDatabaseClient({ url: 'http://localhost:18080' }));
 
-      // We intentionally do NOT call client.db.run() here because there is no
-      // server listening.  The contract being tested is purely that
+      // We intentionally do NOT execute any SQL against client.db here because
+      // there is no server listening.  The contract being tested is purely that
       // createDatabaseClient resolves (i.e. the PRAGMA block is skipped) and
       // that the returned shape is correct.
       expect(typeof client.db).toBe('object');
@@ -263,7 +273,7 @@ describe('createDatabaseClient', () => {
         expect(typeof client.close).toBe('function');
 
         // Eagerly close to release the file lock before cleanup.
-        client.close();
+        await client.close();
         openClients = openClients.filter((c) => c !== client);
 
         deleteSqliteArtifacts(defaultDbPath);
@@ -275,6 +285,120 @@ describe('createDatabaseClient', () => {
           // Ignore temp-dir cleanup failures on CI filesystem edges.
         }
       }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Dialect brand
+  // -------------------------------------------------------------------------
+
+  describe('dialect brand', () => {
+    it('exposes dialect "sqlite" on the client and brands the db handle', async () => {
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      expect(client.dialect).toBe('sqlite');
+      expect(getDatabaseDialect(client.db)).toBe('sqlite');
+    });
+
+    it('attaches the brand non-enumerably so it does not leak through spreads', async () => {
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      const descriptor = Object.getOwnPropertyDescriptor(client.db, DATABASE_DIALECT);
+      expect(descriptor).toMatchObject({ value: 'sqlite', enumerable: false, writable: false, configurable: false });
+
+      // Spread copies enumerable own properties (including symbols); the
+      // non-enumerable brand must not travel with shallow copies.
+      const shallowCopy = { ...client.db };
+      expect(Object.getOwnPropertySymbols(shallowCopy)).not.toContain(DATABASE_DIALECT);
+    });
+
+    it('throws when re-branding an already-branded handle with a different dialect', async () => {
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      // A dialect-matching executor view gets past the consistency guard so
+      // the test exercises the defineProperty rejection itself.
+      const postgresExecutor = { ...getRawSqlExecutor(client.db), dialect: 'postgres' as const };
+
+      // The brand is non-configurable, so Object.defineProperty rejects any
+      // attempt to change a handle's dialect after creation.
+      expect(() => brandDatabase(client.db, 'postgres', postgresExecutor)).toThrow(TypeError);
+      expect(getDatabaseDialect(client.db)).toBe('sqlite');
+    });
+
+    it('rejects branding when the executor dialect does not match the brand dialect', async () => {
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      // Every branded handle carries a dialect-consistent executor; a
+      // mismatched pair must fail loudly at creation time.
+      expect(() => brandDatabase({}, 'postgres', getRawSqlExecutor(client.db))).toThrow(/does not match/);
+    });
+
+    it('defaults unbranded handles to "sqlite"', async () => {
+      // Hand-rolled raw drizzle instance — never passes through the factory,
+      // so it carries no brand. This is the contract that keeps existing
+      // hand-rolled in-memory test clients on SQLite semantics.
+      const rawDb = drizzle({ connection: { url: ':memory:' } });
+      try {
+        expect(getDatabaseDialect(rawDb)).toBe('sqlite');
+        expect(Object.getOwnPropertySymbols(rawDb)).not.toContain(DATABASE_DIALECT);
+      } finally {
+        rawDb.$client.close();
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Postgres dispatch — pg is installed in this workspace (the storage
+  // conformance package depends on it). Pool construction is lazy, so the
+  // dispatch seam is exercised for real without a running server: a
+  // postgres:// URL must produce a postgres-branded client, never libsql.
+  // -------------------------------------------------------------------------
+
+  describe('postgres dispatch', () => {
+    it('dispatches postgres:// to the PG branch — resolves to postgres dialect without connecting', async () => {
+      const client = track(await createDatabaseClient({ url: 'postgres://user:pw@localhost:5432/makaio' }));
+
+      expect(client.dialect).toBe('postgres');
+      expect(getDatabaseDialect(client.db)).toBe('postgres');
+    });
+
+    it('dispatches postgresql:// (long scheme) to the PG branch', async () => {
+      const client = track(await createDatabaseClient({ url: 'postgresql://user:pw@localhost:5432/makaio' }));
+
+      expect(client.dialect).toBe('postgres');
+    });
+
+    it('dispatches POSTGRES:// (uppercase) to the PG branch (/i flag)', async () => {
+      const client = track(await createDatabaseClient({ url: 'POSTGRES://user:pw@localhost:5432/makaio' }));
+
+      expect(client.dialect).toBe('postgres');
+    });
+
+    it('wraps a failing pg import in an actionable error with the cause attached', async () => {
+      // Fault injection: simulate a host application without the
+      // consumer-provided 'pg' package by making its module resolution throw.
+      // The real catch block in createNodePgClient must wrap the failure with
+      // the actionable install hint and preserve the underlying cause.
+      vi.doMock('pg', () => {
+        throw new Error('simulated missing pg module');
+      });
+      try {
+        await expect(createDatabaseClient({ url: 'postgres://user:pw@localhost:5432/makaio' })).rejects.toSatisfy(
+          (error: unknown) =>
+            error instanceof Error &&
+            error.message.includes("consumer-provided 'pg' package") &&
+            error.cause !== undefined,
+        );
+      } finally {
+        vi.doUnmock('pg');
+      }
+    });
+
+    it('does not dispatch file: URLs to the PG branch — resolves to sqlite dialect', async () => {
+      // The Postgres branch must not intercept SQLite-style URLs.
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      expect(client.dialect).toBe('sqlite');
     });
   });
 
@@ -296,6 +420,15 @@ describe('createDatabaseClient', () => {
 
       // A second call must also be safe (the interface contract documents this).
       expect(() => client.close()).not.toThrow();
+    });
+
+    it('is awaitable, including across repeated calls (void-tolerant await)', async () => {
+      const client = track(await createDatabaseClient({ url: ':memory:' }));
+
+      // close() is typed void | Promise<void>; shutdown call sites await it
+      // unconditionally. Both calls must tolerate that await.
+      await client.close();
+      await client.close();
     });
   });
 });

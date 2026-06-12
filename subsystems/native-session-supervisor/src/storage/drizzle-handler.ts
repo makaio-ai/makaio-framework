@@ -1,21 +1,30 @@
 /**
  * Drizzle-based storage handlers for supervisor runtime subjects.
  *
- * Provides persistent SQLite-backed storage for supervisor runtime metadata
- * using Drizzle ORM. Each handler responds to a bus subject and delegates
- * to the `supervisor_runtimes` table.
+ * Provides persistent storage for supervisor runtime metadata using Drizzle
+ * ORM. Each handler responds to a bus subject and delegates to the
+ * `supervisor_runtimes` table. The dialect-correct table objects are resolved
+ * at registration time via {@link resolveSchema}.
  *
  * Scrollback and terminal output are NOT stored here.
  * @packageDocumentation
  */
 
 import { eq, type SQL } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
 import { SupervisorRuntimeStorageSubjects } from './namespace.js';
-import { supervisorRuntimes } from './schema.js';
+import { supervisorRuntimesSchema } from './schema.variants.js';
 import { runtimeToRow, rowToRuntime } from './map-runtime.js';
+
+/**
+ * The canonical `supervisorRuntimes` table type. {@link resolveSchema} returns
+ * the SQLite-typed face for both dialects (`DialectSchema` intentionally types
+ * its `postgres` record as the SQLite one), so `.sqlite` names the type of the
+ * resolved table under either dialect — it is not a SQLite-only assumption.
+ */
+type SupervisorRuntimesTable = typeof supervisorRuntimesSchema.sqlite.supervisorRuntimes;
 
 // ---------------------------------------------------------------------------
 // Per-subject handler factories
@@ -28,6 +37,7 @@ import { runtimeToRow, rowToRuntime } from './map-runtime.js';
  * @returns Unsubscribe function.
  */
 function registerGetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { supervisorRuntimes } = resolveSchema(db, supervisorRuntimesSchema);
   return bus.on(SupervisorRuntimeStorageSubjects.get, async (ctx) => {
     const locator = ctx.payload;
 
@@ -51,6 +61,7 @@ function registerGetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
  * @returns Unsubscribe function.
  */
 function registerSetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { supervisorRuntimes } = resolveSchema(db, supervisorRuntimesSchema);
   return bus.on(SupervisorRuntimeStorageSubjects.set, async (ctx) => {
     const row = runtimeToRow(ctx.payload);
 
@@ -86,10 +97,11 @@ function registerSetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
  * @returns Unsubscribe function.
  */
 function registerUpdateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { supervisorRuntimes } = resolveSchema(db, supervisorRuntimesSchema);
   return bus.on(SupervisorRuntimeStorageSubjects.update, async (ctx) => {
     const { supervisorSessionId, pid, status, sessionId, adapterSessionId, stoppedAt, metadata } = ctx.payload;
 
-    const updateValues: Partial<typeof supervisorRuntimes.$inferInsert> = {};
+    const updateValues: Partial<SupervisorRuntimesTable['$inferInsert']> = {};
 
     if (pid !== undefined) updateValues.pid = pid;
     if (status !== undefined) updateValues.status = status;
@@ -120,6 +132,7 @@ function registerUpdateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
  * @returns Unsubscribe function.
  */
 function registerDeleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { supervisorRuntimes } = resolveSchema(db, supervisorRuntimesSchema);
   return bus.on(SupervisorRuntimeStorageSubjects.delete, async (ctx) => {
     const deleted = await db
       .delete(supervisorRuntimes)
@@ -137,6 +150,7 @@ function registerDeleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
  * @returns Unsubscribe function.
  */
 function registerListHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { supervisorRuntimes } = resolveSchema(db, supervisorRuntimesSchema);
   return bus.on(SupervisorRuntimeStorageSubjects.list, async (ctx) => {
     const { status, limit } = ctx.payload;
 

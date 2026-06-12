@@ -12,14 +12,29 @@
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase, type RawSqlExecutor } from '@makaio/storage-drizzle';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { readMigrations, type MigrationMeta } from '../read-migrations.js';
 import { applyMigrations } from '../apply-migrations.js';
 
-interface TableColumnInfo {
+/**
+ * SQLite `PRAGMA table_info` row subset used by these assertions. A type alias
+ * (not an interface) so it satisfies the executor's `Record<string, unknown>`
+ * row constraint.
+ */
+type TableColumnInfo = {
   readonly name: string;
   readonly notnull: number;
+};
+
+/**
+ * Database access handed to migration test callbacks.
+ */
+interface MigrationTestDb {
+  /** Database handle for `applyMigrations` and query-builder access. */
+  readonly db: MakaioDatabase;
+  /** Raw SQL executor for schema and data assertions. */
+  readonly rawSql: RawSqlExecutor;
 }
 
 /**
@@ -36,17 +51,17 @@ async function readMigrationMeta(filename: string): Promise<Record<string, unkno
 /**
  * Create an in-memory database, apply the package migrations, and run a test
  * callback against the migrated schema.
- * @param callback - Test body that receives the migrated database.
+ * @param callback - Test body that receives the migrated database context.
  * @returns The callback result.
  */
 async function withMigratedMemoryDatabase<TResult>(
-  callback: (db: MakaioDatabase) => Promise<TResult>,
+  callback: (context: MigrationTestDb) => Promise<TResult>,
 ): Promise<TResult> {
   const { db, close } = await createDatabaseClient({ url: ':memory:' });
 
   try {
     await applyMigrations(db, readMigrations());
-    return await callback(db);
+    return await callback({ db, rawSql: getRawSqlExecutor(db) });
   } finally {
     close();
   }
@@ -56,18 +71,18 @@ async function withMigratedMemoryDatabase<TResult>(
  * Create an in-memory database, apply the selected package migrations, and run
  * a test callback against the migrated schema.
  * @param migrations - Migration entries to apply before the callback.
- * @param callback - Test body that receives the migrated database.
+ * @param callback - Test body that receives the migrated database context.
  * @returns The callback result.
  */
 async function withMemoryDatabaseAtMigrations<TResult>(
   migrations: MigrationMeta[],
-  callback: (db: MakaioDatabase) => Promise<TResult>,
+  callback: (context: MigrationTestDb) => Promise<TResult>,
 ): Promise<TResult> {
   const { db, close } = await createDatabaseClient({ url: ':memory:' });
 
   try {
     await applyMigrations(db, migrations);
-    return await callback(db);
+    return await callback({ db, rawSql: getRawSqlExecutor(db) });
   } finally {
     close();
   }
@@ -75,15 +90,15 @@ async function withMemoryDatabaseAtMigrations<TResult>(
 
 /**
  * Read SQLite column metadata for a table.
- * @param db - Database connection to inspect.
+ * @param rawSql - Raw SQL executor for the database to inspect.
  * @param tableName - Table whose columns should be read.
  * @returns Table column metadata keyed by column name.
  */
 async function readTableColumns(
-  db: MakaioDatabase,
+  rawSql: RawSqlExecutor,
   tableName: 'workflow_executions' | 'workflow_run_contexts',
 ): Promise<Map<string, TableColumnInfo>> {
-  const rows = await db.all<TableColumnInfo>(sql.raw(`PRAGMA table_info(${tableName})`));
+  const rows = await rawSql.all<TableColumnInfo>(sql.raw(`PRAGMA table_info(${tableName})`));
   return new Map(rows.map((row) => [row.name, row]));
 }
 
@@ -159,8 +174,8 @@ describe('core migrations', () => {
     const migrations = readMigrations();
     const migration = splitBeforeMigration(migrations, '0005_round_calypso');
 
-    await withMemoryDatabaseAtMigrations(migration.before, async (db) => {
-      await db.run(sql`
+    await withMemoryDatabaseAtMigrations(migration.before, async ({ db, rawSql }) => {
+      await rawSql.run(sql`
         INSERT INTO workflow_executions (
           id,
           workflow_id,
@@ -182,7 +197,7 @@ describe('core migrations', () => {
           'global'
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_run_contexts (
           execution_id,
           workflow_id,
@@ -217,19 +232,19 @@ describe('core migrations', () => {
 
       await applyMigrations(db, [migration.target]);
 
-      const executionColumns = await readTableColumns(db, 'workflow_executions');
-      const runContextColumns = await readTableColumns(db, 'workflow_run_contexts');
+      const executionColumns = await readTableColumns(rawSql, 'workflow_executions');
+      const runContextColumns = await readTableColumns(rawSql, 'workflow_run_contexts');
 
       expect(executionColumns.get('inputs')?.notnull).toBe(0);
       expect(runContextColumns.get('inputs')?.notnull).toBe(0);
       expect(runContextColumns.has('execution_hints')).toBe(true);
 
-      const executionRows = await db.all<{ inputs: string | null }>(sql`
+      const executionRows = await rawSql.all<{ inputs: string | null }>(sql`
         SELECT inputs
         FROM workflow_executions
         WHERE id = 'exec-before-0005'
       `);
-      const runContextRows = await db.all<{ inputs: string | null; execution_hints: string | null }>(sql`
+      const runContextRows = await rawSql.all<{ inputs: string | null; execution_hints: string | null }>(sql`
         SELECT inputs, execution_hints
         FROM workflow_run_contexts
         WHERE execution_id = 'exec-before-0005'
@@ -238,7 +253,7 @@ describe('core migrations', () => {
       expect(executionRows).toEqual([{ inputs: '{"task":"review"}' }]);
       expect(runContextRows).toEqual([{ inputs: '{"task":"review"}', execution_hints: null }]);
 
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_executions (
           id,
           workflow_id,
@@ -260,7 +275,7 @@ describe('core migrations', () => {
           'global'
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_run_contexts (
           execution_id,
           workflow_id,
@@ -295,7 +310,7 @@ describe('core migrations', () => {
         )
       `);
 
-      const nullableRows = await db.all<{ execution_hints: string | null; inputs: string | null }>(sql`
+      const nullableRows = await rawSql.all<{ execution_hints: string | null; inputs: string | null }>(sql`
         SELECT inputs, execution_hints
         FROM workflow_run_contexts
         WHERE execution_id = 'exec-null-input'
@@ -308,8 +323,8 @@ describe('core migrations', () => {
     const migrations = readMigrations();
     const migration = splitBeforeMigration(migrations, '0006_free_tiger_shark');
 
-    await withMemoryDatabaseAtMigrations(migration.before, async (db) => {
-      await db.run(sql`
+    await withMemoryDatabaseAtMigrations(migration.before, async ({ db, rawSql }) => {
+      await rawSql.run(sql`
         INSERT INTO workflow_executions (
           id,
           workflow_id,
@@ -331,7 +346,7 @@ describe('core migrations', () => {
           'global'
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_execution_frames (
           frame_id,
           execution_id,
@@ -353,7 +368,7 @@ describe('core migrations', () => {
           '{"ok":true}'
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_execution_frames (
           frame_id,
           execution_id,
@@ -375,7 +390,7 @@ describe('core migrations', () => {
           NULL
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_gate_instances (
           id,
           execution_id,
@@ -397,7 +412,7 @@ describe('core migrations', () => {
           1000
         )
       `);
-      await db.run(sql`
+      await rawSql.run(sql`
         INSERT INTO workflow_gate_instances (
           id,
           execution_id,
@@ -422,18 +437,18 @@ describe('core migrations', () => {
 
       await applyMigrations(db, [migration.target]);
 
-      const frameColumns = await db.all<TableColumnInfo>(sql.raw('PRAGMA table_info(workflow_execution_frames)'));
-      const gateColumns = await db.all<TableColumnInfo>(sql.raw('PRAGMA table_info(workflow_gate_instances)'));
+      const frameColumns = await rawSql.all<TableColumnInfo>(sql.raw('PRAGMA table_info(workflow_execution_frames)'));
+      const gateColumns = await rawSql.all<TableColumnInfo>(sql.raw('PRAGMA table_info(workflow_gate_instances)'));
       expect(frameColumns.map((column) => column.name)).toContain('output_present');
       expect(gateColumns.map((column) => column.name)).toContain('resume_data_present');
 
-      const frameRows = await db.all<{ frame_id: string; output_present: number }>(sql`
+      const frameRows = await rawSql.all<{ frame_id: string; output_present: number }>(sql`
         SELECT frame_id, output_present
         FROM workflow_execution_frames
         WHERE execution_id = 'exec-before-0006'
         ORDER BY frame_id
       `);
-      const gateRows = await db.all<{ node_id: string; resume_data_present: number }>(sql`
+      const gateRows = await rawSql.all<{ node_id: string; resume_data_present: number }>(sql`
         SELECT node_id, resume_data_present
         FROM workflow_gate_instances
         WHERE execution_id = 'exec-before-0006'
@@ -452,8 +467,8 @@ describe('core migrations', () => {
   });
 
   it('client_binary_versions table exists after all migrations', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      const tables = await db.all<{ name: string }>(sql`
+    await withMigratedMemoryDatabase(async ({ rawSql }) => {
+      const tables = await rawSql.all<{ name: string }>(sql`
         SELECT name
         FROM sqlite_master
         WHERE type = 'table' AND name = 'client_binary_versions'
@@ -464,8 +479,8 @@ describe('core migrations', () => {
   });
 
   it('client_binary_state table exists after all migrations', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      const tables = await db.all<{ name: string }>(sql`
+    await withMigratedMemoryDatabase(async ({ rawSql }) => {
+      const tables = await rawSql.all<{ name: string }>(sql`
         SELECT name
         FROM sqlite_master
         WHERE type = 'table' AND name = 'client_binary_state'
@@ -476,8 +491,8 @@ describe('core migrations', () => {
   });
 
   it('client_runtimes table exists after all migrations', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      const tables = await db.all<{ name: string }>(sql`
+    await withMigratedMemoryDatabase(async ({ rawSql }) => {
+      const tables = await rawSql.all<{ name: string }>(sql`
         SELECT name
         FROM sqlite_master
         WHERE type = 'table' AND name = 'client_runtimes'
@@ -488,8 +503,8 @@ describe('core migrations', () => {
   });
 
   it('uq_client_binary_versions_client_version unique index exists', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      const indexes = await db.all<{ name: string }>(sql`
+    await withMigratedMemoryDatabase(async ({ rawSql }) => {
+      const indexes = await rawSql.all<{ name: string }>(sql`
         SELECT name
         FROM sqlite_master
         WHERE type = 'index' AND name = 'uq_client_binary_versions_client_version'
@@ -500,13 +515,13 @@ describe('core migrations', () => {
   });
 
   it('client_binary_state stores active-version state', async () => {
-    await withMigratedMemoryDatabase(async (db) => {
-      await db.run(sql`
+    await withMigratedMemoryDatabase(async ({ rawSql }) => {
+      await rawSql.run(sql`
         INSERT INTO client_binary_state (client_id, active_version, updated_at)
         VALUES ('test-client', '1.0.0', 1000)
       `);
 
-      const rows = await db.all<{ active_version: string }>(sql`
+      const rows = await rawSql.all<{ active_version: string }>(sql`
         SELECT active_version
         FROM client_binary_state
         WHERE client_id = 'test-client'

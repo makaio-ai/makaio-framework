@@ -1,6 +1,7 @@
 /* eslint max-lines: ["error", { "max": 500 }] */
 import { describe, it, expect } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionStorageSubjects } from '../namespace.js';
 import { AgentStorageSubjects } from '../agent-namespace.js';
@@ -23,9 +24,11 @@ describe('registerDrizzleSessionStorage', () => {
       expect(result.success).toBe(true);
 
       // Verify directly in DB
-      const rows = await ctx.db.run(sql`SELECT * FROM sessions WHERE session_id = 'persist-test-1'`);
-      expect(rows.rows).toHaveLength(1);
-      expect(rows.rows[0].session_id).toBe('persist-test-1');
+      const rows = await getRawSqlExecutor(ctx.db).all<{ session_id: unknown }>(
+        sql`SELECT * FROM sessions WHERE session_id = 'persist-test-1'`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.session_id).toBe('persist-test-1');
     });
     it('should persist session with agents', async () => {
       const leadAgent = createAgent({
@@ -63,8 +66,10 @@ describe('registerDrizzleSessionStorage', () => {
       });
 
       // Verify agents in DB
-      const agentRows = await ctx.db.run(sql`SELECT * FROM agents WHERE session_id = 'agents-test-1'`);
-      expect(agentRows.rows).toHaveLength(2);
+      const agentRows = await getRawSqlExecutor(ctx.db).all<Record<string, unknown>>(
+        sql`SELECT * FROM agents WHERE session_id = 'agents-test-1'`,
+      );
+      expect(agentRows).toHaveLength(2);
     });
     it('should update session on conflict (upsert)', async () => {
       const session = createSession({
@@ -339,7 +344,7 @@ describe('registerDrizzleSessionStorage', () => {
     });
 
     it('should include first user message preview without scanning all user messages in memory', async () => {
-      await ctx.db.run(sql`
+      await ctx.exec(sql`
         CREATE TABLE IF NOT EXISTS turns (
           turn_id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -350,7 +355,7 @@ describe('registerDrizzleSessionStorage', () => {
           usage TEXT
         )
       `);
-      await ctx.db.run(sql`
+      await ctx.exec(sql`
         CREATE TABLE IF NOT EXISTS messages (
           message_id TEXT PRIMARY KEY,
           turn_id TEXT REFERENCES turns(turn_id) ON DELETE CASCADE,
@@ -377,7 +382,7 @@ describe('registerDrizzleSessionStorage', () => {
         session: previewSession,
       });
 
-      await ctx.db.run(sql`
+      await ctx.exec(sql`
         INSERT INTO messages (message_id, turn_id, session_id, role, content_text, blocks, timestamp)
         VALUES
           ('msg-assistant', null, 'preview-session', 'assistant', 'assistant text', '[]', 100),
@@ -444,13 +449,17 @@ describe('registerDrizzleSessionStorage', () => {
         agent,
       });
 
-      const agentsBefore = await ctx.db.run(sql`SELECT * FROM agents WHERE session_id = 'cascade-test'`);
-      expect(agentsBefore.rows).toHaveLength(1);
+      const agentsBefore = await getRawSqlExecutor(ctx.db).all<Record<string, unknown>>(
+        sql`SELECT * FROM agents WHERE session_id = 'cascade-test'`,
+      );
+      expect(agentsBefore).toHaveLength(1);
 
       await MakaioBus.request(SessionStorageSubjects.delete, { sessionId: session.sessionId });
 
-      const agentsAfter = await ctx.db.run(sql`SELECT * FROM agents WHERE session_id = 'cascade-test'`);
-      expect(agentsAfter.rows).toHaveLength(0);
+      const agentsAfter = await getRawSqlExecutor(ctx.db).all<Record<string, unknown>>(
+        sql`SELECT * FROM agents WHERE session_id = 'cascade-test'`,
+      );
+      expect(agentsAfter).toHaveLength(0);
     });
   });
 });

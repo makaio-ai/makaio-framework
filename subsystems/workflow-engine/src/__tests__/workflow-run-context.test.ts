@@ -1,10 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { WorkflowRunContextSchema } from '@makaio/contracts';
+import { WorkflowRunContextSchema, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
 import { buildWorkflowRunContext } from '../workflow-run-context-builder.js';
-import { createTestDb, createWorkflowDefinition, type TestDbContext } from './shared.js';
+import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
+
+/**
+ * Persist a run context together with its parent execution row.
+ *
+ * `workflow_run_contexts.execution_id` references `workflow_executions.id`
+ * (1:1, cascade delete), so the execution row must exist before the
+ * run-context snapshot can be stored.
+ * @param runContext - Run context to persist.
+ */
+async function persistRunContext(runContext: WorkflowRunContext): Promise<void> {
+  await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+    execution: createWorkflowExecution({ id: runContext.executionId, workflowId: runContext.workflowId }),
+  });
+  await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+}
 
 describe('WorkflowRunContext storage round-trip', () => {
   let dbContext: TestDbContext;
@@ -94,7 +109,7 @@ describe('WorkflowRunContext storage round-trip', () => {
     const executionId = 'exec-rc-definition';
     const runContext = buildRunContext(executionId);
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched).not.toBeNull();
@@ -126,7 +141,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       },
     });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.inputs).toBeNull();
@@ -144,7 +159,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       dispatchMetadata: { poolId: 'pool-original', route: { kind: 'worker-pool' } },
     });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.dispatchMetadata).toEqual({ poolId: 'pool-original', route: { kind: 'worker-pool' } });
@@ -154,7 +169,7 @@ describe('WorkflowRunContext storage round-trip', () => {
     const executionId = 'exec-rc-path';
     const runContext = buildRunContext(executionId, { source: 'path' });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.source).toEqual({ kind: 'path', path: '/workspace/workflow.ts' });
@@ -164,7 +179,7 @@ describe('WorkflowRunContext storage round-trip', () => {
     const executionId = 'exec-rc-source';
     const runContext = buildRunContext(executionId, { source: 'source' });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.source).toEqual({ kind: 'source', filename: 'workflow.ts', source: 'export default ...' });
@@ -186,7 +201,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       },
     };
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext: withSnapshot });
+    await persistRunContext(withSnapshot);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.definitionSnapshot).toBeDefined();
@@ -211,7 +226,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       scope: { type: 'external', kind: 'project', id: 'proj-1' },
     });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.scope).toEqual({ type: 'external', kind: 'project', id: 'proj-1' });
@@ -224,7 +239,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       artifactRef: { kind: 'implementation-plan', id: 'artifact-42' },
     });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.artifactRef).toEqual({ kind: 'implementation-plan', id: 'artifact-42' });
@@ -240,7 +255,7 @@ describe('WorkflowRunContext storage round-trip', () => {
   it('overwrites an existing run context on upsert', async () => {
     const executionId = 'exec-rc-upsert';
     const first = buildRunContext(executionId);
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext: first });
+    await persistRunContext(first);
 
     const second = WorkflowRunContextSchema.parse({
       ...first,
@@ -261,7 +276,7 @@ describe('WorkflowRunContext storage round-trip', () => {
       },
     });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+    await persistRunContext(runContext);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.workerManifest.packages).toHaveLength(1);

@@ -84,7 +84,7 @@ describe('createDrizzleCrudHandlers lifecycle events', () => {
 
   beforeEach(async () => {
     ctx = await createTempDb('crud-handlers-lifecycle');
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       CREATE TABLE lifecycle_entities (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

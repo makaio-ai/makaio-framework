@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { sqliteTable, text, integer, uniqueIndex, index, primaryKey, real } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { epochMs, bool, jsonCol, float8 } from '@makaio/storage-drizzle/columns/sqlite';
 import type {
   WorkflowDefinition,
   WorkflowExecutionScope,
@@ -51,34 +52,34 @@ export const workflowDefinitions = sqliteTable(
      * Root sequence node tree (JSON).
      * Replaces the old flat `steps` DAG with a structured `WorkflowSequenceNode` tree.
      */
-    root: text('root', { mode: 'json' }).$type<WorkflowDefinition['root']>().notNull(),
+    root: jsonCol<WorkflowDefinition['root']>('root').notNull(),
     /** JSON Schema for workflow input parameters (JSON object). */
-    inputSchema: text('input_schema', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    inputSchema: jsonCol<Record<string, JsonValue>>('input_schema'),
     /** JSON Schema for static workflow configuration (JSON object). */
-    configSchema: text('config_schema', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    configSchema: jsonCol<Record<string, JsonValue>>('config_schema'),
     /** JSON Schema for the workflow's primary output (JSON object). */
-    outputSchema: text('output_schema', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    outputSchema: jsonCol<Record<string, JsonValue>>('output_schema'),
     /** Primary artifact binding for workflow output/state (JSON object). */
-    artifact: text('artifact', { mode: 'json' }).$type<WorkflowDefinition['artifact']>(),
+    artifact: jsonCol<WorkflowDefinition['artifact']>('artifact'),
     /** Trigger configuration (JSON array). Null means manual-only default. */
-    triggers: text('triggers', { mode: 'json' }).$type<WorkflowTrigger[]>(),
+    triggers: jsonCol<WorkflowTrigger[]>('triggers'),
     ...scopeColumns(),
     /** Creation timestamp. */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
     /** Last update timestamp. */
-    updatedAt: integer('updated_at').notNull(),
+    updatedAt: epochMs('updated_at').notNull(),
     /** Canvas layout hints for the visual editor (JSON object). */
-    canvasLayout: text('canvas_layout', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    canvasLayout: jsonCol<Record<string, JsonValue>>('canvas_layout'),
     /**
      * Provenance record for extension-synced definitions (JSON).
      * Absent on locally-authored definitions.
      */
-    source: text('source', { mode: 'json' }).$type<WorkflowDefinitionProvenance>(),
+    source: jsonCol<WorkflowDefinitionProvenance>('source'),
     /**
      * Advisory execution hints for worker provisioning (JSON).
      * Merged with per-call hints at execution start.
      */
-    executionHints: text('execution_hints', { mode: 'json' }).$type<ExecutionHints>(),
+    executionHints: jsonCol<ExecutionHints>('execution_hints'),
   },
   (table) => [
     // (name, scopeType, scopeKind, scopeId) unique to prevent duplicate names per scope.
@@ -106,17 +107,17 @@ export const workflowExecutions = sqliteTable(
       enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'],
     }).notNull(),
     /** Bound workflow input value (JSON). */
-    inputs: text('inputs', { mode: 'json' }).$type<JsonValue>(),
+    inputs: jsonCol<JsonValue>('inputs'),
     /** Error message if execution failed. */
     error: text('error'),
     /** Cancellation reason if execution was cancelled. */
     reason: text('reason'),
     /** Execution start timestamp. */
-    startedAt: integer('started_at').notNull(),
+    startedAt: epochMs('started_at').notNull(),
     /** Execution completion timestamp. */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
     /** Trigger payload from the firing trigger (JSON object). */
-    triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, JsonValue>>(),
+    triggerPayload: jsonCol<Record<string, JsonValue>>('trigger_payload'),
     /** Artifact kind the execution is bound to (flat for indexed filtering). */
     artifactKind: text('artifact_kind'),
     /** Artifact identifier within its kind. */
@@ -166,7 +167,7 @@ export const workflowExecutionFrames = sqliteTable(
      * Ordered path of frame IDs from the root frame to this frame (inclusive).
      * Used for tree traversal, log correlation, and UI breadcrumb display.
      */
-    path: text('path', { mode: 'json' }).$type<string[]>().notNull(),
+    path: jsonCol<string[]>('path').notNull(),
     /** Parent frame ID. Absent for the root frame. */
     parentFrameId: text('parent_frame_id'),
     /** Current frame execution status. */
@@ -187,15 +188,15 @@ export const workflowExecutionFrames = sqliteTable(
      */
     branchKey: text('branch_key'),
     /** JSON-serializable output produced by the node on completion. */
-    output: text('output', { mode: 'json' }).$type<JsonValue>(),
+    output: jsonCol<JsonValue>('output'),
     /** Whether `output` was explicitly produced, including JSON null. */
-    outputPresent: integer('output_present', { mode: 'boolean' }).notNull().default(false),
+    outputPresent: bool('output_present').notNull().default(false),
     /** Human-readable error message when status is `failed`. */
     error: text('error'),
     /** Epoch milliseconds when the frame started executing. */
-    startedAt: integer('started_at'),
+    startedAt: epochMs('started_at'),
     /** Epoch milliseconds when the frame reached a terminal status. */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
   },
   (table) => [
     // Efficient per-execution frame lookup.
@@ -234,7 +235,7 @@ export const workflowGateInstances = sqliteTable(
      * JSON Schema describing the expected resume data payload.
      * Callers must satisfy this schema when responding to the gate.
      */
-    schema: text('schema', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    schema: jsonCol<Record<string, unknown>>('schema').notNull(),
     /**
      * Optional prompt shown to the reviewer after template interpolation.
      * Populated from the gate node's `prompt` field at execution time.
@@ -249,13 +250,13 @@ export const workflowGateInstances = sqliteTable(
     /** Effective timeout in milliseconds captured when the gate opened. */
     timeoutMs: integer('timeout_ms'),
     /** JSON-serializable resume data submitted by the approver. */
-    resumeData: text('resume_data', { mode: 'json' }).$type<JsonValue>(),
+    resumeData: jsonCol<JsonValue>('resume_data'),
     /** Whether `resume_data` was explicitly submitted, including JSON null. */
-    resumeDataPresent: integer('resume_data_present', { mode: 'boolean' }).notNull().default(false),
+    resumeDataPresent: bool('resume_data_present').notNull().default(false),
     /** Epoch milliseconds when the gate was created (node entered). */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
     /** Epoch milliseconds when the gate left the `waiting` status. */
-    resolvedAt: integer('resolved_at'),
+    resolvedAt: epochMs('resolved_at'),
   },
   (table) => [
     // Efficient per-execution gate lookup.
@@ -288,9 +289,9 @@ export const workflowStepSpans = sqliteTable(
     /** Current span status. */
     status: text('status').$type<SpanStatus>().notNull(),
     /** Step start timestamp (epoch ms). */
-    startedAt: integer('started_at'),
+    startedAt: epochMs('started_at'),
     /** Step completion timestamp (epoch ms). */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. */
     durationMs: integer('duration_ms'),
     /** Input tokens consumed (agent steps). */
@@ -298,7 +299,7 @@ export const workflowStepSpans = sqliteTable(
     /** Output tokens produced (agent steps). */
     outputTokens: integer('output_tokens'),
     /** Estimated cost in USD (agent steps). */
-    estimatedCost: real('estimated_cost'),
+    estimatedCost: float8('estimated_cost'),
     /** Number of tool calls (agent steps). */
     toolCallCount: integer('tool_call_count'),
     /** Serialized step input (JSON string). */
@@ -330,7 +331,7 @@ export const workflowExecutionLinks = sqliteTable(
     /** Relationship type. */
     linkType: text('link_type').$type<ExecutionLinkType>().notNull(),
     /** Optional metadata (e.g., reason, target station). */
-    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    metadata: jsonCol<Record<string, unknown>>('metadata'),
   },
   (table) => [
     primaryKey({ columns: [table.sourceExecutionId, table.targetExecutionId] }),
@@ -360,7 +361,9 @@ export const workflowRunContexts = sqliteTable(
   'workflow_run_contexts',
   {
     /** Unique execution identifier (1:1 with workflow_executions.id). */
-    executionId: text('execution_id').primaryKey(),
+    executionId: text('execution_id')
+      .primaryKey()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
     /** Workflow definition identifier. */
     workflowId: text('workflow_id').notNull(),
     /** Coordinator session that owns this execution. */
@@ -374,21 +377,21 @@ export const workflowRunContexts = sqliteTable(
     /** Inline source code (for `kind === 'source'`). */
     sourceCode: text('source_code'),
     /** Serialized definition snapshot (JSON). Present for `kind === 'definition'`. */
-    definitionSnapshot: text('definition_snapshot', { mode: 'json' }).$type<WorkflowDefinition>(),
+    definitionSnapshot: jsonCol<WorkflowDefinition>('definition_snapshot'),
     /** Resolved worker contribution manifest (JSON). */
-    workerManifest: text('worker_manifest', { mode: 'json' }).$type<WorkerContributionManifest>().notNull(),
+    workerManifest: jsonCol<WorkerContributionManifest>('worker_manifest').notNull(),
     /** Bound workflow input value (JSON). */
-    inputs: text('inputs', { mode: 'json' }).$type<JsonValue>(),
+    inputs: jsonCol<JsonValue>('inputs'),
     /** Bound workflow configuration values (JSON object). */
-    config: text('config', { mode: 'json' }).$type<Record<string, JsonValue>>().notNull().default(sql`'{}'`),
+    config: jsonCol<Record<string, JsonValue>>('config').notNull().default(sql`'{}'`),
     /** Trigger payload from the firing trigger (JSON object). */
-    triggerPayload: text('trigger_payload', { mode: 'json' }).$type<Record<string, JsonValue>>().notNull(),
+    triggerPayload: jsonCol<Record<string, JsonValue>>('trigger_payload').notNull(),
     /** Explicit artifact reference supplied by the execution starter. */
-    artifactRef: text('artifact_ref', { mode: 'json' }).$type<WorkflowRunContext['artifactRef']>(),
+    artifactRef: jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
     /** Advisory worker provisioning hints supplied by the start request. */
-    executionHints: text('execution_hints', { mode: 'json' }).$type<WorkflowRunContext['executionHints']>(),
+    executionHints: jsonCol<WorkflowRunContext['executionHints']>('execution_hints'),
     /** Opaque dispatch metadata that must survive pause/resume boundaries. */
-    dispatchMetadata: text('dispatch_metadata', { mode: 'json' }).$type<WorkflowRunContext['dispatchMetadata']>(),
+    dispatchMetadata: jsonCol<WorkflowRunContext['dispatchMetadata']>('dispatch_metadata'),
     /** Scope type discriminant. */
     scopeType: text('scope_type', {
       enum: ['global', 'workspace', 'session', 'external'],
@@ -406,19 +409,17 @@ export const workflowRunContexts = sqliteTable(
      * Platform/workspace context (JSON).
      * Contains `repoPath`, `makaioHome`, `os`, `arch`, and optional `worktree`.
      */
-    context: text('context', { mode: 'json' })
-      .$type<{
-        repoPath: string;
-        makaioHome: string;
-        os: 'darwin' | 'linux' | 'win32';
-        arch: string;
-        worktree?: string;
-      }>()
-      .notNull(),
+    context: jsonCol<{
+      repoPath: string;
+      makaioHome: string;
+      os: 'darwin' | 'linux' | 'win32';
+      arch: string;
+      worktree?: string;
+    }>('context').notNull(),
     /** Extra non-secret environment variables (JSON object). */
-    env: text('env', { mode: 'json' }).$type<Record<string, string>>().notNull(),
+    env: jsonCol<Record<string, string>>('env').notNull(),
     /** Snapshot creation timestamp (epoch ms). */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
     /**
      * Durable record of the suspension strategy selected for this execution.
      *
@@ -454,7 +455,9 @@ export const worklogSummaries = sqliteTable(
   'worklog_summaries',
   {
     /** Unique execution identifier (1:1 with workflow_executions.id). */
-    executionId: text('execution_id').primaryKey(),
+    executionId: text('execution_id')
+      .primaryKey()
+      .references(() => workflowExecutions.id, { onDelete: 'cascade' }),
     /** Workflow definition identifier. */
     workflowId: text('workflow_id').notNull(),
     /** Human-readable workflow name at execution start. */
@@ -466,9 +469,9 @@ export const worklogSummaries = sqliteTable(
       enum: ['pending', 'running', 'paused', 'completed', 'failed', 'cancelled'],
     }).notNull(),
     /** Epoch milliseconds when the execution started. */
-    startedAt: integer('started_at').notNull(),
+    startedAt: epochMs('started_at').notNull(),
     /** Epoch milliseconds when the execution reached a terminal status. */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. Present once execution completes. */
     durationMs: integer('duration_ms'),
     /** Aggregated input tokens across all station frames. */
@@ -476,7 +479,7 @@ export const worklogSummaries = sqliteTable(
     /** Aggregated output tokens across all station frames. */
     totalOutputTokens: integer('total_output_tokens'),
     /** Aggregated estimated cost in USD across all station frames. */
-    totalEstimatedCost: real('total_estimated_cost'),
+    totalEstimatedCost: float8('total_estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
     error: text('error'),
     /** Identifier of the node that caused failure. */
@@ -518,7 +521,7 @@ export const worklogFrameEntries = sqliteTable(
      * Ordered path of frame IDs from the root frame to this frame (inclusive).
      * Stored as a JSON array for tree correlation.
      */
-    path: text('path', { mode: 'json' }).$type<string[]>().notNull(),
+    path: jsonCol<string[]>('path').notNull(),
     /** Current or terminal frame status. */
     status: text('status', {
       enum: ['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled'],
@@ -530,9 +533,9 @@ export const worklogFrameEntries = sqliteTable(
     /** Branch key for frames inside a parallel node. */
     branchKey: text('branch_key'),
     /** Epoch milliseconds when the frame started executing. */
-    startedAt: integer('started_at'),
+    startedAt: epochMs('started_at'),
     /** Epoch milliseconds when the frame reached a terminal status. */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. */
     durationMs: integer('duration_ms'),
     /** Input tokens consumed (station frames with LLM execution). */
@@ -540,7 +543,7 @@ export const worklogFrameEntries = sqliteTable(
     /** Output tokens produced (station frames with LLM execution). */
     outputTokens: integer('output_tokens'),
     /** Estimated cost in USD (station frames with LLM execution). */
-    estimatedCost: real('estimated_cost'),
+    estimatedCost: float8('estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
     error: text('error'),
   },
@@ -578,14 +581,14 @@ export const worklogArtifactWrites = sqliteTable(
      * Artifact binding (kind, schemaVersion, scope) as a JSON object.
      * Describes what the artifact is, not its content.
      */
-    artifact: text('artifact', { mode: 'json' }).$type<WorkflowArtifactBinding>().notNull(),
+    artifact: jsonCol<WorkflowArtifactBinding>('artifact').notNull(),
     /**
      * Artifact revision identifier assigned by the artifact service on write.
      * Absent if the write is still in-flight or failed.
      */
     revision: text('revision'),
     /** Epoch milliseconds when the write was recorded. */
-    writtenAt: integer('written_at').notNull(),
+    writtenAt: epochMs('written_at').notNull(),
   },
   (table) => [
     // Efficient per-execution artifact write lookup.
@@ -632,11 +635,11 @@ export const worklogGateEvents = sqliteTable(
      */
     prompt: text('prompt'),
     /** Epoch milliseconds when the gate entered `waiting`. */
-    openedAt: integer('opened_at').notNull(),
+    openedAt: epochMs('opened_at').notNull(),
     /** Epoch milliseconds when the gate left `waiting`. */
-    resolvedAt: integer('resolved_at'),
+    resolvedAt: epochMs('resolved_at'),
     /** JSON-serializable resume data submitted by the approver. */
-    resumeData: text('resume_data', { mode: 'json' }).$type<JsonValue>(),
+    resumeData: jsonCol<JsonValue>('resume_data'),
   },
   (table) => [
     // Efficient per-execution gate lookup.

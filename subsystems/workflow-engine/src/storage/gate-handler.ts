@@ -7,11 +7,13 @@ import {
   type JsonValue,
   type WorkflowGateInstance,
 } from '@makaio/contracts';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowExecutions, workflowGateInstances, type InsertWorkflowGateInstance } from './schema.js';
+import type { InsertWorkflowGateInstance } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 
-type DbGateRow = typeof workflowGateInstances.$inferSelect;
+type WorkflowGateInstancesTable = typeof workflowEngineSchema.sqlite.workflowGateInstances;
+type DbGateRow = WorkflowGateInstancesTable['$inferSelect'];
 
 /**
  * Build the stable primary key for a gate instance row.
@@ -71,12 +73,15 @@ export function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateIn
  * @param executionId - Optional execution ID filter from request payload.
  * @param status - Optional status filter from request payload.
  * @param limit - Optional limit from request payload.
+ * @param workflowGateInstances - Dialect-resolved table object, supplied by the
+ *   caller after resolving from a branded handle via `resolveSchema`.
  * @returns Resolved limit and drizzle predicate expressions.
  */
 function resolveListGatesParams(
   executionId: string | undefined,
   status: WorkflowGateInstance['status'] | undefined,
   limit: number | undefined,
+  workflowGateInstances: WorkflowGateInstancesTable,
 ) {
   // Guard: schema refine runs in dev/test but is skipped in production.
   if (executionId === undefined && status === undefined) {
@@ -106,6 +111,8 @@ function resolveListGatesParams(
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowExecutions, workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
+
   const unsubSetGate = bus.on(WorkflowStorageSubjects.setGateInstance, async (ctx) => {
     const gate = ctx.payload.gate as WorkflowGateInstance;
     const dbValues = toGateDbValues(gate);
@@ -144,7 +151,7 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
 
   const unsubListGates = bus.on(WorkflowStorageSubjects.listGateInstances, async (ctx) => {
     const { executionId, status, limit } = ctx.payload;
-    const { resolvedLimit, predicates } = resolveListGatesParams(executionId, status, limit);
+    const { resolvedLimit, predicates } = resolveListGatesParams(executionId, status, limit, workflowGateInstances);
     const rows = await db
       .select()
       .from(workflowGateInstances)

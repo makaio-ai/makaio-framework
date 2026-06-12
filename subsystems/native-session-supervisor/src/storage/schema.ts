@@ -9,11 +9,12 @@
  * ======================
  * 1. Modify the schema file(s) in src/storage/schema.ts
  * 2. Run: `yarn workspace \@makaio/storage-migrations db:generate`
- * 3. Review generated SQL in libs/storage/migrations/drizzle/
+ * 3. Review generated SQL in storage/migrations/drizzle/
  * 4. Migrations auto-apply on startup via runtimes/node
  */
 
 import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Supervisor runtimes table.
@@ -83,13 +84,13 @@ export const supervisorRuntimes = sqliteTable(
     /**
      * Unix epoch timestamp (milliseconds) when the process was started.
      */
-    startedAt: integer('started_at').notNull(),
+    startedAt: epochMs('started_at').notNull(),
 
     /**
      * Unix epoch timestamp (milliseconds) when the process stopped.
      * NULL while the process is still running.
      */
-    stoppedAt: integer('stopped_at'),
+    stoppedAt: epochMs('stopped_at'),
 
     /**
      * JSON-serialized arbitrary pass-through metadata (`Record<string, unknown>`).

@@ -9,77 +9,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
-import { createTempDb, createDbCleanup } from '@makaio/test-utils/drizzle-harness';
+import { createTempDb, createDbCleanup, type TestDbContext } from '@makaio/test-utils/drizzle-harness';
 import { makeStubExtensionContext } from '@makaio/test-utils';
+import { installMessagesFtsTestSchema, installSessionStorageTestSchema } from '../../testing/storage-test-schema.js';
 import { registerDrizzleMessageStorage } from '../drizzle-handler.js';
 import { MessageStorageSubjects } from '../namespace.js';
-
-// ---------------------------------------------------------------------------
-// Minimal schema SQL for the FTS search test database
-// ---------------------------------------------------------------------------
-
-const CREATE_SESSIONS_TABLE_SQL = sql`
-  CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY
-  )
-`;
-
-const CREATE_TURNS_TABLE_SQL = sql`
-  CREATE TABLE IF NOT EXISTS turns (
-    turn_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL
-  )
-`;
-
-const CREATE_MESSAGES_TABLE_SQL = sql`
-  CREATE TABLE IF NOT EXISTS messages (
-    message_id TEXT PRIMARY KEY,
-    turn_id TEXT REFERENCES turns(turn_id) ON DELETE CASCADE,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    content_text TEXT NOT NULL,
-    blocks TEXT NOT NULL DEFAULT '[]',
-    agent_id TEXT,
-    adapter_session_id TEXT,
-    adapter_message_id TEXT,
-    timestamp INTEGER NOT NULL,
-    edit_of TEXT,
-    origin TEXT
-  )
-`;
-
-const CREATE_MESSAGES_FTS_SQL = sql`
-  CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-    session_id,
-    content_text,
-    content='messages',
-    content_rowid='rowid',
-    tokenize='porter unicode61'
-  )
-`;
-
-const CREATE_TRIGGER_AI_SQL = sql`
-  CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-    INSERT INTO messages_fts(rowid, session_id, content_text)
-    VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
-  END
-`;
-
-const CREATE_TRIGGER_AD_SQL = sql`
-  CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
-    VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
-  END
-`;
-
-const CREATE_TRIGGER_AU_SQL = sql`
-  CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-    INSERT INTO messages_fts(messages_fts, rowid, session_id, content_text)
-    VALUES('delete', OLD.rowid, OLD.session_id, OLD.content_text);
-    INSERT INTO messages_fts(rowid, session_id, content_text)
-    VALUES (NEW.rowid, NEW.session_id, NEW.content_text);
-  END
-`;
 
 // ---------------------------------------------------------------------------
 // Test DB factory
@@ -87,49 +21,51 @@ const CREATE_TRIGGER_AU_SQL = sql`
 
 interface FtsTestContext {
   db: MakaioDatabase;
+  /** Executes a raw SQL write through the harness executor seam. */
+  exec: TestDbContext['exec'];
   cleanup: () => void;
 }
 
 /**
  * Creates a temporary SQLite database with the messages table, FTS5 virtual
  * table, sync triggers, and a registered ftsSearch handler.
- * @returns Test context with db and cleanup
+ * @returns Test context with db, exec, and cleanup
  */
 async function createFtsTestDb(): Promise<FtsTestContext> {
-  const { db, close, dbPath } = await createTempDb('msg-fts');
+  const { db, exec, close, dbPath } = await createTempDb('msg-fts');
 
-  await db.run(CREATE_SESSIONS_TABLE_SQL);
-  await db.run(CREATE_TURNS_TABLE_SQL);
-  await db.run(CREATE_MESSAGES_TABLE_SQL);
-  await db.run(CREATE_MESSAGES_FTS_SQL);
-  await db.run(CREATE_TRIGGER_AI_SQL);
-  await db.run(CREATE_TRIGGER_AD_SQL);
-  await db.run(CREATE_TRIGGER_AU_SQL);
+  // Session tier first (turns/messages reference sessions), then the messages
+  // tier with the FTS5 table and sync triggers.
+  await installSessionStorageTestSchema(db);
+  await installMessagesFtsTestSchema(db);
 
   // Seed a session so FK constraints are satisfied
-  await db.run(sql`INSERT INTO sessions (session_id) VALUES ('session-1')`);
+  await exec(sql`
+    INSERT INTO sessions (session_id, created_at, last_activity_at, status)
+    VALUES ('session-1', 1000, 1000, 'active')
+  `);
 
   const handlerCleanup = registerDrizzleMessageStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
 
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
-  return { db, cleanup };
+  return { db, exec, cleanup };
 }
 
 /**
  * Inserts a message directly into the messages table.
  * The INSERT trigger automatically syncs the row into messages_fts.
- * @param db - Drizzle database instance
+ * @param exec - Raw SQL write seam from the test context
  * @param messageId - Unique message identifier
  * @param contentText - Plain-text content to index
  * @param timestamp - Ordering timestamp (Unix ms)
  */
 async function insertMessage(
-  db: MakaioDatabase,
+  exec: FtsTestContext['exec'],
   messageId: string,
   contentText: string,
   timestamp: number = Date.now(),
 ): Promise<void> {
-  await db.run(sql`
+  await exec(sql`
     INSERT INTO messages (message_id, session_id, role, content_text, blocks, timestamp)
     VALUES (${messageId}, 'session-1', 'user', ${contentText}, '[]', ${timestamp})
   `);
@@ -149,8 +85,8 @@ describe('message ftsSearch handler – BM25 score projection', () => {
   afterEach(() => ctx.cleanup());
 
   it('returns positive scores for matching messages', async () => {
-    await insertMessage(ctx.db, 'msg-1', 'TypeScript generics conditional types mapped types', 1000);
-    await insertMessage(ctx.db, 'msg-2', 'TypeScript compiler strict mode tsconfig settings', 2000);
+    await insertMessage(ctx.exec, 'msg-1', 'TypeScript generics conditional types mapped types', 1000);
+    await insertMessage(ctx.exec, 'msg-2', 'TypeScript compiler strict mode tsconfig settings', 2000);
 
     const result = await MakaioBus.request(MessageStorageSubjects.ftsSearch, {
       query: 'TypeScript',
@@ -166,13 +102,13 @@ describe('message ftsSearch handler – BM25 score projection', () => {
   it('ranks the more-relevant message first when ordering by score', async () => {
     // msg-dense repeats the search term multiple times → higher BM25 score
     await insertMessage(
-      ctx.db,
+      ctx.exec,
       'msg-dense',
       'authentication authentication authentication JWT authentication token authentication',
       1000,
     );
     // msg-sparse mentions it once
-    await insertMessage(ctx.db, 'msg-sparse', 'I heard about authentication once', 2000);
+    await insertMessage(ctx.exec, 'msg-sparse', 'I heard about authentication once', 2000);
 
     const result = await MakaioBus.request(MessageStorageSubjects.ftsSearch, {
       query: 'authentication',

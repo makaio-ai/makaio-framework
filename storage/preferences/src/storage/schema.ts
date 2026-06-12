@@ -4,7 +4,8 @@
  * Single table storing key-value preferences with composite key.
  */
 
-import { sqliteTable, text, integer, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Preferences table for persistent key-value storage.
@@ -28,7 +29,7 @@ export const preferences = sqliteTable(
     /** JSON-serialized value */
     value: text('value').notNull(),
     /** Last update timestamp (Unix ms) */
-    updatedAt: integer('updated_at').notNull(),
+    updatedAt: epochMs('updated_at').notNull(),
   },
   (table) => [
     uniqueIndex('preferences_pk').on(table.scope, table.surface, table.context, table.viewport, table.category),

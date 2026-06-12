@@ -10,7 +10,7 @@
  *  1. Config resolution via FileConfigStorage + NodeRuntimeProvider
  *  2. Bus creation (MakaioBus singleton) + namespace registration + busCreated phase event
  *  3. Transport — BusServerTransportProvider (WebSocket bus server on provided HTTP server)
- *  4. Storage — initializeNodeDatabase (SQLite init) + RuntimeSubjects.database exposure
+ *  4. Storage — initializeNodeDatabase (SQLite file or Postgres URL) + RuntimeSubjects.database exposure
  *  5. Identity — loadOrCreateMachineIdentity + platform bus handler registration
  *  6. Config handlers + framework package assembly
  *  7. Extension discovery and loading
@@ -247,12 +247,14 @@ export async function bootMakaioRuntimeCore(
     }
 
     // -----------------------------------------------------------------------
-    // 4. Storage — initialize SQLite database and expose it through
-    //    RuntimeSubjects.database for consumers that need the concrete handle.
+    // 4. Storage — initialize the database (SQLite file or Postgres URL)
+    //    and expose it through RuntimeSubjects.database for consumers that
+    //    need the concrete handle.
     // -----------------------------------------------------------------------
     const { databaseClient } = await initializeNodeDatabase({
       makaioHome,
       migrationsDir: options.centralMigrationsDir,
+      database: options.database,
     });
     const db = databaseClient.db;
     console.info('[boot] Database initialized');

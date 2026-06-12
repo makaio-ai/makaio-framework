@@ -13,6 +13,7 @@ export {
   CONNECTOR_SWAP_DEFAULT_PIPELINE,
   ContextWindowTracker,
   createSessionExtensionContext,
+  EmbeddingIndexManager,
   ensureAgentCwd,
   ensureAgentModel,
   extractTextContent,

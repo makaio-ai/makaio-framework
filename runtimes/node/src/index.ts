@@ -69,9 +69,11 @@ export {
 } from './makaio-config.js';
 export {
   initializeNodeDatabase,
+  type DatabaseBootOptions,
   type InitializeNodeDatabaseOptions,
   type InitializeNodeDatabaseResult,
 } from './initialize-node-database.js';
+export { resolveBundledMigrationsDir, type BundledMigrationsProbes } from './resolve-bundled-migrations-dir.js';
 export { BusServerTransportProvider, type BusServerTransportOptions } from './bus-server-transport.js';
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
 export { readFrameworkVersion } from './read-framework-version.js';

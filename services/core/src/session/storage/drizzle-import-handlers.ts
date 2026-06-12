@@ -1,9 +1,9 @@
 import { eq, desc, and, inArray, isNull, or, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type BranchKind } from '@makaio/contracts';
 import { SessionStorageSubjects } from './namespace.js';
-import { sessions, agents } from './schema.js';
+import { sessionStorageSchema } from './schema.variants.js';
 import { mapAgentsBySession, mapToSession } from './drizzle-utils.js';
 import { kindToBranchKind } from '../import/lineage-utils.js';
 import type { SessionHandlerDeps } from './drizzle-handler.js';
@@ -11,15 +11,20 @@ import { createMonotonicClock } from './monotonic-clock.js';
 
 const nextDiscoveredAt = createMonotonicClock();
 
+/** Canonical column shape of the sessions table, resolved through the dialect seam. */
+type SessionsTable = typeof sessionStorageSchema.sqlite.sessions;
+
 /**
  * Build a SQL CASE clause that corrects an unstarted discovery-stub timestamp on re-import.
  * @param column - The timestamp column to conditionally update
  * @param startedAt - The real start timestamp from the import, or undefined to keep existing
+ * @param sessions - Dialect-resolved sessions table object.
  * @returns SQL expression for the conflict SET clause
  */
 function timestampConflictClause(
-  column: typeof sessions.createdAt | typeof sessions.lastActivityAt,
+  column: SessionsTable['createdAt'] | SessionsTable['lastActivityAt'],
   startedAt: number | undefined,
+  sessions: SessionsTable,
 ) {
   return startedAt === undefined
     ? sql`${column}`
@@ -29,6 +34,47 @@ function timestampConflictClause(
           ELSE ${column}
         END
       `;
+}
+
+/**
+ * Build the conflict-merge SET clause for the import UPSERT.
+ *
+ * Converges an existing row into the canonical imported-session shape and
+ * merges enrichment fields so later scans can supply previously-unknown values.
+ *
+ * Extracted from {@link registerImportUpsertHandler} to keep it within the
+ * max-lines-per-function lint threshold.
+ * @param sessions - Dialect-resolved sessions table object.
+ * @param startedAt - The real start timestamp from the import, or undefined to keep existing
+ * @returns Drizzle `set` object for `onConflictDoUpdate`
+ */
+function buildImportConflictSet(sessions: SessionsTable, startedAt: number | undefined) {
+  return {
+    status: sql`
+      CASE
+        WHEN COALESCE(${sessions.importStatus}, excluded.import_status) = 'discovered' THEN excluded.status
+        ELSE ${sessions.status}
+      END
+    `,
+    isImported: true,
+    importStatus: sql`COALESCE(${sessions.importStatus}, excluded.import_status)`,
+    adapterName: sql`COALESCE(${sessions.adapterName}, excluded.adapter_name)`,
+    discoveredAt: sql`COALESCE(${sessions.discoveredAt}, excluded.discovered_at)`,
+    // Immutable identity fields: keep existing value, fall back to new.
+    source: sql`COALESCE(${sessions.source}, excluded.source)`,
+    logFilePath: sql`COALESCE(${sessions.logFilePath}, excluded.log_file_path)`,
+    // Enrichment fields: prefer incoming value over stored null so each
+    // re-scan can supply data that was absent on first discovery.
+    targetWorkingDirectory: sql`COALESCE(excluded.target_working_directory, ${sessions.targetWorkingDirectory})`,
+    title: sql`COALESCE(excluded.title, ${sessions.title})`,
+    forkPointMessageId: sql`COALESCE(excluded.fork_point_message_id, ${sessions.forkPointMessageId})`,
+    parentExternalSessionId: sql`COALESCE(excluded.parent_external_session_id, ${sessions.parentExternalSessionId})`,
+    branchKind: sql`COALESCE(excluded.branch_kind, ${sessions.branchKind})`,
+    adapterId: sql`COALESCE(excluded.adapter_id, ${sessions.adapterId})`,
+    clientId: sql`COALESCE(excluded.client_id, ${sessions.clientId})`,
+    createdAt: timestampConflictClause(sessions.createdAt, startedAt, sessions),
+    lastActivityAt: timestampConflictClause(sessions.lastActivityAt, startedAt, sessions),
+  };
 }
 
 /**
@@ -55,6 +101,7 @@ function timestampConflictClause(
  */
 function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.importUpsert, async (ctx) => {
     const {
@@ -109,32 +156,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         // cannot participate in the `(source, adapterSessionId)` invariant, so
         // this handler does not merge them into a sourced import.
         target: [sessions.source, sessions.adapterSessionId],
-        set: {
-          status: sql`
-            CASE
-              WHEN COALESCE(${sessions.importStatus}, excluded.import_status) = 'discovered' THEN excluded.status
-              ELSE ${sessions.status}
-            END
-          `,
-          isImported: true,
-          importStatus: sql`COALESCE(${sessions.importStatus}, excluded.import_status)`,
-          adapterName: sql`COALESCE(${sessions.adapterName}, excluded.adapter_name)`,
-          discoveredAt: sql`COALESCE(${sessions.discoveredAt}, excluded.discovered_at)`,
-          // Immutable identity fields: keep existing value, fall back to new.
-          source: sql`COALESCE(${sessions.source}, excluded.source)`,
-          logFilePath: sql`COALESCE(${sessions.logFilePath}, excluded.log_file_path)`,
-          // Enrichment fields: prefer incoming value over stored null so each
-          // re-scan can supply data that was absent on first discovery.
-          targetWorkingDirectory: sql`COALESCE(excluded.target_working_directory, ${sessions.targetWorkingDirectory})`,
-          title: sql`COALESCE(excluded.title, ${sessions.title})`,
-          forkPointMessageId: sql`COALESCE(excluded.fork_point_message_id, ${sessions.forkPointMessageId})`,
-          parentExternalSessionId: sql`COALESCE(excluded.parent_external_session_id, ${sessions.parentExternalSessionId})`,
-          branchKind: sql`COALESCE(excluded.branch_kind, ${sessions.branchKind})`,
-          adapterId: sql`COALESCE(excluded.adapter_id, ${sessions.adapterId})`,
-          clientId: sql`COALESCE(excluded.client_id, ${sessions.clientId})`,
-          createdAt: timestampConflictClause(sessions.createdAt, startedAt),
-          lastActivityAt: timestampConflictClause(sessions.lastActivityAt, startedAt),
-        },
+        set: buildImportConflictSet(sessions, startedAt),
       })
       .returning({
         sessionId: sessions.sessionId,
@@ -224,6 +246,7 @@ async function resolveParentSession(
   parentExternalSessionId: string | null,
   source: string,
 ): Promise<string | null> {
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
   if (parentExternalSessionId === null) {
     return null;
   }
@@ -258,6 +281,7 @@ async function resolveParentSession(
  */
 function registerGetByLogFilePathHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.getByLogFilePath, async (ctx) => {
     const { logFilePath } = ctx.payload;
@@ -284,6 +308,7 @@ function registerGetByLogFilePathHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerListImportedHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.listImported, async (ctx) => {
     const { source, importStatus } = ctx.payload;
@@ -320,6 +345,7 @@ function registerListImportedHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerCountBySourceHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.countBySource, async (ctx) => {
     const { source } = ctx.payload;
@@ -372,6 +398,7 @@ function registerCountBySourceHandler(deps: SessionHandlerDeps): () => void {
  */
 function registerUpdateImportStatusHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
+  const { sessions } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.updateImportStatus, async (ctx) => {
     const { sessionId, importStatus } = ctx.payload;

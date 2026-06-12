@@ -1,8 +1,9 @@
 # @makaio/runtime-node
 
 Node.js runtime package for the Makaio AI Framework. Provides the full boot
-sequence, filesystem-based config/discovery, SQLite storage initialisation,
-credential resolution, and model-registry infrastructure for Node.js hosts.
+sequence, filesystem-based config/discovery, storage initialisation (SQLite or
+PostgreSQL), credential resolution, and model-registry infrastructure for
+Node.js hosts.
 
 ## Boot Sequence
 
@@ -14,7 +15,7 @@ Node.js HTTP server and runs the complete 12-step startup:
 | 1 | **Config** — `NodeRuntimeProvider` resolves effective `makaio.config.*` through `ConfigProvider` over `FileConfigStorage`, then loads machine ID |
 | 2 | **Bus** — `MakaioBus` singleton is created; `busCreated` phase event emitted |
 | 3 | **Transport** — `BusServerTransportProvider` attaches a WebSocket upgrade handler to the HTTP server |
-| 4 | **Storage** — SQLite database initialised via `initializeNodeDatabase`; handle exposed on `RuntimeSubjects.database` |
+| 4 | **Storage** — SQLite file or Postgres URL (`database.url` boot option / `MAKAIO_DATABASE_URL`) initialised via `initializeNodeDatabase`; handle exposed on `RuntimeSubjects.database` |
 | 5 | **Identity** — machine key material loaded or generated; `RuntimeSubjects.machineIdentity` and `RuntimeSubjects.busPort` handlers registered |
 | 6 | **Config handlers** — runtime config bus handlers registered; framework core packages assembled |
 | 7 | **Extension discovery and loading** — `FilesystemDescriptorDiscovery` (or override) scans configured roots; browser-only and CLI-only packages merged |
@@ -83,8 +84,22 @@ export default defineMakaioConfig({
 |----------------------|---------|
 | `MAKAIO_HOME` | Runtime data directory (config, DB, keys, installed extensions). Default: `~/.makaio` |
 | `MAKAIO_CONFIG_FILE` | Explicit config file path override |
+| `MAKAIO_DATABASE_URL` | Postgres connection URL (`postgres://` / `postgresql://`); selects the Postgres backend |
+| `MAKAIO_DATABASE_PATH` | SQLite database file path override; outranked by URL sources |
 | `MAKAIO_MODE` | ConfigProvider mode input; current Node boot still passes a local-mode host override |
 | `MAKAIO_RELAY_URL` | Relay endpoint override exposed through effective runtime config without being persisted by `ConfigSubjects.update` |
+
+### Database Backend
+
+SQLite is the default backend; a Postgres URL opts into PostgreSQL. The
+connection target resolves in this order (empty and whitespace-only values
+count as unset): `database.url` boot option → `MAKAIO_DATABASE_URL` →
+`dbPath` (direct `initializeNodeDatabase` callers only) →
+`MAKAIO_DATABASE_PATH` → `<makaioHome>/makaio.db`. A non-Postgres URL from
+the first two sources is rejected with an error instead of falling through. Pool size is tuned with `database.poolMax`
+(`DatabaseBootOptions`). Migrations for the selected backend are applied
+automatically during boot. See the `@makaio/framework` README for the
+consumer-facing PostgreSQL guide (the `pg` driver is consumer-provided).
 
 ## Named Exports
 
@@ -123,9 +138,9 @@ export default defineMakaioConfig({
 
 | Export | Description |
 |--------|-------------|
-| `runMigrations` | Apply pending Drizzle migrations to the SQLite database |
-| `createArtifactsFts5Tables` | Create FTS5 virtual tables for artifact full-text search |
-| `setupArtifactsFtsSync` | Install triggers to keep FTS5 index in sync |
+| `initializeNodeDatabase` | Resolve the database target (SQLite file or Postgres URL), open it, and run migrations |
+| `resolveBundledMigrationsDir` | Locate the bundled migration chain for a dialect in packaged layouts |
+| `runMigrations` | Apply pending Drizzle migrations from the bundled chain matching the handle's dialect |
 | `FileConfigStorage` | Persist extension config as JSON files under `MAKAIO_HOME` |
 | `FileRegistryCache` | File-backed model registry cache |
 
@@ -154,6 +169,7 @@ export default defineMakaioConfig({
 |------|-------------|
 | `BootMakaioRuntimeOptions` | Options for `bootMakaioRuntime` (adds `httpServer`) |
 | `CoreBootOptions` | Platform-agnostic boot options shared by Node and Bun |
+| `DatabaseBootOptions` | `database` boot option: connection `url` (Postgres opt-in) and `poolMax` |
 | `MakaioRuntime` | Handle returned on successful boot (`port`, `host`, `machineId`, `shutdown`) |
 | `ServerTransportProvider` | Transport provider interface with optional `dispatchingAuth` |
 | `TransportReadyInfo` | `{ port, host }` passed to `onTransportReady` |

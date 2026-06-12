@@ -1,14 +1,15 @@
 # @makaio/storage-drizzle
 
-Drizzle ORM extension for storage namespaces with a runtime-selected SQLite/Drizzle client seam.
+Drizzle ORM extension for storage namespaces with a runtime-selected SQLite/Postgres client seam.
 
 ## What This Is
 
 Extends `@makaio/storage-core` with:
 
 - **Declaration merging** - Adds `drizzle` property to `StorageNamespaceExtensions`
-- **Database client sub-entry** - Async factory that selects Bun SQLite for Bun-local databases
-  and libSQL/Drizzle for Node.js or remote URLs
+- **Database client sub-entry** - Async factory that selects node-postgres for
+  `postgres://` / `postgresql://` URLs, Bun SQLite for Bun-local databases, and
+  libSQL/Drizzle for Node.js or remote URLs
 - **Type-safe tables** - Access Drizzle schemas directly from storage namespaces
 
 ## Quick Start
@@ -70,14 +71,24 @@ const { db } = await createDatabaseClient({
 const { db } = await createDatabaseClient({
   url: 'http://localhost:8080',
 });
+
+// Production with Postgres (requires the consumer-provided `pg` package)
+const { db } = await createDatabaseClient({
+  url: process.env.DATABASE_URL, // postgres://user:pw@host:5432/db
+});
 ```
+
+`pg` is consumer-provided — a documented peer, deliberately not listed in this
+package's dependencies or peer dependencies so selecting SQLite never pulls in
+a Postgres driver: hosts that use `postgres://` / `postgresql://` URLs install
+it in the host application; SQLite-only hosts need nothing extra.
 
 ## Architecture Principles
 
 **1. Extension Point** - Uses TypeScript declaration merging, not inheritance
 
-**2. Runtime SQLite seam** - Client factory selects the appropriate SQLite driver by runtime and
-URL while exposing one `MakaioDatabase` contract
+**2. Runtime driver seam** - Client factory selects the appropriate driver (node-postgres,
+Bun SQLite, libSQL) by runtime and URL while exposing one `MakaioDatabase` contract
 
 **3. Entrypoint Split** - Root exports namespace/drizzle helpers; client creation lives under
 `@makaio/storage-drizzle/client`
@@ -104,9 +115,11 @@ URL while exposing one `MakaioDatabase` contract
 
 **Client entry (`@makaio/storage-drizzle/client`):**
 
-- `createDatabaseClient(config)` - Async factory for the runtime-selected SQLite driver
-- `DatabaseClient` - `{ db: MakaioDatabase, close(): void }`
-- `DatabaseClientConfig` - `{ url?: string, authToken?: string }`
+- `createDatabaseClient(config)` - Async factory for the runtime-selected database driver
+  (SQLite by default, Postgres for `postgres://` / `postgresql://` URLs)
+- `isPostgresUrl(url)` - Predicate for the Postgres URL dispatch rule
+- `DatabaseClient` - `{ db: MakaioDatabase, dialect: StorageDialect, close(): void | Promise<void> }`
+- `DatabaseClientConfig` - `{ url?: string, authToken?: string, postgres?: PostgresClientOptions }`
 
 ## Design Philosophy
 

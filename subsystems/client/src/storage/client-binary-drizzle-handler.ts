@@ -12,12 +12,13 @@ import { eq, and } from 'drizzle-orm';
 import {
   didAffectRows,
   executeTransaction,
+  resolveSchema,
   type MakaioDatabase,
   type TransactionCallback,
 } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext } from '@makaio/contracts';
-import { clientBinaryVersions, clientBinaryState } from './client-binary-schema.js';
+import { clientBinarySchema } from './client-binary-schema.variants.js';
 import { ClientBinaryStorageSubjects } from './client-binary-storage-namespace.js';
 import type {
   InsertClientBinaryState,
@@ -26,6 +27,11 @@ import type {
   SelectClientBinaryState,
 } from './client-binary-schema.js';
 import type { ClientBinaryVersionRecord, ClientBinaryStateRecord } from './client-binary-storage-namespace.js';
+
+/** Resolved type alias for the `client_binary_versions` table, dialect-independent. */
+type ClientBinaryVersionsTable = typeof clientBinarySchema.sqlite.clientBinaryVersions;
+/** Resolved type alias for the `client_binary_state` table, dialect-independent. */
+type ClientBinaryStateTable = typeof clientBinarySchema.sqlite.clientBinaryState;
 
 export { ClientBinaryStorageNamespace, ClientBinaryStorageSubjects } from './client-binary-storage-namespace.js';
 
@@ -92,10 +98,18 @@ function toVersionInsert(record: ClientBinaryVersionRecord): InsertClientBinaryV
  * The conflict target is intentionally `(clientId, version)` only: repeated
  * install records are idempotent, while unexpected primary-key collisions still
  * surface as database errors.
+ *
+ * Transactions carry no dialect brand, so the resolved table must be supplied
+ * by the caller.
  * @param db - Drizzle database or transaction executor
  * @param record - Version record to persist
+ * @param clientBinaryVersions - Dialect-resolved `client_binary_versions` table
  */
-async function insertInstalledVersion(db: StorageExecutor, record: ClientBinaryVersionRecord): Promise<void> {
+async function insertInstalledVersion(
+  db: StorageExecutor,
+  record: ClientBinaryVersionRecord,
+  clientBinaryVersions: ClientBinaryVersionsTable,
+): Promise<void> {
   await db
     .insert(clientBinaryVersions)
     .values(toVersionInsert(record))
@@ -123,16 +137,21 @@ function toActiveVersionStateInsert(
 
 /**
  * Upsert active-version state.
+ *
+ * Transactions carry no dialect brand, so the resolved table must be supplied
+ * by the caller.
  * @param db - Drizzle database or transaction executor
  * @param clientId - Stable client identifier
  * @param activeVersion - Version to mark active, or `null` to clear
  * @param updatedAt - Epoch ms of this mutation
+ * @param clientBinaryState - Dialect-resolved `client_binary_state` table
  */
 async function upsertActiveVersionState(
   db: StorageExecutor,
   clientId: string,
   activeVersion: string | null,
   updatedAt: number,
+  clientBinaryState: ClientBinaryStateTable,
 ): Promise<void> {
   await db
     .insert(clientBinaryState)
@@ -151,7 +170,8 @@ async function upsertActiveVersionState(
  * @param record - Version record to persist
  */
 async function handleInsertVersion(db: MakaioDatabase, record: ClientBinaryVersionRecord): Promise<void> {
-  await insertInstalledVersion(db, record);
+  const { clientBinaryVersions } = resolveSchema(db, clientBinarySchema);
+  await insertInstalledVersion(db, record, clientBinaryVersions);
 }
 
 /**
@@ -175,6 +195,7 @@ async function handleRecordInstalledVersion(
   previousActiveVersion: string | null;
   activeVersion: string | null;
 }> {
+  const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   return executeTransaction(db, async (tx) => {
     const [stateRow] = await tx
       .select()
@@ -183,13 +204,13 @@ async function handleRecordInstalledVersion(
       .limit(1);
     const previousActiveVersion = stateRow?.activeVersion ?? null;
 
-    await insertInstalledVersion(tx, record);
+    await insertInstalledVersion(tx, record, clientBinaryVersions);
 
     if (!makeActive) {
       return { previousActiveVersion, activeVersion: previousActiveVersion };
     }
 
-    await upsertActiveVersionState(tx, record.clientId, record.version, updatedAt);
+    await upsertActiveVersionState(tx, record.clientId, record.version, updatedAt, clientBinaryState);
 
     return { previousActiveVersion, activeVersion: record.version };
   });
@@ -208,6 +229,7 @@ async function handleGetSnapshot(
   state: ClientBinaryStateRecord | null;
   versions: ClientBinaryVersionRecord[];
 }> {
+  const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   return executeTransaction(db, async (tx) => {
     const [stateRow] = await tx
       .select()
@@ -231,6 +253,7 @@ async function handleLoadSnapshot(db: MakaioDatabase): Promise<{
   states: ClientBinaryStateRecord[];
   versions: ClientBinaryVersionRecord[];
 }> {
+  const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   return executeTransaction(db, async (tx) => {
     const stateRows = await tx.select().from(clientBinaryState);
     const versionRows = await tx.select().from(clientBinaryVersions);
@@ -247,6 +270,7 @@ async function handleLoadSnapshot(db: MakaioDatabase): Promise<{
  * @param record - State record to persist
  */
 async function handleUpsertState(db: MakaioDatabase, record: ClientBinaryStateRecord): Promise<void> {
+  const { clientBinaryState } = resolveSchema(db, clientBinarySchema);
   const values = {
     clientId: record.clientId,
     activeVersion: record.activeVersion ?? null,
@@ -277,6 +301,7 @@ async function handleSetActiveVersion(
   previousActiveVersion: string | null;
   activeVersion: string | null;
 }> {
+  const { clientBinaryState } = resolveSchema(db, clientBinarySchema);
   return executeTransaction(db, async (tx) => {
     const [stateRow] = await tx
       .select()
@@ -285,7 +310,7 @@ async function handleSetActiveVersion(
       .limit(1);
     const previousActiveVersion = stateRow?.activeVersion ?? null;
 
-    await upsertActiveVersionState(tx, clientId, activeVersion, updatedAt);
+    await upsertActiveVersionState(tx, clientId, activeVersion, updatedAt, clientBinaryState);
 
     return { previousActiveVersion, activeVersion };
   });
@@ -295,7 +320,7 @@ async function handleSetActiveVersion(
  * Atomically remove an installed-version row and clear the active-version
  * pointer when it points to the deleted version.
  *
- * All reads and writes execute inside a single SQLite transaction. The result
+ * All reads and writes execute inside a single database transaction. The result
  * captures the pre-transaction active version so the caller can decide whether
  * to emit a `client.version.changed` event.
  * @param db - Drizzle database instance
@@ -314,6 +339,7 @@ async function handleRemoveVersionAndClearActive(
   previousActiveVersion: string | null;
   activeVersion: string | null;
 }> {
+  const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   return executeTransaction(db, async (tx) => {
     // Read current active version before any mutation.
     const [stateRow] = await tx
@@ -385,6 +411,7 @@ export function registerDrizzleClientBinaryStorage(
   db: MakaioDatabase,
   _ctx: ExtensionContext,
 ): () => void {
+  const { clientBinaryVersions, clientBinaryState } = resolveSchema(db, clientBinarySchema);
   const cleanups = [
     bus.on(ClientBinaryStorageSubjects.insertVersion, async (ctx) => {
       await handleInsertVersion(db, ctx.payload);
@@ -476,6 +503,7 @@ export async function selectVersionsByClientId(
   db: MakaioDatabase,
   clientId: string,
 ): Promise<ClientBinaryVersionRecord[]> {
+  const { clientBinaryVersions } = resolveSchema(db, clientBinarySchema);
   const rows = await db.select().from(clientBinaryVersions).where(eq(clientBinaryVersions.clientId, clientId));
   return rows.map(mapVersionRow);
 }
@@ -492,6 +520,7 @@ export async function selectStateByClientId(
   db: MakaioDatabase,
   clientId: string,
 ): Promise<ClientBinaryStateRecord | undefined> {
+  const { clientBinaryState } = resolveSchema(db, clientBinarySchema);
   const [row] = await db.select().from(clientBinaryState).where(eq(clientBinaryState.clientId, clientId)).limit(1);
   return row ? mapStateRow(row) : undefined;
 }

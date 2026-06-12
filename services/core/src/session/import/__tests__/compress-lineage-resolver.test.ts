@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type SessionMessage } from '@makaio/contracts';
 import { MessageStorageSubjects } from '../../messages/namespace.js';
@@ -102,7 +103,7 @@ describe('registerCompressLineageResolver', () => {
   });
 
   beforeEach(async () => {
-    await testContext.db.run(sql`
+    await getRawSqlExecutor(testContext.db).run(sql`
       CREATE TABLE IF NOT EXISTS messages (
         message_id TEXT PRIMARY KEY,
         turn_id TEXT,

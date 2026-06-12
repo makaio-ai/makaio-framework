@@ -1,0 +1,4 @@
+DELETE FROM "workflow_run_contexts" WHERE "execution_id" NOT IN (SELECT "id" FROM "workflow_executions");--> statement-breakpoint
+DELETE FROM "worklog_summaries" WHERE "execution_id" NOT IN (SELECT "id" FROM "workflow_executions");--> statement-breakpoint
+ALTER TABLE "workflow_run_contexts" ADD CONSTRAINT "workflow_run_contexts_execution_id_workflow_executions_id_fk" FOREIGN KEY ("execution_id") REFERENCES "workflow_executions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "worklog_summaries" ADD CONSTRAINT "worklog_summaries_execution_id_workflow_executions_id_fk" FOREIGN KEY ("execution_id") REFERENCES "workflow_executions"("id") ON DELETE cascade ON UPDATE no action;

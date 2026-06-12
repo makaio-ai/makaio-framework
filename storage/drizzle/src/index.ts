@@ -53,13 +53,25 @@ export { createStorageNamespace } from '@makaio/storage-core';
 // Canonical database type alias — import MakaioDatabase from here, not from drizzle-orm/libsql
 export type { MakaioDatabase } from './types';
 
+// Storage dialect brand — attached by the client factory, read via getDatabaseDialect
+export { DATABASE_DIALECT, getDatabaseDialect, type StorageDialect } from './types';
+
+// Dialect-portable raw SQL executor — the only sanctioned path for raw statements
+export { getRawSqlExecutor, type RawSqlExecutor, type RawSqlSession } from './raw-sql';
+
+// Dialect-aware error classification
+export { isDuplicateObjectError, isUniqueViolationError } from './errors';
+
 export { executeTransaction, type TransactionCallback } from './transaction';
 
 // FTS5 query utilities
 export { sanitizeFtsQuery } from './fts';
 
 // Cross-driver write-result normalisation
-export { didAffectRows, affectedRowCount } from './result';
+export { didAffectRows, affectedRowCount, type DrizzleWriteResult } from './result';
 
 // Typed registration helper — isolates the single db cast at the Drizzle boundary
 export { registerDrizzleHandlers, type DrizzleHandlerRegistration } from './register-handlers';
+
+// Dialect schema variants — twins resolved per handle at registration time
+export { defineDialectSchema, resolveSchema, type DialectSchema, type PostgresTwinSchema, type Equal } from './dialect';

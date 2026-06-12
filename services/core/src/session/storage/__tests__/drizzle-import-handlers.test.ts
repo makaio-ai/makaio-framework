@@ -384,7 +384,7 @@ describe('Drizzle session import storage handlers', () => {
   });
 
   it('does not re-emit completion when importStatus is already at the requested value', async () => {
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       INSERT INTO sessions (
         session_id, created_at, last_activity_at, status, adapter_name,
         adapter_session_id, is_imported, source, import_status

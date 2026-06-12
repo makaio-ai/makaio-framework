@@ -3,21 +3,20 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionStorageSubjects } from '../namespace.js';
 import { createTestDb, type TestDbContext } from './shared.js';
 
 describe('list with includePreview', () => {
   let ctx: TestDbContext;
-  let db: MakaioDatabase;
+  let exec: TestDbContext['exec'];
 
   beforeEach(async () => {
     ctx = await createTestDb();
-    db = ctx.db;
+    exec = ctx.exec;
 
     // Create messages table for conversation content
-    await db.run(sql`
+    await exec(sql`
       CREATE TABLE IF NOT EXISTS messages (
         message_id TEXT PRIMARY KEY,
         turn_id TEXT,
@@ -39,7 +38,7 @@ describe('list with includePreview', () => {
 
   it('should return sessions with title when available', async () => {
     // Create session with title
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-1', 1000, 2000, 'active', 'My Test Session')
     `);
@@ -61,13 +60,13 @@ describe('list with includePreview', () => {
 
   it('should include first user message in preview', async () => {
     // Create session without title
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status)
       VALUES ('session-2', 1000, 2000, 'active')
     `);
 
     // Add user message
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, session_id, role, content_text, timestamp)
       VALUES ('msg-1', 'session-2', 'user', 'Hello world!', 1500)
     `);
@@ -88,7 +87,7 @@ describe('list with includePreview', () => {
   });
 
   it('should order by lastActivityAt descending', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES
         ('old-session', 1000, 1000, 'active', 'Old'),
@@ -106,7 +105,7 @@ describe('list with includePreview', () => {
   it('should support pagination', async () => {
     // Create 5 sessions
     for (let i = 1; i <= 5; i++) {
-      await db.run(sql`
+      await exec(sql`
         INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
         VALUES (${`session-${i}`}, ${i * 1000}, ${i * 1000}, 'active', ${`Session ${i}`})
       `);
@@ -129,7 +128,7 @@ describe('list with includePreview', () => {
   });
 
   it('should scope preview and counts to paginated sessions only', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES
         ('page-session-1', 1000, 3000, 'active', 'Page 1'),
@@ -137,7 +136,7 @@ describe('list with includePreview', () => {
         ('off-page-session', 1000, 1000, 'active', 'Off Page')
     `);
 
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO messages (message_id, session_id, role, content_text, timestamp)
       VALUES
         ('p1-user-1', 'page-session-1', 'user', 'Preview for page session 1', 1100),
@@ -161,7 +160,7 @@ describe('list with includePreview', () => {
   });
 
   it('should filter by status', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES
         ('active-session', 1000, 1000, 'active', 'Active'),
@@ -190,7 +189,7 @@ describe('list with includePreview', () => {
   });
 
   it('should not include preview when includePreview is false', async () => {
-    await db.run(sql`
+    await exec(sql`
       INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
       VALUES ('session-1', 1000, 2000, 'active', 'My Test Session')
     `);

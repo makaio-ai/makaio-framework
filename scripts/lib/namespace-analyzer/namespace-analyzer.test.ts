@@ -124,6 +124,30 @@ describe('extractNamespaces', () => {
     ]);
   });
 
+  it('extracts createContractStorageNamespace factory calls', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        declare function createContractStorageNamespace(domain: string, config: { schemas: unknown }): unknown;
+
+        export const DemoStorageNamespace = createContractStorageNamespace('demo', {
+          schemas: {
+            get: { request: {}, response: {} },
+          },
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces).toMatchObject([
+      {
+        prefix: 'storage:demo',
+        kind: 'storage',
+        subjects: [{ key: 'get', wire: 'storage:demo.get', type: 'rpc' }],
+      },
+    ]);
+  });
+
   it('extracts subjects from config shorthand schemas', () => {
     const root = createTempProject({
       'namespace.ts': `

@@ -85,7 +85,7 @@
     "test:sdk:python": "PYTHONPATH=sdks/python/src python3 -m pytest sdks/python/tests",
     "test:sdk:rust": "cd sdks/rust && cargo test && cargo test --examples",
     "test:sdks": "vitest run --config sdks/vitest.e2e.config.ts",
-    "validate": "bun scripts/validate-build-surface.ts && yarn validate:package-overview && yarn validate:sdk-codegen && bun scripts/validate.ts --tsconfig tsconfig.json --tools biome,eslint,typescript",
+    "validate": "bun scripts/validate-build-surface.ts && bun scripts/validate-raw-sql.ts && yarn validate:package-overview && yarn validate:sdk-codegen && bun scripts/validate.ts --tsconfig tsconfig.json --tools biome,eslint,typescript",
     "validate:biome": "bun scripts/validate.ts --no-fix --tool biome",
     "validate:prettier": "bun scripts/validate.ts --no-fix --tool prettier",
     "validate:eslint": "bun scripts/validate.ts --no-fix --tool eslint",

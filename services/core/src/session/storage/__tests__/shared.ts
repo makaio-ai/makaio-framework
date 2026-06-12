@@ -63,7 +63,7 @@ export type { TestDbContextWithCleanup as TestDbContext };
  * @returns Test database context with cleanup that removes temp file
  */
 export async function createTestDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('session');
+  const { db, close, dbPath, exec } = await createTempDb('session');
   const handlerCleanups: Array<() => void> = [];
   const cleanupHandlers = (): void => {
     for (let i = handlerCleanups.length - 1; i >= 0; i--) {
@@ -83,7 +83,7 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
     // Combined cleanup: unsubscribe handlers, close client, delete temp file
     const cleanup = createDbCleanup(cleanupHandlers, close, dbPath);
 
-    return { db, close, dbPath, cleanup };
+    return { db, close, dbPath, exec, cleanup };
   } catch (error) {
     // Setup can fail after the temp DB exists; tear it down eagerly to avoid leaking
     // file handles or partially registered bus handlers into later tests.
@@ -101,6 +101,13 @@ export async function createTestDb(): Promise<TestDbContextWithCleanup> {
 export interface DrizzleTestContext {
   /** Drizzle database instance (available after `beforeEach`). */
   get db(): MakaioDatabase;
+
+  /**
+   * Execute a raw SQL statement through the database's dialect-portable
+   * executor — the designated path for hand-written DDL/DML in test setups.
+   * Row-returning reads go through `getRawSqlExecutor(db).all(...)` instead.
+   */
+  exec: TestDbContextWithCleanup['exec'];
 }
 
 /**
@@ -113,10 +120,12 @@ export interface DrizzleTestContext {
 export function useDrizzleTestLifecycle(): DrizzleTestContext {
   let cleanup: (() => void) | undefined;
   let db: MakaioDatabase | undefined;
+  let exec: TestDbContextWithCleanup['exec'] | undefined;
 
   beforeEach(async () => {
     const ctx = await createTestDb();
     db = ctx.db;
+    exec = ctx.exec;
     cleanup = ctx.cleanup;
   });
 
@@ -124,6 +133,7 @@ export function useDrizzleTestLifecycle(): DrizzleTestContext {
     cleanup?.();
     cleanup = undefined;
     db = undefined;
+    exec = undefined;
   });
 
   return {
@@ -132,6 +142,12 @@ export function useDrizzleTestLifecycle(): DrizzleTestContext {
         throw new Error('useDrizzleTestLifecycle: test DB not initialized');
       }
       return db;
+    },
+    exec(query) {
+      if (!exec) {
+        throw new Error('useDrizzleTestLifecycle: test DB not initialized');
+      }
+      return exec(query);
     },
   };
 }

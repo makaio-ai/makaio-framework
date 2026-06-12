@@ -8,7 +8,8 @@
  * @packageDocumentation
  */
 
-import { integer, sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { epochMs, jsonCol } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Persistent store for client runtime records.
@@ -51,19 +52,19 @@ export const clientRuntimes = sqliteTable(
     cwd: text('cwd'),
 
     /** Full argv of the client process as a JSON array. */
-    argv: text('argv', { mode: 'json' }).$type<string[]>(),
+    argv: jsonCol<string[]>('argv'),
 
     /** Arbitrary pass-through metadata from the most recent observation. */
-    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>(),
+    metadata: jsonCol<Record<string, unknown>>('metadata'),
 
     /** Unix epoch timestamp in milliseconds of the latest captured observation while the row was observed. */
-    observedAt: integer('observed_at').notNull(),
+    observedAt: epochMs('observed_at').notNull(),
 
     /** Unix epoch timestamp in milliseconds when this record was created. */
-    createdAt: integer('created_at').notNull(),
+    createdAt: epochMs('created_at').notNull(),
 
     /** Unix epoch timestamp in milliseconds of the last mutation. */
-    updatedAt: integer('updated_at').notNull(),
+    updatedAt: epochMs('updated_at').notNull(),
   },
   (table) => [
     index('idx_client_runtimes_supervisor_session_id').on(table.supervisorSessionId),

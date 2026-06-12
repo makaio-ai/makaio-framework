@@ -1,11 +1,13 @@
 import { asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowFrameState } from '@makaio/contracts';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowExecutionFrames, type InsertWorkflowExecutionFrame } from './schema.js';
+import type { InsertWorkflowExecutionFrame } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 
-type DbFrameRow = typeof workflowExecutionFrames.$inferSelect;
+type WorkflowExecutionFramesTable = typeof workflowEngineSchema.sqlite.workflowExecutionFrames;
+type DbFrameRow = WorkflowExecutionFramesTable['$inferSelect'];
 
 /**
  * Maps a database row to the `WorkflowFrameState` API type.
@@ -67,6 +69,8 @@ function toFrameDbValues(executionId: string, frame: WorkflowFrameState): Insert
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowExecutionFrames } = resolveSchema(db, workflowEngineSchema);
+
   const unsubSetFrame = bus.on(WorkflowStorageSubjects.setFrame, async (ctx) => {
     const { executionId, frame } = ctx.payload as { executionId: string; frame: WorkflowFrameState };
     const dbValues = toFrameDbValues(executionId, frame);

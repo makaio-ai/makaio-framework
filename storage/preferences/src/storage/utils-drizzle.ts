@@ -1,16 +1,32 @@
 import { eq, and } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { PreferenceValueSchema, type PreferenceKey, type PreferenceItem } from '@makaio/services-core/preferences';
-import { preferences } from './schema.js';
+import { preferencesSchema } from './schema.variants.js';
 import { keyToRow, rowToKey } from './utils-common.js';
 
 /**
+ * Table type alias derived from the preferences dialect variants.
+ *
+ * Used to type the `preferences` parameter in helpers that do not have a
+ * database handle available. Callers must supply the dialect-resolved table
+ * obtained via `resolveSchema`.
+ */
+type PreferencesTable = typeof preferencesSchema.sqlite.preferences;
+
+/**
  * Build Drizzle equality predicates from optional key/category filters.
+ *
+ * The caller is responsible for passing the dialect-resolved table obtained
+ * via `resolveSchema(db, preferencesSchema)`, so that predicates reference
+ * the correct SQLite or Postgres twin.
+ * @param preferences - Dialect-resolved preferences table, obtained via
+ *   `resolveSchema` from the caller's database handle.
  * @param keyFilter - Optional partial key filter
  * @param categoryFilter - Optional category filter
  * @returns Array of Drizzle eq() predicates
  */
 export function buildPreferencePredicates(
+  preferences: PreferencesTable,
   keyFilter?: Partial<PreferenceKey>,
   categoryFilter?: string,
 ): ReturnType<typeof eq>[] {
@@ -50,7 +66,8 @@ export async function queryPreferenceItems(
   keyFilter?: Partial<PreferenceKey>,
   categoryFilter?: string,
 ): Promise<PreferenceItem[]> {
-  const predicates = buildPreferencePredicates(keyFilter, categoryFilter);
+  const { preferences } = resolveSchema(db, preferencesSchema);
+  const predicates = buildPreferencePredicates(preferences, keyFilter, categoryFilter);
 
   const rows =
     predicates.length > 0
@@ -58,8 +75,7 @@ export async function queryPreferenceItems(
           .select()
           .from(preferences)
           .where(and(...predicates))
-          .all()
-      : await db.select().from(preferences).all();
+      : await db.select().from(preferences);
 
   return rows.map((row) => {
     let value: unknown;
@@ -89,9 +105,10 @@ export async function getPreferenceRow(
   db: MakaioDatabase<Record<string, unknown>>,
   key: PreferenceKey,
   category: string,
-): Promise<typeof preferences.$inferSelect | undefined> {
+): Promise<PreferencesTable['$inferSelect'] | undefined> {
+  const { preferences } = resolveSchema(db, preferencesSchema);
   const rowKey = keyToRow(key);
-  return db
+  const [row] = await db
     .select()
     .from(preferences)
     .where(
@@ -103,5 +120,6 @@ export async function getPreferenceRow(
         eq(preferences.category, category),
       ),
     )
-    .get();
+    .limit(1);
+  return row;
 }

@@ -33,9 +33,9 @@ const CREATE_LOG_IMPORT_SETTINGS_TABLE_SQL = sql`
  * @returns cleanup function
  */
 async function createTestDb(): Promise<() => void> {
-  const { db, cleanup: cleanupDb } = await createTempDb('log-import-settings');
+  const { db, exec, cleanup: cleanupDb } = await createTempDb('log-import-settings');
 
-  await db.run(CREATE_LOG_IMPORT_SETTINGS_TABLE_SQL);
+  await exec(CREATE_LOG_IMPORT_SETTINGS_TABLE_SQL);
 
   const handlerCleanup = registerDrizzleLogImportStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
   return () => {

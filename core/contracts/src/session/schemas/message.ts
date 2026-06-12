@@ -30,7 +30,7 @@ export type SessionMessageOrigin = z.infer<typeof SessionMessageOriginSchema>;
  * Design principles:
  * - Single source of truth for conversation content
  * - Blocks preserve full response fidelity (reasoning, tools)
- * - contentText extracted for FTS5 search
+ * - contentText extracted for full-text search
  * - Events remain for lifecycle/audit only
  */
 export const SessionMessageSchema = z.object({
@@ -42,7 +42,7 @@ export const SessionMessageSchema = z.object({
   sessionId: z.string(),
   /** Message role: 'user' or 'assistant' */
   role: SessionMessageRoleSchema,
-  /** Plain text content for FTS5 search */
+  /** Plain text content for full-text search indexing */
   contentText: z.string(),
   /** Structured blocks (text, reasoning, tool_call, tool_output) */
   blocks: z.array(SessionMessageBlockSchema),

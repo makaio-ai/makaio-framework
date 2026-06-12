@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { epochMs, autoPk } from '@makaio/storage-drizzle/columns/sqlite';
 import { messages } from '../messages/schema.js';
 import { sessions } from '../storage/schema.js';
 
@@ -29,7 +30,7 @@ export const sessionEvents = sqliteTable(
      * Auto-increment ID for stable cursor-based pagination.
      * Opaque to consumers — use eventId for external references.
      */
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: autoPk('id'),
 
     /**
      * Makaio session ID (FK to sessions table).
@@ -49,7 +50,7 @@ export const sessionEvents = sqliteTable(
      * Event timestamp (Unix ms).
      * Used for ordering and time-based queries.
      */
-    timestamp: integer('timestamp').notNull(),
+    timestamp: epochMs('timestamp').notNull(),
 
     /**
      * Event type discriminator.

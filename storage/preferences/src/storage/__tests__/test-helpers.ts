@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 export interface PreferencesTestDbContext {
   db: MakaioDatabase;
@@ -18,8 +18,9 @@ export interface LocalStorageMock {
  */
 export async function createPreferencesTestDb(): Promise<PreferencesTestDbContext> {
   const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const executor = getRawSqlExecutor(db);
 
-  await db.run(sql`
+  await executor.run(sql`
     CREATE TABLE IF NOT EXISTS preferences (
       scope TEXT NOT NULL,
       surface TEXT NOT NULL DEFAULT 'any',
@@ -30,7 +31,7 @@ export async function createPreferencesTestDb(): Promise<PreferencesTestDbContex
       updated_at INTEGER NOT NULL
     )
   `);
-  await db.run(sql`
+  await executor.run(sql`
     CREATE UNIQUE INDEX IF NOT EXISTS preferences_pk
     ON preferences(scope, surface, context, viewport, category)
   `);

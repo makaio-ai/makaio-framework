@@ -184,14 +184,14 @@ export type { TestDbContextWithCleanup as TestDbContext };
  * @returns Test database context with cleanup function
  */
 export async function createTestDbForBus(bus: IMakaioBus): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('workflow');
+  const { db, close, dbPath, exec } = await createTempDb('workflow');
 
   await applyMigrations(db, readMigrations(), TEST_MIGRATIONS_TABLE);
 
   const handlerCleanup = registerDrizzleWorkflowStorage(bus, db, makeStubExtensionContext(bus));
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
 
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }
 
 /**

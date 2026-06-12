@@ -1,13 +1,15 @@
 import { eq, and, getTableColumns, sql } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowDefinition } from '@makaio/contracts';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects, type WorkflowListQuery } from './namespace.js';
-import { workflowDefinitions, type InsertWorkflowDefinition } from './schema.js';
+import type { InsertWorkflowDefinition } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 
-type DbDefinitionRow = typeof workflowDefinitions.$inferSelect;
+type WorkflowDefinitionsTable = typeof workflowEngineSchema.sqlite.workflowDefinitions;
+type DbDefinitionRow = WorkflowDefinitionsTable['$inferSelect'];
 
 /**
  * Maps a database row to the `WorkflowDefinition` API type.
@@ -67,6 +69,7 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowDefinitions } = resolveSchema(db, workflowEngineSchema);
   const columns = getTableColumns(workflowDefinitions);
 
   const unsubGet = bus.on(WorkflowStorageSubjects.get, async (ctx) => {

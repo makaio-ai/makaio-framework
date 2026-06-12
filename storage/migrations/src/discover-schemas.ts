@@ -7,6 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { discoverWorkspacePackageJsonPaths, parseWorkspaceGlobs } from '@makaio/utils/workspace-packages';
+import type { StorageDialect } from '@makaio/storage-drizzle';
 
 /**
  * A discovered schema file from a workspace package.
@@ -17,6 +18,19 @@ export interface DiscoveredSchema {
   /** Absolute path to the schema file */
   schemaPath: string;
 }
+
+/**
+ * Shape of the `makaio.drizzleSchema` package.json field.
+ *
+ * - Legacy forms (bare string or string array) mean sqlite-only and remain
+ *   supported for backward compatibility.
+ * - Object form declares both dialect lists explicitly and is required for
+ *   central-tier packages that participate in the Postgres chain.
+ */
+export type DrizzleSchemaDeclaration =
+  | string
+  | string[]
+  | { readonly sqlite?: string | string[]; readonly postgres?: string | string[] };
 
 /**
  * Resolve workspace package globs from the root package.json.
@@ -38,18 +52,57 @@ function resolveWorkspacePatterns(workspaceRoot: string): string[] {
 }
 
 /**
+ * Normalise a declaration field value to a string array.
+ * `undefined` yields an empty array.
+ * @param value - Raw field value from package.json.
+ * @returns Normalised array of paths.
+ */
+function toStringArray(value: string | string[] | undefined): string[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
  * Discover all Drizzle schema files declared in workspace packages.
  *
  * Scans package.json files in the workspace for `makaio.drizzleSchema` fields,
  * resolves relative paths to absolute paths, and validates that files exist.
- * @param workspaceRoot - Absolute path to the workspace root directory
- * @param patterns - Optional workspace glob patterns override. When provided, these
- *   patterns are used instead of the patterns from the root package.json workspaces field.
- * @returns Sorted array of discovered schemas (sorted by package name for deterministic output)
- * @throws Error if a declared schema file does not exist
- * @throws Error if `patterns` is provided as an empty array
+ *
+ * Legacy forms (bare string or string array) are treated as sqlite-only
+ * declarations and remain fully supported.
+ *
+ * Object form `{ sqlite, postgres }` allows a package to declare both dialect
+ * chains at once. The following invariants are enforced on every run:
+ *
+ * - A package declaring only `postgres` entries (and zero `sqlite` entries) is
+ *   a declaration error because SQLite is the baseline dialect.
+ * - Every declared path in **both** dialect lists is existence-checked
+ *   regardless of the requested dialect.
+ *
+ * When `dialect` is `'postgres'`, any package that has SQLite entries but zero
+ *   Postgres entries triggers a generation-time strictness error — all
+ *   central-tier packages must declare Postgres twins before the Postgres chain
+ *   can be generated.
+ * @param workspaceRoot - Absolute path to the workspace root directory.
+ * @param patterns - Optional workspace glob patterns override. When provided,
+ *   these patterns are used instead of the patterns from the root package.json
+ *   workspaces field.
+ * @param dialect - Storage dialect to discover entries for. Defaults to
+ *   `'sqlite'`. Legacy forms are always interpreted as sqlite-only.
+ * @returns Sorted array of discovered schemas (sorted by package name then path
+ *   for deterministic output).
+ * @throws Error if a declared schema file does not exist.
+ * @throws Error if `patterns` is provided as an empty array.
+ * @throws Error if a package declares `postgres` entries but no `sqlite`
+ *   entries (declaration error, every dialect run).
+ * @throws Error if `dialect` is `'postgres'` and any package has `sqlite`
+ *   entries but zero `postgres` entries (generation-time strictness).
  */
-export async function discoverSchemas(workspaceRoot: string, patterns?: string[]): Promise<DiscoveredSchema[]> {
+export async function discoverSchemas(
+  workspaceRoot: string,
+  patterns?: string[],
+  dialect: StorageDialect = 'sqlite',
+): Promise<DiscoveredSchema[]> {
   if (patterns && patterns.length === 0) {
     throw new Error('discoverSchemas: patterns override must contain at least one glob');
   }
@@ -66,7 +119,7 @@ export async function discoverSchemas(workspaceRoot: string, patterns?: string[]
     const pkg = JSON.parse(pkgContent) as {
       name?: string;
       makaio?: {
-        drizzleSchema?: string | string[];
+        drizzleSchema?: DrizzleSchemaDeclaration;
       };
     };
 
@@ -74,25 +127,62 @@ export async function discoverSchemas(workspaceRoot: string, patterns?: string[]
       continue;
     }
 
+    const packageName = pkg.name;
     const packageDir = path.dirname(pkgPath);
-    const schemaPaths = Array.isArray(pkg.makaio.drizzleSchema) ? pkg.makaio.drizzleSchema : [pkg.makaio.drizzleSchema];
+    const declaration = pkg.makaio.drizzleSchema;
 
-    for (const schemaPath of schemaPaths) {
+    // Normalise to { sqlite, postgres } for uniform handling.
+    // Legacy forms (string | string[]) map to sqlite-only.
+    let sqlitePaths: string[];
+    let postgresPaths: string[];
+
+    if (typeof declaration === 'string' || Array.isArray(declaration)) {
+      // Legacy form — sqlite-only, no postgres entries.
+      sqlitePaths = toStringArray(declaration);
+      postgresPaths = [];
+    } else {
+      // Object form.
+      sqlitePaths = toStringArray(declaration.sqlite);
+      postgresPaths = toStringArray(declaration.postgres);
+    }
+
+    // Declaration error (every dialect run): postgres entries without sqlite entries.
+    if (postgresPaths.length > 0 && sqlitePaths.length === 0) {
+      throw new Error(
+        `Package "${packageName}" declares makaio.drizzleSchema with 'postgres' entries but no 'sqlite' entries. ` +
+          `SQLite is the baseline dialect; declare the sqlite schema files as well.`,
+      );
+    }
+
+    // Generation-time strictness (postgres run only): sqlite entries with no postgres entries.
+    if (dialect === 'postgres' && sqlitePaths.length > 0 && postgresPaths.length === 0) {
+      throw new Error(
+        `Package "${packageName}" declares makaio.drizzleSchema without a 'postgres' entry. ` +
+          `Central-tier schema packages must declare Postgres twins ({ "sqlite": [...], "postgres": [...] }) ` +
+          `before the postgres chain can be generated.`,
+      );
+    }
+
+    // Existence-check EVERY declared path in BOTH dialect lists, regardless of
+    // the requested dialect. A missing postgres twin file fails even the sqlite run.
+    const allDeclaredPaths = [...sqlitePaths, ...postgresPaths];
+    for (const schemaPath of allDeclaredPaths) {
       const absolutePath = path.resolve(packageDir, schemaPath);
 
-      // Validate that schema file exists
       if (!fs.existsSync(absolutePath)) {
         throw new Error(
           `Schema file not found: ${absolutePath}\n` +
-            `Declared in ${pkg.name} (${pkgPath})\n` +
+            `Declared in ${packageName} (${pkgPath})\n` +
             `Relative path: ${schemaPath}`,
         );
       }
+    }
 
-      discovered.push({
-        packageName: pkg.name,
-        schemaPath: absolutePath,
-      });
+    // Return only the requested dialect's entries.
+    const dialectPaths = dialect === 'postgres' ? postgresPaths : sqlitePaths;
+    for (const schemaPath of dialectPaths) {
+      const absolutePath = path.resolve(packageDir, schemaPath);
+      discovered.push({ packageName, schemaPath: absolutePath });
     }
   }
 

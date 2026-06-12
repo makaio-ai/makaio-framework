@@ -80,7 +80,7 @@ describe('createDrizzleListHandler', () => {
     ctx = await createTempDb('list-handler');
 
     // Create test table
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       CREATE TABLE test_items (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

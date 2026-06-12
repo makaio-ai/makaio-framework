@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioBus } from '@makaio/bus-core';
@@ -129,7 +130,8 @@ describe('registerSpawningToolCallResolver', () => {
   });
 
   beforeEach(async () => {
-    await testContext.db.run(sql`
+    const rawSql = getRawSqlExecutor(testContext.db);
+    await rawSql.run(sql`
       CREATE TABLE IF NOT EXISTS turns (
         turn_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -140,7 +142,7 @@ describe('registerSpawningToolCallResolver', () => {
         usage TEXT
       )
     `);
-    await testContext.db.run(sql`
+    await rawSql.run(sql`
       CREATE TABLE IF NOT EXISTS messages (
         message_id TEXT PRIMARY KEY,
         turn_id TEXT REFERENCES turns(turn_id) ON DELETE CASCADE,
@@ -427,7 +429,7 @@ describe('registerSpawningToolCallResolver', () => {
       ]),
     ];
 
-    await testContext.db.run(sql`
+    await getRawSqlExecutor(testContext.db).run(sql`
       UPDATE sessions
       SET spawning_tool_call_id = NULL
       WHERE session_id = 'child-session-a'

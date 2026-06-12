@@ -6,21 +6,23 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/libsql';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createDatabaseClient, type DatabaseClient } from '../client';
+import { brandDatabase, createDatabaseClient, type DatabaseClient } from '../client';
+import { getRawSqlExecutor } from '../raw-sql';
 import { executeTransaction } from '../transaction';
 
 describe('executeTransaction', () => {
   let openClients: DatabaseClient[] = [];
   let filesToCleanup: string[] = [];
 
-  afterEach(() => {
+  afterEach(async () => {
     const closeErrors: unknown[] = [];
     for (const client of openClients) {
       try {
-        client.close();
+        await client.close();
       } catch (error) {
         closeErrors.push(error);
       }
@@ -50,7 +52,9 @@ describe('executeTransaction', () => {
   it('serializes concurrent transactions on the same database connection', async () => {
     const dbFilePath = trackDbFile(path.join(os.tmpdir(), `makaio-transaction-test-${crypto.randomUUID()}.db`));
     const { db } = track(await createDatabaseClient({ url: `file:${dbFilePath}` }));
-    await db.run(sql`CREATE TABLE transaction_queue_test (id TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    await getRawSqlExecutor(db).run(
+      sql`CREATE TABLE transaction_queue_test (id TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+    );
 
     const events: string[] = [];
     let releaseFirst = (): void => {};
@@ -81,9 +85,54 @@ describe('executeTransaction', () => {
     releaseFirst();
     await Promise.all([first, second]);
 
-    const rows = await db.all<{ id: string }>(sql`SELECT id FROM transaction_queue_test ORDER BY id`);
+    const rows = await getRawSqlExecutor(db).all<{ id: string }>(
+      sql`SELECT id FROM transaction_queue_test ORDER BY id`,
+    );
     expect(rows.map((row) => row.id)).toEqual(['first', 'second']);
     expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('serializes postgres-branded handles through the same per-handle queue', async () => {
+    // Real in-memory libsql drizzle database — only the brand differs from a
+    // SQLite handle. The executor view claims 'postgres' to satisfy the brand
+    // consistency guard. Pins the serialization contract: a 'postgres' brand
+    // must NOT bypass the queue — read-modify-write callers rely on callbacks
+    // observing each other's commits, which MVCC alone does not provide.
+    const rawDb = drizzle({ connection: { url: ':memory:' } });
+    try {
+      const db = brandDatabase(rawDb, 'postgres', { ...getRawSqlExecutor(rawDb), dialect: 'postgres' as const });
+
+      const events: string[] = [];
+      let releaseFirst = (): void => {};
+      let resolveFirstStarted = (): void => {};
+      const firstStarted = new Promise<void>((resolve) => {
+        resolveFirstStarted = resolve;
+      });
+      const first = executeTransaction(db, async () => {
+        events.push('first:start');
+        resolveFirstStarted();
+        await new Promise<void>((release) => {
+          releaseFirst = release;
+        });
+        events.push('first:end');
+      });
+
+      await firstStarted;
+      const second = executeTransaction(db, async () => {
+        events.push('second:done');
+      });
+
+      // Give a hypothetical bypass ample time to start the second callback
+      // while the first transaction is still open — the queue must hold it.
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      expect(events).toEqual(['first:start']);
+
+      releaseFirst();
+      await Promise.all([first, second]);
+      expect(events).toEqual(['first:start', 'first:end', 'second:done']);
+    } finally {
+      rawDb.$client.close();
+    }
   });
 });
 

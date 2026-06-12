@@ -23,3 +23,4 @@ export type {
 } from './types.js';
 export type { LogImporterInfo } from './schemas/index.js';
 export { registerDrizzleLogImportStorage, rowToSettings } from './storage/handlers.js';
+export { LogImportNamespace, LogImportSubjects } from './namespace.js';

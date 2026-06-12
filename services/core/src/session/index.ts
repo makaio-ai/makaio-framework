@@ -82,6 +82,7 @@ export {
   fetchMessageCountsBySession,
   fetchPreviewBySession,
   fetchSessionPreviewMaps,
+  getSessionAncestorChain,
   mapAgentsBySession,
   mapRowToSession,
   mapToSession,
@@ -122,7 +123,8 @@ export { importCursors } from './import-cursors/schema.js';
 // Search (FTS5) - schema documented in ./search/schema.ts, no runtime exports
 // FTS is handled via raw SQL in handlers
 
-// Embeddings module exists but table excluded from schema (not wired up)
+// Embeddings (per-model tables created on demand by the manager; excluded from the central schema)
+export { EmbeddingIndexManager } from './embeddings/index.js';
 
 // Normalized message model (Phase 1)
 export {

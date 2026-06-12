@@ -1,5 +1,5 @@
 import { eq, and, desc, lt, or } from 'drizzle-orm';
-import { executeTransaction, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
 import type {
@@ -10,7 +10,8 @@ import type {
   WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
-import { workflowExecutions, workflowGateInstances, type InsertWorkflowExecution } from './schema.js';
+import type { InsertWorkflowExecution } from './schema.js';
+import { workflowEngineSchema } from './schema.variants.js';
 import { registerDefinitionHandlers } from './definition-handler.js';
 import { registerFrameHandlers } from './frame-handler.js';
 import { mapGateInstance, registerGateInstanceHandlers, toGateDbValues } from './gate-handler.js';
@@ -19,7 +20,13 @@ import { registerRunContextHandlers, upsertWorkflowRunContext } from './run-cont
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
 
-type DbExecutionRow = typeof workflowExecutions.$inferSelect;
+// The `.sqlite` face is the canonical static type for BOTH dialects:
+// `DialectSchema` presents the Postgres twins through the same SQLite-typed
+// face and `defineDialectSchema` rejects select-row drift between the twins at
+// compile time, so this alias is exactly the type `resolveSchema()` returns at
+// runtime regardless of the active dialect.
+type WorkflowExecutionsTable = typeof workflowEngineSchema.sqlite.workflowExecutions;
+type DbExecutionRow = WorkflowExecutionsTable['$inferSelect'];
 
 /**
  * Maps a database row to the `WorkflowExecution` API type.
@@ -77,6 +84,8 @@ function toExecutionDbValues(execution: WorkflowExecution): InsertWorkflowExecut
  * @param status - Optional execution status filter.
  * @param cursor - Optional pagination cursor.
  * @param artifactRef - Optional bound artifact reference filter (exact kind + id match).
+ * @param workflowExecutions - Dialect-resolved table object, supplied by the
+ *   caller after resolving from a branded handle via `resolveSchema`.
  * @returns Array of SQL predicates for use in a `.where(and(...predicates))` clause.
  */
 function buildExecutionListPredicates(
@@ -85,6 +94,7 @@ function buildExecutionListPredicates(
   status: InsertWorkflowExecution['status'] | undefined,
   cursor: { startedAt: number; id: string } | undefined,
   artifactRef: { kind: string; id: string } | undefined,
+  workflowExecutions: WorkflowExecutionsTable,
 ) {
   const predicates = [
     ...(workflowId ? [eq(workflowExecutions.workflowId, workflowId)] : []),
@@ -120,13 +130,14 @@ async function upsertExecutionStart(
   if (runContext.executionId !== execution.id) {
     throw new Error('setExecutionStart requires execution.id to match runContext.executionId');
   }
+  const { workflowExecutions, workflowRunContexts } = resolveSchema(db, workflowEngineSchema);
   const dbValues = toExecutionDbValues(execution);
   await executeTransaction(db, async (tx) => {
     await tx.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
       target: workflowExecutions.id,
       set: dbValues,
     });
-    await upsertWorkflowRunContext(tx, runContext);
+    await upsertWorkflowRunContext(tx, runContext, workflowRunContexts);
   });
 }
 
@@ -147,6 +158,7 @@ async function restorePausedGateResumeState(
   if (execution.status !== 'paused' || gate.status !== 'waiting') {
     throw new Error('restorePausedGateResumeState requires a paused execution and waiting gate');
   }
+  const { workflowExecutions, workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
   const executionValues = toExecutionDbValues(execution);
   const gateValues = toGateDbValues(gate);
   await executeTransaction(db, async (tx) => {
@@ -178,6 +190,7 @@ async function cancelPausedExecution(
   readonly cancelled: boolean;
   readonly gates: Array<WorkflowGateInstance & { readonly status: 'cancelled' }>;
 }> {
+  const { workflowExecutions, workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
   return executeTransaction(db, async (tx) => {
     const executionRows = await tx
       .select()
@@ -228,6 +241,7 @@ async function applyExecutionUpdate(
   reason: string | null | undefined,
   completedAt: number | null | undefined,
 ): Promise<boolean> {
+  const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
   return executeTransaction(db, async (tx) => {
     const existing = await tx
       .select({ id: workflowExecutions.id })
@@ -256,6 +270,8 @@ async function applyExecutionUpdate(
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
 function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
+
   const unsubGetExecution = bus.on(WorkflowStorageSubjects.getExecution, async (ctx) => {
     const { executionId } = ctx.payload;
     const rows = await db.select().from(workflowExecutions).where(eq(workflowExecutions.id, executionId));
@@ -312,7 +328,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
       throw new Error('Either workflowId, scope, or artifactRef is required to list executions.');
     }
 
-    const predicates = buildExecutionListPredicates(workflowId, scope, status, cursor, artifactRef);
+    const predicates = buildExecutionListPredicates(workflowId, scope, status, cursor, artifactRef, workflowExecutions);
     // Limits are declared with ExecutionListQuerySchema, but production bus dispatch
     // does not parse schemas, so enforce the bounded-list invariant here as well.
     const resolvedLimit = limit ?? EXECUTION_LIST_DEFAULT_LIMIT;

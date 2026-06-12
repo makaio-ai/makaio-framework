@@ -67,12 +67,12 @@ export type { TestDbContextWithCleanup as TestDbContext };
  * @returns Test database context with cleanup function
  */
 export async function createTestDb(): Promise<TestDbContextWithCleanup> {
-  const { db, close, dbPath } = await createTempDb('harness');
+  const { db, close, dbPath, exec } = await createTempDb('harness');
 
-  await db.run(CREATE_HARNESS_TABLE_SQL);
+  await exec(CREATE_HARNESS_TABLE_SQL);
 
   const handlerCleanup = registerDrizzleHarnessStorage(MakaioBus, db, makeStubExtensionContext(MakaioBus));
   const cleanup = createDbCleanup(handlerCleanup, close, dbPath);
 
-  return { db, close, dbPath, cleanup };
+  return { db, close, dbPath, exec, cleanup };
 }

@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, index, primaryKey } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 import { messages } from '../messages/schema.js';
 
 /**
@@ -41,7 +42,7 @@ export const messageRouting = sqliteTable(
     /**
      * Status change timestamp (Unix ms).
      */
-    timestamp: integer('timestamp').notNull(),
+    timestamp: epochMs('timestamp').notNull(),
 
     /**
      * Error message if routing failed.

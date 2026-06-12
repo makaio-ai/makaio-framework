@@ -16,23 +16,51 @@ next: false
 | Schema record | `<inline>` |
 | Tier | framework |
 | Package | `@makaio/contracts` |
-| Defined in | [`packages/contracts/src/session/session-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/packages/contracts/src/session/session-storage-namespace.ts) |
+| Defined in | [`core/contracts/src/session/session-storage-namespace.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/session-storage-namespace.ts) |
 
 ## Subjects
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `countBySource` | [`storage:session.countBySource`](#storage:session.countBySource) | rpc | — |
 | `delete` | [`storage:session.delete`](#storage:session.delete) | rpc | — |
 | `get` | [`storage:session.get`](#storage:session.get) | rpc | — |
 | `getByAdapterSessionId` | [`storage:session.getByAdapterSessionId`](#storage:session.getByAdapterSessionId) | rpc | — |
+| `getByLogFilePath` | [`storage:session.getByLogFilePath`](#storage:session.getByLogFilePath) | rpc | — |
 | `getChildren` | [`storage:session.getChildren`](#storage:session.getChildren) | rpc | — |
 | `getStatusCounts` | [`storage:session.getStatusCounts`](#storage:session.getStatusCounts) | rpc | — |
+| `importUpsert` | [`storage:session.importUpsert`](#storage:session.importUpsert) | rpc | — |
 | `list` | [`storage:session.list`](#storage:session.list) | rpc | — |
+| `listImported` | [`storage:session.listImported`](#storage:session.listImported) | rpc | — |
 | `search` | [`storage:session.search`](#storage:session.search) | rpc | — |
 | `set` | [`storage:session.set`](#storage:session.set) | rpc | — |
 | `update` | [`storage:session.update`](#storage:session.update) | rpc | — |
+| `updateImportStatus` | [`storage:session.updateImportStatus`](#storage:session.updateImportStatus) | rpc | — |
 
 ## Subject Details
+
+### <a id="storage:session.countBySource"></a>`storage:session.countBySource` (rpc)
+
+Count imported sessions grouped by importStatus for a given source.
+Used by the UI dashboard to display import progress.
+
+Subject: `storage:session.countBySource`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `source` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `discovered` | `number` | yes |
+| `imported` | `number` | yes |
+| `total` | `number` | yes |
+| `tracking` | `number` | yes |
 
 ### <a id="storage:session.delete"></a>`storage:session.delete` (rpc)
 
@@ -70,7 +98,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]; status: "discovered" \| "active" \| "closed" \| "archived"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; } \| null` | yes |
+| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; } \| null` | yes |
 
 ### <a id="storage:session.getByAdapterSessionId"></a>`storage:session.getByAdapterSessionId` (rpc)
 
@@ -84,12 +112,33 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterSessionId` | `string` | yes |
+| `source` | `string \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]; status: "discovered" \| "active" \| "closed" \| "archived"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; } \| null` | yes |
+| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; } \| null` | yes |
+
+### <a id="storage:session.getByLogFilePath"></a>`storage:session.getByLogFilePath` (rpc)
+
+Get a session by its source log file path.
+Used by the discovery orchestrator for cursor resumption.
+
+Subject: `storage:session.getByLogFilePath`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `logFilePath` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; } \| null` | yes |
 
 ### <a id="storage:session.getChildren"></a>`storage:session.getChildren` (rpc)
 
@@ -131,6 +180,39 @@ _Empty object._
 | `closed` | `number` | yes |
 | `discovered` | `number` | yes |
 
+### <a id="storage:session.importUpsert"></a>`storage:session.importUpsert` (rpc)
+
+Creates or updates an imported session record. On first discovery, creates a new
+session with `status='discovered'`. On subsequent calls, enriches existing records
+with COALESCE semantics so later scans can supply previously-unknown values without
+overwriting already-populated ones.
+
+Subject: `storage:session.importUpsert`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterId` | `string \| undefined` | no |
+| `clientId` | `string \| undefined` | no |
+| `cwd` | `string \| null` | yes |
+| `externalSessionId` | `string` | yes |
+| `forkPointMessageId` | `string \| null` | yes |
+| `kind` | `"fork" \| "root" \| "subagent" \| "compress"` | yes |
+| `logFilePath` | `string \| null \| undefined` | no |
+| `parentAdapterSessionId` | `string \| null` | yes |
+| `source` | `string` | yes |
+| `startedAt` | `number \| undefined` | no |
+| `title` | `string \| null \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `created` | `boolean` | yes |
+| `sessionId` | `string` | yes |
+
 ### <a id="storage:session.list"></a>`storage:session.list` (rpc)
 
 List sessions with optional status filter and preview data.
@@ -146,18 +228,39 @@ Type: Request (RPC)
 | `includePreview` | `boolean \| undefined` | no |
 | `limit` | `number \| undefined` | no |
 | `offset` | `number \| undefined` | no |
-| `status` | `"discovered" \| "active" \| "closed" \| "archived" \| "all" \| undefined` | no |
+| `status` | `"all" \| "active" \| "archived" \| "closed" \| "discovered" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `sessions` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]; status: "discovered" \| "active" \| "closed" \| "archived"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; preview?: { messageCount: number; firstUserMessage: string \| null; } \| undefined; }[]` | yes |
+| `sessions` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; preview?: { messageCount: number; firstUserMessage: string \| null; } \| undefined; }[]` | yes |
 | `total` | `number` | yes |
+
+### <a id="storage:session.listImported"></a>`storage:session.listImported` (rpc)
+
+List imported sessions with optional source filter.
+
+Subject: `storage:session.listImported`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `importStatus` | `"discovered" \| "imported" \| "tracking" \| undefined` | no |
+| `source` | `string \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `sessions` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; }[]` | yes |
 
 ### <a id="storage:session.search"></a>`storage:session.search` (rpc)
 
-Search sessions by content using FTS5.
+Search sessions by message content (full-text: FTS5 on SQLite,
+tsvector on Postgres) and session title (LIKE on both dialects).
 
 Subject: `storage:session.search`
 Type: Request (RPC)
@@ -169,13 +272,13 @@ Type: Request (RPC)
 | `isImported` | `boolean \| undefined` | no |
 | `limit` | `number \| undefined` | no |
 | `query` | `string` | yes |
-| `status` | `"discovered" \| "active" \| "closed" \| "archived" \| "all" \| undefined` | no |
+| `status` | `"all" \| "active" \| "archived" \| "closed" \| "discovered" \| undefined` | no |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `sessions` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]; status: "discovered" \| "active" \| "closed" \| "archived"; preview: { messageCount: number; firstUserMessage: string \| null; }; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; }[]` | yes |
+| `sessions` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; preview: { messageCount: number; firstUserMessage: string \| null; }; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; }[]` | yes |
 | `total` | `number` | yes |
 
 ### <a id="storage:session.set"></a>`storage:session.set` (rpc)
@@ -190,7 +293,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `ifAbsent` | `boolean \| undefined` | no |
-| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "auto" \| "manual" \| "off" \| undefined; }[]; status: "discovered" \| "active" \| "closed" \| "archived"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; }` | yes |
+| `session` | `{ sessionId: string; createdAt: number; lastActivityAt: number; agents: { agentId: string; adapterId: string; adapterName: string; sessionId: string; role: "lead" \| "member"; status: "active" \| "idle" \| "dead" \| "disposed"; createdAt: number; lastActivityAt: number; adapterSessionId?: string \| undefined; model?: string \| undefined; cwd?: string \| undefined; providerConfigId?: string \| undefined; personaId?: string \| undefined; profileId?: string \| undefined; harnessId?: string \| undefined; clientId?: string \| undefined; compressionMode?: "manual" \| "auto" \| "off" \| undefined; }[]; status: "active" \| "archived" \| "closed" \| "discovered"; leadAgentId?: string \| undefined; parentSessionId?: string \| undefined; contextInheritance?: "none" \| "parent-history" \| undefined; rootSessionId?: string \| undefined; forkPointMessageId?: string \| undefined; branchKind?: "fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; adapterId?: string \| undefined; clientId?: string \| undefined; clientAccountId?: string \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; isOrchestrated?: boolean \| undefined; title?: string \| undefined; summary?: string \| undefined; summaryUpdatedAt?: number \| undefined; isImported?: boolean \| undefined; forkTransforms?: { removedMessageIds?: string[] \| undefined; appliedPipeline?: { actionId: string; options?: Record<string, unknown> \| undefined; }[] \| undefined; segments?: { fromMessageId: string; toMessageId: string; policy: "verbatim" \| "summarize" \| "exclude"; stripReasoning?: boolean \| undefined; stripToolOutputs?: boolean \| undefined; overrides?: Record<string, "exclude"> \| undefined; summaryText?: string \| undefined; }[] \| undefined; } \| undefined; targetWorkingDirectory?: string \| undefined; executionTargetId?: string \| undefined; spawningToolCallId?: string \| undefined; approvalPolicyOverride?: "reject" \| "always-ask" \| "full-access" \| null \| undefined; source?: string \| undefined; parentExternalSessionId?: string \| undefined; logFilePath?: string \| undefined; discoveredAt?: number \| undefined; importStatus?: "discovered" \| "imported" \| "tracking" \| undefined; }` | yes |
 | `sessionId` | `string` | yes |
 
 **Response:**
@@ -215,6 +318,7 @@ Type: Request (RPC)
 | `branchKind` | `"fork" \| "subagent" \| "compress" \| "branch" \| "rewrite" \| "coordinator" \| "aside" \| undefined` | no |
 | `clientAccountId` | `string \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
+| `contextInheritance` | `"none" \| "parent-history" \| undefined` | no |
 | `createdAt` | `number \| undefined` | no |
 | `executionTargetId` | `string \| null \| undefined` | no |
 | `forkPointMessageId` | `string \| undefined` | no |
@@ -225,7 +329,7 @@ Type: Request (RPC)
 | `rootSessionId` | `string \| undefined` | no |
 | `sessionId` | `string` | yes |
 | `spawningToolCallId` | `string \| null \| undefined` | no |
-| `status` | `"discovered" \| "active" \| "closed" \| "archived" \| undefined` | no |
+| `status` | `"active" \| "archived" \| "closed" \| "discovered" \| undefined` | no |
 | `targetWorkingDirectory` | `string \| undefined` | no |
 | `title` | `string \| undefined` | no |
 
@@ -234,6 +338,27 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `clientAccountChanged` | `boolean \| undefined` | no |
+| `success` | `boolean` | yes |
+
+### <a id="storage:session.updateImportStatus"></a>`storage:session.updateImportStatus` (rpc)
+
+Update the import-specific status of a session.
+Emits a lifecycle event on successful transition for entity cache reactivity.
+
+Subject: `storage:session.updateImportStatus`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `importStatus` | `"discovered" \| "imported" \| "tracking"` | yes |
+| `sessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
 | `success` | `boolean` | yes |
 
 ---

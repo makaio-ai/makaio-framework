@@ -4,8 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
-import { EmbeddingIndexManager } from '../index-manager.js';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { decodeEmbedding, EmbeddingIndexManager } from '../index-manager.js';
 
 /**
  * Creates an in-memory SQLite database for testing.
@@ -17,8 +17,19 @@ async function createTestDb(): Promise<{ db: MakaioDatabase; cleanup: () => void
   return { db, cleanup: close };
 }
 
-async function selectTableRows<T>(db: MakaioDatabase, tableName: string, columns: string): Promise<T[]> {
-  return db.all<T>(sql.raw(`SELECT ${columns} FROM ${tableName}`));
+/**
+ * Select rows from a dynamically named table through the raw SQL executor.
+ * @param db - Database handle to query.
+ * @param tableName - Table to select from (test-controlled, not user input).
+ * @param columns - Comma-separated column list or `*`.
+ * @returns Rows typed as `T`.
+ */
+async function selectTableRows<T extends Record<string, unknown>>(
+  db: MakaioDatabase,
+  tableName: string,
+  columns: string,
+): Promise<T[]> {
+  return getRawSqlExecutor(db).all<T>(sql.raw(`SELECT ${columns} FROM ${tableName}`));
 }
 
 describe('EmbeddingIndexManager', () => {
@@ -47,7 +58,7 @@ describe('EmbeddingIndexManager', () => {
       await manager.ensureIndexTable('text-embedding-3-small', 1536);
 
       // Verify table exists
-      const tables = await ctx.db.all<{ name: string }>(sql`
+      const tables = await getRawSqlExecutor(ctx.db).all<{ name: string }>(sql`
         SELECT name FROM sqlite_master
         WHERE type='table' AND name='embeddings_idx_text_embedding_3_small_17pbaaf'
       `);
@@ -64,7 +75,7 @@ describe('EmbeddingIndexManager', () => {
       await manager.ensureIndexTable('text-embedding-3-small', 1536);
       await manager.ensureIndexTable('nomic-embed-text', 768);
 
-      const tables = await ctx.db.all<{ name: string }>(sql`
+      const tables = await getRawSqlExecutor(ctx.db).all<{ name: string }>(sql`
         SELECT name FROM sqlite_master
         WHERE type='table' AND name LIKE 'embeddings_idx_%'
         ORDER BY name
@@ -197,5 +208,60 @@ describe('EmbeddingIndexManager', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].entity_id).toBe('session-2');
     });
+  });
+});
+
+describe('decodeEmbedding', () => {
+  // Values exactly representable in IEEE-754 f32, so round-trips compare with toEqual.
+  const floats = [0.25, -1.5, 3.75];
+
+  /**
+   * Encode the fixture floats as f32 bytes at the given offset inside a padded
+   * backing buffer, returning an exact-length byte view at that offset.
+   * @param byteOffset - Offset of the f32 payload inside the backing buffer.
+   * @returns Uint8Array view with `view.byteOffset === byteOffset`.
+   */
+  function encodedViewAt(byteOffset: number): Uint8Array {
+    const payload = new Uint8Array(Float32Array.from(floats).buffer);
+    const backing = new Uint8Array(byteOffset + payload.byteLength);
+    backing.set(payload, byteOffset);
+    return new Uint8Array(backing.buffer, byteOffset, payload.byteLength);
+  }
+
+  it('wraps an ArrayBuffer directly (SQLite driver shape)', () => {
+    const buffer = new ArrayBuffer(floats.length * 4);
+    new Float32Array(buffer).set(floats);
+
+    expect(Array.from(decodeEmbedding(buffer))).toEqual(floats);
+  });
+
+  it('reinterprets a 4-byte-aligned view zero-copy', () => {
+    const view = encodedViewAt(0);
+
+    const decoded = decodeEmbedding(view);
+
+    expect(Array.from(decoded)).toEqual(floats);
+    // Zero-copy contract: the aligned branch shares the backing buffer.
+    expect(decoded.buffer).toBe(view.buffer);
+  });
+
+  it('copies an unaligned Buffer view instead of throwing (node-postgres pool slice shape)', () => {
+    const view = encodedViewAt(2);
+    // node-postgres bytea values are Buffers sliced from the shared pool at
+    // arbitrary offsets — mirror that exact shape (no copy on construction).
+    const pooled = Buffer.from(view.buffer, view.byteOffset, view.byteLength);
+    expect(pooled.byteOffset % 4).not.toBe(0);
+
+    const decoded = decodeEmbedding(pooled);
+
+    expect(Array.from(decoded)).toEqual(floats);
+    // The unaligned branch must copy: sharing the backing buffer would require
+    // a misaligned Float32Array, which the runtime rejects.
+    expect(decoded.buffer).not.toBe(pooled.buffer);
+  });
+
+  it('throws a descriptive error when the byte length is not a multiple of 4', () => {
+    expect(() => decodeEmbedding(new Uint8Array(5))).toThrow(/byte length 5 is not a multiple of 4/);
+    expect(() => decodeEmbedding(new ArrayBuffer(7))).toThrow(/byte length 7 is not a multiple of 4/);
   });
 });

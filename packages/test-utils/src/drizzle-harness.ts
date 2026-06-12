@@ -1,6 +1,12 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { drizzle } from 'drizzle-orm/libsql';
+import { brandDatabase, createDatabaseClient } from '@makaio/storage-drizzle/client';
+import {
+  getRawSqlExecutor,
+  type MakaioDatabase,
+  type RawSqlExecutor,
+  type RawSqlSession,
+} from '@makaio/storage-drizzle';
 import { beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -11,9 +17,19 @@ export interface TestDbContext {
   db: MakaioDatabase;
   /** Path to temp database file */
   dbPath: string;
-  /** Close database connection and delete temp file */
-  close: () => void;
-  /** Combined cleanup: calls close (for convenience in afterEach/afterAll) */
+  /**
+   * Execute a raw SQL statement through the handle's dialect-portable
+   * executor — the designated path for hand-written DDL/DML in test setups.
+   * Row-returning reads go through `getRawSqlExecutor(db).all(...)` instead.
+   */
+  exec: (query: SQL) => Promise<{ rowsAffected: number }>;
+  /** Close the database connection (may resolve asynchronously) */
+  close: () => void | Promise<void>;
+  /**
+   * Combined cleanup: calls close and deletes the temp file (for convenience in afterEach/afterAll).
+   * Requires a synchronously closing connection (true for all SQLite drivers); clients whose close
+   * resolves asynchronously must use an awaited teardown such as {@link PluginTestDbContext.close}.
+   */
   cleanup: () => void;
 }
 
@@ -59,6 +75,12 @@ export interface PluginTestDbContext {
   db: MakaioDatabase;
   /** Path to temp database file */
   dbPath: string;
+  /**
+   * Execute a raw SQL statement through the handle's dialect-portable
+   * executor — the designated path for hand-written DDL/DML in test setups.
+   * Row-returning reads go through `getRawSqlExecutor(db).all(...)` instead.
+   */
+  exec: TestDbContext['exec'];
   /** Clear all table data (fast, for use in beforeEach) */
   clearData: () => Promise<void>;
   /** Register bus handlers, returns cleanup function */
@@ -89,10 +111,11 @@ export interface PluginTestDbConfig {
 export async function createTempDb(name: string): Promise<TestDbContext> {
   const dbPath = path.join(os.tmpdir(), `makaio-${name}-test-${crypto.randomUUID()}.db`);
   const { db, close } = await createDatabaseClient({ url: `file:${dbPath}` });
+  const rawSql = getRawSqlExecutor(db);
   try {
-    await db.run(sql`SELECT 1`);
+    await rawSql.run(sql`SELECT 1`);
   } catch (err) {
-    close();
+    await close();
     try {
       fs.unlinkSync(dbPath);
     } catch {
@@ -101,7 +124,7 @@ export async function createTempDb(name: string): Promise<TestDbContext> {
     throw err;
   }
   const cleanup = createDbCleanup(() => {}, close, dbPath);
-  return { db, dbPath, close, cleanup };
+  return { db, dbPath, exec: (query) => rawSql.run(query), close, cleanup };
 }
 
 /**
@@ -116,13 +139,14 @@ export async function createTempDb(name: string): Promise<TestDbContext> {
 export async function createPluginTestDb(config: PluginTestDbConfig): Promise<PluginTestDbContext> {
   const dbPath = path.join(os.tmpdir(), `makaio-${config.name}-test-${crypto.randomUUID()}.db`);
   const { db, close: closeDb } = await createDatabaseClient({ url: `file:${dbPath}` });
+  const rawSql = getRawSqlExecutor(db);
 
   try {
     for (const schema of config.schemas) {
-      await db.run(schema);
+      await rawSql.run(schema);
     }
   } catch (err) {
-    closeDb();
+    await closeDb();
     try {
       fs.unlinkSync(dbPath);
     } catch {
@@ -133,7 +157,7 @@ export async function createPluginTestDb(config: PluginTestDbConfig): Promise<Pl
 
   const clearData = async (): Promise<void> => {
     for (const table of config.tables) {
-      await db.run(sql.raw(`DELETE FROM ${table}`));
+      await rawSql.run(sql.raw(`DELETE FROM ${table}`));
     }
   };
 
@@ -142,8 +166,9 @@ export async function createPluginTestDb(config: PluginTestDbConfig): Promise<Pl
   };
 
   const close = async (): Promise<void> => {
-    closeDb();
-    await Promise.resolve();
+    // Awaiting tolerates both synchronous and asynchronous driver teardown and
+    // always yields a microtask before the file is unlinked.
+    await closeDb();
     try {
       fs.unlinkSync(dbPath);
     } catch {
@@ -151,13 +176,62 @@ export async function createPluginTestDb(config: PluginTestDbConfig): Promise<Pl
     }
   };
 
-  return { db, dbPath, clearData, registerHandlers, close };
+  return { db, dbPath, exec: (query) => rawSql.run(query), clearData, registerHandlers, close };
+}
+
+/**
+ * Result of {@link createPgBrandedTestDb}.
+ */
+export interface PgBrandedTestDbContext {
+  /** Postgres-branded database handle backed by an in-memory libsql connection. */
+  db: MakaioDatabase;
+  /** Serialized query chunks of every statement sent through the fake executor. */
+  statements: string[];
+}
+
+/**
+ * Create a Postgres-branded test database without a Postgres server.
+ *
+ * The `pg` driver is an optional peer dependency and is typically absent from
+ * test environments, so dialect-gating suites use this double: the handle is
+ * a real (unbranded) in-memory libsql instance that exists only to satisfy
+ * `MakaioDatabase` — it is never queried directly — while the attached
+ * executor carries the `'postgres'` dialect and records every statement
+ * instead of executing it. Everything above the executor seam (migration
+ * gating, handler registration branches, bus dispatch) runs real code.
+ * @returns Postgres-branded handle plus the recorded statement array.
+ */
+export function createPgBrandedTestDb(): PgBrandedTestDbContext {
+  const statements: string[] = [];
+
+  const session: RawSqlSession = {
+    async run(query): Promise<{ rowsAffected: number }> {
+      statements.push(JSON.stringify(query.queryChunks));
+      return { rowsAffected: 0 };
+    },
+    async all<TRow extends Record<string, unknown>>(): Promise<TRow[]> {
+      return [];
+    },
+  };
+
+  const executor: RawSqlExecutor = {
+    dialect: 'postgres',
+    run: session.run,
+    all: session.all,
+    withSession: (fn) => fn(session),
+  };
+
+  const db: MakaioDatabase = brandDatabase(drizzle({ connection: { url: ':memory:' } }), 'postgres', executor);
+  return { db, statements };
 }
 
 /**
  * Creates cleanup function for test database.
  * @param handlerCleanup - Storage handler cleanup function
- * @param close - Function to close the database connection
+ * @param close - Function to close the database connection. Must close synchronously
+ *   (true for all SQLite drivers) — the temp file is unlinked immediately after the
+ *   call, so clients whose close resolves asynchronously must use an awaited teardown
+ *   such as {@link PluginTestDbContext.close} instead.
  * @param dbPath - Path to temp database file
  * @returns Cleanup function that closes connection and deletes temp file
  */

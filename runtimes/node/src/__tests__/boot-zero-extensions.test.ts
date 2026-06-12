@@ -109,10 +109,18 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
   let tempHome: string;
   let runtime: MakaioRuntime | undefined;
   let originalSkipExtensions: string | undefined;
+  let originalDatabaseUrl: string | undefined;
+  let originalDatabasePath: string | undefined;
 
   beforeEach(async () => {
     originalSkipExtensions = process.env.MAKAIO_SKIP_EXTENSIONS;
     delete process.env.MAKAIO_SKIP_EXTENSIONS;
+    // Boot resolves its database target from these env vars; an ambient value
+    // on the developer machine must not re-route the suite onto a real server.
+    originalDatabaseUrl = process.env.MAKAIO_DATABASE_URL;
+    originalDatabasePath = process.env.MAKAIO_DATABASE_PATH;
+    delete process.env.MAKAIO_DATABASE_URL;
+    delete process.env.MAKAIO_DATABASE_PATH;
     tempHome = await fs.mkdtemp(path.join(tmpdir(), 'makaio-zero-ext-'));
     homedirMock.mockReturnValue(tempHome);
     MakaioBus.__resetHandlers?.();
@@ -128,6 +136,16 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
       delete process.env.MAKAIO_SKIP_EXTENSIONS;
     } else {
       process.env.MAKAIO_SKIP_EXTENSIONS = originalSkipExtensions;
+    }
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.MAKAIO_DATABASE_URL;
+    } else {
+      process.env.MAKAIO_DATABASE_URL = originalDatabaseUrl;
+    }
+    if (originalDatabasePath === undefined) {
+      delete process.env.MAKAIO_DATABASE_PATH;
+    } else {
+      process.env.MAKAIO_DATABASE_PATH = originalDatabasePath;
     }
     await fs.rm(tempHome, { recursive: true, force: true });
   });

@@ -1,4 +1,5 @@
-import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 
 /**
  * Drizzle schema for the `log_import_settings` table.
@@ -17,10 +18,10 @@ export const logImportSettings = sqliteTable('log_import_settings', {
     .default('disabled'),
 
   /** Timestamp in milliseconds when the row was first created. */
-  createdAt: integer('created_at').notNull(),
+  createdAt: epochMs('created_at').notNull(),
 
   /** Timestamp in milliseconds when the row was last updated. */
-  updatedAt: integer('updated_at').notNull(),
+  updatedAt: epochMs('updated_at').notNull(),
 });
 
 /** Type for inserting a new log import settings row. */

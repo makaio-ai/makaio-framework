@@ -19,7 +19,7 @@ describe('buildScopePredicates', () => {
   beforeEach(async () => {
     ctx = await createTempDb('scope-predicates');
 
-    await ctx.db.run(sql`
+    await ctx.exec(sql`
       CREATE TABLE scoped_entities (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,

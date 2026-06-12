@@ -1,9 +1,10 @@
 import { eq, and } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext, MessageRouting, MessageRoutingStatus } from '@makaio/contracts';
 import { MessageRoutingSubjects } from './namespace.js';
-import { messageRouting, type SelectMessageRouting } from './schema.js';
+import type { SelectMessageRouting } from './schema.js';
+import { messageRoutingSchema } from './schema.variants.js';
 
 /**
  * Convert database row to MessageRouting type.
@@ -23,7 +24,7 @@ function rowToRouting(row: SelectMessageRouting): MessageRouting {
 /**
  * Register Drizzle-based message routing storage handlers.
  *
- * Manages message delivery tracking in SQLite/libSQL via Drizzle ORM.
+ * Manages message delivery tracking via Drizzle ORM.
  * @param bus - The bus instance to register handlers on
  * @param db - The Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)
@@ -34,6 +35,7 @@ export function registerDrizzleMessageRoutingStorage(
   db: MakaioDatabase,
   _ctx: ExtensionContext,
 ): () => void {
+  const { messageRouting } = resolveSchema(db, messageRoutingSchema);
   const unsubs: Array<() => void> = [];
 
   // storage:messageRouting.record

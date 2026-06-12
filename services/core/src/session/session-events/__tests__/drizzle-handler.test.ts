@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionEventStorageSubjects } from '../namespace.js';
 import { createEvent, createTestDb, insertTestSession } from './shared.js';
@@ -174,11 +174,9 @@ describe('registerDrizzleSessionEventStorage', () => {
         }),
       });
 
-      const rows = await db.run(sql`SELECT type, content_text FROM session_events`);
-      const results = rows.rows.map((r) => ({
-        type: String(r.type),
-        content_text: r.content_text as string | null,
-      }));
+      const results = await getRawSqlExecutor(db).all<{ type: string; content_text: string | null }>(
+        sql`SELECT type, content_text FROM session_events`,
+      );
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual({
@@ -203,10 +201,11 @@ describe('registerDrizzleSessionEventStorage', () => {
         }),
       });
 
-      const rows = await db.run(sql`SELECT content_text FROM session_events`);
-      const contentText = rows.rows[0].content_text as string;
+      const rows = await getRawSqlExecutor(db).all<{ content_text: string | null }>(
+        sql`SELECT content_text FROM session_events`,
+      );
 
-      expect(contentText).toBe('First paragraph\nSecond paragraph');
+      expect(rows[0].content_text).toBe('First paragraph\nSecond paragraph');
     });
 
     it('should extract contentText from plugin summary payloads', async () => {
@@ -219,10 +218,11 @@ describe('registerDrizzleSessionEventStorage', () => {
         }),
       });
 
-      const rows = await db.run(sql`SELECT content_text FROM session_events`);
-      const contentText = rows.rows[0].content_text as string;
+      const rows = await getRawSqlExecutor(db).all<{ content_text: string | null }>(
+        sql`SELECT content_text FROM session_events`,
+      );
 
-      expect(contentText).toBe('Test summary');
+      expect(rows[0].content_text).toBe('Test summary');
     });
 
     it('should return null contentText for structural events', async () => {
@@ -245,11 +245,9 @@ describe('registerDrizzleSessionEventStorage', () => {
         });
       }
 
-      const rows = await db.run(sql`SELECT type, content_text FROM session_events ORDER BY id`);
-      const results = rows.rows.map((r) => ({
-        type: String(r.type),
-        content_text: r.content_text as string | null,
-      }));
+      const results = await getRawSqlExecutor(db).all<{ type: string; content_text: string | null }>(
+        sql`SELECT type, content_text FROM session_events ORDER BY id`,
+      );
 
       expect(results).toHaveLength(structuralTypes.length);
       for (const result of results) {
@@ -270,8 +268,10 @@ describe('registerDrizzleSessionEventStorage', () => {
       });
       await MakaioBus.request(SessionEventStorageSubjects.append, { event });
 
-      const rows = await db.run(sql`SELECT agent_id, adapter_id FROM session_events`);
-      const row = rows.rows[0];
+      const rows = await getRawSqlExecutor(db).all<{ agent_id: string | null; adapter_id: string | null }>(
+        sql`SELECT agent_id, adapter_id FROM session_events`,
+      );
+      const row = rows[0];
 
       expect(row.agent_id).toBe('test-agent-123');
       expect(row.adapter_id).toBe('test-adapter-456');
@@ -288,8 +288,10 @@ describe('registerDrizzleSessionEventStorage', () => {
       });
       await MakaioBus.request(SessionEventStorageSubjects.append, { event });
 
-      const rows = await db.run(sql`SELECT turn_id, originating_message_id FROM session_events`);
-      const row = rows.rows[0];
+      const rows = await getRawSqlExecutor(db).all<{ turn_id: string | null; originating_message_id: string | null }>(
+        sql`SELECT turn_id, originating_message_id FROM session_events`,
+      );
+      const row = rows[0];
 
       expect(row.turn_id).toBe('turn-abc');
       expect(row.originating_message_id).toBe('msg-xyz');

@@ -62,7 +62,8 @@ export const CrudSchemas = {
   },
 
   /**
-   * Search sessions by content using FTS5 full-text search.
+   * Search sessions by content using full-text search
+   * (FTS5 on SQLite, tsvector on Postgres).
    *
    * Subject: `session.search`
    * Type: Request (RPC)
@@ -79,7 +80,7 @@ export const CrudSchemas = {
    */
   search: {
     request: z.object({
-      /** FTS5 search query */
+      /** Full-text search query */
       query: z.string(),
       /** Maximum number of sessions to return */
       limit: z.number().int().min(1).optional(),

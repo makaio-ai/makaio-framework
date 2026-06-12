@@ -1,9 +1,10 @@
 import { eq, and, gt, lt, inArray, asc, desc } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionContext, MakaioSessionEvent, SessionEventPayload, SessionEventType } from '@makaio/contracts';
 import { SessionEventStorageSubjects } from './namespace.js';
-import { sessionEvents, type SelectSessionEvent } from './schema.js';
+import type { SelectSessionEvent } from './schema.js';
+import { sessionEventsSchema } from './schema.variants.js';
 
 /**
  * Fields stored as columns that should be stripped from the nested payload.
@@ -11,11 +12,19 @@ import { sessionEvents, type SelectSessionEvent } from './schema.js';
 const PAYLOAD_COLUMN_FIELDS = ['sessionId', 'agentId', 'adapterId', 'messageId', 'turnId'] as const;
 
 /**
+ * Resolved `session_events` table. The `.sqlite` face is the canonical static
+ * type for both dialects (see `schema.variants.ts`).
+ */
+type SessionEventsTable = typeof sessionEventsSchema.sqlite.sessionEvents;
+
+/**
  * Dependencies for session event storage handlers.
  */
 interface SessionEventHandlerDeps {
   bus: IMakaioBus;
   db: MakaioDatabase;
+  /** Dialect-resolved table, resolved once at registration time. */
+  sessionEvents: SessionEventsTable;
 }
 
 /**
@@ -151,7 +160,7 @@ function extractPluginContentText(payload: Record<string, unknown>): string | nu
  * @param deps - Dependencies containing bus and database
  * @returns Cleanup function to unsubscribe handler
  */
-function registerAppendHandler({ bus, db }: SessionEventHandlerDeps): () => void {
+function registerAppendHandler({ bus, db, sessionEvents }: SessionEventHandlerDeps): () => void {
   return bus.on(SessionEventStorageSubjects.append, async (ctx) => {
     const { event } = ctx.payload;
 
@@ -193,7 +202,7 @@ function registerAppendHandler({ bus, db }: SessionEventHandlerDeps): () => void
  * @param deps - Dependencies containing bus and database
  * @returns Cleanup function to unsubscribe handler
  */
-function registerGetEventsHandler({ bus, db }: SessionEventHandlerDeps): () => void {
+function registerGetEventsHandler({ bus, db, sessionEvents }: SessionEventHandlerDeps): () => void {
   return bus.on(SessionEventStorageSubjects.getEvents, async (ctx) => {
     const { sessionId, options } = ctx.payload;
 
@@ -257,7 +266,7 @@ function registerGetEventsHandler({ bus, db }: SessionEventHandlerDeps): () => v
  * @param deps - Dependencies containing bus and database
  * @returns Cleanup function to unsubscribe handler
  */
-function registerGetByIdsHandler({ bus, db }: SessionEventHandlerDeps): () => void {
+function registerGetByIdsHandler({ bus, db, sessionEvents }: SessionEventHandlerDeps): () => void {
   return bus.on(SessionEventStorageSubjects.getByIds, async (ctx) => {
     const { sessionId, eventIds } = ctx.payload;
     const rows = await db
@@ -275,7 +284,7 @@ function registerGetByIdsHandler({ bus, db }: SessionEventHandlerDeps): () => vo
  * @param deps - Dependencies containing bus and database
  * @returns Cleanup function to unsubscribe handler
  */
-function registerDeleteBySessionHandler({ bus, db }: SessionEventHandlerDeps): () => void {
+function registerDeleteBySessionHandler({ bus, db, sessionEvents }: SessionEventHandlerDeps): () => void {
   return bus.on(SessionEventStorageSubjects.deleteBySession, async (ctx) => {
     const { sessionId } = ctx.payload;
 
@@ -295,7 +304,7 @@ function registerDeleteBySessionHandler({ bus, db }: SessionEventHandlerDeps): (
  * @param deps - Dependencies containing bus and database
  * @returns Cleanup function to unsubscribe handler
  */
-function registerGetEventsBySessionsHandler({ bus, db }: SessionEventHandlerDeps): () => void {
+function registerGetEventsBySessionsHandler({ bus, db, sessionEvents }: SessionEventHandlerDeps): () => void {
   return bus.on(SessionEventStorageSubjects.getEventsBySessions, async (ctx) => {
     const { sessionIds, types, limitPerSession = 50 } = ctx.payload;
 
@@ -325,10 +334,10 @@ function registerGetEventsBySessionsHandler({ bus, db }: SessionEventHandlerDeps
 /**
  * Register Drizzle-based session event storage handlers.
  *
- * Persists events to SQLite/libSQL via Drizzle ORM with cursor-based
- * pagination and content extraction for future FTS/embedding support.
+ * Persists events via Drizzle ORM with cursor-based pagination and content
+ * extraction for future FTS/embedding support.
  * @param bus - The bus instance to register handlers on
- * @param db - The Drizzle database instance (any libSQL database)
+ * @param db - The Drizzle database instance
  * @param _ctx - Extension context (unused; reserved for future use)
  * @returns Cleanup function to unsubscribe all handlers
  * @example
@@ -350,7 +359,9 @@ export function registerDrizzleSessionEventStorage(
   db: MakaioDatabase,
   _ctx: ExtensionContext,
 ): () => void {
-  const deps: SessionEventHandlerDeps = { bus, db };
+  // Resolve the dialect schema once; every handler shares the same table.
+  const { sessionEvents } = resolveSchema(db, sessionEventsSchema);
+  const deps: SessionEventHandlerDeps = { bus, db, sessionEvents };
   const cleanups = [
     registerAppendHandler(deps),
     registerGetEventsHandler(deps),

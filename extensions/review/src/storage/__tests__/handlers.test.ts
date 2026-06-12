@@ -89,9 +89,9 @@ describe('registerReviewStorageHandlers', () => {
     bus = createBusInstance();
     dbContext = await createTempDb('review-storage');
     db = dbContext.db;
-    await db.run(CREATE_REVIEW_FINDINGS_TABLE_SQL);
+    await dbContext.exec(CREATE_REVIEW_FINDINGS_TABLE_SQL);
     for (const indexSql of CREATE_REVIEW_FINDINGS_INDICES_SQL) {
-      await db.run(indexSql);
+      await dbContext.exec(indexSql);
     }
     cleanupHandlers = registerReviewStorageHandlers(bus, db, makeStubExtensionContext(bus));
   });

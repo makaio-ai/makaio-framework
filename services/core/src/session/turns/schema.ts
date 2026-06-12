@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 import { sessions } from '../storage/schema.js';
 
 /**
@@ -38,13 +39,13 @@ export const turns = sqliteTable(
      * Turn start timestamp (Unix ms).
      * When the user message was received.
      */
-    startedAt: integer('started_at').notNull(),
+    startedAt: epochMs('started_at').notNull(),
 
     /**
      * Turn completion timestamp (Unix ms).
      * When all agents have responded. NULL while in progress.
      */
-    completedAt: integer('completed_at'),
+    completedAt: epochMs('completed_at'),
 
     /**
      * Turn status.

@@ -9,15 +9,15 @@
  * through these utilities to produce the final `IMakaioSession` shapes.
  */
 import { and, count, eq, inArray, sql } from 'drizzle-orm';
-import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { ForkTransformsSchema, type ForkTransforms, type IMakaioSession } from '@makaio/contracts';
 import { ClientIdentityObservationSchema } from '@makaio/contracts/client';
 import { mapAgent } from './agent-drizzle-handler.js';
-import { messages } from '../messages/schema.js';
-import { sessions, agents } from './schema.js';
+import type { sessionStorageSchema } from './schema.variants.js';
+import { messagesSchema } from '../messages/schema.variants.js';
 
-type SessionRow = typeof sessions.$inferSelect;
-type AgentRow = typeof agents.$inferSelect;
+type SessionRow = (typeof sessionStorageSchema.sqlite.sessions)['$inferSelect'];
+type AgentRow = (typeof sessionStorageSchema.sqlite.agents)['$inferSelect'];
 
 type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
 
@@ -161,6 +161,8 @@ export async function fetchSessionPreviewMaps(
   if (sessionIds.length === 0) {
     return {};
   }
+
+  const { messages } = resolveSchema(db, messagesSchema);
 
   const firstUserMessageBySession = db
     .select({

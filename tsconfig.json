@@ -97,6 +97,7 @@
       "@makaio/rules/schemas": ["./packages/rules/src/schemas.ts"],
       "@makaio/storage-migrations": ["./storage/migrations/src/index.ts"],
       "@makaio/storage-migrations/apply-migrations": ["./storage/migrations/src/apply-migrations.ts"],
+      "@makaio/storage-migrations/discover-schemas": ["./storage/migrations/src/discover-schemas.ts"],
       "@makaio/ui-theme": ["./ui/theme/index.scss"],
       "@makaio/ui-theme/*": ["./ui/theme/*"],
       "@makaio/ui-kernel": ["./ui/kernel/src/index.ts"],
