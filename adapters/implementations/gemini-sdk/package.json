@@ -51,7 +51,7 @@
   "devDependencies": {
     "@agentclientprotocol/sdk": "0.21.0",
     "@google/gemini-cli": "0.43.0",
-    "@google/gemini-cli-core": "0.43.0",
+    "@google/gemini-cli-core": "0.46.0",
     "@google/genai": "1.48.0",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/ai-adapters-stream-session": "workspace:*",
