@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type AdapterContribution, createClientDefinition } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  type AdapterContribution,
+  type ProviderDefinitionInput,
+  createClientDefinition,
+} from '@makaio/contracts';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
@@ -13,6 +18,7 @@ import type {
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
+import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
 import { AdapterSubsystemService } from '../adapter-subsystem-service.js';
@@ -179,12 +185,17 @@ function createContribution(
   };
 }
 
-function createExtension(name: string, adapters: readonly AdapterContribution[]): KernelMakaioExtension {
+function createExtension(
+  name: string,
+  adapters: readonly AdapterContribution[],
+  providers?: readonly ProviderDefinitionInput[],
+): KernelMakaioExtension {
   return {
     name,
     displayName: name,
     version: '0.1.0',
     adapters,
+    ...(providers !== undefined ? { providers } : {}),
   };
 }
 
@@ -397,6 +408,147 @@ describe('AdapterContributionProcessor rollback', () => {
     } finally {
       offCatalog();
       offRegistry();
+    }
+  });
+
+  it('serves framework-only provider storage reads from loaded adapter definitions', async () => {
+    const providerDefinition = {
+      id: 'runtime-provider',
+      name: 'Runtime Provider',
+      description: 'Provider contributed by a framework-only extension',
+      endpoints: {
+        anthropic: 'https://runtime-provider.example/anthropic',
+      },
+      defaultModel: 'runtime-model',
+      fastModel: 'runtime-fast-model',
+      defaultModelFilterMode: 'allowlist',
+      credentialEnvVars: {
+        apiKey: 'RUNTIME_PROVIDER_API_KEY',
+      },
+      availableModels: [
+        {
+          name: 'runtime-model',
+          friendlyName: 'Runtime Model',
+          contextWindowSize: 16_384,
+          labId: 'runtime-provider',
+        },
+      ],
+    } satisfies ProviderDefinitionInput;
+    const repository = new MemoryRepository();
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [{ packageName: '@owner/runtime-provider-package', definition: providerDefinition }],
+        clients: [],
+      });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/runtime-adapter-extension',
+        createExtension('@owner/runtime-adapter-extension', [
+          createContribution(
+            'runtime-adapter',
+            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            [{ definitionId: 'runtime-provider' }],
+          ),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      const { provider } = await MakaioBus.request(ProviderStorageSubjects.get, { id: 'runtime-provider' });
+      const { providers } = await MakaioBus.request(ProviderStorageSubjects.list, {});
+      const { providers: anthropicProviders } = await MakaioBus.request(ProviderStorageSubjects.listByProtocol, {
+        protocol: 'anthropic',
+      });
+      const { providers: openAiProviders } = await MakaioBus.request(ProviderStorageSubjects.listByProtocol, {
+        protocol: 'openai',
+      });
+
+      expect(provider).toMatchObject({
+        id: 'runtime-provider',
+        packageName: '@owner/runtime-provider-package',
+        name: 'Runtime Provider',
+        description: 'Provider contributed by a framework-only extension',
+        endpoints: {
+          anthropic: 'https://runtime-provider.example/anthropic',
+        },
+        defaultModel: 'runtime-model',
+        fastModel: 'runtime-fast-model',
+        defaultModelFilterMode: 'allowlist',
+        credentialEnvVars: {
+          apiKey: 'RUNTIME_PROVIDER_API_KEY',
+        },
+        enabled: true,
+        createdAt: 0,
+        updatedAt: 0,
+      });
+      expect(provider?.availableModels).toEqual(providerDefinition.availableModels);
+      expect(providers.map((entry) => entry.id)).toContain('runtime-provider');
+      expect(anthropicProviders.map((entry) => entry.id)).toEqual(['runtime-provider']);
+      expect(openAiProviders).toEqual([]);
+    } finally {
+      offCatalog();
+    }
+  });
+
+  it('lets host provider storage handlers override loaded adapter fallback records', async () => {
+    const repository = new MemoryRepository();
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const offProvider = MakaioBus.on(ProviderStorageSubjects.get, (ctx) => {
+      ctx.setResult({
+        provider: {
+          id: 'runtime-provider',
+          packageName: '@owner/host-storage',
+          name: 'Host Storage Provider',
+          availableModels: [],
+          defaultModelFilterMode: 'show-all',
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/runtime-provider-extension',
+        createExtension(
+          '@owner/runtime-provider-extension',
+          [
+            createContribution(
+              'runtime-adapter',
+              async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+              [{ definitionId: 'runtime-provider' }],
+            ),
+          ],
+          [{ id: 'runtime-provider', name: 'Runtime Provider' }],
+        ),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'runtime-provider' })).resolves.toMatchObject({
+        provider: {
+          packageName: '@owner/host-storage',
+          name: 'Host Storage Provider',
+        },
+      });
+    } finally {
+      offProvider();
     }
   });
 

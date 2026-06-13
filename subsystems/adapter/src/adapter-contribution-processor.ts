@@ -1,7 +1,6 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import type {
   AdapterContribution,
-  AdapterProviderDefinitionContract,
   AdapterProviderRef,
   ProtocolId,
   ProviderAIModel,
@@ -17,7 +16,7 @@ import type { z } from 'zod';
 import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
-import type { LoadedAdapter } from './adapter-runtime-types.js';
+import type { LoadedAdapter, LoadedAdapterProvider } from './adapter-runtime-types.js';
 import {
   cloneAdapterClientRefs,
   resolveDefaultClientId,
@@ -32,6 +31,11 @@ import {
  */
 function cloneProviderModels(models: readonly ProviderAIModel[]): ProviderAIModel[] {
   return models.map((model) => ({ ...model }));
+}
+
+interface ProviderDefinitionCacheEntry {
+  readonly packageName: string;
+  readonly definition: ProviderDefinitionInput;
 }
 
 /**
@@ -219,12 +223,12 @@ export class AdapterContributionProcessor {
     const providerModelCache = new Map<string, ProviderAIModel[]>();
 
     const catalog = await ctx.bus.request(ExtensionSubjects.contributions.catalog, {});
-    const providerDefinitionCache = new Map<string, ProviderDefinitionInput>();
+    const providerDefinitionCache = new Map<string, ProviderDefinitionCacheEntry>();
     for (const entry of catalog.providers) {
-      providerDefinitionCache.set(entry.definition.id, entry.definition);
+      providerDefinitionCache.set(entry.definition.id, entry);
     }
     for (const definition of pkg.providers ?? []) {
-      providerDefinitionCache.set(definition.id, definition);
+      providerDefinitionCache.set(definition.id, { packageName, definition });
     }
     const clientCatalog = catalog.clients as readonly AdapterClientCatalogEntry[];
 
@@ -303,7 +307,7 @@ export class AdapterContributionProcessor {
     contribution: AdapterContribution,
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
-    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
     clientCatalog?: readonly AdapterClientCatalogEntry[],
   ): Promise<LoadedAdapter> {
     const loadedAdapter = await this.buildLoadedAdapter(
@@ -393,28 +397,29 @@ export class AdapterContributionProcessor {
     adapterName: string,
     adapterConfigSchema?: z.ZodObject<z.ZodRawShape>,
     adapterCredentialSchema?: z.ZodObject<z.ZodRawShape>,
-    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
-  ): Promise<AdapterProviderDefinitionContract[]> {
+    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
+  ): Promise<LoadedAdapterProvider[]> {
     let definitionMap = providerDefinitionCache;
     if (!definitionMap) {
-      definitionMap = new Map<string, ProviderDefinitionInput>();
+      definitionMap = new Map<string, ProviderDefinitionCacheEntry>();
       const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
       for (const entry of catalog.providers) {
-        definitionMap.set(entry.definition.id, entry.definition);
+        definitionMap.set(entry.definition.id, entry);
       }
     }
 
-    const resolved: AdapterProviderDefinitionContract[] = [];
+    const resolved: LoadedAdapterProvider[] = [];
     const missing: string[] = [];
 
     for (const ref of providerRefs) {
-      const definition = definitionMap.get(ref.definitionId);
-      if (!definition) {
+      const entry = definitionMap.get(ref.definitionId);
+      if (!entry) {
         missing.push(ref.definitionId);
         continue;
       }
       resolved.push({
-        definition,
+        definition: entry.definition,
+        providerPackageName: entry.packageName,
         configSchema: ref.configSchema ?? adapterConfigSchema,
         credentialSchema: ref.credentialSchema ?? adapterCredentialSchema,
       });
@@ -455,7 +460,7 @@ export class AdapterContributionProcessor {
     contribution: AdapterContribution,
     bus: IMakaioBus = MakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]> = new Map(),
-    providerDefinitionCache?: Map<string, ProviderDefinitionInput>,
+    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
     clientCatalog?: readonly AdapterClientCatalogEntry[],
   ): Promise<LoadedAdapter> {
     const def = contribution.definition;

@@ -64,6 +64,14 @@ export interface AdapterInstance {
 }
 
 /**
+ * Provider definition resolved for one loaded adapter.
+ */
+export interface LoadedAdapterProvider extends AdapterProviderDefinitionContract {
+  /** Extension package that contributed the provider definition. */
+  providerPackageName: string;
+}
+
+/**
  * Loaded adapter entry produced by processing `MakaioPackage.adapters`.
  *
  * This is the canonical core-layer representation of a fully-loaded adapter
@@ -103,7 +111,7 @@ export interface LoadedAdapter {
    * `AdapterProviderDefinition` (from `ai-adapters-core`) extends this
    * contract and is assignment-compatible.
    */
-  providers: AdapterProviderDefinitionContract[];
+  providers: LoadedAdapterProvider[];
   /** Help links for documentation. */
   helpLinks?: readonly HelpLink[];
   /** Setup instructions in Markdown format. */

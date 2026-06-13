@@ -490,6 +490,24 @@ describe('verifyFrameworkDist', () => {
     ]);
   });
 
+  it('reports source-only files in bundled migration chains', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {} });
+    writeMigrationChain(join(root, 'dist/drizzle'), 1);
+    writeBuiltFile(join(root, 'dist/drizzle/meta/0000_snapshot.json'), '{"generator":"state"}');
+
+    const result = verifyFrameworkDist(root, { migrationChains: ['dist/drizzle'] });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: 'dist/drizzle',
+        kind: 'migration-chain-extra-file',
+        target: 'dist/drizzle/meta/0000_snapshot.json',
+      }),
+    ]);
+  });
+
   it('reports journal entries that carry no tag', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {} });

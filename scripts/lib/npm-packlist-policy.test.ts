@@ -86,6 +86,44 @@ describe('npm packlist policy', () => {
     expect(result.forbidden).toContain('npm-debug.log');
   });
 
+  it('rejects Drizzle generator snapshots from published migration chains', () => {
+    const result = checkPacklist('@makaio/storage-pg', [
+      'package.json',
+      'README.md',
+      'LICENSE',
+      'dist/index.mjs',
+      'drizzle-postgres/0000_init.sql',
+      'drizzle-postgres/meta/_journal.json',
+      'drizzle-postgres/meta/0000_snapshot.json',
+      'drizzle/meta/0001_snapshot.json',
+    ]);
+
+    expect(result.forbidden).toEqual(['drizzle-postgres/meta/0000_snapshot.json', 'drizzle/meta/0001_snapshot.json']);
+    expect(result.forbidden).not.toContain('drizzle-postgres/meta/_journal.json');
+  });
+
+  it('rejects every source-only file from published runtime migration chains', () => {
+    const result = checkPacklist('@makaio/storage-pg', [
+      'package.json',
+      'README.md',
+      'LICENSE',
+      'dist/index.mjs',
+      'drizzle-postgres/0000_init.sql',
+      'drizzle-postgres/meta/_journal.json',
+      'drizzle-postgres/0001_messages_content_tsv.na.md',
+      'drizzle-postgres/README.md',
+      'dist/drizzle/0000_init.sql',
+      'dist/drizzle/meta/_journal.json',
+      'dist/drizzle/notes/schema.md',
+    ]);
+
+    expect(result.forbidden).toEqual([
+      'drizzle-postgres/0001_messages_content_tsv.na.md',
+      'drizzle-postgres/README.md',
+      'dist/drizzle/notes/schema.md',
+    ]);
+  });
+
   it('reports missing README and LICENSE', () => {
     const result = checkPacklist('@makaio/test', ['package.json', 'dist/index.js']);
     expect(result.missingRequired).toContain('README.md');

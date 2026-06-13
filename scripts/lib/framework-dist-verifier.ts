@@ -7,6 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { join, relative, resolve, sep } from 'node:path';
 import { normalizePackageExports, type PackageExportsField } from '../../build-tooling/package-exports.js';
+import { collectUnexpectedRuntimeMigrationFiles } from './runtime-migration-assets.js';
 
 /** A framework dist verification finding. */
 export interface FrameworkDistIssue {
@@ -18,6 +19,7 @@ export interface FrameworkDistIssue {
   readonly kind:
     | 'export-target-not-file'
     | 'export-target-outside-root'
+    | 'migration-chain-extra-file'
     | 'migration-journal-mismatch'
     | 'missing-export-target'
     | 'missing-migration-chain'
@@ -194,7 +196,7 @@ function isLocalFileTarget(target: string): boolean {
  *    engine-exclusive SQL markers. The Postgres engine ships exclusively
  *    with `@makaio/storage-pg`.
  * 5. Every bundled migration chain ships with a journal that matches its
- *    `.sql` migration files.
+ *    `.sql` migration files and contains no source-only Drizzle artifacts.
  * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
  * @param options - Optional overrides for the verified migration chains.
  * @returns Verification result with all missing or unsafe targets.
@@ -526,6 +528,17 @@ function checkMigrationChains(root: string, migrationChains: readonly string[], 
         });
       }
     });
+
+    for (const file of collectUnexpectedRuntimeMigrationFiles(resolve(root, chain))) {
+      issues.push({
+        exportKey: chain,
+        kind: 'migration-chain-extra-file',
+        message:
+          `Bundled migration chain "${chain}" contains source-only file "${chain}/${file}". ` +
+          'Runtime chains must contain only root-level .sql files and meta/_journal.json.',
+        target: `${chain}/${file}`,
+      });
+    }
   }
 }
 

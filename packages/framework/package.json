@@ -75,6 +75,10 @@
       "types": "./dist/hooks/index.d.mts",
       "default": "./dist/hooks/index.mjs"
     },
+    "./inbound-hooks": {
+      "types": "./dist/inbound-hooks/index.d.mts",
+      "default": "./dist/inbound-hooks/index.mjs"
+    },
     "./providers": {
       "types": "./dist/providers/index.d.mts",
       "default": "./dist/providers/index.mjs"
@@ -362,6 +366,10 @@
     "./storage/handlers/drizzle": {
       "types": "./dist/storage/handlers/drizzle/index.d.mts",
       "default": "./dist/storage/handlers/drizzle/index.mjs"
+    },
+    "./adapter-subsystem": {
+      "types": "./dist/adapter-subsystem/index.d.mts",
+      "default": "./dist/adapter-subsystem/index.mjs"
     },
     "./adapters": {
       "types": "./dist/adapters/index.d.mts",

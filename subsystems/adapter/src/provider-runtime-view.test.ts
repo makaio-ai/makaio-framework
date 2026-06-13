@@ -67,4 +67,34 @@ describe('buildProviderContextFromRaw', () => {
       unsubList();
     }
   });
+
+  it('keeps the selected provider in ambient credential discovery when list results omit it', async () => {
+    const anthropic = providerRecord('anthropic', { apiKey: 'ANTHROPIC_API_KEY' });
+    const unsubGet = MakaioBus.on(ProviderStorageSubjects.get, (ctx) => {
+      ctx.setResult({ provider: anthropic });
+    });
+    const unsubList = MakaioBus.on(ProviderStorageSubjects.list, (ctx) => {
+      ctx.setResult({ providers: [] });
+    });
+
+    try {
+      await expect(
+        buildProviderContextFromRaw(MakaioBus, 'anthropic.work', {
+          $schema: PROVIDER_CONFIG_SCHEMA_VERSION,
+          definitionId: 'anthropic',
+          name: 'Anthropic Work',
+          credentials: {
+            apiKey: CredentialRefSchema.parse('stored:providerConfig:anthropic.work:apiKey'),
+          },
+          isDefault: true,
+          enabled: true,
+        }),
+      ).resolves.toMatchObject({
+        ambientCredentialEnvVars: ['ANTHROPIC_API_KEY'],
+      });
+    } finally {
+      unsubGet();
+      unsubList();
+    }
+  });
 });

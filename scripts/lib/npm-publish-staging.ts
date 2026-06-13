@@ -8,8 +8,9 @@
  */
 
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { createPortablePackageJson, type PackageJsonLike } from '@makaio/build-tooling/portable-package';
+import { copyRuntimeMigrationChain, isMigrationChainDirectory } from './runtime-migration-assets.js';
 
 /** Directory, relative to each package root, used as the npm publish root. */
 export const NPM_PUBLISH_DIRECTORY = 'node_modules/.makaio-publish';
@@ -61,8 +62,14 @@ export interface PublishablePackageJson extends PackageJsonLike {
  * @returns Absolute publish directory path.
  */
 export function resolveNpmPublishDirectory(packageDir: string, packageJson: PublishDirectoryPackageJson): string {
+  const packageRoot = resolve(packageDir);
   const directory = packageJson.publishConfig?.directory ?? NPM_PUBLISH_DIRECTORY;
-  return resolve(packageDir, directory);
+  const publishDir = resolve(packageRoot, directory);
+  const packageRootPrefix = `${packageRoot}${sep}`;
+  if (publishDir === packageRoot || !publishDir.startsWith(packageRootPrefix)) {
+    throw new Error(`npm publish directory escapes package root: ${directory}`);
+  }
+  return publishDir;
 }
 
 /**
@@ -99,14 +106,78 @@ export function createStagedPackageJson(
 }
 
 /**
+ * Return a package path without its optional leading `./`.
+ * @param target - Package-relative manifest target.
+ * @returns Target without a leading `./`.
+ */
+function stripPackageRelativePrefix(target: string): string {
+  return target.startsWith('./') ? target.slice(2) : target;
+}
+
+/**
+ * Return whether a copied source should be staged into the publish directory.
+ * @param source - Absolute source path currently being copied.
+ * @returns Whether the file should be included in the staged package.
+ */
+function shouldStagePublishFile(source: string): boolean {
+  return !source.endsWith('.map');
+}
+
+/**
+ * Resolve a declaration target to the emitted file extension in the staged package.
+ * @param publishDir - Absolute publish staging directory.
+ * @param target - Package-relative declaration target from the manifest.
+ * @returns The original target, or the matching emitted `.d.ts` target.
+ */
+function resolveStagedDeclarationTarget(publishDir: string, target: string): string {
+  if (existsSync(join(publishDir, stripPackageRelativePrefix(target)))) {
+    return target;
+  }
+
+  const candidates = target.endsWith('.d.mts')
+    ? [target.replace(/\.d\.mts$/u, '.d.ts')]
+    : target.endsWith('.d.cts')
+      ? [target.replace(/\.d\.cts$/u, '.d.ts')]
+      : [];
+
+  return candidates.find((candidate) => existsSync(join(publishDir, stripPackageRelativePrefix(candidate)))) ?? target;
+}
+
+/**
+ * Rewrite manifest declaration targets so they match staged declaration files.
+ * @param publishDir - Absolute publish staging directory.
+ * @param value - Manifest object or nested export value.
+ * @returns Manifest value with `types` paths reconciled.
+ */
+function normalizeStagedDeclarationTargets(publishDir: string, value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeStagedDeclarationTargets(publishDir, entry));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nestedValue]) => [
+      key,
+      key === 'types' && typeof nestedValue === 'string'
+        ? resolveStagedDeclarationTarget(publishDir, nestedValue)
+        : normalizeStagedDeclarationTargets(publishDir, nestedValue),
+    ]),
+  );
+}
+
+/**
  * Stage one package for npm publishing.
  * @param packageDir - Absolute package root.
  * @param frameworkVersion - Version of the public `@makaio/framework` package.
  * @returns Absolute path to the staged publish directory.
  */
 export function stagePackageForNpmPublish(packageDir: string, frameworkVersion: string): string {
-  const packageJson = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as PublishablePackageJson;
-  const publishDir = resolveNpmPublishDirectory(packageDir, packageJson);
+  const packageRoot = resolve(packageDir);
+  const packageRootPrefix = `${packageRoot}${sep}`;
+  const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as PublishablePackageJson;
+  const publishDir = resolveNpmPublishDirectory(packageRoot, packageJson);
   const files = packageJson.files;
 
   if (!files || files.length === 0) {
@@ -119,18 +190,26 @@ export function stagePackageForNpmPublish(packageDir: string, frameworkVersion: 
   for (const file of files) {
     if (file === 'package.json') continue;
 
-    const source = join(packageDir, file);
+    const source = resolve(packageRoot, file);
+    if (source === packageRoot || !source.startsWith(packageRootPrefix)) {
+      throw new Error(`${packageJson.name}: publish file escapes package root: ${file}`);
+    }
     if (!existsSync(source)) {
       throw new Error(`${packageJson.name}: publish file is missing before staging: ${file}`);
     }
-    cpSync(source, join(publishDir, file), { recursive: true });
+    if (isMigrationChainDirectory(source)) {
+      copyRuntimeMigrationChain(source, join(publishDir, file));
+    } else {
+      cpSync(source, join(publishDir, file), { recursive: true, filter: shouldStagePublishFile });
+    }
   }
 
-  writeFileSync(
-    join(publishDir, 'package.json'),
-    `${JSON.stringify(createStagedPackageJson(packageJson, frameworkVersion), null, 2)}\n`,
-    'utf8',
+  const stagedPackageJson = normalizeStagedDeclarationTargets(
+    publishDir,
+    createStagedPackageJson(packageJson, frameworkVersion),
   );
+
+  writeFileSync(join(publishDir, 'package.json'), `${JSON.stringify(stagedPackageJson, null, 2)}\n`, 'utf8');
 
   return publishDir;
 }
