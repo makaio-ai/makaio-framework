@@ -11,9 +11,14 @@
 
 import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { rewriteFrameworkImportsInText } from '@makaio/build-tooling/framework-import-map';
 import { createLocalBinPathEnv } from '@makaio/build-tooling/process-env';
+
+const require = createRequire(import.meta.url);
+const tsgoPackageJson = require.resolve('@typescript/native-preview/package.json');
+const tsgoBinPath = join(dirname(tsgoPackageJson), 'bin', 'tsgo.js');
 
 /**
  * Options for {@link emitDeclarations}.
@@ -82,7 +87,7 @@ export function emitDeclarations(options: EmitDeclarationsOptions): void {
   } = options;
 
   console.info('[tsgo] Emitting declarations…');
-  execFileSync('tsgo', ['--project', tsconfig, '--noCheck'], {
+  execFileSync(process.execPath, [tsgoBinPath, '--project', tsconfig, '--noCheck'], {
     stdio: 'inherit',
     cwd: packageDir,
     env: createLocalBinPathEnv({ startDir: packageDir }),
