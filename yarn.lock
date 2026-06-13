@@ -4287,6 +4287,7 @@ __metadata:
   resolution: "@makaio/build-tooling@workspace:build-tooling"
   dependencies:
     "@types/node": "npm:^24.3.0"
+    "@typescript/native-preview": "npm:^7.0.0-dev.20260515.1"
     sass: "npm:^1.100.0"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
