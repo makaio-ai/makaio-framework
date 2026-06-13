@@ -410,6 +410,9 @@ function defaultRunCommand(command: GenerateMigrationsCommand): void {
  * @returns True when invoked as the entrypoint via tsx/node.
  */
 function isMainModule(): boolean {
+  if (typeof import.meta.main === 'boolean') {
+    return import.meta.main;
+  }
   const entry = process.argv[1];
   if (!entry) {
     return false;
