@@ -270,6 +270,15 @@ describe('npm packlist policy', () => {
     expect(issues).toEqual([]);
   });
 
+  it('keeps the public contracts source manifest publishable without runtime @makaio workspace deps', () => {
+    const path = join(FRAMEWORK_ROOT, 'core', 'contracts', 'package.json');
+    const manifest = readJsonFile<PackedPackageManifest>(path);
+    const issues = checkSourceManifestMakaioReferences(manifest).map((issue) => `${path}: ${issue}`);
+
+    expect(issues).toEqual([]);
+    expect(manifest.peerDependencies?.['@makaio/framework']).toBe('^1.0.0');
+  });
+
   it('keeps every public adapter package loadable through the convention server entry', () => {
     const adapterManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'adapters', 'implementations'));
 
