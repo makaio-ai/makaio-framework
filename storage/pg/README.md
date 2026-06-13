@@ -10,9 +10,11 @@ export MAKAIO_DATABASE_URL=postgres://user:password@host:5432/makaio
 ```
 
 The node-postgres driver (`pg`) is a regular dependency — installing this
-package is everything a Postgres host needs for the driver. The committed
-Postgres migration chain ships inside the npm tarball (`drizzle-postgres/`)
-and is applied automatically at boot. The engine attaches through the storage
+package is everything a Postgres host needs for the driver. The package stages
+a runtime-only Postgres migration chain inside the npm tarball
+(`drizzle-postgres/`): root-level `.sql` files plus `meta/_journal.json`.
+Drizzle generator snapshots remain source-only. The chain is applied
+automatically at boot. The engine attaches through the storage
 engine registry: Node and Bun runtime hosts auto-resolve it for recognized
 `postgres://` / `postgresql://` URLs, the `database.engines` boot option
 registers it explicitly, and direct callers use

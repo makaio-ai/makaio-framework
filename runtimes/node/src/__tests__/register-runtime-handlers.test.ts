@@ -96,14 +96,14 @@ describe('registerRuntimeHandlers', () => {
         packageName: 'wrong-package',
         factory: async () => ({ adapterId: 'wrong-adapter-id' }),
         options: { adapterId: 'wrong-adapter-id' },
-        providers: [{ definition: providerDefinition }],
+        providers: [{ definition: providerDefinition, providerPackageName: 'wrong-package' }],
       },
       {
         name: 'bound-adapter',
         packageName: 'bound-package',
         factory: async () => ({ adapterId: 'bound-adapter-id' }),
         options: { adapterId: 'bound-adapter-id' },
-        providers: [{ definition: providerDefinition }],
+        providers: [{ definition: providerDefinition, providerPackageName: 'bound-package' }],
       },
     ];
     const instances = new Map<string, AdapterInstance>([

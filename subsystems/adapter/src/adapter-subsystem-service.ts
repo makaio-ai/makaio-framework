@@ -13,6 +13,7 @@ import { AdapterContributionProcessor } from './adapter-contribution-processor.j
 import { AdapterSubsystemSubjects } from './namespace.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
 import type { LoadedAdapter, AdapterInstance } from './adapter-runtime-types.js';
+import { registerProviderStorageFallbackHandlers } from './provider-storage-fallback.js';
 
 /**
  * Constructor options for {@link AdapterSubsystemService}.
@@ -123,6 +124,7 @@ export class AdapterSubsystemService extends BaseService {
   }
 
   private registerBusHandlers(): void {
+    this.addCleanup(registerProviderStorageFallbackHandlers(this.bus, () => this.registry.getLoadedAdapters()));
     this.registerReadHandlers();
     this.registerMutationHandlers();
   }

@@ -1,5 +1,43 @@
-import { describe, expect, it } from 'vitest';
-import { buildFrameworkPeerRange, createStagedPackageJson } from './npm-publish-staging.js';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { registerStorageEngine } from '@makaio/storage-drizzle';
+import { storageEngine as postgresStorageEngine } from '@makaio/storage-pg';
+import { readMigrations } from '@makaio/storage-migrations';
+import { buildFrameworkPeerRange, createStagedPackageJson, stagePackageForNpmPublish } from './npm-publish-staging.js';
+
+registerStorageEngine(postgresStorageEngine);
+
+const tempDirs: string[] = [];
+
+/**
+ * Create a temporary package root tracked for cleanup.
+ * @returns Absolute path to the temporary directory.
+ */
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'makaio-publish-staging-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+/**
+ * Write a fixture file, creating parent directories first.
+ * @param root - Fixture root.
+ * @param relativePath - Root-relative file path.
+ * @param content - File content.
+ */
+function writeFixture(root: string, relativePath: string, content = ''): void {
+  const filePath = join(root, relativePath);
+  mkdirSync(join(filePath, '..'), { recursive: true });
+  writeFileSync(filePath, content);
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('buildFrameworkPeerRange', () => {
   it('returns a caret range for stable versions', () => {
@@ -90,5 +128,124 @@ describe('createStagedPackageJson', () => {
     );
     expect((staged.publishConfig as Record<string, unknown> | undefined)?.['directory']).toBeUndefined();
     expect((staged.publishConfig as Record<string, unknown> | undefined)?.['access']).toBe('public');
+  });
+});
+
+describe('stagePackageForNpmPublish', () => {
+  it('stages migration chain directories as runtime-readable assets', () => {
+    const packageDir = makeTempDir();
+    writeFixture(
+      packageDir,
+      'package.json',
+      JSON.stringify({
+        name: '@makaio/storage-pg',
+        version: '1.0.0',
+        type: 'module',
+        files: ['dist', 'drizzle-postgres', 'LICENSE', 'README.md'],
+        publishConfig: { access: 'public', directory: 'node_modules/.makaio-publish' },
+      }),
+    );
+    writeFixture(packageDir, 'LICENSE', 'MIT');
+    writeFixture(packageDir, 'README.md', '# test');
+    writeFixture(packageDir, 'dist/index.mjs', 'export {};');
+    writeFixture(packageDir, 'drizzle-postgres/0000_init.sql', 'CREATE TABLE demo (id text);');
+    writeFixture(
+      packageDir,
+      'drizzle-postgres/meta/_journal.json',
+      JSON.stringify({
+        dialect: 'postgresql',
+        entries: [{ idx: 0, version: '7', when: 1, tag: '0000_init', breakpoints: false }],
+      }),
+    );
+    writeFixture(packageDir, 'drizzle-postgres/meta/0000_snapshot.json', '{"generator":"state"}');
+
+    const publishDir = stagePackageForNpmPublish(packageDir, '1.0.0');
+
+    expect(existsSync(join(publishDir, 'drizzle-postgres/0000_init.sql'))).toBe(true);
+    expect(existsSync(join(publishDir, 'drizzle-postgres/meta/_journal.json'))).toBe(true);
+    expect(existsSync(join(publishDir, 'drizzle-postgres/meta/0000_snapshot.json'))).toBe(false);
+    expect(
+      readMigrations({ migrationsDir: join(publishDir, 'drizzle-postgres'), expectedDialect: 'postgres' }),
+    ).toEqual([
+      expect.objectContaining({
+        tag: '0000_init',
+        sql: ['CREATE TABLE demo (id text);'],
+      }),
+    ]);
+  });
+
+  it('stages dist files without sourcemaps and points types at emitted declarations', () => {
+    const packageDir = makeTempDir();
+    writeFixture(
+      packageDir,
+      'package.json',
+      JSON.stringify({
+        name: '@makaio/client-test',
+        version: '1.0.0',
+        type: 'module',
+        files: ['dist', 'LICENSE', 'README.md'],
+        publishConfig: {
+          access: 'public',
+          exports: {
+            '.': './dist/index.mjs',
+            './server': './dist/server.mjs',
+          },
+        },
+      }),
+    );
+    writeFixture(packageDir, 'LICENSE', 'MIT');
+    writeFixture(packageDir, 'README.md', '# test');
+    writeFixture(packageDir, 'dist/index.mjs', 'export {};');
+    writeFixture(packageDir, 'dist/index.d.ts', 'export {};');
+    writeFixture(packageDir, 'dist/index.d.ts.map', '{}');
+    writeFixture(packageDir, 'dist/server.mjs', 'export {};');
+    writeFixture(packageDir, 'dist/server.d.ts', 'export {};');
+
+    const publishDir = stagePackageForNpmPublish(packageDir, '1.0.0');
+    const manifest = JSON.parse(readFileSync(join(publishDir, 'package.json'), 'utf8')) as {
+      readonly types?: string;
+      readonly exports?: {
+        readonly '.': { readonly types?: string };
+        readonly './server': { readonly types?: string };
+      };
+    };
+
+    expect(existsSync(join(publishDir, 'dist/index.d.ts'))).toBe(true);
+    expect(existsSync(join(publishDir, 'dist/index.d.ts.map'))).toBe(false);
+    expect(manifest.types).toBe('dist/index.d.ts');
+    expect(manifest.exports?.['.'].types).toBe('./dist/index.d.ts');
+    expect(manifest.exports?.['./server'].types).toBe('./dist/server.d.ts');
+  });
+
+  it('rejects publish directories outside the package root', () => {
+    const packageDir = makeTempDir();
+    writeFixture(
+      packageDir,
+      'package.json',
+      JSON.stringify({
+        name: '@makaio/test',
+        version: '1.0.0',
+        files: ['dist'],
+        publishConfig: { directory: '../outside' },
+      }),
+    );
+    writeFixture(packageDir, 'dist/index.mjs', 'export {};');
+
+    expect(() => stagePackageForNpmPublish(packageDir, '1.0.0')).toThrow(/publish directory escapes package root/u);
+  });
+
+  it('rejects package file entries outside the package root', () => {
+    const packageDir = makeTempDir();
+    writeFixture(
+      packageDir,
+      'package.json',
+      JSON.stringify({
+        name: '@makaio/test',
+        version: '1.0.0',
+        files: ['../outside.txt'],
+      }),
+    );
+
+    expect(() => stagePackageForNpmPublish(packageDir, '1.0.0')).toThrow(/publish file escapes package root/u);
   });
 });

@@ -7,6 +7,7 @@
  */
 
 import { builtinModules } from 'node:module';
+import { isRuntimeMigrationChainFile } from './runtime-migration-assets.js';
 
 /** Result of a packlist policy check for a single package. */
 export interface PacklistPolicyResult {
@@ -53,6 +54,30 @@ const FORBIDDEN_PATTERNS = [
   /(^|\/)(npm-debug|yarn-error)\.log$/,
 ];
 
+const MIGRATION_CHAIN_DIR_PATTERN = /^drizzle(?:-[^/]+)?$/u;
+
+/**
+ * Return the path inside a `drizzle*` migration chain, if the file is under one.
+ * @param file - Packlist file path using slash separators.
+ * @returns Chain-relative file path, or undefined when outside a chain.
+ */
+function toMigrationChainRelativePath(file: string): string | undefined {
+  const segments = file.split('/');
+  const chainIndex = segments.findIndex((segment) => MIGRATION_CHAIN_DIR_PATTERN.test(segment));
+  if (chainIndex === -1 || chainIndex === segments.length - 1) return undefined;
+  return segments.slice(chainIndex + 1).join('/');
+}
+
+/**
+ * Return whether a packed file violates the runtime migration artifact contract.
+ * @param file - Packlist file path using slash separators.
+ * @returns Whether the file is source-only content inside a migration chain.
+ */
+function isForbiddenRuntimeMigrationChainFile(file: string): boolean {
+  const relativePath = toMigrationChainRelativePath(file);
+  return relativePath !== undefined && !isRuntimeMigrationChainFile(relativePath);
+}
+
 /**
  * Check a package's file list against the npm packlist policy.
  * @param packageName - Package name for reporting.
@@ -63,7 +88,9 @@ export function checkPacklist(packageName: string, files: readonly string[]): Pa
   const fileSet = new Set(files);
   const required = ['package.json', 'README.md', 'LICENSE'];
   const missingRequired = required.filter((file) => !fileSet.has(file));
-  const forbidden = files.filter((file) => FORBIDDEN_PATTERNS.some((pattern) => pattern.test(file)));
+  const forbidden = files.filter(
+    (file) => FORBIDDEN_PATTERNS.some((pattern) => pattern.test(file)) || isForbiddenRuntimeMigrationChainFile(file),
+  );
   return { packageName, missingRequired, forbidden };
 }
 

@@ -10,7 +10,7 @@
  *
  * Groups:
  *   1. bus    — `@makaio/bus-core` bundles all deps inline (singleton root)
- *   2. core   — 26 packages that externalize framework siblings
+ *   2. core   — framework packages that externalize framework siblings
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
 
@@ -30,6 +30,7 @@ import {
   type PackageExportsField,
 } from '@makaio/build-tooling/package-exports';
 import { verifyFrameworkDist } from '../../scripts/lib/framework-dist-verifier.js';
+import { copyRuntimeMigrationChain } from '../../scripts/lib/runtime-migration-assets.js';
 import { writeFrameworkDistBuildStamp } from './build-fingerprint.js';
 
 /** This package's root (`packages/framework/`). Build output lands in `./dist/` here. */
@@ -186,7 +187,7 @@ try {
 // `dist/runtime-node/../drizzle` lookup). The Postgres chain ships with
 // `@makaio/storage-pg`, whose engine resolves it through
 // `StorageEngine.migrations.resolveSourceChainDir`.
-cpSync(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'), { recursive: true });
+copyRuntimeMigrationChain(join(FRAMEWORK_ROOT, 'storage', 'migrations', 'drizzle'), join(DIST, 'drizzle'));
 
 // ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)

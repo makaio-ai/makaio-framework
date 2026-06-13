@@ -101,6 +101,11 @@ describe('FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS', () => {
     expect(entry?.packageRoot).toBe('core/tools-core');
   });
 
+  it('maps framework packages referenced by public declarations to umbrella subpaths', () => {
+    expect(getFrameworkPublicPackageByName('@makaio/subsystem-adapter')?.frameworkSubpath).toBe('adapter-subsystem');
+    expect(getFrameworkPublicPackageByName('@makaio/inbound-hooks')?.frameworkSubpath).toBe('inbound-hooks');
+  });
+
   it('does not expose descriptor-owned tool extensions as tools subpaths', () => {
     const subpathSet = new Set<string>(FRAMEWORK_DIST_SUBPATHS.map((e) => e.subpath));
     expect(subpathSet.has('tools/filesystem')).toBe(false);

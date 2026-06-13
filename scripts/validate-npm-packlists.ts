@@ -134,7 +134,8 @@ const issues: string[] = [];
 for (const dir of packageDirs) {
   try {
     const sourceManifest = readPackageJson(dir);
-    const packDir = sourceManifest.publishConfig?.directory ? resolveNpmPublishDirectory(dir, sourceManifest) : dir;
+    const publishDir = resolveNpmPublishDirectory(dir, sourceManifest);
+    const packDir = existsSync(publishDir) ? publishDir : dir;
     if (!existsSync(packDir)) {
       throw new Error(`publish directory does not exist: ${packDir}`);
     }

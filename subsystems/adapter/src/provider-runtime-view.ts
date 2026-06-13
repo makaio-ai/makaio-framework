@@ -34,8 +34,8 @@ export async function buildProviderContextFromRaw(
 }
 
 /**
- * Reads all known providers for ambient credential cleanup, falling back to the
- * selected provider when storage listing is unavailable during early boot.
+ * Reads all known providers for ambient credential cleanup while always
+ * including the selected provider from the context build.
  * @param bus - Bus used to query provider storage
  * @param provider - Selected provider definition for this context
  * @returns Provider definitions visible for ambient credential discovery
@@ -46,7 +46,11 @@ async function listProvidersForAmbientCredentials(
 ): Promise<readonly ProviderRecord[]> {
   try {
     const providerListResult = await bus.requestOptional(ProviderStorageSubjects.list, {});
-    return providerListResult.handled ? providerListResult.data.providers : [provider];
+    if (!providerListResult.handled) {
+      return [provider];
+    }
+    const providers = providerListResult.data.providers;
+    return providers.some((entry) => entry.id === provider.id) ? providers : [provider, ...providers];
   } catch (error) {
     console.debug('[AdapterSubsystem] Provider list unavailable for ambient credential discovery', error);
     return [provider];

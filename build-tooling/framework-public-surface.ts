@@ -50,6 +50,7 @@ export const FRAMEWORK_DIST_SUBPATHS = [
   { subpath: 'service-base', sourceDist: 'packages/service-base/dist', packageName: '@makaio/service-base' },
   { subpath: 'contracts', sourceDist: 'core/contracts/dist', packageName: '@makaio/contracts' },
   { subpath: 'hooks', sourceDist: 'packages/hooks/dist', packageName: '@makaio/hooks' },
+  { subpath: 'inbound-hooks', sourceDist: 'packages/inbound-hooks/dist', packageName: '@makaio/inbound-hooks' },
   { subpath: 'kernel', sourceDist: 'packages/kernel/dist', packageName: '@makaio/kernel' },
   { subpath: 'services', sourceDist: 'services/core/dist', packageName: '@makaio/services-core' },
   { subpath: 'clients', sourceDist: 'subsystems/client/dist', packageName: '@makaio/subsystem-client' },
@@ -66,6 +67,11 @@ export const FRAMEWORK_DIST_SUBPATHS = [
     subpath: 'storage/handlers',
     sourceDist: 'storage/handlers/dist',
     packageName: '@makaio/storage-handlers',
+  },
+  {
+    subpath: 'adapter-subsystem',
+    sourceDist: 'subsystems/adapter/dist',
+    packageName: '@makaio/subsystem-adapter',
   },
   { subpath: 'adapters', sourceDist: 'adapters/core/dist', packageName: '@makaio/ai-adapters-core' },
   {
@@ -129,6 +135,7 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/subsystem-adapter',
   '@makaio/contracts',
   '@makaio/hooks',
+  '@makaio/inbound-hooks',
   '@makaio/kernel',
   '@makaio/services-core',
   '@makaio/subsystem-client',
@@ -177,6 +184,7 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
   { packageName: '@makaio/service-base', frameworkSubpath: 'service-base', packageRoot: 'packages/service-base' },
   { packageName: '@makaio/contracts', frameworkSubpath: 'contracts', packageRoot: 'core/contracts' },
   { packageName: '@makaio/hooks', frameworkSubpath: 'hooks', packageRoot: 'packages/hooks' },
+  { packageName: '@makaio/inbound-hooks', frameworkSubpath: 'inbound-hooks', packageRoot: 'packages/inbound-hooks' },
   { packageName: '@makaio/kernel', frameworkSubpath: 'kernel', packageRoot: 'packages/kernel' },
   { packageName: '@makaio/services-core', frameworkSubpath: 'services', packageRoot: 'services/core' },
   { packageName: '@makaio/subsystem-client', frameworkSubpath: 'clients', packageRoot: 'subsystems/client' },
@@ -197,6 +205,11 @@ export const FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS = [
     packageName: '@makaio/storage-handlers',
     frameworkSubpath: 'storage/handlers',
     packageRoot: 'storage/handlers',
+  },
+  {
+    packageName: '@makaio/subsystem-adapter',
+    frameworkSubpath: 'adapter-subsystem',
+    packageRoot: 'subsystems/adapter',
   },
   { packageName: '@makaio/ai-adapters-core', frameworkSubpath: 'adapters', packageRoot: 'adapters/core' },
   {
