@@ -21,7 +21,7 @@ import type { SessionEventEnvelopeSchema, SessionEventTypeMap } from './schemas/
  * merging without touching framework source. Host consumers augment this
  * interface inside a `declare module '@makaio/contracts'` block.
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type, import/namespace -- Intentional seam for declaration merging; z.infer is a TypeScript type utility, not a runtime member
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- Intentional seam for declaration merging
 export interface IMakaioSession extends z.infer<typeof MakaioSessionSchema> {}
 
 /**

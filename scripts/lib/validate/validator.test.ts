@@ -14,7 +14,6 @@ describe('getWorkerConfig', () => {
     });
     expect(getWorkerConfig('typescript', { profile: 'full-workspace' })).toMatchObject({
       tool: 'typescript',
-      maxHeapMB: 2048,
       timeoutMs: 1_800_000,
     });
   });

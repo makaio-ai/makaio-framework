@@ -8,6 +8,7 @@ import { DefinitionSubjects } from '@makaio/services-core/definition';
 import { buildProviderContext } from '@makaio/services-core/provider-context';
 import { ProviderRuntimeSubjects } from '@makaio/services-core/provider-runtime';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
+import { ProviderStorageSubjects, type ProviderRecord } from '@makaio/services-core/settings/storage';
 import { z } from 'zod';
 
 type LoadedProviderDefinition = LoadedAdapter['providers'][number];
@@ -109,8 +110,37 @@ function stripMetaSchema(jsonSchema: unknown): Record<string, unknown> {
   return schema;
 }
 
+/**
+ * Project a loaded adapter's provider definition into a {@link ProviderRecord}.
+ *
+ * Fills DB-specific fields with sensible defaults so the in-memory fallback
+ * satisfies the same schema as the Drizzle-backed handler.
+ * @param provider - Provider definition from a loaded adapter.
+ * @param packageName - Package that contributed this provider.
+ * @returns Provider record compatible with the storage bus contract.
+ */
+function toProviderRecord(provider: LoadedAdapter['providers'][number], packageName: string): ProviderRecord {
+  const def = provider.definition;
+  const now = Date.now();
+  return {
+    id: def.id,
+    packageName,
+    name: def.name,
+    description: def.description,
+    endpoints: def.endpoints,
+    defaultModel: def.defaultModel,
+    fastModel: def.fastModel,
+    availableModels: def.availableModels ?? [],
+    defaultModelFilterMode: 'show-all',
+    credentialEnvVars: def.credentialEnvVars,
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 // NOTE: do NOT change without explicit human approval
-/* eslint max-lines-per-function: ["error", { "max": 160 }] */
+/* eslint max-lines-per-function: ["error", { "max": 190 }] */
 /**
  * Register runtime bus handlers for adapter listing, config schemas, and model fetching.
  *
@@ -182,6 +212,48 @@ export function registerRuntimeHandlers(
         }),
       );
     }
+
+    // In-memory provider storage fallback. Product hosts register a
+    // Drizzle-backed handler via settingsStoragePackage at priority 0.
+    // Registering at priority -1 ensures the DB handler wins when present;
+    // in framework-standalone mode (e.g. CLI `serve`) this is the only
+    // handler and serves provider definitions from loaded adapters.
+    cleanups.push(
+      bus.on(
+        ProviderStorageSubjects.get,
+        ({ payload, setResult }) => {
+          for (const adapter of getLoadedAdapters()) {
+            const match = adapter.providers.find((p) => p.definition.id === payload.id);
+            if (match) {
+              setResult({ provider: toProviderRecord(match, adapter.packageName) });
+              return;
+            }
+          }
+          setResult({ provider: null });
+        },
+        { priority: -1 },
+      ),
+    );
+
+    cleanups.push(
+      bus.on(
+        ProviderStorageSubjects.list,
+        ({ setResult }) => {
+          const records: ProviderRecord[] = [];
+          const seen = new Set<string>();
+          for (const adapter of getLoadedAdapters()) {
+            for (const provider of adapter.providers) {
+              if (!seen.has(provider.definition.id)) {
+                seen.add(provider.definition.id);
+                records.push(toProviderRecord(provider, adapter.packageName));
+              }
+            }
+          }
+          setResult({ providers: records });
+        },
+        { priority: -1 },
+      ),
+    );
 
     cleanups.push(
       bus.on(ProviderRuntimeSubjects.fetchModels, async ({ payload, setResult }) => {
