@@ -16,14 +16,12 @@
  */
 
 import * as http from 'node:http';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import type { IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import type { ToolExecutionContextOverrides } from '@makaio/contracts';
 import { createHttpMcpHandler, startHttpMcpServer } from '../server.js';
+import { createClient, registerEmptyToolList } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,36 +57,6 @@ async function mountHandler(
         httpServer.close((err) => (err ? reject(err) : resolve()));
       }),
   };
-}
-
-/**
- * Create an MCP client connected to the given port.
- * @param port - HTTP port to connect to.
- * @param adapterSessionId - Optional adapter session ID passed as a query param.
- * @returns Connected client and transport.
- */
-async function createClient(
-  port: number,
-  adapterSessionId?: string,
-): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
-  const url = adapterSessionId
-    ? new URL(`http://127.0.0.1:${port}/?adapterSessionId=${encodeURIComponent(adapterSessionId)}`)
-    : new URL(`http://127.0.0.1:${port}/`);
-  const client = new Client({ name: 'test-client', version: '1.0.0' });
-  const transport = new StreamableHTTPClientTransport(url);
-  await client.connect(transport);
-  return { client, transport };
-}
-
-/**
- * Register a one-shot ToolSubjects.list handler returning an empty tool list.
- * @param bus - Bus instance to register on.
- * @returns Cleanup function that removes the handler.
- */
-function registerEmptyToolList(bus: IMakaioBus): () => void {
-  return bus.on(ToolSubjects.list, (ctx) => {
-    ctx.setResult({ tools: [], toolsets: [] });
-  });
 }
 
 // ---------------------------------------------------------------------------

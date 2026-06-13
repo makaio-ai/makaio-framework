@@ -7,6 +7,8 @@
  */
 
 export {
+  ADAPTER_SESSION_ID_HEADER,
+  ADAPTER_SESSION_ID_PARAM,
   createMcpServer,
   createMcpRequestHandler,
   createHttpMcpHandler,
@@ -27,6 +29,8 @@ export {
   type ToolApproveRequestPayload,
   type ToolApproveResponse,
 } from './server.js';
+
+export { createFetchMcpHandler, type FetchMcpHandlerHandle } from './fetch-handler.js';
 
 export type { McpAgentContext } from '@makaio/contracts';
 
