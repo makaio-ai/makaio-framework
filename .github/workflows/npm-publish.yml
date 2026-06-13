@@ -192,7 +192,7 @@ jobs:
       - name: Build selected packages
         run: |
           selected="$(node -e "const pkgs = JSON.parse(require('fs').readFileSync(process.env.DEV_PUBLISH_MANIFEST, 'utf8')); const names = pkgs.map((pkg) => pkg.name); console.log(names.length > 1 ? '{' + names.join(',') + '}' : names[0]);")"
-          yarn workspaces foreach -Apt -j 2 --include "$selected" run build
+          yarn workspaces foreach -Apti -j 1 --include "$selected" run build
 
       - name: Pack selected packages
         run: bun scripts/dev-publish.ts pack --manifest "$DEV_PUBLISH_MANIFEST"
