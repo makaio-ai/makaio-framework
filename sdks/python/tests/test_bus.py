@@ -1180,7 +1180,12 @@ class ConnectLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_connect_timeout_covers_readiness(self):
         websocket = FakeWebSocket(auto_sync_complete=False)
-        client = BusClient("ws://test", websocket_factory=lambda url: websocket, connect_timeout_ms=25)
+        client = BusClient(
+            "ws://test",
+            auth=False,
+            websocket_factory=lambda url: websocket,
+            connect_timeout_ms=25,
+        )
 
         with self.assertRaises(asyncio.TimeoutError):
             await client.connect()

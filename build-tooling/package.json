@@ -37,6 +37,10 @@
       "source": "./tsdown-adapter-preset.ts",
       "default": "./tsdown-adapter-preset.ts"
     },
+    "./tsdown-adapter-build": {
+      "source": "./tsdown-adapter-build.ts",
+      "default": "./tsdown-adapter-build.ts"
+    },
     "./framework-public-surface": {
       "source": "./framework-public-surface.ts",
       "default": "./framework-public-surface.ts"
