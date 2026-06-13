@@ -75,7 +75,7 @@ function registerCreateHandler(
   maxTurnNumberBySession: Map<string, number>,
 ): () => void {
   return bus.on(TurnStorageSubjects.create, (ctx) => {
-    const { sessionId, turnId } = ctx.payload;
+    const { sessionId, turnId, initiator } = ctx.payload;
     const now = Date.now();
     const id = turnId ?? crypto.randomUUID();
 
@@ -88,6 +88,7 @@ function registerCreateHandler(
       turnNumber,
       startedAt: now,
       status: 'active',
+      ...(initiator !== undefined && { initiator }),
     };
 
     indexTurn(turn);

@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { TurnSchema, TurnStatusSchema, TurnUsageSchema } from '@makaio/contracts';
+import { TurnInitiatorSchema, TurnSchema, TurnStatusSchema, TurnUsageSchema } from '@makaio/contracts';
 import type { SchemaRecord } from '@makaio/core';
 
 /**
@@ -30,6 +30,7 @@ export const TurnStorageSchemas = {
     request: z.object({
       sessionId: z.string(),
       turnId: z.string().optional(),
+      initiator: TurnInitiatorSchema.optional(),
     }),
     response: z.object({
       turn: TurnSchema,

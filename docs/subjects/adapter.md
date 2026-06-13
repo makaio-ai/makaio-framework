@@ -278,6 +278,7 @@ Success is implicit. Errors are thrown if:
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterId` | `string` | yes |
+| `adapterSessionId` | `string \| undefined` | no |
 | `agentId` | `string` | yes |
 | `cwd` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
@@ -382,6 +383,7 @@ For `resume` mode, `sessionId` and `adapterSessionId` are REQUIRED.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `adapterConfig` | `Record<string, unknown> \| undefined` | no |
 | `adapterId` | `string` | yes |
 | `allowedDirectories` | `string[] \| undefined` | no |
 | `allowedTools` | `string[] \| undefined` | no |

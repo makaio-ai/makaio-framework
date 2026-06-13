@@ -8,7 +8,7 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
-import type { ActiveAgentRegistry } from './agent-registry.js';
+import type { ActiveAgentEntry, ActiveAgentRegistry } from './agent-registry.js';
 import type { AgentCreationOptions } from './types.js';
 import type { McpSessionContext } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
@@ -77,7 +77,7 @@ export class AgentRehydrationManager<
   public handleRehydrateAgent = async (
     ctx: RequestContext<RehydrateAgentRequestPayload, RehydrateAgentResponsePayload>,
   ): Promise<void> => {
-    const { agentId, cwd, model } = ctx.payload;
+    const { agentId, cwd, model, adapterSessionId } = ctx.payload;
     const existing = this.inFlight.get(agentId);
     if (existing) {
       await existing;
@@ -88,15 +88,7 @@ export class AgentRehydrationManager<
     const rehydratePromise = (async (): Promise<void> => {
       const entry = this.registry.get(agentId);
       if (entry) {
-        await entry.agent.swapConnector({ cwd, model });
-        const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
-        if (refreshedAdapterSessionId) {
-          entry.adapterSessionId = refreshedAdapterSessionId;
-        }
-        if (cwd !== undefined || model !== undefined) {
-          await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
-        }
-        await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+        await this.rehydrateRegisteredAgent(agentId, entry, { adapterSessionId, cwd, model });
         return;
       }
       const result = await this.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
@@ -111,16 +103,16 @@ export class AgentRehydrationManager<
       // regains tool ledger and native passthrough. Best-effort: resolves to
       // undefined if the MCP service is unavailable on this process start.
       const mcpSessionContext = await this.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
-      // Falls back to sentinel when provider config was deleted between sessions.
       const providerContext =
         persisted.providerConfigId !== undefined
-          ? await buildProviderContext(this.globalBus, persisted.providerConfigId).catch(() =>
-              createSentinelProviderContext(),
-            )
+          ? await buildProviderContext(this.globalBus, persisted.providerConfigId).catch(createSentinelProviderContext)
           : undefined;
       const agentCreationRequest: AgentCreationOptions = {
         model: model ?? persisted.model,
         cwd: cwd ?? persisted.cwd,
+        allowedDirectories: persisted.allowedDirectories,
+        adapterSessionId: adapterSessionId ?? persisted.adapterSessionId,
+        resumeAdapterSessionId: adapterSessionId ?? persisted.adapterSessionId,
         ...(providerContext !== undefined && { providerContext }),
         ...(mcpSessionContext !== undefined && { mcpSessionContext }),
       };
@@ -170,6 +162,38 @@ export class AgentRehydrationManager<
 
     ctx.setResult({});
   };
+
+  /**
+   * Rehydrate an agent that is still present in the in-memory registry.
+   * @param agentId - Agent identifier being rehydrated
+   * @param entry - Active registry entry for the agent
+   * @param runtime - Runtime overrides from the rehydrate request
+   */
+  private async rehydrateRegisteredAgent(
+    agentId: string,
+    entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
+    runtime: { adapterSessionId?: string; cwd?: string; model?: string },
+  ): Promise<void> {
+    const nativeSessionId = runtime.adapterSessionId ?? entry.adapterSessionId;
+    await entry.agent.swapConnector({
+      cwd: runtime.cwd,
+      model: runtime.model,
+      adapterSessionId: nativeSessionId,
+      resumeAdapterSessionId: nativeSessionId,
+    });
+    const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
+    if (refreshedAdapterSessionId) {
+      entry.adapterSessionId = refreshedAdapterSessionId;
+    }
+    if (runtime.cwd !== undefined || runtime.model !== undefined) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+        agentId,
+        cwd: runtime.cwd,
+        model: runtime.model,
+      });
+    }
+    await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+  }
 
   /**
    * Re-resolve MCP session context from persisted resolution keys on rehydrate.

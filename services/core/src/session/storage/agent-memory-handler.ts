@@ -7,20 +7,34 @@ import { AgentStorageSubjects } from './agent-namespace.js';
  *
  * Returns `false` when none of the mutable fields are provided (no-op guard).
  * @param agent - Agent record to mutate in-place
+ * @param adapterId - Current runtime adapter instance ID, or `undefined` to leave unchanged
  * @param cwd - New working directory, or `undefined` to leave unchanged
  * @param model - New model identifier, or `undefined` to leave unchanged
+ * @param allowedDirectories - Directory restrictions, or `undefined` to leave unchanged
  * @param providerConfigId - New provider config UUID, or `undefined` to leave unchanged
  * @returns `true` if at least one field was updated, `false` otherwise
  */
 function applyRuntimeUpdate(
   agent: MakaioSessionAgent,
+  adapterId: string | undefined,
   cwd: string | undefined,
   model: string | undefined,
+  allowedDirectories: string[] | undefined,
   providerConfigId: string | undefined,
 ): boolean {
-  if (cwd === undefined && model === undefined && providerConfigId === undefined) return false;
+  if (
+    adapterId === undefined &&
+    cwd === undefined &&
+    model === undefined &&
+    allowedDirectories === undefined &&
+    providerConfigId === undefined
+  ) {
+    return false;
+  }
+  if (adapterId !== undefined) agent.adapterId = adapterId;
   if (cwd !== undefined) agent.cwd = cwd;
   if (model !== undefined) agent.model = model;
+  if (allowedDirectories !== undefined) agent.allowedDirectories = allowedDirectories;
   if (providerConfigId !== undefined) agent.providerConfigId = providerConfigId;
   return true;
 }
@@ -115,8 +129,8 @@ export function registerMemoryAgentStorage(bus: IMakaioBus): () => void {
         ctx.setResult({ success: false });
         return;
       }
-      const { cwd, model, providerConfigId } = ctx.payload;
-      if (!applyRuntimeUpdate(agent, cwd, model, providerConfigId)) {
+      const { adapterId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
+      if (!applyRuntimeUpdate(agent, adapterId, cwd, model, allowedDirectories, providerConfigId)) {
         ctx.setResult({ success: false });
         return;
       }

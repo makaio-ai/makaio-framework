@@ -31,6 +31,7 @@ const CREATE_TURNS_TABLE_SQL = sql`
     status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'error')),
     error TEXT,
     usage TEXT,
+    initiator TEXT,
     UNIQUE(session_id, turn_number)
   )
 `;

@@ -22,6 +22,7 @@ export interface AgentConnectorLifecycleManagerConfig<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      resumeAdapterSessionId: string;
       mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ) => ConfigFactoryInput<TBus>;
@@ -112,6 +113,8 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       cwd: string;
       model: string;
       providerContext: ProviderContext;
+      adapterSessionId: string;
+      resumeAdapterSessionId: string;
       mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ): Promise<void> {
@@ -125,7 +128,10 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       model: configOverrides?.model ?? currentConnector.model,
       ...(configOverrides?.providerContext && { providerContext: configOverrides.providerContext }),
       ...(configOverrides?.mcpSessionContext && { mcpSessionContext: configOverrides.mcpSessionContext }),
-      adapterSessionId: crypto.randomUUID(),
+      adapterSessionId: configOverrides?.adapterSessionId ?? crypto.randomUUID(),
+      ...(configOverrides?.resumeAdapterSessionId !== undefined && {
+        resumeAdapterSessionId: configOverrides.resumeAdapterSessionId,
+      }),
     });
 
     const fullConfig = await this.config.configFactory(configInput);

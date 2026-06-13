@@ -92,6 +92,7 @@ export class SessionTurnManager {
     const createResult = await this.bus.requestOptional(TurnStorageSubjects.create, {
       sessionId,
       ...(turnId !== undefined && { turnId }),
+      ...(initiator !== undefined && { initiator }),
     });
 
     let resolvedTurnId: string;

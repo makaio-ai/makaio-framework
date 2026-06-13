@@ -3,6 +3,7 @@ import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } fro
 import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
 import { ContextModeSchema } from '../subagent/schemas.js';
+import { AIReasoningLevelSchema } from '../model/index.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 
@@ -985,6 +986,8 @@ export const WorkflowResolvedRoleSchema = z.object({
   adapterName: z.string().min(1),
   /** Model override for the resolved role. */
   model: z.string().optional(),
+  /** Reasoning effort override for supporting adapters. */
+  reasoningEffort: AIReasoningLevelSchema.optional(),
   /** Harness ID for per-role tool governance. */
   harnessId: z.string().optional(),
   /** System prompt to prepend for this role. */

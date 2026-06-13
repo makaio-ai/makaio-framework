@@ -70,6 +70,12 @@ export const turnsDual = defineDualTable(
      * @see TurnUsageSchema in libs/contracts for structure definition
      */
     usage: c.text('usage'),
+
+    /**
+     * Turn origin metadata for loop prevention and audit.
+     * Stored as hand-stringified JSON because turn.create uses a raw SQL CTE.
+     */
+    initiator: c.text('initiator'),
   }),
   {
     sqlite: (t) => [

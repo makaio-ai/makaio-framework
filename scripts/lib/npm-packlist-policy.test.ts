@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   checkDeclarationDependencies,
@@ -7,7 +9,31 @@ import {
   checkRuntimeWorkspaceDependencies,
   checkSourceManifestMakaioReferences,
   extractBareImportSpecifiers,
+  type PackedExtensionDescriptor,
+  type PackedPackageManifest,
 } from './npm-packlist-policy.js';
+import { NPM_PUBLISH_DIRECTORY } from './npm-publish-staging.js';
+
+const FRAMEWORK_ROOT = resolve(import.meta.dirname, '..', '..');
+
+function readPackageJson(packageDir: string): PackedPackageManifest {
+  return JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as PackedPackageManifest;
+}
+
+function readJsonFile<T>(path: string): T {
+  return JSON.parse(readFileSync(path, 'utf8')) as T;
+}
+
+function discoverPublicPackageManifests(root: string): Array<{ path: string; manifest: PackedPackageManifest }> {
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(root, entry.name))
+    .filter((packageDir) => existsSync(join(packageDir, 'package.json')))
+    .map((packageDir) => ({ path: join(packageDir, 'package.json'), manifest: readPackageJson(packageDir) }))
+    .filter(({ manifest }) => {
+      return (manifest.publishConfig as { access?: unknown } | undefined)?.access === 'public';
+    });
+}
 
 describe('npm packlist policy', () => {
   it('accepts dist files plus package metadata', () => {
@@ -181,6 +207,53 @@ describe('npm packlist policy', () => {
         peerDependencies: { '@makaio/storage-drizzle': '^1.0.0' },
       }),
     ).toEqual(['@makaio/storage-pg: @makaio peer dependency other than @makaio/framework: @makaio/storage-drizzle']);
+  });
+
+  it('keeps public adapter and client source manifests publishable without runtime @makaio workspace deps', () => {
+    const packageManifests = [
+      ...discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'adapters', 'implementations')),
+      ...discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'clients')),
+    ];
+
+    const issues = packageManifests.flatMap(({ path, manifest }) =>
+      checkSourceManifestMakaioReferences(manifest).map((issue) => `${path}: ${issue}`),
+    );
+
+    expect(issues).toEqual([]);
+  });
+
+  it('keeps every public adapter package loadable through the convention server entry', () => {
+    const adapterManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'adapters', 'implementations'));
+
+    const issues = adapterManifests.flatMap(({ path, manifest }) => {
+      const packageDir = path.slice(0, -'/package.json'.length);
+      const descriptor = readJsonFile<PackedExtensionDescriptor>(join(packageDir, 'descriptor.json'));
+      if (descriptor.entrypoints?.server !== true) {
+        return [`${path}: public adapters must declare descriptor.entrypoints.server=true`];
+      }
+
+      return checkDescriptorEntrypointFiles(
+        manifest.name ?? path,
+        descriptor,
+        ['package.json', 'README.md', 'LICENSE', 'descriptor.json', 'dist/index.mjs', 'dist/server.mjs'],
+        manifest,
+      ).map((issue) => `${path}: ${issue}`);
+    });
+
+    expect(issues).toEqual([]);
+  });
+
+  it('stages public client packages before npm packlist validation', () => {
+    const clientManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'clients'));
+
+    const issues = clientManifests.flatMap(({ path, manifest }) => {
+      const directory = (manifest.publishConfig as { directory?: unknown } | undefined)?.directory;
+      return directory === NPM_PUBLISH_DIRECTORY
+        ? []
+        : [`${path}: public clients must publish from ${NPM_PUBLISH_DIRECTORY}`];
+    });
+
+    expect(issues).toEqual([]);
   });
 
   it('requires descriptor entrypoint stems to exist as dist files in the packlist', () => {

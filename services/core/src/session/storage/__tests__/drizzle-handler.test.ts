@@ -221,6 +221,7 @@ describe('registerDrizzleSessionStorage', () => {
         createdAt: 1000,
         lastActivityAt: 1000,
         role: 'lead',
+        allowedDirectories: ['/workspace'],
       });
       const memberAgent = createAgent({
         agentId: 'member-agent',
@@ -267,6 +268,7 @@ describe('registerDrizzleSessionStorage', () => {
       expect(retrieved?.adapterId).toBe('adapter-1');
       expect(retrieved?.adapterName).toBe('claude-code');
       expect(retrieved?.role).toBe('lead');
+      expect(retrieved?.allowedDirectories).toEqual(['/workspace']);
     });
   });
 

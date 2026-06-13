@@ -96,6 +96,7 @@ export {
   SessionMessageBlockSchema,
   SessionMessageSchema,
   SessionMessageRoleSchema,
+  TurnInitiatorSchema,
   TurnSchema,
   TurnStatusSchema,
   TurnUsageSchema,
@@ -109,6 +110,7 @@ export type {
   SessionMessage,
   SessionMessageRole,
   Turn,
+  TurnInitiator,
   TurnStatus,
   TurnUsage,
   UsageMetrics,
@@ -124,9 +126,7 @@ export type { BranchBehavior } from './utils/index.js';
 export type {
   SendMessageRequest as SessionSendMessageRequest,
   SendMessageResponse as SessionSendMessageResponse,
-  TurnInitiator,
 } from './schemas/orchestrator.js';
-export { TurnInitiatorSchema } from './schemas/orchestrator.js';
 
 // Compression mode (framework-owned, used by session/agent and agent-resolution schemas)
 export { CompressionModeSchema, type CompressionMode } from './schemas/compression.js';

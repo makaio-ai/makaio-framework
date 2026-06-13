@@ -176,6 +176,7 @@ export function createAgentConnectorLifecycleManager<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      resumeAdapterSessionId: string;
       mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ) => ConfigFactoryInput<TBus>;

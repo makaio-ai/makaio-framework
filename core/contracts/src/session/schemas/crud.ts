@@ -7,6 +7,27 @@ import { MakaioSessionSchema, SessionWithPreviewSchema } from './session.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
 import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
 
+const RestartAgentsResultSchema = z.discriminatedUnion('success', [
+  z.object({
+    /** Agent that was rehydrated */
+    agentId: z.string(),
+    /** Adapter instance used for rehydration */
+    adapterId: z.string(),
+    /** Rehydrate succeeded */
+    success: z.literal(true),
+  }),
+  z.object({
+    /** Agent whose rehydrate failed */
+    agentId: z.string(),
+    /** Adapter instance targeted for rehydration */
+    adapterId: z.string(),
+    /** Rehydrate failed */
+    success: z.literal(false),
+    /** Failure message */
+    error: z.string(),
+  }),
+]);
+
 /**
  * Caller-facing fields shared by `session.create` and `session.registerExternal`.
  *
@@ -241,6 +262,30 @@ export const CrudSchemas = {
     response: z.object({
       /** Whether the session was successfully resumed */
       success: z.boolean(),
+    }),
+  },
+
+  /**
+   * Explicitly restart persisted session agents.
+   *
+   * Subject: `session.restartAgents`
+   * Type: Request (RPC)
+   *
+   * This restores runtime connectors for agents already persisted on the
+   * session. It intentionally does not change `session.resume` status
+   * semantics; closed-session status and runtime rehydration remain separate
+   * seams.
+   */
+  restartAgents: {
+    request: z.object({
+      /** Session whose persisted agents should be rehydrated */
+      sessionId: z.string(),
+    }),
+    response: z.object({
+      /** Session whose agents were targeted */
+      sessionId: z.string(),
+      /** Per-agent rehydrate result */
+      results: z.array(RestartAgentsResultSchema),
     }),
   },
 
@@ -480,3 +525,7 @@ export const CrudSchemas = {
     }),
   },
 } satisfies SchemaRecord;
+
+export type RestartAgentsResult = z.infer<typeof RestartAgentsResultSchema>;
+export type RestartAgentsRequest = z.infer<(typeof CrudSchemas)['restartAgents']['request']>;
+export type RestartAgentsResponse = z.infer<(typeof CrudSchemas)['restartAgents']['response']>;

@@ -88,7 +88,9 @@ describe('protocol manifest export', () => {
     expect(sessionSubjects).toEqual([
       'session.agent.added',
       'session.created',
+      'session.restartAgents',
       'session.sendMessage',
+      'session.turn.await',
       'session.turn.completed',
       'session.turn.started',
       'session.user_message.sent',

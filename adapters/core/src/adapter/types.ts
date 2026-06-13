@@ -37,7 +37,9 @@ export type AgentCreationOptions = Omit<
       | 'env'
       | 'allowedTools'
       | 'disallowedTools'
+      | 'allowedDirectories'
       | 'reasoningEffort'
+      | 'adapterConfig'
       | 'mode'
       | 'mcpSessionContext'
       | 'harnessId'
@@ -50,6 +52,7 @@ export type AgentCreationOptions = Omit<
   'providerContext'
 > & {
   adapterSessionId?: string;
+  resumeAdapterSessionId?: string;
   /** Unresolved provider context (credential refs, not plaintext). */
   providerContext?: ProviderContext;
 };

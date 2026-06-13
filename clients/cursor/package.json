@@ -13,11 +13,9 @@
   "peerDependencies": {
     "@makaio/framework": "^1.0.0"
   },
-  "dependencies": {
-    "@makaio/contracts": "workspace:*"
-  },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
+    "@makaio/contracts": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3"
   },
@@ -29,9 +27,16 @@
   ],
   "publishConfig": {
     "access": "public",
+    "directory": "node_modules/.makaio-publish",
     "exports": {
-      ".": "./dist/index.mjs",
-      "./server": "./dist/server.mjs"
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./server": {
+        "types": "./dist/server.d.ts",
+        "default": "./dist/server.mjs"
+      }
     }
   },
   "repository": {

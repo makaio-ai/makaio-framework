@@ -1,7 +1,14 @@
 import { eq, and, asc, desc, sql } from 'drizzle-orm';
 import { getRawSqlExecutor, getStorageEngine, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { TurnUsageSchema, type Turn, type TurnStatus, type TurnUsage } from '@makaio/contracts';
+import {
+  TurnInitiatorSchema,
+  TurnUsageSchema,
+  type Turn,
+  type TurnInitiator,
+  type TurnStatus,
+  type TurnUsage,
+} from '@makaio/contracts';
 import { TurnStorageSubjects } from '../../turn/namespace.js';
 import type { SelectTurn } from './schema.js';
 import { turnsSchema } from './schema.variants.js';
@@ -47,11 +54,40 @@ function parseUsage(usage: string | null): TurnUsage | undefined {
 }
 
 /**
+ * Serialize turn initiator metadata for storage.
+ * @param initiator - Turn initiator metadata
+ * @returns JSON blob for persistence, or null when absent
+ */
+function serializeInitiator(initiator: TurnInitiator | undefined): string | null {
+  return initiator ? JSON.stringify(initiator) : null;
+}
+
+/**
+ * Parse stored initiator JSON into a TurnInitiator object.
+ * @param initiator - Stored initiator JSON value
+ * @returns Parsed initiator or undefined if absent/invalid
+ */
+function parseInitiator(initiator: string | null): TurnInitiator | undefined {
+  if (!initiator) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(initiator);
+    const result = TurnInitiatorSchema.safeParse(parsed);
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Convert database row to Turn type.
  * @param row - Database row to convert
  * @returns Turn object
  */
 function rowToTurn(row: SelectTurn): Turn {
+  const initiator = parseInitiator(row.initiator);
   return {
     turnId: row.turnId,
     sessionId: row.sessionId,
@@ -61,6 +97,7 @@ function rowToTurn(row: SelectTurn): Turn {
     status: row.status as TurnStatus,
     error: row.error ?? undefined,
     usage: parseUsage(row.usage),
+    ...(initiator !== undefined && { initiator }),
   };
 }
 
@@ -105,9 +142,10 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
   const { turns } = resolveSchema(db, turnsSchema);
 
   return bus.on(TurnStorageSubjects.create, async (ctx) => {
-    const { sessionId, turnId } = ctx.payload;
+    const { sessionId, turnId, initiator } = ctx.payload;
     const now = Date.now();
     const id = turnId ?? crypto.randomUUID();
+    const serializedInitiator = serializeInitiator(initiator);
 
     // Turn number assignment via CTE-based INSERT (single statement) plus a
     // bounded retry on unique-violation:
@@ -136,8 +174,8 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
             FROM turns
             WHERE session_id = ${sessionId}
           )
-          INSERT INTO turns (turn_id, session_id, turn_number, started_at, status)
-          SELECT ${id}, ${sessionId}, n, ${now}, ${'active'}
+          INSERT INTO turns (turn_id, session_id, turn_number, started_at, status, initiator)
+          SELECT ${id}, ${sessionId}, n, ${now}, ${'active'}, ${serializedInitiator}
           FROM next_num
         `);
         break;
@@ -161,6 +199,7 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
       turnNumber: inserted.turnNumber,
       startedAt: now,
       status: 'active',
+      ...(initiator !== undefined && { initiator }),
     };
 
     ctx.setResult({ turn });
@@ -228,6 +267,7 @@ function registerSetHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
       status: turn.status,
       error: turn.error ?? null,
       usage: turn.usage ? JSON.stringify(turn.usage) : null,
+      initiator: serializeInitiator(turn.initiator),
     };
 
     await db.insert(turns).values(values).onConflictDoUpdate({ target: turns.turnId, set: values });

@@ -9,28 +9,13 @@ import { MessageInputSchema, MessageOutcomeSchema, ResponseSchemaDescriptorSchem
 import type { SchemaRecord } from '@makaio/core';
 import { SessionContextSchema } from '../session-context.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
-import { SessionMessageOriginSchema } from './message.js';
+import { SessionMessageOriginSchema, TurnInitiatorSchema } from './message.js';
 
 // ============================================================================
 // Orchestrator Base Schemas
 // ============================================================================
 
-/**
- * Identifies the origin of a turn for loop prevention and audit.
- *
- * Used by extensions (e.g., Routine) to distinguish user-initiated turns from
- * extension-initiated turns, preventing recursive execution loops.
- */
-export const TurnInitiatorSchema = z.object({
-  /** Origin category */
-  source: z.enum(['user', 'extension', 'system']),
-  /**
-   * Identifier for the specific origin.
-   *
-   * Examples: `'routine:validation'`, `'loop'`, `'subagent:xyz'`.
-   */
-  sourceId: z.string().optional(),
-});
+export { TurnInitiatorSchema };
 
 /** Parsed type for {@link TurnInitiatorSchema}. */
 export type TurnInitiator = z.infer<typeof TurnInitiatorSchema>;
@@ -53,6 +38,15 @@ const BaseTurnEventSchema = z.object({
 const BaseUserMessageEventSchema = BaseTurnEventSchema.extend({
   /** User message identifier */
   messageId: z.string(),
+});
+
+const TurnCompletedEventSchema = BaseTurnEventSchema.extend({
+  /** Whether all agents completed successfully */
+  success: z.boolean(),
+  /** Error message if any agent failed */
+  error: z.string().optional(),
+  /** Origin of the turn (for loop prevention and audit) */
+  initiator: TurnInitiatorSchema.optional(),
 });
 
 const SessionCustomAgentSelectionSchema = AgentSelectionBaseSchema.safeExtend({
@@ -288,14 +282,31 @@ export const OrchestratorSchemas = {
    * - success=false: any agent had outcome='error'
    * - cancelled/superseded/merged outcomes are neutral (not errors)
    */
-  'turn.completed': BaseTurnEventSchema.extend({
-    /** Whether all agents completed successfully */
-    success: z.boolean(),
-    /** Error message if any agent failed */
-    error: z.string().optional(),
-    /** Origin of the turn (for loop prevention and audit) */
-    initiator: TurnInitiatorSchema.optional(),
-  }),
+  'turn.completed': TurnCompletedEventSchema,
+
+  /**
+   * Await completion of a specific session turn.
+   *
+   * Subject: `session.turn.await`
+   * Type: Request (RPC)
+   *
+   * Resolves with the matching `session.turn.completed` payload. The timeout is
+   * required so callers cannot accidentally create an unbounded wait.
+   */
+  'turn.await': {
+    request: z.object({
+      /** Session whose turn should complete */
+      sessionId: z.string(),
+      /** Turn identifier to wait for */
+      turnId: z.string(),
+      /** Maximum wait duration in milliseconds */
+      timeoutMs: z.number().int().positive(),
+    }),
+    response: z.object({
+      /** Matched turn completion payload */
+      completion: TurnCompletedEventSchema,
+    }),
+  },
 
   /**
    * User message sent to session.
@@ -413,6 +424,8 @@ export type AgentAttachRequest = z.infer<(typeof OrchestratorSchemas)['agent.att
 export type AgentAttachResponse = z.infer<(typeof OrchestratorSchemas)['agent.attach']['response']>;
 export type TurnStarted = z.infer<(typeof OrchestratorSchemas)['turn.started']>;
 export type TurnCompleted = z.infer<(typeof OrchestratorSchemas)['turn.completed']>;
+export type TurnAwaitRequest = z.infer<(typeof OrchestratorSchemas)['turn.await']['request']>;
+export type TurnAwaitResponse = z.infer<(typeof OrchestratorSchemas)['turn.await']['response']>;
 export type UserMessageSent = z.infer<(typeof OrchestratorSchemas)['user_message.sent']>;
 export type UserMessageAcknowledged = z.infer<(typeof OrchestratorSchemas)['user_message.acknowledged']>;
 export type UserMessageCompleted = z.infer<(typeof OrchestratorSchemas)['user_message.completed']>;

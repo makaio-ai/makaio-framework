@@ -18,11 +18,14 @@ export type OptionalAgentRuntimeFields = Partial<
     | 'env'
     | 'allowedTools'
     | 'disallowedTools'
+    | 'allowedDirectories'
+    | 'adapterSessionId'
     | 'resumeAdapterSessionId'
     | 'harnessId'
     | 'clientId'
     | 'clientProfileName'
     | 'reasoningEffort'
+    | 'adapterConfig'
     | 'mcpSessionContext'
     | 'toolLedger'
     | 'ephemeral'
@@ -36,7 +39,7 @@ export type OptionalAgentRuntimeFields = Partial<
  * `createAgent` below the ESLint complexity ceiling while preserving
  * type-safe undefined-stripping semantics.
  *
- * Precedence: `cwd`/`env` override `platformCwd`/`platformEnv` when both are defined.
+ * Precedence: `cwd` overrides `platformCwd`; `env` is merged over `platformEnv` key-by-key.
  * @param opts - Candidate optional fields; only defined values are included
  * @returns Subset of AIAgentConfig containing only the defined fields
  */
@@ -46,15 +49,19 @@ export function buildOptionalAgentConfig(
     platformEnv?: Record<string, string>;
   } & OptionalAgentRuntimeFields,
 ): OptionalAgentRuntimeFields {
+  const env =
+    opts.platformEnv !== undefined || opts.env !== undefined ? { ...opts.platformEnv, ...opts.env } : undefined;
   return {
     ...(opts.platformCwd !== undefined && { cwd: opts.platformCwd }),
-    ...(opts.platformEnv !== undefined && { env: opts.platformEnv }),
+    ...(env !== undefined && { env }),
     ...(opts.model !== undefined && { model: opts.model }),
     ...(opts.cwd !== undefined && { cwd: opts.cwd }),
-    ...(opts.env !== undefined && { env: opts.env }),
     ...(opts.allowedTools !== undefined && { allowedTools: opts.allowedTools }),
     ...(opts.disallowedTools !== undefined && { disallowedTools: opts.disallowedTools }),
+    ...(opts.allowedDirectories !== undefined && { allowedDirectories: opts.allowedDirectories }),
+    ...(opts.adapterSessionId !== undefined && { adapterSessionId: opts.adapterSessionId }),
     ...(opts.reasoningEffort !== undefined && { reasoningEffort: opts.reasoningEffort }),
+    ...(opts.adapterConfig !== undefined && { adapterConfig: opts.adapterConfig }),
     ...(opts.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: opts.resumeAdapterSessionId }),
     ...(opts.harnessId !== undefined && { harnessId: opts.harnessId }),
     ...(opts.clientId !== undefined && { clientId: opts.clientId }),

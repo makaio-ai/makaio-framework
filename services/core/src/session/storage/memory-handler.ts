@@ -305,12 +305,13 @@ export function registerMemorySessionStorage(bus: IMakaioBus): () => void {
  */
 function registerGetByAdapterSessionIdHandler(bus: IMakaioBus, store: Map<string, IMakaioSession>): () => void {
   return bus.on(SessionStorageSubjects.getByAdapterSessionId, async (ctx) => {
-    const { adapterSessionId, source } = ctx.payload;
+    const { adapterSessionId, source, adapterName } = ctx.payload;
     const matches = Array.from(store.values()).filter(
       (session) =>
         session.adapterSessionId !== undefined &&
         session.adapterSessionId === adapterSessionId &&
-        (source === undefined || session.source === source),
+        (source === undefined || session.source === source) &&
+        (adapterName === undefined || session.adapterName === adapterName),
     );
 
     const session = matches[0];

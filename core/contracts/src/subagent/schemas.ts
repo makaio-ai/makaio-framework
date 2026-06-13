@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ResponseSchemaDescriptorSchema } from '../shared/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
+import { AIReasoningLevelSchema } from '../model/index.js';
 
 // ============================================================================
 // Configuration Schemas
@@ -71,6 +72,8 @@ export const SubagentConfigSchema = z.object({
   harnessId: z.string().optional(),
   /** Model identifier (default: inherit from parent) */
   model: z.string().optional(),
+  /** Reasoning effort level to apply for supporting adapters. */
+  reasoningEffort: AIReasoningLevelSchema.optional(),
   /** Context mode: fork (inherit history) or fresh (clean) */
   contextMode: ContextModeSchema.default('fork'),
   /** Tool allowlist (default: inherit from parent) */

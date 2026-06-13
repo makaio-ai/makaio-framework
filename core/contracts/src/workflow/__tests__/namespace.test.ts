@@ -920,6 +920,7 @@ describe('WorkflowResolvedRoleSchema', () => {
     const role = WorkflowResolvedRoleSchema.parse({
       adapterName: 'openai',
       model: 'gpt-4',
+      reasoningEffort: 'high',
       harnessId: 'harness-reviewer',
       systemPrompt: 'You are a code reviewer',
       contextMode: 'fresh',
@@ -931,6 +932,7 @@ describe('WorkflowResolvedRoleSchema', () => {
     });
     expect(role.adapterName).toBe('openai');
     expect(role.model).toBe('gpt-4');
+    expect(role).toMatchObject({ reasoningEffort: 'high' });
     expect(role.harnessId).toBe('harness-reviewer');
     expect(role.systemPrompt).toBe('You are a code reviewer');
     expect(role.contextMode).toBe('fresh');

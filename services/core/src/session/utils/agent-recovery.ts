@@ -208,6 +208,7 @@ export async function recoverAgent(
     agentId: deadAgent.agentId,
     cwd: recoveryConfig.cwd,
     model: recoveryConfig.model ?? deadAgent.model,
+    ...(deadAgent.adapterSessionId !== undefined && { adapterSessionId: deadAgent.adapterSessionId }),
   });
 
   deadAgent.adapterId = resolvedAdapterId;

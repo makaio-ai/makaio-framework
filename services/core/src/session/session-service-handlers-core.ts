@@ -1,9 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { IMakaioBus } from '@makaio/bus-core';
+import { TimeoutError, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IMakaioSession } from '@makaio/contracts';
+import { TurnStorageSubjects } from '../turn/namespace.js';
 import { SessionEventStorageSubjects } from './session-events/namespace.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
+import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import { registerAgentAddedHandler, registerAgentRemovedHandler } from './session-service-agent-handlers.js';
+import { recoverAgent } from './utils/agent-recovery.js';
 
 /**
  * Dependencies required to register the framework-core session service handlers.
@@ -19,10 +22,10 @@ interface CoreSessionServiceHandlerDeps {
 
 /**
  * Registers the framework-core session service handlers:
- * `session.create`, `session.get`, `session.list`, `session.close`,
- * `session.update`, `session.archive`, `session.purge`,
- * `session.registerExternal`, `session.agent.added`, and
- * `session.agent.removed`.
+ * `session.create`, `session.get`, `session.list`, `session.turn.await`,
+ * `session.close`, `session.restartAgents`, `session.update`,
+ * `session.archive`, `session.purge`, `session.registerExternal`,
+ * `session.agent.added`, and `session.agent.removed`.
  *
  * These handlers cover the minimal, load-bearing session contract for the
  * framework SDK. Host-specific handlers (search, resume, analytics, context
@@ -39,7 +42,9 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerCreateHandler(deps),
     registerGetHandler(deps),
     registerListHandler(deps),
+    registerTurnAwaitHandler(deps),
     registerCloseHandler(deps),
+    registerRestartAgentsHandler(deps),
     registerCoreUpdateHandler(deps),
     registerCoreArchiveHandler(deps),
     registerCorePurgeHandler(deps),
@@ -47,6 +52,65 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerAgentAddedHandler(deps.bus),
     registerAgentRemovedHandler(deps.bus),
   ];
+}
+
+/**
+ * Handle turn completion waits.
+ * @param deps - Core handler dependencies
+ * @returns Cleanup function
+ */
+function registerTurnAwaitHandler(deps: CoreSessionServiceHandlerDeps): () => void {
+  const { bus } = deps;
+  return bus.on(SessionSubjects.turn.await, async (ctx) => {
+    const { sessionId, turnId, timeoutMs } = ctx.payload;
+    const controller = new AbortController();
+    const completion = bus.once(SessionSubjects.turn.completed, {
+      timeoutMs,
+      filter: { sessionId, turnId },
+      signal: controller.signal,
+    });
+    completion.catch(() => undefined);
+
+    const storedCompletion = await getStoredTurnCompletion(bus, sessionId, turnId);
+    if (storedCompletion !== undefined) {
+      controller.abort();
+      ctx.setResult({ completion: storedCompletion });
+      return;
+    }
+
+    try {
+      const completed = await completion;
+      ctx.setResult({ completion: completed.payload });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'OnceTimeoutError') {
+        throw new TimeoutError('session.turn.await', timeoutMs);
+      }
+      throw error;
+    }
+  });
+}
+
+/**
+ * Resolve a completed turn from durable storage, if available.
+ * @param bus - Bus used for optional turn storage lookup
+ * @param sessionId - Session ID expected by the await call
+ * @param turnId - Turn ID expected by the await call
+ * @returns Completion payload, or undefined when storage is absent/not terminal
+ */
+async function getStoredTurnCompletion(bus: IMakaioBus, sessionId: string, turnId: string) {
+  const storedTurn = await bus.requestOptional(TurnStorageSubjects.get, { turnId });
+  const turn = storedTurn.handled ? storedTurn.data.turn : null;
+  if (turn?.sessionId !== sessionId || (turn.status !== 'completed' && turn.status !== 'error')) {
+    return undefined;
+  }
+  return {
+    sessionId,
+    turnId,
+    turnNumber: turn.turnNumber,
+    success: turn.status === 'completed',
+    ...(turn.error !== undefined && { error: turn.error }),
+    ...(turn.initiator !== undefined && { initiator: turn.initiator }),
+  };
 }
 
 /**
@@ -202,6 +266,45 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
     await bus.requestOptional(SessionStorageSubjects.set, { sessionId, session });
     await bus.emit(SessionSubjects.closed, { sessionId });
     ctx.setResult({ success: true });
+  });
+}
+
+type RestartAgentsHandlerResult =
+  | { agentId: string; adapterId: string; success: true }
+  | { agentId: string; adapterId: string; success: false; error: string };
+
+/**
+ * Handle explicit session agent runtime restoration.
+ * @param deps - Core handler dependencies
+ * @returns Cleanup function
+ */
+function registerRestartAgentsHandler(deps: CoreSessionServiceHandlerDeps): () => void {
+  const { bus } = deps;
+  return bus.on(SessionSubjects.restartAgents, async (ctx) => {
+    const { sessionId } = ctx.payload;
+    const listResult = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+    const agents = listResult.handled ? listResult.data.agents : [];
+    const results: RestartAgentsHandlerResult[] = [];
+
+    for (const agent of agents) {
+      try {
+        const recovered = await recoverAgent(bus, agent, {
+          cwd: agent.cwd,
+          model: agent.model,
+        });
+        await bus.requestOptional(AgentStorageSubjects.updateRuntime, {
+          agentId: recovered.agentId,
+          adapterId: recovered.adapterId,
+        });
+        results.push({ agentId: recovered.agentId, adapterId: recovered.adapterId, success: true });
+      } catch (error) {
+        const cause = error instanceof Error ? error.cause : undefined;
+        const message = cause instanceof Error ? cause.message : error instanceof Error ? error.message : String(error);
+        results.push({ agentId: agent.agentId, adapterId: agent.adapterId, success: false, error: message });
+      }
+    }
+
+    ctx.setResult({ sessionId, results });
   });
 }
 
@@ -372,6 +475,7 @@ async function resolveRegistrationConflict(
 ): Promise<{ sessionId: string; created: false }> {
   const conflictLookup = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
     adapterSessionId,
+    adapterName,
   });
   if (conflictLookup.handled && conflictLookup.data.session !== null) {
     const winner = conflictLookup.data.session;
@@ -443,6 +547,7 @@ function registerRegisterExternalHandler(deps: CoreSessionServiceHandlerDeps): (
     // import-provenance `source` field; `adapterName` is used instead.
     const lookupResult = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId,
+      adapterName,
     });
 
     if (lookupResult.handled && lookupResult.data.session !== null) {

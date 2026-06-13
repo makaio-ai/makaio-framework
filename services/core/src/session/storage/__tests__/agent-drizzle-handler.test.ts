@@ -36,6 +36,7 @@ const CREATE_AGENTS_TABLE_SQL = sql`
     adapter_session_id TEXT,
     model TEXT,
     cwd TEXT,
+    allowed_directories TEXT,
     provider_config_id TEXT,
     persona_id TEXT,
     profile_id TEXT,
@@ -136,6 +137,7 @@ describe('registerDrizzleAgentStorage', () => {
         status: 'active',
         model: 'claude-4',
         cwd: '/home/user/project',
+        allowedDirectories: ['/home/user/project'],
         adapterSessionId: 'external-session-123',
         createdAt: 1000,
         lastActivityAt: 2000,
@@ -188,7 +190,6 @@ describe('registerDrizzleAgentStorage', () => {
 
       expect(result.success).toBe(true);
 
-      // Verify in DB
       const rows = await getRawSqlExecutor(db).all<{ agent_id: unknown }>(
         sql`SELECT * FROM agents WHERE agent_id = 'insert-test'`,
       );

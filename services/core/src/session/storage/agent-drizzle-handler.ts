@@ -35,6 +35,7 @@ export function mapAgent(row: AgentRow): MakaioSessionAgent {
     model: row.model ?? undefined,
     adapterSessionId: row.adapterSessionId ?? undefined,
     cwd: row.cwd ?? undefined,
+    allowedDirectories: row.allowedDirectories ?? undefined,
     providerConfigId: row.providerConfigId ?? undefined,
     personaId: row.personaId ?? undefined,
     profileId: row.profileId ?? undefined,
@@ -62,6 +63,7 @@ function toDbValues(agent: MakaioSessionAgent): AgentsTable['$inferInsert'] {
     model: agent.model ?? null,
     adapterSessionId: agent.adapterSessionId ?? null,
     cwd: agent.cwd ?? null,
+    allowedDirectories: agent.allowedDirectories ?? null,
     providerConfigId: agent.providerConfigId ?? null,
     personaId: agent.personaId ?? null,
     profileId: agent.profileId ?? null,
@@ -234,14 +236,16 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
   const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateRuntime, async (ctx) => {
-    const { agentId, cwd, model, providerConfigId } = ctx.payload;
+    const { agentId, adapterId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
     const now = Date.now();
     const updateFields: Partial<AgentsTable['$inferInsert']> = {
       lastActivityAt: now,
     };
 
+    if (adapterId !== undefined) updateFields.adapterId = adapterId;
     if (cwd !== undefined) updateFields.cwd = cwd;
     if (model !== undefined) updateFields.model = model;
+    if (allowedDirectories !== undefined) updateFields.allowedDirectories = allowedDirectories;
     if (providerConfigId !== undefined) updateFields.providerConfigId = providerConfigId;
 
     const result = await db.update(agents).set(updateFields).where(eq(agents.agentId, agentId));

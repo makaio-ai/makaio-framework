@@ -16,6 +16,15 @@ function toCliEffortValue(level: AIReasoningLevel): string | undefined {
 }
 
 /**
+ * Serialize Claude CLI tool policy lists into one deterministic flag value.
+ * @param tools - Tool names or patterns in caller-provided order
+ * @returns Comma-separated CLI flag value
+ */
+function toCliToolPolicyValue(tools: string[]): string {
+  return tools.join(',');
+}
+
+/**
  * Arguments for building CLI arguments.
  */
 interface BuildCliArgsOptions {
@@ -53,6 +62,8 @@ interface BuildCliArgsOptions {
  * - `--append-system-prompt` — optional runtime system prompt (append mode)
  * - `--max-budget-usd` — optional spend cap
  * - `--effort` — reasoning effort level (`low | medium | high | max`); omitted when `none`
+ * - `--allowedTools` — optional comma-separated allow-list from `config.allowedTools`
+ * - `--disallowedTools` — optional comma-separated deny-list from `config.disallowedTools`
  * - `--mcp-config` — optional inline JSON MCP config string (or path to a JSON file)
  * - `--permission-prompt-tool` — optional MCP tool to handle permission prompts
  * - `--json-schema` — JSON-serialized schema from `config.responseSchema`; constrains model output to valid JSON
@@ -104,6 +115,14 @@ export function buildCliArgs({
     if (effortValue !== undefined) {
       args.push('--effort', effortValue);
     }
+  }
+
+  if (config.allowedTools !== undefined) {
+    args.push('--allowedTools', toCliToolPolicyValue(config.allowedTools));
+  }
+
+  if (config.disallowedTools !== undefined) {
+    args.push('--disallowedTools', toCliToolPolicyValue(config.disallowedTools));
   }
 
   if (mcpConfig) {

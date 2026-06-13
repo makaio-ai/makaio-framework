@@ -111,6 +111,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `adapterName` | `string \| undefined` | no |
 | `adapterSessionId` | `string` | yes |
 | `source` | `string \| undefined` | no |
 

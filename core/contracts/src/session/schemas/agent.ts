@@ -33,6 +33,8 @@ export const MakaioSessionAgentSchema = z.object({
   model: z.string().optional(),
   /** Current working directory */
   cwd: z.string().optional(),
+  /** Directory restrictions for file-system tool execution. */
+  allowedDirectories: z.array(z.string()).optional(),
   /** Provider config UUID for credential/endpoint resolution */
   providerConfigId: z.string().optional(),
   /** Persona used to configure this agent (if any). */

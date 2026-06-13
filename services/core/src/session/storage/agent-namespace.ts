@@ -136,15 +136,22 @@ export const AgentStorageNamespace = createStorageNamespaceDefinition('agent', {
       request: z
         .object({
           agentId: z.string(),
+          adapterId: z.string().optional(),
           cwd: z.string().optional(),
           model: z.string().optional(),
+          allowedDirectories: z.array(z.string()).optional(),
           providerConfigId: z.string().optional(),
         })
         .refine(
           (payload) =>
-            payload.cwd !== undefined || payload.model !== undefined || payload.providerConfigId !== undefined,
+            payload.adapterId !== undefined ||
+            payload.cwd !== undefined ||
+            payload.model !== undefined ||
+            payload.allowedDirectories !== undefined ||
+            payload.providerConfigId !== undefined,
           {
-            message: 'At least one runtime field (cwd, model, or providerConfigId) must be provided',
+            message:
+              'At least one runtime field (adapterId, cwd, model, allowedDirectories, or providerConfigId) must be provided',
           },
         ),
       response: z.object({

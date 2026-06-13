@@ -99,6 +99,46 @@ describe('buildCliArgs', () => {
     });
   });
 
+  describe('tool policy', () => {
+    it('passes allowedTools as a deterministic comma-separated allow-list', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ allowedTools: ['Bash(git status)', 'Edit', 'mcp__makaio__approve'] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      const idx = args.indexOf('--allowedTools');
+      expect(idx).toBeGreaterThan(-1);
+      expect(args[idx + 1]).toBe('Bash(git status),Edit,mcp__makaio__approve');
+      expect(args).not.toContain('--disallowedTools');
+    });
+
+    it('passes disallowedTools as a deterministic comma-separated deny-list', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ disallowedTools: ['WebSearch', 'Bash(rm *)'] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      const idx = args.indexOf('--disallowedTools');
+      expect(idx).toBeGreaterThan(-1);
+      expect(args[idx + 1]).toBe('WebSearch,Bash(rm *)');
+      expect(args).not.toContain('--allowedTools');
+    });
+
+    it('preserves an empty allowedTools list as an explicit empty allow-list', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ allowedTools: [] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      const idx = args.indexOf('--allowedTools');
+      expect(idx).toBeGreaterThan(-1);
+      expect(args[idx + 1]).toBe('');
+    });
+  });
+
   describe('reasoningEffort', () => {
     it('emits --effort low for level "low"', () => {
       const args = buildCliArgs({ config: makeConfig({ reasoningEffort: 'low' }), prompt: 'hi', sessionId: 'sid' });

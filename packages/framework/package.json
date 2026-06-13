@@ -63,6 +63,10 @@
       "types": "./dist/utils/index.d.mts",
       "default": "./dist/utils/index.mjs"
     },
+    "./utils/keychain": {
+      "types": "./dist/utils/keychain.d.mts",
+      "default": "./dist/utils/keychain.mjs"
+    },
     "./service-base": {
       "types": "./dist/service-base/index.d.mts",
       "default": "./dist/service-base/index.mjs"
@@ -114,6 +118,10 @@
     "./contracts/materialization": {
       "types": "./dist/contracts/materialization/index.d.mts",
       "default": "./dist/contracts/materialization/index.mjs"
+    },
+    "./contracts/native-session-supervisor": {
+      "types": "./dist/contracts/native-session-supervisor/index.d.mts",
+      "default": "./dist/contracts/native-session-supervisor/index.mjs"
     },
     "./contracts/model-registry": {
       "types": "./dist/contracts/model-registry/index.d.mts",

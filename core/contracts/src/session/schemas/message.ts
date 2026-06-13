@@ -95,6 +95,26 @@ export const TurnUsageSchema = z.object({
 export type TurnUsage = z.infer<typeof TurnUsageSchema>;
 
 /**
+ * Identifies the origin of a turn for loop prevention and audit.
+ *
+ * Used by extensions (e.g., Routine) to distinguish user-initiated turns from
+ * extension-initiated turns, preventing recursive execution loops.
+ */
+export const TurnInitiatorSchema = z.object({
+  /** Origin category */
+  source: z.enum(['user', 'extension', 'system']),
+  /**
+   * Identifier for the specific origin.
+   *
+   * Examples: `'routine:validation'`, `'loop'`, `'subagent:xyz'`.
+   */
+  sourceId: z.string().optional(),
+});
+
+/** Parsed type for {@link TurnInitiatorSchema}. */
+export type TurnInitiator = z.infer<typeof TurnInitiatorSchema>;
+
+/**
  * A turn in a session conversation.
  *
  * A turn represents a user message and all agent responses to it.
@@ -117,6 +137,8 @@ export const TurnSchema = z.object({
   error: z.string().optional(),
   /** Aggregated usage/cost for this turn. Populated on turn completion. */
   usage: TurnUsageSchema.optional(),
+  /** Origin of the turn, when known. */
+  initiator: TurnInitiatorSchema.optional(),
 });
 
 export type Turn = z.infer<typeof TurnSchema>;

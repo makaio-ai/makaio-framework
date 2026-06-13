@@ -40,6 +40,10 @@ export type ClaudeCliAgentConfig = BaseAgentConnectorConfig<ClaudeCodeCliConnect
    * (servers + direct/discoverable tools) for the CLI adapter's native-passthrough mode.
    */
   mcpSessionContext?: McpSessionContext;
+  /** Allowed Claude tool names or patterns to pass via `--allowedTools`. */
+  allowedTools?: string[];
+  /** Disallowed Claude tool names or patterns to pass via `--disallowedTools`. */
+  disallowedTools?: string[];
 };
 
 /**
@@ -102,6 +106,10 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
    * except `'extra-high'` which maps to `'max'` (the CLI's accepted value).
    */
   reasoningEffort?: AIReasoningLevel;
+  /** Allowed Claude tool names or patterns to pass via `--allowedTools`. */
+  allowedTools?: string[];
+  /** Disallowed Claude tool names or patterns to pass via `--disallowedTools`. */
+  disallowedTools?: string[];
   /**
    * Absolute path to the `claude` CLI binary.
    * Falls back to `'claude'` (resolved via PATH) when omitted.
