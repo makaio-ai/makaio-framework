@@ -222,6 +222,16 @@ describe('npm packlist policy', () => {
     expect(issues).toEqual([]);
   });
 
+  it('keeps public provider source manifests publishable without runtime @makaio workspace deps', () => {
+    const packageManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'providers'));
+
+    const issues = packageManifests.flatMap(({ path, manifest }) =>
+      checkSourceManifestMakaioReferences(manifest).map((issue) => `${path}: ${issue}`),
+    );
+
+    expect(issues).toEqual([]);
+  });
+
   it('keeps every public adapter package loadable through the convention server entry', () => {
     const adapterManifests = discoverPublicPackageManifests(join(FRAMEWORK_ROOT, 'adapters', 'implementations'));
 
