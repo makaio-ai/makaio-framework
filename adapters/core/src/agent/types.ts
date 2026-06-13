@@ -219,6 +219,8 @@ export interface AIAgentConfig<
   disallowedTools?: string[];
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories?: string[];
+  /** Per-call adapter-specific JSON config forwarded to the adapter config factory. */
+  adapterConfig?: Record<string, unknown>;
   /**
    * MCP session context resolved by the orchestrator.
    * Passed through to the connector config so adapters can inject direct tools.
@@ -289,10 +291,15 @@ export interface AgentSendMessageOptions extends SendMessageOptions {
   sessionContext?: SessionContext;
 
   /**
-   * Structured output descriptor.
-   * When present and the adapter declares `structuredOutput` capability,
-   * the adapter enforces this schema at the model level.
-   * Ignored by adapters that lack the capability.
+   * Structured output descriptor for the turn.
+   *
+   * Adapters that declare `structuredOutput` pass this schema to their native
+   * model-level output controls. Other adapters receive an instruction block
+   * and the agent validates the terminal output after completion.
+   *
+   * Validation retries are default-off (`maxRetries: 0`) and fallback
+   * enforcement is a no-op unless the host registers structured-output override
+   * handlers.
    */
   responseSchema?: ResponseSchemaDescriptor;
 }

@@ -9,10 +9,11 @@ import { ResponseSchemaDescriptorSchema, StructuredOutputValidationErrorSchema }
  * Direction: framework → host
  *
  * Emitted before a retry decision is made. The host layer (or any registered
- * handler) returns the maximum number of retry attempts permitted for this
- * agent/adapter/schema combination. If no host handler is registered the
- * framework applies its built-in default of 0 retries, because replaying a
- * turn can duplicate non-idempotent tool or outbound side effects.
+ * override handler) returns the maximum number of retry attempts permitted for
+ * this agent/adapter/schema combination. The framework-owned default policy is
+ * `maxRetries: 0`, so structured-output validation does not replay turns unless
+ * a host explicitly opts in. Replaying a turn can duplicate non-idempotent tool
+ * or outbound side effects.
  */
 export const StructuredOutputRetryPolicySchema = {
   request: z
@@ -46,7 +47,9 @@ export const StructuredOutputRetryPolicySchema = {
  *
  * Emitted when retry attempts are exhausted and the framework needs the host
  * to decide whether to enforce conformance via a fallback adapter/model or
- * to surface the error upstream. Returning `enforced: true` with a corrected
+ * to surface the error upstream. The framework-owned default handler is a
+ * no-op that returns `enforced: false`; enforcement only happens when a host
+ * registers an override handler. Returning `enforced: true` with a corrected
  * `output` string means the framework treats the turn as successfully completed.
  */
 export const StructuredOutputEnforceSchema = {

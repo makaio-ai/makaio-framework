@@ -38,7 +38,9 @@ APPROVAL_REQUEST = "approval.request"
 APPROVAL_RESOLVE_ENRICHED_POLICY = "approval.resolveEnrichedPolicy"
 SESSION_AGENT_ADDED = "session.agent.added"
 SESSION_CREATED = "session.created"
+SESSION_RESTART_AGENTS = "session.restartAgents"
 SESSION_SEND_MESSAGE = "session.sendMessage"
+SESSION_TURN_AWAIT = "session.turn.await"
 SESSION_TURN_COMPLETED = "session.turn.completed"
 SESSION_TURN_STARTED = "session.turn.started"
 SESSION_USER_MESSAGE_SENT = "session.user_message.sent"
@@ -89,7 +91,9 @@ ALL_SUBJECTS = (
     APPROVAL_RESOLVE_ENRICHED_POLICY,
     SESSION_AGENT_ADDED,
     SESSION_CREATED,
+    SESSION_RESTART_AGENTS,
     SESSION_SEND_MESSAGE,
+    SESSION_TURN_AWAIT,
     SESSION_TURN_COMPLETED,
     SESSION_TURN_STARTED,
     SESSION_USER_MESSAGE_SENT,

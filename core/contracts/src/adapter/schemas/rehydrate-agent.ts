@@ -22,6 +22,7 @@ import { z } from 'zod';
  * @param agentId - Agent to rehydrate
  * @param cwd - Optional working directory override for new connector
  * @param model - Optional model override for new connector
+ * @param adapterSessionId - Optional persisted native session ID for resume-capable connectors
  */
 export const RehydrateAgentSchema = {
   request: z.object({
@@ -36,6 +37,9 @@ export const RehydrateAgentSchema = {
 
     /** Optional model override for new connector (adapter-specific, e.g., 'sonnet', 'opus') */
     model: z.string().optional(),
+
+    /** Optional persisted native session ID for resume-capable connectors */
+    adapterSessionId: z.string().optional(),
   }),
 
   /** Empty response - success is implicit, errors throw */

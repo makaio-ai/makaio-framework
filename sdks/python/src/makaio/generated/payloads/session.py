@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 @dataclass(frozen=True)
 class SessionAgentAddedPayload:
@@ -24,6 +24,32 @@ class SessionCreatedPayload:
     parent_session_id: str | None
     session_id: str
     origin_window_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionRestartAgentsRequest:
+    session_id: str
+
+
+@dataclass(frozen=True)
+class SessionRestartAgentsResponseResultsItemVariantA:
+    adapter_id: str
+    agent_id: str
+    success: Literal[True]
+
+
+@dataclass(frozen=True)
+class SessionRestartAgentsResponseResultsItemVariantB:
+    adapter_id: str
+    agent_id: str
+    error: str
+    success: Literal[False]
+
+
+@dataclass(frozen=True)
+class SessionRestartAgentsResponse:
+    results: list[Union[SessionRestartAgentsResponseResultsItemVariantA, SessionRestartAgentsResponseResultsItemVariantB]]
+    session_id: str
 
 
 @dataclass(frozen=True)
@@ -72,6 +98,34 @@ class SessionSendMessageResponse:
     message_id: str
     session_id: str
     turn_id: str
+
+
+@dataclass(frozen=True)
+class SessionTurnAwaitRequest:
+    session_id: str
+    timeout_ms: int
+    turn_id: str
+
+
+@dataclass(frozen=True)
+class SessionTurnAwaitResponseCompletionInitiator:
+    source: Literal["user", "extension", "system"]
+    source_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionTurnAwaitResponseCompletion:
+    session_id: str
+    success: bool
+    turn_id: str
+    turn_number: int
+    error: str | None = None
+    initiator: SessionTurnAwaitResponseCompletionInitiator | None = None
+
+
+@dataclass(frozen=True)
+class SessionTurnAwaitResponse:
+    completion: SessionTurnAwaitResponseCompletion
 
 
 @dataclass(frozen=True)

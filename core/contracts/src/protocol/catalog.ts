@@ -13,7 +13,16 @@ export const PublicProtocolNamespaces = [
   {
     namespace: SessionNamespace.name,
     schemas: SessionSchemas,
-    subjects: ['sendMessage', 'created', 'agent.added', 'turn.started', 'turn.completed', 'user_message.sent'],
+    subjects: [
+      'sendMessage',
+      'restartAgents',
+      'created',
+      'agent.added',
+      'turn.await',
+      'turn.started',
+      'turn.completed',
+      'user_message.sent',
+    ],
   },
   { namespace: ToolNamespace.name, schemas: ToolSchemas },
 ] as const satisfies ProtocolNamespaceCatalog;

@@ -67,4 +67,42 @@ describe('StartAgentSchema', () => {
 
     expect(parsed.success).toBe(true);
   });
+
+  it('preserves JSON-safe adapterConfig on start requests', () => {
+    const parsed = StartAgentSchema.request.parse({
+      adapterId: 'adapter-1',
+      role: 'lead',
+      initialMessage: 'hello',
+      adapterConfig: {
+        queryOptions: {
+          maxTurns: 3,
+          permissionMode: 'acceptEdits',
+        },
+      },
+    });
+
+    expect(parsed).toMatchObject({
+      adapterConfig: {
+        queryOptions: {
+          maxTurns: 3,
+          permissionMode: 'acceptEdits',
+        },
+      },
+    });
+  });
+
+  it('rejects non-JSON adapterConfig values', () => {
+    const parsed = StartAgentSchema.request.safeParse({
+      adapterId: 'adapter-1',
+      role: 'lead',
+      initialMessage: 'hello',
+      adapterConfig: {
+        queryOptions: {
+          maxTurns: undefined,
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });

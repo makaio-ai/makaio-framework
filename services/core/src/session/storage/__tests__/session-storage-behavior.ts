@@ -262,10 +262,15 @@ export function describeSessionStorageBehavior(): void {
         adapterSessionId: 'external-shared-123',
         source: 'codex',
       });
+      const claudeAdapterResult = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        adapterSessionId: 'external-shared-123',
+        adapterName: 'claude-code',
+      });
 
       expect(ambiguousResult.session).toBeNull();
       expect(claudeResult.session?.sessionId).toBe('adapter-lookup-claude');
       expect(codexResult.session?.sessionId).toBe('adapter-lookup-codex');
+      expect(claudeAdapterResult.session?.sessionId).toBe('adapter-lookup-claude');
     });
   });
 

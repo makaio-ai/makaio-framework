@@ -388,6 +388,16 @@ pub mod session {
         const SUBJECT: &'static str = CREATED;
     }
 
+    pub const RESTART_AGENTS: &str = "session.restartAgents";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct RestartAgents;
+    impl RequestSubject for RestartAgents {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = RESTART_AGENTS;
+    }
+
     pub const SEND_MESSAGE: &str = "session.sendMessage";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,6 +406,16 @@ pub mod session {
         type Request = Value;
         type Response = Value;
         const SUBJECT: &'static str = SEND_MESSAGE;
+    }
+
+    pub const TURN_AWAIT: &str = "session.turn.await";
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct TurnAwait;
+    impl RequestSubject for TurnAwait {
+        type Request = Value;
+        type Response = Value;
+        const SUBJECT: &'static str = TURN_AWAIT;
     }
 
     pub const TURN_COMPLETED: &str = "session.turn.completed";
@@ -727,8 +747,20 @@ pub const SUBJECTS: &[ProtocolSubject] = &[
     ProtocolSubject {
         kind: SubjectKind::Request,
         namespace: "session",
+        subject: "restartAgents",
+        full_subject: session::RESTART_AGENTS,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "session",
         subject: "sendMessage",
         full_subject: session::SEND_MESSAGE,
+    },
+    ProtocolSubject {
+        kind: SubjectKind::Request,
+        namespace: "session",
+        subject: "turn.await",
+        full_subject: session::TURN_AWAIT,
     },
     ProtocolSubject {
         kind: SubjectKind::Event,

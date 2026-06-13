@@ -282,10 +282,20 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
          * Optional source adapter identity.
          *
          * When omitted, storage returns a session only if the external ID is
-         * unique across all sources; ambiguous cross-source matches resolve to
-         * `null` instead of picking an arbitrary row.
+         * unique after all provided filters are applied. Supplying
+         * `adapterName` narrows the ambiguity scope to that registered adapter;
+         * otherwise ambiguous cross-source matches resolve to `null` instead
+         * of picking an arbitrary row.
          */
         source: z.string().optional(),
+        /**
+         * Optional registered adapter identity.
+         *
+         * External registrations stamp `adapterName`, not import provenance
+         * `source`, so callers that need the (`adapterName`, `adapterSessionId`)
+         * idempotency key should use this filter.
+         */
+        adapterName: z.string().optional(),
       }),
       response: z.object({
         session: MakaioSessionSchema.nullable(),

@@ -6,10 +6,19 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  AgentSubjects,
+  CanonicalModelSubjects,
+  CredentialSubjects,
+  SessionSubjects,
+} from '@makaio/contracts';
+import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import type { IMakaioSession } from '@makaio/contracts';
 import { buildDeterministicAdapterId } from '../../adapter-runtime/index.js';
+import { AdapterSubsystemSubjects } from '../../adapter-subsystem/namespace.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
+import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import {
   createMockSession,
@@ -114,6 +123,112 @@ describe('SessionOrchestrator - Auto-attach', () => {
         adapterId: buildDeterministicAdapterId('test-machine', 'my-adapter'),
         sessionId,
       });
+    });
+
+    it.each([
+      {
+        name: 'direct adapter selection',
+        agent: { kind: 'adapter', adapterName: 'test-adapter', providerConfigId: 'provider-config-1' } as const,
+        providerConfigId: 'provider-config-1',
+        definitionId: 'provider-def-1',
+      },
+      {
+        name: 'canonical-model resolution',
+        agent: { kind: 'canonical-model', model: 'test-adapter::requested-model' } as const,
+        providerConfigId: 'provider-config-canonical',
+        definitionId: 'provider-def-canonical',
+        resolvedModel: 'resolved-model',
+      },
+    ])('resolves and forwards providerContext for $name', async ({
+      agent,
+      providerConfigId,
+      definitionId,
+      resolvedModel,
+    }) => {
+      const sessionId = `session-provider-context-${providerConfigId}`;
+      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+
+      const order: string[] = [];
+      const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
+      let receivedPayload: Record<string, unknown> | undefined;
+      let startedAgentId: string | undefined;
+      if (resolvedModel !== undefined) {
+        unsubscribers.push(
+          MakaioBus.on(CanonicalModelSubjects.resolve, (ctx) => {
+            ctx.setResult({
+              kind: 'adapter',
+              adapterName: 'test-adapter',
+              providerConfigId,
+              model: resolvedModel,
+            });
+          }),
+        );
+      }
+      unsubscribers.push(
+        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
+          expect(ctx.payload.providerConfigId).toBe(providerConfigId);
+          ctx.setResult({
+            context: {
+              providerConfigId,
+              definitionId,
+              credentialRefs: { apiKey: buildStoredCredentialRef(providerConfigId, 'apiKey') },
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(CredentialSubjects.activate, (ctx) => {
+          order.push('activate');
+          expect(ctx.payload.providerConfigId).toBe(providerConfigId);
+          ctx.setResult({});
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+          order.push('start');
+          receivedPayload = ctx.payload as Record<string, unknown>;
+          const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+          startedAgentId = agentId;
+          const adapterSessionId = `adapter-session-${sessionId}`;
+          ctx.setResult({
+            success: true as const,
+            agentId,
+            adapterId: ctx.payload.adapterId,
+            adapterSessionId,
+            sessionId,
+          });
+          emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+          runtimeUpdates.push({
+            agentId: ctx.payload.agentId,
+            providerConfigId: ctx.payload.providerConfigId,
+          });
+          ctx.setResult({ success: true });
+        }),
+      );
+
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      await emitAdapterInitialized('test-adapter');
+
+      await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        agent,
+        message: 'Hello!',
+      });
+
+      expect(order).toEqual(['activate', 'start']);
+      expect(receivedPayload).toMatchObject({
+        ...(resolvedModel !== undefined && { model: resolvedModel }),
+        providerContext: {
+          providerConfigId,
+          definitionId,
+        },
+      });
+      expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBe(providerConfigId);
+      expect(runtimeUpdates).toEqual([{ agentId: startedAgentId, providerConfigId }]);
     });
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {

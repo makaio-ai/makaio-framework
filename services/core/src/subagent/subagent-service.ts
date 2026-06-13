@@ -420,6 +420,7 @@ export class SubagentService extends BaseService {
       sessionId,
       initialMessage: task,
       model: config.model,
+      reasoningEffort: config.reasoningEffort,
       systemPrompt: config.systemPrompt,
       responseSchema: config.responseSchema,
       allowedTools: config.tools,

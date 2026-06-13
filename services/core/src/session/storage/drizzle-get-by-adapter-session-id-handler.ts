@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, type SQL } from 'drizzle-orm';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { SessionStorageSubjects } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
@@ -15,16 +15,19 @@ export function registerGetByAdapterSessionIdHandler(deps: SessionHandlerDeps): 
   const { sessions, agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(SessionStorageSubjects.getByAdapterSessionId, async (ctx) => {
-    const { adapterSessionId, source } = ctx.payload;
+    const { adapterSessionId, source, adapterName } = ctx.payload;
+    const conditions: SQL[] = [eq(sessions.adapterSessionId, adapterSessionId)];
+    if (source !== undefined) {
+      conditions.push(eq(sessions.source, source));
+    }
+    if (adapterName !== undefined) {
+      conditions.push(eq(sessions.adapterName, adapterName));
+    }
 
     const sessionRows = await db
       .select()
       .from(sessions)
-      .where(
-        source === undefined
-          ? eq(sessions.adapterSessionId, adapterSessionId)
-          : and(eq(sessions.adapterSessionId, adapterSessionId), eq(sessions.source, source)),
-      )
+      .where(and(...conditions))
       .limit(2);
 
     const sessionRow = sessionRows[0];

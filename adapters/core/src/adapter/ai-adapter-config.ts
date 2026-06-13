@@ -65,7 +65,13 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories?: string[];
 
-  /** Provider-specific configuration (non-credential settings). Adapters merge with defaults. */
+  /**
+   * Adapter-specific per-call configuration (non-credential settings).
+   *
+   * This receives `startAgent.adapterConfig` at runtime and feeds the existing
+   * `createAdapterConfigFactory` providerConfig merge slot. It is unrelated to
+   * ProviderConfig credential entities, which flow through `providerContext`.
+   */
   providerConfig?: Record<string, unknown>;
 
   runtimeTimeouts?: TimeoutConfig;

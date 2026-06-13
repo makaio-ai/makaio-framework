@@ -98,6 +98,18 @@ describeStorageConformance('handlers-turns-events', (config) => {
       const expected = Array.from({ length: N }, (_, i) => i + 1);
       expect(turnNumbers).toEqual(expected);
     });
+
+    it('round-trips turn initiator metadata through storage', async () => {
+      const sessionId = `sess-turn-initiator-${crypto.randomUUID()}`;
+      const session = makeSession({ sessionId });
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session });
+
+      const initiator = { source: 'extension' as const, sourceId: 'routine:validation' };
+      const { turn } = await MakaioBus.request(TurnStorageSubjects.create, { sessionId, initiator });
+      const getResult = await MakaioBus.request(TurnStorageSubjects.get, { turnId: turn.turnId });
+
+      expect(getResult.turn?.initiator).toEqual(initiator);
+    });
   });
 
   // ─── 2. Session-events cursor monotonicity ───────────────────────────────

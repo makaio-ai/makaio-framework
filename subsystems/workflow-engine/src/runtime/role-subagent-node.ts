@@ -26,6 +26,7 @@ interface ResolvedSubagentConfigInput {
   readonly task: string;
   readonly adapterName: string;
   readonly model?: string;
+  readonly reasoningEffort?: WorkflowResolvedRole['reasoningEffort'];
   readonly harnessId?: string;
   readonly systemPrompt?: string;
   readonly contextMode?: WorkflowResolvedRole['contextMode'];
@@ -344,6 +345,7 @@ function buildSubagentConfig(
     task,
     adapterName: role.adapterName,
     ...(role.model !== undefined ? { model: role.model } : {}),
+    ...(role.reasoningEffort !== undefined ? { reasoningEffort: role.reasoningEffort } : {}),
     ...(role.harnessId !== undefined ? { harnessId: role.harnessId } : {}),
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
     ...(role.contextMode !== undefined ? { contextMode: role.contextMode } : {}),

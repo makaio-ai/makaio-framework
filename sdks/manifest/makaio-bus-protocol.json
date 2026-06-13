@@ -5109,6 +5109,78 @@
     {
       "kind": "request",
       "namespace": "session",
+      "subject": "restartAgents",
+      "fullSubject": "session.restartAgents",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "adapterId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["agentId", "adapterId", "success"],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "adapterId": {
+                      "type": "string"
+                    },
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "success": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["agentId", "adapterId", "success", "error"],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "sessionId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "results"],
+        "type": "object"
+      }
+    },
+    {
+      "kind": "request",
+      "namespace": "session",
       "subject": "sendMessage",
       "fullSubject": "session.sendMessage",
       "local": false,
@@ -7296,6 +7368,77 @@
           }
         },
         "required": ["messageId", "turnId", "sessionId"],
+        "type": "object"
+      }
+    },
+    {
+      "kind": "request",
+      "namespace": "session",
+      "subject": "turn.await",
+      "fullSubject": "session.turn.await",
+      "local": false,
+      "channel": false,
+      "requestSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": ["sessionId", "turnId", "timeoutMs"],
+        "type": "object"
+      },
+      "responseSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "completion": {
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "type": "string"
+              },
+              "initiator": {
+                "additionalProperties": false,
+                "properties": {
+                  "source": {
+                    "enum": ["user", "extension", "system"],
+                    "type": "string"
+                  },
+                  "sourceId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["source"],
+                "type": "object"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "success": {
+                "type": "boolean"
+              },
+              "turnId": {
+                "type": "string"
+              },
+              "turnNumber": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["sessionId", "turnId", "turnNumber", "success"],
+            "type": "object"
+          }
+        },
+        "required": ["completion"],
         "type": "object"
       }
     },

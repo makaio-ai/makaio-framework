@@ -233,6 +233,26 @@ describe('session.registerExternal', () => {
     expect(repeated).toEqual({ sessionId: first.sessionId, created: false });
   });
 
+  it('preserves idempotency for caller-provided sessionId after an external ID becomes ambiguous', async () => {
+    const first = await MakaioBus.request(SessionSubjects.registerExternal, {
+      sessionId: 'caller-provided-adapter-a',
+      adapterName: 'adapter-a',
+      adapterSessionId: 'shared-ext-id-custom',
+    });
+    await MakaioBus.request(SessionSubjects.registerExternal, {
+      adapterName: 'adapter-b',
+      adapterSessionId: 'shared-ext-id-custom',
+    });
+
+    const repeated = await MakaioBus.request(SessionSubjects.registerExternal, {
+      adapterName: 'adapter-a',
+      adapterSessionId: 'shared-ext-id-custom',
+    });
+
+    expect(first).toEqual({ sessionId: 'caller-provided-adapter-a', created: true });
+    expect(repeated).toEqual({ sessionId: 'caller-provided-adapter-a', created: false });
+  });
+
   it('creates distinct sessions for the same adapter with different external IDs', async () => {
     const first = await MakaioBus.request(SessionSubjects.registerExternal, {
       adapterName: 'adapter-a',

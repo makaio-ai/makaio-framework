@@ -1,9 +1,8 @@
 /**
- * Integration tests for `client.resolveBinary` wiring in `ClaudeCliConnector`.
+ * Integration tests for session config wiring in `ClaudeCliConnector`.
  *
- * Verifies that `initializeSession()` seeds the resolved binary context and
- * installs the per-turn resolver so each CLI subprocess can spawn with the
- * current binary path and environment.
+ * Verifies that `initializeSession()` seeds resolved runtime values and static
+ * connector options into the session before any CLI subprocess is spawned.
  *
  * Design invariants under test:
  * - When a managed binary context is returned, `binaryPath` and `env` flow into
@@ -13,6 +12,7 @@
  * - When no `client.resolveBinary` handler is registered, the session uses the
  *   pre-existing behaviour (no managed override).
  * - An explicit `providerConfig.binaryPath` always wins over the resolved value.
+ * - Adapter tool policy arrays are preserved for CLI argument generation.
  */
 
 import os from 'node:os';
@@ -37,6 +37,8 @@ interface TestSessionConfig {
   readonly binaryPath?: string;
   readonly env: Record<string, string>;
   readonly resolveTurnExecutionContext?: () => Promise<unknown>;
+  readonly allowedTools?: string[];
+  readonly disallowedTools?: string[];
 }
 
 /**
@@ -79,6 +81,8 @@ async function makeConnector(
   opts: {
     binaryPath?: string;
     env?: Record<string, string>;
+    allowedTools?: string[];
+    disallowedTools?: string[];
     providerContext?: ConstructorParameters<typeof ClaudeCliConnector>[0]['providerContext'];
   } = {},
 ): Promise<ClaudeCliConnector> {
@@ -91,6 +95,8 @@ async function makeConnector(
     cwd: os.tmpdir(),
     model: 'claude-sonnet',
     env: opts.env ?? {},
+    allowedTools: opts.allowedTools,
+    disallowedTools: opts.disallowedTools,
     providerContext: opts.providerContext,
     providerConfig: opts.binaryPath !== undefined ? { binaryPath: opts.binaryPath } : undefined,
   });
@@ -100,7 +106,7 @@ async function makeConnector(
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe('ClaudeCliConnector — client.resolveBinary integration', () => {
+describe('ClaudeCliConnector — session config integration', () => {
   let cleanup: Array<() => void>;
 
   beforeEach(() => {
@@ -235,5 +241,17 @@ describe('ClaudeCliConnector — client.resolveBinary integration', () => {
 
     expect(capturedRequests).toHaveLength(1);
     expect(capturedRequests[0]).toMatchObject({ clientId: 'claude-code' });
+  });
+
+  it('passes tool policy lists into the session config', async () => {
+    const connector = await makeConnector({
+      allowedTools: ['Bash(git status)', 'Edit'],
+      disallowedTools: ['WebSearch'],
+    });
+    await connector.initialize();
+
+    const sessionConfig = getSessionConfig(connector);
+    expect(sessionConfig?.allowedTools).toEqual(['Bash(git status)', 'Edit']);
+    expect(sessionConfig?.disallowedTools).toEqual(['WebSearch']);
   });
 });

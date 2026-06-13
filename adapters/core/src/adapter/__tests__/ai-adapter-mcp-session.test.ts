@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, type McpSessionContext } from '@makaio/contracts';
+import type { ExtractSubjectPayload } from '@makaio/core';
 import { createTestAdapter, MockConnector, type BaseAgentConnectorConfig, type TestBus } from './shared.js';
 
 const TEST_PROVIDER_CONTEXT = { providerConfigId: 'test-config', definitionId: 'provider-1', credentialRefs: {} };
@@ -85,5 +86,54 @@ describe('AIAdapter MCP session wiring', () => {
     expect(capturedConfigs[0]?.mcpSessionContext).toEqual(mcpSessionContext);
     expect(capturedConfigs[0]?.toolLedger).toBeDefined();
     expect(capturedConfigs[0]?.toolLedger?.getAllEntries()).toEqual([]);
+  });
+
+  it('bridges startAgent adapterConfig into config factory providerConfig', async () => {
+    const capturedInputs: Array<{ providerConfig?: Record<string, unknown> }> = [];
+
+    ({ adapter } = createTestAdapter('test-adapter-config', {
+      configFactory: async (input) => {
+        capturedInputs.push({ providerConfig: input.providerConfig });
+        return {
+          bus: input.bus,
+          agentId: input.agentId,
+          adapterId: input.adapterId,
+          adapterName: input.adapterName,
+          model: input.model ?? 'test-model',
+          cwd: input.cwd ?? '/tmp',
+          ...(input.providerConfig !== undefined && { providerConfig: input.providerConfig }),
+        };
+      },
+      connectorFactory: async (config) => new MockConnector(config),
+    }));
+
+    await adapter.init();
+
+    const payload: ExtractSubjectPayload<typeof AdapterSubjects.startAgent> & {
+      adapterConfig: Record<string, unknown>;
+    } = {
+      adapterId: adapter.adapterId,
+      sessionId: 'session-adapter-config',
+      role: 'lead',
+      providerContext: TEST_PROVIDER_CONTEXT,
+      adapterConfig: {
+        queryOptions: {
+          maxTurns: 2,
+        },
+      },
+    };
+
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, payload);
+
+    expect(result.success).toBe(true);
+    expect(capturedInputs).toEqual([
+      {
+        providerConfig: {
+          queryOptions: {
+            maxTurns: 2,
+          },
+        },
+      },
+    ]);
   });
 });

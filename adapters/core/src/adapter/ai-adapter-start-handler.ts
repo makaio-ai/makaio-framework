@@ -104,8 +104,8 @@ async function persistAndEmitAgent(
   const resolvedClientId = payload.clientId ?? clientId;
   // providerConfigId is NOT persisted from the adapter layer — the adapter only has
   // the definitionId (e.g. 'anthropic'), not the config UUID the orchestrator
-  // uses for credential resolution and rehydration. The orchestrator's
-  // persistAgentIdentity call writes the correct providerConfigId.
+  // uses for credential resolution and rehydration. The orchestrator writes the
+  // selected providerConfigId after startAgent returns the durable agentId.
   try {
     await globalBus.requestOptional(AgentStorageSubjects.set, {
       agentId,
@@ -117,6 +117,7 @@ async function persistAndEmitAgent(
         adapterSessionId,
         model: payload.model,
         cwd: resolvedCwd,
+        allowedDirectories: payload.allowedDirectories,
         role,
         status: 'idle' as const,
         createdAt: now,

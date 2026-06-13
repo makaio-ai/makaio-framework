@@ -16,6 +16,8 @@ export interface AgentRuntimeConnectorOverrides {
   cwd: string;
   model: string;
   providerContext: ProviderContext;
+  adapterSessionId: string;
+  resumeAdapterSessionId: string;
   mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
 }
 

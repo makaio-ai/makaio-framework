@@ -653,6 +653,8 @@ export abstract class AIAgent<
       cwd: string;
       model: string;
       providerContext: ProviderContext;
+      adapterSessionId: string;
+      resumeAdapterSessionId: string;
       mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ): Promise<void> {
@@ -695,6 +697,7 @@ export abstract class AIAgent<
       model: string;
       providerContext: ProviderContext;
       adapterSessionId: string;
+      resumeAdapterSessionId: string;
       mcpSessionContext: McpRuntimeSessionContext | McpSessionContext | LedgerSessionContext;
     }>,
   ): ConfigFactoryInput<TBus> {
@@ -723,12 +726,13 @@ export abstract class AIAgent<
       env: cfg.env,
       adapterSessionId: overrides?.adapterSessionId ?? cfg.adapterSessionId,
       sessionId: cfg.sessionId,
-      resumeAdapterSessionId: cfg.resumeAdapterSessionId,
+      resumeAdapterSessionId: overrides?.resumeAdapterSessionId ?? cfg.resumeAdapterSessionId,
       reasoningEffort: currentReasoningEffort,
       supportedReasoningLevels: this.getSupportedReasoningLevels(overrides?.model ?? cfg.model),
       allowedTools: cfg.allowedTools,
       disallowedTools: cfg.disallowedTools,
       allowedDirectories: cfg.allowedDirectories,
+      providerConfig: cfg.adapterConfig,
       mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
       toolLedger: cfg.toolLedger,
       clientId: cfg.clientId,

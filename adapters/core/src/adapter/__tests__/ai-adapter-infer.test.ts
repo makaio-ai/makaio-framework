@@ -606,6 +606,62 @@ describe('AIAdapter.handleInfer', () => {
     }
   });
 
+  it('merges per-call env over platform default env for agent startup', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createInitDefaultsAdapter({ inferredText: '' }, capture);
+    await adapter.init();
+
+    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      adapterId: adapter.adapterId,
+      role: 'lead',
+      mode: 'create',
+      initialMessage: 'hello',
+      env: { EXTRA: '2' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(capture.agentConfigs[0]?.env).toEqual({ TEST_DEFAULT: '1', EXTRA: '2' });
+    expect(capture.configFactoryInputs[0]?.env).toEqual({ TEST_DEFAULT: '1', EXTRA: '2' });
+  });
+
+  it('forwards allowedDirectories from startAgent payload into connector config input and persistence', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = createTestAdapter({ inferredText: '' }, capture);
+    await adapter.init();
+
+    const allowedDirectories = ['/workspace'];
+    let persistedAllowedDirectories: string[] | undefined;
+    const offSet = MakaioBus.on(AgentStorageSubjects.set, (ctx) => {
+      persistedAllowedDirectories = ctx.payload.agent.allowedDirectories;
+      ctx.setResult({ success: true });
+    });
+
+    try {
+      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+        adapterId: adapter.adapterId,
+        role: 'lead',
+        mode: 'create',
+        initialMessage: 'hello',
+        allowedDirectories,
+      });
+
+      expect(result.success).toBe(true);
+      expect(capture.agentConfigs[0]?.allowedDirectories).toEqual(allowedDirectories);
+      expect(capture.configFactoryInputs[0]?.allowedDirectories).toEqual(allowedDirectories);
+      expect(persistedAllowedDirectories).toEqual(allowedDirectories);
+    } finally {
+      offSet();
+    }
+  });
+
   it('forwards reasoningEffort from startAgent payload into agent config', async () => {
     const capture = {
       configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],

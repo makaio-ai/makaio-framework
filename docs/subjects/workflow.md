@@ -758,6 +758,7 @@ Type: Request (RPC)
 | `harnessId` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `providerContext` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined` | no |
+| `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `systemPrompt` | `string \| undefined` | no |
 
 ### <a id="workflow.resolveRole"></a>`workflow.resolveRole` (rpc)
@@ -783,6 +784,7 @@ Type: Request (RPC)
 | `harnessId` | `string \| undefined` | no |
 | `model` | `string \| undefined` | no |
 | `providerContext` | `{ providerConfigId: string; definitionId: string; credentialRefs: Record<string, string & $brand<"CredentialRef">>; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; credentialEnvVars?: Record<string, string> \| undefined; ambientCredentialEnvVars?: string[] \| undefined; } \| undefined` | no |
+| `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
 | `systemPrompt` | `string \| undefined` | no |
 
 ### <a id="workflow.runFile"></a>`workflow.runFile` (rpc)

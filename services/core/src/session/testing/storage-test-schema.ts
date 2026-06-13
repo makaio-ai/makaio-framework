@@ -65,6 +65,7 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       adapter_session_id TEXT,
       model TEXT,
       cwd TEXT,
+      allowed_directories TEXT,
       provider_config_id TEXT,
       persona_id TEXT,
       profile_id TEXT,
@@ -109,7 +110,8 @@ export const MESSAGES_FTS_TEST_SCHEMA_SQL: SQL[] = [
       started_at INTEGER NOT NULL,
       completed_at INTEGER,
       status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'error')),
-      error TEXT
+      error TEXT,
+      initiator TEXT
     )
   `,
   sql`

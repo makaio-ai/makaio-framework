@@ -127,6 +127,8 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
       env: executionContext.env,
       providerConfig: cliConfig.providerConfig,
       reasoningEffort: this.currentReasoningEffort,
+      allowedTools: cliConfig.allowedTools,
+      disallowedTools: cliConfig.disallowedTools,
       binaryPath: executionContext.binaryPath,
       resolveTurnExecutionContext: () => this.resolveTurnExecutionContext(),
       firstOutputTimeoutMs: this.timeouts.values.initialization,
@@ -403,6 +405,6 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
    * Killing the process would also discard any accumulated context.
    */
   public async interrupt(): Promise<void> {
-    console.warn('[ClaudeCliConnector] interrupt() is not supported — process is single-shot');
+    throw new Error('Claude Code CLI adapter does not support interrupt()');
   }
 }

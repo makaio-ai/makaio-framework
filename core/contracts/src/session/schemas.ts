@@ -8,6 +8,8 @@ import { ResolveAgentConfigSchema } from './schemas/resolve-agent-config.js';
 import { ResolveSystemPromptSchema } from './schemas/resolve-system-prompt.js';
 import { SessionEnrichmentSchemas } from './schemas/enrichment.js';
 
+export type { RestartAgentsRequest, RestartAgentsResponse, RestartAgentsResult } from './schemas/crud.js';
+
 // Entity schemas
 export { AgentStatusSchema, MakaioSessionAgentSchema } from './schemas/agent.js';
 export type { AgentStatus, MakaioSessionAgent } from './schemas/agent.js';
@@ -98,6 +100,7 @@ export {
   SessionMessageOriginSchema,
   SessionMessageRoleSchema,
   SessionMessageSchema,
+  TurnInitiatorSchema,
   TurnSchema,
   TurnStatusSchema,
   TurnUsageSchema,
@@ -111,11 +114,12 @@ export type {
   SessionMessageOrigin,
   SessionMessageRole,
   Turn,
+  TurnInitiator,
   TurnStatus,
   TurnUsage,
   UsageMetrics,
 } from './schemas/message.js';
-export { OrchestratorSchemas, TurnInitiatorSchema } from './schemas/orchestrator.js';
+export { OrchestratorSchemas } from './schemas/orchestrator.js';
 export type {
   AgentAttachRequest,
   AgentAttachResponse,
@@ -123,8 +127,9 @@ export type {
   SendMessageResponse,
   SessionForkRequest,
   SessionForkResponse,
+  TurnAwaitRequest,
+  TurnAwaitResponse,
   TurnCompleted,
-  TurnInitiator,
   TurnStarted,
   UserMessageAcknowledged,
   UserMessageCompleted,

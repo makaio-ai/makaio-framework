@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 104 |
-| Subjects | 931 (398 events, 533 RPCs) |
+| Subjects | 933 (398 events, 535 RPCs) |
 | framework | 100 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -76,7 +76,7 @@ next: false
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |
-| [`session`](./session.md) | bus | 55 | 29E / 26R |
+| [`session`](./session.md) | bus | 57 | 29E / 28R |
 | [`skill`](./skill.md) | bus | 6 | 3E / 3R |
 | [`storage:message`](./storage-message.md) | storage | 9 | 1E / 8R |
 | [`storage:session`](./storage-session.md) | storage | 14 | 0E / 14R |

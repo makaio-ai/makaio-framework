@@ -1146,7 +1146,12 @@ describe('executeDelegateNode', () => {
     const spawned: unknown[] = [];
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       expect(requestCtx.payload.roleId).toBe('reviewer');
-      requestCtx.setResult({ adapterName: 'claude-code', model: 'sonnet', contextMode: 'fresh' });
+      requestCtx.setResult({
+        adapterName: 'claude-code',
+        model: 'sonnet',
+        reasoningEffort: 'high',
+        contextMode: 'fresh',
+      });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
       spawned.push(requestCtx.payload);
@@ -1172,6 +1177,7 @@ describe('executeDelegateNode', () => {
           task: 'Review workflow runtime',
           adapterName: 'claude-code',
           model: 'sonnet',
+          reasoningEffort: 'high',
           contextMode: 'fresh',
           responseSchema: { schema: { type: 'object' } },
         },

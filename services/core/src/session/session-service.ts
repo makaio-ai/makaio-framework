@@ -10,7 +10,8 @@ import { TurnStorageSubjects } from './turns/index.js';
  *
  * Registers the minimal, load-bearing session handlers that the framework SDK
  * requires: `session.create`, `session.get`, `session.list`, `session.close`,
- * `session.agent.added`, and `session.agent.removed`.
+ * `session.turn.await`, `session.restartAgents`, `session.agent.added`, and
+ * `session.agent.removed`.
  *
  * Host-specific handlers (search, update, resume, archive, purge, analytics,
  * context window, branching) are registered by the host session service which
@@ -59,7 +60,7 @@ export class MakaioSessionService extends BaseService {
   /**
    * Initialize the service.
    *
-   * Registers the six framework-core session bus handlers, then performs
+   * Registers the framework-core session bus handlers, then performs
    * startup reconciliation to close any turns that were left `active` by a
    * prior process crash. Each orphaned turn is closed with status `'error'`
    * and a `'process-restart'` error message, and a `turn.completed` event is

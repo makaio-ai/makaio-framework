@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { MessageInputSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
+import { JsonObjectContractSchema, MessageInputSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
 import { AgentRoleSchema } from '../../session/schemas.js';
 import { SessionContextSchema } from '../../session/session-context.js';
 import { McpRuntimeSessionContextSchema, McpSessionContextSchema } from '../../mcp/schemas.js';
@@ -42,6 +42,12 @@ const StartAgentBaseSchema = z
 
     /** Reasoning effort level to apply for this agent invocation. */
     reasoningEffort: AIReasoningLevelSchema.optional(),
+
+    /**
+     * Per-call adapter-specific configuration.
+     * JSON-safe opaque bag forwarded to the adapter config factory merge seam.
+     */
+    adapterConfig: JsonObjectContractSchema.optional(),
 
     /** Environment variables to pass to agent execution */
     env: z.record(z.string(), z.string()).optional(),

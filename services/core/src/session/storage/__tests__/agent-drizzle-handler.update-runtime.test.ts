@@ -24,6 +24,7 @@ const CREATE_AGENTS_TABLE_SQL = sql`
     adapter_session_id TEXT,
     model TEXT,
     cwd TEXT,
+    allowed_directories TEXT,
     provider_config_id TEXT,
     persona_id TEXT,
     profile_id TEXT,
@@ -71,6 +72,7 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
         lastActivityAt: 1000,
         model: 'model-v1',
         cwd: '/tmp/old',
+        allowedDirectories: ['/tmp/old'],
       },
     });
   });
@@ -92,8 +94,27 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
 
     expect(agent?.model).toBe('model-v2');
     expect(agent?.cwd).toBe('/tmp/old');
+    expect(agent?.allowedDirectories).toEqual(['/tmp/old']);
     expect(agent?.status).toBe('idle');
     expect(agent?.lastActivityAt).toBeGreaterThanOrEqual(beforeUpdate);
+  });
+
+  it('updates allowedDirectories without overwriting other runtime fields', async () => {
+    const result = await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      agentId: 'runtime-test',
+      allowedDirectories: ['/tmp/new'],
+    });
+
+    expect(result.success).toBe(true);
+
+    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, {
+      agentId: 'runtime-test',
+    });
+
+    expect(agent?.allowedDirectories).toEqual(['/tmp/new']);
+    expect(agent?.model).toBe('model-v1');
+    expect(agent?.cwd).toBe('/tmp/old');
+    expect(agent?.status).toBe('idle');
   });
 
   it('returns false when agent is missing', async () => {
@@ -119,5 +140,25 @@ describe('registerDrizzleAgentStorage.updateRuntime', () => {
     expect(agent?.providerConfigId).toBe('provider-2');
     expect(agent?.model).toBe('model-v1');
     expect(agent?.cwd).toBe('/tmp/old');
+    expect(agent?.allowedDirectories).toEqual(['/tmp/old']);
+  });
+
+  it('updates adapterId without overwriting other runtime fields', async () => {
+    const result = await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      agentId: 'runtime-test',
+      adapterId: 'adapter-2',
+    });
+
+    expect(result.success).toBe(true);
+
+    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, {
+      agentId: 'runtime-test',
+    });
+
+    expect(agent?.adapterId).toBe('adapter-2');
+    expect(agent?.model).toBe('model-v1');
+    expect(agent?.cwd).toBe('/tmp/old');
+    expect(agent?.allowedDirectories).toEqual(['/tmp/old']);
+    expect(agent?.status).toBe('idle');
   });
 });

@@ -304,6 +304,9 @@ export const agentsDual = defineDualTable(
     /** Current working directory */
     cwd: c.text('cwd'),
 
+    /** Directory restrictions for file-system tool execution. */
+    allowedDirectories: c.jsonCol<string[]>('allowed_directories'),
+
     /** Provider config UUID for credential/endpoint resolution */
     providerConfigId: c.text('provider_config_id'),
 

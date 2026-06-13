@@ -15,6 +15,7 @@ import {
 import { AdapterRegistry } from './adapter-registry.js';
 import { MessageStorageSubjects } from './messages/index.js';
 import { MessageRoutingSubjects } from './message-routing/index.js';
+import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import { SessionTurnManager, type TurnCompletionResult } from './session-turn-manager.js';
 import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
 
@@ -40,6 +41,7 @@ import {
 } from './session-orchestrator-helpers-core.js';
 import type { Turn } from './entities/turn.js';
 import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
+import { activateProviderContext, buildProviderContext } from '../provider-context/index.js';
 
 /**
  * Slim framework session orchestrator.
@@ -53,8 +55,8 @@ import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
  * 1. Get or create session (via `getOrCreateSession`)
  * 2. Start agent if session has no agents — resolves the canonical
  *    `adapterName` from direct selections, uses `adapterId` directly when
- *    provided, otherwise resolves it via `AdapterRegistry`, then calls bare
- *    `AdapterSubjects.startAgent`
+ *    provided, otherwise resolves it via `AdapterRegistry`, resolves
+ *    provider credentials when selected, then calls `AdapterSubjects.startAgent`
  * 3. Resolve target agents (via `resolveTargetAgents`)
  * 4. Verify agent liveness and build recovery context for dead agents
  *    (requestOptional `AdapterSubjects.getAgent` + `buildRecoveryContext`)
@@ -109,7 +111,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    * Core flow:
    * 1. Get or create session
    * 2. Start agent if session has no agents (canonicalize direct selections,
-   *    resolve adapterId, bare startAgent)
+   *    resolve adapterId, resolve provider credentials, startAgent)
    * 3. Resolve target agents
    * 4. Verify agent liveness and build recovery context for dead agents
    * 5. Get or create turn (via SessionTurnManager)
@@ -161,11 +163,19 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           const adapterId =
             normalizeSelectionString(adapterKindSelection.adapterId) ??
             (await this.adapterRegistry.resolveAvailable(adapterName));
+          const providerContext =
+            adapterKindSelection.providerConfigId !== undefined
+              ? await buildProviderContext(this.bus, adapterKindSelection.providerConfigId)
+              : undefined;
+          if (providerContext !== undefined) {
+            await activateProviderContext(this.bus, providerContext);
+          }
 
           const startResult = await this.bus.request(AdapterSubjects.startAgent, {
             adapterId,
             sessionId: resolvedSessionId,
             role: 'lead',
+            ...(providerContext !== undefined && { providerContext }),
             ...(adapterKindSelection.model !== undefined && { model: adapterKindSelection.model }),
             ...(adapterKindSelection.reasoningEffort !== undefined && {
               reasoningEffort: adapterKindSelection.reasoningEffort,
@@ -200,10 +210,19 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             sessionId: resolvedSessionId,
             role: 'lead',
             status: 'idle',
+            ...(adapterKindSelection.providerConfigId !== undefined && {
+              providerConfigId: adapterKindSelection.providerConfigId,
+            }),
             createdAt: now,
             lastActivityAt: now,
           });
           session.leadAgentId = startResult.agentId;
+          if (adapterKindSelection.providerConfigId !== undefined) {
+            await this.bus.requestOptional(AgentStorageSubjects.updateRuntime, {
+              agentId: startResult.agentId,
+              providerConfigId: adapterKindSelection.providerConfigId,
+            });
+          }
         }
 
         // 3. Resolve target agents

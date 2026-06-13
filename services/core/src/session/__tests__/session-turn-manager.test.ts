@@ -29,19 +29,34 @@ type UnsubFn = () => void;
  */
 function registerTurnStorageHandlers(): UnsubFn {
   const nextBySession = new Map<string, number>();
-  const turnsById = new Map<string, { sessionId: string; turnNumber: number; startedAt: number }>();
+  const turnsById = new Map<
+    string,
+    { sessionId: string; turnNumber: number; startedAt: number; initiator?: TurnInitiator }
+  >();
   const unsubs: UnsubFn[] = [];
 
   unsubs.push(
     MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
-      const { sessionId } = ctx.payload;
+      const { sessionId, initiator } = ctx.payload;
       const turnNumber = (nextBySession.get(sessionId) ?? 0) + 1;
       nextBySession.set(sessionId, turnNumber);
       const turnId = ctx.payload.turnId ?? crypto.randomUUID();
       const startedAt = Date.now();
-      turnsById.set(turnId, { sessionId, turnNumber, startedAt });
+      turnsById.set(turnId, {
+        sessionId,
+        turnNumber,
+        startedAt,
+        ...(initiator !== undefined && { initiator }),
+      });
       ctx.setResult({
-        turn: { turnId, sessionId, turnNumber, startedAt, status: 'active' },
+        turn: {
+          turnId,
+          sessionId,
+          turnNumber,
+          startedAt,
+          status: 'active',
+          ...(initiator !== undefined && { initiator }),
+        },
       });
     }),
   );
@@ -60,6 +75,7 @@ function registerTurnStorageHandlers(): UnsubFn {
           status: ctx.payload.status,
           error: ctx.payload.error,
           usage: ctx.payload.usage,
+          ...(stored.initiator !== undefined && { initiator: stored.initiator }),
         },
         transitioned: true,
       });

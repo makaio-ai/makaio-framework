@@ -62,6 +62,7 @@ next: false
 | `registerExternal` | [`session.registerExternal`](#session.registerExternal) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `resolveAgentConfig` | [`session.resolveAgentConfig`](#session.resolveAgentConfig) | rpc | [`resolve-agent-config.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/resolve-agent-config.ts) |
 | `resolveSystemPrompt` | [`session.resolveSystemPrompt`](#session.resolveSystemPrompt) | rpc | [`resolve-system-prompt.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/resolve-system-prompt.ts) |
+| `restartAgents` | [`session.restartAgents`](#session.restartAgents) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `resume` | [`session.resume`](#session.resume) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
 | `resumed` | [`session.resumed`](#session.resumed) | event | [`events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/events.ts) |
 | `search` | [`session.search`](#session.search) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
@@ -70,6 +71,7 @@ next: false
 | `snapshot.import` | [`session.snapshot.import`](#session.snapshot.import) | rpc | [`snapshot.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/snapshot.ts) |
 | `snapshot.validate` | [`session.snapshot.validate`](#session.snapshot.validate) | rpc | [`snapshot.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/snapshot.ts) |
 | `squash` | [`session.squash`](#session.squash) | event | [`lifecycle-events.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/lifecycle-events.ts) |
+| `turn.await` | [`session.turn.await`](#session.turn.await) | rpc | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `turn.completed` | [`session.turn.completed`](#session.turn.completed) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `turn.started` | [`session.turn.started`](#session.turn.started) | event | [`orchestrator.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/orchestrator.ts) |
 | `update` | [`session.update`](#session.update) | rpc | [`crud.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/session/schemas/crud.ts) |
@@ -881,6 +883,31 @@ Type: Request (RPC)
 | `profileName` | `string \| undefined` | no |
 | `systemPrompt` | `string` | yes |
 
+### <a id="session.restartAgents"></a>`session.restartAgents` (rpc)
+
+Explicitly restart persisted session agents.
+
+Subject: `session.restartAgents`
+Type: Request (RPC)
+
+This restores runtime connectors for agents already persisted on the
+session. It intentionally does not change `session.resume` status
+semantics; closed-session status and runtime rehydration remain separate
+seams.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `sessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `results` | `({ agentId: string; adapterId: string; success: true; } \| { agentId: string; adapterId: string; success: false; error: string; })[]` | yes |
+| `sessionId` | `string` | yes |
+
 ### <a id="session.resume"></a>`session.resume` (rpc)
 
 Resume a closed session back to active.
@@ -1071,6 +1098,30 @@ persists with transform applied.
 | `summaryJson` | `string` | yes |
 | `tokensAfter` | `number \| undefined` | no |
 | `tokensBefore` | `number \| undefined` | no |
+
+### <a id="session.turn.await"></a>`session.turn.await` (rpc)
+
+Await completion of a specific session turn.
+
+Subject: `session.turn.await`
+Type: Request (RPC)
+
+Resolves with the matching `session.turn.completed` payload. The timeout is
+required so callers cannot accidentally create an unbounded wait.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `sessionId` | `string` | yes |
+| `timeoutMs` | `number` | yes |
+| `turnId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completion` | `{ sessionId: string; turnId: string; turnNumber: number; success: boolean; error?: string \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 ### <a id="session.turn.completed"></a>`session.turn.completed` (event)
 

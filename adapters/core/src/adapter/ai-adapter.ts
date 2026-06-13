@@ -293,9 +293,10 @@ export abstract class AIAdapter<
     // clientId: payload carries it from the caller; adapter definition is the authoritative fallback.
     const clientId = request.clientId ?? this.clientId;
     const resumeAdapterSessionId =
-      'adapterSessionId' in request && 'mode' in request && request.mode === 'resume'
+      request.resumeAdapterSessionId ??
+      ('adapterSessionId' in request && 'mode' in request && request.mode === 'resume'
         ? (request as { adapterSessionId: string }).adapterSessionId
-        : undefined;
+        : undefined);
 
     // Resolve provider-scoped models only. Avoid cross-provider flattening because
     // duplicate model names across providers are ambiguous for execution metadata.
@@ -327,7 +328,10 @@ export abstract class AIAdapter<
         env,
         allowedTools,
         disallowedTools,
+        allowedDirectories: request.allowedDirectories,
+        adapterSessionId: request.adapterSessionId,
         reasoningEffort,
+        adapterConfig: request.adapterConfig,
         resumeAdapterSessionId,
         harnessId,
         clientId,

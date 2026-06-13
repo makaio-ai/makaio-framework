@@ -226,10 +226,15 @@ describeStorageConformance('handlers-sessions', (config) => {
       await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session });
 
       const agentId = `agent-${crypto.randomUUID()}`;
-      const agent = makeAgent({ agentId, sessionId, status: 'idle' });
+      const agent = makeAgent({ agentId, sessionId, status: 'idle', allowedDirectories: ['/workspace'] });
 
       await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent });
-      const updated: MakaioSessionAgent = { ...agent, status: 'active', lastActivityAt: Date.now() + 100 };
+      const updated: MakaioSessionAgent = {
+        ...agent,
+        status: 'active',
+        allowedDirectories: ['/workspace', '/tmp'],
+        lastActivityAt: Date.now() + 100,
+      };
       const result = await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent: updated });
       expect(result.success).toBe(true);
 
@@ -237,6 +242,7 @@ describeStorageConformance('handlers-sessions', (config) => {
       expect(listResult.agents).toHaveLength(1);
       expect(listResult.agents[0].agentId).toBe(agentId);
       expect(listResult.agents[0].status).toBe('active');
+      expect(listResult.agents[0].allowedDirectories).toEqual(['/workspace', '/tmp']);
     });
   });
 });
