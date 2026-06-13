@@ -16,12 +16,6 @@
 
 export { getMigrationsFolder } from './run-migrations.js';
 export {
-  generateMigrations,
-  type GenerateMigrationsOptions,
-  type GenerateMigrationsResult,
-  type GenerateMigrationsLegResult,
-} from './generate-migrations.js';
-export {
   MigrationDialectMismatchError,
   readMigrations,
   type MigrationMeta,

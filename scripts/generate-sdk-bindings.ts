@@ -184,6 +184,9 @@ async function readUtf8(filePath: string): Promise<string> {
  * @returns True when executed directly.
  */
 function isMainModule(): boolean {
+  if (typeof import.meta.main === 'boolean') {
+    return import.meta.main;
+  }
   const entry = process.argv[1];
   return entry !== undefined && pathToFileURL(entry).href === import.meta.url;
 }
