@@ -103,6 +103,11 @@ export function createBaseConfig(customRules, options = {}) {
     {
       rules: {
         'jsdoc/require-example': 'off',
+        'jsdoc/require-next-type': 'off',
+        'jsdoc/require-yields-type': 'off',
+        'jsdoc/require-property': 'off',
+        'jsdoc/require-property-name': 'off',
+        'jsdoc/require-property-description': 'off',
       },
     },
 
@@ -136,6 +141,8 @@ export function createBaseConfig(customRules, options = {}) {
       rules: {
         'tsdoc/syntax': 'error',
         'import/no-unresolved': 'off',
+        'import/namespace': 'off',
+        'import/no-duplicates': 'off',
         'jsdoc/require-example': 'off',
         'jsdoc/require-throws-type': 'off',
         'jsdoc/require-param-description': 'error',

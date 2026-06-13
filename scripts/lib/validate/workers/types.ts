@@ -54,8 +54,6 @@ export interface WorkerOutput {
 export interface WorkerConfig {
   /** Tool to validate with */
   tool: WorkerTool;
-  /** Maximum heap size in MB (default: 2048) */
-  maxHeapMB?: number;
   /** Timeout in milliseconds (default: 600000 = 10 minutes) */
   timeoutMs?: number;
 }

@@ -5,7 +5,6 @@ import { spawnWorker } from './workers/spawner.js';
 import type { FileValidationResults, ValidateOptions, ValidationSummary, ToolRunStatus } from './types.js';
 import type { WorkerConfig, WorkerInput, WorkerTool } from './workers/types.js';
 
-const FULL_WORKSPACE_TYPESCRIPT_HEAP_MB = 2048;
 const FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS = 1_800_000;
 const DEFAULT_TOOLS: WorkerTool[] = ['biome', 'eslint', 'stylelint', 'typescript'];
 
@@ -20,15 +19,7 @@ export function getWorkerConfig(tool: WorkerTool, options: ValidateOptions): Wor
     return { tool };
   }
 
-  if (tool === 'typescript') {
-    return {
-      tool,
-      maxHeapMB: FULL_WORKSPACE_TYPESCRIPT_HEAP_MB,
-      timeoutMs: FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS,
-    };
-  }
-
-  if (tool === 'eslint') {
+  if (tool === 'typescript' || tool === 'eslint') {
     return { tool, timeoutMs: FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS };
   }
 
@@ -55,9 +46,8 @@ export function resolveWorkerTools(options: ValidateOptions): WorkerTool[] {
 /**
  * Workspace validator for Biome formatting, ESLint, Stylelint, and TypeScript.
  *
- * Each validator runs in its own forked process with isolated V8 heap memory.
- * When a worker process exits, ALL its memory is immediately reclaimed by the OS.
- * This prevents OOM errors that occur when running all validators in a single process.
+ * Each validator runs in its own forked process.
+ * When a worker process exits, its memory is immediately reclaimed by the OS.
  * @example
  * ```typescript
  * const validator = new WorkspaceValidator();
