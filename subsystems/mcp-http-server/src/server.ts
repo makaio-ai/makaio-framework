@@ -44,6 +44,12 @@ export type {
   ToolApproveResponse,
 };
 
+/** Query parameter name used by adapters to pass the session ID when custom headers are not available. */
+export const ADAPTER_SESSION_ID_PARAM = 'adapterSessionId';
+
+/** HTTP header name that carries the adapter session ID after query-param promotion. */
+export const ADAPTER_SESSION_ID_HEADER = 'x-adapter-session-id';
+
 /**
  * Options for configuring MCP server startup.
  */
@@ -118,8 +124,8 @@ export interface CreateMcpServerOptions {
 }
 
 /**
- * Transport-agnostic options shared by {@link createHttpMcpHandler} and
- * {@link startHttpMcpServer}.  These fields configure the MCP server and its
+ * Transport-agnostic options shared by {@link createHttpMcpHandler},
+ * {@link createFetchMcpHandler}, and {@link startHttpMcpServer}.  These fields configure the MCP server and its
  * attached transport without prescribing how the resulting handler is mounted
  * onto an HTTP stack.
  */
@@ -132,7 +138,8 @@ export interface HttpMcpHandlerOptions {
    * Optional callback invoked when the underlying MCP transport closes.
    *
    * Called synchronously by the MCP SDK's transport `onclose` hook — that is,
-   * after {@link HttpMcpHandlerHandle.close} (or {@link HttpMcpServerHandle.close})
+   * after {@link HttpMcpHandlerHandle.close}, {@link FetchMcpHandlerHandle.close},
+   * or {@link HttpMcpServerHandle.close}
    * has been called and the transport has finished tearing down.  Intended for
    * best-effort resource cleanup (e.g. flushing session registries) without
    * blocking the close path.
@@ -220,7 +227,7 @@ function toCallToolResult(result: ToolResult<unknown>): CallToolResult {
 function extractAdapterSessionId(extra: {
   requestInfo?: { headers: Record<string, string | string[] | undefined> };
 }): string | undefined {
-  const rawHeader = extra.requestInfo?.headers['x-adapter-session-id'];
+  const rawHeader = extra.requestInfo?.headers[ADAPTER_SESSION_ID_HEADER];
   return Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
 }
 
@@ -551,11 +558,11 @@ export async function createHttpMcpHandler(
     const queryStart = rawUrl.indexOf('?');
     if (queryStart === -1) return;
 
-    const adapterSessionId = new URLSearchParams(rawUrl.slice(queryStart + 1)).get('adapterSessionId');
+    const adapterSessionId = new URLSearchParams(rawUrl.slice(queryStart + 1)).get(ADAPTER_SESSION_ID_PARAM);
     if (adapterSessionId) {
-      req.headers['x-adapter-session-id'] = adapterSessionId;
+      req.headers[ADAPTER_SESSION_ID_HEADER] = adapterSessionId;
       Object.defineProperty(req, 'rawHeaders', {
-        value: [...req.rawHeaders, 'x-adapter-session-id', adapterSessionId],
+        value: [...req.rawHeaders, ADAPTER_SESSION_ID_HEADER, adapterSessionId],
         configurable: true,
       });
     }
