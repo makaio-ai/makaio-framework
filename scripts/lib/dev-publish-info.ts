@@ -10,10 +10,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '../../build-tooling/framework-public-surface.js';
 import { checkSourceManifestMakaioReferences } from './npm-packlist-policy.js';
+import { isRuntimeMigrationChainFile } from './runtime-migration-assets.js';
 import type { WorkspacePackage } from './dev-publish-core.js';
 export { renderDevPublishInfo } from './dev-publish-info-render.js';
 
 const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'] as const;
+const FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT = 'storage/migrations/drizzle';
 const FRAMEWORK_UMBRELLA_INPUT_PATHS = [
   'build-tooling/framework-import-map.ts',
   'build-tooling/framework-public-surface.ts',
@@ -172,13 +174,31 @@ function isWithinPackageRoot(file: string, packageRoot: string): boolean {
 }
 
 /**
+ * Tests whether a repository path is copied into the framework runtime
+ * migration chain.
+ * @param file - Repository-root-relative path.
+ * @returns True when the file is part of the shipped migration chain.
+ */
+function isFrameworkRuntimeMigrationChainInput(file: string): boolean {
+  const prefix = `${FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT}/`;
+  if (!file.startsWith(prefix)) {
+    return false;
+  }
+
+  return isRuntimeMigrationChainFile(file.slice(prefix.length));
+}
+
+/**
  * Tests whether a repository path participates in the framework umbrella
  * package build while living outside the framework package root.
  * @param file - Repository-root-relative path.
  * @returns True when the file can affect the assembled framework artifact.
  */
 function isFrameworkUmbrellaInput(file: string): boolean {
-  return FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath);
+  return (
+    FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath) ||
+    isFrameworkRuntimeMigrationChainInput(file)
+  );
 }
 
 /**
