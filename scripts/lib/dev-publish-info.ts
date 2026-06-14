@@ -8,23 +8,18 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '../../build-tooling/framework-public-surface.js';
+import {
+  FRAMEWORK_BUILD_PACKAGE_NAMES,
+  FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS,
+  FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS,
+  FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT,
+} from '../../build-tooling/framework-public-surface.js';
 import { checkSourceManifestMakaioReferences } from './npm-packlist-policy.js';
 import { isRuntimeMigrationChainFile } from './runtime-migration-assets.js';
 import type { WorkspacePackage } from './dev-publish-core.js';
 export { renderDevPublishInfo } from './dev-publish-info-render.js';
 
 const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'] as const;
-const FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT = 'storage/migrations/drizzle';
-const FRAMEWORK_UMBRELLA_INPUT_PATHS = [
-  'build-tooling/framework-import-map.ts',
-  'build-tooling/framework-public-surface.ts',
-  'build-tooling/package-exports.ts',
-  'build-tooling/tsdown-framework-preset.ts',
-  'build-tooling/tsdown-scss.ts',
-  'scripts/lib/framework-dist-verifier.ts',
-  'scripts/lib/runtime-migration-assets.ts',
-] as const;
 const NON_PUBLISHABLE_PREFIXES = ['.changeset/', '.github/', 'docs/', 'scripts/'] as const;
 const NON_PUBLISHABLE_PATH_SEGMENTS = new Set(['__tests__', 'fixtures', 'snapshots']);
 const NON_PUBLISHABLE_FILE_NAMES = new Set([
@@ -60,6 +55,30 @@ interface DevTagMetadata {
   readonly name: string;
   readonly timestamp: number;
 }
+
+interface WorkspacePackageManifest {
+  readonly name?: string;
+  readonly location: string;
+  readonly version?: string;
+  readonly private?: boolean;
+  readonly dependencies?: Record<string, string>;
+  readonly peerDependencies?: Record<string, string>;
+  readonly optionalDependencies?: Record<string, string>;
+}
+
+/** Workspace package root used for framework build-input mapping. */
+export interface FrameworkBuildPackageRoot {
+  readonly name: string;
+  readonly location: string;
+}
+
+/** Options for mapping files to dev-publish packages. */
+export interface DevPublishFileMappingOptions {
+  readonly frameworkBuildPackageRoots?: readonly FrameworkBuildPackageRoot[];
+}
+
+const DEFAULT_FRAMEWORK_BUILD_PACKAGE_ROOTS: readonly FrameworkBuildPackageRoot[] =
+  FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.map((entry) => ({ name: entry.packageName, location: entry.packageRoot }));
 
 /**
  * Extracts the dev timestamp from a package-scoped dev tag.
@@ -98,12 +117,12 @@ export function selectLatestDevTag(packageName: string, tagNames: readonly strin
 }
 
 /**
- * Discovers publishable Makaio package manifests at a Git ref without checking
- * out or executing code from that ref.
+ * Reads Makaio workspace package manifests at a Git ref without checking out or
+ * executing code from that ref.
  * @param ref - Git ref whose package manifests should be inspected.
- * @returns Publishable package metadata at the requested ref.
+ * @returns Workspace package manifests at the requested ref.
  */
-export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] {
+function readWorkspacePackageManifestsAtRef(ref: string): WorkspacePackageManifest[] {
   const output = execFileSync('git', ['ls-tree', '-r', '--name-only', ref], { encoding: 'utf8' });
   const packageJsonPaths = output
     .trim()
@@ -111,7 +130,7 @@ export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] 
     .map((path) => path.trim())
     .filter((path) => path !== 'package.json' && path.endsWith('/package.json'));
 
-  const packages: WorkspacePackage[] = [];
+  const manifests: WorkspacePackageManifest[] = [];
   for (const packageJsonPath of packageJsonPaths) {
     const raw = execFileSync('git', ['show', `${ref}:${packageJsonPath}`], { encoding: 'utf8' });
     const packageJson = JSON.parse(raw) as {
@@ -123,7 +142,34 @@ export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] 
       optionalDependencies?: Record<string, string>;
     };
 
-    if (packageJson.private || !packageJson.name?.startsWith('@makaio/') || !packageJson.version) {
+    if (!packageJson.name?.startsWith('@makaio/')) {
+      continue;
+    }
+
+    manifests.push({
+      name: packageJson.name,
+      location: packageJsonPath.slice(0, -'/package.json'.length),
+      version: packageJson.version,
+      private: packageJson.private,
+      dependencies: packageJson.dependencies,
+      peerDependencies: packageJson.peerDependencies,
+      optionalDependencies: packageJson.optionalDependencies,
+    });
+  }
+
+  return manifests;
+}
+
+/**
+ * Discovers publishable Makaio package manifests at a Git ref without checking
+ * out or executing code from that ref.
+ * @param ref - Git ref whose package manifests should be inspected.
+ * @returns Publishable package metadata at the requested ref.
+ */
+export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] {
+  const packages: WorkspacePackage[] = [];
+  for (const packageJson of readWorkspacePackageManifestsAtRef(ref)) {
+    if (packageJson.private || !packageJson.name || !packageJson.version) {
       continue;
     }
     if (checkSourceManifestMakaioReferences(packageJson).length > 0) {
@@ -132,13 +178,29 @@ export function discoverWorkspacePackagesAtRef(ref: string): WorkspacePackage[] 
 
     packages.push({
       name: packageJson.name,
-      location: packageJsonPath.slice(0, -'/package.json'.length),
+      location: packageJson.location,
       version: packageJson.version,
       dependencies: Object.assign({}, ...DEPENDENCY_FIELDS.map((field) => packageJson[field] ?? {})),
     });
   }
 
   return packages;
+}
+
+/**
+ * Resolves workspace roots that feed the framework distribution at a Git ref.
+ * @param ref - Git ref whose package manifests should be inspected.
+ * @returns Framework build-input package roots at the requested ref.
+ */
+export function discoverFrameworkBuildPackageRootsAtRef(ref: string): FrameworkBuildPackageRoot[] {
+  const frameworkBuildPackageNames = new Set<string>(FRAMEWORK_BUILD_PACKAGE_NAMES);
+  return readWorkspacePackageManifestsAtRef(ref).flatMap((packageJson) => {
+    if (packageJson.name === undefined || !frameworkBuildPackageNames.has(packageJson.name)) {
+      return [];
+    }
+
+    return [{ name: packageJson.name, location: packageJson.location }];
+  });
 }
 
 /**
@@ -196,25 +258,37 @@ function isFrameworkRuntimeMigrationChainInput(file: string): boolean {
  */
 function isFrameworkUmbrellaInput(file: string): boolean {
   return (
-    FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath) ||
+    FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS.some((inputPath) => file === inputPath) ||
     isFrameworkRuntimeMigrationChainInput(file)
   );
 }
 
 /**
  * Maps one repository path to dev-publishable packages using package manifests
- * and the framework umbrella public surface as source of truth.
+ * and framework build-input roots as source of truth.
  * @param file - Repository-root-relative path.
  * @param workspaces - Dev-publishable package metadata at the target ref.
+ * @param options - Optional build-input roots used for framework mapping.
  * @returns Package names affected by this file.
  */
-function mapFileToDevPublishPackages(file: string, workspaces: readonly WorkspacePackage[]): string[] {
+function mapFileToDevPublishPackages(
+  file: string,
+  workspaces: readonly WorkspacePackage[],
+  options: DevPublishFileMappingOptions = {},
+): string[] {
   const framework = workspaces.find((workspace) => workspace.name === '@makaio/framework');
-  const mapsToFrameworkUmbrella = framework !== undefined && isFrameworkUmbrellaInput(file);
+  const frameworkBuildPackageRoots = options.frameworkBuildPackageRoots ?? DEFAULT_FRAMEWORK_BUILD_PACKAGE_ROOTS;
+  const isRelevant = isDevPublishRelevantFile(file);
+  const mapsToFrameworkNonWorkspaceInput = framework !== undefined && isFrameworkUmbrellaInput(file);
 
-  if (!isDevPublishRelevantFile(file) && !mapsToFrameworkUmbrella) {
+  if (!isRelevant && !mapsToFrameworkNonWorkspaceInput) {
     return [];
   }
+
+  const mapsToFrameworkUmbrella =
+    mapsToFrameworkNonWorkspaceInput ||
+    (framework !== undefined &&
+      frameworkBuildPackageRoots.some((workspace) => isWithinPackageRoot(file, workspace.location)));
 
   const packageNames = new Set<string>();
   for (const workspace of workspaces) {
@@ -236,20 +310,22 @@ function mapFileToDevPublishPackages(file: string, workspaces: readonly Workspac
 }
 
 /**
- * Groups files by dev-publishable package using package manifests and build
- * surface metadata as source of truth.
+ * Groups files by dev-publishable package using package manifests and
+ * framework build-input metadata as source of truth.
  * @param files - Repository-root-relative paths.
  * @param workspaces - Dev-publishable package metadata at the target ref.
+ * @param options - Optional build-input roots used for framework mapping.
  * @returns Package names mapped to publish-relevant files.
  */
 export function groupDevPublishFilesByPackage(
   files: readonly string[],
   workspaces: readonly WorkspacePackage[],
+  options: DevPublishFileMappingOptions = {},
 ): Map<string, string[]> {
   const byPackage = new Map<string, string[]>();
 
   for (const file of files) {
-    for (const packageName of mapFileToDevPublishPackages(file, workspaces)) {
+    for (const packageName of mapFileToDevPublishPackages(file, workspaces, options)) {
       const mappedFiles = byPackage.get(packageName) ?? [];
       mappedFiles.push(file);
       byPackage.set(packageName, mappedFiles);
@@ -388,22 +464,25 @@ function selectLatestReachableDevTag(
  * @param workspaces - Publishable workspace metadata.
  * @param baseSha - Base commit SHA.
  * @param headSha - Head commit SHA.
+ * @param options - Optional build-input roots used for framework mapping.
  * @returns Dev publish info for all packages pending at the head.
  */
 export function resolveDevPublishInfo(
   workspaces: readonly WorkspacePackage[],
   baseSha: string,
   headSha: string,
+  options: DevPublishFileMappingOptions = {},
 ): DevPublishInfo {
   const prBaseSha = resolveMergeBase(baseSha, headSha);
   const prChangedFiles = readChangedFiles(prBaseSha, headSha);
-  const prChangedFilesByPackage = groupDevPublishFilesByPackage(prChangedFiles, workspaces);
+  const prChangedFilesByPackage = groupDevPublishFilesByPackage(prChangedFiles, workspaces, options);
   const candidates: DevPublishInfoPackage[] = [];
 
   for (const workspace of [...workspaces].sort((left, right) => left.name.localeCompare(right.name))) {
     const latestTag = selectLatestReachableDevTag(workspace.name, headSha);
     const baselineChangedFiles = latestTag ? readChangedFiles(latestTag.commitSha, headSha) : prChangedFiles;
-    const pendingFiles = groupDevPublishFilesByPackage(baselineChangedFiles, workspaces).get(workspace.name) ?? [];
+    const pendingFiles =
+      groupDevPublishFilesByPackage(baselineChangedFiles, workspaces, options).get(workspace.name) ?? [];
     const prFiles = prChangedFilesByPackage.get(workspace.name) ?? [];
 
     if (pendingFiles.length === 0) continue;

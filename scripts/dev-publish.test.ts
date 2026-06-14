@@ -240,6 +240,8 @@ describe('dev publish info file mapping', () => {
         'scripts/lib/framework-dist-verifier.ts',
         'scripts/lib/runtime-migration-assets.ts',
         'scripts/lib/unrelated-tool.ts',
+        'packages/file-watcher/src/index.ts',
+        'ui/theme/tokens/_colors.scss',
         'storage/migrations/drizzle/0000_bootstrap.sql',
         'storage/migrations/drizzle/meta/0000_snapshot.json',
         'storage/migrations/drizzle/meta/_journal.json',
@@ -252,6 +254,13 @@ describe('dev publish info file mapping', () => {
           dependencies: {},
         },
       ],
+      {
+        frameworkBuildPackageRoots: [
+          { name: '@makaio/build-tooling', location: 'build-tooling' },
+          { name: '@makaio/file-watcher', location: 'packages/file-watcher' },
+          { name: '@makaio/ui-theme', location: 'ui/theme' },
+        ],
+      },
     );
 
     expect([...grouped.entries()]).toEqual([
@@ -265,6 +274,8 @@ describe('dev publish info file mapping', () => {
           'build-tooling/tsdown-scss.ts',
           'scripts/lib/framework-dist-verifier.ts',
           'scripts/lib/runtime-migration-assets.ts',
+          'packages/file-watcher/src/index.ts',
+          'ui/theme/tokens/_colors.scss',
           'storage/migrations/drizzle/0000_bootstrap.sql',
           'storage/migrations/drizzle/meta/_journal.json',
         ],

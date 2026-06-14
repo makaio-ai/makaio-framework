@@ -11,7 +11,12 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { discoverWorkspacePackagesAtRef, renderDevPublishInfo, resolveDevPublishInfo } from './lib/dev-publish-info.js';
+import {
+  discoverFrameworkBuildPackageRootsAtRef,
+  discoverWorkspacePackagesAtRef,
+  renderDevPublishInfo,
+  resolveDevPublishInfo,
+} from './lib/dev-publish-info.js';
 import {
   applyDevManifestStamp,
   buildAnnotatedTag,
@@ -304,14 +309,14 @@ function main(argv: readonly string[]): void {
   }
 
   if (command === 'info') {
+    const base = requireFlag(flags, 'base');
+    const head = requireFlag(flags, 'head');
     writeFileSync(
       requireFlag(flags, 'out'),
       renderDevPublishInfo(
-        resolveDevPublishInfo(
-          discoverWorkspacePackagesAtRef(requireFlag(flags, 'head')),
-          requireFlag(flags, 'base'),
-          requireFlag(flags, 'head'),
-        ),
+        resolveDevPublishInfo(discoverWorkspacePackagesAtRef(head), base, head, {
+          frameworkBuildPackageRoots: discoverFrameworkBuildPackageRootsAtRef(head),
+        }),
       ),
     );
     return;
