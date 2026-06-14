@@ -14,6 +14,8 @@ import {
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowRunContextSchema,
+  JsonPatchOperationSchema,
+  JsonValueSchema,
 } from '@makaio/contracts';
 import {
   workflowDefinitions,
@@ -27,6 +29,8 @@ import {
   worklogFrameEntries,
   worklogArtifactWrites,
   worklogGateEvents,
+  workflowExecutionState,
+  workflowExecutionStateEvents,
 } from './schema.js';
 
 const ExecutionUpdateSchema = z.object({
@@ -101,7 +105,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
      * one storage transaction.
      */
     setExecutionStart: {
-      request: z.object({ execution: WorkflowExecutionSchema, runContext: WorkflowRunContextSchema }),
+      request: z.object({
+        execution: WorkflowExecutionSchema,
+        runContext: WorkflowRunContextSchema,
+        initialState: JsonValueSchema.optional(),
+      }),
       response: z.object({ id: z.string(), executionId: z.string() }),
     },
 
@@ -285,6 +293,48 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       request: z.object({ executionId: z.string().min(1) }),
       response: z.object({ runContext: WorkflowRunContextSchema.nullable() }),
     }),
+
+    // ─────────────────────────────────────────────────────────────
+    // Execution state
+    // ─────────────────────────────────────────────────────────────
+
+    /** Initialize execution state snapshot at sequence 0. */
+    initializeState: localSubject({
+      request: z.object({
+        executionId: z.string().min(1),
+        initialValue: JsonValueSchema,
+      }),
+      response: z.object({}),
+    }),
+
+    /** Read current execution state snapshot. */
+    getState: localSubject({
+      request: z.object({ executionId: z.string().min(1) }),
+      response: z.object({
+        state: z
+          .object({
+            executionId: z.string().min(1),
+            sequence: z.number().int().nonnegative(),
+            value: JsonValueSchema,
+          })
+          .nullable(),
+      }),
+    }),
+
+    /** Apply a state mutation with optimistic concurrency control. */
+    patchState: localSubject({
+      request: z.object({
+        executionId: z.string().min(1),
+        expectedSequence: z.number().int().nonnegative(),
+        nextValue: JsonValueSchema,
+      }),
+      response: z.object({
+        executionId: z.string().min(1),
+        sequence: z.number().int().positive(),
+        patch: z.array(JsonPatchOperationSchema),
+        value: JsonValueSchema,
+      }),
+    }),
   },
   extensions: {
     drizzle: {
@@ -299,6 +349,8 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       worklogFrameEntries,
       worklogArtifactWrites,
       worklogGateEvents,
+      workflowExecutionState,
+      workflowExecutionStateEvents,
     },
   },
 });

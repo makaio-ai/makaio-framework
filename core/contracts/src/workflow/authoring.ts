@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { JsonValue } from '../shared/json-value.js';
 import type {
   WorkflowDefinition,
   WorkflowDelegateAgentNode,
@@ -23,6 +24,7 @@ import type {
   NodeOptions,
   ParallelOptions,
   WorkflowBuilder,
+  WorkflowStateAuthoringDefinition,
   WorkflowZodSchemas,
 } from './authoring-builder.js';
 import type { TriggerPayloadFromTriggers, WorkflowTriggerDef } from './authoring-triggers.js';
@@ -237,6 +239,7 @@ function buildIterateChainNode(
 interface BuilderState {
   readonly rootNodes: WorkflowNode[];
   readonly runtimeHandlers: Map<string, StationHandler>;
+  readonly runtimeFactories: ReadonlyMap<string, () => WorkflowNode[]>;
   readonly registeredIds: Set<string>;
   readonly zodGates: Record<string, z.ZodTypeAny>;
   readonly zodSchemas: {
@@ -247,6 +250,7 @@ interface BuilderState {
     readonly gates: Record<string, z.ZodTypeAny>;
   };
   readonly definition: WorkflowDefinition;
+  readonly triggers: WorkflowTrigger[];
 }
 
 /**
@@ -256,13 +260,15 @@ interface BuilderState {
  * seed object is created; keeping the seed typed avoids asserting through
  * `unknown` while still making the staged construction explicit.
  * @typeParam TTriggerPayload - The trigger payload union type.
+ * @typeParam TState - The workflow run-state type carried by the builder.
  */
-type WorkflowBuilderSeed<TTriggerPayload> = Omit<
-  WorkflowBuilder<TTriggerPayload>,
+type WorkflowBuilderSeed<TTriggerPayload, TState extends JsonValue | undefined> = Omit<
+  WorkflowBuilder<TTriggerPayload, TState>,
   | 'input'
   | 'config'
   | 'output'
   | 'artifact'
+  | 'state'
   | 'station'
   | 'delegateToAgent'
   | 'delegateToRole'
@@ -281,9 +287,10 @@ type WorkflowBuilderSeed<TTriggerPayload> = Omit<
  * @param builder - Builder object to annotate.
  * @param state - Shared mutable state.
  * @typeParam TTriggerPayload - The trigger payload union type.
+ * @typeParam TState - The workflow run-state type carried by the builder.
  */
-function attachSchemaBuilderMethods<TTriggerPayload>(
-  builder: WorkflowBuilder<TTriggerPayload>,
+function attachSchemaBuilderMethods<TTriggerPayload, TState extends JsonValue | undefined>(
+  builder: WorkflowBuilder<TTriggerPayload, TState>,
   state: BuilderState,
 ): void {
   builder.input = (schema: z.ZodTypeAny) => {
@@ -313,6 +320,13 @@ function attachSchemaBuilderMethods<TTriggerPayload>(
     };
     return builder;
   };
+  builder.state = <TNextState extends JsonValue>(stateDefinition: WorkflowStateAuthoringDefinition<TNextState>) => {
+    state.definition.state = {
+      schema: stateDefinition.schema,
+      ...(stateDefinition.initial !== undefined && { initial: stateDefinition.initial }),
+    };
+    return createWorkflowBuilder<TTriggerPayload, TNextState>(state);
+  };
 }
 
 /**
@@ -321,13 +335,14 @@ function attachSchemaBuilderMethods<TTriggerPayload>(
  * @param builder - Builder object to annotate.
  * @param state - Shared mutable state.
  * @typeParam TTriggerPayload - The trigger payload union type.
+ * @typeParam TState - The workflow run-state type carried by the builder.
  */
-function attachNodeBuilderMethods<TTriggerPayload>(
-  builder: WorkflowBuilder<TTriggerPayload>,
+function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | undefined>(
+  builder: WorkflowBuilder<TTriggerPayload, TState>,
   state: BuilderState,
 ): void {
   const { rootNodes, runtimeHandlers, registeredIds, zodGates } = state;
-  builder.station = (nodeId: string, handler: StationHandler, nodeOptions?: NodeOptions) => {
+  builder.station = (nodeId, handler, nodeOptions) => {
     claimStepId(registeredIds, nodeId);
     rootNodes.push({
       id: nodeId,
@@ -385,7 +400,7 @@ function attachNodeBuilderMethods<TTriggerPayload>(
     rootNodes.push(buildGateNode(nodeId, gateOptions, zodGates));
     return builder;
   };
-  builder.iterate = (nodeId: string, handler: IterateHandler, iterateOptions: IterateOptions) => {
+  builder.iterate = (nodeId, handler, iterateOptions) => {
     claimStepId(registeredIds, nodeId);
     rootNodes.push(buildIterateNode(nodeId, handler, iterateOptions, registeredIds, runtimeHandlers));
     return builder;
@@ -414,6 +429,37 @@ function addNode(
   claimNodeIds(registeredIds, node);
   extractHandlers(node, runtimeHandlers);
   rootNodes.push(node);
+}
+
+/**
+ * Create a typed fluent builder view over shared mutable authoring state.
+ * @param state - Shared mutable workflow definition state.
+ * @returns A builder view with the requested trigger and state type parameters.
+ * @typeParam TTriggerPayload - The trigger payload union type.
+ * @typeParam TState - The workflow run-state type carried by this builder view.
+ */
+function createWorkflowBuilder<TTriggerPayload, TState extends JsonValue | undefined>(
+  state: BuilderState,
+): WorkflowBuilder<TTriggerPayload, TState> {
+  const builderSeed: WorkflowBuilderSeed<TTriggerPayload, TState> = {
+    id: state.definition.id,
+    definition: state.definition,
+    runtimeHandlers: state.runtimeHandlers,
+    runtimeFactories: state.runtimeFactories,
+    source: undefined,
+    get zodSchemas(): WorkflowZodSchemas {
+      return state.zodSchemas as WorkflowZodSchemas;
+    },
+    addTrigger<TPayload>(trigger: WorkflowTriggerDef<TPayload>): WorkflowBuilder<TTriggerPayload | TPayload, TState> {
+      state.triggers.push(trigger);
+      return createWorkflowBuilder<TTriggerPayload | TPayload, TState>(state);
+    },
+  };
+  const builder = builderSeed as WorkflowBuilder<TTriggerPayload, TState>;
+
+  attachSchemaBuilderMethods(builder, state);
+  attachNodeBuilderMethods(builder, state);
+  return builder;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -447,12 +493,13 @@ function addNode(
 export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerDef<unknown>[] | undefined = undefined>(
   id: string,
   options?: DefineWorkflowOptions<TTriggers>,
-): WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>> {
+): WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>, undefined> {
   const rootNodes: WorkflowNode[] = [];
   const runtimeHandlers = new Map<string, StationHandler>();
   const registeredIds = new Set<string>();
   const zodGates: Record<string, z.ZodTypeAny> = {};
   const zodSchemas: BuilderState['zodSchemas'] = { gates: zodGates };
+  const runtimeFactories = new Map<string, () => WorkflowNode[]>();
   const triggers: WorkflowTrigger[] = options?.triggers ? [...options.triggers] : [];
   const definition: WorkflowDefinition = {
     id,
@@ -462,81 +509,21 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
     triggers,
     scope: { type: 'global' },
   };
-  const state: BuilderState = { rootNodes, runtimeHandlers, registeredIds, zodGates, zodSchemas, definition };
-
-  let builder: WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>>;
-  const builderSeed: WorkflowBuilderSeed<TriggerPayloadFromTriggers<TTriggers>> = {
-    id,
-    definition,
+  const state: BuilderState = {
+    rootNodes,
     runtimeHandlers,
-    runtimeFactories: new Map<string, () => WorkflowNode[]>(),
-    source: undefined,
-    get zodSchemas(): WorkflowZodSchemas {
-      return zodSchemas as WorkflowZodSchemas;
-    },
-    addTrigger<TPayload>(
-      trigger: WorkflowTriggerDef<TPayload>,
-    ): WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers> | TPayload> {
-      triggers.push(trigger);
-      return builder as WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers> | TPayload>;
-    },
+    runtimeFactories,
+    registeredIds,
+    zodGates,
+    zodSchemas,
+    definition,
+    triggers,
   };
-  builder = builderSeed as WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>>;
 
-  attachSchemaBuilderMethods(builder, state);
-  attachNodeBuilderMethods(builder, state);
-  return builder;
+  return createWorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>, undefined>(state);
 }
 
-// ─────────────────────────────────────────────────────────────
-// Public API re-exports
-// ─────────────────────────────────────────────────────────────
-
-export type {
-  CronTriggerPayload,
-  ExtractTriggerPayload,
-  TriggerPayloadFromTriggers,
-  WebhookTriggerPayload,
-  WorkflowTriggerDef,
-} from './authoring-triggers.js';
-export {
-  BusEventWorkflowTrigger,
-  CronWorkflowTrigger,
-  ExtensionWorkflowTrigger,
-  ManualWorkflowTrigger,
-  WebhookWorkflowTrigger,
-} from './authoring-triggers.js';
-export type {
-  ArtifactContext,
-  ArtifactPatch,
-  ArtifactUpdateOperation,
-  ArtifactUpdater,
-  IterateHandler,
-  PreviousStepOutput,
-  StationHandler,
-  StepContext,
-  WorkflowContext,
-  WorkflowContextBase,
-  WorkflowProgressUpdate,
-} from './authoring-context.js';
-export type {
-  AgentConfig,
-  ArtifactBindingOptions,
-  BuiltWorkflow,
-  DefineWorkflowOptions,
-  GateOptions,
-  IterateOptions,
-  NodeOptions,
-  ParallelMode,
-  ParallelOptions,
-  WorkflowBuilder,
-  WorkflowZodSchemas,
-} from './authoring-builder.js';
-export {
-  delegateToAgent,
-  delegateToRole,
-  gate,
-  iterate,
-  iterateChain,
-  station,
-} from './authoring-node-factories.js';
+// biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
+export { BusEventWorkflowTrigger, CronWorkflowTrigger, ExtensionWorkflowTrigger, ManualWorkflowTrigger, WebhookWorkflowTrigger, delegateToAgent, delegateToRole, gate, iterate, iterateChain, station } from './authoring-exports.js';
+// biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
+export { type AgentConfig, type ArtifactBindingOptions, type ArtifactContext, type ArtifactPatch, type ArtifactUpdateOperation, type ArtifactUpdater, type BuiltWorkflow, type CronTriggerPayload, type DefineWorkflowOptions, type ExtractTriggerPayload, type GateOptions, type IterateHandler, type IterateOptions, type NodeOptions, type ParallelMode, type ParallelOptions, type PreviousStepOutput, type StationHandler, type StationStepContext, type StepContext, type TriggerPayloadFromTriggers, type WebhookTriggerPayload, type WorkflowBuilder, type WorkflowContext, type WorkflowContextBase, type WorkflowProgressUpdate, type WorkflowStateAuthoringDefinition, type WorkflowStateContext, type WorkflowTriggerDef, type WorkflowZodSchemas } from './authoring-exports.js';

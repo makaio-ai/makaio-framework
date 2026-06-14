@@ -10,6 +10,8 @@ import {
   worklogFrameEntriesDual,
   worklogArtifactWritesDual,
   worklogGateEventsDual,
+  workflowExecutionStateDual,
+  workflowExecutionStateEventsDual,
 } from './schema.js';
 
 /** Postgres face of the `workflow_definitions` table. */
@@ -34,3 +36,7 @@ export const worklogFrameEntries = worklogFrameEntriesDual.postgres;
 export const worklogArtifactWrites = worklogArtifactWritesDual.postgres;
 /** Postgres face of the `worklog_gate_events` table. */
 export const worklogGateEvents = worklogGateEventsDual.postgres;
+/** Postgres face of the `workflow_execution_state` table. */
+export const workflowExecutionState = workflowExecutionStateDual.postgres;
+/** Postgres face of the `workflow_execution_state_events` table. */
+export const workflowExecutionStateEvents = workflowExecutionStateEventsDual.postgres;

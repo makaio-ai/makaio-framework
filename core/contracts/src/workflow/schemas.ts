@@ -730,6 +730,30 @@ export const WorkflowDefinitionProvenanceSchema = z.discriminatedUnion('kind', [
 export type WorkflowDefinitionProvenance = z.infer<typeof WorkflowDefinitionProvenanceSchema>;
 
 // ─────────────────────────────────────────────────────────────
+// Workflow State Definition
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Optional state contract declared on a workflow definition.
+ *
+ * When present, the workflow engine initializes run-scoped mutable state
+ * at execution start and exposes it to station handlers via `ctx.state`.
+ * State is runtime-owned execution data — persisted as a current snapshot
+ * plus an append-only mutation log, never through the artifact store.
+ * Keep state as small run working memory; large context, evidence, and
+ * durable domain outputs belong in context providers or artifact storage.
+ */
+export const WorkflowStateDefinitionSchema = z.object({
+  /** JSON Schema describing the shape of the workflow's run state. */
+  schema: JsonSchemaRecordSchema,
+  /** Initial state value applied when an execution starts. */
+  initial: JsonValueSchema.optional(),
+});
+
+/** Inferred type for {@link WorkflowStateDefinitionSchema}. */
+export type WorkflowStateDefinition = z.infer<typeof WorkflowStateDefinitionSchema>;
+
+// ─────────────────────────────────────────────────────────────
 // Workflow Definition (stored entity)
 // ─────────────────────────────────────────────────────────────
 
@@ -767,6 +791,16 @@ export const WorkflowDefinitionSchema = z.object({
    * Validated when the root sequence completes.
    */
   outputSchema: JsonSchemaRecordSchema.optional(),
+  /**
+   * Optional state contract for run-scoped mutable state.
+   *
+   * When present, the workflow engine initializes the declared state at
+   * execution start and exposes it to station handlers via `ctx.state`.
+   * The `schema` field describes the shape; `initial` provides the
+   * starting value. Keep payloads small; this is not a large context or
+   * artifact storage channel.
+   */
+  state: WorkflowStateDefinitionSchema.optional(),
   /**
    * Primary artifact binding for this workflow.
    * When set, the workflow's output is associated with an artifact kind and scope.

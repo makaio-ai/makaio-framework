@@ -11,6 +11,8 @@ import {
   worklogFrameEntries,
   worklogArtifactWrites,
   worklogGateEvents,
+  workflowExecutionState,
+  workflowExecutionStateEvents,
 } from './schema.js';
 import {
   workflowDefinitions as workflowDefinitionsPg,
@@ -24,6 +26,8 @@ import {
   worklogFrameEntries as worklogFrameEntriesPg,
   worklogArtifactWrites as worklogArtifactWritesPg,
   worklogGateEvents as worklogGateEventsPg,
+  workflowExecutionState as workflowExecutionStatePg,
+  workflowExecutionStateEvents as workflowExecutionStateEventsPg,
 } from './schema.postgres.js';
 
 /** Dialect variants for the workflow engine storage tables. */
@@ -40,6 +44,8 @@ export const workflowEngineSchema = defineDialectSchema(
     worklogFrameEntries,
     worklogArtifactWrites,
     worklogGateEvents,
+    workflowExecutionState,
+    workflowExecutionStateEvents,
   },
   {
     workflowDefinitions: workflowDefinitionsPg,
@@ -53,5 +59,7 @@ export const workflowEngineSchema = defineDialectSchema(
     worklogFrameEntries: worklogFrameEntriesPg,
     worklogArtifactWrites: worklogArtifactWritesPg,
     worklogGateEvents: worklogGateEventsPg,
+    workflowExecutionState: workflowExecutionStatePg,
+    workflowExecutionStateEvents: workflowExecutionStateEventsPg,
   },
 );

@@ -12,6 +12,7 @@ import {
 } from './runtime-context.js';
 import type { NodeOutcome } from './node-execution.js';
 import { createArtifactContext } from '../artifact-context/update-artifact.js';
+import { createWorkflowStateContext } from './workflow-state-context.js';
 import { executeRoleSubagentNode } from './role-subagent-node.js';
 import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
 
@@ -39,6 +40,9 @@ import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
  * - `signal` forwards the execution's cooperative cancellation signal.
  * - `artifact` is injected when the workflow declares an artifact binding and
  *   the execution has a resolved {@link ArtifactBindingState}.
+ * - `state` is injected when the workflow declares a state contract via the
+ *   `state` field on the definition, providing `get()` and `update()` for
+ *   run-scoped mutable state.
  * @param node - The station node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context (for previousSteps).
@@ -74,6 +78,10 @@ export async function executeStationNode(
           bus: ctx.bus,
         })
       : undefined;
+
+  // Build state context when the workflow declares a state contract.
+  const stateCtx =
+    ctx.definition.state !== undefined ? createWorkflowStateContext(ctx.executionId, ctx.bus) : undefined;
 
   /**
    * Emit a structured progress signal to the `execution.progress` bus subject.
@@ -132,6 +140,8 @@ export async function executeStationNode(
       signal: ctx.signal,
       // ── Artifact context (present when a binding is configured) ──
       ...(artifact !== undefined && { artifact }),
+      // ── State context (present when a state contract is declared) ──
+      ...(stateCtx !== undefined && { state: stateCtx }),
       // ── Runtime bus ──────────────────────────────────────────
       bus: ctx.bus,
       // ── Progress reporting ────────────────────────────────────

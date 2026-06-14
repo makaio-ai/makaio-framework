@@ -663,6 +663,7 @@ export {
   WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
   WorkflowSequenceNodeSchema,
+  WorkflowStateDefinitionSchema,
   WorkflowStationNodeSchema,
   WorkflowTriggerSchema,
   WorkflowStepTypeSchema,
@@ -687,6 +688,7 @@ export {
   ContextPublishTargetSchema,
   ResolvedContextEntrySchema,
   ContextBundleSchema,
+  JsonPatchOperationSchema,
 } from './workflow/index.js';
 export type {
   ContextBundle,
@@ -698,6 +700,7 @@ export type {
   ExtensionWorkflowTriggerShape,
   IStepRunner,
   IWorkflowTriggerTypeRegistry,
+  JsonPatchOperation,
   ResolvedContextEntry,
   SpanRecord,
   BusEventTrigger,
@@ -739,6 +742,7 @@ export type {
   WorkflowResolvedAgent,
   WorkflowResolvedRole,
   WorkflowSequenceNode,
+  WorkflowStateDefinition,
   WorkflowStationNode,
   WorkflowTrigger,
   WorkflowTriggerTypeRecord,
@@ -815,12 +819,15 @@ export type {
   ParallelOptions,
   PreviousStepOutput,
   StationHandler,
+  StationStepContext,
   StepContext,
   WebhookTriggerPayload,
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,
   WorkflowProgressUpdate,
+  WorkflowStateAuthoringDefinition,
+  WorkflowStateContext,
   WorkflowTriggerDef,
   WorkflowZodSchemas,
 } from './workflow/index.js';
@@ -1124,7 +1131,4 @@ export {
   SubjectTelemetrySchemas,
   SubjectTelemetrySubjects,
 } from './telemetry/index.js';
-export type {
-  SubjectTelemetryAttributeValue,
-  SubjectTelemetryFact,
-} from './telemetry/index.js';
+export type { SubjectTelemetryAttributeValue, SubjectTelemetryFact } from './telemetry/index.js';

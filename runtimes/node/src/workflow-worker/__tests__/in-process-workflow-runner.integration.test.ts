@@ -45,7 +45,7 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
  * Register in-memory workflow storage handlers on a bus instance.
  *
  * Provides the minimum storage surface the orchestrator needs for a zero-step
- * workflow run, while still exercising the real storage request subjects.
+ * workflow run, including the atomic start checkpoint subject.
  * @param bus - Bus instance to register handlers on.
  * @returns Cleanup function and execution store.
  */
@@ -58,6 +58,12 @@ function registerInMemoryStorage(
     const execution = ctx.payload.execution as WorkflowExecution;
     executions.set(execution.id, execution);
     ctx.setResult({ id: execution.id });
+  });
+
+  const offSetExecutionStart = bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+    const execution = ctx.payload.execution as WorkflowExecution;
+    executions.set(execution.id, execution);
+    ctx.setResult({ id: execution.id, executionId: execution.id });
   });
 
   const offUpdate = bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
@@ -80,6 +86,7 @@ function registerInMemoryStorage(
   return [
     () => {
       offSet();
+      offSetExecutionStart();
       offUpdate();
       offSpan();
     },

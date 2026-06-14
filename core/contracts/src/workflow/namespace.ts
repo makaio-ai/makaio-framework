@@ -20,6 +20,7 @@ import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowRunContextSchema } from './run-context.js';
 import { WorkLogExecutionSummarySchema, WorkLogStatsSchema } from './worklog.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
+import { JsonPatchOperationSchema } from './json-patch.js';
 
 /**
  * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
@@ -742,6 +743,81 @@ export const WorkflowSchemas = {
   'worklog.changed': z.object({
     /** Execution whose WorkLog record changed. */
     executionId: z.string().min(1),
+  }),
+
+  // ─────────────────────────────────────────────────────────────
+  // Run state RPC subjects
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Retrieve the current run state snapshot for a workflow execution (RPC).
+   *
+   * Returns the current sequence number and state value. Sequence `0` is
+   * the initial state written at execution start.
+   */
+  'state.get': {
+    request: z.object({
+      /** Execution identifier to retrieve state for. */
+      executionId: z.string().min(1),
+    }),
+    response: z.object({
+      /** Execution identifier. */
+      executionId: z.string().min(1),
+      /** Monotonically increasing sequence number of the current snapshot. */
+      sequence: z.number().int().nonnegative(),
+      /** Current state value. */
+      value: JsonValueSchema,
+    }),
+  },
+
+  /**
+   * Apply a state mutation to a workflow execution (RPC).
+   *
+   * The caller supplies the full next value and a JSON Patch array describing
+   * the requested mutation. The engine persists a canonical patch derived from
+   * the accepted state transition so the audit log and update events cannot
+   * drift from the stored snapshot. The required `expectedSequence` lets the
+   * handler reject the mutation if the current sequence does not match
+   * (optimistic concurrency control).
+   */
+  'state.patch': {
+    request: z.object({
+      /** Execution identifier. */
+      executionId: z.string().min(1),
+      /** Expected current sequence for optimistic concurrency. */
+      expectedSequence: z.number().int().nonnegative(),
+      /** JSON Patch operations describing the requested mutation. */
+      patch: z.array(JsonPatchOperationSchema),
+      /** Full next state value after applying the patch. */
+      nextValue: JsonValueSchema,
+    }),
+    response: z.object({
+      /** Execution identifier. */
+      executionId: z.string().min(1),
+      /** New sequence number after the mutation. */
+      sequence: z.number().int().positive(),
+      /** Accepted state value. */
+      value: JsonValueSchema,
+    }),
+  },
+
+  /**
+   * Emitted after a state mutation is accepted and persisted.
+   *
+   * Subscribers use this for real-time state change observation
+   * without polling the `state.get` RPC.
+   */
+  'state.updated': z.object({
+    /** Execution whose state changed. */
+    executionId: z.string().min(1),
+    /** Sequence number of the new snapshot. */
+    sequence: z.number().int().positive(),
+    /** JSON Patch operations that produced this state. */
+    patch: z.array(JsonPatchOperationSchema),
+    /** Full state value after the mutation. */
+    value: JsonValueSchema,
+    /** Epoch milliseconds when the mutation was applied. */
+    updatedAt: z.number().int().positive(),
   }),
 } satisfies SchemaRecord;
 

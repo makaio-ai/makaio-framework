@@ -3,8 +3,13 @@ import { createBusInstance } from '@makaio/bus-core';
 import { SessionNamespace, SessionSubjects, WorkflowNamespace, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
-import { startFileExecution, type StartExecutionDeps } from '../workflow-execution-start.js';
+import {
+  persistLoadedExecutionStart,
+  startFileExecution,
+  type StartExecutionDeps,
+} from '../workflow-execution-start.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
+import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
 function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']>[0]): WorkflowRunContext {
   return {
@@ -86,6 +91,48 @@ describe('startFileExecution', () => {
       offSetExecutionStart();
       offClose();
       offCreate();
+    }
+  });
+});
+
+describe('persistLoadedExecutionStart', () => {
+  it('requires atomic execution-start storage for worker-loaded executions', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+
+    const setExecution = vi.fn();
+    const offSetExecution = bus.on(WorkflowStorageSubjects.setExecution, (ctx) => {
+      setExecution(ctx.payload);
+      ctx.setResult({ id: ctx.payload.execution.id });
+    });
+
+    const workflow = createWorkflowDefinition({ id: 'wf-worker-start-storage-required' });
+    const execution = createWorkflowExecution({
+      id: 'wfx-worker-start-storage-required',
+      workflowId: workflow.id,
+      status: 'running',
+    });
+    const runContext = makeRunContext({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      inputs: {},
+      config: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-worker-start-storage-required',
+      workspaceRoot: '/repo',
+      suspensionStrategy: 'wait-in-process',
+    });
+
+    try {
+      await expect(persistLoadedExecutionStart(bus, execution, runContext, workflow)).rejects.toThrow(
+        'storage:workflow.setExecutionStart',
+      );
+      expect(setExecution).not.toHaveBeenCalled();
+    } finally {
+      offSetExecution();
     }
   });
 });

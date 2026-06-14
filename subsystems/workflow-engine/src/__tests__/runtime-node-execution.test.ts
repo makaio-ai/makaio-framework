@@ -7,6 +7,7 @@ import {
   SubagentSubjects,
   WorkflowNamespace,
   WorkflowSubjects,
+  type JsonValue,
   type SpanRecord,
   type StationHandler,
   type WorkflowDefinition,
@@ -21,6 +22,7 @@ import {
 } from '@makaio/contracts';
 import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeStationNode } from '../runtime/station-node.js';
+import { createWorkflowStateContext } from '../runtime/workflow-state-context.js';
 import { executeDelegateAgentNode, executeDelegateRoleNode } from '../runtime/delegate-node.js';
 import { executeRoleSubagentNode } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
@@ -2185,5 +2187,348 @@ describe('executeSequence with serialized parallel mode', () => {
     const outcome = await executeSequence(root, ctx, emptyExpressionCtx);
 
     expect(outcome).toEqual({ status: 'failed', error: 'serialized branch failed' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Station handler state context tests
+// ─────────────────────────────────────────────────────────────
+
+describe('station handler state context', () => {
+  it('provides ctx.state when workflow declares a state contract', async () => {
+    const bus = makeBus();
+    let currentState = { tier: 'T1', selectedReviewers: [] as string[] };
+    let sequence = 0;
+    let receivedPatch: unknown;
+
+    // Register mock state handlers on the bus (public RPC subjects).
+    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
+      requestCtx.setResult({
+        executionId: 'exec-state-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
+      receivedPatch = requestCtx.payload.patch;
+      sequence++;
+      currentState = requestCtx.payload.nextValue as typeof currentState;
+      requestCtx.setResult({
+        executionId: 'exec-state-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    // Create a definition with a state contract.
+    const definition = makeDefinition('workflow-state-test');
+    definition.state = {
+      schema: {
+        type: 'object',
+        properties: {
+          tier: { type: 'string' },
+          selectedReviewers: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      initial: { tier: 'T1', selectedReviewers: [] },
+    };
+
+    let capturedState: unknown;
+    let capturedAfterUpdate: unknown;
+
+    const handlers: Record<string, StationHandler> = {
+      'test-state-station': async (ctx) => {
+        // Verify state context exists
+        expect(ctx.state).toBeDefined();
+
+        // Read state
+        capturedState = await ctx.state!.get();
+
+        // Update state
+        capturedAfterUpdate = await ctx.state!.update((draft: unknown) => {
+          const d = draft as { tier: string; selectedReviewers: string[] };
+          d.tier = 'T2';
+          d.selectedReviewers.push('spec-compliance-reviewer');
+        });
+
+        return { ok: true };
+      },
+    };
+
+    const runtimeCtx = new RuntimeContext(
+      'exec-state-test',
+      'workflow-state-test',
+      definition,
+      makeExecution('workflow-state-test'),
+      new Map(Object.entries(handlers)),
+      bus,
+      new AbortController().signal,
+    );
+
+    const node: WorkflowStationNode = {
+      id: 'test-state-station',
+      type: 'station',
+      prompt: 'Test state',
+    };
+
+    try {
+      const outcome = await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+
+      expect(outcome.status).toBe('completed');
+      expect(capturedState).toEqual({
+        tier: 'T1',
+        selectedReviewers: [],
+      });
+      expect(capturedAfterUpdate).toEqual({
+        tier: 'T2',
+        selectedReviewers: ['spec-compliance-reviewer'],
+      });
+      expect(receivedPatch).toEqual([
+        { op: 'add', path: '/selectedReviewers/0', value: 'spec-compliance-reviewer' },
+        { op: 'replace', path: '/tier', value: 'T2' },
+      ]);
+    } finally {
+      cleanupGet();
+      cleanupPatch();
+    }
+  });
+
+  it('does not provide ctx.state when workflow has no state contract', async () => {
+    let capturedState: unknown = 'sentinel';
+
+    const handlers: Record<string, StationHandler> = {
+      'no-state-station': async (ctx) => {
+        capturedState = ctx.state;
+        return { ok: true };
+      },
+    };
+
+    const runtimeCtx = makeCtx(handlers);
+    const node: WorkflowStationNode = {
+      id: 'no-state-station',
+      type: 'station',
+      prompt: 'No state',
+    };
+
+    await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+    expect(capturedState).toBeUndefined();
+  });
+
+  it('supports multiple sequential state updates with sequence tracking', async () => {
+    const bus = makeBus();
+    let currentState: Record<string, unknown> = { count: 0 };
+    let sequence = 0;
+
+    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
+      requestCtx.setResult({
+        executionId: 'exec-seq-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
+      // Verify expectedSequence is passed for concurrency control
+      expect(requestCtx.payload.expectedSequence).toBe(sequence);
+      sequence++;
+      currentState = requestCtx.payload.nextValue as Record<string, unknown>;
+      requestCtx.setResult({
+        executionId: 'exec-seq-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    const definition = makeDefinition('workflow-seq-test');
+    definition.state = {
+      schema: { type: 'object' },
+      initial: { count: 0 },
+    };
+
+    let finalState: unknown;
+
+    const handlers: Record<string, StationHandler> = {
+      'seq-station': async (ctx) => {
+        await ctx.state!.update((draft: unknown) => {
+          (draft as Record<string, number>)['count'] = 1;
+        });
+        finalState = await ctx.state!.update((draft: unknown) => {
+          (draft as Record<string, number>)['count'] = 2;
+        });
+        return { ok: true };
+      },
+    };
+
+    const runtimeCtx = new RuntimeContext(
+      'exec-seq-test',
+      'workflow-seq-test',
+      definition,
+      makeExecution('workflow-seq-test'),
+      new Map(Object.entries(handlers)),
+      bus,
+      new AbortController().signal,
+    );
+
+    const node: WorkflowStationNode = {
+      id: 'seq-station',
+      type: 'station',
+      prompt: 'Sequential updates',
+    };
+
+    try {
+      const outcome = await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+
+      expect(outcome.status).toBe('completed');
+      expect(finalState).toEqual({ count: 2 });
+      expect(sequence).toBe(2);
+    } finally {
+      cleanupGet();
+      cleanupPatch();
+    }
+  });
+
+  it('sends meaningful JSON Patch operations and awaits async state mutators', async () => {
+    const bus = makeBus();
+    const initialState = {
+      flag: true,
+      list: ['first', 'second'],
+      'nested/key~tag': 'before',
+      removeList: ['keep', 'drop'],
+      tier: 'T1',
+    };
+    let currentState = structuredClone(initialState);
+    let sequence = 0;
+    const receivedPatches: unknown[] = [];
+
+    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
+      requestCtx.setResult({
+        executionId: 'exec-patch-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
+      expect(currentState).toEqual(initialState);
+      receivedPatches.push(requestCtx.payload.patch);
+      sequence++;
+      currentState = requestCtx.payload.nextValue as typeof currentState;
+      requestCtx.setResult({
+        executionId: 'exec-patch-test',
+        sequence,
+        value: structuredClone(currentState),
+      });
+    });
+
+    const state = createWorkflowStateContext('exec-patch-test', bus);
+
+    try {
+      const updated = await state.update(async (draft) => {
+        await Promise.resolve();
+        const mutable = draft as {
+          count?: number;
+          flag?: boolean;
+          list: string[];
+          'nested/key~tag': string;
+          removeList: string[];
+          tier: string;
+        };
+        mutable.count = 1;
+        delete mutable.flag;
+        mutable.list[0] = 'updated-first';
+        mutable.list.push('third');
+        mutable['nested/key~tag'] = 'after';
+        mutable.removeList.pop();
+        mutable.tier = 'T2';
+      });
+
+      expect(updated).toEqual({
+        count: 1,
+        list: ['updated-first', 'second', 'third'],
+        'nested/key~tag': 'after',
+        removeList: ['keep'],
+        tier: 'T2',
+      });
+      expect(receivedPatches).toEqual([
+        [
+          { op: 'add', path: '/count', value: 1 },
+          { op: 'remove', path: '/flag' },
+          { op: 'replace', path: '/list/0', value: 'updated-first' },
+          { op: 'add', path: '/list/2', value: 'third' },
+          { op: 'replace', path: '/nested~1key~0tag', value: 'after' },
+          { op: 'remove', path: '/removeList/1' },
+          { op: 'replace', path: '/tier', value: 'T2' },
+        ],
+      ]);
+    } finally {
+      cleanupGet();
+      cleanupPatch();
+    }
+  });
+
+  it('supports replacing primitive workflow state values from state mutators', async () => {
+    const bus = makeBus();
+    let currentState: JsonValue = 0;
+    let sequence = 0;
+    const receivedPatches: unknown[] = [];
+
+    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
+      requestCtx.setResult({
+        executionId: 'exec-primitive-state-test',
+        sequence,
+        value: currentState,
+      });
+    });
+
+    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, (requestCtx) => {
+      receivedPatches.push(requestCtx.payload.patch);
+      sequence++;
+      currentState = requestCtx.payload.nextValue as JsonValue;
+      requestCtx.setResult({
+        executionId: 'exec-primitive-state-test',
+        sequence,
+        value: currentState,
+      });
+    });
+
+    const state = createWorkflowStateContext('exec-primitive-state-test', bus);
+
+    try {
+      const updated = await state.update(() => 1);
+
+      expect(updated).toBe(1);
+      expect(currentState).toBe(1);
+      expect(receivedPatches).toEqual([[{ op: 'replace', path: '', value: 1 }]]);
+    } finally {
+      cleanupGet();
+      cleanupPatch();
+    }
+  });
+
+  it('forwards sequence conflicts from the state patch RPC', async () => {
+    const bus = makeBus();
+    const cleanupGet = bus.on(WorkflowSubjects.state.get, (requestCtx) => {
+      requestCtx.setResult({
+        executionId: 'exec-conflict-test',
+        sequence: 0,
+        value: { count: 0 },
+      });
+    });
+    const cleanupPatch = bus.on(WorkflowSubjects.state.patch, () => {
+      throw new Error('state sequence conflict: expected 0, got 1');
+    });
+    const state = createWorkflowStateContext('exec-conflict-test', bus);
+
+    try {
+      await expect(
+        state.update((draft) => {
+          (draft as { count: number }).count = 1;
+        }),
+      ).rejects.toThrow('state sequence conflict: expected 0, got 1');
+    } finally {
+      cleanupGet();
+      cleanupPatch();
+    }
   });
 });

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
 import type { CompletionMode } from '../subagent/schemas.js';
-import type { IterateHandler, StationHandler, StepContext } from './authoring-context.js';
+import type { IterateHandler, PreviousStepOutput, StationHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -185,6 +185,25 @@ export interface WorkflowZodSchemas {
 }
 
 // ─────────────────────────────────────────────────────────────
+// State definition options (builder-level)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Typed state contract accepted by the fluent `.state()` builder method.
+ *
+ * The JSON Schema is serialized onto the workflow definition. The optional
+ * initial value is typed for authoring-time handler context inference and is
+ * also stored on the serializable definition when provided.
+ * @typeParam TState - Workflow run-state shape declared by the author.
+ */
+export interface WorkflowStateAuthoringDefinition<TState extends JsonValue = JsonValue> {
+  /** JSON Schema describing the workflow run-state shape. */
+  readonly schema: Record<string, JsonValue>;
+  /** Optional initial value for a new workflow execution. */
+  readonly initial?: TState;
+}
+
+// ─────────────────────────────────────────────────────────────
 // Built Workflow Return Type
 // ─────────────────────────────────────────────────────────────
 
@@ -253,8 +272,10 @@ export interface DefineWorkflowOptions<
  * be passed wherever a built workflow is expected without an explicit `.build()`
  * call.
  * @typeParam TTrigger - Trigger payload type (from the union of added triggers)
+ * @typeParam TState - Workflow run-state type declared via `.state()`.
  */
-export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
+export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | undefined = undefined>
+  extends BuiltWorkflow {
   /**
    * Sets the workflow's input schema.
    *
@@ -263,7 +284,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param schema - Zod schema describing the workflow's input parameters
    * @returns This builder for chaining
    */
-  input(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger>;
+  input(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger, TState>;
   /**
    * Sets the workflow's config schema.
    *
@@ -272,7 +293,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param schema - Zod schema describing the workflow's static configuration
    * @returns This builder for chaining
    */
-  config(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger>;
+  config(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger, TState>;
   /**
    * Sets the workflow's output schema.
    *
@@ -281,7 +302,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param schema - Zod schema describing the workflow's primary output
    * @returns This builder for chaining
    */
-  output(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger>;
+  output(schema: z.ZodTypeAny): WorkflowBuilder<TTrigger, TState>;
   /**
    * Binds a primary artifact to the workflow.
    *
@@ -290,7 +311,20 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Artifact binding configuration
    * @returns This builder for chaining
    */
-  artifact(options: ArtifactBindingOptions): WorkflowBuilder<TTrigger>;
+  artifact(options: ArtifactBindingOptions): WorkflowBuilder<TTrigger, TState>;
+  /**
+   * Declares a typed run-state contract for this workflow.
+   *
+   * The state definition specifies a JSON Schema and optional initial value.
+   * At execution start, the engine initializes the state snapshot from
+   * `initial` (or `{}` when omitted). Station handlers access the state
+   * via `ctx.state.get()` and `ctx.state.update()`.
+   * @param definition - State contract with JSON Schema and optional initial value
+   * @returns This builder for chaining
+   */
+  state<TNextState extends JsonValue>(
+    definition: WorkflowStateAuthoringDefinition<TNextState>,
+  ): WorkflowBuilder<TTrigger, TNextState>;
   /**
    * Appends a station node to the root sequence and registers the handler.
    *
@@ -301,7 +335,17 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Optional node conditions (`when`, `skip`)
    * @returns This builder for chaining
    */
-  station(id: string, handler: StationHandler, options?: NodeOptions): WorkflowBuilder<TTrigger>;
+  station(
+    id: string,
+    handler: StationHandler<
+      TTrigger,
+      Record<string, PreviousStepOutput<JsonValue>>,
+      Record<string, unknown>,
+      unknown,
+      TState
+    >,
+    options?: NodeOptions,
+  ): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a delegate-agent node to the root sequence.
    * @param id - Unique node identifier
@@ -309,7 +353,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Optional node conditions
    * @returns This builder for chaining
    */
-  delegateToAgent(id: string, agentConfig: AgentConfig, options?: NodeOptions): WorkflowBuilder<TTrigger>;
+  delegateToAgent(id: string, agentConfig: AgentConfig, options?: NodeOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a delegate-role node to the root sequence.
    * @param id - Unique node identifier
@@ -317,7 +361,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Optional node conditions and role delegation settings; `prompt` defaults to the node ID
    * @returns This builder for chaining
    */
-  delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowBuilder<TTrigger>;
+  delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a parallel node with static branches to the root sequence.
    *
@@ -329,7 +373,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param branches - Ordered list of branch nodes
    * @returns This builder for chaining
    */
-  parallel(id: string, options: ParallelOptions, branches: WorkflowNode[]): WorkflowBuilder<TTrigger>;
+  parallel(id: string, options: ParallelOptions, branches: WorkflowNode[]): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a gate node to the root sequence.
    *
@@ -340,7 +384,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Gate configuration including prompt and timeout
    * @returns This builder for chaining
    */
-  gate(id: string, options: GateOptions): WorkflowBuilder<TTrigger>;
+  gate(id: string, options: GateOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends an iterate node to the root sequence and registers the handler.
    * @param id - Unique iterate node identifier
@@ -348,7 +392,17 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Iterate configuration including collection expression
    * @returns This builder for chaining
    */
-  iterate(id: string, handler: IterateHandler, options: IterateOptions): WorkflowBuilder<TTrigger>;
+  iterate(
+    id: string,
+    handler: IterateHandler<
+      TTrigger,
+      Record<string, PreviousStepOutput<JsonValue>>,
+      Record<string, unknown>,
+      unknown,
+      TState
+    >,
+    options: IterateOptions,
+  ): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends an iterate-chain node to the root sequence.
    *
@@ -359,13 +413,13 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Iterate configuration including collection expression
    * @returns This builder for chaining
    */
-  iterateChain(id: string, chain: WorkflowNode[], options: IterateOptions): WorkflowBuilder<TTrigger>;
+  iterateChain(id: string, chain: WorkflowNode[], options: IterateOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a trigger to the workflow definition.
    * @param trigger - The trigger to add
    * @returns This builder with an expanded trigger payload union
    */
-  addTrigger<TPayload>(trigger: WorkflowTriggerDef<TPayload>): WorkflowBuilder<TTrigger | TPayload>;
+  addTrigger<TPayload>(trigger: WorkflowTriggerDef<TPayload>): WorkflowBuilder<TTrigger | TPayload, TState>;
   /**
    * Appends an arbitrary pre-built node to the root sequence.
    *

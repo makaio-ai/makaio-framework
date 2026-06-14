@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 450, "skipBlankLines": true, "skipComments": true }] */
+/* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }] */
 import { sql } from 'drizzle-orm';
 import { uniqueIndex, index, primaryKey } from 'drizzle-orm/sqlite-core';
 import { uniqueIndex as pgUniqueIndex, index as pgIndex, primaryKey as pgPrimaryKey } from 'drizzle-orm/pg-core';
@@ -19,6 +19,7 @@ import type {
   WorkLogGateEvent,
   ExecutionHints,
   WorkflowDefinitionProvenance,
+  JsonPatchOperation,
 } from '@makaio/contracts';
 import type { DualColumnBundle } from '@makaio/storage-drizzle';
 
@@ -63,7 +64,9 @@ export const workflowDefinitionsDual = defineDualTable(
     configSchema: c.jsonCol<Record<string, JsonValue>>('config_schema'),
     /** JSON Schema for the workflow's primary output (JSON object). */
     outputSchema: c.jsonCol<Record<string, JsonValue>>('output_schema'),
-    /** Primary artifact binding for workflow output/state (JSON object). */
+    /** Optional state contract for run-scoped mutable state (JSON object). */
+    state: c.jsonCol<NonNullable<WorkflowDefinition['state']>>('state'),
+    /** Primary artifact binding declared by the workflow (JSON object). */
     artifact: c.jsonCol<WorkflowDefinition['artifact']>('artifact'),
     /** Trigger configuration (JSON array). Null means manual-only default. */
     triggers: c.jsonCol<WorkflowTrigger[]>('triggers'),
@@ -764,3 +767,79 @@ export const worklogGateEvents = worklogGateEventsDual.sqlite;
 
 export type InsertWorklogGateEvent = typeof worklogGateEvents.$inferInsert;
 export type SelectWorklogGateEvent = typeof worklogGateEvents.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────
+// Workflow Execution State Tables
+//
+// Current-state snapshot and append-only mutation log for
+// typed per-execution state managed via the step-context API.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Workflow execution state snapshot table.
+ *
+ * Stores the latest state value for each execution. Updated in place via
+ * optimistic-concurrency patches through the `patchWorkflowState` handler.
+ * The `sequence` column is a monotonically increasing counter used for
+ * compare-and-set conflict detection.
+ *
+ * CENTRAL tier — migrated alongside `workflow_executions`.
+ */
+export const workflowExecutionStateDual = defineDualTable('workflow_execution_state', (c) => ({
+  /** Execution this state belongs to (1:1 with workflow_executions.id). */
+  executionId: c
+    .text('execution_id')
+    .primaryKey()
+    .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
+  /** Monotonically increasing sequence number for optimistic concurrency. */
+  sequence: c.int4('sequence').notNull().default(0),
+  /** Current state value (JSON). */
+  value: c.jsonCol<JsonValue>('value').notNull(),
+  /** Last update timestamp (epoch ms). */
+  updatedAt: c.epochMs('updated_at').notNull(),
+}));
+
+/** SQLite face of the `workflow_execution_state` table (canonical schema). */
+export const workflowExecutionState = workflowExecutionStateDual.sqlite;
+
+export type InsertWorkflowExecutionState = typeof workflowExecutionState.$inferInsert;
+export type SelectWorkflowExecutionState = typeof workflowExecutionState.$inferSelect;
+
+/**
+ * Workflow execution state mutation log table.
+ *
+ * Append-only log of every state mutation applied to an execution. Each row
+ * records the JSON-Patch array (`patch`) and the resulting full value
+ * (`value`) at the given `sequence` number. Used for audit trails,
+ * debugging, and eventual replay.
+ *
+ * CENTRAL tier — migrated alongside `workflow_executions`.
+ */
+export const workflowExecutionStateEventsDual = defineDualTable(
+  'workflow_execution_state_events',
+  (c) => ({
+    /** Execution this event belongs to. */
+    executionId: c
+      .text('execution_id')
+      .notNull()
+      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
+    /** Sequence number of the mutation (matches the snapshot sequence after apply). */
+    sequence: c.int4('sequence').notNull(),
+    /** JSON-Patch operations applied in this mutation (JSON array). */
+    patch: c.jsonCol<JsonPatchOperation[]>('patch').notNull(),
+    /** Full state value after applying the patch (JSON). */
+    value: c.jsonCol<JsonValue>('value').notNull(),
+    /** Mutation timestamp (epoch ms). */
+    createdAt: c.epochMs('created_at').notNull(),
+  }),
+  {
+    sqlite: (t) => [primaryKey({ columns: [t.executionId, t.sequence] })],
+    postgres: (t) => [pgPrimaryKey({ columns: [t.executionId, t.sequence] })],
+  },
+);
+
+/** SQLite face of the `workflow_execution_state_events` table (canonical schema). */
+export const workflowExecutionStateEvents = workflowExecutionStateEventsDual.sqlite;
+
+export type InsertWorkflowExecutionStateEvent = typeof workflowExecutionStateEvents.$inferInsert;
+export type SelectWorkflowExecutionStateEvent = typeof workflowExecutionStateEvents.$inferSelect;

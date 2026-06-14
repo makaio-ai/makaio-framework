@@ -165,6 +165,27 @@ describe('WorkflowRunContext storage round-trip', () => {
     expect(fetched?.dispatchMetadata).toEqual({ poolId: 'pool-original', route: { kind: 'worker-pool' } });
   });
 
+  it('preserves dispatch metadata when a worker checkpoint refreshes run context without it', async () => {
+    const workflow = createWorkflowDefinition({ id: 'wf-test' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const executionId = 'exec-rc-start-preserves-dispatch-metadata';
+    await persistRunContext(
+      WorkflowRunContextSchema.parse({
+        ...buildRunContext(executionId),
+        dispatchMetadata: { poolId: 'pool-original', route: { kind: 'worker-pool' } },
+      }),
+    );
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
+      execution: createWorkflowExecution({ id: executionId, workflowId: 'wf-test', status: 'running' }),
+      runContext: buildRunContext(executionId),
+    });
+
+    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(fetched?.dispatchMetadata).toEqual({ poolId: 'pool-original', route: { kind: 'worker-pool' } });
+  });
+
   it('persists and retrieves a path-sourced run context', async () => {
     const executionId = 'exec-rc-path';
     const runContext = buildRunContext(executionId, { source: 'path' });

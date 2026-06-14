@@ -93,6 +93,40 @@ export interface ArtifactContext<TData extends Record<string, unknown> = Record<
 }
 
 // ─────────────────────────────────────────────────────────────
+// Workflow State Context
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Run-scoped mutable state API exposed on {@link StepContext}.
+ *
+ * Provides read and update access to the workflow's typed run state.
+ * State mutations are sequence-numbered and conflict-checked by the
+ * engine; the `update` method applies a producer function to a
+ * structured clone of the current state, or accepts a returned replacement
+ * value for primitive state.
+ * @typeParam TState - The workflow's declared state type
+ */
+export interface WorkflowStateContext<TState> {
+  /**
+   * Retrieve the current state snapshot.
+   * @returns The current state value
+   */
+  get(): Promise<TState>;
+  /**
+   * Apply a mutation to the current state.
+   *
+   * The `mutator` receives a mutable draft of the current state. Object and
+   * array states can be mutated in place; primitive states should return the
+   * replacement value.
+   * The engine computes a JSON Patch from the mutation, persists it
+   * with sequence numbering, and returns the accepted next state.
+   * @param mutator - Function that mutates the draft state or returns a replacement
+   * @returns The accepted next state after the mutation
+   */
+  update(mutator: (draft: TState) => TState | void | Promise<TState | void>): Promise<TState>;
+}
+
+// ─────────────────────────────────────────────────────────────
 // Workflow Context
 // ─────────────────────────────────────────────────────────────
 
@@ -184,12 +218,15 @@ export type { WorkflowProgressUpdate };
  *   `unknown` so the contracts package stays free of any bus implementation dependency.
  *   Bind to `IMakaioBus` (from `@makaio/bus-core`) in host layers that need full bus
  *   authoring surface access inside station handlers.
+ * @typeParam TState - The workflow's declared run state type; defaults to `unknown`
+ *   when no state contract is declared on the workflow definition.
  */
 export interface StepContext<
   TTrigger,
   TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>>,
   TArtifactData extends Record<string, unknown> = Record<string, unknown>,
   TBus = unknown,
+  TState = unknown,
 > extends WorkflowContextBase {
   /** Typed payload from the trigger that started this execution. */
   readonly trigger: TTrigger;
@@ -216,6 +253,16 @@ export interface StepContext<
    */
   readonly artifact?: ArtifactContext<TArtifactData>;
   /**
+   * Run-scoped mutable state API.
+   *
+   * Present when the workflow declares a state contract via the `state`
+   * field on the definition. Provides `get()` and `update()` methods
+   * for reading and mutating the execution's working memory.
+   *
+   * `undefined` when no state contract is declared on the workflow.
+   */
+  readonly state?: WorkflowStateContext<TState>;
+  /**
    * Runtime bus for station handlers that need to query or write durable
    * artifacts as part of their authored output.
    *
@@ -239,18 +286,70 @@ export interface StepContext<
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Generic station handler — a function accepting a {@link StepContext} and
+ * Station handler context with state presence refined by the builder.
+ *
+ * Base {@link StepContext} keeps `state` optional because runtime contexts can
+ * be constructed without a state contract. The authoring builder uses this
+ * type so workflows that declare `.state<T>()` receive a required
+ * `WorkflowStateContext<T>` in station handlers, while workflows without state
+ * expose `state` as absent.
+ * @typeParam TTrigger - The trigger payload type
+ * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TArtifactData - Artifact data shape
+ * @typeParam TBus - Runtime bus type supplied by the host runtime
+ * @typeParam TState - The workflow's declared run state type
+ */
+export type StationStepContext<
+  TTrigger,
+  TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>>,
+  TArtifactData extends Record<string, unknown> = Record<string, unknown>,
+  TBus = unknown,
+  TState = undefined,
+> = Omit<StepContext<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>, 'state'> &
+  (unknown extends TState
+    ? { readonly state?: WorkflowStateContext<TState> }
+    : [TState] extends [undefined]
+      ? { readonly state?: undefined }
+      : { readonly state: WorkflowStateContext<TState> });
+
+/**
+ * Generic station handler — a function accepting a {@link StationStepContext} and
  * returning a JSON-serializable value.
  *
  * Used in the fluent builder methods where trigger and dependency types are
- * not tracked at the builder call site.
+ * tracked by the builder and erased for runtime handler storage.
+ * @typeParam TTrigger - The trigger payload type
+ * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TArtifactData - Artifact data shape
+ * @typeParam TBus - Runtime bus type supplied by the host runtime
+ * @typeParam TState - The workflow's declared run state type; defaults to
+ *   `unknown` for erased runtime-handler storage.
  */
-export type StationHandler = (
-  ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>,
-) => JsonValue | Promise<JsonValue>;
+export type StationHandler<
+  TTrigger = unknown,
+  TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>> = Record<string, PreviousStepOutput<JsonValue>>,
+  TArtifactData extends Record<string, unknown> = Record<string, unknown>,
+  TBus = unknown,
+  TState = unknown,
+> = {
+  bivarianceHack(
+    ctx: StationStepContext<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>,
+  ): JsonValue | Promise<JsonValue>;
+}['bivarianceHack'];
 
 /**
  * Generic iterate handler — same signature as {@link StationHandler} but
  * semantically used for `iterate` node bodies.
+ * @typeParam TTrigger - The trigger payload type
+ * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TArtifactData - Artifact data shape
+ * @typeParam TBus - Runtime bus type supplied by the host runtime
+ * @typeParam TState - The workflow's declared run state type
  */
-export type IterateHandler = StationHandler;
+export type IterateHandler<
+  TTrigger = unknown,
+  TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>> = Record<string, PreviousStepOutput<JsonValue>>,
+  TArtifactData extends Record<string, unknown> = Record<string, unknown>,
+  TBus = unknown,
+  TState = unknown,
+> = StationHandler<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>;

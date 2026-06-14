@@ -1,4 +1,4 @@
-import { expect, it, describe } from 'vitest';
+import { expect, expectTypeOf, it, describe } from 'vitest';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import {
@@ -304,6 +304,79 @@ describe('fluent builder — artifact binding', () => {
 
     expect(workflow.zodSchemas.artifact).toBeUndefined();
     expect(workflow.definition.artifact?.kind).toBe('summary');
+  });
+});
+
+describe('fluent builder — state typing', () => {
+  interface ReviewState {
+    tier: 'T0' | 'T1' | 'T2' | 'T3';
+    selectedReviewers: string[];
+  }
+
+  const ReviewStateSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      tier: { type: 'string', enum: ['T0', 'T1', 'T2', 'T3'] },
+      selectedReviewers: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['tier', 'selectedReviewers'],
+  } as const;
+
+  it('types workflow state in station handlers after state declaration', () => {
+    const workflow = defineWorkflow('typed-state-flow')
+      .state<ReviewState>({
+        schema: ReviewStateSchema,
+        initial: { tier: 'T1', selectedReviewers: [] },
+      })
+      .station('select-reviewer', async (ctx) => {
+        expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
+        const current = await ctx.state.get();
+        expectTypeOf(current.tier).toEqualTypeOf<ReviewState['tier']>();
+        expectTypeOf(current.selectedReviewers).toEqualTypeOf<string[]>();
+
+        const updated = await ctx.state.update((draft) => {
+          expectTypeOf(draft).toEqualTypeOf<ReviewState>();
+          draft.selectedReviewers.push('correctness-reviewer');
+          // @ts-expect-error ReviewState.selectedReviewers only accepts strings.
+          draft.selectedReviewers.push(42);
+        });
+
+        expectTypeOf(ctx.state.update((draft) => void draft)).toEqualTypeOf<Promise<ReviewState>>();
+        expectTypeOf(
+          ctx.state.update(() => ({ tier: 'T2', selectedReviewers: ['correctness-reviewer'] })),
+        ).toEqualTypeOf<Promise<ReviewState>>();
+        expectTypeOf(updated).toEqualTypeOf<ReviewState>();
+        return { reviewerCount: updated.selectedReviewers.length };
+      });
+
+    expect(workflow.definition.state?.initial).toEqual({ tier: 'T1', selectedReviewers: [] });
+  });
+
+  it('preserves state typing when a trigger is added after state declaration', () => {
+    const workflow = defineWorkflow('state-then-trigger-flow')
+      .state<ReviewState>({
+        schema: ReviewStateSchema,
+        initial: { tier: 'T2', selectedReviewers: [] },
+      })
+      .addTrigger(BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout }));
+
+    workflow.station('uses-trigger-and-state', async (ctx) => {
+      expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
+      expectTypeOf(ctx.trigger.worktreePath).toEqualTypeOf<string>();
+      return { tier: (await ctx.state.get()).tier, worktreePath: ctx.trigger.worktreePath };
+    });
+
+    expect(workflow.definition.triggers).toHaveLength(1);
+  });
+
+  it('keeps no-state workflow handlers ergonomic', () => {
+    const workflow = defineWorkflow('no-state-flow').station('do-work', (ctx) => {
+      expectTypeOf(ctx.state).toEqualTypeOf<undefined>();
+      return { workflowId: ctx.workflowId };
+    });
+
+    expect(workflow.runtimeHandlers.has('do-work')).toBe(true);
   });
 });
 

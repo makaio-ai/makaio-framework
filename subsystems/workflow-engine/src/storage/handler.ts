@@ -2,7 +2,13 @@ import { eq, and, desc, lt, or } from 'drizzle-orm';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
-import type { JsonValue, WorkflowExecution, WorkflowGateInstance, WorkflowRunContext } from '@makaio/contracts';
+import type {
+  JsonPatchOperation,
+  JsonValue,
+  WorkflowExecution,
+  WorkflowGateInstance,
+  WorkflowRunContext,
+} from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecution } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
@@ -11,6 +17,8 @@ import { registerFrameHandlers } from './frame-handler.js';
 import { mapGateInstance, registerGateInstanceHandlers, toGateDbValues } from './gate-handler.js';
 import { registerSpanHandlers } from './span-handler.js';
 import { registerRunContextHandlers, upsertWorkflowRunContext } from './run-context-handler.js';
+import { registerStateHandlers } from './state-handler.js';
+import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
 import { registerWorklogProjection } from '../worklog/worklog-projection-service.js';
 
@@ -115,23 +123,65 @@ function buildExecutionListPredicates(
  * @param db - Database handle.
  * @param execution - Execution row to upsert.
  * @param runContext - Matching run-context snapshot to upsert.
+ * @param initialState - Validated initial workflow state to persist, when the workflow declares state.
  */
 async function upsertExecutionStart(
   db: MakaioDatabase,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
+  initialState: JsonValue | undefined,
 ): Promise<void> {
   if (runContext.executionId !== execution.id) {
     throw new Error('setExecutionStart requires execution.id to match runContext.executionId');
   }
-  const { workflowExecutions, workflowRunContexts } = resolveSchema(db, workflowEngineSchema);
+  const { workflowExecutions, workflowRunContexts, workflowExecutionState, workflowExecutionStateEvents } =
+    resolveSchema(db, workflowEngineSchema);
   const dbValues = toExecutionDbValues(execution);
   await executeTransaction(db, async (tx) => {
     await tx.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
       target: workflowExecutions.id,
       set: dbValues,
     });
-    await upsertWorkflowRunContext(tx, runContext, workflowRunContexts);
+    const existingRunContexts =
+      runContext.dispatchMetadata === undefined
+        ? await tx
+            .select({ dispatchMetadata: workflowRunContexts.dispatchMetadata })
+            .from(workflowRunContexts)
+            .where(eq(workflowRunContexts.executionId, runContext.executionId))
+            .limit(1)
+        : [];
+    const existingDispatchMetadata = existingRunContexts[0]?.dispatchMetadata;
+    const runContextSnapshot =
+      runContext.dispatchMetadata === undefined &&
+      existingDispatchMetadata !== null &&
+      existingDispatchMetadata !== undefined
+        ? { ...runContext, dispatchMetadata: existingDispatchMetadata as WorkflowRunContext['dispatchMetadata'] }
+        : runContext;
+    await upsertWorkflowRunContext(tx, runContextSnapshot, workflowRunContexts);
+    if (initialState !== undefined) {
+      const now = Date.now();
+      const initialColumnValue = toWorkflowStateJsonColumnValue(db, initialState);
+      await tx
+        .insert(workflowExecutionState)
+        .values({
+          executionId: execution.id,
+          sequence: 0,
+          value: initialColumnValue,
+          updatedAt: now,
+        })
+        .onConflictDoNothing();
+
+      await tx
+        .insert(workflowExecutionStateEvents)
+        .values({
+          executionId: execution.id,
+          sequence: 0,
+          patch: [] as JsonPatchOperation[],
+          value: initialColumnValue,
+          createdAt: now,
+        })
+        .onConflictDoNothing();
+    }
   });
 }
 
@@ -287,7 +337,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     // but TypeScript cannot unify duplicate z.infer results here.
     const execution = ctx.payload.execution as WorkflowExecution;
     const runContext = ctx.payload.runContext as WorkflowRunContext;
-    await upsertExecutionStart(db, execution, runContext);
+    await upsertExecutionStart(db, execution, runContext, ctx.payload.initialState as JsonValue | undefined);
 
     ctx.setResult({ id: execution.id, executionId: execution.id });
   });
@@ -380,6 +430,7 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
   const gateCleanup = registerGateInstanceHandlers(bus, db);
   const spanCleanup = registerSpanHandlers(bus, db);
   const runContextCleanup = registerRunContextHandlers(bus, db);
+  const stateCleanup = registerStateHandlers(bus, db);
   const worklogCleanup = registerWorklogProjection(bus, db);
 
   return () => {
@@ -389,6 +440,7 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
     gateCleanup();
     spanCleanup();
     runContextCleanup();
+    stateCleanup();
     worklogCleanup();
   };
 }

@@ -436,6 +436,77 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
       dbContext.cleanup();
     }
   });
+
+  it('cancels an empty workflow when the worker signal aborts during start checkpointing', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const controller = new AbortController();
+    const cancellationEvents: Array<{ executionId: string; reason?: string }> = [];
+    const completionEvents: Array<{ executionId: string }> = [];
+    const offSetExecutionStart = bus.on(
+      WorkflowStorageSubjects.setExecutionStart,
+      async (ctx) => {
+        controller.abort();
+        await ctx.next();
+      },
+      { priority: 100 },
+    );
+    const offCancelled = bus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+      cancellationEvents.push(ctx.payload);
+    });
+    const offCompleted = bus.on(WorkflowSubjects.execution.completed, (ctx) => {
+      completionEvents.push(ctx.payload);
+    });
+    const workflow: WorkflowDefinition = {
+      id: 'empty-start-checkpoint-abort',
+      root: { id: 'empty-start-checkpoint-abort__root', type: 'sequence', nodes: [] },
+      scope: { type: 'global' },
+    };
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        config: makeWorkerConfig({
+          executionId: 'exec-empty-start-checkpoint-abort',
+          workflowId: workflow.id,
+          coordinatorSessionId: 'session-empty-start-checkpoint-abort',
+        }),
+        loaded: { definition: workflow, runtimeHandlers: new Map() },
+        bus,
+        signal: controller.signal,
+      });
+
+      expect(result).toMatchObject({
+        executionId: 'exec-empty-start-checkpoint-abort',
+        workflowId: workflow.id,
+        status: 'cancelled',
+        reason: WORKFLOW_CANCELLED_REASON,
+      });
+      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
+        executionId: 'exec-empty-start-checkpoint-abort',
+      });
+      expect(execution).toMatchObject({
+        id: 'exec-empty-start-checkpoint-abort',
+        workflowId: workflow.id,
+        status: 'cancelled',
+      });
+      expect(cancellationEvents).toEqual([
+        {
+          executionId: 'exec-empty-start-checkpoint-abort',
+          workflowId: workflow.id,
+          reason: WORKFLOW_CANCELLED_REASON,
+          completedAt: expect.any(Number),
+        },
+      ]);
+      expect(completionEvents).toEqual([]);
+    } finally {
+      offCompleted();
+      offCancelled();
+      offSetExecutionStart();
+      dbContext.cleanup();
+    }
+  });
 });
 
 describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
@@ -481,13 +552,16 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
 describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
   /**
-   * Register the minimum execution persistence handler needed to observe
-   * resume-frame loading failures without a full storage backend.
+   * Register the minimum execution-start persistence handlers needed to observe
+   * resume-frame failures without a full storage backend.
    * @param bus - Isolated workflow test bus.
    */
   function registerSetExecutionOnly(bus: ReturnType<typeof createBusInstance>): void {
     bus.on(WorkflowStorageSubjects.setExecution, (ctx) => {
       ctx.setResult({ id: ctx.payload.execution.id });
+    });
+    bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+      ctx.setResult({ id: ctx.payload.execution.id, executionId: ctx.payload.execution.id });
     });
   }
 

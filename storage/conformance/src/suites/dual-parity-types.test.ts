@@ -401,6 +401,8 @@ const STRUCTURAL_ONLY_DUAL_TABLES: ReadonlySet<string> = new Set([
   'workflow_run_contexts',
   'worklog_artifact_writes',
   'worklog_gate_events',
+  'workflow_execution_state',
+  'workflow_execution_state_events',
 ]);
 
 /**

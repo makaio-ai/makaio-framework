@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { asc, eq } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -13,6 +14,7 @@ import {
   type WorkflowGateInstance,
 } from '@makaio/contracts';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
+import { workflowExecutionStateEvents } from '../storage/schema.js';
 
 describe('WorkflowExecutionScopeSchema', () => {
   it('parses global scope', () => {
@@ -140,6 +142,54 @@ describe('workflow storage handlers', () => {
 
     expect(fetched?.source).toEqual(workflow.source);
     expect(fetched?.executionHints).toEqual(workflow.executionHints);
+  });
+
+  it('round-trips definition state through storage', async () => {
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'workflow-state-round-trip' }),
+      state: {
+        schema: {
+          type: 'object',
+          properties: { count: { type: 'number' } },
+          required: ['count'],
+          additionalProperties: false,
+        },
+        initial: { count: 0 },
+      },
+    } satisfies WorkflowDefinition;
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+
+    expect(fetched?.state).toEqual(workflow.state);
+  });
+
+  it('clears definition state when an update payload omits the state contract', async () => {
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'workflow-state-clear' }),
+      state: {
+        schema: {
+          type: 'object',
+          properties: { count: { type: 'number' } },
+          required: ['count'],
+          additionalProperties: false,
+        },
+        initial: { count: 0 },
+      },
+    } satisfies WorkflowDefinition;
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    await MakaioBus.request(WorkflowStorageSubjects.set, {
+      workflow: {
+        id: workflow.id,
+        name: workflow.name,
+        root: workflow.root,
+        scope: workflow.scope,
+      },
+    });
+
+    const { workflow: fetched } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+    expect(fetched?.state).toBeUndefined();
   });
 
   it('preserves optional definition fields when omitted from an update payload', async () => {
@@ -327,6 +377,164 @@ describe('workflow storage handlers', () => {
     await expect(
       MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id }),
     ).resolves.toEqual(expect.objectContaining({ runContext: expect.objectContaining({ executionId: execution.id }) }));
+  });
+
+  it('stores execution start, run context, and initial state in one storage request', async () => {
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'workflow-execution-start-state' }),
+      state: {
+        schema: {
+          type: 'object',
+          properties: { count: { type: 'number' } },
+          required: ['count'],
+          additionalProperties: false,
+        },
+        initial: { count: 0 },
+      },
+    } satisfies WorkflowDefinition;
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-start-with-state', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-state',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
+      execution,
+      runContext,
+      initialState: workflow.state.initial,
+    });
+
+    const { state } = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id });
+    const stateEvents = await dbContext.db
+      .select()
+      .from(workflowExecutionStateEvents)
+      .where(eq(workflowExecutionStateEvents.executionId, execution.id));
+
+    expect(state).toEqual({ executionId: execution.id, sequence: 0, value: { count: 0 } });
+    expect(stateEvents).toEqual([
+      expect.objectContaining({
+        executionId: execution.id,
+        sequence: 0,
+        patch: [],
+        value: { count: 0 },
+      }),
+    ]);
+  });
+
+  it('initializes, reads, and patches workflow state with sequence checks', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-state-sequence' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-state-sequence', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.initializeState, {
+      executionId: execution.id,
+      initialValue: { count: 0 },
+    });
+
+    await expect(MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id })).resolves.toEqual({
+      state: { executionId: execution.id, sequence: 0, value: { count: 0 } },
+    });
+
+    const patched = await MakaioBus.request(WorkflowStorageSubjects.patchState, {
+      executionId: execution.id,
+      expectedSequence: 0,
+      nextValue: { count: 1 },
+    });
+
+    const stateEvents = await dbContext.db
+      .select()
+      .from(workflowExecutionStateEvents)
+      .where(eq(workflowExecutionStateEvents.executionId, execution.id))
+      .orderBy(asc(workflowExecutionStateEvents.sequence));
+
+    expect(patched).toEqual({
+      executionId: execution.id,
+      sequence: 1,
+      patch: [{ op: 'replace', path: '/count', value: 1 }],
+      value: { count: 1 },
+    });
+    expect(stateEvents.map((event) => event.sequence)).toEqual([0, 1]);
+    expect(stateEvents[1]).toEqual(
+      expect.objectContaining({
+        patch: [{ op: 'replace', path: '/count', value: 1 }],
+        value: { count: 1 },
+      }),
+    );
+  });
+
+  it('derives workflow state event patches from the accepted value transition', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-state-derived-patch' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-state-derived-patch', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    await MakaioBus.request(WorkflowStorageSubjects.initializeState, {
+      executionId: execution.id,
+      initialValue: { count: 0 },
+    });
+
+    const patched = await MakaioBus.request(WorkflowStorageSubjects.patchState, {
+      executionId: execution.id,
+      expectedSequence: 0,
+      nextValue: { count: 2 },
+    });
+
+    const stateEvents = await dbContext.db
+      .select()
+      .from(workflowExecutionStateEvents)
+      .where(eq(workflowExecutionStateEvents.executionId, execution.id))
+      .orderBy(asc(workflowExecutionStateEvents.sequence));
+
+    const expectedPatch = [{ op: 'replace', path: '/count', value: 2 }];
+    expect(patched).toEqual({
+      executionId: execution.id,
+      sequence: 1,
+      patch: expectedPatch,
+      value: { count: 2 },
+    });
+    expect(stateEvents[1]).toEqual(
+      expect.objectContaining({
+        patch: expectedPatch,
+        value: { count: 2 },
+      }),
+    );
+  });
+
+  it('rejects stale state patch sequence guards', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-state-conflict' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-state-conflict', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.request(WorkflowStorageSubjects.initializeState, {
+      executionId: execution.id,
+      initialValue: { count: 0 },
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.patchState, {
+      executionId: execution.id,
+      expectedSequence: 0,
+      nextValue: { count: 1 },
+    });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.patchState, {
+        executionId: execution.id,
+        expectedSequence: 0,
+        nextValue: { count: 2 },
+      }),
+    ).rejects.toThrow('state sequence conflict');
   });
 
   it('round-trips suspensionStrategy through run context storage', async () => {

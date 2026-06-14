@@ -1,4 +1,4 @@
-/* eslint max-lines-per-function: ["error", { "max": 90 }] */
+/* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 90, "skipBlankLines": true, "skipComments": true }] */
 import { isAbsolute, resolve } from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
@@ -20,6 +20,7 @@ import { type ExecutorConfig, type ActiveExecution } from './types.js';
 import { generateId } from './executor-helpers.js';
 import { sanitizeTriggerPayload } from './trigger-payload-sanitizer.js';
 import { type FinalizerDeps } from './workflow-execution-finalizer.js';
+import { getValidatedInitialWorkflowState } from './workflow-state-validation.js';
 // dag-utils import removed: step DAG replaced by primitive runtime frame model
 import {
   bindWorkflowInputs,
@@ -83,6 +84,30 @@ export interface StartExecutionDeps {
    * @param executionId - Target execution identifier.
    */
   runExecution(executionId: string): Promise<void>;
+}
+
+/**
+ * Persist a worker-loaded execution snapshot through atomic start storage.
+ *
+ * Worker-loaded executions require `setExecutionStart` so execution, run
+ * context, and initial state are recorded atomically before runtime work starts.
+ * @param bus - Message bus used for storage requests.
+ * @param execution - Running execution row.
+ * @param runContext - Worker-loaded run-context snapshot.
+ * @param definition - Loaded workflow definition.
+ */
+export async function persistLoadedExecutionStart(
+  bus: IMakaioBus,
+  execution: WorkflowExecution,
+  runContext: WorkflowRunContext,
+  definition: WorkflowDefinition,
+): Promise<void> {
+  const initialState = getValidatedInitialWorkflowState(definition);
+  await bus.request(WorkflowStorageSubjects.setExecutionStart, {
+    execution,
+    runContext,
+    initialState,
+  });
 }
 
 /**
@@ -174,13 +199,15 @@ function seedDefinitionExecution(
  * @param bus - Message bus used for storage requests.
  * @param execution - The new `WorkflowExecution` record.
  * @param runContext - The pre-built {@link WorkflowRunContext} snapshot.
+ * @param initialState - Optional validated initial workflow state.
  */
 async function persistExecutionStart(
   bus: IMakaioBus,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
+  initialState: JsonValue | undefined,
 ): Promise<void> {
-  await bus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+  await bus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext, initialState });
 }
 
 /**
@@ -340,27 +367,6 @@ interface DefinitionStartOptions {
   readonly scopeOverride?: WorkflowExecutionScope;
 }
 
-/** Normalized definition execution start options. */
-interface NormalizedDefinitionStartOptions extends Omit<DefinitionStartOptions, 'config' | 'input'> {
-  /** Caller-supplied JSON input value. */
-  readonly input: JsonValue;
-  /** Workflow configuration overrides. */
-  readonly config: Record<string, unknown>;
-}
-
-/**
- * Normalize start options while preserving scalar and array workflow inputs.
- * @param options - Raw start options.
- * @returns Options with defaults applied.
- */
-function normalizeDefinitionStartOptions(options: DefinitionStartOptions): NormalizedDefinitionStartOptions {
-  return {
-    ...options,
-    input: options.input === undefined ? {} : options.input,
-    config: options.config ?? {},
-  };
-}
-
 /**
  * Create the coordinator session that owns a definition-backed execution.
  * @param bus - Bus used for session creation.
@@ -401,8 +407,9 @@ export async function startExecution(
   options: DefinitionStartOptions = {},
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
-  const { input, config, parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } =
-    normalizeDefinitionStartOptions(options);
+  const { parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } = options;
+  const input = options.input === undefined ? {} : options.input;
+  const config = options.config ?? {};
 
   const workflow = await loadAndValidateWorkflow(bus, workflowId);
   const executionId = generateId('wfx');
@@ -448,7 +455,8 @@ export async function startExecution(
       resolvedScope,
       runContext,
     );
-    await persistExecutionStart(bus, execution, runContext);
+    const initialState = executionSource.kind === 'definition' ? getValidatedInitialWorkflowState(workflow) : undefined;
+    await persistExecutionStart(bus, execution, runContext, initialState);
 
     const startedAt = execution.startedAt;
     const startedEventTask = emitExecutionStarted(bus, {
@@ -589,7 +597,7 @@ export async function startFileExecution(
       triggerPayload: sanitizedTriggerPayload ?? {},
       workspaceRoot,
     });
-    await persistExecutionStart(bus, execution, runContext);
+    await persistExecutionStart(bus, execution, runContext, undefined);
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
