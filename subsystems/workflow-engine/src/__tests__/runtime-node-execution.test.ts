@@ -1172,7 +1172,7 @@ describe('executeDelegateNode', () => {
       createdSessions.push(requestCtx.payload);
       requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
     });
-    const unsubscribeAttach = ctx.bus.on(SessionSubjects.agent.attach, (requestCtx) => {
+    const unsubscribeAttach = ctx.bus.on(SessionSubjects.agent.attachResolved, (requestCtx) => {
       attachedAgents.push(requestCtx.payload);
       requestCtx.setResult({
         agentId: 'agent-review-delegate',
@@ -1244,6 +1244,11 @@ describe('executeDelegateNode', () => {
             reasoningEffort: 'high',
             providerConfigId: 'provider-config-review',
             systemPrompt: 'Review carefully.',
+            providerContext: {
+              providerConfigId: 'provider-config-review',
+              definitionId: 'provider-definition-review',
+              credentialRefs: {},
+            },
           }),
         }),
       ]);

@@ -133,6 +133,7 @@ function toProviderRecord(provider: LoadedAdapter['providers'][number], packageN
     availableModels: def.availableModels ?? [],
     defaultModelFilterMode: 'show-all',
     credentialEnvVars: def.credentialEnvVars,
+    capabilities: def.capabilities,
     enabled: true,
     createdAt: now,
     updatedAt: now,

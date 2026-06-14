@@ -139,9 +139,15 @@ export class OpenAIConnectorSession extends BaseStreamSession<
   /**
    * Return true when OpenAI-compatible tool calling must carry the structured
    * result because the active provider rejects `response_format` alongside tools.
+   *
+   * Providers that natively support `response_format: json_schema` with tools
+   * (e.g., OpenAI) bypass this workaround entirely.
    * @returns Whether this turn should use the internal finalizer tool
    */
   private shouldUseStructuredOutputFinalizer(): boolean {
+    if (this.config.supportsResponseFormatWithTools) {
+      return false;
+    }
     return this.currentResponseSchema !== undefined && this.currentTools.length > 0;
   }
 
@@ -387,9 +393,7 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         reasoningEffort: this.currentReasoningEffort,
         supportsReasoningEffort,
         responseSchema: this.getRequestResponseSchema(),
-        // The adapter supports OpenAI-compatible base URLs, so strict mode cannot
-        // be claimed globally until capability resolution is provider/model-aware.
-        supportsStructuredOutputStrict: false,
+        supportsStructuredOutputStrict: this.config.supportsStructuredOutputStrict,
       }),
       { signal: abortSignal },
     );

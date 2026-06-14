@@ -20,6 +20,8 @@ describe('OpenAIConnectorSession empty input guard', () => {
       env: {},
       client: new OpenAI({ apiKey: 'test-api-key' }),
       openAITools: [],
+      supportsResponseFormatWithTools: true,
+      supportsStructuredOutputStrict: true,
       emitSdkEvent: async () => {},
       handleError: () => {},
       requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,

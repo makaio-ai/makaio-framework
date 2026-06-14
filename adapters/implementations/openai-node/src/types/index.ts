@@ -115,6 +115,16 @@ export interface OpenAISessionConfig {
   /** Resolved system prompt string to prepend to messages */
   systemPrompt?: string;
   /**
+   * Whether the provider accepts `response_format: json_schema` alongside
+   * tools in the same request, bypassing the finalizer-tool workaround.
+   */
+  supportsResponseFormatWithTools: boolean;
+  /**
+   * Whether the provider accepts `strict: true` on `json_schema`
+   * response format payloads for guaranteed schema conformance.
+   */
+  supportsStructuredOutputStrict: boolean;
+  /**
    * Reasoning levels supported by the active model.
    * Populated by the config factory from the resolved ProviderRecord's model catalog.
    * Absent when the model does not declare reasoning support.

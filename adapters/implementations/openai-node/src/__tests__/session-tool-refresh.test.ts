@@ -92,6 +92,8 @@ function createSession(
     env: {},
     client: {} as never,
     openAITools: [createOpenAITool('native_before')],
+    supportsResponseFormatWithTools: true,
+    supportsStructuredOutputStrict: true,
     emitSdkEvent: async () => {},
     handleError: () => {},
     requestToolApproval: async () => ({ action: 'allow' }),
@@ -202,10 +204,52 @@ describe('OpenAIConnectorSession tool refresh', () => {
     ]);
   });
 
-  it('uses the internal finalizer tool instead of response_format when structured output and tools are both active', async () => {
+  it('sends response_format alongside tools when provider supports it', async () => {
+    const bus = await OpenAINodeConnectorNamespace.scopedBus();
+    const responseSchema = {
+      schema: {
+        type: 'object',
+        properties: { ok: { type: 'boolean' } },
+        required: ['ok'],
+        additionalProperties: false,
+      },
+      name: 'ok_schema',
+      strict: true,
+    } satisfies NonNullable<MessageHandle['responseSchema']>;
+    const session = createSession(bus, { supportsResponseFormatWithTools: true });
+    const handle = createHandle(responseSchema);
+
+    session.apiCallFn = async (adapterSessionId) => {
+      await bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+        event: {
+          eventType: 'message_complete',
+          content: '{"ok":true}',
+          finish_reason: 'stop',
+        },
+        agentId: 'agent-id',
+        adapterId: 'adapter-id',
+        adapterName: 'openai-node',
+        adapterSessionId,
+      });
+    };
+
+    await session.startNewTurnForTest(handle);
+    await expect(handle.waitForCompletion()).resolves.toEqual({
+      outcome: 'completed',
+      result: { message: '{"ok":true}' },
+    });
+
+    expect(session.lastRequestTools.map(getToolName)).toEqual(['native_before']);
+    expect(session.lastRequestResponseSchema).toBe(responseSchema);
+  });
+
+  it('uses the internal finalizer tool instead of response_format when provider does not support response_format with tools', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
     const approval = vi.fn(async () => ({ action: 'allow' as const }));
-    const session = createSession(bus, { requestToolApproval: approval });
+    const session = createSession(bus, {
+      requestToolApproval: approval,
+      supportsResponseFormatWithTools: false,
+    });
     const handle = createHandle({
       schema: {
         type: 'object',
@@ -261,7 +305,10 @@ describe('OpenAIConnectorSession tool refresh', () => {
 
   it('rejects registry tools that collide with the reserved structured-output finalizer name', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, { openAITools: [createOpenAITool(STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME)] });
+    const session = createSession(bus, {
+      openAITools: [createOpenAITool(STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME)],
+      supportsResponseFormatWithTools: false,
+    });
     const handle = createHandle({
       schema: {
         type: 'object',

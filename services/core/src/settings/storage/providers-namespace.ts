@@ -30,6 +30,8 @@ export const ProviderRecordSchema = z.object({
   defaultModelFilterMode: ModelFilterModeSchema,
   /** Credential environment variable names — maps field names to env var names. */
   credentialEnvVars: z.record(z.string(), z.string()).optional(),
+  /** Provider-declared capability hints, opaque to storage — interpreted by adapters. */
+  capabilities: z.record(z.string(), z.unknown()).optional(),
   /** Whether this provider is enabled. */
   enabled: z.boolean(),
   /** Timestamp when record was created (Unix milliseconds). */

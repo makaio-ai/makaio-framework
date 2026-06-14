@@ -20,6 +20,36 @@ export const OpenAINodeProviderConfigSchema = z.object({
     title: 'Base URL',
     description: 'API endpoint for OpenAI-compatible providers',
   }),
+
+  /**
+   * Whether the provider accepts `response_format: json_schema` alongside
+   * `tools` in the same request.
+   *
+   * When `true`, the adapter sends structured output via `response_format`
+   * directly and skips the synthetic finalizer-tool workaround.
+   * When `false`, the adapter injects a `makaio_submit_structured_output`
+   * tool and suppresses `response_format` to avoid provider rejection.
+   *
+   * Resolved automatically per provider when omitted (native OpenAI = true).
+   */
+  supportsResponseFormatWithTools: z.boolean().optional().meta({
+    title: 'Supports response_format with tools',
+    description: 'Whether the provider handles json_schema response_format alongside tool calls',
+  }),
+
+  /**
+   * Whether the provider accepts `strict: true` on `json_schema`
+   * response format payloads.
+   *
+   * When `true`, the API guarantees schema conformance. When `false`,
+   * the `strict` flag is omitted even if the schema descriptor requests it.
+   *
+   * Resolved automatically per provider when omitted (native OpenAI = true).
+   */
+  supportsStructuredOutputStrict: z.boolean().optional().meta({
+    title: 'Supports strict structured output',
+    description: 'Whether the provider supports strict: true on json_schema response format',
+  }),
 });
 
 /**

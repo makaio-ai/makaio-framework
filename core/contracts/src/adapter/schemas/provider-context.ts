@@ -36,6 +36,15 @@ export const ProviderContextSchema = z.object({
    * `credentialRefs`.
    */
   ambientCredentialEnvVars: z.array(z.string()).optional(),
+
+  /**
+   * Provider-declared capability hints forwarded from the provider definition.
+   *
+   * Opaque to the bus — adapters narrow-cast to protocol-specific types
+   * at the connector layer for feature detection (e.g., structured output
+   * modes, tool-call semantics).
+   */
+  capabilities: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
