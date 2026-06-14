@@ -45,10 +45,13 @@ jobs:
 
       - name: Fetch PR head and dev tags
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          git fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
           fetched_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
           if [ "$fetched_sha" != "$HEAD_SHA" ]; then
             echo "::error::Fetched PR head $fetched_sha but GitHub resolved $HEAD_SHA."

@@ -81,8 +81,10 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain('github.rest.issues.createComment');
     expect(workflow).toContain('ref: ${{ steps.pr.outputs.base-sha }}');
     expect(workflow).toContain('persist-credentials: false');
+    expect(workflow).toContain('GITHUB_TOKEN: ${{ github.token }}');
+    expect(workflow).toContain('http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}');
     expect(workflow).toContain(
-      'git fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"',
+      'fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"',
     );
     expect(workflow).toContain('yarn exec tsx scripts/dev-publish.ts info');
     expect(workflow).not.toContain('      comment_id:\n        required: true');
