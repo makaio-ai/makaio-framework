@@ -228,6 +228,22 @@ describe('dev publish info file mapping', () => {
       ['@makaio/adapter-openai-node', ['adapters/implementations/openai-node/src/connector.ts']],
     ]);
   });
+
+  it('maps framework umbrella build inputs to the framework package', () => {
+    const grouped = groupDevPublishFilesByPackage(
+      ['build-tooling/framework-public-surface.ts'],
+      [
+        {
+          name: '@makaio/framework',
+          location: 'packages/framework',
+          version: '1.0.0',
+          dependencies: {},
+        },
+      ],
+    );
+
+    expect([...grouped.entries()]).toEqual([['@makaio/framework', ['build-tooling/framework-public-surface.ts']]]);
+  });
 });
 
 describe('dev publish info git args', () => {

@@ -14,6 +14,7 @@ import type { WorkspacePackage } from './dev-publish-core.js';
 export { renderDevPublishInfo } from './dev-publish-info-render.js';
 
 const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'] as const;
+const FRAMEWORK_UMBRELLA_INPUT_PATHS = ['build-tooling/framework-public-surface.ts'] as const;
 const NON_PUBLISHABLE_PREFIXES = ['.changeset/', '.github/', 'docs/', 'scripts/'] as const;
 const NON_PUBLISHABLE_PATH_SEGMENTS = new Set(['__tests__', 'fixtures', 'snapshots']);
 const NON_PUBLISHABLE_FILE_NAMES = new Set([
@@ -185,6 +186,7 @@ function mapFileToDevPublishPackages(file: string, workspaces: readonly Workspac
   if (
     framework !== undefined &&
     (isWithinPackageRoot(file, framework.location) ||
+      FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath) ||
       FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.some((entry) => isWithinPackageRoot(file, entry.packageRoot)))
   ) {
     packageNames.add(framework.name);

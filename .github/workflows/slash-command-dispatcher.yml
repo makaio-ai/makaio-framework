@@ -198,8 +198,6 @@ jobs:
     secrets: inherit
     with:
       pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
-      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
-      comment_url: ${{ needs.resolve.outputs.comment_url }}
 
   # ── Stable Release ─────────────────────────────────────────────────
   release:

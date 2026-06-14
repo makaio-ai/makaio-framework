@@ -6,12 +6,6 @@ on:
       pr_number:
         required: true
         type: number
-      comment_id:
-        required: true
-        type: number
-      comment_url:
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -47,6 +41,7 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.base-sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Fetch PR head and dev tags
         env:
