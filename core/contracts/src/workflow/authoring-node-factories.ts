@@ -108,7 +108,7 @@ export function delegateToAgent(id: string, config: AgentConfig, options?: NodeO
  * or an `iterateChain()` sub-chain.
  * @param id - Unique node identifier
  * @param role - Named product role to delegate to
- * @param options - Optional node conditions plus optional `prompt` and `completion` overrides
+ * @param options - Optional node conditions and role delegation settings
  * @returns A {@link WorkflowDelegateRoleNode}
  */
 export function delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowDelegateRoleNode {
@@ -119,6 +119,8 @@ export function delegateToRole(id: string, role: string, options?: DelegateToRol
     prompt: options?.prompt ?? id,
     ...(options?.when !== undefined && { when: options.when }),
     ...(options?.skip !== undefined && { skip: options.skip }),
+    ...(options?.outputSchema !== undefined && { outputSchema: options.outputSchema }),
+    ...(options?.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
     ...(options?.completion !== undefined && { completion: options.completion }),
   };
 }

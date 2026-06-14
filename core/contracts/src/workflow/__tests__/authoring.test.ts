@@ -396,6 +396,26 @@ describe('fluent builder — delegateToRole nodes', () => {
     const node = workflow.definition.root.nodes[0];
     expect((node as { prompt?: string }).prompt).toBe('Perform a detailed analysis');
   });
+
+  it('preserves role delegation schema, timeout, and completion settings', () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { verdict: { type: 'string' } },
+      required: ['verdict'],
+    };
+    const workflow = defineWorkflow('role-contract-options').delegateToRole('review', 'analyst', {
+      outputSchema,
+      timeoutMs: 120_000,
+      completion: 'turn',
+    });
+
+    expect(workflow.definition.root.nodes[0]).toMatchObject({
+      type: 'delegate-role',
+      outputSchema,
+      timeoutMs: 120_000,
+      completion: 'turn',
+    });
+  });
 });
 
 describe('fluent builder — parallel nodes', () => {
@@ -838,6 +858,23 @@ describe('standalone factory — delegateToRole()', () => {
   it('accepts a custom prompt', () => {
     const node = delegateToRole('r', 'analyst', { prompt: 'Custom prompt' });
     expect(node.prompt).toBe('Custom prompt');
+  });
+
+  it('preserves schema, timeout, and completion settings', () => {
+    const outputSchema = {
+      type: 'object',
+      properties: { summary: { type: 'string' } },
+      required: ['summary'],
+    };
+    const node = delegateToRole('r', 'analyst', {
+      outputSchema,
+      timeoutMs: 45_000,
+      completion: 'turn',
+    });
+
+    expect(node.outputSchema).toBe(outputSchema);
+    expect(node.timeoutMs).toBe(45_000);
+    expect(node.completion).toBe('turn');
   });
 });
 

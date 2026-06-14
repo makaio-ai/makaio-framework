@@ -44,6 +44,50 @@ describe('registerAttachHandler', () => {
       expect(result.adapterSessionId).toBe(adapterSessionId);
     });
 
+    it('uses resolved providerContext on local attachResolved without rebuilding it', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const providerContext = {
+        providerConfigId: 'provider-config-resolved',
+        definitionId: 'provider-definition-resolved',
+        endpointOverrides: { anthropic: 'https://provider.example/chat' },
+        credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-resolved', 'apiKey') },
+      };
+      let buildProviderContextCalled = false;
+      let credentialActivated = false;
+
+      ctx.trackUnsubscribe(
+        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (context) => {
+          buildProviderContextCalled = true;
+          context.setResult({
+            context: {
+              providerConfigId: context.payload.providerConfigId,
+              definitionId: 'unexpected-provider-definition',
+              credentialRefs: {},
+            },
+          });
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(CredentialSubjects.activate, (context) => {
+          credentialActivated = true;
+          expect(context.payload.providerConfigId).toBe(providerContext.providerConfigId);
+          context.setResult({});
+        }),
+      );
+      const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await MakaioBus.request(SessionSubjects.agent.attachResolved, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName, providerContext },
+      });
+
+      expect(buildProviderContextCalled).toBe(false);
+      expect(credentialActivated).toBe(true);
+      expect(receivedRequests[0]).toMatchObject({ providerContext });
+    });
+
     it('passes machineId to adapter resolution when provided', async () => {
       resetBusHandlers();
       const activeTurns = new Map<string, Turn>();

@@ -122,6 +122,8 @@ export type {
 export { OrchestratorSchemas } from './schemas/orchestrator.js';
 export type {
   AgentAttachRequest,
+  AgentAttachResolvedRequest,
+  AgentAttachResolvedResponse,
   AgentAttachResponse,
   SendMessageRequest,
   SendMessageResponse,
