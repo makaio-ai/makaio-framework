@@ -86,6 +86,11 @@ jobs:
               return;
             }
 
+            if (isOrgMember && (trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info '))) {
+              emit('dev-publish-info');
+              return;
+            }
+
             if (isOwner && trimmed.startsWith('/release ')) {
               const bump = trimmed.split(/\s+/)[1];
               if (['patch', 'minor', 'major'].includes(bump)) {
@@ -180,6 +185,21 @@ jobs:
       comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
       comment_url: ${{ needs.resolve.outputs.comment_url }}
       comment_body: ${{ needs.resolve.outputs.comment_body }}
+
+  # ── Dev Publish Info ──────────────────────────────────────────────
+  dev-publish-info:
+    needs: resolve
+    if: needs.resolve.outputs.command == 'dev-publish-info'
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    uses: ./.github/workflows/dev-publish-info.yml
+    secrets: inherit
+    with:
+      pr_number: ${{ fromJSON(needs.resolve.outputs.pr_number) }}
+      comment_id: ${{ fromJSON(needs.resolve.outputs.comment_id) }}
+      comment_url: ${{ needs.resolve.outputs.comment_url }}
 
   # ── Stable Release ─────────────────────────────────────────────────
   release:
