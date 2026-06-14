@@ -288,6 +288,31 @@ describe('MakaioBus.extendSubject()', () => {
       }).toThrow(/Cannot extend 'extSubRefinedReqDefaultOverwrite.create' request/);
     });
 
+    it('rejects checked primitive field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqCheckedOverwrite', {
+          create: {
+            request: z.object({ code: z.string().min(2) }).superRefine((payload, ctx) => {
+              if (payload.code[1].toUpperCase() !== payload.code[1]) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['code'],
+                  message: 'second character must be uppercase',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { code: z.literal('x') },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqCheckedOverwrite.create' request/);
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {

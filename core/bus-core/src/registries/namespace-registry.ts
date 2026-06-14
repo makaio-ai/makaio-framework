@@ -50,12 +50,23 @@ function literalValueDomain(schema: z.ZodLiteral): ReadonlySet<string> | undefin
 }
 
 /**
+ * Detect field-level checks that narrow a broad primitive domain.
+ * @param schema - Field schema to inspect.
+ * @returns True when the schema carries checks such as min/max/string formats.
+ */
+function hasFieldChecks(schema: z.ZodType): boolean {
+  const checks = (schema._def as { checks?: readonly unknown[] }).checks;
+  return Array.isArray(checks) && checks.length > 0;
+}
+
+/**
  * Build a small runtime output-domain model for the Zod field types that can
  * safely participate in refined-object overrides.
  * @param schema - Field schema to inspect.
+ * @param rejectChecked - Whether checked primitive schemas should be treated as unknown.
  * @returns Domain descriptors, or undefined when the field is too complex.
  */
-function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
+function fieldValueDomain(schema: z.ZodType, rejectChecked = false): ReadonlySet<string> | undefined {
   const domain = new Set<string>();
   let inner = schema;
   while (
@@ -70,6 +81,7 @@ function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
     inner = inner.unwrap() as z.ZodType;
   }
 
+  if (rejectChecked && hasFieldChecks(inner)) return undefined;
   if (inner instanceof z.ZodLiteral) {
     const literalDomain = literalValueDomain(inner);
     if (!literalDomain) return undefined;
@@ -94,7 +106,7 @@ function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
  * @returns True when the known extension domain is a subset of the original domain.
  */
 function extensionFieldIsCompatible(original: z.ZodType, extension: z.ZodType): boolean {
-  const originalDomain = fieldValueDomain(original);
+  const originalDomain = fieldValueDomain(original, true);
   const extensionDomain = fieldValueDomain(extension);
   if (!originalDomain || !extensionDomain) return false;
 
