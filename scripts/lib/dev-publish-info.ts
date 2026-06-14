@@ -342,7 +342,7 @@ export function groupDevPublishFilesByPackage(
  * @returns Arguments passed to `git`.
  */
 export function buildChangedFilesArgs(baseSha: string, headSha: string): string[] {
-  return ['diff', '--name-only', `${baseSha}..${headSha}`];
+  return ['diff', '--name-only', '--no-renames', `${baseSha}..${headSha}`];
 }
 
 /**

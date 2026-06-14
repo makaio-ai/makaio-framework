@@ -286,7 +286,7 @@ describe('dev publish info file mapping', () => {
 
 describe('dev publish info git args', () => {
   it('builds the changed-file range command', () => {
-    expect(buildChangedFilesArgs('base', 'head')).toEqual(['diff', '--name-only', 'base..head']);
+    expect(buildChangedFilesArgs('base', 'head')).toEqual(['diff', '--name-only', '--no-renames', 'base..head']);
   });
 
   it('builds the merge-base command', () => {
