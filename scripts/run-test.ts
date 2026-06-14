@@ -75,7 +75,7 @@ function resolveTest(inputPath: string): ResolvedTest | null {
  * @param env - Additional environment variables.
  */
 function runVitest(args: string[], cwd: string, env?: Record<string, string>): void {
-  execFileSync('yarn', ['vitest', 'run', ...args], {
+  execFileSync('yarn', ['exec', 'vitest', 'run', ...args], {
     env: { ...process.env, CI: process.env.CI ?? 'true', ...env },
     stdio: 'inherit',
     cwd,

@@ -41,7 +41,8 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
 /**
  * Extend a Zod object without dropping metadata attached to the original schema.
  *
- * Zod `.extend()` returns a new object schema. Any policy stored through
+ * Zod `.safeExtend()` returns a new object schema while preserving refinements.
+ * Any policy stored through
  * `.meta()` belongs to the original instance, so the bus must copy it when
  * host packages add fields to a registered subject.
  * @param schema - Original registered object schema.
@@ -52,7 +53,7 @@ function extendZodObjectPreservingMetadata(
   schema: z.ZodObject<z.ZodRawShape>,
   extension: z.ZodRawShape,
 ): z.ZodObject<z.ZodRawShape> {
-  const extended = schema.extend(extension);
+  const extended = schema.safeExtend(extension);
   const metadata = schema.meta();
   return metadata ? (extended.meta(metadata) as z.ZodObject<z.ZodRawShape>) : extended;
 }
@@ -505,11 +506,11 @@ export const createNamespaceRegistry = () => {
       return bestMatch?.config ?? { mode: 'strict' };
     },
     /**
-     * Additively extend a registered subject's schema with new fields.
+     * Extend a registered subject's schema with new fields.
      *
-     * For request subjects, extends the request and/or response ZodObject via `.extend()`.
-     * For event subjects, extends the event ZodObject directly.
-     * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins (Zod `.extend()` semantics).
+     * For request subjects, extends the request and/or response ZodObject via `.safeExtend()`.
+     * For event subjects, extends the event ZodObject via `.safeExtend()`.
+     * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins.
      * @param fullSubjectKey - Fully-qualified key (e.g., "session.list")
      * @param additionalFields - For request subjects: `{ request?, response? }` each a record
      *   of Zod field definitions. For event subjects: a flat record of Zod field definitions.

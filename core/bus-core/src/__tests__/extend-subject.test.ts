@@ -97,6 +97,72 @@ describe('MakaioBus.extendSubject()', () => {
       expect(fact.attributes).toEqual({ status: 'active', projectId: 'proj-1' });
     });
 
+    it('extends refined request schemas while preserving base refinements', async () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReq', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const extended = MakaioBus.extendSubject(subjects.create, {
+        request: { workflowMetadata: z.object({ workflowId: z.string() }).optional() },
+      });
+
+      MakaioBus.on(extended, (ctx) => {
+        ctx.setResult({ id: ctx.payload.workflowMetadata?.workflowId ?? 'no-workflow' });
+      });
+
+      await expect(
+        MakaioBus.request(extended, { title: 'factory session', workflowMetadata: { workflowId: 'wf-1' } }),
+      ).resolves.toEqual({ id: 'wf-1' });
+      await expect(
+        MakaioBus.request(extended, { title: '   ', workflowMetadata: { workflowId: 'wf-1' } }),
+      ).rejects.toThrow(/title must not be blank/);
+    });
+
+    it('allows refined request schemas to redefine fields with later extensions', async () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqOverwrite', {
+          create: {
+            request: z.object({ title: z.string(), mode: z.string().optional() }).superRefine((payload, ctx) => {
+              if (payload.mode === 'blocked') {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['mode'],
+                  message: 'mode is blocked',
+                });
+              }
+            }),
+            response: z.object({ acceptedTitle: z.string() }),
+          },
+        }),
+      );
+
+      const extended = MakaioBus.extendSubject(subjects.create, {
+        request: { title: z.literal('factory') },
+      });
+
+      MakaioBus.on(extended, (ctx) => {
+        ctx.setResult({ acceptedTitle: ctx.payload.title });
+      });
+
+      await expect(MakaioBus.request(extended, { title: 'factory' })).resolves.toEqual({ acceptedTitle: 'factory' });
+      await expect(MakaioBus.request(extended, { title: 'factory', mode: 'blocked' })).rejects.toThrow(
+        /mode is blocked/,
+      );
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
