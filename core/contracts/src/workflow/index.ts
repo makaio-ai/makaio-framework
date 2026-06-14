@@ -6,6 +6,10 @@ export {
   EXECUTION_LIST_DEFAULT_LIMIT,
   EXECUTION_LIST_MAX_LIMIT,
   EXECUTION_LIST_MIN_LIMIT,
+  ExecutionsByArtifactRefsQuerySchema,
+  EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF,
+  EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF,
+  EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS,
   ExtensionWorkflowTriggerSchema,
   GateInstanceListQuerySchema,
   WorkflowArtifactBindingSchema,
@@ -42,6 +46,7 @@ export type {
   BusEventTrigger,
   ExecutionListCursor,
   ExecutionListQuery,
+  ExecutionsByArtifactRefsQuery,
   ExecutionStatus,
   ExtensionWorkflowTrigger as ExtensionWorkflowTriggerShape,
   GateInstanceListQuery,
@@ -149,10 +154,22 @@ export type {
   WorkflowTriggerBlock,
 } from './blocks.js';
 export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
-export { WorkflowArtifactRefSchema } from './artifact-ref.js';
+export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './artifact-ref.js';
 export type { WorkflowArtifactRef } from './artifact-ref.js';
 export { WorkflowRunContextSchema } from './run-context.js';
 export type { WorkflowRunContext } from './run-context.js';
+export { walkWorkflowDefinition } from './walk.js';
+export type { WalkContext, WalkRelationship, WorkflowNodeVisitor } from './walk.js';
+export { projectWorkflowGraph } from './projection.js';
+export type {
+  ProjectedEdge,
+  ProjectedEdgeKind,
+  ProjectedNode,
+  ProjectedNodeRole,
+  ProjectedWorkflowGraph,
+  WorkflowDefinitionPath,
+  WorkflowDefinitionPathSegment,
+} from './projection.js';
 export {
   WorkflowWorkerBusAuthSchema,
   WorkflowWorkerSourceSchema,

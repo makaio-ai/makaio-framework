@@ -1,7 +1,13 @@
 import { eq, and, desc, lt, or } from 'drizzle-orm';
 import { executeTransaction, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { EXECUTION_LIST_DEFAULT_LIMIT, EXECUTION_LIST_MAX_LIMIT, EXECUTION_LIST_MIN_LIMIT } from '@makaio/contracts';
+import {
+  EXECUTION_LIST_DEFAULT_LIMIT,
+  EXECUTION_LIST_MAX_LIMIT,
+  EXECUTION_LIST_MIN_LIMIT,
+  ExecutionsByArtifactRefsQuerySchema,
+  serializeArtifactRef,
+} from '@makaio/contracts';
 import type {
   JsonPatchOperation,
   JsonValue,
@@ -308,12 +314,12 @@ async function applyExecutionUpdate(
 }
 
 /**
- * Register all execution-related bus handlers (get, set, update, list).
+ * Register execution CRUD handlers (get, set, update, cancel, restore).
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
  * @returns Cleanup function that unsubscribes all registered handlers.
  */
-function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
 
   const unsubGetExecution = bus.on(WorkflowStorageSubjects.getExecution, async (ctx) => {
@@ -363,6 +369,25 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     ctx.setResult(await cancelPausedExecution(db, executionId, completedAt, reason));
   });
 
+  return () => {
+    unsubGetExecution();
+    unsubSetExecution();
+    unsubSetExecutionStart();
+    unsubRestorePausedGateResumeState();
+    unsubUpdateExecution();
+    unsubCancelPausedExecution();
+  };
+}
+
+/**
+ * Register execution listing handlers (single and batch).
+ * @param bus - Message bus to subscribe on.
+ * @param db - Drizzle database instance.
+ * @returns Cleanup function that unsubscribes all registered handlers.
+ */
+function registerExecutionListHandlers(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
+
   const unsubListExecutions = bus.on(WorkflowStorageSubjects.listExecutions, async (ctx) => {
     const { workflowId, scope, status, limit, cursor, artifactRef } = ctx.payload;
 
@@ -396,14 +421,37 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
     ctx.setResult({ executions: rows.map(mapExecution) });
   });
 
+  const unsubListExecutionsByArtifactRefs = bus.on(
+    WorkflowStorageSubjects.listExecutionsByArtifactRefs,
+    async (ctx) => {
+      const parsed = ExecutionsByArtifactRefsQuerySchema.safeParse(ctx.payload);
+      if (!parsed.success) {
+        throw new Error(`Invalid listExecutionsByArtifactRefs query: ${parsed.error.message}`);
+      }
+      const { refs, limitPerRef: resolvedLimit } = parsed.data;
+
+      const executionsByRef: Record<string, WorkflowExecution[]> = {};
+
+      for (const ref of refs) {
+        const rows = await db
+          .select()
+          .from(workflowExecutions)
+          .where(and(eq(workflowExecutions.artifactKind, ref.kind), eq(workflowExecutions.artifactId, ref.id)))
+          .orderBy(desc(workflowExecutions.startedAt), desc(workflowExecutions.id))
+          .limit(resolvedLimit);
+
+        if (rows.length > 0) {
+          executionsByRef[serializeArtifactRef(ref)] = rows.map(mapExecution);
+        }
+      }
+
+      ctx.setResult({ executionsByRef });
+    },
+  );
+
   return () => {
-    unsubGetExecution();
-    unsubSetExecution();
-    unsubSetExecutionStart();
-    unsubRestorePausedGateResumeState();
-    unsubUpdateExecution();
-    unsubCancelPausedExecution();
     unsubListExecutions();
+    unsubListExecutionsByArtifactRefs();
   };
 }
 
@@ -412,7 +460,7 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
  *
  * Handles:
  * - Definition CRUD: get, set, delete, list
- * - Execution CRUD: getExecution, setExecution, updateExecution, listExecutions
+ * - Execution CRUD: getExecution, setExecution, updateExecution, listExecutions, listExecutionsByArtifactRefs
  * - Frame CRUD: setFrame, getFrame, listFrames
  * - Gate instance CRUD: setGateInstance, getGateInstance, listGateInstances
  * - Span CRUD: setSpan, listSpans
@@ -425,7 +473,8 @@ function registerExecutionHandlers(bus: IMakaioBus, db: MakaioDatabase): () => v
  */
 export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const definitionCleanup = registerDefinitionHandlers(bus, db);
-  const executionCleanup = registerExecutionHandlers(bus, db);
+  const executionCrudCleanup = registerExecutionCrudHandlers(bus, db);
+  const executionListCleanup = registerExecutionListHandlers(bus, db);
   const frameCleanup = registerFrameHandlers(bus, db);
   const gateCleanup = registerGateInstanceHandlers(bus, db);
   const spanCleanup = registerSpanHandlers(bus, db);
@@ -435,7 +484,8 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
 
   return () => {
     definitionCleanup();
-    executionCleanup();
+    executionCrudCleanup();
+    executionListCleanup();
     frameCleanup();
     gateCleanup();
     spanCleanup();

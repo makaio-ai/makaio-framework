@@ -1135,6 +1135,42 @@ export const ExecutionListQuerySchema = z
 
 export type ExecutionListQuery = z.infer<typeof ExecutionListQuerySchema>;
 
+// ── Batch execution lookup by artifact refs ──────────────────
+
+/** Maximum number of artifact refs accepted per batch request. */
+export const EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS = 200;
+
+/** Maximum per-ref execution limit in a batch request. */
+export const EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF = 100;
+
+/** Default per-ref execution limit when callers omit `limitPerRef`. */
+export const EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF = 10;
+
+/**
+ * Query parameters for batch-fetching executions grouped by artifact reference.
+ *
+ * Each ref is queried independently against the artifact index. Results are
+ * keyed by the canonical `"kind:id"` serialization (see {@link serializeArtifactRef}).
+ * Refs that match no executions are omitted from the response record.
+ *
+ * Failure semantics are all-or-nothing: individual refs cannot fail independently
+ * since each is a simple indexed lookup — a DB-level error would affect the
+ * entire request.
+ */
+export const ExecutionsByArtifactRefsQuerySchema = z.object({
+  /** Artifact references to look up. */
+  refs: z.array(WorkflowArtifactRefSchema).min(1).max(EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS),
+  /** Maximum executions to return per ref. Defaults to 10, max 100. */
+  limitPerRef: z
+    .number()
+    .int()
+    .min(EXECUTION_LIST_MIN_LIMIT)
+    .max(EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF)
+    .default(EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF),
+});
+
+export type ExecutionsByArtifactRefsQuery = z.infer<typeof ExecutionsByArtifactRefsQuerySchema>;
+
 /**
  * Query parameters for listing gate instances.
  *
