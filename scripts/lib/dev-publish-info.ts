@@ -14,7 +14,15 @@ import type { WorkspacePackage } from './dev-publish-core.js';
 export { renderDevPublishInfo } from './dev-publish-info-render.js';
 
 const DEPENDENCY_FIELDS = ['dependencies', 'peerDependencies', 'optionalDependencies'] as const;
-const FRAMEWORK_UMBRELLA_INPUT_PATHS = ['build-tooling/framework-public-surface.ts'] as const;
+const FRAMEWORK_UMBRELLA_INPUT_PATHS = [
+  'build-tooling/framework-import-map.ts',
+  'build-tooling/framework-public-surface.ts',
+  'build-tooling/package-exports.ts',
+  'build-tooling/tsdown-framework-preset.ts',
+  'build-tooling/tsdown-scss.ts',
+  'scripts/lib/framework-dist-verifier.ts',
+  'scripts/lib/runtime-migration-assets.ts',
+] as const;
 const NON_PUBLISHABLE_PREFIXES = ['.changeset/', '.github/', 'docs/', 'scripts/'] as const;
 const NON_PUBLISHABLE_PATH_SEGMENTS = new Set(['__tests__', 'fixtures', 'snapshots']);
 const NON_PUBLISHABLE_FILE_NAMES = new Set([
@@ -164,6 +172,16 @@ function isWithinPackageRoot(file: string, packageRoot: string): boolean {
 }
 
 /**
+ * Tests whether a repository path participates in the framework umbrella
+ * package build while living outside the framework package root.
+ * @param file - Repository-root-relative path.
+ * @returns True when the file can affect the assembled framework artifact.
+ */
+function isFrameworkUmbrellaInput(file: string): boolean {
+  return FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath);
+}
+
+/**
  * Maps one repository path to dev-publishable packages using package manifests
  * and the framework umbrella public surface as source of truth.
  * @param file - Repository-root-relative path.
@@ -171,7 +189,10 @@ function isWithinPackageRoot(file: string, packageRoot: string): boolean {
  * @returns Package names affected by this file.
  */
 function mapFileToDevPublishPackages(file: string, workspaces: readonly WorkspacePackage[]): string[] {
-  if (!isDevPublishRelevantFile(file)) {
+  const framework = workspaces.find((workspace) => workspace.name === '@makaio/framework');
+  const mapsToFrameworkUmbrella = framework !== undefined && isFrameworkUmbrellaInput(file);
+
+  if (!isDevPublishRelevantFile(file) && !mapsToFrameworkUmbrella) {
     return [];
   }
 
@@ -182,11 +203,10 @@ function mapFileToDevPublishPackages(file: string, workspaces: readonly Workspac
     }
   }
 
-  const framework = workspaces.find((workspace) => workspace.name === '@makaio/framework');
   if (
     framework !== undefined &&
     (isWithinPackageRoot(file, framework.location) ||
-      FRAMEWORK_UMBRELLA_INPUT_PATHS.some((inputPath) => file === inputPath) ||
+      mapsToFrameworkUmbrella ||
       FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS.some((entry) => isWithinPackageRoot(file, entry.packageRoot)))
   ) {
     packageNames.add(framework.name);

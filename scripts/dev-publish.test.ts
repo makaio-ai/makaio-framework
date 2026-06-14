@@ -231,7 +231,16 @@ describe('dev publish info file mapping', () => {
 
   it('maps framework umbrella build inputs to the framework package', () => {
     const grouped = groupDevPublishFilesByPackage(
-      ['build-tooling/framework-public-surface.ts'],
+      [
+        'build-tooling/framework-import-map.ts',
+        'build-tooling/framework-public-surface.ts',
+        'build-tooling/package-exports.ts',
+        'build-tooling/tsdown-framework-preset.ts',
+        'build-tooling/tsdown-scss.ts',
+        'scripts/lib/framework-dist-verifier.ts',
+        'scripts/lib/runtime-migration-assets.ts',
+        'scripts/lib/unrelated-tool.ts',
+      ],
       [
         {
           name: '@makaio/framework',
@@ -242,7 +251,20 @@ describe('dev publish info file mapping', () => {
       ],
     );
 
-    expect([...grouped.entries()]).toEqual([['@makaio/framework', ['build-tooling/framework-public-surface.ts']]]);
+    expect([...grouped.entries()]).toEqual([
+      [
+        '@makaio/framework',
+        [
+          'build-tooling/framework-import-map.ts',
+          'build-tooling/framework-public-surface.ts',
+          'build-tooling/package-exports.ts',
+          'build-tooling/tsdown-framework-preset.ts',
+          'build-tooling/tsdown-scss.ts',
+          'scripts/lib/framework-dist-verifier.ts',
+          'scripts/lib/runtime-migration-assets.ts',
+        ],
+      ],
+    ]);
   });
 });
 
