@@ -107,7 +107,7 @@ function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
 function extensionFieldIsCompatible(original: z.ZodType, extension: z.ZodType): boolean {
   const originalDomain = fieldValueDomain(original);
   const extensionDomain = fieldValueDomain(extension);
-  if (!originalDomain || !extensionDomain) return true;
+  if (!originalDomain || !extensionDomain) return false;
 
   for (const value of extensionDomain) {
     if (originalDomain.has(value)) continue;

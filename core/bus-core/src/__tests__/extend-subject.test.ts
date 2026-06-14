@@ -188,6 +188,31 @@ describe('MakaioBus.extendSubject()', () => {
       }).toThrow(/Cannot extend 'extSubRefinedReqBadOverwrite.create' request/);
     });
 
+    it('rejects unmodeled overlapping field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqEnumOverwrite', {
+          create: {
+            request: z.object({ status: z.enum(['open', 'closed']) }).superRefine((payload, ctx) => {
+              if (!payload.status.startsWith('o')) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['status'],
+                  message: 'status must start with o',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { status: z.number() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqEnumOverwrite.create' request/);
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
