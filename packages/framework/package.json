@@ -111,6 +111,10 @@
       "types": "./dist/contracts/config/index.d.mts",
       "default": "./dist/contracts/config/index.mjs"
     },
+    "./contracts/canonical-model": {
+      "types": "./dist/contracts/canonical-model/index.d.mts",
+      "default": "./dist/contracts/canonical-model/index.mjs"
+    },
     "./contracts/extension": {
       "types": "./dist/contracts/extension/index.d.mts",
       "default": "./dist/contracts/extension/index.mjs"

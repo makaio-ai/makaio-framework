@@ -180,6 +180,7 @@ async function executeRoleStationNode(
       prompt: node.prompt,
       ...(outputSchema !== undefined ? { outputSchema } : {}),
       ...(node.timeoutMs !== undefined ? { timeoutMs: node.timeoutMs } : {}),
+      ...(node.completion !== undefined ? { completion: node.completion } : {}),
       unresolvedRoleError: `No runtime handler registered for station node '${node.id}', and role '${node.role}' could not be resolved`,
       unavailableRuntimeError: `Subagent runtime is not available for station node '${node.id}'`,
       unavailableAwaitError: `Subagent runtime cannot await station node '${node.id}'`,

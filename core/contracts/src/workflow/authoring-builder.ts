@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
+import type { CompletionMode } from '../subagent/schemas.js';
 import type { IterateHandler, StationHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
 
@@ -23,6 +24,16 @@ export interface NodeOptions {
    */
   readonly skip?: string;
 }
+
+/**
+ * Options for delegate-role nodes created via the fluent builder or standalone factory.
+ */
+export type DelegateToRoleOptions = NodeOptions & {
+  /** Prompt text passed to the role subagent. Defaults to the node ID. */
+  readonly prompt?: string;
+  /** Completion behavior requested from the spawned role subagent. */
+  readonly completion?: CompletionMode;
+};
 
 /**
  * Configuration for a delegate-agent node created via the fluent builder.
@@ -300,11 +311,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * @param options - Optional node conditions; `prompt` defaults to the node ID
    * @returns This builder for chaining
    */
-  delegateToRole(
-    id: string,
-    role: string,
-    options?: NodeOptions & { readonly prompt?: string },
-  ): WorkflowBuilder<TTrigger>;
+  delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowBuilder<TTrigger>;
   /**
    * Appends a parallel node with static branches to the root sequence.
    *

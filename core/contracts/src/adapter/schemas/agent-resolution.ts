@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { AIReasoningLevelSchema } from '../../model/index.js';
 import { McpRuntimeSessionContextSchema } from '../../mcp/schemas.js';
 import { SystemPromptSchema } from '../../shared/index.js';
+import { JsonObjectContractSchema } from '../../shared/json-value.js';
 
 // ============================================================================
 // AgentSelection — extensible agent configuration hint
@@ -94,6 +95,9 @@ export const AgentSelectionBaseSchema = z.looseObject({
    * - non-empty array: restrict access to listed directories
    */
   allowedDirectories: z.array(z.string()).optional(),
+
+  /** Per-call adapter-specific configuration. Forwarded to startAgent. */
+  adapterConfig: JsonObjectContractSchema.optional(),
 });
 
 export type AgentSelectionBase = z.infer<typeof AgentSelectionBaseSchema>;

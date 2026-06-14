@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
 import { ArtifactScopeSchema } from '../artifact/index.js';
 import { ProviderContextSchema } from '../adapter/schemas/provider-context.js';
-import { ContextModeSchema } from '../subagent/schemas.js';
+import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js';
 import { AIReasoningLevelSchema } from '../model/index.js';
 import { ExecutionHintsSchema } from './execution-hints.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
@@ -421,6 +421,12 @@ export const WorkflowStationNodeSchema = WorkflowNodeBaseSchema.extend({
    * time when omitted.
    */
   timeoutMs: z.number().int().positive().optional(),
+  /**
+   * Subagent completion mode. `'tool'` (default) waits for an explicit
+   * `completeTask` tool call; `'turn'` completes when the agent's first
+   * turn finishes — useful for tool-less, one-shot stations.
+   */
+  completion: CompletionModeSchema.optional(),
 });
 
 export type WorkflowStationNode = z.infer<typeof WorkflowStationNodeSchema>;
@@ -488,6 +494,12 @@ export const WorkflowDelegateRoleNodeSchema = WorkflowNodeBaseSchema.extend({
    * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) when omitted.
    */
   timeoutMs: z.number().int().positive().optional(),
+  /**
+   * Subagent completion mode. `'tool'` (default) waits for an explicit
+   * `completeTask` tool call; `'turn'` completes when the agent's first
+   * turn finishes — useful for tool-less, one-shot delegates.
+   */
+  completion: CompletionModeSchema.optional(),
 });
 
 export type WorkflowDelegateRoleNode = z.infer<typeof WorkflowDelegateRoleNodeSchema>;
@@ -996,6 +1008,12 @@ export const WorkflowResolvedRoleSchema = z.object({
   contextMode: ContextModeSchema.optional(),
   /** Provider context for credential and endpoint resolution. */
   providerContext: ProviderContextSchema.optional(),
+  /**
+   * Subagent completion mode forwarded from the workflow node.
+   * `'tool'` (default) waits for `completeTask`; `'turn'` completes on
+   * first turn end.
+   */
+  completion: CompletionModeSchema.optional(),
 });
 
 export type WorkflowResolvedRole = z.infer<typeof WorkflowResolvedRoleSchema>;

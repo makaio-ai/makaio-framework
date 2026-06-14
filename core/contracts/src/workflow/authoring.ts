@@ -16,6 +16,7 @@ import type { IterateHandler, StationHandler } from './authoring-context.js';
 import type {
   AgentConfig,
   ArtifactBindingOptions,
+  DelegateToRoleOptions,
   DefineWorkflowOptions,
   GateOptions,
   IterateOptions,
@@ -352,7 +353,7 @@ function attachNodeBuilderMethods<TTriggerPayload>(
     rootNodes.push(n);
     return builder;
   };
-  builder.delegateToRole = (nodeId: string, role: string, nodeOptions?: NodeOptions & { readonly prompt?: string }) => {
+  builder.delegateToRole = (nodeId: string, role: string, nodeOptions?: DelegateToRoleOptions) => {
     claimStepId(registeredIds, nodeId);
     rootNodes.push({
       id: nodeId,
@@ -361,6 +362,7 @@ function attachNodeBuilderMethods<TTriggerPayload>(
       prompt: nodeOptions?.prompt ?? nodeId,
       ...(nodeOptions?.when !== undefined && { when: nodeOptions.when }),
       ...(nodeOptions?.skip !== undefined && { skip: nodeOptions.skip }),
+      ...(nodeOptions?.completion !== undefined && { completion: nodeOptions.completion }),
     } as WorkflowDelegateRoleNode);
     return builder;
   };
@@ -391,11 +393,25 @@ function attachNodeBuilderMethods<TTriggerPayload>(
     rootNodes.push(buildIterateChainNode(nodeId, chain, iterateOptions, registeredIds, runtimeHandlers));
     return builder;
   };
-  builder.addNode = (node: WorkflowNode) => {
-    claimNodeIds(registeredIds, node);
-    extractHandlers(node, runtimeHandlers);
-    rootNodes.push(node);
-  };
+  builder.addNode = (node: WorkflowNode) => addNode(node, registeredIds, runtimeHandlers, rootNodes);
+}
+
+/**
+ * Claim IDs, extract handlers, and append a standalone node to the root sequence.
+ * @param node - The workflow node to add.
+ * @param registeredIds - Set of already-claimed step IDs.
+ * @param runtimeHandlers - Handler map to populate.
+ * @param rootNodes - Root node array to append to.
+ */
+function addNode(
+  node: WorkflowNode,
+  registeredIds: Set<string>,
+  runtimeHandlers: Map<string, StationHandler>,
+  rootNodes: WorkflowNode[],
+): void {
+  claimNodeIds(registeredIds, node);
+  extractHandlers(node, runtimeHandlers);
+  rootNodes.push(node);
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -22,6 +22,7 @@
     "./client": "./src/client/index.ts",
     "./common": "./src/common/index.ts",
     "./config": "./src/config/index.ts",
+    "./canonical-model": "./src/canonical-model/index.ts",
     "./harness": "./src/harness/index.ts",
     "./host": "./src/host/index.ts",
     "./extension": "./src/extension/index.ts",
@@ -89,6 +90,10 @@
       "./config": {
         "types": "./dist/config/index.d.ts",
         "default": "./dist/config/index.mjs"
+      },
+      "./canonical-model": {
+        "types": "./dist/canonical-model/index.d.ts",
+        "default": "./dist/canonical-model/index.mjs"
       },
       "./harness": {
         "types": "./dist/harness/index.d.ts",

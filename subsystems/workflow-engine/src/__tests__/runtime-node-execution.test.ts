@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, ValidationError } from '@makaio/bus-core';
 import {
+  AgentSubjects,
+  SessionSubjects,
   SubagentSubjects,
   WorkflowNamespace,
   WorkflowSubjects,
@@ -1133,9 +1135,129 @@ describe('executeStationNode', () => {
 });
 
 describe('executeDelegateNode', () => {
-  it('runs delegate-role nodes through the subagent seam', async () => {
+  it('runs delegate-role nodes through a session turn', async () => {
     const node: WorkflowDelegateRoleNode = {
       id: 'review-delegate',
+      type: 'delegate-role',
+      role: 'reviewer',
+      prompt: 'Review {{ ctx.inputs.title }}',
+      outputSchema: { type: 'object' },
+      timeoutMs: 1_000,
+      completion: 'turn',
+    };
+    const ctx = makeCtx({});
+    const createdSessions: unknown[] = [];
+    const sentMessages: unknown[] = [];
+    const awaitedTurns: unknown[] = [];
+    const closedSessions: unknown[] = [];
+
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      expect(requestCtx.payload.roleId).toBe('reviewer');
+      requestCtx.setResult({
+        adapterName: 'claude-code',
+        model: 'sonnet',
+        reasoningEffort: 'high',
+        systemPrompt: 'Review carefully.',
+        providerContext: {
+          providerConfigId: 'provider-config-review',
+          definitionId: 'provider-definition-review',
+          credentialRefs: {},
+        },
+      });
+    });
+    const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
+      createdSessions.push(requestCtx.payload);
+      requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
+    });
+    const unsubscribeSendMessage = ctx.bus.on(SessionSubjects.sendMessage, async (requestCtx) => {
+      sentMessages.push(requestCtx.payload);
+      await ctx.bus.emit(AgentSubjects.complete, {
+        agentId: 'agent-review-delegate',
+        adapterId: 'adapter-review-delegate',
+        adapterName: 'claude-code',
+        adapterSessionId: 'adapter-session-review-delegate',
+        sessionId: requestCtx.payload.sessionId,
+        messageId: 'message-review-delegate',
+        turnId: 'turn-review-delegate',
+        message: '{"approved":true}',
+      });
+      requestCtx.setResult({
+        sessionId: requestCtx.payload.sessionId,
+        messageId: 'message-review-delegate',
+        turnId: 'turn-review-delegate',
+      });
+    });
+    const unsubscribeTurnAwait = ctx.bus.on(SessionSubjects.turn.await, (requestCtx) => {
+      awaitedTurns.push(requestCtx.payload);
+      requestCtx.setResult({
+        completion: {
+          sessionId: requestCtx.payload.sessionId,
+          turnId: requestCtx.payload.turnId,
+          turnNumber: 1,
+          success: true,
+        },
+      });
+    });
+    const unsubscribeClose = ctx.bus.on(SessionSubjects.close, (requestCtx) => {
+      closedSessions.push(requestCtx.payload);
+      requestCtx.setResult({ success: true });
+    });
+
+    try {
+      const outcome = await executeDelegateRoleNode(
+        node,
+        ctx,
+        {
+          ...emptyExpressionCtx,
+          inputs: { title: 'workflow runtime' },
+        },
+        'frame-review-delegate',
+      );
+
+      expect(outcome).toEqual({ status: 'completed', output: '{"approved":true}' });
+      expect(createdSessions).toEqual([
+        expect.objectContaining({
+          parentSessionId: 'exec-test',
+          branchKind: 'subagent',
+          title: "Workflow delegate-role 'review-delegate'",
+        }),
+      ]);
+      expect(sentMessages).toEqual([
+        expect.objectContaining({
+          sessionId: expect.any(String),
+          message: 'Review workflow runtime',
+          responseSchema: { schema: { type: 'object' } },
+          source: 'system',
+          agent: expect.objectContaining({
+            kind: 'adapter',
+            adapterName: 'claude-code',
+            model: 'sonnet',
+            reasoningEffort: 'high',
+            providerConfigId: 'provider-config-review',
+            systemPrompt: 'Review carefully.',
+          }),
+        }),
+      ]);
+      expect(awaitedTurns).toEqual([
+        {
+          sessionId: expect.any(String),
+          turnId: 'turn-review-delegate',
+          timeoutMs: 1_000,
+        },
+      ]);
+      expect(closedSessions).toEqual([{ sessionId: expect.any(String) }]);
+    } finally {
+      unsubscribeRole();
+      unsubscribeCreate();
+      unsubscribeSendMessage();
+      unsubscribeTurnAwait();
+      unsubscribeClose();
+    }
+  });
+
+  it('preserves subagent semantics for delegate-role nodes with default tool completion', async () => {
+    const node: WorkflowDelegateRoleNode = {
+      id: 'review-delegate-tool',
       type: 'delegate-role',
       role: 'reviewer',
       prompt: 'Review {{ ctx.inputs.title }}',
@@ -1144,48 +1266,76 @@ describe('executeDelegateNode', () => {
     };
     const ctx = makeCtx({});
     const spawned: unknown[] = [];
+    const sentMessages: unknown[] = [];
+
     const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       expect(requestCtx.payload.roleId).toBe('reviewer');
       requestCtx.setResult({
         adapterName: 'claude-code',
         model: 'sonnet',
         reasoningEffort: 'high',
+        harnessId: 'review-harness',
+        systemPrompt: 'Review carefully.',
         contextMode: 'fresh',
+        providerContext: {
+          providerConfigId: 'provider-config-review',
+          definitionId: 'provider-definition-review',
+          credentialRefs: {},
+        },
       });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
       spawned.push(requestCtx.payload);
-      requestCtx.setResult({ subagentId: 'subagent-review-delegate', status: 'spawning' });
+      requestCtx.setResult({ subagentId: 'subagent-review-delegate-tool', status: 'spawning' });
     });
     const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
-      expect(requestCtx.payload).toEqual({ subagentId: 'subagent-review-delegate', timeoutMs: 1_000 });
+      expect(requestCtx.payload).toEqual({ subagentId: 'subagent-review-delegate-tool', timeoutMs: 1_000 });
       requestCtx.setResult({ status: 'completed', result: '{"approved":true}' });
+    });
+    const unsubscribeSendMessage = ctx.bus.on(SessionSubjects.sendMessage, (requestCtx) => {
+      sentMessages.push(requestCtx.payload);
+      requestCtx.setResult({ sessionId: 'unexpected', messageId: 'unexpected', turnId: 'unexpected' });
     });
 
     try {
-      const outcome = await executeDelegateRoleNode(node, ctx, {
-        ...emptyExpressionCtx,
-        inputs: { title: 'workflow runtime' },
-      });
+      const outcome = await executeDelegateRoleNode(
+        node,
+        ctx,
+        {
+          ...emptyExpressionCtx,
+          inputs: { title: 'workflow runtime' },
+        },
+        'frame-review-delegate-tool',
+      );
 
       expect(outcome).toEqual({ status: 'completed', output: '{"approved":true}' });
-      expect(spawned).toHaveLength(1);
-      expect(spawned[0]).toMatchObject({
-        parentSessionId: 'exec-test',
-        depth: 1,
-        config: {
-          task: 'Review workflow runtime',
-          adapterName: 'claude-code',
-          model: 'sonnet',
-          reasoningEffort: 'high',
-          contextMode: 'fresh',
-          responseSchema: { schema: { type: 'object' } },
-        },
-      });
+      expect(sentMessages).toEqual([]);
+      expect(spawned).toEqual([
+        expect.objectContaining({
+          parentSessionId: 'exec-test',
+          depth: 1,
+          config: expect.objectContaining({
+            task: 'Review workflow runtime',
+            adapterName: 'claude-code',
+            model: 'sonnet',
+            reasoningEffort: 'high',
+            harnessId: 'review-harness',
+            systemPrompt: 'Review carefully.',
+            contextMode: 'fresh',
+            providerContext: {
+              providerConfigId: 'provider-config-review',
+              definitionId: 'provider-definition-review',
+              credentialRefs: {},
+            },
+            responseSchema: { schema: { type: 'object' } },
+          }),
+        }),
+      ]);
     } finally {
       unsubscribeRole();
       unsubscribeSpawn();
       unsubscribeAwait();
+      unsubscribeSendMessage();
     }
   });
 

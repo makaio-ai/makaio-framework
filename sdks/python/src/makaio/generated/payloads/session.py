@@ -114,6 +114,19 @@ class SessionTurnAwaitResponseCompletionInitiator:
 
 
 @dataclass(frozen=True)
+class SessionTurnAwaitResponseCompletionUsageTotal:
+    input_tokens: float
+    output_tokens: float
+    cost: float | None = None
+
+
+@dataclass(frozen=True)
+class SessionTurnAwaitResponseCompletionUsage:
+    total: SessionTurnAwaitResponseCompletionUsageTotal
+    by_agent: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class SessionTurnAwaitResponseCompletion:
     session_id: str
     success: bool
@@ -121,6 +134,7 @@ class SessionTurnAwaitResponseCompletion:
     turn_number: int
     error: str | None = None
     initiator: SessionTurnAwaitResponseCompletionInitiator | None = None
+    usage: SessionTurnAwaitResponseCompletionUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +149,19 @@ class SessionTurnCompletedPayloadInitiator:
 
 
 @dataclass(frozen=True)
+class SessionTurnCompletedPayloadUsageTotal:
+    input_tokens: float
+    output_tokens: float
+    cost: float | None = None
+
+
+@dataclass(frozen=True)
+class SessionTurnCompletedPayloadUsage:
+    total: SessionTurnCompletedPayloadUsageTotal
+    by_agent: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class SessionTurnCompletedPayload:
     session_id: str
     success: bool
@@ -142,6 +169,7 @@ class SessionTurnCompletedPayload:
     turn_number: int
     error: str | None = None
     initiator: SessionTurnCompletedPayloadInitiator | None = None
+    usage: SessionTurnCompletedPayloadUsage | None = None
 
 
 @dataclass(frozen=True)

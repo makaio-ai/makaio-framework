@@ -5226,6 +5226,15 @@
               {
                 "additionalProperties": {},
                 "properties": {
+                  "adapterConfig": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "adapterId": {
                     "minLength": 1,
                     "type": "string"
@@ -5569,6 +5578,15 @@
               {
                 "additionalProperties": {},
                 "properties": {
+                  "adapterConfig": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "allowedDirectories": {
                     "items": {
                       "type": "string"
@@ -5905,6 +5923,15 @@
               {
                 "additionalProperties": {},
                 "properties": {
+                  "adapterConfig": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/__schema0"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "allowedDirectories": {
                     "items": {
                       "type": "string"
@@ -7432,6 +7459,51 @@
                 "maximum": 9007199254740991,
                 "minimum": 1,
                 "type": "integer"
+              },
+              "usage": {
+                "additionalProperties": false,
+                "properties": {
+                  "byAgent": {
+                    "additionalProperties": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "cost": {
+                          "type": "number"
+                        },
+                        "inputTokens": {
+                          "type": "number"
+                        },
+                        "outputTokens": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["inputTokens", "outputTokens"],
+                      "type": "object"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "total": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "cost": {
+                        "type": "number"
+                      },
+                      "inputTokens": {
+                        "type": "number"
+                      },
+                      "outputTokens": {
+                        "type": "number"
+                      }
+                    },
+                    "required": ["inputTokens", "outputTokens"],
+                    "type": "object"
+                  }
+                },
+                "required": ["total"],
+                "type": "object"
               }
             },
             "required": ["sessionId", "turnId", "turnNumber", "success"],
@@ -7482,6 +7554,51 @@
             "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
+          },
+          "usage": {
+            "additionalProperties": false,
+            "properties": {
+              "byAgent": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cost": {
+                      "type": "number"
+                    },
+                    "inputTokens": {
+                      "type": "number"
+                    },
+                    "outputTokens": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["inputTokens", "outputTokens"],
+                  "type": "object"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "total": {
+                "additionalProperties": false,
+                "properties": {
+                  "cost": {
+                    "type": "number"
+                  },
+                  "inputTokens": {
+                    "type": "number"
+                  },
+                  "outputTokens": {
+                    "type": "number"
+                  }
+                },
+                "required": ["inputTokens", "outputTokens"],
+                "type": "object"
+              }
+            },
+            "required": ["total"],
+            "type": "object"
           }
         },
         "required": ["sessionId", "turnId", "turnNumber", "success"],

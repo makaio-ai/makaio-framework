@@ -32,6 +32,7 @@ interface ResolvedSubagentConfigInput {
   readonly contextMode?: WorkflowResolvedRole['contextMode'];
   readonly providerContext?: WorkflowResolvedRole['providerContext'];
   readonly responseSchema?: ResponseSchemaDescriptor;
+  readonly completion?: WorkflowResolvedRole['completion'];
 }
 
 export interface ExecuteRoleSubagentNodeParams {
@@ -57,6 +58,8 @@ export interface ExecuteRoleSubagentNodeParams {
   readonly cancellationLabel: string;
   /** Runtime frame that owns the spawned child session. */
   readonly frameId?: string;
+  /** Completion mode from the workflow node definition. */
+  readonly completion?: WorkflowResolvedRole['completion'];
 }
 
 export interface ExecuteResolvedSubagentNodeParams {
@@ -115,11 +118,13 @@ export async function executeRoleSubagentNode(
   }
 
   const task = resolveTemplate(params.prompt, buildRuntimeExpressionScope(expressionCtx));
+  const resolvedConfig =
+    params.completion !== undefined ? { ...roleResult.data, completion: params.completion } : roleResult.data;
   return executeResolvedSubagentNode(
     {
       ...params,
       task,
-      resolvedConfig: roleResult.data,
+      resolvedConfig,
     },
     ctx,
   );
@@ -350,6 +355,7 @@ function buildSubagentConfig(
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
     ...(role.contextMode !== undefined ? { contextMode: role.contextMode } : {}),
     ...(role.providerContext !== undefined ? { providerContext: role.providerContext } : {}),
+    ...(role.completion !== undefined ? { completion: role.completion } : {}),
     ...(outputSchema !== undefined ? { responseSchema: outputSchema } : {}),
   };
 }

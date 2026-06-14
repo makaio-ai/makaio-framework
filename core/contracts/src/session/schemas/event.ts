@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { BranchKindSchema } from './primitives.js';
 import { OrchestratorSchemas, type TurnInitiator } from './orchestrator.js';
+import type { TurnUsage } from './message.js';
 
 /**
  * Extend a schema with sessionId for session-scoped events.
@@ -255,8 +256,10 @@ export interface SessionEventTypeMap {
   'turn.completed': {
     sessionId: string;
     turnId: string;
+    turnNumber: number;
     success: boolean;
     error?: string;
+    usage?: TurnUsage;
     initiator?: TurnInitiator;
   };
 

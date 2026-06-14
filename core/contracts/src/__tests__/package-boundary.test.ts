@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 const contractsRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageRoot = dirname(contractsRoot);
+const frameworkRoot = dirname(dirname(packageRoot));
+const frameworkPackageRoot = join(frameworkRoot, 'packages', 'framework');
 const forbiddenRuntimeDeps = ['@makaio/bus-core', '@makaio/storage-core', '@makaio/utils'] as const;
 const runtimeDependencyFields = [
   'dependencies',
@@ -106,5 +108,31 @@ describe('@makaio/contracts package boundary', () => {
     });
 
     expect(violations).toEqual([]);
+  });
+
+  it('publishes the canonical-model subpath export', () => {
+    const pkg = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
+      readonly exports?: Record<string, unknown>;
+      readonly publishConfig?: { readonly exports?: Record<string, unknown> };
+    };
+    const frameworkPkg = JSON.parse(readFileSync(join(frameworkPackageRoot, 'package.json'), 'utf8')) as {
+      readonly exports?: Record<string, unknown>;
+    };
+
+    expect(pkg.exports).toMatchObject({
+      './canonical-model': './src/canonical-model/index.ts',
+    });
+    expect(pkg.publishConfig?.exports).toMatchObject({
+      './canonical-model': {
+        types: './dist/canonical-model/index.d.ts',
+        default: './dist/canonical-model/index.mjs',
+      },
+    });
+    expect(frameworkPkg.exports).toMatchObject({
+      './contracts/canonical-model': {
+        types: './dist/contracts/canonical-model/index.d.mts',
+        default: './dist/contracts/canonical-model/index.mjs',
+      },
+    });
   });
 });

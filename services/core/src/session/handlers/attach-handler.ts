@@ -140,7 +140,14 @@ export function registerAttachHandler(bus: IMakaioBus, activeTurns: Map<string, 
 
 /** Runtime options plus model, providerContext, and reasoningEffort (top-level on startAgent but grouped here for convenience). */
 type ExtractableRuntimeOptions = Partial<
-  AdapterRuntimeOptions & { model: string; providerContext: ProviderContext; reasoningEffort: AIReasoningLevel }
+  AdapterRuntimeOptions & {
+    adapterConfig: AgentSelectionBase['adapterConfig'];
+    env: AgentSelectionBase['env'];
+    mcpSessionContext: AgentSelectionBase['mcpSessionContext'];
+    model: string;
+    providerContext: ProviderContext;
+    reasoningEffort: AIReasoningLevel;
+  }
 >;
 
 /** Result of merging explicit and resolved runtime options. */
@@ -163,6 +170,9 @@ function extractRuntimeOptions(selection: AgentSelectionBase): ExtractableRuntim
     ...(selection.allowedTools !== undefined && { allowedTools: selection.allowedTools }),
     ...(selection.disallowedTools !== undefined && { disallowedTools: selection.disallowedTools }),
     ...(selection.allowedDirectories !== undefined && { allowedDirectories: selection.allowedDirectories }),
+    ...(selection.env !== undefined && { env: selection.env }),
+    ...(selection.mcpSessionContext !== undefined && { mcpSessionContext: selection.mcpSessionContext }),
+    ...(selection.adapterConfig !== undefined && { adapterConfig: selection.adapterConfig }),
     ...(selection.systemPrompt !== undefined && { systemPrompt: selection.systemPrompt }),
   };
 }
@@ -306,6 +316,9 @@ function mergeRuntimeOptions(
     allowedTools: explicit.allowedTools ?? resolved?.allowedTools,
     disallowedTools: explicit.disallowedTools ?? resolved?.disallowedTools,
     allowedDirectories: explicit.allowedDirectories ?? resolved?.allowedDirectories,
+    env: explicit.env,
+    mcpSessionContext: explicit.mcpSessionContext,
+    adapterConfig: explicit.adapterConfig,
     systemPrompt: explicit.systemPrompt ?? resolved?.systemPrompt,
     providerContext,
   });

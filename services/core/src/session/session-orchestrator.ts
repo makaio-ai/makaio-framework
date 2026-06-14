@@ -193,6 +193,9 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             ...(adapterKindSelection.allowedDirectories !== undefined && {
               allowedDirectories: adapterKindSelection.allowedDirectories,
             }),
+            ...(adapterKindSelection.adapterConfig !== undefined && {
+              adapterConfig: adapterKindSelection.adapterConfig,
+            }),
             ...(sessionContext !== undefined && { sessionContext }),
           });
 

@@ -9,7 +9,7 @@ import { MessageInputSchema, MessageOutcomeSchema, ResponseSchemaDescriptorSchem
 import type { SchemaRecord } from '@makaio/core';
 import { SessionContextSchema } from '../session-context.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
-import { SessionMessageOriginSchema, TurnInitiatorSchema } from './message.js';
+import { SessionMessageOriginSchema, TurnInitiatorSchema, TurnUsageSchema } from './message.js';
 
 // ============================================================================
 // Orchestrator Base Schemas
@@ -45,6 +45,8 @@ const TurnCompletedEventSchema = BaseTurnEventSchema.extend({
   success: z.boolean(),
   /** Error message if any agent failed */
   error: z.string().optional(),
+  /** Aggregated token usage captured for the completed turn. */
+  usage: TurnUsageSchema.optional(),
   /** Origin of the turn (for loop prevention and audit) */
   initiator: TurnInitiatorSchema.optional(),
 });
