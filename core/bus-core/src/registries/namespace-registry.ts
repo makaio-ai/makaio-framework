@@ -64,6 +64,7 @@ function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
     inner instanceof z.ZodDefault ||
     inner instanceof z.ZodReadonly
   ) {
+    if (inner instanceof z.ZodDefault) return undefined;
     if (inner instanceof z.ZodOptional) domain.add('undefined');
     if (inner instanceof z.ZodNullable) domain.add('null');
     inner = inner.unwrap() as z.ZodType;

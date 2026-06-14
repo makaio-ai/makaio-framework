@@ -263,6 +263,31 @@ describe('MakaioBus.extendSubject()', () => {
       }).toThrow(/Cannot extend 'extSubRefinedReqNullishOverwrite.create' request/);
     });
 
+    it('rejects defaulted field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqDefaultOverwrite', {
+          create: {
+            request: z.object({ title: z.string().optional().default('fallback') }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { title: z.string().optional() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqDefaultOverwrite.create' request/);
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
