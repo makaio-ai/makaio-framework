@@ -163,6 +163,31 @@ describe('MakaioBus.extendSubject()', () => {
       );
     });
 
+    it('rejects incompatible field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqBadOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { title: z.number() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqBadOverwrite.create' request/);
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {

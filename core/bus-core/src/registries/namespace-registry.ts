@@ -39,6 +39,120 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
 }
 
 /**
+ * Unwrap transparent output-preserving schema layers before field compatibility checks.
+ * @param schema - Field schema to inspect.
+ * @returns Innermost field schema for common transparent wrappers.
+ */
+function unwrapFieldSchema(schema: z.ZodType): z.ZodType {
+  let current = schema;
+  while (
+    current instanceof z.ZodOptional ||
+    current instanceof z.ZodNullable ||
+    current instanceof z.ZodDefault ||
+    current instanceof z.ZodReadonly
+  ) {
+    current = current.unwrap() as z.ZodType;
+  }
+  return current;
+}
+
+/**
+ * Extract literal value descriptors from a Zod literal schema.
+ * @param schema - Literal schema to inspect.
+ * @returns Runtime value descriptors, or undefined when unavailable.
+ */
+function literalValueDomain(schema: z.ZodLiteral): ReadonlySet<string> | undefined {
+  const values = (schema._def as { values?: readonly unknown[] }).values;
+  if (!values) return undefined;
+  return new Set(values.map((value) => `literal:${typeof value}:${String(value)}`));
+}
+
+/**
+ * Build a small runtime output-domain model for the Zod field types that can
+ * safely participate in refined-object overrides.
+ * @param schema - Field schema to inspect.
+ * @returns Domain descriptors, or undefined when the field is too complex.
+ */
+function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
+  const domain = new Set<string>();
+  if (schema instanceof z.ZodOptional) domain.add('undefined');
+  if (schema instanceof z.ZodNullable) domain.add('null');
+
+  const inner = unwrapFieldSchema(schema);
+  if (inner instanceof z.ZodLiteral) {
+    const literalDomain = literalValueDomain(inner);
+    if (!literalDomain) return undefined;
+    for (const value of literalDomain) domain.add(value);
+    return domain;
+  }
+  if (inner instanceof z.ZodString) domain.add('string');
+  else if (inner instanceof z.ZodNumber) domain.add('number');
+  else if (inner instanceof z.ZodBoolean) domain.add('boolean');
+  else if (inner instanceof z.ZodBigInt) domain.add('bigint');
+  else if (inner instanceof z.ZodDate) domain.add('date');
+  else if (inner instanceof z.ZodArray) domain.add('array');
+  else if (inner instanceof z.ZodObject) domain.add('object');
+  else return undefined;
+
+  return domain;
+}
+
+/**
+ * Check whether every value accepted by an extension field also satisfies the
+ * original field's broad runtime output domain.
+ * @param original - Original object field schema.
+ * @param extension - Extension field schema replacing the original field.
+ * @returns True when the known extension domain is a subset of the original domain.
+ */
+function extensionFieldIsCompatible(original: z.ZodType, extension: z.ZodType): boolean {
+  const originalDomain = fieldValueDomain(original);
+  const extensionDomain = fieldValueDomain(extension);
+  if (!originalDomain || !extensionDomain) return true;
+
+  for (const value of extensionDomain) {
+    if (originalDomain.has(value)) continue;
+    const primitive = value.startsWith('literal:') ? value.slice('literal:'.length).split(':', 1)[0] : value;
+    if (!originalDomain.has(primitive)) return false;
+  }
+  return true;
+}
+
+/**
+ * Detect whether an object schema carries refinements that will run after field parsing.
+ * @param schema - Object schema to inspect.
+ * @returns True when the object has registered refinement checks.
+ */
+function hasObjectRefinements(schema: z.ZodObject<z.ZodRawShape>): boolean {
+  const checks = (schema._def as { checks?: readonly unknown[] }).checks;
+  return Array.isArray(checks) && checks.length > 0;
+}
+
+/**
+ * Reject refined-object field overrides that can feed incompatible parsed values
+ * into existing refinement callbacks.
+ * @param schema - Original registered object schema.
+ * @param extension - Extension shape to merge.
+ * @param label - Human-readable label for error messages.
+ */
+function assertCompatibleRefinedObjectExtension(
+  schema: z.ZodObject<z.ZodRawShape>,
+  extension: z.ZodRawShape,
+  label: string,
+): void {
+  if (!hasObjectRefinements(schema)) return;
+
+  const shape = schema.shape;
+  for (const [key, extensionField] of Object.entries(extension)) {
+    const originalField = shape[key];
+    if (!originalField) continue;
+    if (extensionFieldIsCompatible(originalField as z.ZodType, extensionField as z.ZodType)) continue;
+    throw new Error(
+      `[MakaioBus] Cannot extend ${label}: field '${key}' overrides an incompatible refined schema field`,
+    );
+  }
+}
+
+/**
  * Extend a Zod object without dropping metadata attached to the original schema.
  *
  * Zod `.safeExtend()` returns a new object schema while preserving refinements.
@@ -47,12 +161,15 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
  * host packages add fields to a registered subject.
  * @param schema - Original registered object schema.
  * @param extension - Additional fields to merge into the schema.
+ * @param label - Human-readable label for error messages.
  * @returns Extended schema carrying the original schema metadata.
  */
 function extendZodObjectPreservingMetadata(
   schema: z.ZodObject<z.ZodRawShape>,
   extension: z.ZodRawShape,
+  label: string,
 ): z.ZodObject<z.ZodRawShape> {
+  assertCompatibleRefinedObjectExtension(schema, extension, label);
   const extended = schema.safeExtend(extension);
   const metadata = schema.meta();
   return metadata ? (extended.meta(metadata) as z.ZodObject<z.ZodRawShape>) : extended;
@@ -534,10 +651,18 @@ export const createNamespaceRegistry = () => {
         if (ext.response) assertZodObject(current.response, `'${fullSubjectKey}' response`);
         const extended = {
           request: ext.request
-            ? extendZodObjectPreservingMetadata(current.request as z.ZodObject<z.ZodRawShape>, ext.request)
+            ? extendZodObjectPreservingMetadata(
+                current.request as z.ZodObject<z.ZodRawShape>,
+                ext.request,
+                `'${fullSubjectKey}' request`,
+              )
             : current.request,
           response: ext.response
-            ? extendZodObjectPreservingMetadata(current.response as z.ZodObject<z.ZodRawShape>, ext.response)
+            ? extendZodObjectPreservingMetadata(
+                current.response as z.ZodObject<z.ZodRawShape>,
+                ext.response,
+                `'${fullSubjectKey}' response`,
+              )
             : current.response,
         };
         subjectSchemas.set(fullSubjectKey, extended);
@@ -545,7 +670,11 @@ export const createNamespaceRegistry = () => {
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
       } else {
         assertZodObject(current, `'${fullSubjectKey}'`);
-        const extended = extendZodObjectPreservingMetadata(current, additionalFields as z.ZodRawShape);
+        const extended = extendZodObjectPreservingMetadata(
+          current,
+          additionalFields as z.ZodRawShape,
+          `'${fullSubjectKey}'`,
+        );
         subjectSchemas.set(fullSubjectKey, extended);
         const entry = registeredSubjects.get(fullSubjectKey);
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
