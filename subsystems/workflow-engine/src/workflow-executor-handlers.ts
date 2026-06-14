@@ -94,6 +94,10 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
       const result = await bus.request(WorkflowStorageSubjects.listExecutions, ctx.payload);
       ctx.setResult(result);
     }),
+    bus.on(WorkflowSubjects.listExecutionsByArtifactRefs, async (ctx) => {
+      const result = await bus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, ctx.payload);
+      ctx.setResult(result);
+    }),
     bus.on(WorkflowSubjects.listSpans, async (ctx) => {
       const result = await bus.request(WorkflowStorageSubjects.listSpans, {
         executionId: ctx.payload.executionId,

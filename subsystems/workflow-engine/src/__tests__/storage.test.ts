@@ -7,9 +7,15 @@ import {
   EXECUTION_LIST_DEFAULT_LIMIT,
   EXECUTION_LIST_MAX_LIMIT,
   EXECUTION_LIST_MIN_LIMIT,
+  EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF,
+  EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF,
+  EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS,
+  ExecutionsByArtifactRefsQuerySchema,
   WorkflowExecutionScopeSchema,
   ExecutionListQuerySchema,
   WorkflowRunContextSchema,
+  serializeArtifactRef,
+  parseArtifactRef,
   type WorkflowDefinition,
   type WorkflowGateInstance,
 } from '@makaio/contracts';
@@ -83,6 +89,97 @@ describe('ExecutionListQuerySchema', () => {
     const result = ExecutionListQuerySchema.parse({ artifactRef: { kind: 'workpiece', id: 'wp-1' } });
     expect(result.artifactRef).toEqual({ kind: 'workpiece', id: 'wp-1' });
     expect(result.limit).toBe(EXECUTION_LIST_DEFAULT_LIMIT);
+  });
+});
+
+describe('serializeArtifactRef / parseArtifactRef', () => {
+  it('round-trips a ref through serialize and parse', () => {
+    const ref = { kind: 'workpiece', id: 'wp-123' };
+    const key = serializeArtifactRef(ref);
+    expect(key).toBe('workpiece:wp-123');
+    expect(parseArtifactRef(key)).toEqual(ref);
+  });
+
+  it('handles ids containing colons', () => {
+    const ref = { kind: 'workpiece', id: 'ns:sub:id' };
+    const key = serializeArtifactRef(ref);
+    expect(key).toBe('workpiece:ns\\:sub\\:id');
+    expect(parseArtifactRef(key)).toEqual(ref);
+  });
+
+  it('handles kinds containing colons', () => {
+    const ref = { kind: 'system:workpiece', id: 'wp-123' };
+    const key = serializeArtifactRef(ref);
+    expect(key).toBe('system\\:workpiece:wp-123');
+    expect(parseArtifactRef(key)).toEqual(ref);
+  });
+
+  it('handles components containing backslashes', () => {
+    const ref = { kind: 'work\\piece', id: 'wp\\123' };
+    const key = serializeArtifactRef(ref);
+    expect(key).toBe('work\\\\piece:wp\\\\123');
+    expect(parseArtifactRef(key)).toEqual(ref);
+  });
+
+  it('rejects keys without a colon', () => {
+    expect(() => parseArtifactRef('nocolon')).toThrow('Invalid artifact ref key');
+  });
+
+  it('rejects keys with an empty id portion', () => {
+    expect(() => parseArtifactRef('kind:')).toThrow('empty id');
+  });
+
+  it('rejects keys with a dangling escape', () => {
+    expect(() => parseArtifactRef('kind:id\\')).toThrow('Invalid artifact ref key component');
+  });
+
+  it('rejects keys with non-canonical escape sequences', () => {
+    expect(() => parseArtifactRef('kind:id\\q')).toThrow('Invalid artifact ref key component');
+  });
+});
+
+describe('ExecutionsByArtifactRefsQuerySchema', () => {
+  it('requires at least one ref', () => {
+    expect(() => ExecutionsByArtifactRefsQuerySchema.parse({ refs: [] })).toThrow();
+  });
+
+  it('defaults limitPerRef to the contract default', () => {
+    const result = ExecutionsByArtifactRefsQuerySchema.parse({
+      refs: [{ kind: 'workpiece', id: 'wp-1' }],
+    });
+    expect(result.limitPerRef).toBe(EXECUTIONS_BY_ARTIFACT_REFS_DEFAULT_LIMIT_PER_REF);
+  });
+
+  it('accepts explicit limitPerRef', () => {
+    const result = ExecutionsByArtifactRefsQuerySchema.parse({
+      refs: [{ kind: 'workpiece', id: 'wp-1' }],
+      limitPerRef: 50,
+    });
+    expect(result.limitPerRef).toBe(50);
+  });
+
+  it('rejects limitPerRef above the max', () => {
+    expect(() =>
+      ExecutionsByArtifactRefsQuerySchema.parse({
+        refs: [{ kind: 'workpiece', id: 'wp-1' }],
+        limitPerRef: EXECUTIONS_BY_ARTIFACT_REFS_MAX_LIMIT_PER_REF + 1,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects more refs than the max', () => {
+    const refs = Array.from({ length: EXECUTIONS_BY_ARTIFACT_REFS_MAX_REFS + 1 }, (_, i) => ({
+      kind: 'workpiece',
+      id: `wp-${i}`,
+    }));
+    expect(() => ExecutionsByArtifactRefsQuerySchema.parse({ refs })).toThrow();
+  });
+
+  it('accepts refs whose response keys require escaping', () => {
+    const result = ExecutionsByArtifactRefsQuerySchema.parse({
+      refs: [{ kind: 'work:piece', id: 'wp:1' }],
+    });
+    expect(result.refs).toEqual([{ kind: 'work:piece', id: 'wp:1' }]);
   });
 });
 
@@ -710,6 +807,104 @@ describe('workflow storage handlers', () => {
         process.env.NODE_ENV = originalNodeEnv;
       }
     }
+  });
+
+  it('batch-fetches executions grouped by artifact ref', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-batch-artifact' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const refA = { kind: 'workpiece', id: 'wp-a' };
+    const refB = { kind: 'workpiece', id: 'wp-b' };
+    const refC = { kind: 'workpiece', id: 'wp-c' };
+    const refEscaped = { kind: 'work:piece', id: 'wp:escaped' };
+
+    const now = Date.now();
+    const execA1 = createWorkflowExecution({
+      id: 'exec-a1',
+      workflowId: workflow.id,
+      artifactRef: refA,
+      startedAt: now - 200,
+    });
+    const execA2 = createWorkflowExecution({
+      id: 'exec-a2',
+      workflowId: workflow.id,
+      artifactRef: refA,
+      startedAt: now - 100,
+    });
+    const execB1 = createWorkflowExecution({
+      id: 'exec-b1',
+      workflowId: workflow.id,
+      artifactRef: refB,
+      startedAt: now,
+    });
+    const execEscaped = createWorkflowExecution({
+      id: 'exec-escaped',
+      workflowId: workflow.id,
+      artifactRef: refEscaped,
+      startedAt: now - 50,
+    });
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: execA1 });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: execA2 });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: execB1 });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: execEscaped });
+
+    const { executionsByRef } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, {
+      refs: [refA, refB, refC, refEscaped],
+    });
+
+    const keyA = serializeArtifactRef(refA);
+    const keyB = serializeArtifactRef(refB);
+    const keyC = serializeArtifactRef(refC);
+    const keyEscaped = serializeArtifactRef(refEscaped);
+
+    expect(Object.keys(executionsByRef).sort()).toEqual([keyA, keyB, keyEscaped].sort());
+    expect(executionsByRef[keyA]!.map((e) => e.id)).toEqual(['exec-a2', 'exec-a1']);
+    expect(executionsByRef[keyB]!.map((e) => e.id)).toEqual(['exec-b1']);
+    expect(executionsByRef[keyEscaped]!.map((e) => e.id)).toEqual(['exec-escaped']);
+    expect(executionsByRef[keyC]).toBeUndefined();
+  });
+
+  it('respects limitPerRef in batch artifact ref query', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-batch-limit' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+
+    const ref = { kind: 'workpiece', id: 'wp-limited' };
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) {
+      await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
+        execution: createWorkflowExecution({
+          id: `exec-limited-${i}`,
+          workflowId: workflow.id,
+          artifactRef: ref,
+          startedAt: now - i * 100,
+        }),
+      });
+    }
+
+    const { executionsByRef } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, {
+      refs: [ref],
+      limitPerRef: 2,
+    });
+
+    const key = serializeArtifactRef(ref);
+    expect(executionsByRef[key]).toHaveLength(2);
+    expect(executionsByRef[key]![0]!.id).toBe('exec-limited-0');
+    expect(executionsByRef[key]![1]!.id).toBe('exec-limited-1');
+  });
+
+  it('rejects batch query with empty refs array', async () => {
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, { refs: [] }),
+    ).rejects.toThrow();
+  });
+
+  it('rejects malformed refs before batch artifact ref query execution', async () => {
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.listExecutionsByArtifactRefs, {
+        refs: [{ kind: 'workpiece' }] as never,
+      }),
+    ).rejects.toThrow('Invalid listExecutionsByArtifactRefs query');
   });
 
   it('returns stable scope-filtered pages that do not overlap', async () => {

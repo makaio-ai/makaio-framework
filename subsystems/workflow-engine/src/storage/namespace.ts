@@ -7,6 +7,7 @@ import {
   ExecutionStatusSchema,
   WorkflowListQuerySchema,
   ExecutionListQuerySchema,
+  ExecutionsByArtifactRefsQuerySchema,
   ExecutionLinkSchema,
   ExecutionLinkListQuerySchema,
   GateInstanceListQuerySchema,
@@ -139,6 +140,17 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     listExecutions: {
       request: ExecutionListQuerySchema,
       response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
+    },
+
+    /**
+     * Batch-fetch recent executions grouped by artifact reference.
+     * Internal storage implementation for the public `workflow.listExecutionsByArtifactRefs` subject.
+     */
+    listExecutionsByArtifactRefs: {
+      request: ExecutionsByArtifactRefsQuerySchema,
+      response: z.object({
+        executionsByRef: z.record(z.string(), z.array(WorkflowExecutionSchema)),
+      }),
     },
 
     // ─────────────────────────────────────────────────────────────

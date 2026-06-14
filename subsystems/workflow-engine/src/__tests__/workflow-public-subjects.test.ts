@@ -15,6 +15,7 @@ import {
   type WorkflowRunResult,
   type WorkflowStationNode,
   type WorkflowWorkerConfig,
+  serializeArtifactRef,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -835,6 +836,41 @@ describe('workflow public subjects', () => {
     } finally {
       unsub();
     }
+  });
+
+  it('batch-fetches executions by artifact refs via public subject', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-batch-artifact-ref',
+      name: 'Batch Artifact Ref',
+      steps: [],
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const refA = { kind: 'workpiece', id: 'wp-batch-a' };
+    const refB = { kind: 'workpiece', id: 'wp-batch-b' };
+    const refMiss = { kind: 'workpiece', id: 'wp-batch-miss' };
+
+    const { executionId: idA } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      artifactRef: refA,
+    });
+    const { executionId: idB } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      artifactRef: refB,
+    });
+
+    const { executionsByRef } = await MakaioBus.request(WorkflowSubjects.listExecutionsByArtifactRefs, {
+      refs: [refA, refB, refMiss],
+      limitPerRef: 10,
+    });
+
+    expect(executionsByRef[serializeArtifactRef(refA)]?.map((e) => e.id)).toEqual([idA]);
+    expect(executionsByRef[serializeArtifactRef(refB)]?.map((e) => e.id)).toEqual([idB]);
+    expect(executionsByRef[serializeArtifactRef(refMiss)]).toBeUndefined();
   });
 
   it('passes start artifact references through isolated runner configuration', async () => {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createBusNamespace, observability, type SchemaRecord } from '@makaio/core';
 import {
   ExecutionListQuerySchema,
+  ExecutionsByArtifactRefsQuerySchema,
   ExecutionStatusSchema,
   GateInstanceListQuerySchema,
   WorkflowDefinitionSchema,
@@ -198,6 +199,20 @@ export const WorkflowSchemas = {
   listExecutions: {
     request: ExecutionListQuerySchema,
     response: z.object({ executions: z.array(WorkflowExecutionSchema) }),
+  },
+  /**
+   * Batch-fetch recent executions grouped by artifact reference.
+   *
+   * Eliminates N+1 fan-out when a consumer needs execution history for
+   * multiple artifacts (e.g. graph enrichment). Each ref is an independent
+   * indexed lookup; results are keyed by canonical `"kind:id"` serialization.
+   * Refs with no matching executions are omitted from the response.
+   */
+  listExecutionsByArtifactRefs: {
+    request: ExecutionsByArtifactRefsQuerySchema,
+    response: z.object({
+      executionsByRef: z.record(z.string(), z.array(WorkflowExecutionSchema)),
+    }),
   },
   /**
    * List persisted step spans for a workflow execution.
