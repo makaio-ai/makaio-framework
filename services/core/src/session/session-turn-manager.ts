@@ -221,14 +221,14 @@ export class SessionTurnManager {
     this.completingSessions.add(turn.sessionId);
 
     const usageAccumulator = this.usageAccumulators.get(turn.sessionId);
-    const usage = usageAccumulator?.snapshot();
+    let completedUsage = usageAccumulator?.snapshot();
 
     try {
       await this.bus.requestOptional(TurnStorageSubjects.complete, {
         turnId: turn.turnId,
         status: result.success ? 'completed' : 'error',
         error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
-        ...(usage !== undefined && { usage }),
+        ...(completedUsage !== undefined && { usage: completedUsage }),
       });
 
       const bufferedUsage = this.bufferedUsageDuringCompletion.get(turn.sessionId) ?? [];
@@ -239,6 +239,7 @@ export class SessionTurnManager {
         this.bufferedUsageDuringCompletion.delete(turn.sessionId);
 
         const mergedUsage = usageAccumulator?.snapshot();
+        completedUsage = mergedUsage;
         await this.bus.requestOptional(TurnStorageSubjects.complete, {
           turnId: turn.turnId,
           status: result.success ? 'completed' : 'error',
@@ -268,6 +269,7 @@ export class SessionTurnManager {
       turnNumber: turn.turnNumber,
       success: result.success,
       error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+      ...(completedUsage !== undefined && { usage: completedUsage }),
       initiator: turn.initiator,
     });
   }

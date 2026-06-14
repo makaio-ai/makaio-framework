@@ -10,7 +10,13 @@ import type {
   WorkflowStationNode,
 } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
-import type { AgentConfig, GateOptions, IterateOptions, NodeOptions } from './authoring-builder.js';
+import type {
+  AgentConfig,
+  DelegateToRoleOptions,
+  GateOptions,
+  IterateOptions,
+  NodeOptions,
+} from './authoring-builder.js';
 
 // ─────────────────────────────────────────────────────────────
 // Shared WeakMap for standalone handler registration
@@ -102,14 +108,10 @@ export function delegateToAgent(id: string, config: AgentConfig, options?: NodeO
  * or an `iterateChain()` sub-chain.
  * @param id - Unique node identifier
  * @param role - Named product role to delegate to
- * @param options - Optional node conditions plus optional `prompt` override
+ * @param options - Optional node conditions plus optional `prompt` and `completion` overrides
  * @returns A {@link WorkflowDelegateRoleNode}
  */
-export function delegateToRole(
-  id: string,
-  role: string,
-  options?: NodeOptions & { readonly prompt?: string },
-): WorkflowDelegateRoleNode {
+export function delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowDelegateRoleNode {
   return {
     id,
     type: 'delegate-role',
@@ -117,6 +119,7 @@ export function delegateToRole(
     prompt: options?.prompt ?? id,
     ...(options?.when !== undefined && { when: options.when }),
     ...(options?.skip !== undefined && { skip: options.skip }),
+    ...(options?.completion !== undefined && { completion: options.completion }),
   };
 }
 

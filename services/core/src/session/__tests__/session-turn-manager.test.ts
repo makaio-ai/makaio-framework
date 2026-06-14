@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { TurnInitiator } from '@makaio/contracts';
+import type { TurnInitiator, TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { SessionTurnManager } from '../session-turn-manager.js';
 import { resetBusHandlers, waitForAsync } from './shared.js';
@@ -96,6 +96,7 @@ function collectTurnCompleted(unsubs: UnsubFn[]): Array<{
   turnNumber: number;
   success: boolean;
   error?: string;
+  usage?: TurnUsage;
   initiator?: TurnInitiator;
 }> {
   const received: Array<{
@@ -104,12 +105,13 @@ function collectTurnCompleted(unsubs: UnsubFn[]): Array<{
     turnNumber: number;
     success: boolean;
     error?: string;
+    usage?: TurnUsage;
     initiator?: TurnInitiator;
   }> = [];
   unsubs.push(
     MakaioBus.on(SessionSubjects.turn.completed, (ctx) => {
-      const { sessionId, turnId, turnNumber, success, error, initiator } = ctx.payload;
-      received.push({ sessionId, turnId, turnNumber, success, error, initiator });
+      const { sessionId, turnId, turnNumber, success, error, usage, initiator } = ctx.payload;
+      received.push({ sessionId, turnId, turnNumber, success, error, usage, initiator });
     }),
   );
   return received;
@@ -352,6 +354,31 @@ describe('SessionTurnManager', () => {
         success: true,
       });
       expect(turnCompleted[0]?.error).toBeUndefined();
+    });
+
+    it('emits accumulated usage on turn.completed', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const turn = await manager.createTurn('sess-usage-event', ['agent-a']);
+      turn.addMessage('msg-usage-event');
+
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        agentId: 'agent-a',
+        turnId: turn.turnId,
+        inputTokens: 120,
+        outputTokens: 45,
+      });
+      await emitAgentComplete('agent-a', turn.turnId);
+      await waitForAsync();
+
+      expect(turnCompleted[0]?.usage).toEqual({
+        total: { inputTokens: 120, outputTokens: 45 },
+        byAgent: { 'agent-a': { inputTokens: 120, outputTokens: 45 } },
+      });
     });
 
     it('emits turn.completed with success=false and error when failed', async () => {

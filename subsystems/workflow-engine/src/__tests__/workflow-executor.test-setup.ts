@@ -1,5 +1,6 @@
 import { MakaioBus } from '@makaio/bus-core';
 import {
+  AgentSubjects,
   AdapterSubjects,
   DEFAULT_CONSTRAINTS,
   SubagentConfigSchema,
@@ -14,6 +15,7 @@ import {
   registerMemorySessionStorage,
   registerMemorySessionEventStorage,
   MakaioSessionService,
+  SessionOrchestrator,
 } from '@makaio/services-core/session';
 import { SubagentService } from '@makaio/services-core/subagent';
 import { WorkflowExecutor } from '../workflow-executor.js';
@@ -22,6 +24,7 @@ import { createTestDb, type TestDbContext } from './shared.js';
 export interface WorkflowExecutorTestSetup {
   dbContext: TestDbContext;
   sessionService: MakaioSessionService;
+  sessionOrchestrator: SessionOrchestrator;
   workflowExecutor: WorkflowExecutor;
   cleanupFns: Array<() => void>;
 }
@@ -36,6 +39,33 @@ function registerAdapterStartHandler(): () => void {
       sessionId: ctx.payload.sessionId ?? 'session-missing',
       messageId: `message-${Math.random().toString(36).slice(2)}`,
     });
+  });
+}
+
+/**
+ * Minimal agent.sendMessage handler for workflow session-turn tests.
+ *
+ * The session orchestrator owns turn completion, so this handler acknowledges
+ * delivery first and emits agent.complete on the next tick with the turn
+ * correlation fields it received.
+ * @returns Cleanup function.
+ */
+function registerAgentSendMessageHandler(): () => void {
+  return MakaioBus.on(AgentSubjects.sendMessage, (ctx) => {
+    const messageId = ctx.payload.messageId ?? `message-${Math.random().toString(36).slice(2)}`;
+    ctx.setResult({ messageId });
+    setTimeout(() => {
+      void MakaioBus.emit(AgentSubjects.complete, {
+        agentId: ctx.payload.agentId,
+        adapterId: ctx.payload.adapterId,
+        adapterName: 'workflow-test-adapter',
+        adapterSessionId: `adapter-session-${ctx.payload.agentId}`,
+        ...(ctx.payload.sessionId !== undefined ? { sessionId: ctx.payload.sessionId } : {}),
+        messageId,
+        ...(ctx.payload.turnId !== undefined ? { turnId: ctx.payload.turnId } : {}),
+        message: `completed:${String(ctx.payload.message)}`,
+      }).catch(() => {});
+    }, 0);
   });
 }
 
@@ -143,6 +173,7 @@ export async function setupWorkflowExecutorTest(
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();
+  const sessionOrchestrator = new SessionOrchestrator(MakaioBus, 'workflow-test-machine');
 
   cleanupFns.push(...registerSubagentStubHandlers(MakaioBus));
 
@@ -159,6 +190,7 @@ export async function setupWorkflowExecutorTest(
   }
 
   cleanupFns.push(registerAdapterStartHandler());
+  cleanupFns.push(registerAgentSendMessageHandler());
   registerCommonMockHandlers(cleanupFns);
   cleanupFns.push(
     MakaioBus.on(SubagentSubjects.spawned, (ctx) => {
@@ -176,6 +208,7 @@ export async function setupWorkflowExecutorTest(
   return {
     dbContext,
     sessionService,
+    sessionOrchestrator,
     workflowExecutor,
     cleanupFns,
   };
@@ -183,6 +216,7 @@ export async function setupWorkflowExecutorTest(
 
 export async function teardownWorkflowExecutorTest(setup: WorkflowExecutorTestSetup): Promise<void> {
   await setup.workflowExecutor.destroy();
+  setup.sessionOrchestrator.destroy();
   await setup.sessionService.destroy();
 
   setup.cleanupFns.forEach((cleanup) => cleanup());
@@ -225,6 +259,7 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();
+  const sessionOrchestrator = new SessionOrchestrator(MakaioBus, 'workflow-test-machine');
 
   // Real SubagentService — handles spawn/await/completeTask/kill RPCs.
   // sweepIntervalMs: 0 disables the periodic cleanup interval to avoid timer
@@ -257,13 +292,6 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
     MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
       adapterStartCalls.push(ctx.payload);
       const subagentId = pendingSubagentIds.shift();
-      if (subagentId === undefined) {
-        ctx.setResult({
-          success: false,
-          message: 'Adapter start received no matching spawned subagent id',
-        });
-        return;
-      }
       ctx.setResult({
         success: true,
         agentId: `agent-${Math.random().toString(36).slice(2)}`,
@@ -272,6 +300,9 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
         sessionId: ctx.payload.sessionId ?? 'session-missing',
         messageId: `message-${Math.random().toString(36).slice(2)}`,
       });
+      if (subagentId === undefined) {
+        return;
+      }
       // Complete the subagent on the next tick so SubagentSubjects.await can
       // register its pending resolver before the completion fires.
       setTimeout(() => {
@@ -284,10 +315,12 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
   );
 
   registerCommonMockHandlers(cleanupFns);
+  cleanupFns.push(registerAgentSendMessageHandler());
 
   return {
     dbContext,
     sessionService,
+    sessionOrchestrator,
     subagentService,
     workflowExecutor,
     cleanupFns,
@@ -304,6 +337,7 @@ export async function teardownWorkflowExecutorWithSubagentServiceTest(
 ): Promise<void> {
   await setup.workflowExecutor.destroy();
   await setup.subagentService.destroy();
+  setup.sessionOrchestrator.destroy();
   await setup.sessionService.destroy();
 
   setup.cleanupFns.forEach((cleanup) => cleanup());

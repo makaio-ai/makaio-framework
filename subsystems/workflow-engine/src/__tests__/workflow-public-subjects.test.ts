@@ -735,7 +735,7 @@ describe('workflow public subjects', () => {
     ]);
   });
 
-  it('emits frame.sessionLinked when a delegate-role node spawns a child session', async () => {
+  it('emits frame.sessionLinked when a delegate-role node creates a child session', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -745,17 +745,6 @@ describe('workflow public subjects', () => {
         ctx.setResult({
           adapterName: 'claude-code',
           model: 'workflow-test-model',
-          contextMode: 'fresh',
-        });
-      }),
-    );
-
-    setup.cleanupFns.push(
-      MakaioBus.on(SubagentSubjects.getStatus, (ctx) => {
-        ctx.setResult({
-          status: 'running',
-          childSessionId: `session-${ctx.payload.subagentId}`,
-          progress: [],
         });
       }),
     );
@@ -765,6 +754,7 @@ describe('workflow public subjects', () => {
       type: 'delegate-role',
       role: 'reviewer',
       prompt: 'Review linked session',
+      completion: 'turn',
     };
 
     const workflow = createWorkflowDefinition({
@@ -777,6 +767,8 @@ describe('workflow public subjects', () => {
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    const { workflow: storedWorkflow } = await MakaioBus.request(WorkflowSubjects.getDefinition, { id: workflow.id });
+    expect(storedWorkflow?.root.nodes[0]).toMatchObject({ completion: 'turn' });
 
     const sessionLinks: Array<{ frameId: string; sessionId: string }> = [];
     const cleanupLinks = MakaioBus.on(WorkflowSubjects.frame.sessionLinked, (ctx) => {

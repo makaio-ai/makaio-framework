@@ -141,6 +141,39 @@ describe('registerAttachHandler - runtime options', () => {
       });
     });
 
+    it('passes explicit attach runtime payloads that do not come from agent resolution', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      const adapterConfig = { sandbox: { mode: 'review' }, maxTurns: 2 };
+      const env = { REVIEW_MODE: 'strict' };
+      const mcpSessionContext = {
+        sessionId,
+        servers: [],
+        directTools: [],
+        discoverableTools: [],
+      };
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: {
+          kind: 'adapter',
+          adapterName,
+          adapterConfig,
+          env,
+          mcpSessionContext,
+        },
+      });
+
+      expect(receivedRequests[0]).toMatchObject({
+        adapterConfig,
+        env,
+        mcpSessionContext,
+      });
+    });
+
     it('does not include undefined runtime options', async () => {
       ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
       const { unsubscribe, receivedRequests } = ctx.registerStartAgentHandler();
@@ -157,6 +190,9 @@ describe('registerAttachHandler - runtime options', () => {
       expect(receivedRequests[0]).not.toHaveProperty('cwd');
       expect(receivedRequests[0]).not.toHaveProperty('allowedTools');
       expect(receivedRequests[0]).not.toHaveProperty('disallowedTools');
+      expect(receivedRequests[0]).not.toHaveProperty('adapterConfig');
+      expect(receivedRequests[0]).not.toHaveProperty('env');
+      expect(receivedRequests[0]).not.toHaveProperty('mcpSessionContext');
     });
   });
 });
