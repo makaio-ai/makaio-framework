@@ -25,6 +25,7 @@ function mapDefinition(row: DbDefinitionRow): WorkflowDefinition {
     inputSchema: (row.inputSchema as WorkflowDefinition['inputSchema']) ?? undefined,
     configSchema: (row.configSchema as WorkflowDefinition['configSchema']) ?? undefined,
     outputSchema: (row.outputSchema as WorkflowDefinition['outputSchema']) ?? undefined,
+    state: (row.state as WorkflowDefinition['state']) ?? undefined,
     artifact: row.artifact ?? undefined,
     triggers: row.triggers ?? undefined,
     scope: fromScopeColumns(row),
@@ -50,6 +51,7 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     inputSchema: (workflow.inputSchema as Record<string, JsonValue> | undefined) ?? null,
     configSchema: (workflow.configSchema as Record<string, JsonValue> | undefined) ?? null,
     outputSchema: (workflow.outputSchema as Record<string, JsonValue> | undefined) ?? null,
+    state: workflow.state ?? null,
     artifact: workflow.artifact ?? null,
     triggers: workflow.triggers ?? null,
     canvasLayout: (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null,
@@ -95,9 +97,10 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
       return;
     }
 
-    // Build the update set: always-present fields are overwritten; optional
-    // nullable fields use COALESCE so existing values are preserved when the
-    // caller omits them (i.e. when the new value is null).
+    // Build the update set: always-present fields are overwritten. Most
+    // optional metadata fields preserve existing values when omitted; `state`
+    // is a full contract and must clear when omitted from the replacement
+    // definition.
     const [updatedRow] = await db
       .update(workflowDefinitions)
       .set({
@@ -111,6 +114,7 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
         inputSchema: values.inputSchema !== null ? values.inputSchema : sql`${columns.inputSchema}`,
         configSchema: values.configSchema !== null ? values.configSchema : sql`${columns.configSchema}`,
         outputSchema: values.outputSchema !== null ? values.outputSchema : sql`${columns.outputSchema}`,
+        state: values.state,
         artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
         triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
         canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,

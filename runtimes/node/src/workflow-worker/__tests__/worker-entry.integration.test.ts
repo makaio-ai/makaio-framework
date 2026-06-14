@@ -30,8 +30,8 @@ interface HostWorkflowBus {
 /**
  * Start a real bus transport with in-memory workflow storage handlers.
  *
- * Registers handlers for the three storage subjects the orchestrator writes
- * during a workflow run: `setExecution`, `updateExecution`, and `setSpan`.
+ * Registers handlers for the storage subjects the orchestrator writes during
+ * a workflow run, including the atomic `setExecutionStart` launch checkpoint.
  * All cleanup callbacks are collected so `close()` can unregister them in one pass.
  * @returns Host bus resources for worker-entry integration tests.
  */
@@ -52,6 +52,12 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
     ctx.setResult({ id: execution.id });
   });
 
+  const offSetExecutionStart = bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+    const execution = ctx.payload.execution as WorkflowExecution;
+    executions.set(execution.id, execution);
+    ctx.setResult({ id: execution.id, executionId: execution.id });
+  });
+
   const offUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
     const { executionId, status, error, completedAt } = ctx.payload;
     const execution = executions.get(executionId);
@@ -69,7 +75,7 @@ async function startHostWorkflowBus(): Promise<HostWorkflowBus> {
     ctx.setResult({ id: ctx.payload.span.stepId });
   });
 
-  const cleanups: Array<() => void> = [offSetExecution, offUpdateExecution, offSetSpan];
+  const cleanups: Array<() => void> = [offSetExecution, offSetExecutionStart, offUpdateExecution, offSetSpan];
 
   const transport = new BusServerTransportProvider({ httpServer: server });
   try {

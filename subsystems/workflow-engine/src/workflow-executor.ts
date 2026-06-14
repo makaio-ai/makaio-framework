@@ -15,6 +15,7 @@ import { registerDrizzleWorkflowStorage } from './storage/handler.js';
 import { DEFAULT_EXECUTOR_CONFIG, type ActiveRunnerStep, type ExecutorConfig, type ActiveExecution } from './types.js';
 import {
   registerWorkflowStorageDelegationHandlers,
+  registerWorkflowStateHandlers,
   registerWorkflowTriggerTypeHandlers,
 } from './workflow-executor-handlers.js';
 import {
@@ -112,6 +113,9 @@ export class WorkflowExecutor extends BaseService {
   protected async onInit(): Promise<void> {
     this.registerExecutionHandlers();
     for (const cleanup of registerWorkflowStorageDelegationHandlers(this.bus)) {
+      this.addCleanup(cleanup);
+    }
+    for (const cleanup of registerWorkflowStateHandlers(this.bus)) {
       this.addCleanup(cleanup);
     }
     for (const cleanup of registerWorkflowTriggerTypeHandlers(this.bus, () => this.triggerTypeRegistry)) {

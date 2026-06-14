@@ -701,6 +701,28 @@ describe('WorkflowDefinitionSchema', () => {
     expect(def.source?.kind).toBe('extension');
     expect(def.executionHints?.requirements?.capabilities).toEqual(['makaio.factory.github-actions']);
   });
+
+  it('accepts a workflow definition with a state contract', () => {
+    const def = WorkflowDefinitionSchema.parse({
+      id: 'review',
+      state: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            tier: { type: 'string', enum: ['T0', 'T1', 'T2', 'T3'] },
+            selectedReviewers: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['tier', 'selectedReviewers'],
+        },
+        initial: { tier: 'T1', selectedReviewers: [] },
+      },
+      root: { id: 'root', type: 'sequence', nodes: [] },
+    });
+
+    expect(def.state?.initial).toEqual({ tier: 'T1', selectedReviewers: [] });
+    expect(def.state?.schema).toBeDefined();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -1601,5 +1623,117 @@ describe('execution.paused event', () => {
         pausedAtFrameId: 'frame-approve-1',
       }),
     ).toMatchObject({ pausedAtFrameId: 'frame-approve-1' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// State RPC subjects
+// ─────────────────────────────────────────────────────────────
+
+describe('state RPC subjects', () => {
+  it('exposes workflow state subjects as nested accessors', () => {
+    expect(WorkflowSubjects.state.get.subject).toBe('state.get');
+    expect(WorkflowSubjects.state.patch.subject).toBe('state.patch');
+    expect(WorkflowSubjects.state.updated.subject).toBe('state.updated');
+  });
+
+  it('parses a state.get request and response', () => {
+    const req = WorkflowSchemas['state.get'].request.parse({ executionId: 'wfx-1' });
+    expect(req.executionId).toBe('wfx-1');
+
+    const res = WorkflowSchemas['state.get'].response.parse({
+      executionId: 'wfx-1',
+      sequence: 0,
+      value: { tier: 'T1', selectedReviewers: [] },
+    });
+    expect(res.sequence).toBe(0);
+    expect(res.value).toEqual({ tier: 'T1', selectedReviewers: [] });
+  });
+
+  it('rejects state.get with empty executionId', () => {
+    expect(() => WorkflowSchemas['state.get'].request.parse({ executionId: '' })).toThrow();
+  });
+
+  it('parses a state.patch request with expectedSequence', () => {
+    const req = WorkflowSchemas['state.patch'].request.parse({
+      executionId: 'wfx-1',
+      expectedSequence: 0,
+      patch: [{ op: 'add', path: '/selectedReviewers/0', value: 'correctness-reviewer' }],
+      nextValue: { tier: 'T1', selectedReviewers: ['correctness-reviewer'] },
+    });
+    expect(req.expectedSequence).toBe(0);
+    expect(req.patch).toHaveLength(1);
+  });
+
+  it('requires expectedSequence on state.patch requests', () => {
+    expect(() =>
+      WorkflowSchemas['state.patch'].request.parse({
+        executionId: 'wfx-1',
+        patch: [{ op: 'replace', path: '/tier', value: 'T2' }],
+        nextValue: { tier: 'T2', selectedReviewers: [] },
+      }),
+    ).toThrow();
+  });
+
+  it('rejects non-JSON-Patch entries on state.patch requests', () => {
+    expect(() =>
+      WorkflowSchemas['state.patch'].request.parse({
+        executionId: 'wfx-1',
+        expectedSequence: 0,
+        patch: [{ path: '/tier', value: 'T2' }],
+        nextValue: { tier: 'T2', selectedReviewers: [] },
+      }),
+    ).toThrow();
+    expect(() =>
+      WorkflowSchemas['state.patch'].request.parse({
+        executionId: 'wfx-1',
+        expectedSequence: 0,
+        patch: ['replace tier'],
+        nextValue: { tier: 'T2', selectedReviewers: [] },
+      }),
+    ).toThrow();
+  });
+
+  it('parses a state.patch response', () => {
+    const res = WorkflowSchemas['state.patch'].response.parse({
+      executionId: 'wfx-1',
+      sequence: 1,
+      value: { tier: 'T1', selectedReviewers: ['correctness-reviewer'] },
+    });
+    expect(res.sequence).toBe(1);
+  });
+
+  it('rejects state.patch response with sequence 0', () => {
+    expect(() =>
+      WorkflowSchemas['state.patch'].response.parse({
+        executionId: 'wfx-1',
+        sequence: 0,
+        value: {},
+      }),
+    ).toThrow();
+  });
+
+  it('parses a state.updated event', () => {
+    const payload = WorkflowSchemas['state.updated'].parse({
+      executionId: 'wfx-1',
+      sequence: 1,
+      patch: [{ op: 'replace', path: '/tier', value: 'T2' }],
+      value: { tier: 'T2', selectedReviewers: [] },
+      updatedAt: 1718280000000,
+    });
+    expect(payload.sequence).toBe(1);
+    expect(payload.updatedAt).toBe(1718280000000);
+  });
+
+  it('rejects state.updated with sequence 0', () => {
+    expect(() =>
+      WorkflowSchemas['state.updated'].parse({
+        executionId: 'wfx-1',
+        sequence: 0,
+        patch: [],
+        value: {},
+        updatedAt: 1000,
+      }),
+    ).toThrow();
   });
 });

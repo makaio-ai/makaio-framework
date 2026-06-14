@@ -11,8 +11,12 @@ import {
 import type { TransportReceiveContext } from '@makaio/core';
 import { WorkflowRunContextSchema, WorkflowSubjects } from '@makaio/contracts';
 import { WorkflowNamespace } from '../namespace.js';
-import { registerWorkflowStorageDelegationHandlers } from '../workflow-executor-handlers.js';
+import {
+  registerWorkflowStateHandlers,
+  registerWorkflowStorageDelegationHandlers,
+} from '../workflow-executor-handlers.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
+import { createTestDbForBus, createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
 /** Minimal transport fixture for injecting remote getRunContext requests. */
 class StubTransport implements BusTransport {
@@ -74,6 +78,49 @@ class StubTransport implements BusTransport {
         payload: { executionId },
         correlationId: `storage-corr-${executionId}`,
         messageId: `storage-msg-${executionId}`,
+      },
+      context,
+    );
+  }
+
+  /**
+   * Inject a remote workflow.state.get request.
+   * @param executionId - Requested workflow execution id.
+   * @param context - Transport receive context for the remote caller.
+   */
+  public async requestStateGet(executionId: string, context: TransportReceiveContext): Promise<void> {
+    await this.handler?.(
+      {
+        type: 'request',
+        namespace: WorkflowSubjects.state.get.$meta.namespace,
+        subject: WorkflowSubjects.state.get.subject as string,
+        payload: { executionId },
+        correlationId: `state-get-corr-${executionId}`,
+        messageId: `state-get-msg-${executionId}`,
+      },
+      context,
+    );
+  }
+
+  /**
+   * Inject a remote workflow.state.patch request.
+   * @param executionId - Requested workflow execution id.
+   * @param context - Transport receive context for the remote caller.
+   */
+  public async requestStatePatch(executionId: string, context: TransportReceiveContext): Promise<void> {
+    await this.handler?.(
+      {
+        type: 'request',
+        namespace: WorkflowSubjects.state.patch.$meta.namespace,
+        subject: WorkflowSubjects.state.patch.subject as string,
+        payload: {
+          executionId,
+          expectedSequence: 0,
+          patch: [{ op: 'replace', path: '/count', value: 1 }],
+          nextValue: { count: 1 },
+        },
+        correlationId: `state-patch-corr-${executionId}`,
+        messageId: `state-patch-msg-${executionId}`,
       },
       context,
     );
@@ -238,5 +285,73 @@ describe('workflow.getRunContext authorization', () => {
       correlationId: `storage-corr-${runContext.executionId}`,
       error: { message: expect.stringContaining('local-only') },
     });
+  });
+});
+
+describe('workflow state authorization', () => {
+  it('denies remote state reads and writes from peers bound to a different execution', async () => {
+    const bus = createWorkflowTestBus();
+    const dbContext = await createTestDbForBus(bus);
+    const cleanups = [...registerWorkflowStorageDelegationHandlers(bus), ...registerWorkflowStateHandlers(bus)];
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'wf-state-auth' }),
+      state: {
+        schema: {
+          type: 'object',
+          properties: { count: { type: 'number' } },
+          required: ['count'],
+          additionalProperties: false,
+        },
+        initial: { count: 0 },
+      },
+    };
+    const execution = createWorkflowExecution({ id: 'wfx-state-auth', workflowId: workflow.id });
+    const runContextForState = WorkflowRunContextSchema.parse({
+      ...runContext,
+      executionId: execution.id,
+      workflowId: workflow.id,
+      definitionSnapshot: workflow,
+      cancelSubject: `workflow.${execution.id}.cancel`,
+    });
+
+    try {
+      await bus.request(WorkflowStorageSubjects.set, { workflow });
+      await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+      await bus.request(WorkflowStorageSubjects.setRunContext, { runContext: runContextForState });
+      await bus.request(WorkflowStorageSubjects.initializeState, {
+        executionId: execution.id,
+        initialValue: workflow.state.initial,
+      });
+
+      const transport = new StubTransport();
+      bus.registerTransport(transport);
+      const remoteContext: TransportReceiveContext = {
+        transportName: 'remote-workflow',
+        peer: { kind: 'workflow-execution', id: 'wfx-other', authenticated: true },
+      };
+
+      await transport.requestStateGet(execution.id, remoteContext);
+      await transport.requestStatePatch(execution.id, remoteContext);
+
+      expect(
+        transport.messages.find(
+          (message) => message.type === 'response' && message.correlationId === `state-get-corr-${execution.id}`,
+        ),
+      ).toMatchObject({
+        type: 'response',
+        error: { message: expect.stringContaining('Unauthorized') },
+      });
+      expect(
+        transport.messages.find(
+          (message) => message.type === 'response' && message.correlationId === `state-patch-corr-${execution.id}`,
+        ),
+      ).toMatchObject({
+        type: 'response',
+        error: { message: expect.stringContaining('Unauthorized') },
+      });
+    } finally {
+      cleanups.forEach((cleanup) => cleanup());
+      dbContext.cleanup();
+    }
   });
 });

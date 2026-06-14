@@ -97,6 +97,38 @@ describe('loadWorkflowFromConfig — definition source', () => {
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 
+  it('preserves the state field on definition-sourced configs', async () => {
+    const definition = makeDefinition({
+      state: {
+        schema: {
+          type: 'object',
+          properties: {
+            counter: { type: 'number' },
+            label: { type: 'string' },
+          },
+          required: ['counter'],
+        },
+        initial: { counter: 0, label: 'default' },
+      },
+    });
+    const config = makeConfig({ definition });
+
+    const loaded = await loadWorkflowFromConfig(config);
+
+    expect(loaded.definition.state).toBeDefined();
+    expect(loaded.definition.state!.schema).toEqual({
+      type: 'object',
+      properties: {
+        counter: { type: 'number' },
+        label: { type: 'string' },
+      },
+      required: ['counter'],
+    });
+    expect(loaded.definition.state!.initial).toEqual({ counter: 0, label: 'default' });
+    expect(loaded.definition).toBe(definition);
+    expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
+  });
+
   it('returns an empty runtimeHandlers map for pipeline-primitive definitions', async () => {
     const definition = makeDefinition({
       root: {

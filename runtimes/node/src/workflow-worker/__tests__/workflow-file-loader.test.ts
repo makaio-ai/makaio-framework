@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { loadWorkflowModule, loadWorkflowModules } from '../workflow-file-loader.js';
+import type { RuntimeLoadedWorkflow } from '../index.js';
 
 /**
  * Create an isolated temp directory for each test.
@@ -244,15 +245,15 @@ export default { definition, runtimeHandlers: new Map() };
  * @param entries - Array of `{ id, stepIds }` describing each workflow in the bundle.
  * @returns ESM module source string with a bundle default export.
  */
-function makeBundleModuleSource(entries: Array<{ id: string; stepIds: string[] }>): string {
+function makeBundleModuleSource(entries: Array<{ id: string; stepIds: string[]; stateSource?: string }>): string {
   const workflowLiterals = entries
-    .map(({ id, stepIds }) => {
+    .map(({ id, stepIds, stateSource }) => {
       const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
       const stationNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'station', prompt: '${sid}' }`).join(', ');
       return (
         `{ definition: { id: '${id}', name: '${id}', ` +
         `root: { id: '${id}__root', type: 'sequence', nodes: [${stationNodes}] }, ` +
-        `triggers: [], scope: { type: 'global' } }, ` +
+        `triggers: [], scope: { type: 'global' }${stateSource !== undefined ? `, state: ${stateSource}` : ''} }, ` +
         `runtimeHandlers: new Map([${stepEntries}]) }`
       );
     })
@@ -260,6 +261,115 @@ function makeBundleModuleSource(entries: Array<{ id: string; stepIds: string[] }
 
   return `export default { workflows: [${workflowLiterals}] };`;
 }
+
+describe('loadWorkflowModule — state field preservation', () => {
+  it('preserves state.schema and state.initial through the file-loader round-trip', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    const source = `
+const definition = {
+  id: 'stateful-wf',
+  name: 'Stateful Workflow',
+  root: { id: 'stateful-wf__root', type: 'sequence', nodes: [
+    { id: 'step1', type: 'station', prompt: 'do work' },
+  ] },
+  triggers: [],
+  scope: { type: 'global' },
+  state: {
+    schema: {
+      type: 'object',
+      properties: {
+        counter: { type: 'number' },
+        label: { type: 'string' },
+      },
+      required: ['counter'],
+    },
+    initial: { counter: 0, label: 'default' },
+  },
+};
+const runtimeHandlers = new Map([['step1', (ctx) => ctx]]);
+export default { definition, runtimeHandlers };
+`;
+    const filePath = join(dir, 'stateful-workflow.mjs');
+    await writeFile(filePath, source, 'utf8');
+
+    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
+
+    expect(loaded.definition.state).toBeDefined();
+    expect(loaded.definition.state!.schema).toEqual({
+      type: 'object',
+      properties: {
+        counter: { type: 'number' },
+        label: { type: 'string' },
+      },
+      required: ['counter'],
+    });
+    expect(loaded.definition.state!.initial).toEqual({ counter: 0, label: 'default' });
+  });
+
+  it('preserves state with schema-only (no initial) through the round-trip', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    const source = `
+const definition = {
+  id: 'state-no-initial',
+  name: 'State Without Initial',
+  root: { id: 'root', type: 'sequence', nodes: [] },
+  triggers: [],
+  scope: { type: 'global' },
+  state: {
+    schema: { type: 'object', properties: { items: { type: 'array' } } },
+  },
+};
+export default { definition, runtimeHandlers: new Map() };
+`;
+    const filePath = join(dir, 'state-no-initial.mjs');
+    await writeFile(filePath, source, 'utf8');
+
+    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
+
+    expect(loaded.definition.state).toBeDefined();
+    expect(loaded.definition.state!.schema).toEqual({
+      type: 'object',
+      properties: { items: { type: 'array' } },
+    });
+    expect(loaded.definition.state!.initial).toBeUndefined();
+  });
+
+  it('preserves state through inline source round-trip', async () => {
+    const source = `
+const definition = {
+  id: 'inline-stateful',
+  name: 'Inline Stateful',
+  root: { id: 'root', type: 'sequence', nodes: [] },
+  triggers: [],
+  scope: { type: 'global' },
+  state: {
+    schema: { type: 'object', properties: { done: { type: 'boolean' } } },
+    initial: { done: false },
+  },
+};
+export default { definition, runtimeHandlers: new Map() };
+`;
+
+    const loaded = await loadWorkflowModule({
+      kind: 'source',
+      filename: 'inline-stateful.mjs',
+      source,
+    });
+
+    expect(loaded.definition.state).toBeDefined();
+    expect(loaded.definition.state!.schema).toEqual({
+      type: 'object',
+      properties: { done: { type: 'boolean' } },
+    });
+    expect(loaded.definition.state!.initial).toEqual({ done: false });
+  });
+});
 
 describe('loadWorkflowModules', () => {
   describe('kind: path — single workflow', () => {
@@ -299,6 +409,33 @@ describe('loadWorkflowModules', () => {
       expect(loaded[0].runtimeHandlers.has('analyse')).toBe(true);
       expect(loaded[1].runtimeHandlers.has('patch')).toBe(true);
       expect(loaded[1].runtimeHandlers.has('commit')).toBe(true);
+    });
+
+    it('preserves state fields for workflows inside a bundle export', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const content = makeBundleModuleSource([
+        {
+          id: 'stateful-bundle-workflow',
+          stepIds: ['mutate-state'],
+          stateSource: `{
+            schema: { type: 'object', properties: { count: { type: 'number' } } },
+            initial: { count: 0 },
+          }`,
+        },
+      ]);
+      const filePath = join(dir, 'stateful-bundle-workflow.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const loaded = await loadWorkflowModules({ kind: 'path', path: filePath });
+      const workflow: RuntimeLoadedWorkflow = loaded[0];
+
+      expect(workflow.definition.state).toEqual({
+        schema: { type: 'object', properties: { count: { type: 'number' } } },
+        initial: { count: 0 },
+      });
     });
 
     it('propagates validation errors for invalid workflows inside a bundle', async () => {

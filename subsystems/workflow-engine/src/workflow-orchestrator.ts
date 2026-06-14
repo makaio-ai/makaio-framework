@@ -19,6 +19,7 @@ import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { buildResumeFrameIndex } from './runtime/resume-frames.js';
+import { persistLoadedExecutionStart } from './workflow-execution-start.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
@@ -409,7 +410,7 @@ function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: Workflo
     executionId: config.executionId,
     workflowId: config.workflowId,
     source: config.source,
-    ...(config.source.kind === 'definition' ? { definitionSnapshot: config.definition ?? definition } : {}),
+    definitionSnapshot: config.source.kind === 'definition' ? (config.definition ?? definition) : definition,
     workerManifest: { packages: [] },
     inputs: config.inputs,
     config: config.config ?? {},
@@ -518,8 +519,9 @@ async function emitTerminalExecutionEvent(
  *
  * ### Persistence contract
  * The caller MUST ensure a {@link WorkflowStorageSubjects} handler is registered
- * on the bus before calling this function. The orchestrator writes the initial
- * execution record; the runtime writes frame state on each transition.
+ * on the bus before calling this function. When `setExecutionStart` is
+ * available, the orchestrator checkpoints the loaded run context before
+ * scheduling nodes; the runtime writes frame state on each transition.
  * @param params - Orchestrator parameters including config, loaded workflow, bus, and signal.
  * @returns Workflow run result with status `completed`, `failed`, `cancelled`, or `paused`.
  */
@@ -531,20 +533,14 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     return persistPreRuntimeTerminalExecution(bus, config, 'cancelled', WORKFLOW_CANCELLED_REASON);
   }
 
-  if (definition.root.nodes.length === 0) {
-    return persistPreRuntimeTerminalExecution(bus, config, 'completed');
-  }
-
   const liveExecution = await buildRunningExecution(bus, config);
-
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
+  const runContext = buildWorkerRunContext(config, definition);
+  await persistLoadedExecutionStart(bus, liveExecution, runContext, definition);
 
   const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
-
-  const runContext = buildWorkerRunContext(config, definition);
 
   activeExecutions.set(config.executionId, {
     execution: liveExecution,
@@ -567,16 +563,18 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   let signalCancellationFinalized = false;
 
   try {
-    result = await runRuntimeSequence(
-      config,
-      definition,
-      liveExecution,
-      runContext,
-      runtimeHandlers,
-      bus,
-      signal,
-      loaded.zodSchemas,
-    );
+    if (definition.root.nodes.length > 0) {
+      result = await runRuntimeSequence(
+        config,
+        definition,
+        liveExecution,
+        runContext,
+        runtimeHandlers,
+        bus,
+        signal,
+        loaded.zodSchemas,
+      );
+    }
   } catch (error) {
     result = { status: 'failed', error: error instanceof Error ? error.message : String(error) };
   } finally {

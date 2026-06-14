@@ -23,4 +23,11 @@ export {
   workflowStepSpansDual,
   worklogSummariesDual,
   worklogFrameEntriesDual,
+  workflowExecutionStateDual,
+  workflowExecutionStateEventsDual,
 } from './storage/schema.js';
+export {
+  initializeWorkflowState,
+  getWorkflowState,
+  patchWorkflowState,
+} from './storage/state-handler.js';

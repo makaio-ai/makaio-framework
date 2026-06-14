@@ -34,6 +34,7 @@ export {
   WorkflowResolvedRoleSchema,
   WorkflowSequenceNodeSchema,
   WorkflowSourceLocationSchema,
+  WorkflowStateDefinitionSchema,
   WorkflowStationNodeSchema,
   WorkflowTriggerSchema,
 } from './schemas.js';
@@ -70,6 +71,7 @@ export type {
   WorkflowResolvedRole,
   WorkflowSequenceNode,
   WorkflowSourceLocation,
+  WorkflowStateDefinition,
   WorkflowStationNode,
   WorkflowTrigger,
 } from './schemas.js';
@@ -112,6 +114,8 @@ export {
   ExecutionLinkListQuerySchema,
 } from './span.js';
 export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink, ExecutionLinkListQuery } from './span.js';
+export { JsonPatchOperationSchema } from './json-patch.js';
+export type { JsonPatchOperation } from './json-patch.js';
 export {
   ArtifactQuerySourceSchema,
   BusRequestSourceSchema,
@@ -219,12 +223,15 @@ export type {
   ParallelOptions,
   PreviousStepOutput,
   StationHandler,
+  StationStepContext,
   StepContext,
   WebhookTriggerPayload,
   WorkflowBuilder,
   WorkflowContext,
   WorkflowContextBase,
   WorkflowProgressUpdate,
+  WorkflowStateAuthoringDefinition,
+  WorkflowStateContext,
   WorkflowTriggerDef,
   WorkflowZodSchemas,
 } from './authoring.js';
