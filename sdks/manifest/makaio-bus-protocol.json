@@ -1005,6 +1005,39 @@
       "local": false,
       "channel": false,
       "requestSchema": {
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ]
+          }
+        },
         "additionalProperties": false,
         "properties": {
           "adapterId": {
@@ -1044,7 +1077,9 @@
                 "type": "array"
               },
               "capabilities": {
-                "additionalProperties": {},
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
                 "propertyNames": {
                   "type": "string"
                 },

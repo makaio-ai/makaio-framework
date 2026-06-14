@@ -1165,6 +1165,11 @@ describe('executeDelegateNode', () => {
           providerConfigId: 'provider-config-review',
           definitionId: 'provider-definition-review',
           credentialRefs: {},
+          capabilities: {
+            structuredOutput: {
+              responseFormatWithTools: true,
+            },
+          },
         },
       });
     });
@@ -1248,6 +1253,11 @@ describe('executeDelegateNode', () => {
               providerConfigId: 'provider-config-review',
               definitionId: 'provider-definition-review',
               credentialRefs: {},
+              capabilities: {
+                structuredOutput: {
+                  responseFormatWithTools: true,
+                },
+              },
             },
           }),
         }),

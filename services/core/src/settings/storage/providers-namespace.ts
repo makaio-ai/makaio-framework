@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { createStorageNamespaceDefinition } from '@makaio/storage-core';
-import { AIModelSchema, ModelFilterModeSchema, ProtocolEndpointsSchema, ProtocolIdSchema } from '@makaio/contracts';
+import {
+  AIModelSchema,
+  ModelFilterModeSchema,
+  ProviderCapabilitiesSchema,
+  ProtocolEndpointsSchema,
+  ProtocolIdSchema,
+} from '@makaio/contracts';
 import { StorageIdRequestSchema } from './shared-schemas.js';
 
 /**
@@ -31,7 +37,7 @@ export const ProviderRecordSchema = z.object({
   /** Credential environment variable names — maps field names to env var names. */
   credentialEnvVars: z.record(z.string(), z.string()).optional(),
   /** Provider-declared capability hints, opaque to storage — interpreted by adapters. */
-  capabilities: z.record(z.string(), z.unknown()).optional(),
+  capabilities: ProviderCapabilitiesSchema.optional(),
   /** Whether this provider is enabled. */
   enabled: z.boolean(),
   /** Timestamp when record was created (Unix milliseconds). */

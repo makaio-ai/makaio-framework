@@ -8,9 +8,11 @@ export {
 export {
   ProtocolIdSchema,
   ProtocolEndpointsSchema,
+  ProviderCapabilitiesSchema,
   ProviderDefinitionSchema,
   type ProtocolId,
   type ProtocolEndpoints,
+  type ProviderCapabilities,
   type ProviderDefinition,
   type ProviderDefinitionInput,
 } from './definition.js';

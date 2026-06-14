@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { AIModelSchema } from '../model/schemas.js';
+import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { ModelFilterModeSchema } from './visibility.js';
 
 /**
@@ -44,6 +45,19 @@ export const ProtocolEndpointsSchema = z
  * Inferred type for a protocol-to-endpoint mapping.
  */
 export type ProtocolEndpoints = z.infer<typeof ProtocolEndpointsSchema>;
+
+/**
+ * Opaque provider-declared capability hints.
+ *
+ * Providers use this free-form bag for endpoint capability metadata that is
+ * interpreted by protocol adapters, not by the framework contract layer.
+ */
+export const ProviderCapabilitiesSchema = JsonObjectContractSchema;
+
+/**
+ * Inferred type for provider-declared capability hints.
+ */
+export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
 
 /**
  * Provider definition schema.
@@ -175,7 +189,7 @@ export const ProviderDefinitionSchema = z.object({
    * }
    * ```
    */
-  capabilities: z.record(z.string(), z.unknown()).optional(),
+  capabilities: ProviderCapabilitiesSchema.optional(),
 });
 
 /**

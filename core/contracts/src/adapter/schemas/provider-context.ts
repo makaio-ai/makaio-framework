@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ProtocolEndpointsSchema } from '../../provider/definition.js';
+import { ProtocolEndpointsSchema, ProviderCapabilitiesSchema } from '../../provider/definition.js';
 import { CredentialRefSchema } from '../../config/credential-ref.js';
 
 /**
@@ -44,7 +44,7 @@ export const ProviderContextSchema = z.object({
    * at the connector layer for feature detection (e.g., structured output
    * modes, tool-call semantics).
    */
-  capabilities: z.record(z.string(), z.unknown()).optional(),
+  capabilities: ProviderCapabilitiesSchema.optional(),
 });
 
 /**
