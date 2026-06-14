@@ -39,24 +39,6 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
 }
 
 /**
- * Unwrap transparent output-preserving schema layers before field compatibility checks.
- * @param schema - Field schema to inspect.
- * @returns Innermost field schema for common transparent wrappers.
- */
-function unwrapFieldSchema(schema: z.ZodType): z.ZodType {
-  let current = schema;
-  while (
-    current instanceof z.ZodOptional ||
-    current instanceof z.ZodNullable ||
-    current instanceof z.ZodDefault ||
-    current instanceof z.ZodReadonly
-  ) {
-    current = current.unwrap() as z.ZodType;
-  }
-  return current;
-}
-
-/**
  * Extract literal value descriptors from a Zod literal schema.
  * @param schema - Literal schema to inspect.
  * @returns Runtime value descriptors, or undefined when unavailable.
@@ -75,10 +57,18 @@ function literalValueDomain(schema: z.ZodLiteral): ReadonlySet<string> | undefin
  */
 function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
   const domain = new Set<string>();
-  if (schema instanceof z.ZodOptional) domain.add('undefined');
-  if (schema instanceof z.ZodNullable) domain.add('null');
+  let inner = schema;
+  while (
+    inner instanceof z.ZodOptional ||
+    inner instanceof z.ZodNullable ||
+    inner instanceof z.ZodDefault ||
+    inner instanceof z.ZodReadonly
+  ) {
+    if (inner instanceof z.ZodOptional) domain.add('undefined');
+    if (inner instanceof z.ZodNullable) domain.add('null');
+    inner = inner.unwrap() as z.ZodType;
+  }
 
-  const inner = unwrapFieldSchema(schema);
   if (inner instanceof z.ZodLiteral) {
     const literalDomain = literalValueDomain(inner);
     if (!literalDomain) return undefined;
@@ -90,8 +80,6 @@ function fieldValueDomain(schema: z.ZodType): ReadonlySet<string> | undefined {
   else if (inner instanceof z.ZodBoolean) domain.add('boolean');
   else if (inner instanceof z.ZodBigInt) domain.add('bigint');
   else if (inner instanceof z.ZodDate) domain.add('date');
-  else if (inner instanceof z.ZodArray) domain.add('array');
-  else if (inner instanceof z.ZodObject) domain.add('object');
   else return undefined;
 
   return domain;
