@@ -775,19 +775,36 @@ describe('workflow public subjects', () => {
       sessionLinks.push({ frameId: ctx.payload.frameId, sessionId: ctx.payload.sessionId });
     });
 
-    const completedPromise = new Promise<string>((resolve) => {
-      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
-        unsubscribe();
-        resolve(ctx.payload.executionId);
-      });
-    });
+    const terminalPromise = new Promise<{ executionId: string; status: 'completed' | 'failed'; error?: string }>(
+      (resolve) => {
+        const unsubscribers = [
+          MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+            resolve({ executionId: ctx.payload.executionId, status: 'completed' });
+          }),
+          MakaioBus.on(WorkflowSubjects.execution.failed, (ctx) => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+            resolve({ executionId: ctx.payload.executionId, status: 'failed', error: ctx.payload.error });
+          }),
+          MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+            resolve({ executionId: ctx.payload.executionId, status: 'failed', error: 'cancelled' });
+          }),
+        ];
+      },
+    );
 
     try {
       const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
         workflowId: workflow.id,
       });
 
-      await expect(completedPromise).resolves.toBe(executionId);
+      const terminal = await terminalPromise;
+      expect(terminal.executionId).toBe(executionId);
+      if (terminal.error !== undefined) {
+        throw new Error(terminal.error);
+      }
+      expect(terminal.status).toBe('completed');
 
       expect(sessionLinks).toEqual(
         expect.arrayContaining([

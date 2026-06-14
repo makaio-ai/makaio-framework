@@ -5,12 +5,10 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentResolutionSubjects, SessionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, AgentResolutionSubjects, ProviderContextSchema, SessionSubjects } from '@makaio/contracts';
 import type {
-  AdapterRuntimeOptions,
   AgentRole,
   AgentSelectionBase,
-  AIReasoningLevel,
   CompressionMode,
   MessageInput,
   ProviderContext,
@@ -19,10 +17,16 @@ import type {
 } from '@makaio/contracts';
 import { Turn } from '../entities/turn.js';
 import { activateProviderContext } from '../../provider-context/index.js';
-import { buildProviderContext, extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
+import { extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { TurnStorageSubjects } from '../turns/index.js';
+import { resolveAttachProviderSelection } from './attach-provider-selection.js';
+import {
+  extractRuntimeOptions,
+  mergeRuntimeOptions,
+  type ExtractableRuntimeOptions,
+} from './attach-runtime-options.js';
 
 /**
  * Registers the session.agent.attach RPC handler.
@@ -39,141 +43,155 @@ import { TurnStorageSubjects } from '../turns/index.js';
  * @returns Cleanup function to unsubscribe
  */
 export function registerAttachHandler(bus: IMakaioBus, activeTurns: Map<string, Turn>, machineId?: string): () => void {
-  return bus.on(SessionSubjects.agent.attach, async (ctx) => {
-    const { sessionId, agent: agentSelection, initialMessage, role: requestedRole } = ctx.payload;
-    const explicitRuntime = extractRuntimeOptions(agentSelection);
-
-    // Validate session before resolving any host-scoped selection state.
-    const session = await validateSession(bus, sessionId);
-
-    // Resolve agent selection: 'adapter' kind is handled inline; other kinds
-    // are delegated to the host-tier AgentResolutionSubjects.resolve handler.
-    // Project scope was removed from IMakaioSession in W1-A; host-tier handler
-    // resolves scope from its own junction table when needed.
-    const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
-
-    // Merge explicit runtime fields with resolved values, then resolve to a concrete adapterId.
-    const candidateAdapterName =
-      agentSelection.kind === 'adapter' && 'adapterName' in agentSelection
-        ? (agentSelection.adapterName as string | undefined)
-        : resolved?.adapterName;
-    // When the caller already knows the exact adapter instance (multi-host
-    // topology), bypass the name-based storage lookup entirely.
-    const candidateAdapterId =
-      agentSelection.kind === 'adapter' && 'adapterId' in agentSelection
-        ? (agentSelection.adapterId as string | undefined)
-        : undefined;
-
-    const { adapterName, adapterId } = await resolveAdapterTarget(
-      bus,
-      candidateAdapterName,
-      candidateAdapterId,
-      machineId,
-    );
-
-    const { providerConfigId: mergedProviderConfigId, providerContext } = await resolveAttachProviderSelection(
-      bus,
-      agentSelection.providerConfigId,
-      resolved,
-    );
-    const { runtimeOptions, mergedModel, mergedCwd } = mergeRuntimeOptions(explicitRuntime, resolved, providerContext);
-    const role = determineRole(session, requestedRole);
-    const resumeAdapterSessionId = resolveResumeAdapterSessionId(session);
-
-    const startAgentRequest = buildStartAgentRequest(
-      adapterId,
-      sessionId,
-      initialMessage,
-      role,
-      runtimeOptions,
-      resumeAdapterSessionId,
-      resolved?.harnessId,
-    );
-    if (providerContext !== undefined) {
-      await activateProviderContext(bus, providerContext);
-    }
-    const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
-
-    if (!startResult.success) {
-      throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);
-    }
-
-    // personaId is not in ResolvedAgentConfig — extract from the selection directly for kind: 'persona'.
-    const personaId =
-      agentSelection.kind === 'persona' ? (agentSelection as { personaId?: string }).personaId : undefined;
-
-    const now = Date.now();
-    await persistIdentityOrRollback(bus, startResult, {
-      adapterName,
-      sessionId,
-      role,
-      timestamp: now,
-      personaId,
-      profileId: resolved?.profileId,
-      harnessId: resolved?.harnessId,
-      providerConfigId: mergedProviderConfigId,
-      compressionMode: resolved?.compressionMode,
-      model: mergedModel,
-      cwd: mergedCwd,
-    });
-
-    const turnInfo =
-      initialMessage && startResult.messageId
-        ? await setupTurnTracking(
-            bus,
-            activeTurns,
-            sessionId,
-            startResult.agentId,
-            startResult.messageId,
-            initialMessage,
-          )
-        : undefined;
-
-    ctx.setResult({
-      agentId: startResult.agentId,
-      adapterSessionId: startResult.adapterSessionId,
-      role,
-      ...(turnInfo && { messageId: turnInfo.messageId, turnId: turnInfo.turnId }),
-    });
+  const attachCleanup = bus.on(SessionSubjects.agent.attach, async (ctx) => {
+    ctx.setResult(await attachAgent(bus, activeTurns, machineId, ctx.payload));
   });
+  const attachResolvedCleanup = bus.on(SessionSubjects.agent.attachResolved, async (ctx) => {
+    if (!ctx.origin.local) {
+      throw new Error('[attach-handler] session.agent.attachResolved requires a local-origin request');
+    }
+    ctx.setResult(
+      await attachAgent(bus, activeTurns, machineId, {
+        ...ctx.payload,
+        resolvedProviderContext:
+          ctx.payload.agent.providerContext === undefined
+            ? undefined
+            : ProviderContextSchema.parse(ctx.payload.agent.providerContext),
+      }),
+    );
+  });
+
+  return () => {
+    attachCleanup();
+    attachResolvedCleanup();
+  };
 }
 
-/** Runtime options plus model, providerContext, and reasoningEffort (top-level on startAgent but grouped here for convenience). */
-type ExtractableRuntimeOptions = Partial<
-  AdapterRuntimeOptions & {
-    adapterConfig: AgentSelectionBase['adapterConfig'];
-    env: AgentSelectionBase['env'];
-    mcpSessionContext: AgentSelectionBase['mcpSessionContext'];
-    model: string;
-    providerContext: ProviderContext;
-    reasoningEffort: AIReasoningLevel;
-  }
->;
+interface AttachAgentParams {
+  readonly sessionId: string;
+  readonly agent: AgentSelectionBase;
+  readonly initialMessage?: MessageInput;
+  readonly role?: AgentRole;
+  readonly resolvedProviderContext?: ProviderContext;
+}
 
-/** Result of merging explicit and resolved runtime options. */
-type MergedRuntimeOptions = {
-  runtimeOptions: ExtractableRuntimeOptions;
-  mergedModel: string | undefined;
-  mergedCwd: string | undefined;
-};
+interface AdapterCandidate {
+  readonly adapterName: string | undefined;
+  readonly adapterId: string | undefined;
+}
 
 /**
- * Extracts runtime options from agent selection base fields.
- * @param selection - Agent selection containing optional runtime override fields
- * @returns Filtered runtime options object
+ * Attach an agent to a session.
+ * @param bus - Bus instance for storage, resolution, and adapter startup
+ * @param activeTurns - Shared active-turn state for initial-message tracking
+ * @param machineId - Optional machine ID for deterministic adapter resolution
+ * @param params - Attach request fields plus optional resolved provider context
+ * @returns Attach response payload
  */
-function extractRuntimeOptions(selection: AgentSelectionBase): ExtractableRuntimeOptions {
+async function attachAgent(
+  bus: IMakaioBus,
+  activeTurns: Map<string, Turn>,
+  machineId: string | undefined,
+  params: AttachAgentParams,
+) {
+  const { sessionId, agent: agentSelection, initialMessage, role: requestedRole, resolvedProviderContext } = params;
+  const explicitRuntime = extractRuntimeOptions(agentSelection);
+  const session = await validateSession(bus, sessionId);
+
+  const resolved = await resolveAttachSelection(bus, sessionId, initialMessage, agentSelection);
+
+  const adapterCandidate = resolveAdapterCandidate(agentSelection, resolved);
+  const { adapterName, adapterId } = await resolveAdapterTarget(
+    bus,
+    adapterCandidate.adapterName,
+    adapterCandidate.adapterId,
+    machineId,
+  );
+
+  const { providerConfigId: mergedProviderConfigId, providerContext } = await resolveAttachProviderSelection(
+    bus,
+    agentSelection.providerConfigId,
+    resolved,
+    resolvedProviderContext,
+  );
+  const { runtimeOptions, mergedModel, mergedCwd } = mergeRuntimeOptions(explicitRuntime, resolved, providerContext);
+  const role = determineRole(session, requestedRole);
+  const resumeAdapterSessionId = resolveResumeAdapterSessionId(session);
+
+  const startAgentRequest = buildStartAgentRequest(
+    adapterId,
+    sessionId,
+    initialMessage,
+    role,
+    runtimeOptions,
+    resumeAdapterSessionId,
+    resolved?.harnessId,
+  );
+  if (providerContext !== undefined) {
+    await activateProviderContext(bus, providerContext);
+  }
+  const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
+
+  if (!startResult.success) {
+    throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);
+  }
+
+  const now = Date.now();
+  await persistIdentityOrRollback(bus, startResult, {
+    adapterName,
+    sessionId,
+    role,
+    timestamp: now,
+    personaId: getPersonaId(agentSelection),
+    profileId: resolved?.profileId,
+    harnessId: resolved?.harnessId,
+    providerConfigId: mergedProviderConfigId,
+    compressionMode: resolved?.compressionMode,
+    model: mergedModel,
+    cwd: mergedCwd,
+  });
+
+  const turnInfo =
+    initialMessage && startResult.messageId
+      ? await setupTurnTracking(bus, activeTurns, sessionId, startResult.agentId, startResult.messageId, initialMessage)
+      : undefined;
+
   return {
-    ...(selection.model !== undefined && { model: selection.model }),
-    ...(selection.reasoningEffort !== undefined && { reasoningEffort: selection.reasoningEffort }),
-    ...(selection.cwd !== undefined && { cwd: selection.cwd }),
-    ...(selection.allowedTools !== undefined && { allowedTools: selection.allowedTools }),
-    ...(selection.disallowedTools !== undefined && { disallowedTools: selection.disallowedTools }),
-    ...(selection.allowedDirectories !== undefined && { allowedDirectories: selection.allowedDirectories }),
-    ...(selection.env !== undefined && { env: selection.env }),
-    ...(selection.mcpSessionContext !== undefined && { mcpSessionContext: selection.mcpSessionContext }),
-    ...(selection.adapterConfig !== undefined && { adapterConfig: selection.adapterConfig }),
-    ...(selection.systemPrompt !== undefined && { systemPrompt: selection.systemPrompt }),
+    agentId: startResult.agentId,
+    adapterSessionId: startResult.adapterSessionId,
+    role,
+    ...(turnInfo && { messageId: turnInfo.messageId, turnId: turnInfo.turnId }),
+  };
+}
+
+/**
+ * Extract persona identity metadata from persona selections.
+ * @param selection - Agent selection used for attach startup
+ * @returns Persona identifier when the selection is persona-based
+ */
+function getPersonaId(selection: AgentSelectionBase): string | undefined {
+  return selection.kind === 'persona' ? (selection as { personaId?: string }).personaId : undefined;
+}
+
+/**
+ * Select explicit adapter fields before falling back to resolved agent metadata.
+ * @param selection - Agent selection from the attach request
+ * @param resolved - Host-resolved agent metadata, or null for direct adapter selections
+ * @returns Candidate adapter name and instance ID for runtime resolution
+ */
+function resolveAdapterCandidate(
+  selection: AgentSelectionBase,
+  resolved: ResolvedAgentConfig | null,
+): AdapterCandidate {
+  return {
+    adapterName:
+      selection.kind === 'adapter' && 'adapterName' in selection
+        ? (selection.adapterName as string | undefined)
+        : resolved?.adapterName,
+    adapterId:
+      selection.kind === 'adapter' && 'adapterId' in selection
+        ? (selection.adapterId as string | undefined)
+        : undefined,
   };
 }
 
@@ -255,74 +273,6 @@ async function resolveAttachSelection(
     selection,
     context: { sessionId, promptText },
   });
-}
-
-/**
- * Resolve the effective provider selection for attach-time agent startup.
- *
- * Converts the orchestration-level provider config ID into the runtime
- * provider execution context expected by the adapter boundary.
- * @param bus - Bus instance for provider resolution
- * @param explicitProviderConfigId - Provider config selected explicitly on the agent selection
- * @param resolved - Agent resolution result (persona/profile/virtualModel), or null for adapter kind
- * @returns Merged provider ID plus the resolved runtime provider context
- */
-async function resolveAttachProviderSelection(
-  bus: IMakaioBus,
-  explicitProviderConfigId: string | undefined,
-  resolved: ResolvedAgentConfig | null,
-): Promise<{ providerConfigId: string | undefined; providerContext: ProviderContext | undefined }> {
-  const providerConfigId = explicitProviderConfigId ?? resolved?.providerConfigId;
-  const providerContext =
-    providerConfigId !== undefined ? await buildProviderContext(bus, providerConfigId) : undefined;
-  return { providerConfigId, providerContext };
-}
-
-/**
- * Removes keys whose value is `undefined` from an object literal.
- *
- * Avoids inline `...(x !== undefined && { key: x })` spread patterns that each
- * increment ESLint's complexity counter.
- * @param obj - Object potentially containing `undefined` values
- * @returns A new object with all `undefined`-valued keys omitted
- */
-function omitUndefined<T extends object>(obj: T): Partial<T> {
-  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as Partial<T>;
-}
-
-/**
- * Merges explicit runtime options with resolved provider execution context and agent-selection values.
- * Explicit fields take precedence over resolved values.
- * Only defined values are included in the returned options object.
- * @param explicit - Runtime options extracted directly from the agent selection
- * @param resolved - Resolved agent config from host-tier resolution (may be null for adapter kind)
- * @param providerContext - Resolved provider execution context
- * @returns Merged runtime options plus merged model and cwd for identity persistence
- */
-function mergeRuntimeOptions(
-  explicit: ExtractableRuntimeOptions,
-  resolved: ResolvedAgentConfig | null,
-  providerContext: ProviderContext | undefined,
-): MergedRuntimeOptions {
-  const mergedModel = explicit.model ?? resolved?.model;
-  // cwd is explicit-only — ResolvedAgentConfig (persona/profile cascade) does
-  // not carry a cwd field. The project's targetWorkingDirectory is resolved
-  // separately by the orchestrator before attach.
-  const mergedCwd = explicit.cwd;
-  const runtimeOptions: ExtractableRuntimeOptions = omitUndefined({
-    model: mergedModel,
-    reasoningEffort: explicit.reasoningEffort ?? resolved?.reasoningEffort,
-    cwd: mergedCwd,
-    allowedTools: explicit.allowedTools ?? resolved?.allowedTools,
-    disallowedTools: explicit.disallowedTools ?? resolved?.disallowedTools,
-    allowedDirectories: explicit.allowedDirectories ?? resolved?.allowedDirectories,
-    env: explicit.env,
-    mcpSessionContext: explicit.mcpSessionContext,
-    adapterConfig: explicit.adapterConfig,
-    systemPrompt: explicit.systemPrompt ?? resolved?.systemPrompt,
-    providerContext,
-  });
-  return { runtimeOptions, mergedModel, mergedCwd };
 }
 
 /** Fields from the session record needed by the attach handler. */

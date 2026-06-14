@@ -40,6 +40,7 @@ import {
   resolveTargetAgents,
 } from './session-orchestrator-helpers-core.js';
 import type { Turn } from './entities/turn.js';
+import { registerAttachHandler } from './handlers/attach-handler.js';
 import { routeToAgentsCore } from './handlers/route-to-agents-core.js';
 import { activateProviderContext, buildProviderContext } from '../provider-context/index.js';
 
@@ -51,7 +52,7 @@ import { activateProviderContext, buildProviderContext } from '../provider-conte
  * adapter-subsystem reverse lookup for canonical `adapterId` to `adapterName`
  * validation when callers select a direct adapter instance.
  *
- * Registers the core `session.sendMessage` handler only:
+ * Registers the core session orchestration handlers:
  * 1. Get or create session (via `getOrCreateSession`)
  * 2. Start agent if session has no agents — resolves the canonical
  *    `adapterName` from direct selections, uses `adapterId` directly when
@@ -66,6 +67,9 @@ import { activateProviderContext, buildProviderContext } from '../provider-conte
  * 7. Emit `session.turn.started` + `session.user_message.sent`
  * 8. Route to agents (via `routeToAgentsCore`, single shared context)
  * 9. Return result with `messageId`, `turnId`, `sessionId`
+ *
+ * Explicit `session.agent.attach` handlers share the same turn manager so
+ * attach-time initial messages participate in the same completion lifecycle.
  *
  * Host-specific features (personas, MCP, execution targets, container spawn,
  * connector swap, CWD/model enforcement, fork context, TurnContextEnricher) are
@@ -97,6 +101,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
   ) {
     this.turnManager = new SessionTurnManager(bus);
     this.adapterRegistry = new AdapterRegistry(bus);
+    this.cleanups.push(registerAttachHandler(this.bus, this.turnManager.getActiveTurnsMap(), _machineId));
     this.registerSendMessageHandler();
     this.turnManager.registerCompletionHandlers(this.completeTurn.bind(this));
   }
@@ -167,6 +172,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             adapterKindSelection.providerConfigId !== undefined
               ? await buildProviderContext(this.bus, adapterKindSelection.providerConfigId)
               : undefined;
+          const providerConfigId = adapterKindSelection.providerConfigId ?? providerContext?.providerConfigId;
           if (providerContext !== undefined) {
             await activateProviderContext(this.bus, providerContext);
           }
@@ -213,17 +219,17 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             sessionId: resolvedSessionId,
             role: 'lead',
             status: 'idle',
-            ...(adapterKindSelection.providerConfigId !== undefined && {
-              providerConfigId: adapterKindSelection.providerConfigId,
+            ...(providerConfigId !== undefined && {
+              providerConfigId,
             }),
             createdAt: now,
             lastActivityAt: now,
           });
           session.leadAgentId = startResult.agentId;
-          if (adapterKindSelection.providerConfigId !== undefined) {
+          if (providerConfigId !== undefined) {
             await this.bus.requestOptional(AgentStorageSubjects.updateRuntime, {
               agentId: startResult.agentId,
-              providerConfigId: adapterKindSelection.providerConfigId,
+              providerConfigId,
             });
           }
         }

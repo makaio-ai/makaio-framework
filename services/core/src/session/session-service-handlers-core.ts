@@ -109,6 +109,7 @@ async function getStoredTurnCompletion(bus: IMakaioBus, sessionId: string, turnI
     turnNumber: turn.turnNumber,
     success: turn.status === 'completed',
     ...(turn.error !== undefined && { error: turn.error }),
+    ...(turn.usage !== undefined && { usage: turn.usage }),
     ...(turn.initiator !== undefined && { initiator: turn.initiator }),
   };
 }

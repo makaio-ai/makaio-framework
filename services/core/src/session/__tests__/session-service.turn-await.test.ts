@@ -89,6 +89,38 @@ describe('MakaioSessionService - turn await', () => {
     expect(bus.getContext().eventHandlers.has(getFullSubjectKey(SessionSubjects.turn.completed))).toBe(false);
   });
 
+  it('resolves from storage with persisted turn usage', async () => {
+    turnStorageCleanup = registerMemoryTurnStorage(bus);
+    const usage = {
+      total: { inputTokens: 120, outputTokens: 45 },
+      byAgent: { 'agent-a': { inputTokens: 120, outputTokens: 45 } },
+    };
+    const { turn } = await bus.request(TurnStorageSubjects.create, {
+      sessionId: 'session-await-completed-usage',
+    });
+    const { turn: completed } = await bus.request(TurnStorageSubjects.complete, {
+      turnId: turn.turnId,
+      status: 'completed',
+      usage,
+    });
+
+    await expect(
+      bus.request(SessionSubjects.turn.await, {
+        sessionId: completed.sessionId,
+        turnId: completed.turnId,
+        timeoutMs: 5,
+      }),
+    ).resolves.toEqual({
+      completion: {
+        sessionId: completed.sessionId,
+        turnId: completed.turnId,
+        turnNumber: completed.turnNumber,
+        success: true,
+        usage,
+      },
+    });
+  });
+
   it('does not invent an initiator for historical completed turns without one', async () => {
     turnStorageCleanup = registerMemoryTurnStorage(bus);
     const { turn } = await bus.request(TurnStorageSubjects.create, { sessionId: 'session-await-unknown-origin' });

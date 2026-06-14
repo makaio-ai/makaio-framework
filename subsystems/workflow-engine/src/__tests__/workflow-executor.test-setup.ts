@@ -3,6 +3,8 @@ import {
   AgentSubjects,
   AdapterSubjects,
   DEFAULT_CONSTRAINTS,
+  SessionNamespace,
+  SessionSubjects,
   SubagentConfigSchema,
   SubagentSubjects,
   type IWorkflowRunner,
@@ -14,6 +16,8 @@ import { ExecutionTargetSubjects } from '@makaio/services-core';
 import {
   registerMemorySessionStorage,
   registerMemorySessionEventStorage,
+  registerMemoryAgentStorage,
+  AgentStorageSubjects,
   MakaioSessionService,
   SessionOrchestrator,
 } from '@makaio/services-core/session';
@@ -30,13 +34,45 @@ export interface WorkflowExecutorTestSetup {
 }
 
 function registerAdapterStartHandler(): () => void {
-  return MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+  return MakaioBus.on(AdapterSubjects.startAgent, async (ctx) => {
+    const now = Date.now();
+    const agentId = `agent-${Math.random().toString(36).slice(2)}`;
+    const adapterSessionId = `adapter-session-${Math.random().toString(36).slice(2)}`;
+    const sessionId = ctx.payload.sessionId ?? 'session-missing';
+    await MakaioBus.request(AgentStorageSubjects.set, {
+      agentId,
+      agent: {
+        agentId,
+        adapterId: ctx.payload.adapterId,
+        adapterName: 'workflow-test-adapter',
+        sessionId,
+        role: ctx.payload.role ?? 'lead',
+        status: 'idle',
+        createdAt: now,
+        lastActivityAt: now,
+        ...(ctx.payload.model !== undefined && { model: ctx.payload.model }),
+        ...(ctx.payload.cwd !== undefined && { cwd: ctx.payload.cwd }),
+        ...(ctx.payload.providerContext !== undefined && {
+          providerConfigId: ctx.payload.providerContext.providerConfigId,
+        }),
+      },
+    });
+    await MakaioBus.emit(SessionSubjects.agent.added, {
+      sessionId,
+      adapterSessionId,
+      agentId,
+      adapterId: ctx.payload.adapterId,
+      adapterName: 'workflow-test-adapter',
+      role: ctx.payload.role ?? 'lead',
+      ...(ctx.payload.model !== undefined && { model: ctx.payload.model }),
+      ...(ctx.payload.cwd !== undefined && { cwd: ctx.payload.cwd }),
+    });
     ctx.setResult({
       success: true,
-      agentId: `agent-${Math.random().toString(36).slice(2)}`,
+      agentId,
       adapterId: ctx.payload.adapterId,
-      adapterSessionId: `adapter-session-${Math.random().toString(36).slice(2)}`,
-      sessionId: ctx.payload.sessionId ?? 'session-missing',
+      adapterSessionId,
+      sessionId,
       messageId: `message-${Math.random().toString(36).slice(2)}`,
     });
   });
@@ -164,12 +200,14 @@ export async function setupWorkflowExecutorTest(
   options: { readonly workflowRunner?: IWorkflowRunner; readonly initExecutor?: boolean } = {},
 ): Promise<WorkflowExecutorTestSetup> {
   MakaioBus.__resetHandlers?.();
+  MakaioBus.registerNamespace(SessionNamespace);
 
   const cleanupFns: Array<() => void> = [];
   const dbContext = await createTestDb();
 
   cleanupFns.push(registerMemorySessionStorage(MakaioBus));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
+  cleanupFns.push(registerMemoryAgentStorage(MakaioBus));
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();

@@ -76,6 +76,13 @@ Standalone factory functions (`station`, `delegateToAgent`, `delegateToRole`, `g
 `iterate`, `iterateChain`) create nodes for embedding inside `.parallel()` or
 `.iterateChain()` calls. They carry the same options as their builder-method counterparts.
 
+Station-owned child sessions that are not semantically subagents should use the existing
+session branch semantics. Use `branchKind: 'branch'` for generic workflow/station child
+sessions and identify the owning workflow frame through `WorkflowSubjects.frame.sessionLinked`
+or explicit session metadata. `BranchKind` describes session lifecycle semantics;
+product-specific station identity belongs in frame links or metadata rather than a new branch
+kind.
+
 ---
 
 ## Authoring API
@@ -175,8 +182,19 @@ at runtime to determine the concrete agent configuration.
 ```typescript
 workflow.delegateToRole('implement', 'implementer', {
   prompt: 'Implement the plan described in {{ input.description }}',
+  outputSchema: {
+    type: 'object',
+    properties: { summary: { type: 'string' } },
+    required: ['summary'],
+  },
+  timeoutMs: 300_000,
+  completion: 'turn',
 });
 ```
+
+`outputSchema` is a JSON Schema record forwarded to structured-output capable adapters.
+`timeoutMs` bounds the delegated execution. `completion: 'turn'` completes when the delegated
+agent's first turn finishes; omit it to use the default tool-completion contract.
 
 ### `.parallel(id, options, branches)`
 

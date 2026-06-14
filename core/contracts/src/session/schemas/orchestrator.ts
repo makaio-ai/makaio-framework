@@ -4,9 +4,10 @@ import {
   AgentSelectionBaseSchema,
   AgentSelectionSchema,
 } from '../../adapter/schemas/agent-resolution.js';
+import { ProviderContextSchema } from '../../adapter/schemas/provider-context.js';
 import { CanonicalModelSelectionSchema } from '../../canonical-model/selection.js';
 import { MessageInputSchema, MessageOutcomeSchema, ResponseSchemaDescriptorSchema } from '../../shared/index.js';
-import type { SchemaRecord } from '@makaio/core';
+import { localSubject, type SchemaRecord } from '@makaio/core';
 import { SessionContextSchema } from '../session-context.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { SessionMessageOriginSchema, TurnInitiatorSchema, TurnUsageSchema } from './message.js';
@@ -63,6 +64,35 @@ const SessionAgentSelectionSchema = z.union([
   SessionCustomAgentSelectionSchema,
 ]);
 
+const ResolvedAdapterAgentSelectionSchema = AdapterSelectionSchema.extend({
+  /** Already resolved provider execution context for local framework-internal startup paths. */
+  providerContext: ProviderContextSchema.optional(),
+});
+
+const AgentAttachResolvedRequestSchema = z.object({
+  /** Target session (required). */
+  sessionId: z.string(),
+  /** Direct adapter selection plus optional resolved provider context. */
+  agent: ResolvedAdapterAgentSelectionSchema,
+  /** Initial message to send (optional — can attach without sending). */
+  initialMessage: MessageInputSchema.optional(),
+  /** Agent role. Default: 'lead' if no agents exist, else 'member'. */
+  role: z.enum(['lead', 'member']).optional(),
+});
+
+const AgentAttachResolvedResponseSchema = z.object({
+  /** Created agent ID */
+  agentId: z.string(),
+  /** Adapter's own session ID */
+  adapterSessionId: z.string(),
+  /** Assigned role */
+  role: z.enum(['lead', 'member']),
+  /** Message ID if initialMessage was provided */
+  messageId: z.string().optional(),
+  /** Turn ID if initialMessage was provided */
+  turnId: z.string().optional(),
+});
+
 /**
  * Orchestrator schemas for turn lifecycle and user message routing.
  *
@@ -86,7 +116,9 @@ export const OrchestratorSchemas = {
    *
    * `responseSchema.schema` is a JSON Schema document serialized as a
    * JSON-safe `Record<string, JsonValue>` so it can cross bus, storage, and
-   * provider adapter boundaries without runtime-only values.
+   * provider adapter boundaries without runtime-only values. Pass structured
+   * output constraints as `{ schema, name?, strict? }`; raw JSON Schema
+   * documents are intentionally not accepted at this session boundary.
    * @example
    * ```typescript
    * // Start new conversation (client generates sessionId)
@@ -257,6 +289,19 @@ export const OrchestratorSchemas = {
   },
 
   /**
+   * Attach an adapter agent with an already resolved provider context.
+   *
+   * Local-only internal seam for framework runtimes that resolve provider
+   * credentials/endpoints before delegating to the session subsystem. Public
+   * callers must use `agent.attach`/`sendMessage` with `providerConfigId` so
+   * session startup performs provider resolution itself.
+   */
+  'agent.attachResolved': localSubject({
+    request: AgentAttachResolvedRequestSchema,
+    response: AgentAttachResolvedResponseSchema,
+  }),
+
+  /**
    * Turn started.
    *
    * Subject: `session.turn.started`
@@ -283,6 +328,8 @@ export const OrchestratorSchemas = {
    * - success=true: all agents completed with outcome='completed'
    * - success=false: any agent had outcome='error'
    * - cancelled/superseded/merged outcomes are neutral (not errors)
+   * - usage is present when agents emitted token usage before the turn
+   *   completed; absence means unknown usage, not zero usage
    */
   'turn.completed': TurnCompletedEventSchema,
 
@@ -292,8 +339,11 @@ export const OrchestratorSchemas = {
    * Subject: `session.turn.await`
    * Type: Request (RPC)
    *
-   * Resolves with the matching `session.turn.completed` payload. The timeout is
-   * required so callers cannot accidentally create an unbounded wait.
+   * Resolves with the matching `session.turn.completed` payload. The
+   * completion payload is the canonical live read path for turn usage keyed by
+   * `sessionId` and `turnId`; `usage` is omitted when the adapter did not
+   * report token counts. The timeout is required so callers cannot accidentally
+   * create an unbounded wait.
    */
   'turn.await': {
     request: z.object({
@@ -424,6 +474,8 @@ export type SendMessageRequest = z.infer<typeof OrchestratorSchemas.sendMessage.
 export type SendMessageResponse = z.infer<typeof OrchestratorSchemas.sendMessage.response>;
 export type AgentAttachRequest = z.infer<(typeof OrchestratorSchemas)['agent.attach']['request']>;
 export type AgentAttachResponse = z.infer<(typeof OrchestratorSchemas)['agent.attach']['response']>;
+export type AgentAttachResolvedRequest = z.infer<typeof AgentAttachResolvedRequestSchema>;
+export type AgentAttachResolvedResponse = z.infer<typeof AgentAttachResolvedResponseSchema>;
 export type TurnStarted = z.infer<(typeof OrchestratorSchemas)['turn.started']>;
 export type TurnCompleted = z.infer<(typeof OrchestratorSchemas)['turn.completed']>;
 export type TurnAwaitRequest = z.infer<(typeof OrchestratorSchemas)['turn.await']['request']>;

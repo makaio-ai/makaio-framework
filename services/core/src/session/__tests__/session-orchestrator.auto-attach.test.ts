@@ -92,6 +92,39 @@ describe('SessionOrchestrator - Auto-attach', () => {
   });
 
   describe('should auto-attach agent when session has no agents', () => {
+    it('registers attachResolved with the framework orchestrator lifecycle', async () => {
+      const sessionId = 'session-attach-resolved';
+      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+
+      let receivedPayload: { adapterId: string; sessionId: string } | undefined;
+      unsubscribers.push(
+        registerStartAgentHandler((payload) => {
+          receivedPayload = { adapterId: payload.adapterId, sessionId: payload.sessionId };
+        }),
+      );
+
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      await emitAdapterInitialized('my-adapter');
+
+      const result = await MakaioBus.requestOptional(SessionSubjects.agent.attachResolved, {
+        sessionId,
+        role: 'lead',
+        agent: { kind: 'adapter', adapterName: 'my-adapter' },
+      });
+
+      expect(result).toEqual({
+        handled: true,
+        data: expect.objectContaining({
+          role: 'lead',
+          adapterSessionId: `adapter-session-${sessionId}`,
+        }),
+      });
+      expect(receivedPayload).toEqual({
+        adapterId: buildDeterministicAdapterId('test-machine', 'my-adapter'),
+        sessionId,
+      });
+    });
+
     it('calls adapter.startAgent when session exists but has no agents', async () => {
       // Setup: session with no agents
       const sessionId = 'session-empty';
@@ -229,6 +262,83 @@ describe('SessionOrchestrator - Auto-attach', () => {
       });
       expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBe(providerConfigId);
       expect(runtimeUpdates).toEqual([{ agentId: startedAgentId, providerConfigId }]);
+    });
+
+    it('does not trust loose providerContext fields on public sendMessage', async () => {
+      const sessionId = 'session-provider-context-direct';
+      const providerContext = {
+        providerConfigId: 'provider-config-direct',
+        definitionId: 'provider-def-direct',
+        endpointOverrides: { anthropic: 'https://provider.example/chat' },
+        credentialRefs: { apiKey: buildStoredCredentialRef('provider-config-direct', 'apiKey') },
+      };
+      sessions.set(sessionId, createMockSession({ sessionId, agents: [] }));
+
+      const runtimeUpdates: Array<{ agentId: string; providerConfigId?: string }> = [];
+      let receivedPayload: Record<string, unknown> | undefined;
+      let buildProviderContextCalled = false;
+      let credentialActivated = false;
+      let startedAgentId: string | undefined;
+
+      unsubscribers.push(
+        MakaioBus.on(AdapterSubsystemSubjects.buildProviderContext, (ctx) => {
+          buildProviderContextCalled = true;
+          ctx.setResult({
+            context: {
+              providerConfigId: ctx.payload.providerConfigId,
+              definitionId: 'unexpected-provider-def',
+              credentialRefs: {},
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(CredentialSubjects.activate, (ctx) => {
+          credentialActivated = true;
+          ctx.setResult({});
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(AdapterSubjects.startAgent, (ctx) => {
+          receivedPayload = ctx.payload as Record<string, unknown>;
+          const agentId = `agent-${crypto.randomUUID().slice(0, 8)}`;
+          startedAgentId = agentId;
+          const adapterSessionId = `adapter-session-${sessionId}`;
+          ctx.setResult({
+            success: true as const,
+            agentId,
+            adapterId: ctx.payload.adapterId,
+            adapterSessionId,
+            sessionId,
+          });
+          emitAgentAdded({ sessionId, agentId, adapterId: ctx.payload.adapterId, adapterSessionId });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(AgentStorageSubjects.updateRuntime, (ctx) => {
+          runtimeUpdates.push({
+            agentId: ctx.payload.agentId,
+            providerConfigId: ctx.payload.providerConfigId,
+          });
+          ctx.setResult({ success: true });
+        }),
+      );
+
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+      await emitAdapterInitialized('test-adapter');
+
+      await MakaioBus.request(SessionSubjects.sendMessage, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName: 'test-adapter', providerContext },
+        message: 'Hello!',
+      });
+
+      expect(buildProviderContextCalled).toBe(false);
+      expect(credentialActivated).toBe(false);
+      expect(receivedPayload).not.toHaveProperty('providerContext');
+      expect(sessions.get(sessionId)?.agents[0]?.providerConfigId).toBeUndefined();
+      expect(startedAgentId).toBeDefined();
+      expect(runtimeUpdates).toEqual([]);
     });
 
     it('backfills adapterName from adapterId when the direct selection omits adapterName', async () => {

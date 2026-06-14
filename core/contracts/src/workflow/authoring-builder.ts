@@ -31,6 +31,12 @@ export interface NodeOptions {
 export type DelegateToRoleOptions = NodeOptions & {
   /** Prompt text passed to the role subagent. Defaults to the node ID. */
   readonly prompt?: string;
+  /**
+   * JSON Schema for the expected role delegation output.
+   */
+  readonly outputSchema?: Record<string, JsonValue>;
+  /** Timeout in milliseconds for the delegated role execution. */
+  readonly timeoutMs?: number;
   /** Completion behavior requested from the spawned role subagent. */
   readonly completion?: CompletionMode;
 };
@@ -308,7 +314,7 @@ export interface WorkflowBuilder<TTrigger = never> extends BuiltWorkflow {
    * Appends a delegate-role node to the root sequence.
    * @param id - Unique node identifier
    * @param role - Named product role to delegate to
-   * @param options - Optional node conditions; `prompt` defaults to the node ID
+   * @param options - Optional node conditions and role delegation settings; `prompt` defaults to the node ID
    * @returns This builder for chaining
    */
   delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowBuilder<TTrigger>;

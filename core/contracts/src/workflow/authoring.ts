@@ -362,6 +362,8 @@ function attachNodeBuilderMethods<TTriggerPayload>(
       prompt: nodeOptions?.prompt ?? nodeId,
       ...(nodeOptions?.when !== undefined && { when: nodeOptions.when }),
       ...(nodeOptions?.skip !== undefined && { skip: nodeOptions.skip }),
+      ...(nodeOptions?.outputSchema !== undefined && { outputSchema: nodeOptions.outputSchema }),
+      ...(nodeOptions?.timeoutMs !== undefined && { timeoutMs: nodeOptions.timeoutMs }),
       ...(nodeOptions?.completion !== undefined && { completion: nodeOptions.completion }),
     } as WorkflowDelegateRoleNode);
     return builder;

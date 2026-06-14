@@ -1147,6 +1147,7 @@ describe('executeDelegateNode', () => {
     };
     const ctx = makeCtx({});
     const createdSessions: unknown[] = [];
+    const attachedAgents: unknown[] = [];
     const sentMessages: unknown[] = [];
     const awaitedTurns: unknown[] = [];
     const closedSessions: unknown[] = [];
@@ -1168,6 +1169,14 @@ describe('executeDelegateNode', () => {
     const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
       createdSessions.push(requestCtx.payload);
       requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
+    });
+    const unsubscribeAttach = ctx.bus.on(SessionSubjects.agent.attach, (requestCtx) => {
+      attachedAgents.push(requestCtx.payload);
+      requestCtx.setResult({
+        agentId: 'agent-review-delegate',
+        adapterSessionId: 'adapter-session-review-delegate',
+        role: 'lead',
+      });
     });
     const unsubscribeSendMessage = ctx.bus.on(SessionSubjects.sendMessage, async (requestCtx) => {
       sentMessages.push(requestCtx.payload);
@@ -1222,12 +1231,10 @@ describe('executeDelegateNode', () => {
           title: "Workflow delegate-role 'review-delegate'",
         }),
       ]);
-      expect(sentMessages).toEqual([
+      expect(attachedAgents).toEqual([
         expect.objectContaining({
           sessionId: expect.any(String),
-          message: 'Review workflow runtime',
-          responseSchema: { schema: { type: 'object' } },
-          source: 'system',
+          role: 'lead',
           agent: expect.objectContaining({
             kind: 'adapter',
             adapterName: 'claude-code',
@@ -1238,6 +1245,15 @@ describe('executeDelegateNode', () => {
           }),
         }),
       ]);
+      expect(sentMessages).toEqual([
+        expect.objectContaining({
+          sessionId: expect.any(String),
+          message: 'Review workflow runtime',
+          responseSchema: { schema: { type: 'object' } },
+          source: 'system',
+        }),
+      ]);
+      expect(sentMessages[0]).not.toHaveProperty('agent');
       expect(awaitedTurns).toEqual([
         {
           sessionId: expect.any(String),
@@ -1249,8 +1265,61 @@ describe('executeDelegateNode', () => {
     } finally {
       unsubscribeRole();
       unsubscribeCreate();
+      unsubscribeAttach();
       unsubscribeSendMessage();
       unsubscribeTurnAwait();
+      unsubscribeClose();
+    }
+  });
+
+  it('closes delegate-role child sessions when attach is unavailable', async () => {
+    const node: WorkflowDelegateRoleNode = {
+      id: 'review-delegate-unavailable',
+      type: 'delegate-role',
+      role: 'reviewer',
+      prompt: 'Review {{ ctx.inputs.title }}',
+      completion: 'turn',
+    };
+    const ctx = makeCtx({});
+    const closedSessions: unknown[] = [];
+
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({
+        adapterName: 'claude-code',
+        model: 'sonnet',
+      });
+    });
+    const unsubscribeCreate = ctx.bus.on(SessionSubjects.create, (requestCtx) => {
+      requestCtx.setResult({ sessionId: requestCtx.payload.sessionId ?? 'workflow-session-review-delegate' });
+    });
+    const unsubscribeClose = ctx.bus.on(SessionSubjects.close, (requestCtx) => {
+      closedSessions.push(requestCtx.payload);
+      requestCtx.setResult({ success: true });
+    });
+
+    try {
+      const outcome = await executeDelegateRoleNode(
+        node,
+        ctx,
+        {
+          ...emptyExpressionCtx,
+          inputs: { title: 'workflow runtime' },
+        },
+        'frame-review-delegate-unavailable',
+      );
+
+      expect(outcome).toEqual({
+        status: 'failed',
+        error: "Session runtime cannot attach delegate-role node 'review-delegate-unavailable'",
+      });
+      expect(closedSessions).toEqual([
+        {
+          sessionId: expect.stringContaining('review-delegate-unavailable'),
+        },
+      ]);
+    } finally {
+      unsubscribeRole();
+      unsubscribeCreate();
       unsubscribeClose();
     }
   });

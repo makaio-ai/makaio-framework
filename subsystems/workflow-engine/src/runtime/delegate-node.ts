@@ -194,7 +194,6 @@ async function executeDelegateRoleSessionTurn(
     return await runDelegateRoleSessionTurn(params, ctx, {
       abortLink,
       childSessionId,
-      role: params.resolvedRole,
       timeoutMs,
     });
   } catch (error) {
@@ -242,13 +241,33 @@ async function startDelegateRoleSession(
 
   const sessionId = createResult.data.sessionId;
   await emitDelegateRoleSessionLink(params, ctx, sessionId);
+  const attachResult = await ctx.bus
+    .requestOptional(
+      SessionSubjects.agent.attach,
+      {
+        sessionId,
+        agent: buildDelegateRoleAgentSelection(params.resolvedRole),
+        role: 'lead',
+      },
+      { signal: ctx.signal },
+    )
+    .catch(async (error: unknown) => {
+      await closeDelegateRoleSession(ctx, params.node.id, sessionId);
+      throw error;
+    });
+  if (!attachResult.handled) {
+    await closeDelegateRoleSession(ctx, params.node.id, sessionId);
+    return {
+      status: 'failed',
+      error: `Session runtime cannot attach delegate-role node '${params.node.id}'`,
+    };
+  }
   return { sessionId };
 }
 
 interface DelegateRoleSessionTurnRuntime {
   readonly abortLink: LinkedAbortSignal;
   readonly childSessionId: string;
-  readonly role: WorkflowResolvedRole;
   readonly timeoutMs: number;
 }
 
@@ -311,7 +330,6 @@ async function sendDelegateRoleMessage(
     {
       sessionId: runtime.childSessionId,
       message: params.task,
-      agent: buildDelegateRoleAgentSelection(runtime.role),
       ...(params.outputSchema !== undefined ? { responseSchema: params.outputSchema } : {}),
       source: 'system',
     },
@@ -379,9 +397,13 @@ function buildDelegateRoleSessionId(ctx: RuntimeContext, params: DelegateRoleSes
 }
 
 /**
- * Convert the resolved workflow role to the adapter selection accepted by session.sendMessage.
+ * Convert the resolved workflow role to the public adapter selection accepted by session.agent.attach.
+ *
+ * Resolved provider contexts are intentionally reduced to their public
+ * `providerConfigId`; the host session runtime rebuilds the provider context
+ * on the side that owns credentials and adapter startup.
  * @param role - Workflow role resolution result.
- * @returns Direct adapter selection for the session orchestrator.
+ * @returns Direct adapter selection for the session orchestrator attach RPC.
  */
 function buildDelegateRoleAgentSelection(role: WorkflowResolvedRole): AdapterSelection {
   return {
