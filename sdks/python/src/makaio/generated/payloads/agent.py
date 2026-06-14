@@ -333,6 +333,7 @@ class AgentModelChangeRequestProviderContext:
     definition_id: str
     provider_config_id: str
     ambient_credential_env_vars: list[str] | None = None
+    capabilities: dict[str, Any] | None = None
     credential_env_vars: dict[str, Any] | None = None
     endpoint_overrides: AgentModelChangeRequestProviderContextEndpointOverrides | None = None
 

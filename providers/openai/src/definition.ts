@@ -17,4 +17,7 @@ export const providerDefinition: ProviderDefinitionInput = {
   defaultModel: 'gpt-5.2',
   fastModel: 'gpt-5.4-mini',
   credentialEnvVars: { apiKey: 'OPENAI_API_KEY' },
+  capabilities: {
+    structuredOutput: { responseFormatWithTools: true, strict: true },
+  },
 };

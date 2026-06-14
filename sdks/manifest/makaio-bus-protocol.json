@@ -1043,6 +1043,13 @@
                 },
                 "type": "array"
               },
+              "capabilities": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
               "credentialEnvVars": {
                 "additionalProperties": {
                   "type": "string"

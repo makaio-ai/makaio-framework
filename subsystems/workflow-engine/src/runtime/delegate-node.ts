@@ -3,6 +3,7 @@ import {
   AgentSubjects,
   SessionSubjects,
   type AdapterSelection,
+  type ProviderContext,
   type ResponseSchemaDescriptor,
   type WorkflowDelegateAgentNode,
   type WorkflowDelegateRoleNode,
@@ -243,7 +244,7 @@ async function startDelegateRoleSession(
   await emitDelegateRoleSessionLink(params, ctx, sessionId);
   const attachResult = await ctx.bus
     .requestOptional(
-      SessionSubjects.agent.attach,
+      SessionSubjects.agent.attachResolved,
       {
         sessionId,
         agent: buildDelegateRoleAgentSelection(params.resolvedRole),
@@ -397,22 +398,34 @@ function buildDelegateRoleSessionId(ctx: RuntimeContext, params: DelegateRoleSes
 }
 
 /**
- * Convert the resolved workflow role to the public adapter selection accepted by session.agent.attach.
+ * Convert the resolved workflow role to the adapter selection accepted by
+ * `session.agent.attachResolved`.
  *
- * Resolved provider contexts are intentionally reduced to their public
- * `providerConfigId`; the host session runtime rebuilds the provider context
- * on the side that owns credentials and adapter startup.
+ * The full `providerContext` is forwarded via the local-only `attachResolved`
+ * seam so the session orchestrator can short-circuit the config-store lookup.
+ * This avoids unnecessary round-trips through the Adapter Subsystem config
+ * store, which may not have the provider config registered in headless or
+ * embedded deployments. The `providerConfigId` is still set on the selection
+ * for storage and tracking purposes.
  * @param role - Workflow role resolution result.
- * @returns Direct adapter selection for the session orchestrator attach RPC.
+ * @returns Adapter selection with optional resolved provider context for the
+ *   `attachResolved` local seam.
  */
-function buildDelegateRoleAgentSelection(role: WorkflowResolvedRole): AdapterSelection {
+function buildDelegateRoleAgentSelection(
+  role: WorkflowResolvedRole,
+): AdapterSelection & { providerContext?: ProviderContext } {
   return {
     kind: 'adapter',
     adapterName: role.adapterName,
     ...(role.model !== undefined ? { model: role.model } : {}),
     ...(role.reasoningEffort !== undefined ? { reasoningEffort: role.reasoningEffort } : {}),
     ...(role.systemPrompt !== undefined ? { systemPrompt: role.systemPrompt } : {}),
-    ...(role.providerContext !== undefined ? { providerConfigId: role.providerContext.providerConfigId } : {}),
+    ...(role.providerContext !== undefined
+      ? {
+          providerConfigId: role.providerContext.providerConfigId,
+          providerContext: role.providerContext,
+        }
+      : {}),
   };
 }
 

@@ -9,6 +9,22 @@ import { fetchToolsForOpenAI } from './tool-handling.js';
 import { OpenAIConnectorSession } from './session.js';
 import { DEFAULT_MODEL } from './constants.js';
 
+/**
+ * Typed narrow-cast of the opaque provider `capabilities` bag
+ * for OpenAI-protocol providers.
+ *
+ * Adapters read this from `providerContext.capabilities` to detect
+ * structured output features without maintaining hardcoded provider ID sets.
+ */
+interface OpenAIProviderCapabilities {
+  structuredOutput?: {
+    /** Whether `response_format: json_schema` can be sent alongside `tools`. */
+    responseFormatWithTools?: boolean;
+    /** Whether `strict: true` is accepted on `json_schema` response format payloads. */
+    strict?: boolean;
+  };
+}
+
 /** Default adapter identifier for standalone OpenAINodeAgent instances (without adapter layer) */
 const defaultAdapterId = crypto.randomUUID();
 
@@ -122,6 +138,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       throw new Error('[OpenAINodeConnector] createSession() called before fetchTools() — client not initialized');
     }
     const systemPrompt = this.resolveSystemPrompt();
+    const caps = this.config.providerContext?.capabilities as OpenAIProviderCapabilities | undefined;
 
     return new OpenAIConnectorSession({
       bus: this.config.bus,
@@ -137,6 +154,12 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       client: this.client,
       openAITools: this.openAITools,
       systemPrompt,
+      supportsResponseFormatWithTools:
+        this.config.providerConfig?.supportsResponseFormatWithTools ??
+        caps?.structuredOutput?.responseFormatWithTools ??
+        false,
+      supportsStructuredOutputStrict:
+        this.config.providerConfig?.supportsStructuredOutputStrict ?? caps?.structuredOutput?.strict ?? false,
       allowedDirectories: this.config.allowedDirectories,
       supportedReasoningLevels: this.config.supportedReasoningLevels,
       emitSdkEvent: this.emitSdkEvent.bind(this),

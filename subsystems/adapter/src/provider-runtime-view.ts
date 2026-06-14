@@ -30,6 +30,7 @@ export async function buildProviderContextFromRaw(
     credentialRefs: brandCredentialRecord(raw.credentials) ?? {},
     ...(provider.credentialEnvVars ? { credentialEnvVars: { ...provider.credentialEnvVars } } : {}),
     ...(ambientCredentialEnvVars.length > 0 ? { ambientCredentialEnvVars } : {}),
+    ...(provider.capabilities ? { capabilities: provider.capabilities } : {}),
   };
 }
 

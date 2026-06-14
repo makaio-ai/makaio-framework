@@ -156,6 +156,26 @@ export const ProviderDefinitionSchema = z.object({
    * @example `{ apiKey: 'ANTHROPIC_API_KEY' }` or `{ token: 'COPILOT_TOKEN' }`
    */
   credentialEnvVars: z.record(z.string(), z.string()).optional(),
+
+  /**
+   * Free-form bag of protocol-specific capability hints.
+   *
+   * Opaque to the framework — adapters narrow-cast to protocol-specific types
+   * at the connector layer. Provider packages declare capabilities that their
+   * endpoints natively support (e.g., structured output modes, tool-call
+   * features) so adapters can select the optimal code path without maintaining
+   * hardcoded provider ID sets.
+   * @example OpenAI structured output capabilities
+   * ```ts
+   * {
+   *   structuredOutput: {
+   *     responseFormatWithTools: true,
+   *     strict: true,
+   *   },
+   * }
+   * ```
+   */
+  capabilities: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
