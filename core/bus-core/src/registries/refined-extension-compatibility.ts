@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const refinedObjectBaseFieldKeys = new WeakMap<z.ZodObject<z.ZodRawShape>, ReadonlySet<string>>();
+const refinedObjectBaseFields = new WeakMap<z.ZodObject<z.ZodRawShape>, ReadonlyMap<string, z.ZodType>>();
 
 /**
  * Extract literal value descriptors from a Zod literal schema.
@@ -91,17 +91,17 @@ function hasObjectRefinements(schema: z.ZodObject<z.ZodRawShape>): boolean {
 }
 
 /**
- * Resolve the original field keys that a refined object's callbacks may depend on.
+ * Resolve the original fields that a refined object's callbacks may depend on.
  * @param schema - Object schema to inspect.
- * @returns Field keys present before any subject extensions were merged.
+ * @returns Field schemas present before any subject extensions were merged.
  */
-function refinedObjectBaseKeys(schema: z.ZodObject<z.ZodRawShape>): ReadonlySet<string> {
-  const tracked = refinedObjectBaseFieldKeys.get(schema);
+function refinedObjectBaseFieldMap(schema: z.ZodObject<z.ZodRawShape>): ReadonlyMap<string, z.ZodType> {
+  const tracked = refinedObjectBaseFields.get(schema);
   if (tracked) return tracked;
 
-  const keys = new Set(Object.keys(schema.shape));
-  refinedObjectBaseFieldKeys.set(schema, keys);
-  return keys;
+  const fields = new Map(Object.entries(schema.shape).map(([key, field]) => [key, field as z.ZodType]));
+  refinedObjectBaseFields.set(schema, fields);
+  return fields;
 }
 
 /**
@@ -118,13 +118,11 @@ export function assertCompatibleRefinedObjectExtension(
 ): void {
   if (!hasObjectRefinements(schema)) return;
 
-  const shape = schema.shape;
-  const baseKeys = refinedObjectBaseKeys(schema);
+  const baseFields = refinedObjectBaseFieldMap(schema);
   for (const [key, extensionField] of Object.entries(extension)) {
-    if (!baseKeys.has(key)) continue;
-    const originalField = shape[key];
+    const originalField = baseFields.get(key);
     if (!originalField) continue;
-    if (extensionFieldIsCompatible(originalField as z.ZodType, extensionField as z.ZodType)) continue;
+    if (extensionFieldIsCompatible(originalField, extensionField as z.ZodType)) continue;
     throw new Error(
       `[MakaioBus] Cannot extend ${label}: field '${key}' overrides an incompatible refined schema field`,
     );
@@ -141,5 +139,5 @@ export function trackRefinedObjectExtension(
   extended: z.ZodObject<z.ZodRawShape>,
 ): void {
   if (!hasObjectRefinements(original)) return;
-  refinedObjectBaseFieldKeys.set(extended, refinedObjectBaseKeys(original));
+  refinedObjectBaseFields.set(extended, refinedObjectBaseFieldMap(original));
 }

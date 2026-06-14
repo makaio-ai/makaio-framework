@@ -342,6 +342,35 @@ describe('MakaioBus.extendSubject()', () => {
       }).not.toThrow();
     });
 
+    it('compares successive refined field overrides against the original base field schema', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqSuccessiveOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const withFactoryTitle = MakaioBus.extendSubject(subjects.create, {
+        request: { title: z.literal('factory') },
+      });
+
+      expect(() => {
+        MakaioBus.extendSubject(withFactoryTitle, {
+          request: { title: z.literal('other') },
+        });
+      }).not.toThrow();
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
