@@ -313,6 +313,35 @@ describe('MakaioBus.extendSubject()', () => {
       }).toThrow(/Cannot extend 'extSubRefinedReqCheckedOverwrite.create' request/);
     });
 
+    it('allows later extensions to redefine extension-owned fields on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqExtensionOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const withMetadata = MakaioBus.extendSubject(subjects.create, {
+        request: { workflowMetadata: z.object({ workflowId: z.string() }).optional() },
+      });
+
+      expect(() => {
+        MakaioBus.extendSubject(withMetadata, {
+          request: { workflowMetadata: z.string().optional() },
+        });
+      }).not.toThrow();
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
