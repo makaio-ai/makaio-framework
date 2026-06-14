@@ -11,10 +11,12 @@ import * as streamBridge from '../src/stream-bridge.js';
 import {
   OpenAINodeConnectorNamespace,
   OpenAINodeConnectorSubjects,
+  type OpenAINodeConnectorBus,
   type MessageCompleteEvent,
   type SdkEvent,
 } from '../src/namespaces/index.js';
 import { OpenAIConnectorSession } from '../src/session.js';
+import type { OpenAISessionConfig } from '../src/types/index.js';
 
 const originalOpenAiApiKey = process.env['OPENAI_API_KEY'];
 
@@ -25,6 +27,36 @@ afterEach(() => {
     process.env['OPENAI_API_KEY'] = originalOpenAiApiKey;
   }
 });
+
+/**
+ * Create a connector session with shared defaults for session-focused tests.
+ * @param bus - Scoped connector bus used by the session.
+ * @param overrides - Per-test config fields that differ from the defaults.
+ * @returns A configured OpenAI connector session.
+ */
+function createSession(
+  bus: OpenAINodeConnectorBus,
+  overrides: Partial<OpenAISessionConfig> = {},
+): OpenAIConnectorSession {
+  return new OpenAIConnectorSession({
+    bus,
+    adapterId: 'adapter-test',
+    adapterName: 'openai-node',
+    agentId: 'agent-test',
+    sessionId: 'session-test',
+    cwd: os.tmpdir(),
+    model: 'gpt-4o-mini',
+    env: {},
+    client: new OpenAI({ apiKey: 'test-api-key' }),
+    openAITools: [],
+    supportsResponseFormatWithTools: true,
+    supportsStructuredOutputStrict: true,
+    emitSdkEvent: async () => {},
+    handleError: () => {},
+    requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
+    ...overrides,
+  });
+}
 
 describe('openai-node connector/session', () => {
   it('does not mutate connector cwd when changeCwdInPlace runs before session init', async () => {
@@ -71,23 +103,7 @@ describe('openai-node connector/session', () => {
 
   it('aborts message_complete wait when signal is already aborted', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus);
 
     const createMessageCompletePromise = Reflect.get(session, 'createMessageCompletePromise') as
       | ((abortSignal: AbortSignal, adapterSessionId: string) => Promise<{ payload: SdkEvent }>)
@@ -103,23 +119,7 @@ describe('openai-node connector/session', () => {
 
   it('filters message_complete wait by event type and connector identity', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus);
 
     const onceSpy = vi.spyOn(bus, 'once');
     const createMessageCompletePromise = Reflect.get(session, 'createMessageCompletePromise') as
@@ -164,23 +164,7 @@ describe('openai-node connector/session', () => {
       env: {},
       providerConfig: {},
     });
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: initialCwd,
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus, { cwd: initialCwd });
 
     Reflect.set(connector, 'session', session);
     await connector.changeCwdInPlace(updatedCwd);
@@ -261,24 +245,7 @@ describe('openai-node connector/session', () => {
 
   it('prepends system message to messages array when systemPrompt is set', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      systemPrompt: 'You are a helpful assistant.',
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus, { systemPrompt: 'You are a helpful assistant.' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -299,24 +266,7 @@ describe('openai-node connector/session', () => {
 
   it('prepends empty-string system message when explicitly configured', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      systemPrompt: '',
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus, { systemPrompt: '' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -334,24 +284,7 @@ describe('openai-node connector/session', () => {
 
   it('moves history system message to index 0, updates it, and preserves non-system order', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      systemPrompt: 'Configured system prompt',
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus, { systemPrompt: 'Configured system prompt' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -377,24 +310,7 @@ describe('openai-node connector/session', () => {
 
   it('updates existing system message at index 0 without adding a duplicate', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      systemPrompt: 'Configured system prompt',
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus, { systemPrompt: 'Configured system prompt' });
 
     const buildMessages = Reflect.get(session, 'buildMessages') as
       | ((handle: MessageHandle, mergedContent?: string[]) => void)
@@ -418,23 +334,7 @@ describe('openai-node connector/session', () => {
 
   it('does not feed reasoning-only completion back as assistant content', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus);
 
     const handle = new MessageHandle(crypto.randomUUID(), normalizeMessageInput('Hello'), 'enqueue');
     const buildMessages = Reflect.get(session, 'buildMessages') as ((handle: MessageHandle) => void) | undefined;
@@ -474,23 +374,7 @@ describe('openai-node connector/session', () => {
 
   it('accepts block-only user input when content contains non-text parts', async () => {
     const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
-      agentId: 'agent-test',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
-      client: new OpenAI({ apiKey: 'test-api-key' }),
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
-    });
+    const session = createSession(bus);
 
     const buildMessages = Reflect.get(session, 'buildMessages') as ((handle: MessageHandle) => void) | undefined;
     expect(buildMessages).toBeTypeOf('function');
@@ -529,22 +413,9 @@ describe('openai-node connector/session', () => {
     // @ts-expect-error -- partial platform shim; OpenAI has private fields and many more members not needed here
     const mockClient: OpenAI = { chat: { completions: { create: createSpy } } };
 
-    const session = new OpenAIConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'openai-node',
+    const session = createSession(bus, {
       agentId: 'agent-real',
-      sessionId: 'session-test',
-      cwd: os.tmpdir(),
-      model: 'gpt-4o-mini',
-      env: {},
       client: mockClient,
-      openAITools: [],
-      supportsResponseFormatWithTools: true,
-      supportsStructuredOutputStrict: true,
-      emitSdkEvent: async () => {},
-      handleError: () => {},
-      requestToolApproval: async () => ({ action: 'allow' }) as AgentToolApproveResponse,
     });
 
     const executeApiCall = Reflect.get(session, 'executeApiCall') as

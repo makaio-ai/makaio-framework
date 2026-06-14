@@ -102,12 +102,14 @@ export {
   ModelVisibilitySchema,
   ProtocolEndpointsSchema,
   ProtocolIdSchema,
+  ProviderCapabilitiesSchema,
   ProviderDefinitionSchema,
   resolveModelVisibility,
 } from './provider/index.js';
 export type {
   ModelFilterMode,
   ModelVisibility,
+  ProviderCapabilities,
   ProtocolEndpoints,
   ProtocolId,
   ProviderDefinition,
