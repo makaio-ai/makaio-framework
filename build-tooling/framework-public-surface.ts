@@ -120,11 +120,10 @@ export const FRAMEWORK_DIST_SUBPATHS = [
 ] as const satisfies readonly FrameworkDistSubpath[];
 
 /**
- * The set of workspace packages built and assembled into the framework distribution.
+ * The set of workspace packages whose sources feed the framework distribution.
  *
- * Used by CI and validation tooling to scope the topological build to only
- * framework packages. Kept in sync with the `--include` flags in the root
- * `build:framework` script.
+ * Used by CI, validation tooling, portable package generation, and dev-publish
+ * candidate detection to share one framework build-input package boundary.
  */
 export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/build-tooling',
@@ -155,6 +154,7 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/machine-identity',
   '@makaio/test-utils',
   '@makaio/ui-kernel',
+  '@makaio/ui-theme',
   '@makaio/ui-hooks',
   '@makaio/ui-components',
   '@makaio/ui-views',
@@ -165,6 +165,21 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/subsystem-mcp-http-server',
   '@makaio/subsystem-workflow-engine',
 ] as const;
+
+/**
+ * Non-workspace repository paths whose source contents feed the framework
+ * distribution.
+ *
+ * Workspace package inputs are represented by {@link FRAMEWORK_BUILD_PACKAGE_NAMES};
+ * this list is only for build helpers that are not package-owned.
+ */
+export const FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS = [
+  'scripts/lib/framework-dist-verifier.ts',
+  'scripts/lib/runtime-migration-assets.ts',
+] as const;
+
+/** Source migration chain copied into the framework runtime distribution. */
+export const FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT = 'storage/migrations/drizzle';
 
 /**
  * Maps each publicly distributed workspace package to its primary framework

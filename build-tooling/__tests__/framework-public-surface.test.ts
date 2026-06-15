@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   FRAMEWORK_BUILD_PACKAGE_NAMES,
   FRAMEWORK_DIST_SUBPATHS,
+  FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS,
   FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS,
+  FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT,
   getFrameworkDistSubpathMap,
   getFrameworkPublicPackageByName,
 } from '../framework-public-surface.js';
@@ -60,8 +62,17 @@ describe('FRAMEWORK_BUILD_PACKAGE_NAMES', () => {
 
   it('includes build-tooling even though it is not in FRAMEWORK_DIST_SUBPATHS', () => {
     expect(FRAMEWORK_BUILD_PACKAGE_NAMES).toContain('@makaio/build-tooling');
+    expect(FRAMEWORK_BUILD_PACKAGE_NAMES).toContain('@makaio/ui-theme');
     const distPackageNames: readonly string[] = FRAMEWORK_DIST_SUBPATHS.map((e) => e.packageName);
     expect(distPackageNames).not.toContain('@makaio/build-tooling');
+    expect(distPackageNames).not.toContain('@makaio/ui-theme');
+  });
+});
+
+describe('framework non-workspace build inputs', () => {
+  it('declares copied and helper inputs outside workspace package roots', () => {
+    expect(FRAMEWORK_NON_WORKSPACE_BUILD_INPUT_PATHS).toContain('scripts/lib/runtime-migration-assets.ts');
+    expect(FRAMEWORK_RUNTIME_MIGRATION_CHAIN_ROOT).toBe('storage/migrations/drizzle');
   });
 });
 

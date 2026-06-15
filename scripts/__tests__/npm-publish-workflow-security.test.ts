@@ -63,4 +63,38 @@ describe('npm publish workflow security', () => {
     expect(workflow).not.toContain('issue_comment:');
     expect(workflow).not.toContain('/publish-dev');
   });
+
+  it('keeps dev publish info read-only apart from the sticky PR comment', () => {
+    const workflow = readWorkflow('dev-publish-info.yml');
+    const dispatcher = readWorkflow('slash-command-dispatcher.yml');
+
+    expect(workflow).toContain('workflow_call:');
+    expect(dispatcher).toContain("trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info ')");
+    expect(dispatcher).toContain('uses: ./.github/workflows/dev-publish-info.yml');
+    expect(workflow).toContain('pull-requests: read');
+    expect(workflow).toContain('permission-issues: write');
+    expect(workflow).toContain('permission-pull-requests: read');
+    expect(workflow).toContain('<!-- makaio-dev-publish-info -->');
+    expect(workflow).toContain('github.paginate(github.rest.issues.listComments');
+    expect(workflow).toContain("comment.user?.type === 'Bot' && comment.body?.includes(marker)");
+    expect(workflow).toContain('github.rest.issues.updateComment');
+    expect(workflow).toContain('github.rest.issues.createComment');
+    expect(workflow).toContain('ref: ${{ steps.pr.outputs.base-sha }}');
+    expect(workflow).toContain('persist-credentials: false');
+    expect(workflow).toContain('GITHUB_TOKEN: ${{ github.token }}');
+    expect(workflow).toContain('http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}');
+    expect(workflow).toContain(
+      'fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"',
+    );
+    expect(workflow).toContain('yarn exec tsx scripts/dev-publish.ts info');
+    expect(workflow).not.toContain('      comment_id:\n        required: true');
+    expect(workflow).not.toContain('      comment_url:\n        required: true');
+    expect(workflow).not.toContain('\n  deployments: write');
+    expect(workflow).not.toContain('id-token: write');
+    expect(workflow).not.toContain('github.rest.repos.createDeployment');
+    expect(workflow).not.toContain('bun scripts/dev-publish.ts publish');
+    expect(workflow).not.toContain('npm publish');
+    expect(workflow).not.toContain('git tag');
+    expect(workflow).not.toContain('/publish-dev');
+  });
 });

@@ -1,0 +1,131 @@
+name: Dev npm package publish info
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: dev-publish-info-${{ inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  dev-publish-info:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve pull request
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
+            });
+
+            core.setOutput('base-sha', pullRequest.base.sha);
+            core.setOutput('head-sha', pullRequest.head.sha);
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.pr.outputs.base-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch PR head and dev tags
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+            fetch --force --tags origin "pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          fetched_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head")"
+          if [ "$fetched_sha" != "$HEAD_SHA" ]; then
+            echo "::error::Fetched PR head $fetched_sha but GitHub resolved $HEAD_SHA."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Render dev publish info
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base-sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
+          DEV_PUBLISH_INFO_SUMMARY: ${{ runner.temp }}/dev-publish-info.md
+        run: |
+          yarn exec tsx scripts/dev-publish.ts info \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --out "$DEV_PUBLISH_INFO_SUMMARY"
+          cat "$DEV_PUBLISH_INFO_SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.MAKAIO_GITHUB_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MAKAIO_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+
+      - name: Publish sticky PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          DEV_PUBLISH_INFO_SUMMARY: ${{ runner.temp }}/dev-publish-info.md
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- makaio-dev-publish-info -->';
+            const body = fs.readFileSync(process.env.DEV_PUBLISH_INFO_SUMMARY, 'utf8');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              per_page: 100,
+            });
+
+            const existing = comments.find(
+              (comment) => comment.user?.type === 'Bot' && comment.body?.includes(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                body,
+              });
+            }

@@ -7,10 +7,16 @@ import {
   buildAnnotatedTag,
   buildDevVersion,
   buildPublishArgs,
+  buildChangedFilesArgs,
+  buildChangedSinceTagArgs,
+  buildMergeBaseArgs,
+  groupDevPublishFilesByPackage,
   buildRemoteTagCheckArgs,
   parsePackageNames,
+  renderDevPublishInfo,
   renderSummary,
   resolveDevPublishPlan,
+  selectLatestDevTag,
   stripPrerelease,
   type DevStampManifest,
 } from './dev-publish.js';
@@ -148,6 +154,156 @@ describe('buildAnnotatedTag', () => {
   });
 });
 
+describe('selectLatestDevTag', () => {
+  it('selects the newest package-scoped dev tag by timestamp', () => {
+    expect(
+      selectLatestDevTag('@makaio/contracts', [
+        'dev/@makaio/framework/v1.0.0-dev-1780000000200',
+        'dev/@makaio/contracts/v1.0.0-dev-1780000000100',
+        'dev/@makaio/contracts/v1.0.0-dev-1780000000300',
+      ]),
+    ).toBe('dev/@makaio/contracts/v1.0.0-dev-1780000000300');
+  });
+});
+
+describe('dev publish info file mapping', () => {
+  it('groups publish-relevant files by package and ignores tests', () => {
+    const grouped = groupDevPublishFilesByPackage(
+      [
+        'core/contracts/src/index.ts',
+        'core/contracts/src/provider/definition.test.ts',
+        'services/core/src/settings/storage/providers-namespace.ts',
+        '.changeset/provider-capabilities-json-safe.md',
+        'sdks/manifest/makaio-bus-protocol.json',
+        'adapters/implementations/openai-node/__tests__/connector-session.test.ts',
+      ],
+      [
+        {
+          name: '@makaio/contracts',
+          location: 'core/contracts',
+          version: '1.0.0',
+          dependencies: {},
+        },
+        {
+          name: '@makaio/framework',
+          location: 'packages/framework',
+          version: '1.0.0',
+          dependencies: {},
+        },
+      ],
+    );
+
+    expect([...grouped.entries()]).toEqual([
+      ['@makaio/contracts', ['core/contracts/src/index.ts']],
+      [
+        '@makaio/framework',
+        ['core/contracts/src/index.ts', 'services/core/src/settings/storage/providers-namespace.ts'],
+      ],
+    ]);
+  });
+
+  it('maps direct publishable packages without mapping test-only changes', () => {
+    const grouped = groupDevPublishFilesByPackage(
+      [
+        'adapters/implementations/openai-node/src/connector.ts',
+        'adapters/implementations/openai-node/__tests__/connector-session.test.ts',
+      ],
+      [
+        {
+          name: '@makaio/adapter-openai-node',
+          location: 'adapters/implementations/openai-node',
+          version: '1.0.0',
+          dependencies: {},
+        },
+        {
+          name: '@makaio/framework',
+          location: 'packages/framework',
+          version: '1.0.0',
+          dependencies: {},
+        },
+      ],
+    );
+
+    expect([...grouped.entries()]).toEqual([
+      ['@makaio/adapter-openai-node', ['adapters/implementations/openai-node/src/connector.ts']],
+    ]);
+  });
+
+  it('maps framework umbrella build inputs to the framework package', () => {
+    const grouped = groupDevPublishFilesByPackage(
+      [
+        'build-tooling/framework-import-map.ts',
+        'build-tooling/framework-public-surface.ts',
+        'build-tooling/package-exports.ts',
+        'build-tooling/tsdown-framework-preset.ts',
+        'build-tooling/tsdown-scss.ts',
+        'scripts/lib/framework-dist-verifier.ts',
+        'scripts/lib/runtime-migration-assets.ts',
+        'scripts/lib/unrelated-tool.ts',
+        'packages/file-watcher/src/index.ts',
+        'ui/theme/tokens/_colors.scss',
+        'storage/migrations/drizzle/0000_bootstrap.sql',
+        'storage/migrations/drizzle/meta/0000_snapshot.json',
+        'storage/migrations/drizzle/meta/_journal.json',
+      ],
+      [
+        {
+          name: '@makaio/framework',
+          location: 'packages/framework',
+          version: '1.0.0',
+          dependencies: {},
+        },
+      ],
+      {
+        frameworkBuildPackageRoots: [
+          { name: '@makaio/build-tooling', location: 'build-tooling' },
+          { name: '@makaio/file-watcher', location: 'packages/file-watcher' },
+          { name: '@makaio/ui-theme', location: 'ui/theme' },
+        ],
+      },
+    );
+
+    expect([...grouped.entries()]).toEqual([
+      [
+        '@makaio/framework',
+        [
+          'build-tooling/framework-import-map.ts',
+          'build-tooling/framework-public-surface.ts',
+          'build-tooling/package-exports.ts',
+          'build-tooling/tsdown-framework-preset.ts',
+          'build-tooling/tsdown-scss.ts',
+          'scripts/lib/framework-dist-verifier.ts',
+          'scripts/lib/runtime-migration-assets.ts',
+          'packages/file-watcher/src/index.ts',
+          'ui/theme/tokens/_colors.scss',
+          'storage/migrations/drizzle/0000_bootstrap.sql',
+          'storage/migrations/drizzle/meta/_journal.json',
+        ],
+      ],
+    ]);
+  });
+});
+
+describe('dev publish info git args', () => {
+  it('builds the changed-file range command', () => {
+    expect(buildChangedFilesArgs('base', 'head')).toEqual(['diff', '--name-only', '--no-renames', 'base..head']);
+  });
+
+  it('builds the merge-base command', () => {
+    expect(buildMergeBaseArgs('base', 'head')).toEqual(['merge-base', 'base', 'head']);
+  });
+
+  it('builds the package-scoped tag comparison command', () => {
+    expect(buildChangedSinceTagArgs('tag-sha', 'head-sha', ['core/contracts/src/index.ts'])).toEqual([
+      'diff',
+      '--quiet',
+      'tag-sha..head-sha',
+      '--',
+      'core/contracts/src/index.ts',
+    ]);
+  });
+});
+
 describe('buildRemoteTagCheckArgs', () => {
   it('checks origin for the exact annotated tag before pushing', () => {
     expect(buildRemoteTagCheckArgs('dev/@makaio/contracts/v1.0.0-dev-1780000000000')).toEqual([
@@ -232,5 +388,40 @@ describe('renderSummary', () => {
         true,
       ),
     ).toContain('### Dev package dry run');
+  });
+});
+
+describe('renderDevPublishInfo', () => {
+  it('renders a suggested publish command and latest tag context', () => {
+    expect(
+      renderDevPublishInfo({
+        baseSha: 'base',
+        headSha: 'head',
+        prChangedFiles: ['core/contracts/src/index.ts'],
+        candidates: [
+          {
+            name: '@makaio/contracts',
+            location: 'core/contracts',
+            prChangedFiles: ['core/contracts/src/index.ts'],
+            pendingFiles: ['core/contracts/src/index.ts'],
+            latestTag: 'dev/@makaio/contracts/v1.0.0-dev-1780000000000',
+            latestTagCommit: 'abcdef1234567890',
+            reason: 'pr',
+          },
+        ],
+      }),
+    ).toContain('Suggested command: `/publish-dev @makaio/contracts`');
+  });
+
+  it('renders a no-candidates report without an empty details block', () => {
+    const summary = renderDevPublishInfo({
+      baseSha: 'base',
+      headSha: 'head',
+      prChangedFiles: [],
+      candidates: [],
+    });
+
+    expect(summary).toContain('No pending dev-publishable package changes were found.');
+    expect(summary).not.toContain('<details>');
   });
 });
