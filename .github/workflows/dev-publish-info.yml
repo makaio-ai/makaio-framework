@@ -20,7 +20,7 @@ jobs:
   dev-publish-info:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+    name: Get publish info
     steps:
       - name: Resolve pull request
         id: pr

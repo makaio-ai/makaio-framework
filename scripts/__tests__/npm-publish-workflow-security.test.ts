@@ -9,6 +9,22 @@ function readWorkflow(name: string): string {
 }
 
 describe('npm publish workflow security', () => {
+  it('names slash-command dispatcher jobs for readable Actions runs', () => {
+    const dispatcher = readWorkflow('slash-command-dispatcher.yml');
+
+    for (const jobName of [
+      'Resolve slash command',
+      'Changeset bot',
+      'Full CI request',
+      'Conformance request',
+      'Dev publish request',
+      'Dev publish info',
+      'Stable release request',
+    ]) {
+      expect(dispatcher).toContain(`name: ${jobName}`);
+    }
+  });
+
   it('keeps the slash-command request workflow unprivileged', () => {
     const workflow = readWorkflow('npm-publish-request.yml');
     const dispatcher = readWorkflow('slash-command-dispatcher.yml');

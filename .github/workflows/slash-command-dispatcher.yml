@@ -8,6 +8,7 @@ permissions: {}
 
 jobs:
   resolve:
+    name: Resolve slash command
     if: github.event.issue.pull_request != null
     runs-on: ubuntu-slim
     timeout-minutes: 2
@@ -128,6 +129,7 @@ jobs:
 
   # ── Changeset Bot ──────────────────────────────────────────────────
   changeset:
+    name: Changeset bot
     needs: resolve
     if: needs.resolve.outputs.command == 'changeset'
     permissions:
@@ -143,6 +145,7 @@ jobs:
 
   # ── Full CI Request ────────────────────────────────────────────────
   ci:
+    name: Full CI request
     needs: resolve
     if: needs.resolve.outputs.command == 'ci'
     permissions:
@@ -158,6 +161,7 @@ jobs:
 
   # ── Conformance Tests ──────────────────────────────────────────────
   conformance:
+    name: Conformance request
     needs: resolve
     if: needs.resolve.outputs.command == 'conformance'
     permissions:
@@ -173,6 +177,7 @@ jobs:
 
   # ── Dev Publish Request ────────────────────────────────────────────
   publish-dev:
+    name: Dev publish request
     needs: resolve
     if: needs.resolve.outputs.command == 'publish-dev'
     permissions:
@@ -188,6 +193,7 @@ jobs:
 
   # ── Dev Publish Info ──────────────────────────────────────────────
   publish-dev-info:
+    name: Dev publish info
     needs: resolve
     if: needs.resolve.outputs.command == 'publish-dev-info'
     permissions:
@@ -201,6 +207,7 @@ jobs:
 
   # ── Stable Release ─────────────────────────────────────────────────
   release:
+    name: Stable release request
     needs: resolve
     if: needs.resolve.outputs.command == 'release'
     permissions:
