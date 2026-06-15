@@ -1,36 +1,16 @@
-import {
-  WorkflowError,
-  WorkflowErrorCode,
-  type JsonValue,
-  type WorkflowExecutionScope,
-  type WorkflowRunContext,
-} from '@makaio/contracts';
+import { WorkflowError, WorkflowErrorCode, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import type { StartExecutionDeps } from './workflow-execution-start.js';
+import type { DefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
 import { startExecution, startResolvedDefinitionExecution } from './workflow-execution-start.js';
 
 /**
  * Options accepted by {@link rerunExecution}.
  */
-export interface RerunExecutionOptions {
+export interface RerunExecutionOptions extends DefinitionStartOptions {
   /** Execution to replay. */
   readonly executionId: string;
   /** Replay mode: `snapshot` re-uses the original definition; `current` loads the latest. */
   readonly mode: 'snapshot' | 'current';
-  /** Override the original input payload. */
-  readonly input?: JsonValue;
-  /** Override the original configuration. */
-  readonly config?: Record<string, unknown>;
-  /** Optional parent coordinator session for the rerun. */
-  readonly parentSessionId?: string;
-  /** Override the original trigger payload. */
-  readonly triggerPayload?: Record<string, unknown>;
-  /** Override the original artifact binding reference. */
-  readonly artifactRef?: WorkflowRunContext['artifactRef'];
-  /** Override the original execution hints. */
-  readonly executionHints?: WorkflowRunContext['executionHints'];
-  /** Override the original execution scope. */
-  readonly scopeOverride?: WorkflowExecutionScope;
   /** Human-readable reason for the rerun (stored in link metadata). */
   readonly reason?: string;
 }
@@ -102,26 +82,20 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
   const executionHints = options.executionHints ?? originalRunContext.executionHints;
   const scopeOverride = options.scopeOverride ?? originalRunContext.scope;
 
+  const startOptions: DefinitionStartOptions = {
+    input,
+    config,
+    parentSessionId: options.parentSessionId,
+    triggerPayload,
+    artifactRef,
+    executionHints,
+    scopeOverride,
+  };
+
   const rerunExecutionId =
     options.mode === 'snapshot'
-      ? await rerunSnapshot(deps, originalRunContext, {
-          input,
-          config,
-          parentSessionId: options.parentSessionId,
-          triggerPayload,
-          artifactRef,
-          executionHints,
-          scopeOverride,
-        })
-      : await startExecution(deps, originalRunContext.workflowId, {
-          input,
-          config,
-          parentSessionId: options.parentSessionId,
-          triggerPayload,
-          artifactRef,
-          executionHints,
-          scopeOverride,
-        });
+      ? await rerunSnapshot(deps, originalRunContext, startOptions)
+      : await startExecution(deps, originalRunContext.workflowId, startOptions);
 
   await deps.bus.request(WorkflowStorageSubjects.setExecutionLink, {
     link: {
@@ -146,7 +120,7 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
 async function rerunSnapshot(
   deps: StartExecutionDeps,
   originalRunContext: WorkflowRunContext,
-  overrides: Omit<RerunExecutionOptions, 'executionId' | 'mode' | 'reason'>,
+  overrides: DefinitionStartOptions,
 ): Promise<string> {
   const workflow = originalRunContext.definitionSnapshot;
   if (workflow === undefined) {

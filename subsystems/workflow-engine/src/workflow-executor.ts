@@ -35,7 +35,11 @@ import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { validateGateResumeDataForSchema } from './runtime/gate-resume-validation.js';
 import { WorkflowGateTimeoutScheduler } from './workflow-gate-timeout-scheduler.js';
-import { normalizeExecutionHints, normalizeStartInput } from './workflow-executor-input-normalization.js';
+import {
+  normalizeConfig,
+  normalizeExecutionHints,
+  normalizeStartInput,
+} from './workflow-executor-input-normalization.js';
 import { buildWorkflowRunContext, resolveWorkflowContext } from './workflow-run-context-builder.js';
 import {
   assertDurableResumeFramesPresent,
@@ -240,14 +244,10 @@ export class WorkflowExecutor extends BaseService {
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
       const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope, executionHints } =
         ctx.payload;
-      const workflowConfig: Record<string, unknown> =
-        config !== null && typeof config === 'object' && !Array.isArray(config)
-          ? (config as Record<string, unknown>)
-          : {};
       try {
         const executionId = await startExecution(this.buildStartDeps(), workflowId, {
           input: normalizeStartInput(input),
-          config: workflowConfig,
+          config: normalizeConfig(config) ?? {},
           parentSessionId,
           triggerPayload,
           artifactRef,
@@ -274,20 +274,12 @@ export class WorkflowExecutor extends BaseService {
         executionHints,
         reason,
       } = ctx.payload;
-      // Only coerce config when the caller actually supplied one — undefined
-      // tells rerunExecution to inherit from the original run context.
-      const workflowConfig: Record<string, unknown> | undefined =
-        config !== undefined && config !== null && typeof config === 'object' && !Array.isArray(config)
-          ? (config as Record<string, unknown>)
-          : config !== undefined
-            ? {}
-            : undefined;
       try {
         const rerunExecutionId = await rerunExecution(this.buildStartDeps(), {
           executionId,
           mode,
           input: normalizeStartInput(input),
-          config: workflowConfig,
+          config: normalizeConfig(config),
           parentSessionId,
           triggerPayload,
           artifactRef,

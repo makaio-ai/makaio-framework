@@ -46,7 +46,6 @@ export async function loadWorkflowFromConfig(config: WorkflowWorkerConfig): Prom
  * @param loaded - The runtime-loaded workflow from the source file.
  */
 function assertSourceWorkflowMatchesLogicalWorkflow(config: WorkflowWorkerConfig, loaded: RuntimeLoadedWorkflow): void {
-  if (config.source.kind === 'definition') return;
   if (config.workflowId === config.executionId) return;
   if (loaded.definition.id === config.workflowId) return;
 
