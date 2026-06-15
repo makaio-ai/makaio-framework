@@ -86,8 +86,8 @@ jobs:
               return;
             }
 
-            if (isOrgMember && (trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info '))) {
-              emit('dev-publish-info');
+            if (isOrgMember && (trimmed === '/publish-dev-info' || trimmed.startsWith('/publish-dev-info '))) {
+              emit('publish-dev-info');
               return;
             }
 
@@ -187,9 +187,9 @@ jobs:
       comment_body: ${{ needs.resolve.outputs.comment_body }}
 
   # ── Dev Publish Info ──────────────────────────────────────────────
-  dev-publish-info:
+  publish-dev-info:
     needs: resolve
-    if: needs.resolve.outputs.command == 'dev-publish-info'
+    if: needs.resolve.outputs.command == 'publish-dev-info'
     permissions:
       contents: read
       issues: write
