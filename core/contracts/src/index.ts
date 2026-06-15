@@ -773,6 +773,8 @@ export {
   WorkflowSubjects,
   WorkflowRunContextSchema,
 } from './workflow/index.js';
+export { WorkflowError, WorkflowErrorCode } from './workflow/errors.js';
+export type { WorkflowErrorCode as WorkflowErrorCodeType } from './workflow/errors.js';
 export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './workflow/index.js';
 export type { WorkflowArtifactRef } from './workflow/index.js';
 export type { WorkflowRunContext } from './workflow/index.js';

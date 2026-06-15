@@ -14,6 +14,10 @@ describe('ExecutionLinkTypeSchema', () => {
   it('rejects unknown link types', () => {
     expect(() => ExecutionLinkTypeSchema.parse('parent-child')).toThrow();
   });
+
+  it('accepts rerun-of link type', () => {
+    expect(ExecutionLinkTypeSchema.parse('rerun-of')).toBe('rerun-of');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -183,5 +187,27 @@ describe('ExecutionLinkSchema', () => {
         linkType: 'parent-child',
       }),
     ).toThrow();
+  });
+
+  it('accepts rerun provenance links with mode metadata', () => {
+    const result = ExecutionLinkSchema.parse({
+      sourceExecutionId: 'wfx-original',
+      targetExecutionId: 'wfx-rerun',
+      linkType: 'rerun-of',
+      metadata: {
+        mode: 'snapshot',
+        reason: 'validate after fix',
+      },
+    });
+
+    expect(result).toEqual({
+      sourceExecutionId: 'wfx-original',
+      targetExecutionId: 'wfx-rerun',
+      linkType: 'rerun-of',
+      metadata: {
+        mode: 'snapshot',
+        reason: 'validate after fix',
+      },
+    });
   });
 });
