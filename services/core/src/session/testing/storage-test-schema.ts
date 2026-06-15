@@ -39,6 +39,7 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       target_working_directory TEXT,
       execution_target_id TEXT,
       approval_policy_override TEXT,
+      metadata TEXT,
       spawning_tool_call_id TEXT,
       -- Import provenance fields
       source TEXT,

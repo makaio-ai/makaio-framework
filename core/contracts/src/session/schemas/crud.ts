@@ -3,7 +3,7 @@ import type { SchemaRecord } from '@makaio/core';
 import { observability } from '@makaio/core';
 import { BranchKindSchema, SessionContextInheritanceSchema } from './primitives.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
-import { MakaioSessionSchema, SessionWithPreviewSchema } from './session.js';
+import { MakaioSessionSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './session.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
 import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
 
@@ -54,6 +54,8 @@ export const SessionCreateBaseSchema = z.object({
   targetWorkingDirectory: z.string().optional(),
   /** Execution target to stamp on the session at creation time. */
   executionTargetId: z.string().optional(),
+  /** Opaque consumer-owned JSON metadata to preserve on the session. */
+  metadata: SessionRecordMetadataSchema.optional(),
   /** Tool call ID of the spawn_subagent invocation that triggered this session. Only set for subagent sessions. */
   spawningToolCallId: z.string().optional(),
   /**
@@ -381,6 +383,8 @@ export const CrudSchemas = {
       approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
       /** Session title for sidebar display (renames the session) */
       title: z.string().optional(),
+      /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
+      metadata: SessionRecordMetadataSchema.nullable().optional(),
     }),
     response: z.object({
       /** Whether the update succeeded */

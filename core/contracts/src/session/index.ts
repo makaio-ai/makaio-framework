@@ -2,6 +2,7 @@ export { SessionSubjects, SessionNamespace } from './namespace.js';
 export {
   SessionSchemas,
   MakaioSessionSchema,
+  SessionRecordMetadataSchema,
   MakaioSessionEventSchema,
   MakaioSessionAgentSchema,
   SessionPreviewDataSchema,
@@ -22,6 +23,7 @@ export type {
   SnapshotExportOptions,
   SnapshotPreviewData,
   SnapshotImportConflictErrorData,
+  SessionRecordMetadata,
 } from './schemas.js';
 export type {
   IMakaioSession,

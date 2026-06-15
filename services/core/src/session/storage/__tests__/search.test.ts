@@ -22,8 +22,15 @@ describe('search', () => {
 
     // Create session and turn
     await exec(sql`
-      INSERT INTO sessions (session_id, created_at, last_activity_at, status, title)
-      VALUES ('session-1', 1000, 2000, 'active', 'Authentication Flow')
+      INSERT INTO sessions (session_id, created_at, last_activity_at, status, title, metadata)
+      VALUES (
+        'session-1',
+        1000,
+        2000,
+        'active',
+        'Authentication Flow',
+        '{"correlationId":"issue-117","labels":["downstream"]}'
+      )
     `);
 
     await exec(sql`
@@ -49,6 +56,10 @@ describe('search', () => {
 
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0].sessionId).toBe('session-1');
+    expect(result.sessions[0].metadata).toEqual({
+      correlationId: 'issue-117',
+      labels: ['downstream'],
+    });
   });
 
   it('should return empty for no matches', async () => {

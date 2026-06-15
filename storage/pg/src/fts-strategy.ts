@@ -218,7 +218,8 @@ export const postgresFtsSearchStrategy: FtsSearchStrategy = {
         s.summary,
         s.summary_updated_at::double precision AS summary_updated_at,
         s.fork_transforms,
-        s.target_working_directory
+        s.target_working_directory,
+        s.metadata
       FROM sessions s
       ${buildSessionMatchWhere(input)}
       ORDER BY last_activity_at DESC

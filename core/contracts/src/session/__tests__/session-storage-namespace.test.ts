@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { SessionStorageSetRequestSchema, SessionStorageSetSessionSchema } from '../session-storage-namespace.js';
 
 describe('SessionStorageSetSessionSchema', () => {
+  it('accepts JSON-safe session metadata', () => {
+    const result = SessionStorageSetSessionSchema.safeParse({
+      sessionId: 'session-1',
+      createdAt: 1,
+      lastActivityAt: 1,
+      agents: [],
+      status: 'active',
+      metadata: {
+        downstream: {
+          workflowId: 'workflow-1',
+          values: [1, 'two', false, null],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('rejects linked sessions without clientId', () => {
     const result = SessionStorageSetSessionSchema.safeParse({
       sessionId: 'session-1',

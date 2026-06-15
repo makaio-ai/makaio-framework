@@ -13,8 +13,18 @@ export type { RestartAgentsRequest, RestartAgentsResponse, RestartAgentsResult }
 // Entity schemas
 export { AgentStatusSchema, MakaioSessionAgentSchema } from './schemas/agent.js';
 export type { AgentStatus, MakaioSessionAgent } from './schemas/agent.js';
-export { MakaioSessionSchema, SessionPreviewDataSchema, SessionWithPreviewSchema } from './schemas/session.js';
-export type { MakaioSession, SessionPreviewData, SessionWithPreview } from './schemas/session.js';
+export {
+  MakaioSessionSchema,
+  SessionRecordMetadataSchema,
+  SessionPreviewDataSchema,
+  SessionWithPreviewSchema,
+} from './schemas/session.js';
+export type {
+  MakaioSession,
+  SessionPreviewData,
+  SessionRecordMetadata,
+  SessionWithPreview,
+} from './schemas/session.js';
 
 // Snapshot schemas and helpers
 export {

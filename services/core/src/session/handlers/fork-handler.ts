@@ -167,6 +167,7 @@ export function registerForkHandler(bus: IMakaioBus): () => void {
       branchKind = 'fork',
       transforms,
       targetWorkingDirectory,
+      metadata,
       existingSessionId,
     } = ctx.payload;
 
@@ -218,6 +219,7 @@ export function registerForkHandler(bus: IMakaioBus): () => void {
       forkTransforms: transforms,
       ...(name ? { title: name } : {}),
       ...(targetWorkingDirectory ? { targetWorkingDirectory } : {}),
+      ...(metadata ? { metadata } : {}),
     });
 
     // 5. Emit branch.created event (includes transforms for audit trail)

@@ -116,6 +116,7 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
 
   assignNullableSessionField(session, 'executionTargetId', update.executionTargetId);
   assignNullableSessionField(session, 'approvalPolicyOverride', update.approvalPolicyOverride);
+  assignNullableSessionField(session, 'metadata', update.metadata);
   if (update.spawningToolCallId === null) {
     session.spawningToolCallId = undefined;
   } else if (update.spawningToolCallId !== undefined && session.spawningToolCallId === undefined) {

@@ -4,7 +4,7 @@ import { MakaioSessionSchema } from './schemas.js';
 import { ApprovalPolicySchema } from '../harness/schemas.js';
 import { BranchKindSchema, ImportStatusSchema, SessionContextInheritanceSchema } from './schemas/primitives.js';
 import { ForkChildInfoSchema } from './schemas/fork-child-info.js';
-import { SessionPreviewDataSchema, SessionWithPreviewSchema } from './schemas/session.js';
+import { SessionPreviewDataSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './schemas/session.js';
 import { ClientIdentityObservationSchema } from '../client/account-identity.js';
 import {
   RootSessionLineageSchema,
@@ -89,6 +89,8 @@ const SessionStorageUpdateRequestPayloadSchema = z.object({
   targetWorkingDirectory: z.string().optional(),
   createdAt: z.number().finite().optional(),
   lastActivityAt: z.number().finite().optional(),
+  /** Opaque consumer-owned JSON metadata. Null clears it; omission leaves it unchanged. */
+  metadata: SessionRecordMetadataSchema.nullable().optional(),
   /**
    * Write-once spawn provenance. Non-null updates fill missing values without
    * overwriting an existing tool-call assignment; null explicitly clears it.

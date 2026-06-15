@@ -21,7 +21,7 @@ jobs:
       changeset_mode: ${{ steps.detect.outputs.changeset_mode }}
       bump_type: ${{ steps.detect.outputs.bump_type }}
     steps:
-      - name: Detect command
+      - name: Resolve slash command
         id: detect
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -192,7 +192,7 @@ jobs:
       comment_body: ${{ needs.resolve.outputs.comment_body }}
 
   # ── Dev Publish Info ──────────────────────────────────────────────
-  publish-dev-info:
+  dev-publish-info:
     name: Dev publish info
     needs: resolve
     if: needs.resolve.outputs.command == 'publish-dev-info'

@@ -117,6 +117,21 @@ describe('MakaioSessionService - Lifecycle', () => {
       expect(session?.title).toBe('My session');
     });
 
+    it('should create session with generic metadata', async () => {
+      const metadata = {
+        downstream: {
+          workflowId: 'workflow-1',
+          branchCorrelationId: 'branch-1',
+        },
+      };
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {
+        metadata,
+      });
+      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+
+      expect(session).toMatchObject({ metadata });
+    });
+
     it('returns existing session when provided sessionId already exists', async () => {
       const providedSessionId = `session-${crypto.randomUUID()}`;
       const { sessionId: firstId } = await MakaioBus.request(SessionSubjects.create, {
@@ -330,6 +345,46 @@ describe('MakaioSessionService - Lifecycle', () => {
         const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
         expect(session?.title).toBe('Renamed title');
         expect(capturedEvents).toEqual([{ sessionId, changedProperties: ['title'] }]);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('replaces and clears metadata and emits metadata in changedProperties', async () => {
+      const { sessionId } = await MakaioBus.request(SessionSubjects.create, {
+        metadata: { initial: 'value' },
+      });
+
+      const capturedEvents: SessionUpdatedEvent[] = [];
+      const cleanup = MakaioBus.on(SessionSubjects.updated, (ctx) => {
+        capturedEvents.push(ctx.payload);
+      });
+
+      try {
+        const replacement = { downstream: { workflowId: 'workflow-2' } };
+        const replaceResult = await MakaioBus.request(SessionSubjects.update, {
+          sessionId,
+          metadata: replacement,
+        });
+
+        expect(replaceResult.success).toBe(true);
+
+        const { session: afterReplace } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+        expect(afterReplace).toMatchObject({ metadata: replacement });
+
+        const clearResult = await MakaioBus.request(SessionSubjects.update, {
+          sessionId,
+          metadata: null,
+        });
+
+        expect(clearResult.success).toBe(true);
+
+        const { session: afterClear } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+        expect(afterClear?.metadata).toBeUndefined();
+        expect(capturedEvents).toEqual([
+          { sessionId, changedProperties: ['metadata'] },
+          { sessionId, changedProperties: ['metadata'] },
+        ]);
       } finally {
         cleanup();
       }

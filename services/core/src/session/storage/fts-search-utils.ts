@@ -10,7 +10,12 @@
  */
 import { count, inArray } from 'drizzle-orm';
 import { resolveSchema, resolveStorageEngine, type MakaioDatabase } from '@makaio/storage-drizzle';
-import type { ForkTransforms, IMakaioSession } from '@makaio/contracts';
+import {
+  SessionRecordMetadataSchema,
+  type ForkTransforms,
+  type IMakaioSession,
+  type JsonValue,
+} from '@makaio/contracts';
 import { sessionStorageSchema } from './schema.variants.js';
 import { messagesSchema } from '../messages/schema.variants.js';
 
@@ -45,6 +50,7 @@ export type SearchSessionRow = {
   summary_updated_at: number | null;
   fork_transforms: string | null;
   target_working_directory: string | null;
+  metadata: Record<string, JsonValue> | string | null;
 };
 
 /**
@@ -148,6 +154,25 @@ export function parseForkTransforms(raw: string | null): ForkTransforms | undefi
 }
 
 /**
+ * Parses session metadata from a raw search row.
+ * @param raw - Raw JSON column value from SQLite text JSON or Postgres jsonb
+ * @returns Validated metadata, or undefined when absent/invalid
+ */
+function parseSessionMetadata(raw: SearchSessionRow['metadata']): Record<string, JsonValue> | undefined {
+  if (raw === null) {
+    return undefined;
+  }
+
+  try {
+    const candidate: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const result = SessionRecordMetadataSchema.safeParse(candidate);
+    return result.success ? result.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Maps a raw search row to session API format with preview metadata.
  *
  * Scope fields are intentionally absent from the returned `IMakaioSession`.
@@ -186,6 +211,7 @@ export function mapRowToSession(
     summaryUpdatedAt: row.summary_updated_at ?? undefined,
     forkTransforms: parseForkTransforms(row.fork_transforms),
     targetWorkingDirectory: row.target_working_directory ?? undefined,
+    metadata: parseSessionMetadata(row.metadata),
     agents: sessionAgents.map((agent) => ({
       agentId: agent.agentId,
       adapterId: agent.adapterId,

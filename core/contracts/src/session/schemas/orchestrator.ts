@@ -11,6 +11,7 @@ import { localSubject, type SchemaRecord } from '@makaio/core';
 import { SessionContextSchema } from '../session-context.js';
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { SessionMessageOriginSchema, TurnInitiatorSchema, TurnUsageSchema } from './message.js';
+import { SessionRecordMetadataSchema } from './session.js';
 
 // ============================================================================
 // Orchestrator Base Schemas
@@ -450,6 +451,8 @@ export const OrchestratorSchemas = {
       transforms: ForkTransformsSchema.optional(),
       /** Target working directory for the forked session */
       targetWorkingDirectory: z.string().optional(),
+      /** Opaque consumer-owned JSON metadata to preserve on the forked session. */
+      metadata: SessionRecordMetadataSchema.optional(),
       /**
        * Pre-generated session ID to assign to the forked session.
        *

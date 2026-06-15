@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { index, uniqueIndex, check } from 'drizzle-orm/sqlite-core';
 import { index as pgIndex, uniqueIndex as pgUniqueIndex, check as pgCheck } from 'drizzle-orm/pg-core';
+import type { JsonValue } from '@makaio/contracts';
 import { defineDualTable } from '@makaio/storage-drizzle';
 
 /**
@@ -184,6 +185,13 @@ export const sessionsDual = defineDualTable(
     approvalPolicyOverride: c.textEnum('approval_policy_override', {
       enum: ['reject', 'always-ask', 'full-access'] as const,
     }),
+
+    /**
+     * Opaque consumer-owned JSON metadata.
+     *
+     * The framework preserves this data but never interprets its keys.
+     */
+    metadata: c.jsonCol<Record<string, JsonValue>>('metadata'),
 
     /**
      * Tool call ID of the Agent/spawn_subagent invocation that spawned this session.
