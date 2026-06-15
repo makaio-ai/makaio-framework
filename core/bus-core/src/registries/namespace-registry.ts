@@ -8,6 +8,10 @@ import { isCollectorOnlySchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
 import { isLocalSchema } from '../utils/local-schema.js';
 import { unwrapSchema } from '../utils/unwrap-schema.js';
+import {
+  assertCompatibleRefinedObjectExtension,
+  trackRefinedObjectExtension,
+} from './refined-extension-compatibility.js';
 import type { ScopedBus } from '../scoped-bus.js';
 import type {
   BaseSubjectSchema,
@@ -41,20 +45,26 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
 /**
  * Extend a Zod object without dropping metadata attached to the original schema.
  *
- * Zod `.extend()` returns a new object schema. Any policy stored through
+ * Zod `.safeExtend()` returns a new object schema while preserving refinements.
+ * Any policy stored through
  * `.meta()` belongs to the original instance, so the bus must copy it when
  * host packages add fields to a registered subject.
  * @param schema - Original registered object schema.
  * @param extension - Additional fields to merge into the schema.
+ * @param label - Human-readable label for error messages.
  * @returns Extended schema carrying the original schema metadata.
  */
 function extendZodObjectPreservingMetadata(
   schema: z.ZodObject<z.ZodRawShape>,
   extension: z.ZodRawShape,
+  label: string,
 ): z.ZodObject<z.ZodRawShape> {
-  const extended = schema.extend(extension);
+  assertCompatibleRefinedObjectExtension(schema, extension, label);
+  const extended = schema.safeExtend(extension);
   const metadata = schema.meta();
-  return metadata ? (extended.meta(metadata) as z.ZodObject<z.ZodRawShape>) : extended;
+  const result = metadata ? (extended.meta(metadata) as z.ZodObject<z.ZodRawShape>) : extended;
+  trackRefinedObjectExtension(schema, result);
+  return result;
 }
 
 /**
@@ -505,11 +515,11 @@ export const createNamespaceRegistry = () => {
       return bestMatch?.config ?? { mode: 'strict' };
     },
     /**
-     * Additively extend a registered subject's schema with new fields.
+     * Extend a registered subject's schema with new fields.
      *
-     * For request subjects, extends the request and/or response ZodObject via `.extend()`.
-     * For event subjects, extends the event ZodObject directly.
-     * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins (Zod `.extend()` semantics).
+     * For request subjects, extends the request and/or response ZodObject via `.safeExtend()`.
+     * For event subjects, extends the event ZodObject via `.safeExtend()`.
+     * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins.
      * @param fullSubjectKey - Fully-qualified key (e.g., "session.list")
      * @param additionalFields - For request subjects: `{ request?, response? }` each a record
      *   of Zod field definitions. For event subjects: a flat record of Zod field definitions.
@@ -533,10 +543,18 @@ export const createNamespaceRegistry = () => {
         if (ext.response) assertZodObject(current.response, `'${fullSubjectKey}' response`);
         const extended = {
           request: ext.request
-            ? extendZodObjectPreservingMetadata(current.request as z.ZodObject<z.ZodRawShape>, ext.request)
+            ? extendZodObjectPreservingMetadata(
+                current.request as z.ZodObject<z.ZodRawShape>,
+                ext.request,
+                `'${fullSubjectKey}' request`,
+              )
             : current.request,
           response: ext.response
-            ? extendZodObjectPreservingMetadata(current.response as z.ZodObject<z.ZodRawShape>, ext.response)
+            ? extendZodObjectPreservingMetadata(
+                current.response as z.ZodObject<z.ZodRawShape>,
+                ext.response,
+                `'${fullSubjectKey}' response`,
+              )
             : current.response,
         };
         subjectSchemas.set(fullSubjectKey, extended);
@@ -544,7 +562,11 @@ export const createNamespaceRegistry = () => {
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
       } else {
         assertZodObject(current, `'${fullSubjectKey}'`);
-        const extended = extendZodObjectPreservingMetadata(current, additionalFields as z.ZodRawShape);
+        const extended = extendZodObjectPreservingMetadata(
+          current,
+          additionalFields as z.ZodRawShape,
+          `'${fullSubjectKey}'`,
+        );
         subjectSchemas.set(fullSubjectKey, extended);
         const entry = registeredSubjects.get(fullSubjectKey);
         if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });

@@ -97,6 +97,280 @@ describe('MakaioBus.extendSubject()', () => {
       expect(fact.attributes).toEqual({ status: 'active', projectId: 'proj-1' });
     });
 
+    it('extends refined request schemas while preserving base refinements', async () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReq', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const extended = MakaioBus.extendSubject(subjects.create, {
+        request: { workflowMetadata: z.object({ workflowId: z.string() }).optional() },
+      });
+
+      MakaioBus.on(extended, (ctx) => {
+        ctx.setResult({ id: ctx.payload.workflowMetadata?.workflowId ?? 'no-workflow' });
+      });
+
+      await expect(
+        MakaioBus.request(extended, { title: 'factory session', workflowMetadata: { workflowId: 'wf-1' } }),
+      ).resolves.toEqual({ id: 'wf-1' });
+      await expect(
+        MakaioBus.request(extended, { title: '   ', workflowMetadata: { workflowId: 'wf-1' } }),
+      ).rejects.toThrow(/title must not be blank/);
+    });
+
+    it('allows refined request schemas to redefine fields with later extensions', async () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqOverwrite', {
+          create: {
+            request: z.object({ title: z.string(), mode: z.string().optional() }).superRefine((payload, ctx) => {
+              if (payload.mode === 'blocked') {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['mode'],
+                  message: 'mode is blocked',
+                });
+              }
+            }),
+            response: z.object({ acceptedTitle: z.string() }),
+          },
+        }),
+      );
+
+      const extended = MakaioBus.extendSubject(subjects.create, {
+        request: { title: z.literal('factory') },
+      });
+
+      MakaioBus.on(extended, (ctx) => {
+        ctx.setResult({ acceptedTitle: ctx.payload.title });
+      });
+
+      await expect(MakaioBus.request(extended, { title: 'factory' })).resolves.toEqual({ acceptedTitle: 'factory' });
+      await expect(MakaioBus.request(extended, { title: 'factory', mode: 'blocked' })).rejects.toThrow(
+        /mode is blocked/,
+      );
+    });
+
+    it('rejects incompatible field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqBadOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { title: z.number() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqBadOverwrite.create' request/);
+    });
+
+    it('rejects unmodeled overlapping field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqEnumOverwrite', {
+          create: {
+            request: z.object({ status: z.enum(['open', 'closed']) }).superRefine((payload, ctx) => {
+              if (!payload.status.startsWith('o')) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['status'],
+                  message: 'status must start with o',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { status: z.number() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqEnumOverwrite.create' request/);
+    });
+
+    it('rejects structural field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqObjectOverwrite', {
+          create: {
+            request: z.object({ meta: z.object({ id: z.string() }) }).superRefine((payload, ctx) => {
+              if (payload.meta.id.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['meta', 'id'],
+                  message: 'meta id must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { meta: z.object({}) },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqObjectOverwrite.create' request/);
+    });
+
+    it('rejects nested nullish wrapper overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqNullishOverwrite', {
+          create: {
+            request: z.object({ title: z.string().optional() }).superRefine((payload, ctx) => {
+              if (payload.title !== undefined && payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { title: z.string().nullable().optional() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqNullishOverwrite.create' request/);
+    });
+
+    it('rejects defaulted field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqDefaultOverwrite', {
+          create: {
+            request: z.object({ title: z.string().optional().default('fallback') }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { title: z.string().optional() },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqDefaultOverwrite.create' request/);
+    });
+
+    it('rejects checked primitive field overrides on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqCheckedOverwrite', {
+          create: {
+            request: z.object({ code: z.string().min(2) }).superRefine((payload, ctx) => {
+              if (payload.code[1].toUpperCase() !== payload.code[1]) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['code'],
+                  message: 'second character must be uppercase',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      expect(() => {
+        MakaioBus.extendSubject(subjects.create, {
+          request: { code: z.literal('x') },
+        });
+      }).toThrow(/Cannot extend 'extSubRefinedReqCheckedOverwrite.create' request/);
+    });
+
+    it('allows later extensions to redefine extension-owned fields on refined request schemas', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqExtensionOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const withMetadata = MakaioBus.extendSubject(subjects.create, {
+        request: { workflowMetadata: z.object({ workflowId: z.string() }).optional() },
+      });
+
+      expect(() => {
+        MakaioBus.extendSubject(withMetadata, {
+          request: { workflowMetadata: z.string().optional() },
+        });
+      }).not.toThrow();
+    });
+
+    it('compares successive refined field overrides against the original base field schema', () => {
+      const { subjects } = MakaioBus.registerNamespace(
+        createBusNamespace('extSubRefinedReqSuccessiveOverwrite', {
+          create: {
+            request: z.object({ title: z.string() }).superRefine((payload, ctx) => {
+              if (payload.title.trim().length === 0) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: ['title'],
+                  message: 'title must not be blank',
+                });
+              }
+            }),
+            response: z.object({ id: z.string() }),
+          },
+        }),
+      );
+
+      const withFactoryTitle = MakaioBus.extendSubject(subjects.create, {
+        request: { title: z.literal('factory') },
+      });
+
+      expect(() => {
+        MakaioBus.extendSubject(withFactoryTitle, {
+          request: { title: z.literal('other') },
+        });
+      }).not.toThrow();
+    });
+
     it('original subject still works without extended fields', async () => {
       const { subjects } = MakaioBus.registerNamespace(
         createBusNamespace('extSubOrig', {
