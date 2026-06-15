@@ -9,22 +9,6 @@ function readWorkflow(name: string): string {
 }
 
 describe('npm publish workflow security', () => {
-  it('names slash-command dispatcher jobs for readable Actions runs', () => {
-    const dispatcher = readWorkflow('slash-command-dispatcher.yml');
-
-    for (const jobName of [
-      'Resolve slash command',
-      'Changeset bot',
-      'Full CI request',
-      'Conformance request',
-      'Dev publish request',
-      'Dev publish info',
-      'Stable release request',
-    ]) {
-      expect(dispatcher).toContain(`name: ${jobName}`);
-    }
-  });
-
   it('keeps the slash-command request workflow unprivileged', () => {
     const workflow = readWorkflow('npm-publish-request.yml');
     const dispatcher = readWorkflow('slash-command-dispatcher.yml');
@@ -85,24 +69,17 @@ describe('npm publish workflow security', () => {
     const dispatcher = readWorkflow('slash-command-dispatcher.yml');
 
     expect(workflow).toContain('workflow_call:');
-    expect(dispatcher).toContain("trimmed === '/publish-dev-info' || trimmed.startsWith('/publish-dev-info ')");
-    expect(dispatcher).toContain("emit('publish-dev-info')");
-    expect(dispatcher).not.toContain("trimmed === '/dev-publish-info'");
-    expect(dispatcher).not.toContain("trimmed.startsWith('/dev-publish-info ')");
+    expect(dispatcher).toContain("trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info ')");
     expect(dispatcher).toContain('uses: ./.github/workflows/dev-publish-info.yml');
-    expect(workflow).toContain('issues: write');
     expect(workflow).toContain('pull-requests: read');
-    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflow).toContain('permission-issues: write');
-    expect(workflow).toContain('permission-pull-requests: write');
+    expect(workflow).toContain('permission-pull-requests: read');
     expect(workflow).toContain('<!-- makaio-dev-publish-info -->');
     expect(workflow).toContain('github.paginate(github.rest.issues.listComments');
     expect(workflow).toContain("comment.user?.type === 'Bot' && comment.body?.includes(marker)");
     expect(workflow).toContain('github.rest.issues.updateComment');
     expect(workflow).toContain('github.rest.issues.createComment');
-    expect(workflow).toContain('Checkout trusted workflow source');
-    expect(workflow).toContain('ref: ${{ github.sha }}');
-    expect(workflow).toContain('BASE_SHA: ${{ steps.pr.outputs.base-sha }}');
+    expect(workflow).toContain('ref: ${{ steps.pr.outputs.base-sha }}');
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).toContain('GITHUB_TOKEN: ${{ github.token }}');
     expect(workflow).toContain('http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}');

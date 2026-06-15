@@ -8,7 +8,6 @@ permissions: {}
 
 jobs:
   resolve:
-    name: Resolve slash command
     if: github.event.issue.pull_request != null
     runs-on: ubuntu-slim
     timeout-minutes: 2
@@ -87,8 +86,8 @@ jobs:
               return;
             }
 
-            if (isOrgMember && (trimmed === '/publish-dev-info' || trimmed.startsWith('/publish-dev-info '))) {
-              emit('publish-dev-info');
+            if (isOrgMember && (trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info '))) {
+              emit('dev-publish-info');
               return;
             }
 
@@ -129,7 +128,6 @@ jobs:
 
   # ── Changeset Bot ──────────────────────────────────────────────────
   changeset:
-    name: Changeset bot
     needs: resolve
     if: needs.resolve.outputs.command == 'changeset'
     permissions:
@@ -145,7 +143,6 @@ jobs:
 
   # ── Full CI Request ────────────────────────────────────────────────
   ci:
-    name: Full CI request
     needs: resolve
     if: needs.resolve.outputs.command == 'ci'
     permissions:
@@ -161,7 +158,6 @@ jobs:
 
   # ── Conformance Tests ──────────────────────────────────────────────
   conformance:
-    name: Conformance request
     needs: resolve
     if: needs.resolve.outputs.command == 'conformance'
     permissions:
@@ -177,7 +173,6 @@ jobs:
 
   # ── Dev Publish Request ────────────────────────────────────────────
   publish-dev:
-    name: Dev publish request
     needs: resolve
     if: needs.resolve.outputs.command == 'publish-dev'
     permissions:
@@ -192,10 +187,9 @@ jobs:
       comment_body: ${{ needs.resolve.outputs.comment_body }}
 
   # ── Dev Publish Info ──────────────────────────────────────────────
-  publish-dev-info:
-    name: Dev publish info
+  dev-publish-info:
     needs: resolve
-    if: needs.resolve.outputs.command == 'publish-dev-info'
+    if: needs.resolve.outputs.command == 'dev-publish-info'
     permissions:
       contents: read
       issues: write
@@ -207,7 +201,6 @@ jobs:
 
   # ── Stable Release ─────────────────────────────────────────────────
   release:
-    name: Stable release request
     needs: resolve
     if: needs.resolve.outputs.command == 'release'
     permissions:
