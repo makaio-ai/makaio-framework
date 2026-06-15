@@ -72,6 +72,7 @@ describe('npm publish workflow security', () => {
     expect(dispatcher).toContain("trimmed === '/dev-publish-info' || trimmed.startsWith('/dev-publish-info ')");
     expect(dispatcher).toContain('uses: ./.github/workflows/dev-publish-info.yml');
     expect(workflow).toContain('pull-requests: read');
+    expect(workflow).toContain('client-id: ${{ secrets.MAKAIO_GITHUB_APP_ID }}');
     expect(workflow).toContain('permission-issues: write');
     expect(workflow).toContain('permission-pull-requests: read');
     expect(workflow).toContain('<!-- makaio-dev-publish-info -->');
