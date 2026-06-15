@@ -1,3 +1,4 @@
+/* eslint max-lines: ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
@@ -26,6 +27,7 @@ import {
 } from './workflow-execution-finalizer.js';
 import { buildDefinitionRunnerParamsFromRunContext, type RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
+import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
 import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
@@ -256,6 +258,47 @@ export class WorkflowExecutor extends BaseService {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Failed to start workflow: ${message}`);
+      }
+    });
+
+    this.registerHandler(WorkflowSubjects.rerun, async (ctx) => {
+      const {
+        executionId,
+        mode,
+        input,
+        config,
+        parentSessionId,
+        triggerPayload,
+        artifactRef,
+        scope,
+        executionHints,
+        reason,
+      } = ctx.payload;
+      // Only coerce config when the caller actually supplied one — undefined
+      // tells rerunExecution to inherit from the original run context.
+      const workflowConfig: Record<string, unknown> | undefined =
+        config !== undefined && config !== null && typeof config === 'object' && !Array.isArray(config)
+          ? (config as Record<string, unknown>)
+          : config !== undefined
+            ? {}
+            : undefined;
+      try {
+        const rerunExecutionId = await rerunExecution(this.buildStartDeps(), {
+          executionId,
+          mode,
+          input: normalizeStartInput(input),
+          config: workflowConfig,
+          parentSessionId,
+          triggerPayload,
+          artifactRef,
+          executionHints: normalizeExecutionHints(executionHints),
+          scopeOverride: scope,
+          reason,
+        });
+        ctx.setResult({ executionId: rerunExecutionId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to rerun workflow: ${message}`);
       }
     });
 

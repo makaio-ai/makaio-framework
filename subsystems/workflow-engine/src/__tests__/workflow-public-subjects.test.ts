@@ -1479,6 +1479,150 @@ describe('workflow public subjects', () => {
     expect(links).toEqual([link]);
   });
 
+  it('reruns an execution from its stored definition snapshot', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const originalWorkflow = createWorkflowDefinition({
+      id: 'public-rerun-snapshot',
+      name: 'Public Rerun Snapshot v1',
+      root: {
+        id: 'public-rerun-snapshot-root',
+        type: 'sequence',
+        nodes: [],
+      },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: originalWorkflow });
+
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: originalWorkflow.id,
+      input: { value: 'original' },
+      config: { strict: true },
+    });
+
+    await MakaioBus.request(WorkflowSubjects.setDefinition, {
+      workflow: {
+        ...originalWorkflow,
+        name: 'Public Rerun Snapshot v2',
+      },
+    });
+
+    const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
+      executionId: originalExecutionId,
+      mode: 'snapshot',
+      reason: 'verify original topology',
+    });
+
+    expect(rerunExecutionId).not.toBe(originalExecutionId);
+
+    const { runContext: rerunRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: rerunExecutionId,
+    });
+    expect(rerunRunContext?.workflowId).toBe(originalWorkflow.id);
+    expect(rerunRunContext?.definitionSnapshot?.name).toBe('Public Rerun Snapshot v1');
+    expect(rerunRunContext?.inputs).toEqual({ value: 'original' });
+    expect(rerunRunContext?.config).toEqual({ strict: true });
+
+    const { links } = await MakaioBus.request(WorkflowSubjects.listExecutionLinks, {
+      sourceExecutionId: originalExecutionId,
+    });
+    expect(links).toEqual([
+      {
+        sourceExecutionId: originalExecutionId,
+        targetExecutionId: rerunExecutionId,
+        linkType: 'rerun-of',
+        metadata: {
+          mode: 'snapshot',
+          reason: 'verify original topology',
+        },
+      },
+    ]);
+  });
+
+  it('reruns an execution from the current workflow definition', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-rerun-current',
+      name: 'Public Rerun Current v1',
+      root: {
+        id: 'public-rerun-current-root',
+        type: 'sequence',
+        nodes: [],
+      },
+    });
+    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+      input: { value: 'original' },
+    });
+
+    await MakaioBus.request(WorkflowSubjects.setDefinition, {
+      workflow: {
+        ...workflow,
+        name: 'Public Rerun Current v2',
+      },
+    });
+
+    const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
+      executionId: originalExecutionId,
+      mode: 'current',
+      input: { value: 'override' },
+    });
+
+    const { runContext: rerunRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: rerunExecutionId,
+    });
+    expect(rerunRunContext?.definitionSnapshot?.name).toBe('Public Rerun Current v2');
+    expect(rerunRunContext?.inputs).toEqual({ value: 'override' });
+  });
+
+  it('fails snapshot rerun when the original execution has no definition snapshot', async () => {
+    if (!setup) {
+      throw new Error('Workflow executor test setup did not initialize.');
+    }
+
+    const workflow = createWorkflowDefinition({
+      id: 'public-rerun-missing-snapshot',
+      name: 'Missing Snapshot',
+      root: {
+        id: 'public-rerun-missing-snapshot-root',
+        type: 'sequence',
+        nodes: [],
+      },
+    });
+    // Add executionHints with a path source so the executor does NOT store a definition snapshot
+    await MakaioBus.request(WorkflowSubjects.setDefinition, {
+      workflow: {
+        ...workflow,
+        executionHints: {
+          source: { kind: 'path', path: '/repo/not-loaded-by-in-process-runner.mjs' },
+        },
+      },
+    });
+    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
+
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(runContext?.source).toEqual({
+      kind: 'path',
+      path: '/repo/not-loaded-by-in-process-runner.mjs',
+    });
+    expect(runContext?.definitionSnapshot).toBeUndefined();
+
+    await expect(
+      MakaioBus.request(WorkflowSubjects.rerun, {
+        executionId,
+        mode: 'snapshot',
+      }),
+    ).rejects.toThrow('WORKFLOW_SNAPSHOT_UNAVAILABLE');
+  });
+
   it('returns execution frames through the public listFrames subject', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');

@@ -350,7 +350,7 @@ export function mergeExecutionHints(
 }
 
 /** Options accepted by {@link startExecution}. */
-interface DefinitionStartOptions {
+export interface DefinitionStartOptions {
   /** Caller-supplied JSON input value. */
   readonly input?: JsonValue;
   /** Workflow configuration overrides. */
@@ -365,6 +365,29 @@ interface DefinitionStartOptions {
   readonly executionHints?: WorkflowRunContext['executionHints'];
   /** Optional execution scope override. */
   readonly scopeOverride?: WorkflowExecutionScope;
+}
+
+/**
+ * Extended options for {@link startResolvedDefinitionExecution} that supply an
+ * already-loaded workflow definition and optional source/snapshot overrides.
+ *
+ * Used by the rerun path to bypass the storage lookup and replay an execution
+ * with either the original snapshot or the current definition.
+ */
+export interface ResolvedDefinitionStartOptions extends DefinitionStartOptions {
+  /** Pre-loaded workflow definition to use for this execution. */
+  readonly workflow: WorkflowDefinition;
+  /**
+   * Override for the execution source descriptor.
+   * When omitted, the source is resolved from execution hints or defaults to
+   * `{ kind: 'definition', workflowId }`.
+   */
+  readonly executionSource?: WorkflowRunContext['source'];
+  /**
+   * Override for the definition snapshot stored on the run context.
+   * When omitted, the snapshot is derived from the execution source kind.
+   */
+  readonly definitionSnapshot?: WorkflowDefinition;
 }
 
 /**
@@ -406,12 +429,31 @@ export async function startExecution(
   workflowId: string,
   options: DefinitionStartOptions = {},
 ): Promise<string> {
+  const workflow = await loadAndValidateWorkflow(deps.bus, workflowId);
+  return startResolvedDefinitionExecution(deps, workflowId, { ...options, workflow });
+}
+
+/**
+ * Start a definition-backed execution with an already-resolved workflow definition.
+ *
+ * This is the core launch path shared by {@link startExecution} (which loads the
+ * definition from storage first) and the rerun path (which supplies a snapshot
+ * or freshly-loaded definition directly).
+ * @param deps - Shared executor state and callbacks.
+ * @param workflowId - The workflow definition ID.
+ * @param options - Execution options including the pre-loaded workflow.
+ * @returns The new execution ID.
+ */
+export async function startResolvedDefinitionExecution(
+  deps: StartExecutionDeps,
+  workflowId: string,
+  options: ResolvedDefinitionStartOptions,
+): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
-  const { parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } = options;
+  const { workflow, parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } = options;
   const input = options.input === undefined ? {} : options.input;
   const config = options.config ?? {};
 
-  const workflow = await loadAndValidateWorkflow(bus, workflowId);
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
   const boundInputs = bindWorkflowInputs(workflow, input);
@@ -419,7 +461,10 @@ export async function startExecution(
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
   const mergedExecutionHints = mergeExecutionHints(workflow.executionHints, executionHints);
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
-  const executionSource = resolveDefinitionExecutionSource(workflowId, mergedExecutionHints, workspaceRoot);
+  const executionSource =
+    options.executionSource ?? resolveDefinitionExecutionSource(workflowId, mergedExecutionHints, workspaceRoot);
+  const definitionSnapshot =
+    options.definitionSnapshot ?? (executionSource.kind === 'definition' ? workflow : undefined);
 
   const coordinatorSessionId = await createDefinitionCoordinatorSession(
     bus,
@@ -435,7 +480,7 @@ export async function startExecution(
       workflowId,
       coordinatorSessionId,
       source: executionSource,
-      ...(executionSource.kind === 'definition' ? { definitionSnapshot: workflow } : {}),
+      ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
       inputs: boundInputs,
       config: boundConfig,
       scope: resolvedScope,
