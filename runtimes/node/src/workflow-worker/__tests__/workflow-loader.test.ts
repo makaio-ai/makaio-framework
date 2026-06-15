@@ -156,3 +156,49 @@ describe('loadWorkflowFromConfig — definition source', () => {
     expect(mockLoadWorkflowModule).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// loadWorkflowFromConfig — path/source source
+// ---------------------------------------------------------------------------
+
+describe('loadWorkflowFromConfig — path/source source', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('rejects source-loaded workflow ID mismatches for definition-backed source overrides', async () => {
+    mockLoadWorkflowModule.mockResolvedValueOnce({
+      definition: makeDefinition({ id: 'loaded-workflow-id' }),
+      runtimeHandlers: new Map(),
+    });
+
+    const config = makeConfig({
+      executionId: 'wfx-source-mismatch',
+      workflowId: 'stored-workflow-id',
+      source: { kind: 'path', path: '/repo/workflows/stored-workflow.mjs' },
+    });
+
+    await expect(loadWorkflowFromConfig(config)).rejects.toMatchObject({
+      code: 'WORKFLOW_SOURCE_MISMATCH',
+      message: `Source-backed workflow for logical workflow 'stored-workflow-id' loaded definition 'loaded-workflow-id'.`,
+    });
+  });
+
+  it('allows runFile source-loaded workflows whose workflowId is the executionId', async () => {
+    mockLoadWorkflowModule.mockResolvedValueOnce({
+      definition: makeDefinition({ id: 'workflow-file-export-id' }),
+      runtimeHandlers: new Map([['step1', () => ({ ok: true })]]),
+    });
+
+    const config = makeConfig({
+      executionId: 'wfx-run-file',
+      workflowId: 'wfx-run-file',
+      source: { kind: 'path', path: '/repo/workflows/file-run.mjs' },
+    });
+
+    const loaded = await loadWorkflowFromConfig(config);
+
+    expect(loaded.definition.id).toBe('workflow-file-export-id');
+    expect(loaded.runtimeHandlers.size).toBe(1);
+  });
+});

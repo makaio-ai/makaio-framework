@@ -62,6 +62,7 @@ export default {
 
     const loaded = await loadWorkflowFromConfig(
       makeConfig({
+        workflowId: 'wf-source-001',
         source: { kind: 'source', filename: 'source-workflow.mjs', source },
       }),
     );
@@ -101,6 +102,7 @@ export default { definition, runtimeHandlers };
 
     const loaded = await loadWorkflowFromConfig(
       makeConfig({
+        workflowId: 'wf-path-001',
         source: { kind: 'path', path: filePath },
       }),
     );
@@ -129,6 +131,7 @@ export default { definition, runtimeHandlers };
 
     const loaded = await loadWorkflowFromConfig(
       makeConfig({
+        workflowId: 'wf-source-002',
         source: { kind: 'source', filename: 'source-with-handlers.mjs', source },
       }),
     );

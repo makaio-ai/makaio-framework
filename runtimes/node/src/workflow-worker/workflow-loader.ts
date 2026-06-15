@@ -1,4 +1,4 @@
-import type { WorkflowWorkerConfig } from '@makaio/contracts';
+import { WorkflowError, WorkflowErrorCode, type WorkflowWorkerConfig } from '@makaio/contracts';
 import { loadWorkflowModule } from './workflow-file-loader.js';
 import type { RuntimeLoadedWorkflow } from './types.js';
 
@@ -31,5 +31,27 @@ export async function loadWorkflowFromConfig(config: WorkflowWorkerConfig): Prom
     };
   }
 
-  return loadWorkflowModule(config.source);
+  const loaded = await loadWorkflowModule(config.source);
+  assertSourceWorkflowMatchesLogicalWorkflow(config, loaded);
+  return loaded;
+}
+
+/**
+ * Assert that the source-loaded definition ID matches the logical workflow ID.
+ *
+ * Definition-sourced workers skip this check (their definition is pre-resolved).
+ * RunFile executions skip this check (workflowId === executionId signals an
+ * ephemeral file-backed execution where the file defines the canonical ID).
+ * @param config - Worker configuration with the logical workflow identity.
+ * @param loaded - The runtime-loaded workflow from the source file.
+ */
+function assertSourceWorkflowMatchesLogicalWorkflow(config: WorkflowWorkerConfig, loaded: RuntimeLoadedWorkflow): void {
+  if (config.source.kind === 'definition') return;
+  if (config.workflowId === config.executionId) return;
+  if (loaded.definition.id === config.workflowId) return;
+
+  throw new WorkflowError(
+    WorkflowErrorCode.SOURCE_MISMATCH,
+    `Source-backed workflow for logical workflow '${config.workflowId}' loaded definition '${loaded.definition.id}'.`,
+  );
 }
