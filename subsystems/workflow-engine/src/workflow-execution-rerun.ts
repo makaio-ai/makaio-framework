@@ -95,7 +95,7 @@ function buildRerunLinkMetadata(mode: 'snapshot' | 'current', reason: string | u
  */
 export async function rerunExecution(deps: StartExecutionDeps, options: RerunExecutionOptions): Promise<string> {
   const originalRunContext = await loadOriginalRunContext(deps, options.executionId);
-  const input = options.input ?? originalRunContext.inputs;
+  const input = options.input === undefined ? originalRunContext.inputs : options.input;
   const config = options.config ?? originalRunContext.config ?? {};
   const triggerPayload = options.triggerPayload ?? originalRunContext.triggerPayload;
   const artifactRef = options.artifactRef ?? originalRunContext.artifactRef;
