@@ -37,9 +37,10 @@ jobs:
             core.setOutput('base-sha', pullRequest.base.sha);
             core.setOutput('head-sha', pullRequest.head.sha);
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Checkout trusted workflow source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ steps.pr.outputs.base-sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

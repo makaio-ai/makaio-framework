@@ -79,7 +79,9 @@ describe('npm publish workflow security', () => {
     expect(workflow).toContain("comment.user?.type === 'Bot' && comment.body?.includes(marker)");
     expect(workflow).toContain('github.rest.issues.updateComment');
     expect(workflow).toContain('github.rest.issues.createComment');
-    expect(workflow).toContain('ref: ${{ steps.pr.outputs.base-sha }}');
+    expect(workflow).toContain('Checkout trusted workflow source');
+    expect(workflow).toContain('ref: ${{ github.sha }}');
+    expect(workflow).toContain('BASE_SHA: ${{ steps.pr.outputs.base-sha }}');
     expect(workflow).toContain('persist-credentials: false');
     expect(workflow).toContain('GITHUB_TOKEN: ${{ github.token }}');
     expect(workflow).toContain('http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}');
