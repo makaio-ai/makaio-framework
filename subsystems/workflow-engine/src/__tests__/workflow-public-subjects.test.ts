@@ -666,10 +666,16 @@ describe('workflow public subjects', () => {
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner });
-    const capturedDispatchConfigs: Array<{ source: unknown; executionHints: unknown; requirements: unknown }> = [];
+    const capturedDispatchConfigs: Array<{
+      source: unknown;
+      definition: unknown;
+      executionHints: unknown;
+      requirements: unknown;
+    }> = [];
     const cleanupWorkerNodeDispatch = MakaioBus.on(WorkerNodeSubjects.dispatch, (ctx) => {
       capturedDispatchConfigs.push({
         source: ctx.payload.config.source,
+        definition: ctx.payload.config.definition,
         executionHints: ctx.payload.config.executionHints,
         requirements: ctx.payload.requirements,
       });
@@ -718,6 +724,7 @@ describe('workflow public subjects', () => {
     });
     expect(workflowRunnerCalls).toHaveLength(0);
     expect(capturedDispatchConfigs[0]?.source).toEqual(expectedSource);
+    expect(capturedDispatchConfigs[0]?.definition).toBeUndefined();
     expect(capturedDispatchConfigs[0]?.executionHints).toEqual(runContext?.executionHints);
     expect(capturedDispatchConfigs[0]?.requirements).toEqual({
       customCapabilities: ['workflow.local-runtime', 'gpu'],

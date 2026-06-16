@@ -238,6 +238,7 @@ export interface DefinitionRunnerTaskParams {
   executionId: string;
   workflowId: string;
   workflow: WorkflowDefinition;
+  definitionSnapshot?: WorkflowDefinition;
   source: WorkflowWorkerConfig['source'];
   coordinatorSessionId: string;
   sanitizedTriggerPayload: Record<string, unknown>;
@@ -362,9 +363,11 @@ export function buildFileExecutionTask(
  */
 function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): WorkflowWorkerConfig {
   const { config } = deps;
+  const serializedDefinition =
+    params.definitionSnapshot ?? (params.source.kind === 'definition' ? params.workflow : undefined);
   return {
     source: params.source,
-    definition: params.workflow,
+    ...(serializedDefinition !== undefined ? { definition: serializedDefinition } : {}),
     executionId: params.executionId,
     workflowId: params.workflowId,
     triggerPayload: params.sanitizedTriggerPayload,
@@ -478,6 +481,7 @@ export function buildDefinitionRunnerParamsFromRunContext(
     executionId: runContext.executionId,
     workflowId: runContext.workflowId,
     workflow,
+    ...(runContext.definitionSnapshot !== undefined ? { definitionSnapshot: runContext.definitionSnapshot } : {}),
     source: runContext.source,
     coordinatorSessionId: runContext.coordinatorSessionId,
     sanitizedTriggerPayload: runContext.triggerPayload,

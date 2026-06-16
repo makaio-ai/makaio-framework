@@ -529,6 +529,7 @@ export async function startResolvedDefinitionExecution(
       executionId,
       workflowId,
       workflow,
+      ...(definitionSnapshot !== undefined ? { definitionSnapshot } : {}),
       source: executionSource,
       coordinatorSessionId,
       sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
