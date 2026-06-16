@@ -119,6 +119,7 @@ export function mapToSession(sessionRow: SessionRow, agentRows: AgentRow[]): IMa
     executionTargetId: toOptionalValue(sessionRow.executionTargetId),
     agents: agentRows.map(mapAgent),
     approvalPolicyOverride: toOptionalValue(sessionRow.approvalPolicyOverride),
+    metadata: toOptionalValue(sessionRow.metadata),
     spawningToolCallId: toOptionalValue(sessionRow.spawningToolCallId),
     source: toOptionalValue(sessionRow.source),
     parentExternalSessionId: toOptionalValue(sessionRow.parentExternalSessionId),

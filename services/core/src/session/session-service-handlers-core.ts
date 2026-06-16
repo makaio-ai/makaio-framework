@@ -143,6 +143,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       title,
       targetWorkingDirectory,
       executionTargetId,
+      metadata,
       spawningToolCallId,
       originWindowId,
     } = ctx.payload;
@@ -162,6 +163,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       forkTransforms,
       targetWorkingDirectory,
       executionTargetId,
+      metadata,
       spawningToolCallId,
     };
 
@@ -323,13 +325,14 @@ function registerRestartAgentsHandler(deps: CoreSessionServiceHandlerDeps): () =
 function registerCoreUpdateHandler(deps: CoreSessionServiceHandlerDeps): () => void {
   const { bus } = deps;
   return bus.on(SessionSubjects.update, async (ctx) => {
-    const { sessionId, executionTargetId, approvalPolicyOverride, title } = ctx.payload;
+    const { sessionId, executionTargetId, approvalPolicyOverride, title, metadata } = ctx.payload;
 
     const updateResult = await bus.requestOptional(SessionStorageSubjects.update, {
       sessionId,
       executionTargetId,
       approvalPolicyOverride,
       title,
+      metadata,
     });
     const success = updateResult.handled ? updateResult.data.success : false;
 
@@ -338,6 +341,7 @@ function registerCoreUpdateHandler(deps: CoreSessionServiceHandlerDeps): () => v
       if (executionTargetId !== undefined) changedProperties.push('executionTargetId');
       if (approvalPolicyOverride !== undefined) changedProperties.push('approvalPolicyOverride');
       if (title !== undefined) changedProperties.push('title');
+      if (metadata !== undefined) changedProperties.push('metadata');
 
       if (changedProperties.length > 0) {
         await bus.emit(SessionSubjects.updated, { sessionId, changedProperties });
@@ -539,6 +543,7 @@ function registerRegisterExternalHandler(deps: CoreSessionServiceHandlerDeps): (
       title,
       targetWorkingDirectory,
       executionTargetId,
+      metadata,
       spawningToolCallId,
       originWindowId,
     } = ctx.payload;
@@ -582,6 +587,7 @@ function registerRegisterExternalHandler(deps: CoreSessionServiceHandlerDeps): (
       forkTransforms,
       targetWorkingDirectory,
       executionTargetId,
+      metadata,
       spawningToolCallId,
     };
 

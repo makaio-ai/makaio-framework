@@ -84,6 +84,7 @@ function toDbValues(session: IMakaioSession) {
     targetWorkingDirectory: toNullableDbValue(session.targetWorkingDirectory),
     executionTargetId: toNullableDbValue(session.executionTargetId),
     approvalPolicyOverride: toNullableDbValue(session.approvalPolicyOverride),
+    metadata: toNullableDbValue(session.metadata),
     spawningToolCallId: toNullableDbValue(session.spawningToolCallId),
     // Import provenance fields (null for live sessions)
     source: toNullableDbValue(session.source),
@@ -161,6 +162,7 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);
+  assignNullableField(updateFields, 'metadata', payload.metadata);
   if (payload.spawningToolCallId === null) {
     updateFields.spawningToolCallId = null;
   } else if (payload.spawningToolCallId !== undefined) {

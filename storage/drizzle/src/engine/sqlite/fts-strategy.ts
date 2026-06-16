@@ -279,7 +279,8 @@ export const sqliteFtsSearchStrategy: FtsSearchStrategy = {
         s.summary,
         s.summary_updated_at,
         s.fork_transforms,
-        s.target_working_directory
+        s.target_working_directory,
+        s.metadata
       FROM sessions s
       WHERE (
         s.session_id IN (

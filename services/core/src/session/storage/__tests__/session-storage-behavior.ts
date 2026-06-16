@@ -122,6 +122,71 @@ export function describeSessionStorageBehavior(): void {
     });
   });
 
+  describe('metadata', () => {
+    it('should persist session metadata through set, get, and list', async () => {
+      const metadata = {
+        downstream: {
+          workflowId: 'workflow-1',
+          attempt: 1,
+          tags: ['branch', 'correlation'],
+        },
+      };
+      const session = {
+        ...createSession({ sessionId: 'metadata-roundtrip' }),
+        metadata,
+      };
+
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: session.sessionId,
+        session,
+      });
+
+      const getResult = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: session.sessionId,
+      });
+      const listResult = await MakaioBus.request(SessionStorageSubjects.list, {
+        status: 'all',
+      });
+
+      expect(getResult.session).toMatchObject({ metadata });
+      expect(listResult.sessions.find((item) => item.sessionId === session.sessionId)).toMatchObject({ metadata });
+    });
+
+    it('should replace and clear metadata through partial update', async () => {
+      const session = {
+        ...createSession({ sessionId: 'metadata-update' }),
+        metadata: { initial: 'value' },
+      };
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: session.sessionId,
+        session,
+      });
+
+      const replacement = { downstream: { workflowId: 'workflow-2' } };
+      const replaceResult = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        metadata: replacement,
+      });
+      const afterReplace = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: session.sessionId,
+      });
+
+      const clearResult = await MakaioBus.request(SessionStorageSubjects.update, {
+        sessionId: session.sessionId,
+        metadata: null,
+      });
+      const afterClear = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: session.sessionId,
+      });
+
+      expect(replaceResult.success).toBe(true);
+      expect(afterReplace.session).toMatchObject({ metadata: replacement });
+      expect(clearResult.success).toBe(true);
+      expect(afterClear.session).not.toBeNull();
+      expect(afterClear.session?.metadata).toBeUndefined();
+    });
+  });
+
   describe('delete', () => {
     it('should delete session', async () => {
       const session = createSession({ sessionId: 'delete-test' });

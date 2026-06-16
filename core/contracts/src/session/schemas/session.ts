@@ -4,6 +4,14 @@ import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionAgentSchema } from './agent.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
 import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
+import { JsonValueSchema, type JsonValue } from '../../shared/json-value.js';
+
+/** Opaque, JSON-safe consumer metadata preserved on the session record. */
+export const SessionRecordMetadataSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = z.record(
+  z.string(),
+  JsonValueSchema,
+) as z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>>;
+export type SessionRecordMetadata = z.infer<typeof SessionRecordMetadataSchema>;
 
 /**
  * Schema for a makaio orchestration session.
@@ -115,6 +123,12 @@ export const MakaioSessionSchema = z.object({
    *  Null means "use the cascade" (default behavior).
    */
   approvalPolicyOverride: ApprovalPolicySchema.nullable().optional(),
+  /**
+   * Opaque consumer-owned correlation metadata.
+   *
+   * The framework validates only JSON compatibility and never interprets keys.
+   */
+  metadata: SessionRecordMetadataSchema.optional(),
 
   // ─── Import provenance ────────────────────────────────────────────
 
