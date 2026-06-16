@@ -1765,6 +1765,65 @@ describe('workflow public subjects', () => {
     expect(rerunRunContext?.definitionSnapshot?.id).toBe(loadedWorkflow.id);
   });
 
+  it('reruns file-backed executions in current mode from the persisted source', async () => {
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+
+    const loadedWorkflow = createWorkflowDefinition({
+      id: 'public-rerun-file-current-source',
+      name: 'Public Rerun File Current Source',
+      root: {
+        id: 'public-rerun-file-current-source-root',
+        type: 'sequence',
+        nodes: [],
+      },
+    });
+    const capturedConfigs: WorkflowWorkerConfig[] = [];
+    let runCount = 0;
+    const workflowRunner: IWorkflowRunner = {
+      run(config, signal) {
+        capturedConfigs.push(config);
+        runCount += 1;
+        if (runCount > 1) {
+          return waitForRunnerAbort(config, signal);
+        }
+        return runWorkflowOrchestrator({
+          config,
+          loaded: {
+            definition: loadedWorkflow,
+            runtimeHandlers: new Map(),
+          },
+          bus: MakaioBus,
+          signal,
+        });
+      },
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner });
+
+    const filePath = '/workspace/workflows/public-rerun-file-current.ts';
+    const originalCompletedPromise = new Promise<string>((resolve) => {
+      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
+        unsubscribe();
+        resolve(ctx.payload.executionId);
+      });
+    });
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, { filePath });
+    await expect(originalCompletedPromise).resolves.toBe(originalExecutionId);
+
+    const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
+      executionId: originalExecutionId,
+      mode: 'current',
+    });
+
+    const rerunConfig = capturedConfigs.at(1);
+    expect(rerunConfig?.executionId).toBe(rerunExecutionId);
+    expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
+    expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.definition).toBeUndefined();
+  });
+
   it('reruns an execution from the current workflow definition', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');

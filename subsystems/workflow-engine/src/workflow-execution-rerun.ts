@@ -94,7 +94,9 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
   const rerunExecutionId =
     options.mode === 'snapshot'
       ? await rerunSnapshot(deps, originalRunContext, startOptions)
-      : await startExecution(deps, originalRunContext.workflowId, startOptions);
+      : isEphemeralSourceBacked(originalRunContext)
+        ? await rerunCurrentSourceBacked(deps, originalRunContext, startOptions)
+        : await startExecution(deps, originalRunContext.workflowId, startOptions);
 
   return rerunExecutionId;
 }
@@ -112,12 +114,19 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
  * @returns Logical workflow ID for the new rerun execution.
  */
 function resolveSnapshotRerunWorkflowId(originalRunContext: WorkflowRunContext, workflow: WorkflowDefinition): string {
-  const isEphemeralSourceBacked =
-    originalRunContext.source.kind !== 'definition' && originalRunContext.workflowId === originalRunContext.executionId;
-  if (isEphemeralSourceBacked) {
+  if (isEphemeralSourceBacked(originalRunContext)) {
     return workflow.id;
   }
   return originalRunContext.workflowId;
+}
+
+/**
+ * Check whether a run context came from an ephemeral source-backed start.
+ * @param runContext - Durable context for the execution being rerun.
+ * @returns True when the logical workflow ID was the original execution ID.
+ */
+function isEphemeralSourceBacked(runContext: WorkflowRunContext): boolean {
+  return runContext.source.kind !== 'definition' && runContext.workflowId === runContext.executionId;
 }
 
 /**
@@ -145,6 +154,46 @@ async function rerunSnapshot(
     workflow,
     executionSource: originalRunContext.source,
     definitionSnapshot: workflow,
+    input: overrides.input,
+    config: overrides.config,
+    parentSessionId: overrides.parentSessionId,
+    triggerPayload: overrides.triggerPayload,
+    artifactRef: overrides.artifactRef,
+    executionHints: overrides.executionHints,
+    scopeOverride: overrides.scopeOverride,
+    executionLinks: overrides.executionLinks,
+  });
+}
+
+/**
+ * Execute a current-mode rerun for executions that were originally started
+ * directly from a source file rather than a stored definition row.
+ *
+ * The saved snapshot supplies the logical workflow ID and launch-time binding
+ * metadata, but is intentionally not passed as `definitionSnapshot`; the worker
+ * must reload the current source module and own the executable topology.
+ * @param deps - Shared executor state and callbacks.
+ * @param originalRunContext - The original execution's run context.
+ * @param overrides - Caller-supplied option overrides.
+ * @returns The new execution ID.
+ * @throws When the original execution has no definition snapshot.
+ */
+async function rerunCurrentSourceBacked(
+  deps: StartExecutionDeps,
+  originalRunContext: WorkflowRunContext,
+  overrides: DefinitionStartOptions,
+): Promise<string> {
+  const workflow = originalRunContext.definitionSnapshot;
+  if (workflow === undefined) {
+    throw new WorkflowError(
+      WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
+      `Workflow execution '${originalRunContext.executionId}' does not have a definition snapshot.`,
+    );
+  }
+
+  return startResolvedDefinitionExecution(deps, workflow.id, {
+    workflow,
+    executionSource: originalRunContext.source,
     input: overrides.input,
     config: overrides.config,
     parentSessionId: overrides.parentSessionId,
