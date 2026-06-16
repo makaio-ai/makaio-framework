@@ -130,6 +130,23 @@ function isEphemeralSourceBacked(runContext: WorkflowRunContext): boolean {
 }
 
 /**
+ * Return the persisted definition snapshot or fail with the public rerun error.
+ * @param runContext - Durable context for the execution being rerun.
+ * @returns Persisted workflow definition snapshot.
+ * @throws When the original execution has no definition snapshot.
+ */
+function requireDefinitionSnapshot(runContext: WorkflowRunContext): WorkflowDefinition {
+  const workflow = runContext.definitionSnapshot;
+  if (workflow === undefined) {
+    throw new WorkflowError(
+      WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
+      `Workflow execution '${runContext.executionId}' does not have a definition snapshot.`,
+    );
+  }
+  return workflow;
+}
+
+/**
  * Execute a snapshot-mode rerun using the original definition snapshot.
  * @param deps - Shared executor state and callbacks.
  * @param originalRunContext - The original execution's run context.
@@ -142,13 +159,7 @@ async function rerunSnapshot(
   originalRunContext: WorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
-  const workflow = originalRunContext.definitionSnapshot;
-  if (workflow === undefined) {
-    throw new WorkflowError(
-      WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
-      `Workflow execution '${originalRunContext.executionId}' does not have a definition snapshot.`,
-    );
-  }
+  const workflow = requireDefinitionSnapshot(originalRunContext);
 
   return startResolvedDefinitionExecution(deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
     workflow,
@@ -183,13 +194,7 @@ async function rerunCurrentSourceBacked(
   originalRunContext: WorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
-  const workflow = originalRunContext.definitionSnapshot;
-  if (workflow === undefined) {
-    throw new WorkflowError(
-      WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
-      `Workflow execution '${originalRunContext.executionId}' does not have a definition snapshot.`,
-    );
-  }
+  const workflow = requireDefinitionSnapshot(originalRunContext);
 
   // Current source reruns pass the saved snapshot only as launch metadata.
   // Input/config binding currently preserves caller values without schema
