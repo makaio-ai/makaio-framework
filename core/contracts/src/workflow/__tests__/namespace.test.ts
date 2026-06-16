@@ -1630,6 +1630,31 @@ describe('execution.paused event', () => {
 // State RPC subjects
 // ─────────────────────────────────────────────────────────────
 
+describe('WorkflowSubjects.rerun', () => {
+  it('exposes rerun as a public workflow request subject', () => {
+    expect(WorkflowSubjects.rerun.subject).toBe('rerun');
+
+    const request = WorkflowSchemas.rerun.request.parse({
+      executionId: 'wfx-original',
+      mode: 'snapshot',
+      input: { package: 'core' },
+      config: { strict: true },
+      reason: 'compare fixed implementation',
+    });
+    expect(request).toEqual({
+      executionId: 'wfx-original',
+      mode: 'snapshot',
+      input: { package: 'core' },
+      config: { strict: true },
+      reason: 'compare fixed implementation',
+    });
+
+    expect(WorkflowSchemas.rerun.response.parse({ executionId: 'wfx-rerun' })).toEqual({
+      executionId: 'wfx-rerun',
+    });
+  });
+});
+
 describe('state RPC subjects', () => {
   it('exposes workflow state subjects as nested accessors', () => {
     expect(WorkflowSubjects.state.get.subject).toBe('state.get');

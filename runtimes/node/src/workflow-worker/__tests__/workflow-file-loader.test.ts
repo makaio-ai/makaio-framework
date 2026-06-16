@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { WorkflowErrorCode } from '@makaio/contracts';
 import { loadWorkflowModule, loadWorkflowModules } from '../workflow-file-loader.js';
 import type { RuntimeLoadedWorkflow } from '../index.js';
 
@@ -96,7 +97,9 @@ describe('loadWorkflowModule', () => {
       const filePath = join(dir, 'bad-workflow.mjs');
       await writeFile(filePath, content, 'utf8');
 
-      await expect(loadWorkflowModule({ kind: 'path', path: filePath })).rejects.toThrow(/invalid workflow module/i);
+      const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+      await expect(promise).rejects.toThrow(/invalid workflow module/i);
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
     });
 
     it('throws when the module has no default export', async () => {
@@ -231,9 +234,9 @@ export default { definition, runtimeHandlers: new Map() };
 
   describe('kind: definition', () => {
     it('throws because definition-sourced workers are handled by the workflow executor', async () => {
-      await expect(loadWorkflowModule({ kind: 'definition', workflowId: 'some-id' })).rejects.toThrow(
-        /definition-sourced/i,
-      );
+      const promise = loadWorkflowModule({ kind: 'definition', workflowId: 'some-id' });
+      await expect(promise).rejects.toThrow(/definition-sourced/i);
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
     });
   });
 });
@@ -436,6 +439,23 @@ describe('loadWorkflowModules', () => {
         schema: { type: 'object', properties: { count: { type: 'number' } } },
         initial: { count: 0 },
       });
+    });
+
+    it('throws a not-executable workflow error when single-loader receives a bundle export', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const content = makeBundleModuleSource([
+        { id: 'bundle-a', stepIds: ['a'] },
+        { id: 'bundle-b', stepIds: ['b'] },
+      ]);
+      const filePath = join(dir, 'single-loader-bundle.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+      await expect(promise).rejects.toThrow(/single workflow export/i);
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
     });
 
     it('propagates validation errors for invalid workflows inside a bundle', async () => {

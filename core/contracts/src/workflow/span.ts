@@ -63,7 +63,7 @@ export type SpanRecord = z.infer<typeof SpanRecordSchema>;
 /**
  * Link type between workflow executions.
  */
-export const ExecutionLinkTypeSchema = z.enum(['triggered-by', 'feedback-loop']);
+export const ExecutionLinkTypeSchema = z.enum(['triggered-by', 'feedback-loop', 'rerun-of']);
 
 export type ExecutionLinkType = z.infer<typeof ExecutionLinkTypeSchema>;
 

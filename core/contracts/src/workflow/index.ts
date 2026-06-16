@@ -119,6 +119,8 @@ export {
   ExecutionLinkListQuerySchema,
 } from './span.js';
 export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink, ExecutionLinkListQuery } from './span.js';
+export { WorkflowError, WorkflowErrorCode } from './errors.js';
+export type { WorkflowErrorCode as WorkflowErrorCodeType } from './errors.js';
 export { JsonPatchOperationSchema } from './json-patch.js';
 export type { JsonPatchOperation } from './json-patch.js';
 export {

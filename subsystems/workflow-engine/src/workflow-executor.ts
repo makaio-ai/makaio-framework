@@ -1,7 +1,9 @@
+/* eslint max-lines: ["error", { "max": 600, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
   WORKFLOW_CANCELLED_REASON,
+  WorkflowError,
   createWorkflowCancelSubject,
   type IWorkflowRunner,
   type IWorkflowTriggerTypeRegistry,
@@ -26,6 +28,7 @@ import {
 } from './workflow-execution-finalizer.js';
 import { buildDefinitionRunnerParamsFromRunContext, type RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
+import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
 import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
@@ -33,7 +36,11 @@ import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { validateGateResumeDataForSchema } from './runtime/gate-resume-validation.js';
 import { WorkflowGateTimeoutScheduler } from './workflow-gate-timeout-scheduler.js';
-import { normalizeExecutionHints, normalizeStartInput } from './workflow-executor-input-normalization.js';
+import {
+  normalizeConfig,
+  normalizeExecutionHints,
+  normalizeStartInput,
+} from './workflow-executor-input-normalization.js';
 import { buildWorkflowRunContext, resolveWorkflowContext } from './workflow-run-context-builder.js';
 import {
   assertDurableResumeFramesPresent,
@@ -238,14 +245,10 @@ export class WorkflowExecutor extends BaseService {
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
       const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope, executionHints } =
         ctx.payload;
-      const workflowConfig: Record<string, unknown> =
-        config !== null && typeof config === 'object' && !Array.isArray(config)
-          ? (config as Record<string, unknown>)
-          : {};
       try {
         const executionId = await startExecution(this.buildStartDeps(), workflowId, {
           input: normalizeStartInput(input),
-          config: workflowConfig,
+          config: normalizeConfig(config) ?? {},
           parentSessionId,
           triggerPayload,
           artifactRef,
@@ -254,8 +257,43 @@ export class WorkflowExecutor extends BaseService {
         });
         ctx.setResult({ executionId });
       } catch (error) {
+        if (error instanceof WorkflowError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Failed to start workflow: ${message}`);
+      }
+    });
+
+    this.registerHandler(WorkflowSubjects.rerun, async (ctx) => {
+      const {
+        executionId,
+        mode,
+        input,
+        config,
+        parentSessionId,
+        triggerPayload,
+        artifactRef,
+        scope,
+        executionHints,
+        reason,
+      } = ctx.payload;
+      try {
+        const rerunExecutionId = await rerunExecution(this.buildStartDeps(), {
+          executionId,
+          mode,
+          input: normalizeStartInput(input),
+          config: normalizeConfig(config),
+          parentSessionId,
+          triggerPayload,
+          artifactRef,
+          executionHints: normalizeExecutionHints(executionHints),
+          scopeOverride: scope,
+          reason,
+        });
+        ctx.setResult({ executionId: rerunExecutionId });
+      } catch (error) {
+        if (error instanceof WorkflowError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to rerun workflow: ${message}`);
       }
     });
 

@@ -530,6 +530,143 @@ describe('workflow storage handlers', () => {
     ]);
   });
 
+  it('stores execution start and provenance links in one storage request', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-execution-start-links' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const sourceExecution = createWorkflowExecution({
+      id: 'execution-start-link-source',
+      workflowId: workflow.id,
+      status: 'completed',
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: sourceExecution });
+
+    const execution = createWorkflowExecution({ id: 'execution-start-link-target', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-links',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+    const link = {
+      sourceExecutionId: sourceExecution.id,
+      targetExecutionId: execution.id,
+      linkType: 'rerun-of' as const,
+      metadata: { mode: 'snapshot' },
+    };
+
+    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
+      execution,
+      runContext,
+      executionLinks: [link],
+    });
+
+    const { links } = await MakaioBus.request(WorkflowStorageSubjects.listExecutionLinks, {
+      sourceExecutionId: sourceExecution.id,
+    });
+    expect(links).toEqual([link]);
+  });
+
+  it('rolls back execution start when an atomic provenance link is invalid', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-execution-start-link-rollback' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-start-link-rollback', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-link-rollback',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
+        execution,
+        runContext,
+        executionLinks: [
+          {
+            sourceExecutionId: 'missing-source-execution',
+            targetExecutionId: execution.id,
+            linkType: 'rerun-of',
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id }),
+    ).resolves.toEqual({ execution: null });
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id }),
+    ).resolves.toEqual({ runContext: null });
+  });
+
+  it('rejects atomic provenance links targeting a different execution', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-execution-start-link-target-mismatch' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const sourceExecution = createWorkflowExecution({
+      id: 'execution-start-link-target-source',
+      workflowId: workflow.id,
+      status: 'completed',
+    });
+    const unrelatedTarget = createWorkflowExecution({
+      id: 'execution-start-link-target-unrelated',
+      workflowId: workflow.id,
+      status: 'completed',
+    });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: sourceExecution });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: unrelatedTarget });
+
+    const execution = createWorkflowExecution({ id: 'execution-start-link-target-mismatch', workflowId: workflow.id });
+    const now = Date.now();
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-coordinator-link-target-mismatch',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      context: { repoPath: '/workspace', makaioHome: '/home/user/.makaio', os: 'darwin', arch: 'arm64' },
+      env: {},
+      createdAt: now,
+    });
+
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
+        execution,
+        runContext,
+        executionLinks: [
+          {
+            sourceExecutionId: sourceExecution.id,
+            targetExecutionId: unrelatedTarget.id,
+            linkType: 'rerun-of',
+          },
+        ],
+      }),
+    ).rejects.toThrow('setExecutionStart requires executionLinks.targetExecutionId to match execution.id');
+    await expect(
+      MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id }),
+    ).resolves.toEqual({ execution: null });
+  });
+
   it('initializes, reads, and patches workflow state with sequence checks', async () => {
     const workflow = createWorkflowDefinition({ id: 'workflow-state-sequence' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });

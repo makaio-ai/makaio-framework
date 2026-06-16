@@ -58,11 +58,12 @@ export const WorkflowWorkerConfigSchema = z.object({
   /** Workflow source descriptor — tells the worker where to load the workflow from. */
   source: WorkflowWorkerSourceSchema,
   /**
-   * Serialized workflow definition for `'definition'`-sourced workers.
+   * Serialized workflow definition for workers.
    *
-   * When `source.kind === 'definition'`, the executor populates this field so
-   * the worker can construct a {@link LoadedWorkflow} directly without querying
-   * storage. Absent for `'path'` and `'source'` kinds.
+   * Definition-sourced workers construct a {@link LoadedWorkflow} directly from
+   * this field. Source-backed workers may also receive it when the executor
+   * must pin execution to a stored snapshot while loading runtime handlers from
+   * the source module.
    */
   definition: WorkflowDefinitionSchema.optional(),
   /** Unique execution identifier for this workflow run. */

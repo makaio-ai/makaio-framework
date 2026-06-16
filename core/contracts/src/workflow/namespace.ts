@@ -182,6 +182,21 @@ export const WorkflowSchemas = {
     }),
     response: z.object({ executionId: z.string() }),
   },
+  rerun: {
+    request: z.object({
+      executionId: z.string().min(1),
+      mode: z.enum(['snapshot', 'current']),
+      input: JsonValueSchema.optional(),
+      config: JsonValueSchema.optional(),
+      artifactRef: WorkflowArtifactRefSchema.optional(),
+      scope: WorkflowExecutionScopeSchema.optional(),
+      executionHints: ExecutionHintsSchema.optional(),
+      parentSessionId: z.string().optional(),
+      triggerPayload: JsonObjectContractSchema.optional(),
+      reason: z.string().min(1).optional(),
+    }),
+    response: z.object({ executionId: z.string() }),
+  },
   cancel: {
     request: z.object({ executionId: z.string(), reason: z.string().optional() }),
     response: z.object({ cancelled: z.boolean() }),
