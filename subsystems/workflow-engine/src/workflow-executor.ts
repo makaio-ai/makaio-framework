@@ -3,6 +3,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   SessionSubjects,
   WORKFLOW_CANCELLED_REASON,
+  WorkflowError,
   createWorkflowCancelSubject,
   type IWorkflowRunner,
   type IWorkflowTriggerTypeRegistry,
@@ -256,6 +257,7 @@ export class WorkflowExecutor extends BaseService {
         });
         ctx.setResult({ executionId });
       } catch (error) {
+        if (error instanceof WorkflowError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Failed to start workflow: ${message}`);
       }
@@ -289,6 +291,7 @@ export class WorkflowExecutor extends BaseService {
         });
         ctx.setResult({ executionId: rerunExecutionId });
       } catch (error) {
+        if (error instanceof WorkflowError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`Failed to rerun workflow: ${message}`);
       }

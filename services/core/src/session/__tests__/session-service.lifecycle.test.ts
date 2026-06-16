@@ -3,13 +3,14 @@
  *
  * Tests the framework-core handlers: session.create, session.get,
  * session.list, session.close, session.update, session.archive,
- * session.purge, session.agent.added, and session.agent.removed.
+ * session.purge, session.agent.added, session.agent.removed, and focused
+ * session.fork metadata propagation.
  *
  * Most tests use real bus requests against in-memory storage backends; the
  * ephemeral-mode regression uses an isolated bus without storage handlers.
  *
  * Host-specific handler tests (session.update with workstream validation,
- * session.resume, and branching operations) live in the host test layer.
+ * session.resume, and full branching operations) live in the host test layer.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -18,6 +19,7 @@ import { SessionSubjects } from '@makaio/contracts';
 import type { SessionUpdatedEvent } from '@makaio/contracts';
 import { MakaioSessionService } from '../session-service.js';
 import { registerCoreSessionServiceHandlers } from '../session-service-handlers-core.js';
+import { registerForkHandler } from '../handlers/fork-handler.js';
 import { registerMemorySessionStorage } from '../storage/memory-handler.js';
 import { registerMemorySessionEventStorage } from '../session-events/memory-handler.js';
 
@@ -385,6 +387,50 @@ describe('MakaioSessionService - Lifecycle', () => {
           { sessionId, changedProperties: ['metadata'] },
           { sessionId, changedProperties: ['metadata'] },
         ]);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  // ===========================================================================
+  // Session Fork Tests
+  // ===========================================================================
+
+  describe('session.fork', () => {
+    it('propagates JSON-safe metadata onto the child session', async () => {
+      const cleanup = registerForkHandler(MakaioBus);
+
+      try {
+        const { sessionId: sourceSessionId } = await MakaioBus.request(SessionSubjects.create, {
+          title: 'Source session',
+        });
+        const metadata = {
+          downstream: {
+            workflowId: 'workflow-fork',
+            branchCorrelationId: 'branch-1',
+            retryCount: 2,
+            active: true,
+            nullable: null,
+          },
+          tags: ['fork', 'metadata'],
+        };
+
+        const { sessionId: childSessionId } = await MakaioBus.request(SessionSubjects.fork, {
+          sourceSessionId,
+          metadata,
+        });
+
+        const { session: childSession } = await MakaioBus.request(SessionSubjects.get, {
+          sessionId: childSessionId,
+        });
+
+        expect(childSession).toMatchObject({
+          sessionId: childSessionId,
+          parentSessionId: sourceSessionId,
+          branchKind: 'fork',
+          metadata,
+        });
       } finally {
         cleanup();
       }

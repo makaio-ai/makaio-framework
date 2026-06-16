@@ -1,4 +1,4 @@
-import { WorkflowError, WorkflowErrorCode, type WorkflowRunContext } from '@makaio/contracts';
+import { WorkflowError, WorkflowErrorCode, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { DefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
 import { startExecution, startResolvedDefinitionExecution } from './workflow-execution-start.js';
@@ -16,18 +16,6 @@ export interface RerunExecutionOptions extends DefinitionStartOptions {
 }
 
 /**
- * Format a {@link WorkflowError} as a plain `Error` with the code prefix.
- *
- * Bus handlers wrap errors in generic `Error` instances during transport, so
- * the code must be embedded in the message string for callers to match on.
- * @param error - Workflow error to format.
- * @returns Plain error with `"CODE: message"` format.
- */
-function withCode(error: WorkflowError): Error {
-  return new Error(`${error.code}: ${error.message}`);
-}
-
-/**
  * Load the original run context for the execution being rerun.
  * @param deps - Executor dependencies providing the bus.
  * @param executionId - Execution to look up.
@@ -39,11 +27,9 @@ async function loadOriginalRunContext(deps: StartExecutionDeps, executionId: str
     executionId,
   });
   if (runContext === null) {
-    throw withCode(
-      new WorkflowError(
-        WorkflowErrorCode.RUN_CONTEXT_NOT_FOUND,
-        `Run context not found for workflow execution '${executionId}'.`,
-      ),
+    throw new WorkflowError(
+      WorkflowErrorCode.RUN_CONTEXT_NOT_FOUND,
+      `Run context not found for workflow execution '${executionId}'.`,
     );
   }
   return runContext;
@@ -60,7 +46,11 @@ function buildRerunLinkMetadata(mode: 'snapshot' | 'current', reason: string | u
 }
 
 /**
- * Rerun a completed workflow execution.
+ * Rerun a workflow execution with a persisted run context.
+ *
+ * Rerun intentionally keys off the durable run context rather than the
+ * execution row status. Recovery, paused resume, failed retry, and completed
+ * replay all need the same immutable start metadata.
  *
  * Two modes are supported:
  * - `snapshot`: re-executes using the original execution's
@@ -110,6 +100,27 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
 }
 
 /**
+ * Resolve the logical workflow definition ID for a snapshot replay.
+ *
+ * Ephemeral source-backed starts use `executionId` as `workflowId` so the
+ * execution can be persisted without a definition row. Once a runner has loaded
+ * and stored a snapshot, rerunning that snapshot should dispatch under the
+ * loaded definition's ID. Definition-backed executions already have a stable
+ * workflow ID and keep it unchanged.
+ * @param originalRunContext - Durable context for the execution being rerun.
+ * @param workflow - Snapshot definition selected for replay.
+ * @returns Logical workflow ID for the new rerun execution.
+ */
+function resolveSnapshotRerunWorkflowId(originalRunContext: WorkflowRunContext, workflow: WorkflowDefinition): string {
+  const isEphemeralSourceBacked =
+    originalRunContext.source.kind !== 'definition' && originalRunContext.workflowId === originalRunContext.executionId;
+  if (isEphemeralSourceBacked) {
+    return workflow.id;
+  }
+  return originalRunContext.workflowId;
+}
+
+/**
  * Execute a snapshot-mode rerun using the original definition snapshot.
  * @param deps - Shared executor state and callbacks.
  * @param originalRunContext - The original execution's run context.
@@ -124,15 +135,13 @@ async function rerunSnapshot(
 ): Promise<string> {
   const workflow = originalRunContext.definitionSnapshot;
   if (workflow === undefined) {
-    throw withCode(
-      new WorkflowError(
-        WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
-        `Workflow execution '${originalRunContext.executionId}' does not have a definition snapshot.`,
-      ),
+    throw new WorkflowError(
+      WorkflowErrorCode.SNAPSHOT_UNAVAILABLE,
+      `Workflow execution '${originalRunContext.executionId}' does not have a definition snapshot.`,
     );
   }
 
-  return startResolvedDefinitionExecution(deps, originalRunContext.workflowId, {
+  return startResolvedDefinitionExecution(deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
     workflow,
     executionSource: originalRunContext.source,
     definitionSnapshot: workflow,

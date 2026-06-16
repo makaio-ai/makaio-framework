@@ -78,6 +78,36 @@ export default {
     expect(loaded.runtimeHandlers.size).toBe(0);
   });
 
+  it('rejects source-backed workflow modules whose definition ID differs from the configured workflow ID', async () => {
+    const source = `
+const definition = {
+  id: 'loaded-workflow-id',
+  name: 'Source Mismatch Workflow',
+  root: { id: 'loaded-workflow-id__root', type: 'sequence', nodes: [] },
+  triggers: [],
+  scope: { type: 'global' },
+};
+
+export default {
+  definition,
+  runtimeHandlers: new Map(),
+};
+`;
+
+    await expect(
+      loadWorkflowFromConfig(
+        makeConfig({
+          executionId: 'exec-source-mismatch',
+          workflowId: 'configured-workflow-id',
+          source: { kind: 'source', filename: 'source-mismatch-workflow.mjs', source },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      code: 'WORKFLOW_SOURCE_MISMATCH',
+      message: `Source-backed workflow for logical workflow 'configured-workflow-id' loaded definition 'loaded-workflow-id'.`,
+    });
+  });
+
   it('loads a path-sourced workflow module from a real .mjs file', async () => {
     const dir = join(tmpdir(), `wf-loader-path-${randomBytes(6).toString('hex')}`);
     tempDirs.push(dir);

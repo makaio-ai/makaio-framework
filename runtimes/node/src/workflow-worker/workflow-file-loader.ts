@@ -3,7 +3,13 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { WorkflowDefinitionSchema, type WorkflowWorkerSource, type WorkflowZodSchemas } from '@makaio/contracts';
+import {
+  WorkflowDefinitionSchema,
+  WorkflowError,
+  WorkflowErrorCode,
+  type WorkflowWorkerSource,
+  type WorkflowZodSchemas,
+} from '@makaio/contracts';
 import type { RuntimeLoadedWorkflow } from './types.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -22,7 +28,8 @@ import type { RuntimeLoadedWorkflow } from './types.js';
  */
 function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   if (typeof value !== 'object' || value === null) {
-    throw new Error(
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
       `Invalid workflow module default export: expected an object with 'definition' and 'runtimeHandlers', got ${typeof value}.`,
     );
   }
@@ -30,14 +37,18 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   const obj = value as Record<string, unknown>;
 
   if (!(obj['runtimeHandlers'] instanceof Map)) {
-    throw new Error(`Invalid workflow module default export: 'runtimeHandlers' must be a Map instance.`);
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
+      `Invalid workflow module default export: 'runtimeHandlers' must be a Map instance.`,
+    );
   }
 
   // Workflow files export defineWorkflow() builders, whose definition is the
   // persisted pipeline-primitive definition contract.
   const definitionResult = WorkflowDefinitionSchema.safeParse(obj['definition']);
   if (!definitionResult.success) {
-    throw new Error(
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
       `Invalid workflow module default export: 'definition' must satisfy WorkflowDefinitionSchema. ` +
         definitionResult.error.message,
     );
@@ -175,7 +186,8 @@ export async function loadWorkflowModules(
  */
 export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<RuntimeLoadedWorkflow> {
   if (source.kind === 'definition') {
-    throw new Error(
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
       `Definition-sourced workers are handled by the workflow executor, not the file loader. ` +
         `Received source: ${JSON.stringify(source)}`,
     );
@@ -184,7 +196,8 @@ export async function loadWorkflowModule(source: WorkflowWorkerSource): Promise<
   const workflows = await loadWorkflowModules(source);
 
   if (workflows.length !== 1) {
-    throw new Error(
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
       `loadWorkflowModule expects a single workflow export, but the module exported ` +
         `${String(workflows.length)} workflows. Use loadWorkflowModules for bundle exports.`,
     );
