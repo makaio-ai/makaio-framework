@@ -191,6 +191,10 @@ async function rerunCurrentSourceBacked(
     );
   }
 
+  // Current source reruns pass the saved snapshot only as launch metadata.
+  // Input/config binding currently preserves caller values without schema
+  // validation or defaults; the worker reloads the source and persists the
+  // executable definition snapshot it actually ran.
   return startResolvedDefinitionExecution(deps, workflow.id, {
     workflow,
     executionSource: originalRunContext.source,
