@@ -364,7 +364,7 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
   const { config } = deps;
   return {
     source: params.source,
-    ...(params.source.kind === 'definition' ? { definition: params.workflow } : {}),
+    definition: params.workflow,
     executionId: params.executionId,
     workflowId: params.workflowId,
     triggerPayload: params.sanitizedTriggerPayload,

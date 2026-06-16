@@ -5,6 +5,7 @@ import {
   SessionSubjects,
   WorkflowWorkerSourceSchema,
   type ExecutionHints,
+  type ExecutionLink,
   type IWorkflowRunner,
   type JsonValue,
   type WorkflowArtifactRef,
@@ -200,14 +201,21 @@ function seedDefinitionExecution(
  * @param execution - The new `WorkflowExecution` record.
  * @param runContext - The pre-built {@link WorkflowRunContext} snapshot.
  * @param initialState - Optional validated initial workflow state.
+ * @param executionLinks - Optional links persisted in the same start transaction.
  */
 async function persistExecutionStart(
   bus: IMakaioBus,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
   initialState: JsonValue | undefined,
+  executionLinks: readonly ExecutionLink[] | undefined,
 ): Promise<void> {
-  await bus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext, initialState });
+  await bus.request(WorkflowStorageSubjects.setExecutionStart, {
+    execution,
+    runContext,
+    ...(initialState !== undefined ? { initialState } : {}),
+    ...(executionLinks !== undefined && executionLinks.length > 0 ? { executionLinks: [...executionLinks] } : {}),
+  });
 }
 
 /**
@@ -365,6 +373,12 @@ export interface DefinitionStartOptions {
   readonly executionHints?: WorkflowRunContext['executionHints'];
   /** Optional execution scope override. */
   readonly scopeOverride?: WorkflowExecutionScope;
+  /**
+   * Optional provenance links to persist atomically with the execution start.
+   * @param executionId - The generated target execution ID.
+   * @returns Links that reference the generated execution.
+   */
+  readonly executionLinks?: (executionId: string) => readonly ExecutionLink[];
 }
 
 /**
@@ -501,7 +515,7 @@ export async function startResolvedDefinitionExecution(
       runContext,
     );
     const initialState = executionSource.kind === 'definition' ? getValidatedInitialWorkflowState(workflow) : undefined;
-    await persistExecutionStart(bus, execution, runContext, initialState);
+    await persistExecutionStart(bus, execution, runContext, initialState, options.executionLinks?.(executionId));
 
     const startedAt = execution.startedAt;
     const startedEventTask = emitExecutionStarted(bus, {
@@ -642,7 +656,7 @@ export async function startFileExecution(
       triggerPayload: sanitizedTriggerPayload ?? {},
       workspaceRoot,
     });
-    await persistExecutionStart(bus, execution, runContext, undefined);
+    await persistExecutionStart(bus, execution, runContext, undefined, undefined);
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 

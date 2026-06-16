@@ -69,7 +69,8 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
   const config = options.config ?? originalRunContext.config ?? {};
   const triggerPayload = options.triggerPayload ?? originalRunContext.triggerPayload;
   const artifactRef = options.artifactRef ?? originalRunContext.artifactRef;
-  const executionHints = options.executionHints ?? originalRunContext.executionHints;
+  const executionHints =
+    options.executionHints ?? (options.mode === 'snapshot' ? originalRunContext.executionHints : undefined);
   const scopeOverride = options.scopeOverride ?? originalRunContext.scope;
 
   const startOptions: DefinitionStartOptions = {
@@ -80,21 +81,20 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
     artifactRef,
     executionHints,
     scopeOverride,
+    executionLinks: (rerunExecutionId) => [
+      {
+        sourceExecutionId: options.executionId,
+        targetExecutionId: rerunExecutionId,
+        linkType: 'rerun-of',
+        metadata: buildRerunLinkMetadata(options.mode, options.reason),
+      },
+    ],
   };
 
   const rerunExecutionId =
     options.mode === 'snapshot'
       ? await rerunSnapshot(deps, originalRunContext, startOptions)
       : await startExecution(deps, originalRunContext.workflowId, startOptions);
-
-  await deps.bus.request(WorkflowStorageSubjects.setExecutionLink, {
-    link: {
-      sourceExecutionId: options.executionId,
-      targetExecutionId: rerunExecutionId,
-      linkType: 'rerun-of',
-      metadata: buildRerunLinkMetadata(options.mode, options.reason),
-    },
-  });
 
   return rerunExecutionId;
 }
@@ -152,5 +152,6 @@ async function rerunSnapshot(
     artifactRef: overrides.artifactRef,
     executionHints: overrides.executionHints,
     scopeOverride: overrides.scopeOverride,
+    executionLinks: overrides.executionLinks,
   });
 }

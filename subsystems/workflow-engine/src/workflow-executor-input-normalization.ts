@@ -13,10 +13,23 @@ import { ExecutionHintsSchema, JsonValueSchema, type JsonValue, type WorkflowRun
  */
 export function normalizeConfig(config: unknown): Record<string, unknown> | undefined {
   if (config === undefined) return undefined;
-  if (config !== null && typeof config === 'object' && !Array.isArray(config)) {
-    return config as Record<string, unknown>;
+  if (isPlainRecord(config)) {
+    return config;
   }
   return {};
+}
+
+/**
+ * Check whether a value is a JSON-like object record.
+ * @param value - Candidate value.
+ * @returns True when the value is a plain object or null-prototype object.
+ */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**

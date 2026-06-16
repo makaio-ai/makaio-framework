@@ -1748,6 +1748,7 @@ describe('workflow public subjects', () => {
     expect(rerunConfig?.executionId).toBe(rerunExecutionId);
     expect(rerunConfig?.workflowId).toBe(loadedWorkflow.id);
     expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.definition?.id).toBe(loadedWorkflow.id);
 
     const { runContext: rerunRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
       executionId: rerunExecutionId,
@@ -1762,15 +1763,20 @@ describe('workflow public subjects', () => {
       throw new Error('Workflow executor test setup did not initialize.');
     }
 
-    const workflow = createWorkflowDefinition({
-      id: 'public-rerun-current',
-      name: 'Public Rerun Current v1',
-      root: {
-        id: 'public-rerun-current-root',
-        type: 'sequence',
-        nodes: [],
+    const workflow = {
+      ...createWorkflowDefinition({
+        id: 'public-rerun-current',
+        name: 'Public Rerun Current v1',
+        root: {
+          id: 'public-rerun-current-root',
+          type: 'sequence',
+          nodes: [],
+        },
+      }),
+      executionHints: {
+        providers: { piscina: { maxWorkers: 1 } },
       },
-    });
+    };
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
 
     const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.start, {
@@ -1782,6 +1788,9 @@ describe('workflow public subjects', () => {
       workflow: {
         ...workflow,
         name: 'Public Rerun Current v2',
+        executionHints: {
+          providers: { piscina: { maxWorkers: 4 } },
+        },
       },
     });
 
@@ -1796,6 +1805,7 @@ describe('workflow public subjects', () => {
     });
     expect(rerunRunContext?.definitionSnapshot?.name).toBe('Public Rerun Current v2');
     expect(rerunRunContext?.inputs).toEqual({ value: 'override' });
+    expect(rerunRunContext?.executionHints).toEqual({ providers: { piscina: { maxWorkers: 4 } } });
   });
 
   it('fails snapshot rerun when the original execution has no definition snapshot', async () => {

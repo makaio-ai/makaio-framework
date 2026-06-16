@@ -11,6 +11,7 @@ import {
 import type {
   JsonPatchOperation,
   JsonValue,
+  ExecutionLink,
   WorkflowExecution,
   WorkflowGateInstance,
   WorkflowRunContext,
@@ -130,18 +131,25 @@ function buildExecutionListPredicates(
  * @param execution - Execution row to upsert.
  * @param runContext - Matching run-context snapshot to upsert.
  * @param initialState - Validated initial workflow state to persist, when the workflow declares state.
+ * @param executionLinks - Optional provenance links to persist with the execution start.
  */
 async function upsertExecutionStart(
   db: MakaioDatabase,
   execution: WorkflowExecution,
   runContext: WorkflowRunContext,
   initialState: JsonValue | undefined,
+  executionLinks: readonly ExecutionLink[] | undefined,
 ): Promise<void> {
   if (runContext.executionId !== execution.id) {
     throw new Error('setExecutionStart requires execution.id to match runContext.executionId');
   }
-  const { workflowExecutions, workflowRunContexts, workflowExecutionState, workflowExecutionStateEvents } =
-    resolveSchema(db, workflowEngineSchema);
+  const {
+    workflowExecutions,
+    workflowRunContexts,
+    workflowExecutionState,
+    workflowExecutionStateEvents,
+    workflowExecutionLinks,
+  } = resolveSchema(db, workflowEngineSchema);
   const dbValues = toExecutionDbValues(execution);
   await executeTransaction(db, async (tx) => {
     await tx.insert(workflowExecutions).values(dbValues).onConflictDoUpdate({
@@ -187,6 +195,15 @@ async function upsertExecutionStart(
           createdAt: now,
         })
         .onConflictDoNothing();
+    }
+    for (const link of executionLinks ?? []) {
+      await tx
+        .insert(workflowExecutionLinks)
+        .values(link)
+        .onConflictDoUpdate({
+          target: [workflowExecutionLinks.sourceExecutionId, workflowExecutionLinks.targetExecutionId],
+          set: link,
+        });
     }
   });
 }
@@ -343,7 +360,13 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
     // but TypeScript cannot unify duplicate z.infer results here.
     const execution = ctx.payload.execution as WorkflowExecution;
     const runContext = ctx.payload.runContext as WorkflowRunContext;
-    await upsertExecutionStart(db, execution, runContext, ctx.payload.initialState as JsonValue | undefined);
+    await upsertExecutionStart(
+      db,
+      execution,
+      runContext,
+      ctx.payload.initialState as JsonValue | undefined,
+      ctx.payload.executionLinks as ExecutionLink[] | undefined,
+    );
 
     ctx.setResult({ id: execution.id, executionId: execution.id });
   });

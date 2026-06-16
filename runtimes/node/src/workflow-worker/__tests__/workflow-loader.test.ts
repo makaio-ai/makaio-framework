@@ -201,4 +201,25 @@ describe('loadWorkflowFromConfig — path/source source', () => {
     expect(loaded.definition.id).toBe('workflow-file-export-id');
     expect(loaded.runtimeHandlers.size).toBe(1);
   });
+
+  it('uses serialized snapshot definitions while preserving source-loaded runtime handlers', async () => {
+    const runtimeHandler = () => ({ ok: true });
+    mockLoadWorkflowModule.mockResolvedValueOnce({
+      definition: makeDefinition({ id: 'stored-workflow-id', name: 'Current File Topology' }),
+      runtimeHandlers: new Map([['step1', runtimeHandler]]),
+    });
+
+    const snapshotDefinition = makeDefinition({ id: 'stored-workflow-id', name: 'Stored Snapshot Topology' });
+    const config = makeConfig({
+      executionId: 'wfx-source-snapshot',
+      workflowId: 'stored-workflow-id',
+      source: { kind: 'path', path: '/repo/workflows/stored-workflow.mjs' },
+      definition: snapshotDefinition,
+    });
+
+    const loaded = await loadWorkflowFromConfig(config);
+
+    expect(loaded.definition).toBe(snapshotDefinition);
+    expect(loaded.runtimeHandlers.get('step1')).toBe(runtimeHandler);
+  });
 });

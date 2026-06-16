@@ -110,6 +110,7 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
         execution: WorkflowExecutionSchema,
         runContext: WorkflowRunContextSchema,
         initialState: JsonValueSchema.optional(),
+        executionLinks: z.array(ExecutionLinkSchema).optional(),
       }),
       response: z.object({ id: z.string(), executionId: z.string() }),
     },
