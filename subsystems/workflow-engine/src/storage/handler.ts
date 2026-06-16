@@ -143,6 +143,11 @@ async function upsertExecutionStart(
   if (runContext.executionId !== execution.id) {
     throw new Error('setExecutionStart requires execution.id to match runContext.executionId');
   }
+  for (const link of executionLinks ?? []) {
+    if (link.targetExecutionId !== execution.id) {
+      throw new Error('setExecutionStart requires executionLinks.targetExecutionId to match execution.id');
+    }
+  }
   const {
     workflowExecutions,
     workflowRunContexts,
