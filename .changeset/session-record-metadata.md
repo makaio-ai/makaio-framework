@@ -1,6 +1,7 @@
 ---
 "@makaio/contracts": patch
 "@makaio/framework": patch
+"@makaio/runtime-node": patch
 "@makaio/storage-pg": patch
 ---
 

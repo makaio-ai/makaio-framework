@@ -1,7 +1,7 @@
 import { WorkflowError, WorkflowErrorCode, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { DefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
-import { startExecution, startResolvedDefinitionExecution } from './workflow-execution-start.js';
+import { startExecution, startFileExecution, startResolvedDefinitionExecution } from './workflow-execution-start.js';
 
 /**
  * Options accepted by {@link rerunExecution}.
@@ -187,13 +187,16 @@ async function rerunSnapshot(
  * @param originalRunContext - The original execution's run context.
  * @param overrides - Caller-supplied option overrides.
  * @returns The new execution ID.
- * @throws When the original execution has no definition snapshot.
+ * @throws When the original source cannot be reloaded and has no definition snapshot.
  */
 async function rerunCurrentSourceBacked(
   deps: StartExecutionDeps,
   originalRunContext: WorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
+  if (originalRunContext.definitionSnapshot === undefined && originalRunContext.source.kind === 'path') {
+    return startFileExecution(deps, originalRunContext.source.path, overrides);
+  }
   const workflow = requireDefinitionSnapshot(originalRunContext);
 
   // Current source reruns pass the saved snapshot only as launch metadata.

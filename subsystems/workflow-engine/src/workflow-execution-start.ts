@@ -586,6 +586,29 @@ function seedFileExecution(
 }
 
 /**
+ * Create the coordinator session that owns a file-backed execution.
+ * @param bus - Bus used for session creation.
+ * @param parentSessionId - Optional parent coordinator session.
+ * @param filePath - Workflow file path used for the session title.
+ * @param workspaceRoot - Working directory assigned to the coordinator session.
+ * @returns Created coordinator session ID.
+ */
+async function createFileCoordinatorSession(
+  bus: IMakaioBus,
+  parentSessionId: string | undefined,
+  filePath: string,
+  workspaceRoot: string,
+): Promise<string> {
+  const { sessionId } = await bus.request(SessionSubjects.create, {
+    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
+    branchKind: 'coordinator',
+    title: `Workflow: ${filePath}`,
+    targetWorkingDirectory: workspaceRoot,
+  });
+  return sessionId;
+}
+
+/**
  * Start a new workflow execution from a file path on disk.
  *
  * Unlike {@link startExecution}, this variant does not look up the workflow
@@ -603,23 +626,27 @@ function seedFileExecution(
 export async function startFileExecution(
   deps: StartExecutionDeps,
   filePath: string,
-  options: {
-    triggerPayload?: Record<string, unknown>;
-    scopeOverride?: WorkflowExecutionScope;
-  } = {},
+  options: Pick<
+    DefinitionStartOptions,
+    | 'artifactRef'
+    | 'config'
+    | 'executionHints'
+    | 'executionLinks'
+    | 'input'
+    | 'parentSessionId'
+    | 'scopeOverride'
+    | 'triggerPayload'
+  > = {},
 ): Promise<string> {
-  const { bus, config, activeExecutions, executionTasks } = deps;
-  const { triggerPayload, scopeOverride } = options;
+  const { bus, activeExecutions, executionTasks } = deps;
+  const { artifactRef, executionHints, parentSessionId, triggerPayload, scopeOverride } = options;
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
+  const boundInputs = options.input === undefined ? {} : options.input;
+  const boundConfig = options.config ?? {};
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? { type: 'global' };
-  const workspaceRoot = config.platformDefaults.cwd;
-
-  const { sessionId: coordinatorSessionId } = await bus.request(SessionSubjects.create, {
-    branchKind: 'coordinator',
-    title: `Workflow: ${filePath}`,
-    targetWorkingDirectory: workspaceRoot,
-  });
+  const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
+  const coordinatorSessionId = await createFileCoordinatorSession(bus, parentSessionId, filePath, workspaceRoot);
 
   // Ephemeral execution: use the execution ID as workflowId so storage does
   // not require a persisted file/source workflow definition row.
@@ -629,10 +656,11 @@ export async function startFileExecution(
     workflowId,
     coordinatorSessionId,
     status: 'running',
-    inputs: {},
-    config: {},
+    inputs: boundInputs,
+    config: boundConfig,
     startedAt: Date.now(),
     triggerPayload: sanitizedTriggerPayload,
+    ...(artifactRef !== undefined ? { artifactRef } : {}),
     scope: resolvedScope,
   };
 
@@ -651,13 +679,15 @@ export async function startFileExecution(
       workflowId,
       coordinatorSessionId,
       source: { kind: 'path', path: filePath },
-      inputs: {},
-      config: {},
+      inputs: boundInputs,
+      config: boundConfig,
       scope: resolvedScope,
       triggerPayload: sanitizedTriggerPayload ?? {},
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+      ...(executionHints !== undefined ? { executionHints } : {}),
       workspaceRoot,
     });
-    await persistExecutionStart(bus, execution, runContext, undefined, undefined);
+    await persistExecutionStart(bus, execution, runContext, undefined, options.executionLinks?.(executionId));
 
     seedFileExecution(activeExecutions, execution, filePath, resolvedScope, runContext);
 
@@ -666,6 +696,7 @@ export async function startFileExecution(
       workflowId,
       coordinatorSessionId,
       startedAt: execution.startedAt,
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
     });
     const executionTask = buildFileExecutionTask(deps.buildRunnerTaskDeps(workflowRunner), {
       executionId,
@@ -673,6 +704,10 @@ export async function startFileExecution(
       filePath,
       coordinatorSessionId,
       sanitizedTriggerPayload: sanitizedTriggerPayload ?? {},
+      boundInputs,
+      boundConfig,
+      ...(artifactRef !== undefined ? { artifactRef } : {}),
+      ...(executionHints !== undefined ? { executionHints } : {}),
       scope: resolvedScope,
       workspaceRoot,
     });

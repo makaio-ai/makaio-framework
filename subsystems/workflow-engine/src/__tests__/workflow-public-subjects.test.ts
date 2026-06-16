@@ -1824,6 +1824,68 @@ describe('workflow public subjects', () => {
     expect(rerunConfig?.definition).toBeUndefined();
   });
 
+  it('reruns failed file-backed executions in current mode without a loaded snapshot', async () => {
+    if (setup) {
+      await teardownWorkflowExecutorTest(setup);
+      setup = undefined;
+    }
+
+    const capturedConfigs: WorkflowWorkerConfig[] = [];
+    let runCount = 0;
+    const workflowRunner: IWorkflowRunner = {
+      run(config, signal) {
+        capturedConfigs.push(config);
+        runCount += 1;
+        if (runCount === 1) {
+          return Promise.reject(new Error('module load failed before snapshot persistence'));
+        }
+        return waitForRunnerAbort(config, signal);
+      },
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner });
+
+    const filePath = '/workspace/workflows/public-rerun-file-current-load-failure.ts';
+    const { executionId: originalExecutionId } = await MakaioBus.request(WorkflowSubjects.runFile, { filePath });
+    await expectExecutionStatus(originalExecutionId, 'failed');
+
+    const { runContext: originalRunContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
+      executionId: originalExecutionId,
+    });
+    expect(originalRunContext?.source).toEqual({ kind: 'path', path: filePath });
+    expect(originalRunContext?.workflowId).toBe(originalExecutionId);
+    expect(originalRunContext?.definitionSnapshot).toBeUndefined();
+
+    const { executionId: rerunExecutionId } = await MakaioBus.request(WorkflowSubjects.rerun, {
+      executionId: originalExecutionId,
+      mode: 'current',
+      input: { retry: true },
+      config: { fixed: true },
+      executionHints: { providers: { piscina: { maxWorkers: 1 } } },
+      reason: 'source fixed',
+    });
+
+    const rerunConfig = capturedConfigs.at(1);
+    expect(rerunConfig?.executionId).toBe(rerunExecutionId);
+    expect(rerunConfig?.workflowId).toBe(rerunExecutionId);
+    expect(rerunConfig?.source).toEqual({ kind: 'path', path: filePath });
+    expect(rerunConfig?.definition).toBeUndefined();
+    expect(rerunConfig?.inputs).toEqual({ retry: true });
+    expect(rerunConfig?.config).toEqual({ fixed: true });
+    expect(rerunConfig?.executionHints).toEqual({ providers: { piscina: { maxWorkers: 1 } } });
+
+    const { links } = await MakaioBus.request(WorkflowSubjects.listExecutionLinks, {
+      targetExecutionId: rerunExecutionId,
+    });
+    expect(links).toEqual([
+      {
+        sourceExecutionId: originalExecutionId,
+        targetExecutionId: rerunExecutionId,
+        linkType: 'rerun-of',
+        metadata: { mode: 'current', reason: 'source fixed' },
+      },
+    ]);
+  });
+
   it('reruns an execution from the current workflow definition', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');

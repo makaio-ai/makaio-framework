@@ -266,6 +266,48 @@ export interface DefinitionRunnerTaskParams {
   dispatchMetadata?: Record<string, unknown>;
 }
 
+/** Parameters for building a workflow runner task from a file source. */
+export interface FileRunnerTaskParams {
+  executionId: string;
+  workflowId: string;
+  filePath: string;
+  coordinatorSessionId: string;
+  sanitizedTriggerPayload: Record<string, unknown>;
+  boundInputs: JsonValue;
+  boundConfig: Record<string, unknown>;
+  artifactRef?: WorkflowWorkerConfig['artifactRef'];
+  executionHints?: WorkflowWorkerConfig['executionHints'];
+  scope: WorkflowDefinition['scope'];
+  workspaceRoot: string;
+}
+
+/**
+ * Build the worker configuration for a file-based workflow runner task.
+ * @param deps - Runner task dependencies.
+ * @param params - Bound execution data for this task.
+ * @returns Fully populated worker configuration.
+ */
+function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParams): WorkflowWorkerConfig {
+  return {
+    source: { kind: 'path', path: params.filePath },
+    executionId: params.executionId,
+    workflowId: params.workflowId,
+    triggerPayload: params.sanitizedTriggerPayload,
+    inputs: params.boundInputs,
+    config: params.boundConfig,
+    ...(params.artifactRef !== undefined ? { artifactRef: params.artifactRef } : {}),
+    ...(params.executionHints !== undefined ? { executionHints: params.executionHints } : {}),
+    scope: params.scope,
+    busUrl: deps.config.busUrl,
+    busAuth: deps.config.busAuth,
+    context: deps.resolveWorkflowContext(params.workspaceRoot),
+    env: deps.config.platformDefaults.env ?? {},
+    coordinatorSessionId: params.coordinatorSessionId,
+    cancelSubject: `workflow.${params.executionId}.cancel`,
+    suspensionStrategy: 'wait-in-process',
+  };
+}
+
 /**
  * Build the async task for a file-based workflow execution.
  *
@@ -278,41 +320,14 @@ export interface DefinitionRunnerTaskParams {
  * @param params - Identifiers and pre-computed execution data.
  * @returns Settled Promise tracked in `executionTasks`.
  */
-export function buildFileExecutionTask(
-  deps: RunnerTaskDeps,
-  params: {
-    executionId: string;
-    workflowId: string;
-    filePath: string;
-    coordinatorSessionId: string;
-    sanitizedTriggerPayload: Record<string, unknown>;
-    scope: WorkflowDefinition['scope'];
-    workspaceRoot: string;
-  },
-): Promise<void> {
-  const { executionId, workflowId, filePath, coordinatorSessionId, sanitizedTriggerPayload, scope, workspaceRoot } =
-    params;
-  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions, config } = deps;
+export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerTaskParams): Promise<void> {
+  const { executionId } = params;
+  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions } = deps;
 
   const controller = new AbortController();
   workflowAbortControllers.set(executionId, controller);
 
-  const workerConfig: WorkflowWorkerConfig = {
-    source: { kind: 'path', path: filePath },
-    executionId,
-    workflowId,
-    triggerPayload: sanitizedTriggerPayload,
-    inputs: {},
-    config: {},
-    scope,
-    busUrl: config.busUrl,
-    busAuth: config.busAuth,
-    context: deps.resolveWorkflowContext(workspaceRoot),
-    env: config.platformDefaults.env ?? {},
-    coordinatorSessionId,
-    cancelSubject: `workflow.${executionId}.cancel`,
-    suspensionStrategy: 'wait-in-process',
-  };
+  const workerConfig = buildFileWorkerConfig(deps, params);
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal))
