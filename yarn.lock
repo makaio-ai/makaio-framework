@@ -5074,7 +5074,6 @@ __metadata:
     type-fest: "npm:^5.2.0"
     typescript: "npm:^6.0.3"
     typescript-eslint: "npm:^8.61.0"
-    vite: "npm:^8.0.16"
     vitest: "npm:4.1.8"
     vitest-browser-react: "npm:^2.0.4"
     ws: "npm:^8.21.0"
