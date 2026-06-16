@@ -2,6 +2,15 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { WorkerNodeSubjects, type IWorkflowRunner, type WorkflowRunContext } from '@makaio/contracts';
 
 /**
+ * Check whether execution hints require WorkerNode-backed dispatch.
+ * @param executionHints - Merged definition/request execution hints.
+ * @returns True when WorkerNode capabilities are declared.
+ */
+export function hasExecutionHintWorkerNodeDispatch(executionHints: WorkflowRunContext['executionHints']): boolean {
+  return (executionHints?.requirements?.capabilities ?? []).length > 0;
+}
+
+/**
  * Create a bus-backed runner when execution hints require WorkerNode provider selection.
  *
  * Capability hints are hard provider-selection constraints. Definitions that
@@ -19,7 +28,7 @@ export function createExecutionHintWorkerNodeRunner(
   dispatchMetadata?: Record<string, unknown>,
 ): IWorkflowRunner | undefined {
   const capabilities = executionHints?.requirements?.capabilities ?? [];
-  if (capabilities.length === 0) return undefined;
+  if (!hasExecutionHintWorkerNodeDispatch(executionHints)) return undefined;
   return {
     run: (config, signal) =>
       bus.request(

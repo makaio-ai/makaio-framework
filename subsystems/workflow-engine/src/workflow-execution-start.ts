@@ -14,6 +14,8 @@ import {
   type WorkflowExecutionScope,
   type WorkflowRunContext,
   type WorkflowWorkerSource,
+  WorkflowError,
+  WorkflowErrorCode,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -30,6 +32,7 @@ import {
   type RunnerTaskDeps,
 } from './workflow-runner-tasks.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
+import { hasExecutionHintWorkerNodeDispatch } from './worker-node-dispatch-runner.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -262,6 +265,33 @@ function resolveDefinitionExecutionSource(
 }
 
 /**
+ * Ensure source-backed executions can be dispatched by a runner before storage is mutated.
+ * @param deps - Shared executor state and callbacks.
+ * @param source - Resolved execution source.
+ * @param executionHints - Merged definition/request execution hints.
+ * @param workflowId - Logical workflow ID for the pending execution.
+ * @throws When a path/source execution would otherwise fall back to the in-process scheduler.
+ */
+function assertRunnerBackedSourceDispatchAvailable(
+  deps: StartExecutionDeps,
+  source: WorkflowWorkerSource,
+  executionHints: WorkflowRunContext['executionHints'],
+  workflowId: string,
+): void {
+  if (
+    source.kind === 'definition' ||
+    deps.workflowRunner !== undefined ||
+    hasExecutionHintWorkerNodeDispatch(executionHints)
+  ) {
+    return;
+  }
+  throw new WorkflowError(
+    WorkflowErrorCode.NOT_EXECUTABLE,
+    `Workflow source execution '${workflowId}' requires a workflow runner or WorkerNode capability requirements.`,
+  );
+}
+
+/**
  * Register the execution task, fire-and-forget it, then await the started event.
  *
  * Shared by {@link startExecution} and {@link startFileExecution} to avoid
@@ -465,13 +495,11 @@ export async function startResolvedDefinitionExecution(
 ): Promise<string> {
   const { bus, activeExecutions, executionTasks } = deps;
   const { workflow, parentSessionId, triggerPayload, artifactRef, executionHints, scopeOverride } = options;
-  const input = options.input === undefined ? {} : options.input;
-  const config = options.config ?? {};
 
   const executionId = generateId('wfx');
   const sanitizedTriggerPayload = sanitizeTriggerPayload(triggerPayload);
-  const boundInputs = bindWorkflowInputs(workflow, input);
-  const boundConfig = bindWorkflowConfig(workflow, config);
+  const boundInputs = bindWorkflowInputs(workflow, options.input === undefined ? {} : options.input);
+  const boundConfig = bindWorkflowConfig(workflow, options.config ?? {});
   const resolvedScope: WorkflowExecutionScope = scopeOverride ?? workflow.scope;
   const mergedExecutionHints = mergeExecutionHints(workflow.executionHints, executionHints);
   const workspaceRoot = await deps.resolveExecutionWorkspaceRoot(parentSessionId);
@@ -479,6 +507,7 @@ export async function startResolvedDefinitionExecution(
     options.executionSource ?? resolveDefinitionExecutionSource(workflowId, mergedExecutionHints, workspaceRoot);
   const definitionSnapshot =
     options.definitionSnapshot ?? (executionSource.kind === 'definition' ? workflow : undefined);
+  assertRunnerBackedSourceDispatchAvailable(deps, executionSource, mergedExecutionHints, workflowId);
 
   const coordinatorSessionId = await createDefinitionCoordinatorSession(
     bus,
