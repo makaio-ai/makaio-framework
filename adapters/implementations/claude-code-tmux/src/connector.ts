@@ -150,6 +150,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         env,
         sessionId: this.sessionId ?? this.claudeSessionId,
         agentId: this.agentId,
+        adapterSessionId: this.claudeSessionId,
       },
     });
 

@@ -104,6 +104,8 @@ export interface OpenAISessionConfig {
   agentId: string;
   /** Makaio session ID for tool execution context */
   sessionId?: string;
+  /** Provider-assigned session identifier forwarded to tool execution context. */
+  adapterSessionId?: string;
   cwd: string;
   model: string;
   reasoningEffort?: AIReasoningLevel;

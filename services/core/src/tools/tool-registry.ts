@@ -329,6 +329,7 @@ export class ToolRegistry {
       agentId: overrides?.agentId,
       adapterId: effectiveAdapterIdentity.adapterId,
       adapterName: effectiveAdapterIdentity.adapterName,
+      adapterSessionId: overrides?.adapterSessionId,
       turnId: overrides?.turnId,
       turnContext: overrides?.turnContext,
       toolCallId: overrides?.toolCallId,

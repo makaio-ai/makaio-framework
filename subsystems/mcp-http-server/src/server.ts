@@ -358,6 +358,7 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
       sessionId: sessionOverrides?.sessionId ?? sessionId,
       env: sessionOverrides?.env,
       agentId: sessionOverrides?.agentId,
+      adapterSessionId: sessionOverrides?.adapterSessionId,
       turnId: sessionOverrides?.turnId,
       reasoning: sessionOverrides?.reasoning,
       toolCallId: sessionOverrides?.toolCallId,

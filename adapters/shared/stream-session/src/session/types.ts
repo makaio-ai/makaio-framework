@@ -60,6 +60,8 @@ export interface StreamSessionConfig<TBus extends ScopedBus<string> = ScopedBus<
   agentId: string;
   /** Makaio session ID for tool execution context. Stable across turns. */
   sessionId?: string;
+  /** Provider-assigned session identifier forwarded to tool execution context. */
+  adapterSessionId?: string;
   /** Working directory for tool execution context. */
   cwd: string;
   /** Initial model identifier; mutable per turn via `updateModel()`. */

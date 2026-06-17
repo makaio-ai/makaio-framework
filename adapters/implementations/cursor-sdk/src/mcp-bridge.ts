@@ -39,6 +39,7 @@ export async function registerMcpSession(
       env: config.env,
       sessionId: config.makaioSessionId,
       agentId: config.agentId,
+      adapterSessionId,
     },
   });
 
