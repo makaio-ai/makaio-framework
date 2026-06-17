@@ -100,6 +100,8 @@ export const ToolExecutionContextOverridesSchema = z.object({
   adapterId: z.string().optional(),
   /** Adapter name for adapter-scoped execution and policy checks. */
   adapterName: z.string().optional(),
+  /** Provider-assigned session identifier forwarded from the originating adapter session. */
+  adapterSessionId: z.string().optional(),
   /** Turn ID for attribution (typically messageId). */
   turnId: z.string().optional(),
   /** Turn-scoped context contributed by PreUserMessage hooks. */

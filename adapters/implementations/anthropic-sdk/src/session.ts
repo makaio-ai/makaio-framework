@@ -343,6 +343,7 @@ export class AnthropicSdkSession extends BaseStreamSession<
           agentId: this.config.agentId,
           adapterId: this.config.adapterId,
           adapterName: this.config.adapterName,
+          adapterSessionId: this.config.adapterSessionId,
           turnId: currentHandle.messageId,
           turnContext: currentHandle.turnContext,
           reasoning: result.reasoning,

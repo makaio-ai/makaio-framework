@@ -127,6 +127,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
         env: this.config.env,
         sessionId: makaioSessionId,
         agentId: this.config.agentId,
+        adapterSessionId: this.sessionId,
       },
     });
     if (result.handled) {

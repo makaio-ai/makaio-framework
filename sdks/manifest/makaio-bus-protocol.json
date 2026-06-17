@@ -8346,6 +8346,9 @@
               "adapterName": {
                 "type": "string"
               },
+              "adapterSessionId": {
+                "type": "string"
+              },
               "agentId": {
                 "type": "string"
               },

@@ -141,6 +141,8 @@ export interface DynamicToolCallCacheEntry {
 export interface DynamicToolCallContext {
   /** Session ID for multi-session task correlation */
   sessionId?: string;
+  /** Provider-assigned session identifier forwarded to tool execution context. */
+  adapterSessionId?: string;
   /** Agent ID for attribution */
   agentId: string;
   /** Adapter instance ID for allowedAdapters policy enforcement */
@@ -206,6 +208,7 @@ export async function handleDynamicToolCall(
       adapterName: context.adapterName,
       contextOverrides: {
         sessionId: context.sessionId,
+        adapterSessionId: context.adapterSessionId,
         agentId: context.agentId,
         toolCallId: params.itemId,
       },

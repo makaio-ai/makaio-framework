@@ -133,6 +133,7 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       adapterName: this.config.adapterName ?? '',
       agentId: this.agentId,
       sessionId: this.config.sessionId,
+      adapterSessionId: this.adapterSessionId,
       cwd: this.cwd,
       model: this.model ?? '',
       reasoningEffort: this.config.reasoningEffort,

@@ -310,6 +310,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       ) => Promise<{ decision: 'accept' | 'decline'; message?: string }>,
       emit: this.emit.bind(this),
       sessionId: this.sessionId,
+      adapterSessionId: this.adapterSessionId,
       agentId: this.agentId,
       adapterId: this.adapterId,
       adapterName: this.adapterName,

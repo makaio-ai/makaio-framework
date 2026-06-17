@@ -167,6 +167,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         env,
         sessionId: this.config.makaioSessionId ?? sessionIdForMcp,
         agentId: this.config.agentId,
+        adapterSessionId: sessionIdForMcp,
       },
     });
 

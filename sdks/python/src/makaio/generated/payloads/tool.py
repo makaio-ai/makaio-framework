@@ -34,6 +34,7 @@ class ToolErrorPayload:
 class ToolExecuteRequestContextOverrides:
     adapter_id: str | None = None
     adapter_name: str | None = None
+    adapter_session_id: str | None = None
     agent_id: str | None = None
     constraints: dict[str, Any] | None = None
     cwd: str | None = None

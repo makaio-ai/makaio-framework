@@ -55,6 +55,15 @@ export interface ToolExecutionContext extends MakaioContext {
   adapterName?: string;
 
   /**
+   * Provider-assigned session identifier for the originating adapter session.
+   * Distinct from {@link sessionId} (Makaio-managed orchestration session) and
+   * from {@link adapterId} (adapter instance identifier).
+   * Allows tools to correlate their execution with the specific provider session
+   * that issued the tool call (e.g., Claude Code session UUID, Anthropic conversation ID).
+   */
+  adapterSessionId?: string;
+
+  /**
    * Turn identifier for attribution (optional).
    * Provided when tool execution occurs within a specific turn.
    */
