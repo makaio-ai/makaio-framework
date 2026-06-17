@@ -7,6 +7,7 @@ import type {
   WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
+  WorkflowLoopNode,
   WorkflowNode,
   WorkflowParallelNode,
   WorkflowSequenceNode,
@@ -14,6 +15,8 @@ import type {
   WorkflowTrigger,
 } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
+import type { LoopGateHandler } from './loop.js';
+import { validateNoNestedLoops } from './loop.js';
 import type {
   AgentConfig,
   ArtifactBindingOptions,
@@ -21,6 +24,7 @@ import type {
   DefineWorkflowOptions,
   GateOptions,
   IterateOptions,
+  LoopOptions,
   NodeOptions,
   ParallelOptions,
   WorkflowBuilder,
@@ -28,7 +32,11 @@ import type {
   WorkflowZodSchemas,
 } from './authoring-builder.js';
 import type { TriggerPayloadFromTriggers, WorkflowTriggerDef } from './authoring-triggers.js';
-import { standaloneHandlers, zodSchemaToJsonRecord } from './authoring-node-factories.js';
+import {
+  buildSerializableLoopGate,
+  extractStandaloneHandlers,
+  zodSchemaToJsonRecord,
+} from './authoring-node-factories.js';
 
 // ─────────────────────────────────────────────────────────────
 // Internal helpers
@@ -69,36 +77,8 @@ function claimNodeIds(registry: Set<string>, node: WorkflowNode): void {
     claimNodeIds(registry, (node as WorkflowIterateNode).body);
   } else if (node.type === 'iterate-chain') {
     claimNodeIds(registry, (node as WorkflowIterateChainNode).body);
-  }
-}
-
-/**
- * Walks `node` and its descendants, extracting any handlers registered in
- * `standaloneHandlers` and writing them into `runtimeHandlers`.
- *
- * Standalone `iterate()` factories synthesize the same body station as the
- * builder's `.iterate()` method. Because this walk recurses into composite
- * bodies, the handler is registered under the station ID the executor runs.
- * @param node - The node to inspect
- * @param runtimeHandlers - The handler map to populate
- */
-function extractHandlers(node: WorkflowNode, runtimeHandlers: Map<string, StationHandler>): void {
-  const handler = standaloneHandlers.get(node);
-  if (handler !== undefined) {
-    runtimeHandlers.set(node.id, handler);
-  }
-  if (node.type === 'sequence') {
-    for (const child of (node as WorkflowSequenceNode).nodes) {
-      extractHandlers(child, runtimeHandlers);
-    }
-  } else if (node.type === 'parallel') {
-    for (const branch of Object.values((node as WorkflowParallelNode).branches)) {
-      extractHandlers(branch, runtimeHandlers);
-    }
-  } else if (node.type === 'iterate') {
-    extractHandlers((node as WorkflowIterateNode).body, runtimeHandlers);
-  } else if (node.type === 'iterate-chain') {
-    extractHandlers((node as WorkflowIterateChainNode).body, runtimeHandlers);
+  } else if (node.type === 'loop') {
+    claimNodeIds(registry, (node as WorkflowLoopNode).body);
   }
 }
 
@@ -130,7 +110,7 @@ function buildParallelBranchMap(
     const branchSequenceId = `${nodeId}__${branchKey}`;
     claimNodeIds(registeredIds, branchNode);
     claimStepId(registeredIds, branchSequenceId);
-    extractHandlers(branchNode, runtimeHandlers);
+    extractStandaloneHandlers(branchNode, runtimeHandlers);
     branchMap[branchKey] = { id: branchSequenceId, type: 'sequence', nodes: [branchNode] };
   });
   return branchMap;
@@ -214,7 +194,7 @@ function buildIterateChainNode(
   claimStepId(registeredIds, bodySequenceId);
   for (const chainNode of chain) {
     claimNodeIds(registeredIds, chainNode);
-    extractHandlers(chainNode, runtimeHandlers);
+    extractStandaloneHandlers(chainNode, runtimeHandlers);
   }
   return {
     id: nodeId,
@@ -224,6 +204,49 @@ function buildIterateChainNode(
     ...(iterateOptions.when !== undefined && { when: iterateOptions.when }),
     ...(iterateOptions.skip !== undefined && { skip: iterateOptions.skip }),
   };
+}
+
+/**
+ * Build a `loop` node, registering body node IDs/handlers and the gate handler.
+ *
+ * Validates that the loop body contains no nested loops (V1 constraint).
+ * @param nodeId - Loop node ID.
+ * @param bodyNodes - Ordered list of body nodes.
+ * @param loopOptions - Loop configuration options.
+ * @param registeredIds - Set of already-claimed step IDs.
+ * @param runtimeHandlers - Station handler map to populate.
+ * @param runtimeLoopGates - Gate handler map to populate.
+ * @returns The constructed {@link WorkflowLoopNode}.
+ */
+function buildLoopNode(
+  nodeId: string,
+  bodyNodes: WorkflowNode[],
+  loopOptions: LoopOptions,
+  registeredIds: Set<string>,
+  runtimeHandlers: Map<string, StationHandler>,
+  runtimeLoopGates: Map<string, LoopGateHandler>,
+): WorkflowLoopNode {
+  const bodySequenceId = `${nodeId}__body`;
+  claimStepId(registeredIds, bodySequenceId);
+  for (const bodyNode of bodyNodes) {
+    claimNodeIds(registeredIds, bodyNode);
+    extractStandaloneHandlers(bodyNode, runtimeHandlers);
+  }
+  const loopNode: WorkflowLoopNode = {
+    id: nodeId,
+    type: 'loop',
+    maxRounds: loopOptions.maxRounds,
+    body: { id: bodySequenceId, type: 'sequence', nodes: bodyNodes },
+    gate: buildSerializableLoopGate(loopOptions),
+    ...(loopOptions.when !== undefined && { when: loopOptions.when }),
+    ...(loopOptions.skip !== undefined && { skip: loopOptions.skip }),
+  };
+  const nestedError = validateNoNestedLoops(loopNode);
+  if (nestedError !== undefined) {
+    throw new Error(nestedError);
+  }
+  runtimeLoopGates.set(loopOptions.gate.handler, loopOptions.gate.evaluate);
+  return loopNode;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -240,6 +263,7 @@ interface BuilderState {
   readonly rootNodes: WorkflowNode[];
   readonly runtimeHandlers: Map<string, StationHandler>;
   readonly runtimeFactories: ReadonlyMap<string, () => WorkflowNode[]>;
+  readonly runtimeLoopGates: Map<string, LoopGateHandler>;
   readonly registeredIds: Set<string>;
   readonly zodGates: Record<string, z.ZodTypeAny>;
   readonly zodSchemas: {
@@ -276,6 +300,7 @@ type WorkflowBuilderSeed<TTriggerPayload, TState extends JsonValue | undefined> 
   | 'gate'
   | 'iterate'
   | 'iterateChain'
+  | 'loop'
   | 'addNode'
 >;
 
@@ -341,7 +366,7 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
   builder: WorkflowBuilder<TTriggerPayload, TState>,
   state: BuilderState,
 ): void {
-  const { rootNodes, runtimeHandlers, registeredIds, zodGates } = state;
+  const { rootNodes, runtimeHandlers, runtimeLoopGates, registeredIds, zodGates } = state;
   builder.station = (nodeId, handler, nodeOptions) => {
     claimStepId(registeredIds, nodeId);
     rootNodes.push({
@@ -410,7 +435,12 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
     rootNodes.push(buildIterateChainNode(nodeId, chain, iterateOptions, registeredIds, runtimeHandlers));
     return builder;
   };
-  builder.addNode = (node: WorkflowNode) => addNode(node, registeredIds, runtimeHandlers, rootNodes);
+  builder.loop = (nodeId: string, bodyNodes: WorkflowNode[], loopOptions: LoopOptions) => {
+    claimStepId(registeredIds, nodeId);
+    rootNodes.push(buildLoopNode(nodeId, bodyNodes, loopOptions, registeredIds, runtimeHandlers, runtimeLoopGates));
+    return builder;
+  };
+  builder.addNode = (node: WorkflowNode) => addNode(node, registeredIds, runtimeHandlers, runtimeLoopGates, rootNodes);
 }
 
 /**
@@ -418,16 +448,18 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
  * @param node - The workflow node to add.
  * @param registeredIds - Set of already-claimed step IDs.
  * @param runtimeHandlers - Handler map to populate.
+ * @param runtimeLoopGates - Loop gate handler map to populate.
  * @param rootNodes - Root node array to append to.
  */
 function addNode(
   node: WorkflowNode,
   registeredIds: Set<string>,
   runtimeHandlers: Map<string, StationHandler>,
+  runtimeLoopGates: Map<string, LoopGateHandler>,
   rootNodes: WorkflowNode[],
 ): void {
   claimNodeIds(registeredIds, node);
-  extractHandlers(node, runtimeHandlers);
+  extractStandaloneHandlers(node, runtimeHandlers, runtimeLoopGates);
   rootNodes.push(node);
 }
 
@@ -446,6 +478,7 @@ function createWorkflowBuilder<TTriggerPayload, TState extends JsonValue | undef
     definition: state.definition,
     runtimeHandlers: state.runtimeHandlers,
     runtimeFactories: state.runtimeFactories,
+    runtimeLoopGates: state.runtimeLoopGates,
     source: undefined,
     get zodSchemas(): WorkflowZodSchemas {
       return state.zodSchemas as WorkflowZodSchemas;
@@ -496,6 +529,7 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
 ): WorkflowBuilder<TriggerPayloadFromTriggers<TTriggers>, undefined> {
   const rootNodes: WorkflowNode[] = [];
   const runtimeHandlers = new Map<string, StationHandler>();
+  const runtimeLoopGates = new Map<string, LoopGateHandler>();
   const registeredIds = new Set<string>();
   const zodGates: Record<string, z.ZodTypeAny> = {};
   const zodSchemas: BuilderState['zodSchemas'] = { gates: zodGates };
@@ -513,6 +547,7 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
     rootNodes,
     runtimeHandlers,
     runtimeFactories,
+    runtimeLoopGates,
     registeredIds,
     zodGates,
     zodSchemas,
@@ -524,6 +559,6 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
 }
 
 // biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
-export { BusEventWorkflowTrigger, CronWorkflowTrigger, ExtensionWorkflowTrigger, ManualWorkflowTrigger, WebhookWorkflowTrigger, delegateToAgent, delegateToRole, gate, iterate, iterateChain, station } from './authoring-exports.js';
+export { BusEventWorkflowTrigger, CronWorkflowTrigger, ExtensionWorkflowTrigger, ManualWorkflowTrigger, WebhookWorkflowTrigger, delegateToAgent, delegateToRole, gate, iterate, iterateChain, loop, station } from './authoring-exports.js';
 // biome-ignore format: compact explicit re-exports keep this implementation file under the max-lines limit.
-export { type AgentConfig, type ArtifactBindingOptions, type ArtifactContext, type ArtifactPatch, type ArtifactUpdateOperation, type ArtifactUpdater, type BuiltWorkflow, type CronTriggerPayload, type DefineWorkflowOptions, type ExtractTriggerPayload, type GateOptions, type IterateHandler, type IterateOptions, type NodeOptions, type ParallelMode, type ParallelOptions, type PreviousStepOutput, type StationHandler, type StationStepContext, type StepContext, type TriggerPayloadFromTriggers, type WebhookTriggerPayload, type WorkflowBuilder, type WorkflowContext, type WorkflowContextBase, type WorkflowProgressUpdate, type WorkflowStateAuthoringDefinition, type WorkflowStateContext, type WorkflowTriggerDef, type WorkflowZodSchemas } from './authoring-exports.js';
+export { type AgentConfig, type ArtifactBindingOptions, type ArtifactContext, type ArtifactPatch, type ArtifactUpdateOperation, type ArtifactUpdater, type BuiltWorkflow, type CronTriggerPayload, type DefineWorkflowOptions, type ExtractTriggerPayload, type GateOptions, type IterateHandler, type IterateOptions, type LoopGateRegistration, type LoopOptions, type NodeOptions, type ParallelMode, type ParallelOptions, type PreviousStepOutput, type StationHandler, type StationStepContext, type StepContext, type TriggerPayloadFromTriggers, type WebhookTriggerPayload, type WorkflowBuilder, type WorkflowContext, type WorkflowContextBase, type WorkflowProgressUpdate, type WorkflowStateAuthoringDefinition, type WorkflowStateContext, type WorkflowTriggerDef, type WorkflowZodSchemas } from './authoring-exports.js';

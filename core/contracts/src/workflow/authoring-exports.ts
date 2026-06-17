@@ -34,6 +34,8 @@ export type {
   DefineWorkflowOptions,
   GateOptions,
   IterateOptions,
+  LoopGateRegistration,
+  LoopOptions,
   NodeOptions,
   ParallelMode,
   ParallelOptions,
@@ -41,4 +43,13 @@ export type {
   WorkflowStateAuthoringDefinition,
   WorkflowZodSchemas,
 } from './authoring-builder.js';
-export { delegateToAgent, delegateToRole, gate, iterate, iterateChain, station } from './authoring-node-factories.js';
+export type { LoopGateHandler } from './loop.js';
+export {
+  delegateToAgent,
+  delegateToRole,
+  gate,
+  iterate,
+  iterateChain,
+  loop,
+  station,
+} from './authoring-node-factories.js';
