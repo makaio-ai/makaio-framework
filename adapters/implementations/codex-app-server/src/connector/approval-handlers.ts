@@ -158,6 +158,8 @@ export interface DynamicToolApprovalContext {
   emit: CodexAppServerBus['emit'];
   /** Session ID for bus routing */
   sessionId?: string;
+  /** Provider-assigned session identifier forwarded to tool execution context. */
+  adapterSessionId?: string;
   /** Agent ID for attribution */
   agentId: string;
   /** Adapter instance ID for allowedAdapters policy enforcement */
@@ -287,6 +289,7 @@ export async function handleDynamicToolCallApprovalRequest(
 
   const response = await handleDynamicToolCall(params, {
     sessionId: ctx.sessionId,
+    adapterSessionId: ctx.adapterSessionId,
     agentId: ctx.agentId,
     adapterId: ctx.adapterId,
     adapterName: ctx.adapterName,
