@@ -287,6 +287,33 @@ function bindToolRegistryChangeNotifications(server: Server, bus: IMakaioBus): v
 }
 
 /**
+ * Merge session-stable tool context overrides with process-level fallbacks.
+ * @param sessionOverrides - Session-specific context values resolved from the adapter session ID.
+ * @param fallbackSessionId - Process-level session ID used when the registry has no session override.
+ * @returns Tool execution context overrides safe to forward to the tool bus.
+ */
+function buildToolExecutionContextOverrides(
+  sessionOverrides: ToolExecutionContextOverrides | undefined,
+  fallbackSessionId: string,
+): ToolExecutionContextOverrides {
+  // Merge session-stable overrides with per-process fallbacks. Explicit
+  // undefined fields in sessionOverrides must not overwrite the fallbacks,
+  // so we apply ?? for each field individually rather than spreading.
+  return {
+    cwd: sessionOverrides?.cwd ?? process.cwd(),
+    sessionId: sessionOverrides?.sessionId ?? fallbackSessionId,
+    env: sessionOverrides?.env,
+    agentId: sessionOverrides?.agentId,
+    adapterSessionId: sessionOverrides?.adapterSessionId,
+    turnId: sessionOverrides?.turnId,
+    reasoning: sessionOverrides?.reasoning,
+    toolCallId: sessionOverrides?.toolCallId,
+    turnContext: sessionOverrides?.turnContext,
+    constraints: sessionOverrides?.constraints,
+  };
+}
+
+/**
  * Create and configure MCP server.
  *
  * **Freshness contract:** Tool lists are resolved fresh on every MCP `tools/list` and
@@ -350,21 +377,7 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
     // standalone (without a bridge service) where resolveContextOverrides is
     // absent, so failing closed would break the standalone path.
     const sessionOverrides = resolveContextOverrides?.(adapterSessionId);
-    // Merge session-stable overrides with per-process fallbacks. Explicit
-    // undefined fields in sessionOverrides must not overwrite the fallbacks,
-    // so we apply ?? for each field individually rather than spreading.
-    const contextOverrides: ToolExecutionContextOverrides = {
-      cwd: sessionOverrides?.cwd ?? process.cwd(),
-      sessionId: sessionOverrides?.sessionId ?? sessionId,
-      env: sessionOverrides?.env,
-      agentId: sessionOverrides?.agentId,
-      adapterSessionId: sessionOverrides?.adapterSessionId,
-      turnId: sessionOverrides?.turnId,
-      reasoning: sessionOverrides?.reasoning,
-      toolCallId: sessionOverrides?.toolCallId,
-      turnContext: sessionOverrides?.turnContext,
-      constraints: sessionOverrides?.constraints,
-    };
+    const contextOverrides = buildToolExecutionContextOverrides(sessionOverrides, sessionId);
 
     // Payload shape matches ToolSchemas.execute.request: { toolName, input, contextOverrides }.
     // sessionId lives inside contextOverrides, not at the top level.
