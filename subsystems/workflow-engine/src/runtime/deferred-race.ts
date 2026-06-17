@@ -46,7 +46,9 @@ export async function raceDeferredResponse<T>(
     const value = await Promise.race(racePromises);
     return { status: 'resolved', value };
   } catch (error) {
-    return error === 'timed-out' ? { status: 'timed-out' } : { status: 'cancelled' };
+    if (error === 'timed-out') return { status: 'timed-out' };
+    if (error === 'cancelled') return { status: 'cancelled' };
+    throw error;
   } finally {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     signal.removeEventListener('abort', abortHandler);
