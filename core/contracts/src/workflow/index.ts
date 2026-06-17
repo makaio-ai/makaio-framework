@@ -29,6 +29,8 @@ export {
   WorkflowIterateChainNodeSchema,
   WorkflowIterateNodeSchema,
   WorkflowListQuerySchema,
+  WorkflowLoopNodeSchema,
+  LoopGateOutcomeSchema,
   WorkflowNodeBaseSchema,
   WorkflowNodeSchema,
   WorkflowNodeTypeSchema,
@@ -67,6 +69,8 @@ export type {
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowListQuery,
+  WorkflowLoopNode,
+  LoopGateOutcome,
   WorkflowNode,
   WorkflowNodeBase,
   WorkflowNodeType,
@@ -275,3 +279,5 @@ export type {
   TransitionEventType,
   TransitionRuleDefinition,
 } from './transition.js';
+export { validateNoNestedLoops } from './loop.js';
+export type { LoopGateContext, LoopGateHandler } from './loop.js';

@@ -16,6 +16,8 @@ import {
   iterateChain,
 } from '../authoring.js';
 import type { WorkflowGateNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
+import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
+import { validateNoNestedLoops } from '../loop.js';
 import { defineWorkflowBundle } from '../bundle.js';
 
 const GitNamespace = createBusNamespace('git', {
@@ -1070,5 +1072,206 @@ describe('defineWorkflowBundle', () => {
 
     const allDefs = bundle.workflows.map((w) => w.definition);
     expect(() => JSON.stringify(allDefs)).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Loop node schema parsing
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDefinitionSchema — loop node', () => {
+  it('parses a gated loop node', () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: 'review-loop',
+      name: 'Review Loop',
+      scope: { type: 'global' },
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'converge',
+            type: 'loop',
+            maxRounds: 3,
+            body: {
+              id: 'converge__body',
+              type: 'sequence',
+              nodes: [{ id: 'aggregate', type: 'station', prompt: 'Aggregate findings' }],
+            },
+            gate: {
+              handler: 'no-open-blockers',
+              input: 'frames.aggregate.output',
+              config: { blockerSeverities: ['blocker'] },
+              escalation: {
+                title: 'Review loop escalation',
+                prompt: 'The loop reached escalation. Choose the next action.',
+                autoAction: 'reject',
+                timeoutMs: null,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.root.nodes[0]?.type).toBe('loop');
+  });
+
+  it('parses a loop node without optional gate fields', () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: 'minimal-loop',
+      scope: { type: 'global' },
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'retry',
+            type: 'loop',
+            maxRounds: 5,
+            body: {
+              id: 'retry__body',
+              type: 'sequence',
+              nodes: [{ id: 'attempt', type: 'station', prompt: 'Try again' }],
+            },
+            gate: {
+              handler: 'check-success',
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.root.nodes[0]?.type).toBe('loop');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Nested loop validation
+// ─────────────────────────────────────────────────────────────
+
+describe('validateNoNestedLoops', () => {
+  it('returns undefined for a loop whose body contains no loops', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [{ id: 'step', type: 'station', prompt: 'Do work' }],
+      },
+      gate: { handler: 'check' },
+    });
+    expect(validateNoNestedLoops(loopNode)).toBeUndefined();
+  });
+
+  it('rejects a directly nested loop', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'inner',
+            type: 'loop',
+            maxRounds: 2,
+            body: {
+              id: 'inner__body',
+              type: 'sequence',
+              nodes: [{ id: 'step', type: 'station', prompt: 'work' }],
+            },
+            gate: { handler: 'check' },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'inner'");
+    expect(result).toContain("inside loop 'outer'");
+  });
+
+  it('rejects a loop nested inside a parallel branch', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'par',
+            type: 'parallel',
+            branches: {
+              left: {
+                id: 'par__left',
+                type: 'sequence',
+                nodes: [
+                  {
+                    id: 'deep-loop',
+                    type: 'loop',
+                    maxRounds: 1,
+                    body: {
+                      id: 'deep__body',
+                      type: 'sequence',
+                      nodes: [{ id: 'x', type: 'station', prompt: 'x' }],
+                    },
+                    gate: { handler: 'check' },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'deep-loop'");
+  });
+
+  it('rejects a loop nested inside an iterate body', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'iter',
+            type: 'iterate',
+            collection: 'ctx.inputs.items',
+            body: {
+              id: 'iter__body',
+              type: 'sequence',
+              nodes: [
+                {
+                  id: 'nested-loop',
+                  type: 'loop',
+                  maxRounds: 2,
+                  body: {
+                    id: 'nested__body',
+                    type: 'sequence',
+                    nodes: [{ id: 'y', type: 'station', prompt: 'y' }],
+                  },
+                  gate: { handler: 'check' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'nested-loop'");
   });
 });

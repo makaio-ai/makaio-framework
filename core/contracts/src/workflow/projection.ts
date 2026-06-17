@@ -95,6 +95,7 @@ function classifyRole(type: WorkflowNodeType): ProjectedNodeRole {
     case 'parallel':
     case 'iterate':
     case 'iterate-chain':
+    case 'loop':
       return 'control';
     case 'sequence':
       return 'structural';
