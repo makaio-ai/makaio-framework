@@ -119,7 +119,7 @@ async function evaluateConditionExpression(
  * next child (skipped outcome), or a terminal {@link NodeOutcome} when the
  * sequence must stop.
  *
- * When `existingFrame` is provided (a `waiting` gate frame or `running`
+ * When `existingFrame` is provided (a `waiting` gate frame or nonterminal
  * structural frame being reused from a prior execution), the frame is not
  * re-started — the caller has already persisted it and its `status` reflects
  * the durable lifecycle state.
@@ -275,12 +275,13 @@ export async function executeSequence(
       }
     }
 
-    // Reuse persisted waiting gate frames and running structural frames. A
-    // parked gate leaves ancestor container frames running; preserving those
-    // frame IDs is required for descendant frame matching on redispatch.
+    // Reuse persisted waiting gate frames and nonterminal structural frames.
+    // Loop escalation gates use the loop container as the gate frame and leave
+    // it waiting, while descendant gates leave ancestor containers running.
+    // Both states must preserve frame IDs for redispatch matching.
     const existingFrame =
       (resumeFrame?.status === 'waiting' && child.type === 'gate') ||
-      (resumeFrame?.status === 'running' && isStructuralResumeNode(child))
+      ((resumeFrame?.status === 'running' || resumeFrame?.status === 'waiting') && isStructuralResumeNode(child))
         ? resumeFrame
         : undefined;
     const { updatedCtx, outcome } = await executeSequenceChild(

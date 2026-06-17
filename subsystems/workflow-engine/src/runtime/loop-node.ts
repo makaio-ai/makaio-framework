@@ -54,14 +54,15 @@ export interface LoopOutput {
  *
  * Discriminated on `terminal`: when `true` the enclosing loop must
  * return the contained {@link NodeOutcome} immediately. When `false`
- * the body completed successfully and `output` carries the extracted
- * body output.
+ * the body completed successfully and `output` carries the JSON-safe
+ * per-round body output. Rounds without output use `null` because
+ * {@link LoopOutput.bodyOutputs} is an ordered JSON array.
  */
 type RoundBodyResult =
   | { terminal: true; outcome: NodeOutcome }
   | {
       terminal: false;
-      output: JsonValue | undefined;
+      output: JsonValue;
       replayed: boolean;
       gateExpressionCtx: PrimitiveExpressionContext;
     };
@@ -103,7 +104,7 @@ async function executeRoundBody(
   if (resumeFrame?.status === 'completed') {
     return {
       terminal: false,
-      output: (resumeFrame.output ?? null) as JsonValue,
+      output: resumeFrame.output ?? null,
       replayed: true,
       gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, resumeFrame.frameId),
     };
@@ -133,7 +134,7 @@ async function executeRoundBody(
     return { terminal: true, outcome: bodyOutcome };
   }
 
-  const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx);
+  const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx) ?? null;
   await completeFrame(frame, ctx, bodyOutput);
   return {
     terminal: false,
@@ -141,6 +142,29 @@ async function executeRoundBody(
     replayed: false,
     gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, frame.frameId),
   };
+}
+
+/**
+ * Check whether redispatch still has a persisted round frame to replay or resume.
+ * @param node - Loop node whose round frames are indexed.
+ * @param round - Zero-based round index to look up.
+ * @param ctx - Runtime context carrying the resume frame index.
+ * @param parentFrameId - Loop container frame ID.
+ * @returns Whether a matching round frame exists.
+ */
+function hasReusableRoundFrame(
+  node: WorkflowLoopNode,
+  round: number,
+  ctx: RuntimeContext,
+  parentFrameId: string,
+): boolean {
+  return (
+    findReusableResumeFrame(ctx.resumeFrames, node.id, {
+      parentFrameId,
+      iteration: round,
+      statuses: ROUND_RESUME_STATUSES,
+    }) !== undefined
+  );
 }
 
 /**
@@ -351,11 +375,14 @@ export async function executeLoopNode(
       parentPath,
     );
     if (bodyResult.terminal) return bodyResult.outcome;
-    bodyOutputs.push(bodyResult.output as JsonValue);
+    bodyOutputs.push(bodyResult.output);
 
     // Replayed rounds already passed the gate in a prior execution — skip re-evaluation.
     if (bodyResult.replayed) {
       round++;
+      if (hasReusableRoundFrame(node, round, ctx, parentFrameId)) {
+        continue;
+      }
       if (node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
         const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
         const earlyOutcome = await resolvePersistedEscalationGate(

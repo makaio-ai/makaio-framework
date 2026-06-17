@@ -620,12 +620,12 @@ describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
     expect(loaded.runtimeLoopGates).toBeUndefined();
   });
 
-  it('ignores runtimeLoopGates when it is not a Map instance', async () => {
+  it('throws when runtimeLoopGates is defined but not a Map instance', async () => {
     const dir = makeTempDir();
     tempDirs.push(dir);
     await mkdir(dir, { recursive: true });
 
-    // runtimeLoopGates is a plain object, not a Map — should be ignored
+    // runtimeLoopGates is a plain object, not a Map.
     const content = `
 const definition = {
   id: 'bad-gates',
@@ -641,8 +641,8 @@ export default { definition, runtimeHandlers, runtimeLoopGates };
     const filePath = join(dir, 'bad-gates.mjs');
     await writeFile(filePath, content, 'utf8');
 
-    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
-
-    expect(loaded.runtimeLoopGates).toBeUndefined();
+    const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+    await expect(promise).rejects.toThrow(/runtimeLoopGates/i);
+    await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
   });
 });

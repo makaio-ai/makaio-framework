@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
@@ -512,6 +512,48 @@ describe('executeLoopNode — escalation gate', () => {
     }
   });
 
+  it('fails an in-process escalation wait when timeoutMs expires with autoAction reject', async () => {
+    vi.useFakeTimers();
+    try {
+      const stationHandler: StationHandler = async () => ({ needsReview: true });
+      const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+        return { kind: 'escalate', reason: 'needs human review' };
+      };
+
+      const loopNode = makeLoopNodeWithEscalation('loop-timeout-in-process', 'work-station', 'check-gate', 3, {
+        prompt: 'Review needed',
+        autoAction: 'reject',
+        timeoutMs: 1000,
+      });
+      const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+      const containerFrame = ctx.createFrame({
+        nodeId: 'loop-timeout-in-process',
+        nodeType: 'loop',
+        path: [],
+        parentFrameId: undefined,
+      });
+
+      const { executeLoopNode } = await import('../runtime/loop-node.js');
+      const outcomePromise = executeLoopNode(
+        loopNode,
+        ctx,
+        emptyExpressionCtx,
+        executeSequence,
+        containerFrame.frameId,
+        containerFrame.path,
+      );
+      await vi.advanceTimersByTimeAsync(1001);
+      const outcome = await outcomePromise;
+
+      expect(outcome.status).toBe('failed');
+      if (outcome.status === 'failed') {
+        expect(outcome.error).toContain("Loop 'loop-timeout-in-process' escalation gate timed out");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('completes without gate when escalation config is absent', async () => {
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
@@ -635,6 +677,55 @@ describe('executeLoopNode — resume frame reuse', () => {
     }
   });
 
+  it('normalizes replayed and fresh no-output rounds consistently', async () => {
+    let gateCallCount = 0;
+    const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+      gateCallCount++;
+      return { kind: 'pass' };
+    };
+
+    const parentFrameId = 'known-parent-frame';
+    const loopNode = {
+      ...makeLoopNode('loop-no-output', 'unused-station', 'check-gate', 5),
+      body: {
+        id: 'loop-no-output__body',
+        type: 'sequence',
+        nodes: [],
+      },
+    } satisfies WorkflowLoopNode;
+    const resumeFrames: WorkflowFrameState[] = [
+      {
+        frameId: 'resume-round-0',
+        nodeId: 'loop-no-output',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-0'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 0,
+        startedAt: 1,
+        completedAt: 2,
+      },
+    ];
+    const resumeIndex = buildResumeFrameIndex(resumeFrames);
+    const { ctx } = makeCtx({}, { 'check-gate': gateHandler }, new AbortController().signal, {
+      resumeFrames: resumeIndex,
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+      parentFrameId,
+    ]);
+
+    expect(gateCallCount).toBe(1);
+    expect(outcome.status).toBe('completed');
+    if (outcome.status === 'completed') {
+      const loopOutput = outcome.output as LoopOutput;
+      expect(loopOutput.rounds).toBe(2);
+      expect(loopOutput.bodyOutputs).toEqual([null, null]);
+    }
+  });
+
   it('resolves a persisted escalation gate after replaying completed round frames', async () => {
     const stationHandler: StationHandler = async () => {
       throw new Error('body should not rerun');
@@ -656,6 +747,19 @@ describe('executeLoopNode — resume frame reuse', () => {
         output: { result: 'previous-round' },
         startedAt: 1,
         completedAt: 2,
+      },
+      {
+        frameId: 'resume-round-1',
+        nodeId: 'loop-resume-gate',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-1'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 1,
+        output: { result: 'second-previous-round' },
+        startedAt: 3,
+        completedAt: 4,
       },
     ];
 
@@ -698,10 +802,103 @@ describe('executeLoopNode — resume frame reuse', () => {
     if (outcome.status === 'completed') {
       const loopOutput = outcome.output as LoopOutput;
       expect(loopOutput.outcome).toBe('escalate');
-      expect(loopOutput.rounds).toBe(1);
-      expect(loopOutput.bodyOutputs).toEqual([{ result: 'previous-round' }]);
+      expect(loopOutput.rounds).toBe(2);
+      expect(loopOutput.bodyOutputs).toEqual([{ result: 'previous-round' }, { result: 'second-previous-round' }]);
       expect(loopOutput.resumeData).toEqual({ decision: 'continue' });
     }
+  });
+
+  it('reuses a waiting structural loop frame when resolving an escalation gate on redispatch', async () => {
+    const stationHandler: StationHandler = async () => {
+      throw new Error('body should not rerun');
+    };
+    const gateHandler: LoopGateHandler = () => {
+      throw new Error('gate should not re-evaluate');
+    };
+    const parentFrameId = 'waiting-loop-frame';
+    const resumeFrames = buildResumeFrameIndex([
+      {
+        frameId: parentFrameId,
+        nodeId: 'loop-waiting-resume',
+        nodeType: 'loop',
+        path: [parentFrameId],
+        status: 'waiting',
+        attempt: 0,
+        startedAt: 1,
+      },
+      {
+        frameId: 'waiting-loop-round-0',
+        nodeId: 'loop-waiting-resume',
+        nodeType: 'loop',
+        path: [parentFrameId, 'waiting-loop-round-0'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 0,
+        output: { result: 'previous-round' },
+        startedAt: 2,
+        completedAt: 3,
+      },
+    ]);
+
+    const loopNode = makeLoopNodeWithEscalation('loop-waiting-resume', 'work-station', 'check-gate', 5, {
+      prompt: 'Review needed',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+    const rootSequence: WorkflowSequenceNode = {
+      id: 'root',
+      type: 'sequence',
+      nodes: [loopNode],
+    };
+    const { ctx, bus } = makeCtx(
+      { 'work-station': stationHandler },
+      { 'check-gate': gateHandler },
+      new AbortController().signal,
+      { resumeFrames, suspensionStrategy: 'exit-and-redispatch' },
+    );
+    let completedLoopFrame: Pick<WorkflowFrameState, 'frameId' | 'status' | 'output'> | undefined;
+    bus.on(WorkflowStorageSubjects.setFrame, (c) => {
+      if (c.payload.frame.frameId === parentFrameId && c.payload.frame.status === 'completed') {
+        completedLoopFrame = {
+          frameId: c.payload.frame.frameId,
+          status: c.payload.frame.status,
+          ...(c.payload.frame.output !== undefined ? { output: c.payload.frame.output } : {}),
+        };
+      }
+      c.setResult({ frameId: c.payload.frame.frameId });
+    });
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      expect(c.payload.frameId).toBe(parentFrameId);
+      c.setResult({
+        gate: {
+          executionId: 'exec-test',
+          nodeId: 'loop-waiting-resume',
+          frameId: parentFrameId,
+          schema: {},
+          prompt: 'Review needed',
+          status: 'resumed',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'continue' },
+          createdAt: 10,
+          resolvedAt: 20,
+        },
+      });
+    });
+
+    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+
+    expect(outcome.status).toBe('completed');
+    expect(completedLoopFrame).toMatchObject({ frameId: parentFrameId, status: 'completed' });
+    if (completedLoopFrame === undefined) {
+      throw new Error(`Expected loop frame '${parentFrameId}' to be completed`);
+    }
+    const loopOutput = completedLoopFrame.output as LoopOutput;
+    expect(loopOutput.outcome).toBe('escalate');
+    expect(loopOutput.rounds).toBe(1);
+    expect(loopOutput.bodyOutputs).toEqual([{ result: 'previous-round' }]);
+    expect(loopOutput.resumeData).toEqual({ decision: 'continue' });
   });
 
   it('fails an expired persisted escalation gate with auto-reject on redispatch', async () => {

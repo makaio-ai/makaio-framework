@@ -55,16 +55,21 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   }
 
   const zodSchemas = isWorkflowZodSchemas(obj['zodSchemas']) ? obj['zodSchemas'] : undefined;
-  const runtimeLoopGates =
-    obj['runtimeLoopGates'] instanceof Map
-      ? (obj['runtimeLoopGates'] as RuntimeLoadedWorkflow['runtimeLoopGates'])
-      : undefined;
+  const runtimeLoopGatesExport = obj['runtimeLoopGates'];
+  if (runtimeLoopGatesExport !== undefined && !(runtimeLoopGatesExport instanceof Map)) {
+    throw new WorkflowError(
+      WorkflowErrorCode.NOT_EXECUTABLE,
+      `Invalid workflow module default export: 'runtimeLoopGates' must be a Map instance when provided.`,
+    );
+  }
 
   return {
     definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
     runtimeHandlers: obj['runtimeHandlers'] as RuntimeLoadedWorkflow['runtimeHandlers'],
     ...(zodSchemas !== undefined ? { zodSchemas } : {}),
-    ...(runtimeLoopGates !== undefined ? { runtimeLoopGates } : {}),
+    ...(runtimeLoopGatesExport !== undefined
+      ? { runtimeLoopGates: runtimeLoopGatesExport as RuntimeLoadedWorkflow['runtimeLoopGates'] }
+      : {}),
   };
 }
 
