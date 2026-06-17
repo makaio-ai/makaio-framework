@@ -1,13 +1,20 @@
 import type {
   WorkflowIterateChainNode,
   WorkflowIterateNode,
+  WorkflowLoopNode,
   WorkflowNode,
   WorkflowParallelNode,
   WorkflowSequenceNode,
 } from './schemas.js';
 
 /** How the current node was reached from its parent. */
-export type WalkRelationship = 'root' | 'sequence-child' | 'parallel-branch' | 'iterate-body' | 'iterate-chain-body';
+export type WalkRelationship =
+  | 'root'
+  | 'sequence-child'
+  | 'parallel-branch'
+  | 'iterate-body'
+  | 'iterate-chain-body'
+  | 'loop-body';
 
 /**
  * Context passed to visitor callbacks during workflow definition traversal.
@@ -41,8 +48,8 @@ export interface WorkflowNodeVisitor {
  * Depth-first walk over a workflow definition tree.
  *
  * Visits every node in the tree, calling `enter` before children and `leave`
- * after. Handles all 4 recursive child relationships: `sequence.nodes`,
- * `parallel.branches`, `iterate.body`, and `iterate-chain.body`.
+ * after. Handles all 5 recursive child relationships: `sequence.nodes`,
+ * `parallel.branches`, `iterate.body`, `iterate-chain.body`, and `loop.body`.
  * @param root - Root sequence node of the workflow definition.
  * @param visitor - Visitor with optional `enter`/`leave` callbacks.
  */
@@ -107,6 +114,11 @@ function visitNode(
     case 'iterate-chain': {
       const chain = node as WorkflowIterateChainNode;
       visitNode(chain.body, visitor, node, childDepth, childAncestors, 'iterate-chain-body', undefined, undefined);
+      break;
+    }
+    case 'loop': {
+      const loop = node as WorkflowLoopNode;
+      visitNode(loop.body, visitor, node, childDepth, childAncestors, 'loop-body', undefined, undefined);
       break;
     }
     // Leaf nodes: station, delegate-agent, delegate-role, gate — no children.

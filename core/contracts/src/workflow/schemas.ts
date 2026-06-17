@@ -268,6 +268,7 @@ export type WorkflowSourceLocation = z.infer<typeof WorkflowSourceLocationSchema
  * - `gate`           — pauses execution awaiting human or automated approval
  * - `iterate`        — expands over a collection (fan-out then fan-in)
  * - `iterate-chain`  — sequential pipeline iteration over a collection
+ * - `loop`           — gated retry loop with a body sequence and convergence gate
  * - `sequence`       — ordered list of child nodes (the structural container)
  */
 export const WorkflowNodeTypeSchema = z.enum([
@@ -278,6 +279,7 @@ export const WorkflowNodeTypeSchema = z.enum([
   'gate',
   'iterate',
   'iterate-chain',
+  'loop',
   'sequence',
 ]);
 
@@ -359,6 +361,7 @@ export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(
       WorkflowGateNodeSchema,
       WorkflowIterateNodeSchema,
       WorkflowIterateChainNodeSchema,
+      WorkflowLoopNodeSchema,
       WorkflowSequenceNodeSchema,
     ]) as z.ZodType<WorkflowNode>,
 );
@@ -644,6 +647,112 @@ export const WorkflowIterateChainNodeSchema = WorkflowNodeBaseSchema.extend({
 });
 
 export type WorkflowIterateChainNode = z.infer<typeof WorkflowIterateChainNodeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Loop Gate Outcome
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Discriminated union of outcomes a loop gate handler may return.
+ *
+ * - `pass`     — exit the loop and continue downstream
+ * - `loop`     — re-enter the loop body for another round
+ * - `escalate` — pause the loop and raise a gate for human decision
+ */
+export const LoopGateOutcomeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pass') }).strict(),
+  z.object({ kind: z.literal('loop') }).strict(),
+  z.object({ kind: z.literal('escalate'), reason: z.string().min(1) }).strict(),
+]);
+
+export type LoopGateOutcome = z.infer<typeof LoopGateOutcomeSchema>;
+
+// ─────────────────────────────────────────────────────────────
+// Loop Node
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Loop node — gated retry loop with a body sequence and convergence gate.
+ *
+ * Executes `body` up to `maxRounds` times. After each round, the `gate`
+ * handler is evaluated. The handler returns a {@link LoopGateOutcome}:
+ * `pass` exits the loop, `loop` re-enters the body, and `escalate`
+ * suspends the loop and raises a human gate for decision.
+ *
+ * The `gate.escalation` block is optional; when present it configures the
+ * suspended gate's prompt, resume schema, auto-action, and timeout.
+ *
+ * V1 does not support nested loops. Use {@link validateNoNestedLoops}
+ * at authoring time to enforce this constraint.
+ */
+export const WorkflowLoopNodeSchema = WorkflowNodeBaseSchema.extend({
+  /** Node type discriminant. */
+  type: z.literal('loop'),
+  /**
+   * Maximum number of loop iterations before the gate forces escalation.
+   * Must be a positive integer.
+   */
+  maxRounds: z.number().int().positive(),
+  /**
+   * The sequence node executed on each loop iteration.
+   * Must be a `sequence` node; individual stations, delegates, etc.
+   * are placed inside the body sequence.
+   */
+  body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
+  /**
+   * Gate configuration evaluated after each body execution to determine
+   * whether to loop, pass, or escalate.
+   */
+  gate: z
+    .object({
+      /**
+       * Registered gate handler name resolved at runtime.
+       * The handler receives gate input, config, and loop context.
+       */
+      handler: z.string().min(1),
+      /**
+       * Optional expression resolving to the gate handler's input value.
+       * Typically a frame output reference like `'frames.aggregate.output'`.
+       */
+      input: z.string().min(1).optional(),
+      /**
+       * Optional static configuration forwarded to the gate handler.
+       * Arbitrary JSON; the handler interprets its shape.
+       */
+      config: JsonValueSchema.optional(),
+      /**
+       * Optional escalation configuration for when the gate suspends the loop.
+       * When present, the runtime creates a human gate with this configuration.
+       */
+      escalation: z
+        .object({
+          /** Title for the escalation gate dialog. */
+          title: z.string().optional(),
+          /** Prompt shown to the reviewer in the escalation gate. */
+          prompt: z.string().min(1),
+          /**
+           * JSON Schema for the resume data payload submitted when
+           * the escalation gate is resolved.
+           */
+          resumeSchema: JsonSchemaRecordSchema.optional(),
+          /**
+           * Action to take when the escalation timeout expires.
+           * Defaults to `'reject'`.
+           */
+          autoAction: z.enum(['approve', 'reject']).default('reject'),
+          /**
+           * Timeout in milliseconds before `autoAction` fires.
+           * `null` blocks indefinitely (no timeout). Defaults to `null`.
+           */
+          timeoutMs: z.number().int().positive().nullable().default(null),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+});
+
+export type WorkflowLoopNode = z.infer<typeof WorkflowLoopNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Dynamic Region

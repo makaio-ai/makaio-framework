@@ -191,6 +191,7 @@ function seedDefinitionExecution(
     workflow,
     runContext,
     runtimeHandlers: new Map(),
+    runtimeLoopGates: new Map(),
   });
   return execution;
 }
@@ -611,6 +612,7 @@ function seedFileExecution(
     },
     runContext,
     runtimeHandlers: new Map(),
+    runtimeLoopGates: new Map(),
   });
 }
 

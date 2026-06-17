@@ -4,6 +4,7 @@ import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, Workflo
 import type { CompletionMode } from '../subagent/schemas.js';
 import type { IterateHandler, PreviousStepOutput, StationHandler, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
+import type { LoopGateHandler } from './loop.js';
 
 // ─────────────────────────────────────────────────────────────
 // Node Options and Configuration Types
@@ -128,6 +129,69 @@ export interface ParallelOptions {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Loop Options (builder-level)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Associates a named gate handler string with its runtime evaluate function.
+ *
+ * The `handler` string is serialized into the definition; the `evaluate`
+ * function is stored in `runtimeLoopGates` and never persisted.
+ */
+export interface LoopGateRegistration {
+  /** Registered gate handler name resolved at runtime. */
+  readonly handler: string;
+  /** Runtime gate evaluate function stored in `runtimeLoopGates`. */
+  readonly evaluate: LoopGateHandler;
+}
+
+/**
+ * Options for loop nodes created via the fluent builder or standalone factory.
+ *
+ * Extends {@link NodeOptions} with loop-specific configuration: round limit,
+ * gate handler registration, and optional escalation gate parameters.
+ */
+export interface LoopOptions extends NodeOptions {
+  /** Maximum number of loop iterations before the gate forces escalation. */
+  readonly maxRounds: number;
+  /** Gate handler registration and optional gate configuration. */
+  readonly gate: LoopGateRegistration & {
+    /**
+     * Optional expression resolving to the gate handler's input value.
+     * Typically a frame output reference like `'frames.aggregate.output'`.
+     */
+    readonly input?: string;
+    /** Optional static configuration forwarded to the gate handler. */
+    readonly config?: JsonValue;
+    /**
+     * Optional escalation configuration for when the gate suspends the loop.
+     * When present, the runtime creates a human gate with this configuration.
+     */
+    readonly escalation?: {
+      /** Title for the escalation gate dialog. */
+      readonly title?: string;
+      /** Prompt shown to the reviewer in the escalation gate. */
+      readonly prompt: string;
+      /**
+       * JSON Schema for the resume data payload submitted when
+       * the escalation gate is resolved.
+       */
+      readonly resumeSchema?: Record<string, JsonValue>;
+      /**
+       * Action to take when the escalation timeout expires.
+       * Defaults to `'reject'`.
+       */
+      readonly autoAction?: 'approve' | 'reject';
+      /**
+       * Timeout in milliseconds before `autoAction` fires.
+       * `null` blocks indefinitely (no timeout).
+       */
+      readonly timeoutMs?: number | null;
+    };
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // Artifact binding options (builder-level)
 // ─────────────────────────────────────────────────────────────
 
@@ -232,6 +296,11 @@ export interface BuiltWorkflow {
    * Empty while the v1 authoring surface exposes only static topology.
    */
   readonly runtimeFactories: ReadonlyMap<string, () => WorkflowNode[]>;
+  /**
+   * Loop gate handler functions keyed by handler name.
+   * Populated by `.loop()` calls and standalone `loop()` factories.
+   */
+  readonly runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>;
   /** Zod schemas extracted from the builder for runtime validation. */
   readonly zodSchemas: WorkflowZodSchemas;
   /** Optional authoring-time source metadata for diagnostics. */
@@ -414,6 +483,22 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    * @returns This builder for chaining
    */
   iterateChain(id: string, chain: WorkflowNode[], options: IterateOptions): WorkflowBuilder<TTrigger, TState>;
+  /**
+   * Appends a loop node to the root sequence with a gated convergence check.
+   *
+   * The body nodes are executed on each iteration; the gate handler is
+   * evaluated after each body pass to determine whether to loop, pass,
+   * or escalate. Station handlers from standalone `station()` factories
+   * in the body are automatically collected into `runtimeHandlers`.
+   *
+   * V1 does not support nested loops; the builder validates this constraint
+   * at authoring time.
+   * @param id - Unique loop node identifier
+   * @param bodyNodes - Ordered list of nodes forming the loop body
+   * @param options - Loop configuration including maxRounds and gate
+   * @returns This builder for chaining
+   */
+  loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a trigger to the workflow definition.
    * @param trigger - The trigger to add

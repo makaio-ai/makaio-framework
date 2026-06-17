@@ -4,6 +4,7 @@ import type { ExpressionContext } from '@makaio/expression';
 import type {
   BuiltWorkflow,
   JsonValue,
+  LoopGateHandler,
   PreviousStepOutput,
   StationHandler,
   SpanRecord,
@@ -181,6 +182,12 @@ export interface RuntimeExecutionOptions {
    * external responses.
    */
   readonly resumeFrames?: ResumeFrameIndex;
+  /**
+   * Loop gate handler functions keyed by handler name.
+   * Populated by `.loop()` calls and standalone `loop()` factories.
+   * Defaults to an empty map when absent.
+   */
+  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
 }
 
 interface FramePersistenceOptions {
@@ -343,6 +350,7 @@ export class RuntimeContext {
     this.env = platform.env;
     this.suspensionStrategy = options.suspensionStrategy ?? 'wait-in-process';
     this.resumeFrames = options.resumeFrames;
+    this.runtimeLoopGates = options.runtimeLoopGates ?? new Map();
   }
 
   /** Platform/workspace context exposed to station handlers. */
@@ -362,6 +370,12 @@ export class RuntimeContext {
    * `undefined` when the execution is starting fresh.
    */
   public readonly resumeFrames: ResumeFrameIndex | undefined;
+
+  /**
+   * Loop gate handler functions keyed by handler name.
+   * Empty when the workflow has no loop nodes.
+   */
+  public readonly runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>;
 
   /**
    * Create a child context that shares this execution's frame registry and
@@ -388,7 +402,11 @@ export class RuntimeContext {
       this.frameRegistry,
       this.artifactBinding,
       { context: this.platformContext, env: this.env },
-      { suspensionStrategy: this.suspensionStrategy, resumeFrames: this.resumeFrames },
+      {
+        suspensionStrategy: this.suspensionStrategy,
+        resumeFrames: this.resumeFrames,
+        runtimeLoopGates: this.runtimeLoopGates,
+      },
     );
   }
 
@@ -656,5 +674,9 @@ export function createRuntimeContext(
     builtWorkflow.runtimeHandlers,
     bus,
     signal,
+    undefined,
+    undefined,
+    undefined,
+    { runtimeLoopGates: builtWorkflow.runtimeLoopGates },
   );
 }

@@ -7,6 +7,7 @@ import {
   WORKFLOW_CANCELLED_REASON,
   WorkflowNamespace,
   defineWorkflow,
+  station,
   type ArtifactRevision,
   type StationHandler,
   type WorkflowDefinition,
@@ -510,6 +511,71 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
 });
 
 describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
+  it('passes runtimeLoopGates from loaded workflows into loop execution', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const body = vi.fn(async () => ({ blockers: [] }));
+    const gate = vi.fn(() => ({ kind: 'pass' as const }));
+    const workflow = defineWorkflow('orchestrator-loop').loop('converge', [station('aggregate', body)], {
+      maxRounds: 3,
+      gate: { handler: 'no-open-blockers', evaluate: gate },
+    });
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        config: makeWorkerConfig({
+          executionId: 'wfx-orchestrator-loop',
+          workflowId: workflow.id,
+        }),
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+
+      expect(result.status).toBe('completed');
+      expect(body).toHaveBeenCalledOnce();
+      expect(gate).toHaveBeenCalledOnce();
+    } finally {
+      dbContext.cleanup();
+    }
+  });
+
+  it('fails clearly when a serialized loop definition has no runtime gate handler', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const workflow = defineWorkflow('orchestrator-loop-missing-gate').loop(
+      'converge',
+      [station('aggregate', async () => ({ blockers: [] }))],
+      {
+        maxRounds: 3,
+        gate: { handler: 'missing-gate', evaluate: () => ({ kind: 'pass' as const }) },
+      },
+    );
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        config: makeWorkerConfig({
+          executionId: 'wfx-orchestrator-loop-missing-gate',
+          workflowId: workflow.id,
+        }),
+        loaded: { definition: workflow.definition, runtimeHandlers: workflow.runtimeHandlers },
+        bus,
+        signal: new AbortController().signal,
+      });
+
+      expect(result.status).toBe('failed');
+      if (result.status === 'failed') {
+        expect(result.error).toContain('missing loop gate handler(s): missing-gate');
+      }
+    } finally {
+      dbContext.cleanup();
+    }
+  });
+
   it('persists paused execution and returns paused result for remote gate parking', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);

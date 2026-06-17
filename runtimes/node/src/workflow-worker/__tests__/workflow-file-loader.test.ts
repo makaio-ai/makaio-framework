@@ -511,3 +511,138 @@ export default {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// runtimeLoopGates round-trip
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Build ESM source for a workflow whose root contains a `loop` node with
+ * a body sequence and a gate, plus a `runtimeLoopGates` Map carrying the
+ * gate handler function.
+ * @param id - Workflow identifier.
+ * @param gateHandlerName - The gate handler name registered in the map.
+ * @returns ESM module source string.
+ */
+function makeLoopWorkflowModuleSource(id: string, gateHandlerName: string): string {
+  return `
+const definition = {
+  id: '${id}',
+  name: '${id}',
+  root: {
+    id: '${id}__root',
+    type: 'sequence',
+    nodes: [
+      {
+        id: '${id}__loop',
+        type: 'loop',
+        maxRounds: 3,
+        body: {
+          id: '${id}__loop__body',
+          type: 'sequence',
+          nodes: [
+            { id: 'step1', type: 'station', prompt: 'do work' },
+          ],
+        },
+        gate: {
+          handler: '${gateHandlerName}',
+          input: 'frames.step1.output',
+        },
+      },
+    ],
+  },
+  triggers: [],
+  scope: { type: 'global' },
+};
+const runtimeHandlers = new Map([['step1', (ctx) => ctx]]);
+const runtimeLoopGates = new Map([['${gateHandlerName}', (_input, _config, _ctx) => ({ kind: 'pass' })]]);
+export default { definition, runtimeHandlers, runtimeLoopGates };
+`;
+}
+
+describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
+  it('preserves runtimeLoopGates through the file-loader round-trip (path source)', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    const source = makeLoopWorkflowModuleSource('loop-wf', 'convergence-check');
+    const filePath = join(dir, 'loop-workflow.mjs');
+    await writeFile(filePath, source, 'utf8');
+
+    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
+
+    // Definition carries the loop node structure
+    expect(loaded.definition.id).toBe('loop-wf');
+    const rootNodes = loaded.definition.root.nodes;
+    expect(rootNodes).toHaveLength(1);
+    expect(rootNodes[0].type).toBe('loop');
+
+    // Body sequence is preserved inside the loop node
+    expect(rootNodes[0]).toMatchObject({
+      type: 'loop',
+      body: { nodes: [{ id: 'step1', type: 'station' }] },
+    });
+
+    // runtimeLoopGates map is carried through
+    expect(loaded.runtimeLoopGates).toBeDefined();
+    expect(loaded.runtimeLoopGates).toBeInstanceOf(Map);
+    expect(loaded.runtimeLoopGates!.size).toBe(1);
+    expect(loaded.runtimeLoopGates!.has('convergence-check')).toBe(true);
+    expect(loaded.runtimeLoopGates!.get('convergence-check')).toBeTypeOf('function');
+  });
+
+  it('preserves runtimeLoopGates through the inline source round-trip', async () => {
+    const source = makeLoopWorkflowModuleSource('inline-loop-wf', 'quality-gate');
+
+    const loaded = await loadWorkflowModule({
+      kind: 'source',
+      filename: 'inline-loop.mjs',
+      source,
+    });
+
+    expect(loaded.runtimeLoopGates).toBeDefined();
+    expect(loaded.runtimeLoopGates!.has('quality-gate')).toBe(true);
+    expect(loaded.runtimeLoopGates!.get('quality-gate')).toBeTypeOf('function');
+  });
+
+  it('omits runtimeLoopGates when the export does not include one', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    const content = makeWorkflowModuleSource('no-loop-wf', ['step1']);
+    const filePath = join(dir, 'no-loop-workflow.mjs');
+    await writeFile(filePath, content, 'utf8');
+
+    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
+
+    expect(loaded.runtimeLoopGates).toBeUndefined();
+  });
+
+  it('throws when runtimeLoopGates is defined but not a Map instance', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    // runtimeLoopGates is a plain object, not a Map.
+    const content = `
+const definition = {
+  id: 'bad-gates',
+  name: 'bad-gates',
+  root: { id: 'root', type: 'sequence', nodes: [] },
+  triggers: [],
+  scope: { type: 'global' },
+};
+const runtimeHandlers = new Map();
+const runtimeLoopGates = { 'my-gate': () => ({ kind: 'pass' }) };
+export default { definition, runtimeHandlers, runtimeLoopGates };
+`;
+    const filePath = join(dir, 'bad-gates.mjs');
+    await writeFile(filePath, content, 'utf8');
+
+    const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+    await expect(promise).rejects.toThrow(/runtimeLoopGates/i);
+    await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
+  });
+});

@@ -14,8 +14,16 @@ import {
   gate,
   iterate,
   iterateChain,
+  loop,
 } from '../authoring.js';
-import type { WorkflowGateNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
+import {
+  loop as rootLoop,
+  LoopGateOutcomeSchema as RootLoopGateOutcomeSchema,
+  WorkflowLoopNodeSchema as RootWorkflowLoopNodeSchema,
+} from '../../index.js';
+import type { WorkflowGateNode, WorkflowLoopNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
+import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
+import { validateNoNestedLoops } from '../loop.js';
 import { defineWorkflowBundle } from '../bundle.js';
 
 const GitNamespace = createBusNamespace('git', {
@@ -1070,5 +1078,539 @@ describe('defineWorkflowBundle', () => {
 
     const allDefs = bundle.workflows.map((w) => w.definition);
     expect(() => JSON.stringify(allDefs)).not.toThrow();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Loop node schema parsing
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDefinitionSchema — loop node', () => {
+  it('parses a gated loop node', () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: 'review-loop',
+      name: 'Review Loop',
+      scope: { type: 'global' },
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'converge',
+            type: 'loop',
+            maxRounds: 3,
+            body: {
+              id: 'converge__body',
+              type: 'sequence',
+              nodes: [{ id: 'aggregate', type: 'station', prompt: 'Aggregate findings' }],
+            },
+            gate: {
+              handler: 'no-open-blockers',
+              input: 'frames.aggregate.output',
+              config: { blockerSeverities: ['blocker'] },
+              escalation: {
+                title: 'Review loop escalation',
+                prompt: 'The loop reached escalation. Choose the next action.',
+                autoAction: 'reject',
+                timeoutMs: null,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.root.nodes[0]?.type).toBe('loop');
+  });
+
+  it('parses a loop node without optional gate fields', () => {
+    const parsed = WorkflowDefinitionSchema.parse({
+      id: 'minimal-loop',
+      scope: { type: 'global' },
+      root: {
+        id: 'root',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'retry',
+            type: 'loop',
+            maxRounds: 5,
+            body: {
+              id: 'retry__body',
+              type: 'sequence',
+              nodes: [{ id: 'attempt', type: 'station', prompt: 'Try again' }],
+            },
+            gate: {
+              handler: 'check-success',
+            },
+          },
+        ],
+      },
+    });
+    expect(parsed.root.nodes[0]?.type).toBe('loop');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Nested loop validation
+// ─────────────────────────────────────────────────────────────
+
+describe('validateNoNestedLoops', () => {
+  it('returns undefined for a loop whose body contains no loops', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [{ id: 'step', type: 'station', prompt: 'Do work' }],
+      },
+      gate: { handler: 'check' },
+    });
+    expect(validateNoNestedLoops(loopNode)).toBeUndefined();
+  });
+
+  it('rejects a directly nested loop', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'inner',
+            type: 'loop',
+            maxRounds: 2,
+            body: {
+              id: 'inner__body',
+              type: 'sequence',
+              nodes: [{ id: 'step', type: 'station', prompt: 'work' }],
+            },
+            gate: { handler: 'check' },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'inner'");
+    expect(result).toContain("inside loop 'outer'");
+  });
+
+  it('rejects a loop nested inside a parallel branch', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'par',
+            type: 'parallel',
+            branches: {
+              left: {
+                id: 'par__left',
+                type: 'sequence',
+                nodes: [
+                  {
+                    id: 'deep-loop',
+                    type: 'loop',
+                    maxRounds: 1,
+                    body: {
+                      id: 'deep__body',
+                      type: 'sequence',
+                      nodes: [{ id: 'x', type: 'station', prompt: 'x' }],
+                    },
+                    gate: { handler: 'check' },
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'deep-loop'");
+  });
+
+  it('rejects a loop nested inside an iterate body', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'iter',
+            type: 'iterate',
+            collection: 'ctx.inputs.items',
+            body: {
+              id: 'iter__body',
+              type: 'sequence',
+              nodes: [
+                {
+                  id: 'nested-loop',
+                  type: 'loop',
+                  maxRounds: 2,
+                  body: {
+                    id: 'nested__body',
+                    type: 'sequence',
+                    nodes: [{ id: 'y', type: 'station', prompt: 'y' }],
+                  },
+                  gate: { handler: 'check' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'nested-loop'");
+  });
+
+  it('rejects a loop nested inside an iterate-chain body', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'chain',
+            type: 'iterate-chain',
+            collection: 'ctx.inputs.items',
+            body: {
+              id: 'chain__body',
+              type: 'sequence',
+              nodes: [
+                {
+                  id: 'nested-chain-loop',
+                  type: 'loop',
+                  maxRounds: 2,
+                  body: {
+                    id: 'nested-chain__body',
+                    type: 'sequence',
+                    nodes: [{ id: 'z', type: 'station', prompt: 'z' }],
+                  },
+                  gate: { handler: 'check' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'nested-chain-loop'");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Fluent builder — loop nodes
+// ─────────────────────────────────────────────────────────────
+
+describe('fluent builder — loop nodes', () => {
+  it('appends a serializable loop node and stores gate handler', () => {
+    const workflow = defineWorkflow('review-loop').loop('converge', [station('aggregate', () => ({ blockers: [] }))], {
+      maxRounds: 3,
+      gate: {
+        handler: 'no-open-blockers',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+
+    expect(workflow.definition.root.nodes[0]).toMatchObject({
+      id: 'converge',
+      type: 'loop',
+      maxRounds: 3,
+      gate: { handler: 'no-open-blockers' },
+    });
+    expect(workflow.runtimeLoopGates.get('no-open-blockers')).toBeTypeOf('function');
+    // body station handler should be collected
+    expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
+  });
+
+  it('creates the body sequence with correct ID convention', () => {
+    const workflow = defineWorkflow('loop-body-id').loop('retry', [station('attempt', () => null)], {
+      maxRounds: 5,
+      gate: {
+        handler: 'check-success',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+
+    const loopNode = workflow.definition.root.nodes[0] as WorkflowLoopNode | undefined;
+    expect(loopNode?.body.id).toBe('retry__body');
+    expect(loopNode?.body.type).toBe('sequence');
+    expect(loopNode?.body.nodes).toHaveLength(1);
+    expect(loopNode?.body.nodes[0]?.id).toBe('attempt');
+  });
+
+  it('serializes gate input, config, and escalation', () => {
+    const workflow = defineWorkflow('loop-full-gate').loop('converge', [station('work', () => null)], {
+      maxRounds: 3,
+      gate: {
+        handler: 'checker',
+        evaluate: () => ({ kind: 'loop' as const }),
+        input: 'frames.work.output',
+        config: { severity: 'blocker' },
+        escalation: {
+          title: 'Loop escalation',
+          prompt: 'The loop needs human input.',
+          autoAction: 'reject',
+          timeoutMs: null,
+        },
+      },
+    });
+
+    const loopNode = workflow.definition.root.nodes[0] as WorkflowLoopNode | undefined;
+    expect(loopNode?.gate.input).toBe('frames.work.output');
+    expect(loopNode?.gate.config).toEqual({ severity: 'blocker' });
+    expect(loopNode?.gate.escalation).toEqual({
+      title: 'Loop escalation',
+      prompt: 'The loop needs human input.',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+  });
+
+  it('applies when/skip conditions to loop nodes', () => {
+    const workflow = defineWorkflow('loop-conditions').loop('retry', [station('attempt', () => null)], {
+      maxRounds: 2,
+      gate: {
+        handler: 'check',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+      when: "ctx.inputs.retry == 'true'",
+      skip: "ctx.inputs.skipRetry == 'true'",
+    });
+
+    const node = workflow.definition.root.nodes[0];
+    expect(node?.when).toBe("ctx.inputs.retry == 'true'");
+    expect(node?.skip).toBe("ctx.inputs.skipRetry == 'true'");
+  });
+
+  it('loop node definition is JSON-serializable', () => {
+    const workflow = defineWorkflow('loop-serial').loop('converge', [station('work', () => null)], {
+      maxRounds: 3,
+      gate: {
+        handler: 'checker',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+    expect(() => JSON.stringify(workflow.definition)).not.toThrow();
+  });
+
+  it('throws on duplicate loop ID', () => {
+    const workflow = defineWorkflow('loop-dup');
+    workflow.station('converge', () => null);
+    expect(() =>
+      workflow.loop('converge', [station('work', () => null)], {
+        maxRounds: 3,
+        gate: {
+          handler: 'check',
+          evaluate: () => ({ kind: 'pass' as const }),
+        },
+      }),
+    ).toThrow('Duplicate step ID: converge');
+  });
+
+  it('throws on duplicate body node ID', () => {
+    const workflow = defineWorkflow('loop-dup-body');
+    workflow.station('work', () => null);
+    expect(() =>
+      workflow.loop('converge', [station('work', () => null)], {
+        maxRounds: 3,
+        gate: {
+          handler: 'check',
+          evaluate: () => ({ kind: 'pass' as const }),
+        },
+      }),
+    ).toThrow('Duplicate step ID: work');
+  });
+
+  it('throws when synthesized body sequence ID reuses an existing ID', () => {
+    const workflow = defineWorkflow('loop-dup-body-seq');
+    workflow.station('retry__body', () => null);
+    expect(() =>
+      workflow.loop('retry', [station('attempt', () => null)], {
+        maxRounds: 2,
+        gate: {
+          handler: 'check',
+          evaluate: () => ({ kind: 'pass' as const }),
+        },
+      }),
+    ).toThrow('Duplicate step ID: retry__body');
+  });
+
+  it('does not register the loop node itself in runtimeHandlers', () => {
+    const workflow = defineWorkflow('loop-no-handler').loop('converge', [station('work', () => null)], {
+      maxRounds: 3,
+      gate: {
+        handler: 'checker',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+    expect(workflow.runtimeHandlers.has('converge')).toBe(false);
+    expect(workflow.runtimeHandlers.has('work')).toBe(true);
+  });
+
+  it('runtimeLoopGates is empty when no loop nodes are present', () => {
+    const workflow = defineWorkflow('no-loop').station('work', () => null);
+    expect(workflow.runtimeLoopGates.size).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Standalone factory — loop()
+// ─────────────────────────────────────────────────────────────
+
+describe('standalone factory — loop()', () => {
+  it('is exported from the root package barrel with loop schemas', () => {
+    const loopNode = rootLoop('converge', [station('aggregate', () => null)], {
+      maxRounds: 2,
+      gate: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
+    });
+
+    expect(RootWorkflowLoopNodeSchema.parse(loopNode).type).toBe('loop');
+    expect(RootLoopGateOutcomeSchema.parse({ kind: 'loop' })).toEqual({ kind: 'loop' });
+  });
+
+  it('creates a serializable loop node', () => {
+    const loopNode = loop('converge', [station('aggregate', () => ({ blockers: [] }))], {
+      maxRounds: 3,
+      gate: {
+        handler: 'no-open-blockers',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+
+    expect(loopNode).toMatchObject({
+      id: 'converge',
+      type: 'loop',
+      maxRounds: 3,
+      gate: { handler: 'no-open-blockers' },
+      body: {
+        id: 'converge__body',
+        type: 'sequence',
+      },
+    });
+  });
+
+  it('applies when/skip to the standalone loop node', () => {
+    const loopNode = loop('retry', [station('attempt', () => null)], {
+      maxRounds: 2,
+      gate: {
+        handler: 'check',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+      when: 'x',
+      skip: 'y',
+    });
+    expect(loopNode.when).toBe('x');
+    expect(loopNode.skip).toBe('y');
+  });
+
+  it('is JSON-serializable', () => {
+    const loopNode = loop('retry', [station('attempt', () => null)], {
+      maxRounds: 2,
+      gate: {
+        handler: 'check',
+        evaluate: () => ({ kind: 'pass' as const }),
+      },
+    });
+    expect(() => JSON.stringify(loopNode)).not.toThrow();
+  });
+
+  it('serializes gate input, config, and escalation on standalone node', () => {
+    const loopNode = loop('converge', [station('work', () => null)], {
+      maxRounds: 3,
+      gate: {
+        handler: 'checker',
+        evaluate: () => ({ kind: 'loop' as const }),
+        input: 'frames.work.output',
+        config: { threshold: 0.9 },
+        escalation: {
+          prompt: 'Human needed',
+        },
+      },
+    });
+
+    expect(loopNode.gate.input).toBe('frames.work.output');
+    expect(loopNode.gate.config).toEqual({ threshold: 0.9 });
+    expect(loopNode.gate.escalation).toEqual({
+      prompt: 'Human needed',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+  });
+
+  it('rejects nested loops before returning a standalone node', () => {
+    expect(() =>
+      loop(
+        'outer',
+        [
+          loop('inner', [station('work', () => null)], {
+            maxRounds: 2,
+            gate: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
+          }),
+        ],
+        {
+          maxRounds: 3,
+          gate: { handler: 'outer-check', evaluate: () => ({ kind: 'pass' as const }) },
+        },
+      ),
+    ).toThrow("Nested loop 'inner' found inside loop 'outer'");
+  });
+
+  it('addNode collects standalone loop gate handler into runtimeLoopGates', () => {
+    const gateEvaluate = () => ({ kind: 'pass' as const });
+    const workflow = defineWorkflow('standalone-loop-addnode');
+    workflow.addNode(
+      loop('converge', [station('aggregate', () => null)], {
+        maxRounds: 3,
+        gate: {
+          handler: 'blocker-check',
+          evaluate: gateEvaluate,
+        },
+      }),
+    );
+
+    expect(workflow.runtimeLoopGates.get('blocker-check')).toBe(gateEvaluate);
+    expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
+  });
+
+  it('addNode collects standalone loop body station handlers into runtimeHandlers', () => {
+    const bodyHandler = () => ({ processed: true }) as const;
+    const workflow = defineWorkflow('standalone-loop-body-handlers');
+    workflow.addNode(
+      loop('converge', [station('work', bodyHandler), delegateToRole('review', 'analyst')], {
+        maxRounds: 3,
+        gate: {
+          handler: 'check',
+          evaluate: () => ({ kind: 'pass' as const }),
+        },
+      }),
+    );
+
+    expect(workflow.runtimeHandlers.get('work')).toBe(bodyHandler);
+    expect(workflow.runtimeHandlers.has('review')).toBe(false);
   });
 });

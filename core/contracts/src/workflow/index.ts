@@ -29,6 +29,8 @@ export {
   WorkflowIterateChainNodeSchema,
   WorkflowIterateNodeSchema,
   WorkflowListQuerySchema,
+  WorkflowLoopNodeSchema,
+  LoopGateOutcomeSchema,
   WorkflowNodeBaseSchema,
   WorkflowNodeSchema,
   WorkflowNodeTypeSchema,
@@ -67,6 +69,8 @@ export type {
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowListQuery,
+  WorkflowLoopNode,
+  LoopGateOutcome,
   WorkflowNode,
   WorkflowNodeBase,
   WorkflowNodeType,
@@ -218,6 +222,7 @@ export {
   gate,
   iterate,
   iterateChain,
+  loop,
   ManualWorkflowTrigger,
   station,
   WebhookWorkflowTrigger,
@@ -237,6 +242,8 @@ export type {
   GateOptions,
   IterateHandler,
   IterateOptions,
+  LoopGateRegistration,
+  LoopOptions,
   NodeOptions,
   ParallelMode,
   ParallelOptions,
@@ -275,3 +282,5 @@ export type {
   TransitionEventType,
   TransitionRuleDefinition,
 } from './transition.js';
+export { validateNoNestedLoops } from './loop.js';
+export type { LoopGateContext, LoopGateHandler } from './loop.js';

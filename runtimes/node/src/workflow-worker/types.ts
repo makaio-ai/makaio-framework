@@ -1,4 +1,5 @@
 import type {
+  LoopGateHandler,
   StationHandler,
   WorkerContributionManifest,
   WorkflowDefinition,
@@ -20,6 +21,11 @@ export interface RuntimeLoadedWorkflow {
    * Used by the orchestrator to dispatch `station`-type nodes.
    */
   readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
+  /**
+   * Loop gate handler functions keyed by handler name.
+   * Used by the orchestrator to evaluate loop convergence gates.
+   */
+  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
 }
 
 /**

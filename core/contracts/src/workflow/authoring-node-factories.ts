@@ -6,15 +6,21 @@ import type {
   WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
+  WorkflowLoopNode,
   WorkflowNode,
+  WorkflowParallelNode,
+  WorkflowSequenceNode,
   WorkflowStationNode,
 } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
+import type { LoopGateHandler } from './loop.js';
+import { validateNoNestedLoops } from './loop.js';
 import type {
   AgentConfig,
   DelegateToRoleOptions,
   GateOptions,
   IterateOptions,
+  LoopOptions,
   NodeOptions,
 } from './authoring-builder.js';
 
@@ -34,6 +40,18 @@ import type {
  */
 export const standaloneHandlers = new WeakMap<object, StationHandler>();
 
+/**
+ * Module-scoped WeakMap that associates standalone-factory loop nodes with
+ * their gate handler functions.
+ *
+ * When `loop()` is called with a gate registration, the loop node object is
+ * used as a key and the gate evaluate function is stored here. Builder methods
+ * (`addNode()`) read this map when incorporating nodes so gate handlers are
+ * automatically registered in `runtimeLoopGates` without exposing functions
+ * in the serializable node shape.
+ */
+export const standaloneLoopGates = new WeakMap<object, LoopGateHandler>();
+
 // ─────────────────────────────────────────────────────────────
 // Schema helper
 // ─────────────────────────────────────────────────────────────
@@ -51,6 +69,52 @@ export function zodSchemaToJsonRecord(schema: z.ZodTypeAny): Record<string, Json
   const raw = z.toJSONSchema(schema) as Record<string, JsonValue>;
   const { $schema: _dropped, ...rest } = raw;
   return rest;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Standalone Handler Extraction
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Walks `node` and its descendants, extracting any handlers registered in
+ * `standaloneHandlers` and writing them into `handlers`.
+ *
+ * When `loopGates` is provided, loop gate handlers from `standaloneLoopGates`
+ * are also extracted into the map in the same recursive pass.
+ * @param node - The node to inspect
+ * @param handlers - The station handler map to populate
+ * @param loopGates - Optional loop gate handler map to populate
+ */
+export function extractStandaloneHandlers(
+  node: WorkflowNode,
+  handlers: Map<string, StationHandler>,
+  loopGates?: Map<string, LoopGateHandler>,
+): void {
+  const handler = standaloneHandlers.get(node);
+  if (handler !== undefined) {
+    handlers.set(node.id, handler);
+  }
+  if (node.type === 'sequence') {
+    for (const child of (node as WorkflowSequenceNode).nodes) {
+      extractStandaloneHandlers(child, handlers, loopGates);
+    }
+  } else if (node.type === 'parallel') {
+    for (const branch of Object.values((node as WorkflowParallelNode).branches)) {
+      extractStandaloneHandlers(branch, handlers, loopGates);
+    }
+  } else if (node.type === 'iterate') {
+    extractStandaloneHandlers((node as WorkflowIterateNode).body, handlers, loopGates);
+  } else if (node.type === 'iterate-chain') {
+    extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers, loopGates);
+  } else if (node.type === 'loop') {
+    if (loopGates !== undefined) {
+      const gateHandler = standaloneLoopGates.get(node);
+      if (gateHandler !== undefined) {
+        loopGates.set((node as WorkflowLoopNode).gate.handler, gateHandler);
+      }
+    }
+    extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers, loopGates);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -190,5 +254,74 @@ export function iterateChain(id: string, chain: WorkflowNode[], options: Iterate
     body: { id: `${id}__body`, type: 'sequence', nodes: chain },
     ...(options.when !== undefined && { when: options.when }),
     ...(options.skip !== undefined && { skip: options.skip }),
+  };
+}
+
+/**
+ * Creates a loop node for use as a standalone node passed to `addNode()`.
+ *
+ * The gate evaluate function is stored in the module-scoped
+ * `standaloneLoopGates` WeakMap keyed on the returned node object. Builder
+ * methods (`addNode()`) read this map when incorporating the node so the
+ * gate handler is automatically registered in `runtimeLoopGates` without
+ * embedding functions in the serializable node shape.
+ *
+ * Body node handlers registered via standalone `station()` factories are
+ * also collected through the existing `standaloneHandlers` mechanism.
+ * @param id - Unique loop node identifier
+ * @param bodyNodes - Ordered list of nodes forming the loop body
+ * @param options - Loop configuration including maxRounds and gate
+ * @returns A {@link WorkflowLoopNode} with no functions in the serializable definition
+ */
+export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions): WorkflowLoopNode {
+  const node: WorkflowLoopNode = {
+    id,
+    type: 'loop',
+    maxRounds: options.maxRounds,
+    body: { id: `${id}__body`, type: 'sequence', nodes: bodyNodes },
+    gate: buildSerializableLoopGate(options),
+    ...(options.when !== undefined && { when: options.when }),
+    ...(options.skip !== undefined && { skip: options.skip }),
+  };
+  const nestedError = validateNoNestedLoops(node);
+  if (nestedError !== undefined) {
+    throw new Error(nestedError);
+  }
+  standaloneLoopGates.set(node, options.gate.evaluate);
+  return node;
+}
+
+/**
+ * Builds the serializable gate descriptor from {@link LoopOptions}.
+ *
+ * Applies schema defaults for `escalation.autoAction` and
+ * `escalation.timeoutMs` so the resulting object satisfies
+ * `WorkflowLoopNode['gate']` without optional-to-required mismatches.
+ * @param options - Loop options containing the gate registration
+ * @returns A plain gate object suitable for the serializable node
+ */
+export function buildSerializableLoopGate(options: LoopOptions): WorkflowLoopNode['gate'] {
+  const escalation = options.gate.escalation;
+  return {
+    handler: options.gate.handler,
+    ...(options.gate.input !== undefined && {
+      input: options.gate.input,
+    }),
+    ...(options.gate.config !== undefined && {
+      config: options.gate.config,
+    }),
+    ...(escalation !== undefined && {
+      escalation: {
+        prompt: escalation.prompt,
+        autoAction: escalation.autoAction ?? 'reject',
+        timeoutMs: escalation.timeoutMs ?? null,
+        ...(escalation.title !== undefined && {
+          title: escalation.title,
+        }),
+        ...(escalation.resumeSchema !== undefined && {
+          resumeSchema: escalation.resumeSchema,
+        }),
+      },
+    }),
   };
 }

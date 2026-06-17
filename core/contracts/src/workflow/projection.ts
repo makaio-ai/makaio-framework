@@ -95,6 +95,7 @@ function classifyRole(type: WorkflowNodeType): ProjectedNodeRole {
     case 'parallel':
     case 'iterate':
     case 'iterate-chain':
+    case 'loop':
       return 'control';
     case 'sequence':
       return 'structural';
@@ -118,7 +119,7 @@ function relationshipSegments(
   if (relationship === 'sequence-child' && index !== undefined) {
     return [{ kind: 'index', value: index }];
   }
-  if (relationship === 'iterate-body' || relationship === 'iterate-chain-body') {
+  if (relationship === 'iterate-body' || relationship === 'iterate-chain-body' || relationship === 'loop-body') {
     return [{ kind: 'body' }];
   }
   return [];
@@ -218,6 +219,7 @@ export function projectWorkflowGraph(definition: WorkflowDefinition): ProjectedW
             break;
           case 'iterate':
           case 'iterate-chain':
+          case 'loop':
             edges.push({ sourceKey: parentKey, targetKey: key, kind: 'body' });
             break;
           default:

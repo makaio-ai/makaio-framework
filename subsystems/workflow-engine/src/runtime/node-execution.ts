@@ -7,6 +7,7 @@ import type {
   WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
+  WorkflowLoopNode,
   WorkflowNode,
   WorkflowParallelNode,
   WorkflowSequenceNode,
@@ -23,6 +24,7 @@ import { executeParallelNode } from './parallel-node.js';
 import { executeGateNode } from './gate-node.js';
 import { executeIterateNode } from './iterate-node.js';
 import { executeIterateChainNode } from './iterate-chain-node.js';
+import { executeLoopNode } from './loop-node.js';
 
 // ─────────────────────────────────────────────────────────────
 // Node execution result
@@ -180,7 +182,7 @@ export type ExecuteSequenceFn = (
  *
  * This is the central dispatch table for the primitive runtime. All node
  * types are implemented: `sequence`, `station`, `delegate-agent`,
- * `delegate-role`, `parallel`, `gate`, `iterate`, and `iterate-chain`.
+ * `delegate-role`, `parallel`, `gate`, `iterate`, `iterate-chain`, and `loop`.
  *
  * The `executeSequenceFn` parameter is injected by `primitive-runtime.ts` to
  * avoid a circular module-level import between this file and
@@ -258,6 +260,16 @@ export async function executeNode(
     case 'iterate-chain':
       return executeIterateChainNode(
         node as WorkflowIterateChainNode,
+        ctx,
+        expressionCtx,
+        executeSequenceFn,
+        currentFrameId ?? '',
+        parentPath,
+      );
+
+    case 'loop':
+      return executeLoopNode(
+        node as WorkflowLoopNode,
         ctx,
         expressionCtx,
         executeSequenceFn,

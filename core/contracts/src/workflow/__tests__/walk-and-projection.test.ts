@@ -7,6 +7,7 @@ import type {
   WorkflowParallelNode,
   WorkflowIterateNode,
   WorkflowIterateChainNode,
+  WorkflowLoopNode,
   WorkflowDelegateAgentNode,
   WorkflowDelegateRoleNode,
   WorkflowNode,
@@ -46,6 +47,10 @@ function mkIterate(id: string, body: WorkflowSequenceNode): WorkflowIterateNode 
 
 function mkIterateChain(id: string, body: WorkflowSequenceNode): WorkflowIterateChainNode {
   return { type: 'iterate-chain', id, collection: 'items', body };
+}
+
+function mkLoop(id: string, body: WorkflowSequenceNode, maxRounds = 3): WorkflowLoopNode {
+  return { type: 'loop', id, maxRounds, body, gate: { handler: 'my-gate' } };
 }
 
 function mkDefinition(root: WorkflowSequenceNode): WorkflowDefinition {
@@ -118,6 +123,19 @@ describe('walkWorkflowDefinition', () => {
     expect(entries).toContainEqual({ id: 'chain-body', relationship: 'iterate-chain-body' });
   });
 
+  it('walks loop node body with loop-body relationship', () => {
+    const root = mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkStation('inner')]))]);
+    const visited: Array<{ id: string; relationship: string; depth: number }> = [];
+    walkWorkflowDefinition(root, {
+      enter(node, ctx) {
+        visited.push({ id: node.id, relationship: ctx.relationship, depth: ctx.depth });
+      },
+    });
+
+    expect(visited).toContainEqual({ id: 'loop-1__body', relationship: 'loop-body', depth: 2 });
+    expect(visited).toContainEqual({ id: 'inner', relationship: 'sequence-child', depth: 3 });
+  });
+
   it('prunes subtree when enter returns false', () => {
     const root = mkSequence('root', [
       mkParallel('par', {
@@ -182,7 +200,7 @@ describe('walkWorkflowDefinition', () => {
     expect(ancestorPaths['deep']).toEqual(['root', 'par', 'a-seq']);
   });
 
-  it('visits all 8 node types', () => {
+  it('visits all 9 node types', () => {
     const root = mkSequence('root', [
       mkStation('s'),
       mkGate('g'),
@@ -191,6 +209,7 @@ describe('walkWorkflowDefinition', () => {
       mkParallel('p', { b: mkSequence('p-seq', []) }),
       mkIterate('i', mkSequence('i-body', [])),
       mkIterateChain('ic', mkSequence('ic-body', [])),
+      mkLoop('l', mkSequence('l-body', [])),
     ]);
     const types = new Set<string>();
     walkWorkflowDefinition(root, { enter: (node) => void types.add(node.type) });
@@ -204,6 +223,7 @@ describe('walkWorkflowDefinition', () => {
         'parallel',
         'iterate',
         'iterate-chain',
+        'loop',
       ]),
     );
   });
@@ -241,6 +261,7 @@ describe('projectWorkflowGraph', () => {
         mkParallel('p', { b: mkSequence('p-seq', []) }),
         mkIterate('i', mkSequence('i-body', [])),
         mkIterateChain('ic', mkSequence('ic-body', [])),
+        mkLoop('l', mkSequence('l-body', [])),
       ]),
     );
     const { nodes } = projectWorkflowGraph(def);
@@ -254,9 +275,11 @@ describe('projectWorkflowGraph', () => {
     expect(roleMap['p']).toBe('control');
     expect(roleMap['i']).toBe('control');
     expect(roleMap['ic']).toBe('control');
+    expect(roleMap['l']).toBe('control');
     expect(roleMap['p-seq']).toBe('structural');
     expect(roleMap['i-body']).toBe('structural');
     expect(roleMap['ic-body']).toBe('structural');
+    expect(roleMap['l-body']).toBe('structural');
   });
 
   it('emits branch edges for parallel nodes', () => {
@@ -301,6 +324,20 @@ describe('projectWorkflowGraph', () => {
     expect(bodyEdges).toHaveLength(2);
     expect(bodyEdges).toContainEqual({ sourceKey: iterNode.key, targetKey: iterBody.key, kind: 'body' });
     expect(bodyEdges).toContainEqual({ sourceKey: chainNode.key, targetKey: chainBody.key, kind: 'body' });
+  });
+
+  it('projects loop node as control with body edge', () => {
+    const def = mkDefinition(mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkStation('inner')]))]));
+    const { nodes, edges } = projectWorkflowGraph(def);
+
+    const loopNode = nodes.find((n) => n.nodeId === 'loop-1');
+    expect(loopNode?.role).toBe('control');
+
+    const bodyEdge = edges.find((e) => e.sourceKey === loopNode?.key && e.kind === 'body');
+    expect(bodyEdge).toBeDefined();
+
+    const bodyNode = nodes.find((n) => n.nodeId === 'loop-1__body');
+    expect(bodyEdge?.targetKey).toBe(bodyNode?.key);
   });
 
   it('generates unique keys using path-derived identity', () => {
