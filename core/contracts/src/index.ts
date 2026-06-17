@@ -837,6 +837,7 @@ export type {
   GateOptions,
   IterateHandler,
   IterateOptions,
+  LoopGateHandler,
   NodeOptions,
   ParallelMode,
   ParallelOptions,

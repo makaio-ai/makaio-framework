@@ -55,11 +55,16 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
   }
 
   const zodSchemas = isWorkflowZodSchemas(obj['zodSchemas']) ? obj['zodSchemas'] : undefined;
+  const runtimeLoopGates =
+    obj['runtimeLoopGates'] instanceof Map
+      ? (obj['runtimeLoopGates'] as RuntimeLoadedWorkflow['runtimeLoopGates'])
+      : undefined;
 
   return {
     definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
     runtimeHandlers: obj['runtimeHandlers'] as RuntimeLoadedWorkflow['runtimeHandlers'],
     ...(zodSchemas !== undefined ? { zodSchemas } : {}),
+    ...(runtimeLoopGates !== undefined ? { runtimeLoopGates } : {}),
   };
 }
 
