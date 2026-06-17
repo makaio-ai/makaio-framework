@@ -15,6 +15,8 @@ import {
   type RuntimeContext,
 } from './runtime-context.js';
 import { extractLastSequenceOutput } from './iterate-helpers.js';
+import { findReusableResumeFrame } from './resume-frames.js';
+import { openEscalationGate, resolvePersistedEscalationGate } from './loop-escalation.js';
 
 // -----------------------------------------------------------------
 // Loop output type
@@ -35,6 +37,12 @@ export interface LoopOutput {
   readonly lastGateOutcome: LoopGateOutcome;
   /** Ordered body outputs from each round. */
   readonly bodyOutputs: readonly JsonValue[];
+  /**
+   * Resume data from the escalation gate, when the loop was escalated
+   * and the gate was resolved with user input. Absent for `pass` outcomes
+   * and for escalation outcomes that complete without a gate.
+   */
+  readonly resumeData?: JsonValue;
 }
 
 // -----------------------------------------------------------------
@@ -222,18 +230,17 @@ function evaluateGate(
  * 2. Create a per-round iteration frame, execute the body sequence.
  * 3. After the body completes, evaluate the gate handler.
  * 4. On `pass`: complete with a pass outcome.
- * 5. On `escalate`: complete with an escalate outcome.
- * 6. On `loop`: increment round and re-enter unless `maxRounds` is
+ * 5. On `escalate` without escalation config: complete immediately.
+ * 6. On `escalate` with escalation config: open a gate suspension
+ *    (in-process or exit-based) and wait for resolution.
+ * 7. On `loop`: increment round and re-enter unless `maxRounds` is
  *    reached, in which case the runtime overrides with an escalation.
  *
- * **Gate handler resolution:**
- * The gate handler is looked up by name in `ctx.runtimeLoopGates`.
- * If no handler is registered, the node fails with a clear error.
- *
- * **Frame tracking:**
- * The loop container frame is created by the sequence loop in
- * `primitive-runtime.ts` before `executeNode` is called. Each round
- * gets its own child frame with `iteration` = round index.
+ * **Resume support:**
+ * When the execution is re-dispatched (e.g., after an escalation gate
+ * is resolved), previously completed round frames are reused via
+ * {@link findReusableResumeFrame} so body sequences are not re-executed.
+ * The escalation gate is resolved from persisted state on re-entry.
  * @param node - The loop node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -250,9 +257,7 @@ export async function executeLoopNode(
   parentFrameId: string,
   parentPath: string[],
 ): Promise<NodeOutcome> {
-  if (ctx.signal.aborted) {
-    return { status: 'cancelled' };
-  }
+  if (ctx.signal.aborted) return { status: 'cancelled' };
 
   const gateHandler = ctx.runtimeLoopGates.get(node.gate.handler);
   if (gateHandler === undefined) {
@@ -262,13 +267,26 @@ export async function executeLoopNode(
     };
   }
 
-  let round = 0;
-  const bodyOutputs: JsonValue[] = [];
+  const { round: startRound, bodyOutputs } = replayResumedRounds(ctx, node, parentFrameId);
+  let round = startRound;
 
+  // Check for persisted escalation gate on re-entry.
+  if (round > 0 && node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
+    const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
+    const earlyOutcome = await resolvePersistedEscalationGate(
+      ctx,
+      node,
+      parentFrameId,
+      gateOutcome,
+      round,
+      bodyOutputs,
+    );
+    if (earlyOutcome !== undefined) return earlyOutcome;
+  }
+
+  // Main loop.
   while (true) {
-    if (ctx.signal.aborted) {
-      return { status: 'cancelled' };
-    }
+    if (ctx.signal.aborted) return { status: 'cancelled' };
 
     const bodyResult = await executeRoundBody(
       node,
@@ -279,26 +297,68 @@ export async function executeLoopNode(
       parentFrameId,
       parentPath,
     );
-    if (bodyResult.terminal) {
-      return bodyResult.outcome;
-    }
+    if (bodyResult.terminal) return bodyResult.outcome;
     bodyOutputs.push(bodyResult.output as JsonValue);
 
     const gateResult = evaluateGate(node, round, ctx, expressionCtx, gateHandler);
-    if ('status' in gateResult) {
-      return gateResult;
-    }
+    if ('status' in gateResult) return gateResult;
 
-    if (gateResult.kind === 'pass' || gateResult.kind === 'escalate') {
-      const exitKind = gateResult.kind === 'pass' ? 'pass' : 'escalate';
+    if (gateResult.kind === 'pass') {
       return {
         status: 'completed',
-        output: buildLoopOutput(exitKind, round + 1, gateResult, bodyOutputs),
+        output: buildLoopOutput('pass', round + 1, gateResult, bodyOutputs),
+      };
+    }
+    if (gateResult.kind === 'escalate') {
+      if (node.gate.escalation !== undefined) {
+        return openEscalationGate(node, ctx, expressionCtx, parentFrameId, gateResult, round + 1, bodyOutputs);
+      }
+      return {
+        status: 'completed',
+        output: buildLoopOutput('escalate', round + 1, gateResult, bodyOutputs),
       };
     }
 
     round++;
   }
+}
+
+// -----------------------------------------------------------------
+// Resume frame replay
+// -----------------------------------------------------------------
+
+/**
+ * Result of replaying previously completed round frames.
+ * Contains the first round index to execute fresh and the replayed body outputs.
+ */
+interface ReplayedRoundsResult {
+  /** Zero-based index of the first round that needs fresh execution. */
+  readonly round: number;
+  /** Body outputs collected from replayed frames (mutable for the caller to append to). */
+  readonly bodyOutputs: JsonValue[];
+}
+
+/**
+ * Replay previously completed round frames from the resume index,
+ * collecting their outputs without re-executing body sequences.
+ * @param ctx - Runtime context with optional resume frames.
+ * @param node - Loop node for frame matching.
+ * @param parentFrameId - Loop container frame ID.
+ * @returns The first round index to execute fresh and the body outputs replayed.
+ */
+function replayResumedRounds(ctx: RuntimeContext, node: WorkflowLoopNode, parentFrameId: string): ReplayedRoundsResult {
+  let round = 0;
+  const bodyOutputs: JsonValue[] = [];
+  while (true) {
+    const frame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
+      parentFrameId,
+      iteration: round,
+    });
+    if (frame === undefined) break;
+    bodyOutputs.push((frame.output ?? null) as JsonValue);
+    round++;
+  }
+  return { round, bodyOutputs };
 }
 
 // -----------------------------------------------------------------
@@ -311,6 +371,7 @@ export async function executeLoopNode(
  * @param rounds - Total number of rounds executed (1-based).
  * @param lastGateOutcome - The gate outcome that terminated the loop.
  * @param bodyOutputs - Per-round body outputs in execution order.
+ * @param resumeData - Optional resume data from a resolved escalation gate.
  * @returns JSON-serializable loop output.
  */
 function buildLoopOutput(
@@ -318,6 +379,13 @@ function buildLoopOutput(
   rounds: number,
   lastGateOutcome: LoopGateOutcome,
   bodyOutputs: readonly JsonValue[],
+  resumeData?: JsonValue,
 ): LoopOutput {
-  return { outcome, rounds, lastGateOutcome, bodyOutputs };
+  return {
+    outcome,
+    rounds,
+    lastGateOutcome,
+    bodyOutputs,
+    ...(resumeData !== undefined ? { resumeData } : {}),
+  };
 }

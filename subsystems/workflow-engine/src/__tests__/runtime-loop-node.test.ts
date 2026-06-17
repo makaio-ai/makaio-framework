@@ -7,12 +7,17 @@ import {
   type StationHandler,
   type WorkflowDefinition,
   type WorkflowExecution,
+  type WorkflowFrameState,
   type WorkflowLoopNode,
   type WorkflowSequenceNode,
   type WorkflowStationNode,
 } from '@makaio/contracts';
-import { RuntimeContext } from '../runtime/runtime-context.js';
+import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
+import { WorkflowSubjects } from '../namespace.js';
+import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { buildResumeFrameIndex } from '../runtime/resume-frames.js';
+import type { LoopOutput } from '../runtime/loop-node.js';
 
 // -----------------------------------------------------------------
 // Test helpers
@@ -61,15 +66,17 @@ function makeBus(): ReturnType<typeof createBusInstance> {
  * @param handlers - Station handlers keyed by node ID.
  * @param loopGates - Loop gate handlers keyed by handler name.
  * @param signal - Optional abort signal.
- * @returns RuntimeContext wired with the provided handlers and gates.
+ * @param options - Optional additional runtime execution options.
+ * @returns RuntimeContext and the underlying bus.
  */
 function makeCtx(
   handlers: Record<string, StationHandler>,
   loopGates: Record<string, LoopGateHandler> = {},
   signal: AbortSignal = new AbortController().signal,
-): RuntimeContext {
+  options: Omit<RuntimeExecutionOptions, 'runtimeLoopGates'> = {},
+): { ctx: RuntimeContext; bus: ReturnType<typeof createBusInstance> } {
   const bus = makeBus();
-  return new RuntimeContext(
+  const ctx = new RuntimeContext(
     'exec-test',
     'workflow-test',
     makeDefinition('workflow-test'),
@@ -80,8 +87,9 @@ function makeCtx(
     undefined,
     undefined,
     undefined,
-    { runtimeLoopGates: new Map(Object.entries(loopGates)) },
+    { runtimeLoopGates: new Map(Object.entries(loopGates)), ...options },
   );
+  return { ctx, bus };
 }
 
 /** Minimal expression context with no pre-populated frames. */
@@ -150,7 +158,7 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const ctx = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
 
@@ -179,7 +187,7 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const ctx = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
 
@@ -221,7 +229,7 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const ctx = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
 
@@ -254,7 +262,7 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const ctx = makeCtx({ 'work-station': stationHandler }, {});
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, {});
 
     const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
 
@@ -281,13 +289,306 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const ctx = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
       expect(outcome.error).toContain('station exploded');
+    }
+  });
+});
+
+// -----------------------------------------------------------------
+// Escalation gate tests
+// -----------------------------------------------------------------
+
+/**
+ * Build a loop node with escalation config for gate suspension tests.
+ * @param nodeId - Loop node ID.
+ * @param stationId - Station node ID inside the body.
+ * @param gateHandler - Gate handler name.
+ * @param maxRounds - Maximum rounds.
+ * @param escalation - Escalation gate configuration.
+ * @returns A WorkflowLoopNode with escalation config.
+ */
+function makeLoopNodeWithEscalation(
+  nodeId: string,
+  stationId: string,
+  gateHandler: string,
+  maxRounds: number,
+  escalation: NonNullable<WorkflowLoopNode['gate']['escalation']>,
+): WorkflowLoopNode {
+  const base = makeLoopNode(nodeId, stationId, gateHandler, maxRounds);
+  return {
+    ...base,
+    gate: {
+      ...base.gate,
+      escalation,
+    },
+  };
+}
+
+describe('executeLoopNode — escalation gate', () => {
+  it('opens gate suspension when escalation config is present and gate returns escalate', async () => {
+    let callCount = 0;
+    const stationHandler: StationHandler = async () => {
+      callCount++;
+      return callCount;
+    };
+
+    const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+      return { kind: 'escalate', reason: 'review needed' };
+    };
+
+    const loopNode = makeLoopNodeWithEscalation('loop-esc', 'work-station', 'check-gate', 3, {
+      prompt: 'Please review the loop results',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+
+    const { ctx, bus } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+
+    // Create a container frame so updateFrame can find it during escalation.
+    const containerFrame = ctx.createFrame({
+      nodeId: 'loop-esc',
+      nodeType: 'loop',
+      path: [],
+      parentFrameId: undefined,
+    });
+
+    // Track gate.suspended emissions.
+    const suspendedPayloads: unknown[] = [];
+    bus.on(WorkflowSubjects.gate.suspended, (c) => {
+      suspendedPayloads.push(c.payload);
+    });
+
+    // Respond immediately when the gate is suspended so the test doesn't hang.
+    bus.on(WorkflowSubjects.gate.suspended, () => {
+      setImmediate(() => {
+        void bus.request(WorkflowSubjects.gate.respond, {
+          executionId: 'exec-test',
+          gateId: 'loop-esc',
+          action: 'approve',
+          resumeData: { decision: 'approved' },
+        });
+      });
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(
+      loopNode,
+      ctx,
+      emptyExpressionCtx,
+      executeSequence,
+      containerFrame.frameId,
+      containerFrame.path,
+    );
+
+    expect(outcome.status).toBe('completed');
+    expect(callCount).toBe(1);
+    expect(suspendedPayloads).toHaveLength(1);
+    expect(suspendedPayloads[0]).toMatchObject({
+      executionId: 'exec-test',
+      nodeId: 'loop-esc',
+      prompt: 'Please review the loop results',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+
+    if (outcome.status === 'completed') {
+      const loopOutput = outcome.output as LoopOutput;
+      expect(loopOutput.outcome).toBe('escalate');
+      expect(loopOutput.rounds).toBe(1);
+      expect(loopOutput.resumeData).toEqual({ decision: 'approved' });
+      expect(loopOutput.bodyOutputs).toEqual([1]);
+    }
+  });
+
+  it('returns paused for exit-based suspension on escalation', async () => {
+    let callCount = 0;
+    const stationHandler: StationHandler = async () => {
+      callCount++;
+      return callCount;
+    };
+
+    const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+      return { kind: 'escalate', reason: 'needs human review' };
+    };
+
+    const loopNode = makeLoopNodeWithEscalation('loop-park', 'work-station', 'check-gate', 3, {
+      prompt: 'Review needed',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+
+    const { ctx, bus } = makeCtx(
+      { 'work-station': stationHandler },
+      { 'check-gate': gateHandler },
+      new AbortController().signal,
+      { suspensionStrategy: 'exit-and-redispatch' },
+    );
+
+    // Register storage handlers required for exit-based suspension.
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+    bus.on(WorkflowStorageSubjects.setFrame, (c) => {
+      c.setResult({ frameId: c.payload.frame.frameId });
+    });
+
+    const suspendedPayloads: unknown[] = [];
+    bus.on(WorkflowSubjects.gate.suspended, (c) => {
+      suspendedPayloads.push(c.payload);
+    });
+
+    // Create a container frame so updateFrame can find it.
+    const containerFrame = ctx.createFrame({
+      nodeId: 'loop-park',
+      nodeType: 'loop',
+      path: [],
+      parentFrameId: undefined,
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(
+      loopNode,
+      ctx,
+      emptyExpressionCtx,
+      executeSequence,
+      containerFrame.frameId,
+      containerFrame.path,
+    );
+
+    expect(outcome.status).toBe('paused');
+    expect(callCount).toBe(1);
+    expect(suspendedPayloads).toHaveLength(1);
+    if (outcome.status === 'paused') {
+      expect(outcome.pausedAtGateId).toBe('loop-park');
+    }
+  });
+
+  it('completes without gate when escalation config is absent', async () => {
+    let callCount = 0;
+    const stationHandler: StationHandler = async () => {
+      callCount++;
+      return callCount;
+    };
+
+    const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+      return { kind: 'escalate', reason: 'review needed' };
+    };
+
+    // No escalation config — use the basic makeLoopNode.
+    const loopNode = makeLoopNode('loop-no-esc', 'work-station', 'check-gate', 3);
+
+    const { ctx, bus } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const parentFrameId = 'test-loop-parent';
+
+    // Ensure no gate.suspended is emitted.
+    const suspendedPayloads: unknown[] = [];
+    bus.on(WorkflowSubjects.gate.suspended, (c) => {
+      suspendedPayloads.push(c.payload);
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+      parentFrameId,
+    ]);
+
+    expect(outcome.status).toBe('completed');
+    expect(callCount).toBe(1);
+    expect(suspendedPayloads).toHaveLength(0);
+
+    if (outcome.status === 'completed') {
+      const loopOutput = outcome.output as LoopOutput;
+      expect(loopOutput.outcome).toBe('escalate');
+      expect(loopOutput.resumeData).toBeUndefined();
+    }
+  });
+});
+
+// -----------------------------------------------------------------
+// Resume frame reuse tests
+// -----------------------------------------------------------------
+
+describe('executeLoopNode — resume frame reuse', () => {
+  it('skips body execution for rounds with reusable resume frames', async () => {
+    // This test uses executeLoopNode directly with a known parentFrameId
+    // to verify frame reuse behavior.
+    let callCount = 0;
+    const stationHandler: StationHandler = async () => {
+      callCount++;
+      return callCount * 10;
+    };
+
+    let gateCallCount = 0;
+    const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
+      gateCallCount++;
+      return { kind: 'pass' };
+    };
+
+    const loopNode = makeLoopNode('loop-resume', 'work-station', 'check-gate', 5);
+
+    // Build resume frames: 2 completed rounds with known parentFrameId.
+    const parentFrameId = 'known-parent-frame';
+    const resumeFrames: WorkflowFrameState[] = [
+      {
+        frameId: 'resume-round-0',
+        nodeId: 'loop-resume',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-0'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 0,
+        output: 'round-0-output',
+        startedAt: 1,
+        completedAt: 2,
+      },
+      {
+        frameId: 'resume-round-1',
+        nodeId: 'loop-resume',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-1'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 1,
+        output: 'round-1-output',
+        startedAt: 3,
+        completedAt: 4,
+      },
+    ];
+
+    const resumeIndex = buildResumeFrameIndex(resumeFrames);
+    const { ctx } = makeCtx(
+      { 'work-station': stationHandler },
+      { 'check-gate': gateHandler },
+      new AbortController().signal,
+      { resumeFrames: resumeIndex },
+    );
+
+    // Import executeLoopNode for direct invocation.
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+
+    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+      parentFrameId,
+    ]);
+
+    // The two resume rounds were replayed (no body execution).
+    // Then the main loop runs round 2: body executes once, gate passes.
+    expect(callCount).toBe(1);
+    expect(gateCallCount).toBe(1);
+    expect(outcome.status).toBe('completed');
+
+    if (outcome.status === 'completed') {
+      const loopOutput = outcome.output as LoopOutput;
+      expect(loopOutput.outcome).toBe('pass');
+      // 3 rounds total: 2 resumed + 1 fresh.
+      expect(loopOutput.rounds).toBe(3);
+      expect(loopOutput.bodyOutputs).toEqual(['round-0-output', 'round-1-output', 10]);
     }
   });
 });
