@@ -347,6 +347,9 @@ interface ReplayedRoundsResult {
  * @returns The first round index to execute fresh and the body outputs replayed.
  */
 function replayResumedRounds(ctx: RuntimeContext, node: WorkflowLoopNode, parentFrameId: string): ReplayedRoundsResult {
+  if (ctx.resumeFrames === undefined) {
+    return { round: 0, bodyOutputs: [] };
+  }
   let round = 0;
   const bodyOutputs: JsonValue[] = [];
   while (true) {
@@ -374,7 +377,7 @@ function replayResumedRounds(ctx: RuntimeContext, node: WorkflowLoopNode, parent
  * @param resumeData - Optional resume data from a resolved escalation gate.
  * @returns JSON-serializable loop output.
  */
-function buildLoopOutput(
+export function buildLoopOutput(
   outcome: 'pass' | 'escalate',
   rounds: number,
   lastGateOutcome: LoopGateOutcome,

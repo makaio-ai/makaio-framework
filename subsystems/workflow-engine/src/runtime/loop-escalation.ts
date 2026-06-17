@@ -14,21 +14,12 @@ import {
   validateGateResumeData,
   validateGateResumeDataForSchema,
 } from './gate-resume-validation.js';
-import type { LoopOutput } from './loop-node.js';
+import { buildLoopOutput } from './loop-node.js';
+import { buildDeferred } from './deferred.js';
 
 // -----------------------------------------------------------------
 // Internal types
 // -----------------------------------------------------------------
-
-/**
- * Lightweight deferred promise pair for in-process escalation gates.
- * @typeParam T - The resolved value type.
- */
-interface Deferred<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-  readonly reject: (reason: string) => void;
-}
 
 /** User response payload shape for escalation gate responses. */
 interface EscalationGateResponse {
@@ -40,21 +31,6 @@ interface EscalationGateResponse {
 // -----------------------------------------------------------------
 // Shared helpers
 // -----------------------------------------------------------------
-
-/**
- * Create a {@link Deferred} promise pair.
- * @typeParam T - The resolved value type.
- * @returns A deferred promise with external resolve/reject handles.
- */
-function buildDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: string) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 /**
  * Upsert a gate instance record via the storage bus.
@@ -139,32 +115,6 @@ async function emitGateResolved(
   } catch (error) {
     console.error(`[LoopNode] gate.resolved emit failed for '${nodeId}':`, error);
   }
-}
-
-/**
- * Build the loop output record, forwarded from `loop-node.ts` to avoid a
- * circular import. The fields mirror {@link LoopOutput}.
- * @param outcome - Whether the loop exited via pass or escalate.
- * @param rounds - Total number of rounds executed (1-based).
- * @param lastGateOutcome - The gate outcome that terminated the loop.
- * @param bodyOutputs - Per-round body outputs in execution order.
- * @param resumeData - Optional resume data from a resolved escalation gate.
- * @returns JSON-serializable loop output.
- */
-function buildLoopOutput(
-  outcome: 'pass' | 'escalate',
-  rounds: number,
-  lastGateOutcome: LoopGateOutcome,
-  bodyOutputs: readonly JsonValue[],
-  resumeData?: JsonValue,
-): LoopOutput {
-  return {
-    outcome,
-    rounds,
-    lastGateOutcome,
-    bodyOutputs,
-    ...(resumeData !== undefined ? { resumeData } : {}),
-  };
 }
 
 // -----------------------------------------------------------------

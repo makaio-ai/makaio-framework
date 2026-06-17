@@ -93,13 +93,6 @@ export function extractStandaloneHandlers(
   if (handler !== undefined) {
     handlers.set(node.id, handler);
   }
-  if (node.type === 'loop' && loopGates !== undefined) {
-    const loopNode = node as WorkflowLoopNode;
-    const gateHandler = standaloneLoopGates.get(node);
-    if (gateHandler !== undefined) {
-      loopGates.set(loopNode.gate.handler, gateHandler);
-    }
-  }
   if (node.type === 'sequence') {
     for (const child of (node as WorkflowSequenceNode).nodes) {
       extractStandaloneHandlers(child, handlers, loopGates);
@@ -113,6 +106,12 @@ export function extractStandaloneHandlers(
   } else if (node.type === 'iterate-chain') {
     extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers, loopGates);
   } else if (node.type === 'loop') {
+    if (loopGates !== undefined) {
+      const gateHandler = standaloneLoopGates.get(node);
+      if (gateHandler !== undefined) {
+        loopGates.set((node as WorkflowLoopNode).gate.handler, gateHandler);
+      }
+    }
     extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers, loopGates);
   }
 }
