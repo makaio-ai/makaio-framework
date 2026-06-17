@@ -26,7 +26,9 @@ const STRUCTURAL_RESUME_STATUSES = new Set<WorkflowFrameState['status']>([
  * @returns True for structural container node types.
  */
 function isStructuralResumeNode(child: WorkflowSequenceNode['nodes'][number]): boolean {
-  return child.type === 'parallel' || child.type === 'iterate' || child.type === 'iterate-chain';
+  return (
+    child.type === 'parallel' || child.type === 'iterate' || child.type === 'iterate-chain' || child.type === 'loop'
+  );
 }
 
 /**
