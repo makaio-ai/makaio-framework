@@ -57,14 +57,20 @@ export interface LoopOutput {
  * the body completed successfully and `output` carries the extracted
  * body output.
  */
-type RoundBodyResult = { terminal: true; outcome: NodeOutcome } | { terminal: false; output: JsonValue | undefined };
+type RoundBodyResult =
+  | { terminal: true; outcome: NodeOutcome }
+  | { terminal: false; output: JsonValue | undefined; replayed: boolean };
+
+/** Round frame statuses that can be reused while redispatching a parked loop node. */
+const ROUND_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
 
 /**
  * Execute the body sequence for a single loop round.
  *
- * Creates a per-round iteration frame, runs the body sequence, and
- * either returns the extracted body output on success or a terminal
- * {@link NodeOutcome} on failure/cancellation/pause.
+ * Creates a per-round iteration frame (or reuses a persisted one from a
+ * prior execution), runs the body sequence, and either returns the
+ * extracted body output on success or a terminal {@link NodeOutcome} on
+ * failure/cancellation/pause.
  * @param node - The loop node (provides body sequence and node ID).
  * @param round - Zero-based round index for the iteration frame.
  * @param ctx - Runtime context.
@@ -83,20 +89,34 @@ async function executeRoundBody(
   parentFrameId: string,
   parentPath: string[],
 ): Promise<RoundBodyResult> {
-  const frame = ctx.createFrame({
-    nodeId: node.id,
-    nodeType: 'loop',
-    path: parentPath,
+  const resumeFrame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
     parentFrameId,
     iteration: round,
+    statuses: ROUND_RESUME_STATUSES,
   });
+
+  if (resumeFrame?.status === 'completed') {
+    return { terminal: false, output: (resumeFrame.output ?? null) as JsonValue, replayed: true };
+  }
+
+  const frame =
+    resumeFrame ??
+    ctx.createFrame({
+      nodeId: node.id,
+      nodeType: 'loop',
+      path: parentPath,
+      parentFrameId,
+      iteration: round,
+    });
 
   if (ctx.signal.aborted) {
     await cancelFrame(frame, ctx);
     return { terminal: true, outcome: { status: 'cancelled' } };
   }
 
-  await startFrame(frame, ctx);
+  if (resumeFrame === undefined) {
+    await startFrame(frame, ctx);
+  }
 
   const bodyOutcome = await runBodySequence(node, frame, ctx, expressionCtx, executeSequenceFn);
   if (bodyOutcome !== undefined) {
@@ -105,7 +125,7 @@ async function executeRoundBody(
 
   const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx);
   await completeFrame(frame, ctx, bodyOutput);
-  return { terminal: false, output: bodyOutput };
+  return { terminal: false, output: bodyOutput, replayed: false };
 }
 
 /**
@@ -267,24 +287,21 @@ export async function executeLoopNode(
     };
   }
 
-  const { round: startRound, bodyOutputs } = replayResumedRounds(ctx, node, parentFrameId);
-  let round = startRound;
+  const bodyOutputs: JsonValue[] = [];
+  let round = 0;
 
-  // Check for persisted escalation gate on re-entry.
-  if (round > 0 && node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
+  // Check for persisted escalation gate on re-entry (exit-based suspension).
+  if (
+    ctx.resumeFrames !== undefined &&
+    node.gate.escalation !== undefined &&
+    ctx.suspensionStrategy !== 'wait-in-process'
+  ) {
     const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
-    const earlyOutcome = await resolvePersistedEscalationGate(
-      ctx,
-      node,
-      parentFrameId,
-      gateOutcome,
-      round,
-      bodyOutputs,
-    );
+    const earlyOutcome = await resolvePersistedEscalationGate(ctx, node, parentFrameId, gateOutcome, 0, bodyOutputs);
     if (earlyOutcome !== undefined) return earlyOutcome;
   }
 
-  // Main loop.
+  // Main loop — executeRoundBody handles frame resume internally.
   while (true) {
     if (ctx.signal.aborted) return { status: 'cancelled' };
 
@@ -299,6 +316,12 @@ export async function executeLoopNode(
     );
     if (bodyResult.terminal) return bodyResult.outcome;
     bodyOutputs.push(bodyResult.output as JsonValue);
+
+    // Replayed rounds already passed the gate in a prior execution — skip re-evaluation.
+    if (bodyResult.replayed) {
+      round++;
+      continue;
+    }
 
     const gateResult = evaluateGate(node, round, ctx, expressionCtx, gateHandler);
     if ('status' in gateResult) return gateResult;
@@ -321,47 +344,6 @@ export async function executeLoopNode(
 
     round++;
   }
-}
-
-// -----------------------------------------------------------------
-// Resume frame replay
-// -----------------------------------------------------------------
-
-/**
- * Result of replaying previously completed round frames.
- * Contains the first round index to execute fresh and the replayed body outputs.
- */
-interface ReplayedRoundsResult {
-  /** Zero-based index of the first round that needs fresh execution. */
-  readonly round: number;
-  /** Body outputs collected from replayed frames (mutable for the caller to append to). */
-  readonly bodyOutputs: JsonValue[];
-}
-
-/**
- * Replay previously completed round frames from the resume index,
- * collecting their outputs without re-executing body sequences.
- * @param ctx - Runtime context with optional resume frames.
- * @param node - Loop node for frame matching.
- * @param parentFrameId - Loop container frame ID.
- * @returns The first round index to execute fresh and the body outputs replayed.
- */
-function replayResumedRounds(ctx: RuntimeContext, node: WorkflowLoopNode, parentFrameId: string): ReplayedRoundsResult {
-  if (ctx.resumeFrames === undefined) {
-    return { round: 0, bodyOutputs: [] };
-  }
-  let round = 0;
-  const bodyOutputs: JsonValue[] = [];
-  while (true) {
-    const frame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
-      parentFrameId,
-      iteration: round,
-    });
-    if (frame === undefined) break;
-    bodyOutputs.push((frame.output ?? null) as JsonValue);
-    round++;
-  }
-  return { round, bodyOutputs };
 }
 
 // -----------------------------------------------------------------

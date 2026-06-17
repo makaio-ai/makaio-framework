@@ -93,6 +93,7 @@ function claimNodeIds(registry: Set<string>, node: WorkflowNode): void {
  * @param branches - Array of branch nodes.
  * @param registeredIds - Set of already-claimed step IDs.
  * @param runtimeHandlers - Handler map to populate.
+ * @param runtimeLoopGates - Loop gate handler map to populate.
  * @returns Record of branch key → sequence node.
  */
 function buildParallelBranchMap(
@@ -100,6 +101,7 @@ function buildParallelBranchMap(
   branches: WorkflowNode[],
   registeredIds: Set<string>,
   runtimeHandlers: Map<string, StationHandler>,
+  runtimeLoopGates: Map<string, LoopGateHandler>,
 ): Record<string, WorkflowSequenceNode> {
   const branchMap: Record<string, WorkflowSequenceNode> = {};
   branches.forEach((branchNode, index) => {
@@ -110,7 +112,7 @@ function buildParallelBranchMap(
     const branchSequenceId = `${nodeId}__${branchKey}`;
     claimNodeIds(registeredIds, branchNode);
     claimStepId(registeredIds, branchSequenceId);
-    extractStandaloneHandlers(branchNode, runtimeHandlers);
+    extractStandaloneHandlers(branchNode, runtimeHandlers, runtimeLoopGates);
     branchMap[branchKey] = { id: branchSequenceId, type: 'sequence', nodes: [branchNode] };
   });
   return branchMap;
@@ -181,6 +183,7 @@ function buildGateNode(
  * @param iterateOptions - Iterate node options.
  * @param registeredIds - Set of already-claimed step IDs.
  * @param runtimeHandlers - Handler map to populate.
+ * @param runtimeLoopGates - Loop gate handler map to populate.
  * @returns The constructed {@link WorkflowIterateChainNode}.
  */
 function buildIterateChainNode(
@@ -189,12 +192,13 @@ function buildIterateChainNode(
   iterateOptions: IterateOptions,
   registeredIds: Set<string>,
   runtimeHandlers: Map<string, StationHandler>,
+  runtimeLoopGates: Map<string, LoopGateHandler>,
 ): WorkflowIterateChainNode {
   const bodySequenceId = `${nodeId}__body`;
   claimStepId(registeredIds, bodySequenceId);
   for (const chainNode of chain) {
     claimNodeIds(registeredIds, chainNode);
-    extractStandaloneHandlers(chainNode, runtimeHandlers);
+    extractStandaloneHandlers(chainNode, runtimeHandlers, runtimeLoopGates);
   }
   return {
     id: nodeId,
@@ -230,7 +234,7 @@ function buildLoopNode(
   claimStepId(registeredIds, bodySequenceId);
   for (const bodyNode of bodyNodes) {
     claimNodeIds(registeredIds, bodyNode);
-    extractStandaloneHandlers(bodyNode, runtimeHandlers);
+    extractStandaloneHandlers(bodyNode, runtimeHandlers, runtimeLoopGates);
   }
   const loopNode: WorkflowLoopNode = {
     id: nodeId,
@@ -414,7 +418,7 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
       id: nodeId,
       type: 'parallel',
       mode: nodeOptions.mode ?? 'all-settled',
-      branches: buildParallelBranchMap(nodeId, branches, registeredIds, runtimeHandlers),
+      branches: buildParallelBranchMap(nodeId, branches, registeredIds, runtimeHandlers, runtimeLoopGates),
       ...(nodeOptions.when !== undefined && { when: nodeOptions.when }),
       ...(nodeOptions.skip !== undefined && { skip: nodeOptions.skip }),
     } as WorkflowParallelNode);
@@ -432,7 +436,9 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
   };
   builder.iterateChain = (nodeId: string, chain: WorkflowNode[], iterateOptions: IterateOptions) => {
     claimStepId(registeredIds, nodeId);
-    rootNodes.push(buildIterateChainNode(nodeId, chain, iterateOptions, registeredIds, runtimeHandlers));
+    rootNodes.push(
+      buildIterateChainNode(nodeId, chain, iterateOptions, registeredIds, runtimeHandlers, runtimeLoopGates),
+    );
     return builder;
   };
   builder.loop = (nodeId: string, bodyNodes: WorkflowNode[], loopOptions: LoopOptions) => {
