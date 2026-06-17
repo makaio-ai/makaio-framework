@@ -16,6 +16,11 @@ import {
   iterateChain,
   loop,
 } from '../authoring.js';
+import {
+  loop as rootLoop,
+  LoopGateOutcomeSchema as RootLoopGateOutcomeSchema,
+  WorkflowLoopNodeSchema as RootWorkflowLoopNodeSchema,
+} from '../../index.js';
 import type { WorkflowGateNode, WorkflowLoopNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
 import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
 import { validateNoNestedLoops } from '../loop.js';
@@ -1275,6 +1280,46 @@ describe('validateNoNestedLoops', () => {
     expect(result).toBeDefined();
     expect(result).toContain("Nested loop 'nested-loop'");
   });
+
+  it('rejects a loop nested inside an iterate-chain body', () => {
+    const loopNode = WorkflowLoopNodeSchema.parse({
+      id: 'outer',
+      type: 'loop',
+      maxRounds: 3,
+      body: {
+        id: 'outer__body',
+        type: 'sequence',
+        nodes: [
+          {
+            id: 'chain',
+            type: 'iterate-chain',
+            collection: 'ctx.inputs.items',
+            body: {
+              id: 'chain__body',
+              type: 'sequence',
+              nodes: [
+                {
+                  id: 'nested-chain-loop',
+                  type: 'loop',
+                  maxRounds: 2,
+                  body: {
+                    id: 'nested-chain__body',
+                    type: 'sequence',
+                    nodes: [{ id: 'z', type: 'station', prompt: 'z' }],
+                  },
+                  gate: { handler: 'check' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      gate: { handler: 'check' },
+    });
+    const result = validateNoNestedLoops(loopNode);
+    expect(result).toBeDefined();
+    expect(result).toContain("Nested loop 'nested-chain-loop'");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -1438,6 +1483,16 @@ describe('fluent builder — loop nodes', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('standalone factory — loop()', () => {
+  it('is exported from the root package barrel with loop schemas', () => {
+    const loopNode = rootLoop('converge', [station('aggregate', () => null)], {
+      maxRounds: 2,
+      gate: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
+    });
+
+    expect(RootWorkflowLoopNodeSchema.parse(loopNode).type).toBe('loop');
+    expect(RootLoopGateOutcomeSchema.parse({ kind: 'loop' })).toEqual({ kind: 'loop' });
+  });
+
   it('creates a serializable loop node', () => {
     const loopNode = loop('converge', [station('aggregate', () => ({ blockers: [] }))], {
       maxRounds: 3,
@@ -1505,6 +1560,24 @@ describe('standalone factory — loop()', () => {
       autoAction: 'reject',
       timeoutMs: null,
     });
+  });
+
+  it('rejects nested loops before returning a standalone node', () => {
+    expect(() =>
+      loop(
+        'outer',
+        [
+          loop('inner', [station('work', () => null)], {
+            maxRounds: 2,
+            gate: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
+          }),
+        ],
+        {
+          maxRounds: 3,
+          gate: { handler: 'outer-check', evaluate: () => ({ kind: 'pass' as const }) },
+        },
+      ),
+    ).toThrow("Nested loop 'inner' found inside loop 'outer'");
   });
 
   it('addNode collects standalone loop gate handler into runtimeLoopGates', () => {

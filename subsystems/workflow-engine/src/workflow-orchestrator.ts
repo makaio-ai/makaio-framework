@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { WORKFLOW_CANCELLED_REASON } from '@makaio/contracts';
 import type {
   ArtifactRevision,
+  LoopGateHandler,
   StationHandler,
   WorkflowZodSchemas,
   WorkflowDefinition,
@@ -19,6 +20,7 @@ import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { buildResumeFrameIndex } from './runtime/resume-frames.js';
+import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
 import { persistLoadedExecutionStart } from './workflow-execution-start.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -41,6 +43,8 @@ export interface LoadedWorkflow {
    * Used by the orchestrator to dispatch `station`-type nodes.
    */
   readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
+  /** Loop gate handler functions keyed by handler name. */
+  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
 }
 
 /**
@@ -301,6 +305,7 @@ async function buildPreRuntimeTerminalExecution(
  * @param liveExecution - The live execution record.
  * @param runContext - Durable run-context snapshot for this execution.
  * @param runtimeHandlers - Station handler map for dispatch.
+ * @param runtimeLoopGates - Loop gate handler map for convergence checks.
  * @param bus - Worker-local bus.
  * @param signal - Cancellation signal.
  * @param zodSchemas - Optional file-loaded workflow schemas for artifact validation.
@@ -312,6 +317,7 @@ async function runRuntimeSequence(
   liveExecution: WorkflowExecution,
   runContext: WorkflowRunContext,
   runtimeHandlers: Map<string, StationHandler>,
+  runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>,
   bus: IMakaioBus,
   signal: AbortSignal,
   zodSchemas?: WorkflowZodSchemas,
@@ -341,7 +347,7 @@ async function runRuntimeSequence(
     undefined,
     artifactBinding,
     { context: config.context, env: config.env },
-    { suspensionStrategy: config.suspensionStrategy, resumeFrames },
+    { suspensionStrategy: config.suspensionStrategy, resumeFrames, runtimeLoopGates },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
   const outcome = await executeSequence(definition.root, runtimeCtx, expressionCtx);
@@ -538,6 +544,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   await persistLoadedExecutionStart(bus, liveExecution, runContext, definition);
 
   const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
+  const runtimeLoopGates = loaded.runtimeLoopGates ?? new Map<string, LoopGateHandler>();
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
@@ -547,6 +554,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     workflow: definition,
     runContext,
     runtimeHandlers,
+    runtimeLoopGates: new Map(runtimeLoopGates),
   });
 
   const releaseSignalCancellation = bindSignalCancellation({
@@ -564,12 +572,14 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
 
   try {
     if (definition.root.nodes.length > 0) {
+      assertLoopGateHandlersPresent(definition, runtimeLoopGates);
       result = await runRuntimeSequence(
         config,
         definition,
         liveExecution,
         runContext,
         runtimeHandlers,
+        runtimeLoopGates,
         bus,
         signal,
         loaded.zodSchemas,

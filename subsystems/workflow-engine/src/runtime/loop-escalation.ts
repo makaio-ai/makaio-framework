@@ -28,6 +28,9 @@ interface EscalationGateResponse {
   readonly reason?: string;
 }
 
+/** Resume payload produced when a loop escalation timeout auto-approves. */
+const AUTO_APPROVE_TIMEOUT_RESUME_DATA = { action: 'approve', source: 'timeout' } as const satisfies JsonValue;
+
 // -----------------------------------------------------------------
 // Shared helpers
 // -----------------------------------------------------------------
@@ -341,6 +344,56 @@ export async function openEscalationGate(
 }
 
 /**
+ * Resolve an expired persisted loop escalation gate.
+ * @param ctx - Runtime context.
+ * @param node - Loop node with escalation config.
+ * @param parentFrameId - Loop container frame ID used as the gate frame.
+ * @param persistedGate - Waiting gate whose timeout deadline has elapsed.
+ * @param gateOutcome - The escalation outcome for the loop output.
+ * @param rounds - Total rounds completed (1-based).
+ * @param bodyOutputs - Per-round body outputs collected so far.
+ * @returns Terminal outcome for the expired gate.
+ */
+async function resolveExpiredEscalationGate(
+  ctx: RuntimeContext,
+  node: WorkflowLoopNode,
+  parentFrameId: string,
+  persistedGate: WorkflowGateInstance,
+  gateOutcome: LoopGateOutcome,
+  rounds: number,
+  bodyOutputs: readonly JsonValue[],
+): Promise<NodeOutcome> {
+  const resolvedAt = Date.now();
+  if (persistedGate.autoAction === 'approve') {
+    const validation = validateGateResumeDataForSchema(node.id, persistedGate.schema, AUTO_APPROVE_TIMEOUT_RESUME_DATA);
+    if (!validation.valid) {
+      await upsertGateInstance(ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, true);
+      await emitGateResolved(ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
+      return {
+        status: 'failed',
+        error: `Loop '${node.id}' escalation gate auto-approve timeout resume data does not match resumeSchema: ${validation.error}`,
+      };
+    }
+    await upsertGateInstance(
+      ctx,
+      { ...persistedGate, status: 'resumed', resumeData: AUTO_APPROVE_TIMEOUT_RESUME_DATA, resolvedAt },
+      true,
+    );
+    await emitGateResolved(ctx, node.id, parentFrameId, { action: 'approve', source: 'timeout' });
+    return {
+      status: 'completed',
+      output: buildLoopOutput('escalate', rounds, gateOutcome, bodyOutputs, AUTO_APPROVE_TIMEOUT_RESUME_DATA),
+    };
+  }
+  await upsertGateInstance(ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, true);
+  await emitGateResolved(ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
+  return {
+    status: 'failed',
+    error: `Loop '${node.id}' escalation gate timed out after ${String(persistedGate.timeoutMs)}ms and auto-rejected`,
+  };
+}
+
+/**
  * Load a persisted escalation gate instance for exit-strategy resume paths.
  * @param ctx - Runtime context.
  * @param nodeId - Loop node identifier.
@@ -430,6 +483,9 @@ export async function resolvePersistedEscalationGate(
   }
 
   if (persistedGate.status === 'waiting') {
+    if (persistedGate.timeoutMs !== null && Date.now() >= persistedGate.createdAt + persistedGate.timeoutMs) {
+      return resolveExpiredEscalationGate(ctx, node, parentFrameId, persistedGate, gateOutcome, rounds, bodyOutputs);
+    }
     return { status: 'paused', pausedAtGateId: node.id, pausedAtFrameId: parentFrameId };
   }
 

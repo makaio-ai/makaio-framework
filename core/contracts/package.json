@@ -29,6 +29,7 @@
     "./model-registry": "./src/model-registry/index.ts",
     "./provider": "./src/provider/index.ts",
     "./session": "./src/session/index.ts",
+    "./workflow": "./src/workflow/index.ts",
     "./telemetry": "./src/telemetry/index.ts",
     "./shared": "./src/shared/index.ts",
     "./native-session-supervisor": "./src/native-session-supervisor/index.ts",
@@ -118,6 +119,10 @@
       "./session": {
         "types": "./dist/session/index.d.ts",
         "default": "./dist/session/index.mjs"
+      },
+      "./workflow": {
+        "types": "./dist/workflow/index.d.ts",
+        "default": "./dist/workflow/index.mjs"
       },
       "./telemetry": {
         "types": "./dist/telemetry/index.d.ts",

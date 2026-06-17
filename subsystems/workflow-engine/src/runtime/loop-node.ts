@@ -15,7 +15,7 @@ import {
   type RuntimeContext,
 } from './runtime-context.js';
 import { extractLastSequenceOutput } from './iterate-helpers.js';
-import { findReusableResumeFrame } from './resume-frames.js';
+import { findReusableResumeFrame, mergeFrameOutput } from './resume-frames.js';
 import { openEscalationGate, resolvePersistedEscalationGate } from './loop-escalation.js';
 
 // -----------------------------------------------------------------
@@ -59,7 +59,12 @@ export interface LoopOutput {
  */
 type RoundBodyResult =
   | { terminal: true; outcome: NodeOutcome }
-  | { terminal: false; output: JsonValue | undefined; replayed: boolean };
+  | {
+      terminal: false;
+      output: JsonValue | undefined;
+      replayed: boolean;
+      gateExpressionCtx: PrimitiveExpressionContext;
+    };
 
 /** Round frame statuses that can be reused while redispatching a parked loop node. */
 const ROUND_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
@@ -96,7 +101,12 @@ async function executeRoundBody(
   });
 
   if (resumeFrame?.status === 'completed') {
-    return { terminal: false, output: (resumeFrame.output ?? null) as JsonValue, replayed: true };
+    return {
+      terminal: false,
+      output: (resumeFrame.output ?? null) as JsonValue,
+      replayed: true,
+      gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, resumeFrame.frameId),
+    };
   }
 
   const frame =
@@ -125,7 +135,44 @@ async function executeRoundBody(
 
   const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx);
   await completeFrame(frame, ctx, bodyOutput);
-  return { terminal: false, output: bodyOutput, replayed: false };
+  return {
+    terminal: false,
+    output: bodyOutput,
+    replayed: false,
+    gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, frame.frameId),
+  };
+}
+
+/**
+ * Build the expression context visible to the loop gate after a body round.
+ *
+ * `executeSequence` keeps body-local frame outputs in its local context, so the
+ * loop reconstructs the same public frame view from the runtime frame registry.
+ * @param node - Loop node whose body frame outputs should be exposed.
+ * @param ctx - Runtime context containing completed body frames.
+ * @param baseCtx - Outer expression context inherited by the loop.
+ * @param roundFrameId - Frame ID of this loop round.
+ * @returns Expression context that includes body node frame outputs.
+ */
+function buildLoopGateExpressionContext(
+  node: WorkflowLoopNode,
+  ctx: RuntimeContext,
+  baseCtx: PrimitiveExpressionContext,
+  roundFrameId: string,
+): PrimitiveExpressionContext {
+  let gateCtx = baseCtx;
+  for (const bodyNode of (node.body as WorkflowSequenceNode).nodes) {
+    const frame = ctx
+      .getFramesByNodeId(bodyNode.id)
+      .find((candidate) => candidate.parentFrameId === roundFrameId && candidate.status === 'completed');
+    if (frame !== undefined) {
+      gateCtx = mergeFrameOutput(gateCtx, bodyNode.id, {
+        status: 'completed',
+        ...(frame.output !== undefined ? { output: frame.output } : {}),
+      });
+    }
+  }
+  return gateCtx;
 }
 
 /**
@@ -290,17 +337,6 @@ export async function executeLoopNode(
   const bodyOutputs: JsonValue[] = [];
   let round = 0;
 
-  // Check for persisted escalation gate on re-entry (exit-based suspension).
-  if (
-    ctx.resumeFrames !== undefined &&
-    node.gate.escalation !== undefined &&
-    ctx.suspensionStrategy !== 'wait-in-process'
-  ) {
-    const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
-    const earlyOutcome = await resolvePersistedEscalationGate(ctx, node, parentFrameId, gateOutcome, 0, bodyOutputs);
-    if (earlyOutcome !== undefined) return earlyOutcome;
-  }
-
   // Main loop — executeRoundBody handles frame resume internally.
   while (true) {
     if (ctx.signal.aborted) return { status: 'cancelled' };
@@ -320,10 +356,22 @@ export async function executeLoopNode(
     // Replayed rounds already passed the gate in a prior execution — skip re-evaluation.
     if (bodyResult.replayed) {
       round++;
+      if (node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
+        const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
+        const earlyOutcome = await resolvePersistedEscalationGate(
+          ctx,
+          node,
+          parentFrameId,
+          gateOutcome,
+          round,
+          bodyOutputs,
+        );
+        if (earlyOutcome !== undefined) return earlyOutcome;
+      }
       continue;
     }
 
-    const gateResult = evaluateGate(node, round, ctx, expressionCtx, gateHandler);
+    const gateResult = evaluateGate(node, round, ctx, bodyResult.gateExpressionCtx, gateHandler);
     if ('status' in gateResult) return gateResult;
 
     if (gateResult.kind === 'pass') {

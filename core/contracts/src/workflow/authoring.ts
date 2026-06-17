@@ -424,16 +424,14 @@ function attachNodeBuilderMethods<TTriggerPayload, TState extends JsonValue | un
     } as WorkflowParallelNode);
     return builder;
   };
-  builder.gate = (nodeId: string, gateOptions: GateOptions) => {
-    claimStepId(registeredIds, nodeId);
-    rootNodes.push(buildGateNode(nodeId, gateOptions, zodGates));
-    return builder;
-  };
-  builder.iterate = (nodeId, handler, iterateOptions) => {
-    claimStepId(registeredIds, nodeId);
-    rootNodes.push(buildIterateNode(nodeId, handler, iterateOptions, registeredIds, runtimeHandlers));
-    return builder;
-  };
+  builder.gate = (nodeId: string, gateOptions: GateOptions) => (
+    claimStepId(registeredIds, nodeId), rootNodes.push(buildGateNode(nodeId, gateOptions, zodGates)), builder
+  );
+  builder.iterate = (nodeId, handler, iterateOptions) => (
+    claimStepId(registeredIds, nodeId),
+    rootNodes.push(buildIterateNode(nodeId, handler, iterateOptions, registeredIds, runtimeHandlers)),
+    builder
+  );
   builder.iterateChain = (nodeId: string, chain: WorkflowNode[], iterateOptions: IterateOptions) => {
     claimStepId(registeredIds, nodeId);
     rootNodes.push(

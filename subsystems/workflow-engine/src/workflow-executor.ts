@@ -32,6 +32,7 @@ import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask } from './workflow-definition-dispatch.js';
 import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
+import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
 import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
 import { validateGateResumeDataForSchema } from './runtime/gate-resume-validation.js';
@@ -433,7 +434,9 @@ export class WorkflowExecutor extends BaseService {
           undefined,
           artifactBinding,
           { context: active.runContext.context, env: active.runContext.env },
+          { runtimeLoopGates: active.runtimeLoopGates },
         );
+        assertLoopGateHandlersPresent(active.workflow, active.runtimeLoopGates);
         const expressionCtx = runtimeCtx.buildExpressionContext();
         outcome = await executeSequence(active.workflow.root, runtimeCtx, expressionCtx);
       } catch (error) {
@@ -586,6 +589,7 @@ export class WorkflowExecutor extends BaseService {
       workflow: definition,
       runContext,
       runtimeHandlers: new Map(),
+      runtimeLoopGates: new Map(),
     });
 
     const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });

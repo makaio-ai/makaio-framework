@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
+  type JsonValue,
+  type LoopGateContext,
   type LoopGateHandler,
   type LoopGateOutcome,
   type StationHandler,
@@ -206,6 +208,47 @@ describe('executeLoopNode', () => {
       expect(loopOutput.rounds).toBe(2);
       expect(loopOutput.bodyOutputs).toEqual([10, 20]);
     }
+  });
+
+  it('passes evaluated gate input, config, and loop context after body execution', async () => {
+    const stationHandler: StationHandler = async () => ({ score: 42 });
+    const gateCalls: Array<{ input: unknown; config: unknown; round: number; maxRounds: number; nodeId: string }> = [];
+    const gateHandler: LoopGateHandler = (
+      input: JsonValue,
+      config: JsonValue,
+      ctx: LoopGateContext,
+    ): LoopGateOutcome => {
+      gateCalls.push({ input, config, round: ctx.round, maxRounds: ctx.maxRounds, nodeId: ctx.nodeId });
+      return { kind: 'pass' };
+    };
+
+    const loopNode = {
+      ...makeLoopNode('loop-input', 'work-station', 'check-gate', 3),
+      gate: {
+        handler: 'check-gate',
+        input: 'frames["work-station"].output.score',
+        config: { threshold: 40 },
+      },
+    } satisfies WorkflowLoopNode;
+    const rootSequence: WorkflowSequenceNode = {
+      id: 'root',
+      type: 'sequence',
+      nodes: [loopNode],
+    };
+
+    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const outcome = await executeSequence(rootSequence, ctx, emptyExpressionCtx);
+
+    expect(outcome.status).toBe('completed');
+    expect(gateCalls).toEqual([
+      {
+        input: 42,
+        config: { threshold: 40 },
+        round: 1,
+        maxRounds: 3,
+        nodeId: 'loop-input',
+      },
+    ]);
   });
 
   it('escalates when max rounds reached', async () => {
@@ -590,5 +633,135 @@ describe('executeLoopNode — resume frame reuse', () => {
       expect(loopOutput.rounds).toBe(3);
       expect(loopOutput.bodyOutputs).toEqual(['round-0-output', 'round-1-output', 10]);
     }
+  });
+
+  it('resolves a persisted escalation gate after replaying completed round frames', async () => {
+    const stationHandler: StationHandler = async () => {
+      throw new Error('body should not rerun');
+    };
+    const gateHandler: LoopGateHandler = () => {
+      throw new Error('gate should not re-evaluate');
+    };
+    const parentFrameId = 'known-parent-frame';
+    const resumeFrames: WorkflowFrameState[] = [
+      {
+        frameId: 'resume-round-0',
+        nodeId: 'loop-resume-gate',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-0'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 0,
+        output: { result: 'previous-round' },
+        startedAt: 1,
+        completedAt: 2,
+      },
+    ];
+
+    const loopNode = makeLoopNodeWithEscalation('loop-resume-gate', 'work-station', 'check-gate', 5, {
+      prompt: 'Review needed',
+      autoAction: 'reject',
+      timeoutMs: null,
+    });
+    const resumeIndex = buildResumeFrameIndex(resumeFrames);
+    const { ctx, bus } = makeCtx(
+      { 'work-station': stationHandler },
+      { 'check-gate': gateHandler },
+      new AbortController().signal,
+      { resumeFrames: resumeIndex, suspensionStrategy: 'exit-and-redispatch' },
+    );
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: 'exec-test',
+          nodeId: 'loop-resume-gate',
+          frameId: parentFrameId,
+          schema: {},
+          prompt: 'Review needed',
+          status: 'resumed',
+          autoAction: 'reject',
+          timeoutMs: null,
+          resumeData: { decision: 'continue' },
+          createdAt: 10,
+          resolvedAt: 20,
+        },
+      });
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+      parentFrameId,
+    ]);
+
+    expect(outcome.status).toBe('completed');
+    if (outcome.status === 'completed') {
+      const loopOutput = outcome.output as LoopOutput;
+      expect(loopOutput.outcome).toBe('escalate');
+      expect(loopOutput.rounds).toBe(1);
+      expect(loopOutput.bodyOutputs).toEqual([{ result: 'previous-round' }]);
+      expect(loopOutput.resumeData).toEqual({ decision: 'continue' });
+    }
+  });
+
+  it('fails an expired persisted escalation gate with auto-reject on redispatch', async () => {
+    const loopNode = makeLoopNodeWithEscalation('loop-timeout', 'work-station', 'check-gate', 5, {
+      prompt: 'Review needed',
+      autoAction: 'reject',
+      timeoutMs: 1,
+    });
+    const parentFrameId = 'timeout-parent-frame';
+    const resumeFrames = buildResumeFrameIndex([
+      {
+        frameId: 'resume-round-0',
+        nodeId: 'loop-timeout',
+        nodeType: 'loop',
+        path: [parentFrameId, 'resume-round-0'],
+        parentFrameId,
+        status: 'completed',
+        attempt: 0,
+        iteration: 0,
+        output: 'previous-output',
+        startedAt: 1,
+        completedAt: 2,
+      },
+    ]);
+    const persistedGateUpdates: unknown[] = [];
+    const { ctx, bus } = makeCtx(
+      { 'work-station': async () => 'fresh-output' },
+      { 'check-gate': () => ({ kind: 'loop' }) },
+      new AbortController().signal,
+      { resumeFrames, suspensionStrategy: 'exit-and-redispatch' },
+    );
+    bus.on(WorkflowStorageSubjects.getGateInstance, (c) => {
+      c.setResult({
+        gate: {
+          executionId: 'exec-test',
+          nodeId: 'loop-timeout',
+          frameId: parentFrameId,
+          schema: {},
+          prompt: 'Review needed',
+          status: 'waiting',
+          autoAction: 'reject',
+          timeoutMs: 1,
+          createdAt: Date.now() - 10_000,
+        },
+      });
+    });
+    bus.on(WorkflowStorageSubjects.setGateInstance, (c) => {
+      persistedGateUpdates.push(c.payload.gate);
+      c.setResult({ id: c.payload.gate.frameId });
+    });
+
+    const { executeLoopNode } = await import('../runtime/loop-node.js');
+    const outcome = await executeLoopNode(loopNode, ctx, emptyExpressionCtx, executeSequence, parentFrameId, [
+      parentFrameId,
+    ]);
+
+    expect(outcome.status).toBe('failed');
+    if (outcome.status === 'failed') {
+      expect(outcome.error).toContain('auto-rejected');
+    }
+    expect(persistedGateUpdates).toContainEqual(expect.objectContaining({ status: 'timed-out' }));
   });
 });

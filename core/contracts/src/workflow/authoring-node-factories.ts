@@ -14,6 +14,7 @@ import type {
 } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
 import type { LoopGateHandler } from './loop.js';
+import { validateNoNestedLoops } from './loop.js';
 import type {
   AgentConfig,
   DelegateToRoleOptions,
@@ -282,6 +283,10 @@ export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions
     ...(options.when !== undefined && { when: options.when }),
     ...(options.skip !== undefined && { skip: options.skip }),
   };
+  const nestedError = validateNoNestedLoops(node);
+  if (nestedError !== undefined) {
+    throw new Error(nestedError);
+  }
   standaloneLoopGates.set(node, options.gate.evaluate);
   return node;
 }

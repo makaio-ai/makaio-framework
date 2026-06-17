@@ -1,4 +1,5 @@
 import type {
+  LoopGateHandler,
   StationHandler,
   StepRunnerBusAuth,
   StepRunnerPlatformDefaults,
@@ -77,4 +78,6 @@ export interface ActiveExecution {
    * (e.g. inline builds, runFile). Empty for definition-backed executions.
    */
   runtimeHandlers: Map<string, StationHandler>;
+  /** Loop gate handler functions keyed by handler name. */
+  runtimeLoopGates: Map<string, LoopGateHandler>;
 }
