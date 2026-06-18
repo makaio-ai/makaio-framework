@@ -5886,11 +5886,13 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/type-lens@workspace:packages/type-lens"
   dependencies:
+    "@makaio/build-tooling": "workspace:*"
     "@types/node": "npm:^24.3.0"
     quick-lru: "npm:^7.3.0"
     ts-morph: "npm:^24.0.0"
+    tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
-    vitest: "npm:4.1.8"
+    vitest: "npm:4.1.7"
     zod: "npm:^4.1.13"
   languageName: unknown
   linkType: soft

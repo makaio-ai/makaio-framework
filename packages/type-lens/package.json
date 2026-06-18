@@ -26,11 +26,73 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
-    "vitest": "4.1.8"
+    "tsdown": "0.22.0",
+    "vitest": "4.1.7"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "main": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./schemas": {
+        "types": "./dist/schemas.d.ts",
+        "default": "./dist/schemas.mjs"
+      },
+      "./index-engine": {
+        "types": "./dist/index-engine.d.ts",
+        "default": "./dist/index-engine.mjs"
+      },
+      "./index-query": {
+        "types": "./dist/index-query.d.ts",
+        "default": "./dist/index-query.mjs"
+      },
+      "./index-types": {
+        "types": "./dist/index-types.d.ts",
+        "default": "./dist/index-types.mjs"
+      },
+      "./index-utils": {
+        "types": "./dist/index-utils.d.ts",
+        "default": "./dist/index-utils.mjs"
+      },
+      "./member-extractor": {
+        "types": "./dist/member-extractor.d.ts",
+        "default": "./dist/member-extractor.mjs"
+      },
+      "./source-filter": {
+        "types": "./dist/source-filter.d.ts",
+        "default": "./dist/source-filter.mjs"
+      },
+      "./symbol-extractor": {
+        "types": "./dist/symbol-extractor.d.ts",
+        "default": "./dist/symbol-extractor.mjs"
+      },
+      "./type-analysis": {
+        "types": "./dist/type-analysis.d.ts",
+        "default": "./dist/type-analysis.mjs"
+      },
+      "./tsci-analyzer": {
+        "types": "./dist/tsci-analyzer.d.ts",
+        "default": "./dist/tsci-analyzer.mjs"
+      },
+      "./storage/vector-math": {
+        "types": "./dist/storage/vector-math.d.ts",
+        "default": "./dist/storage/vector-math.mjs"
+      }
+    }
   },
   "license": "MIT",
   "scripts": {
+    "build": "bun build.ts",
     "test": "vitest run"
   }
 }
