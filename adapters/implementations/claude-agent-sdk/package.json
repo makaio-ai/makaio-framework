@@ -59,7 +59,7 @@
     "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.22.3"
   },
   "publishConfig": {
     "access": "public",
