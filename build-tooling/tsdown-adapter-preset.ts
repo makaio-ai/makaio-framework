@@ -1,12 +1,7 @@
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Plugin } from 'rolldown';
 import type { UserConfig } from 'tsdown';
 import { defineConfig } from 'tsdown';
-import {
-  rewriteFrameworkImportSpecifier,
-  rewriteFrameworkImportsInText,
-} from '@makaio/build-tooling/framework-import-map';
+import { rewriteFrameworkImportSpecifier } from '@makaio/build-tooling/framework-import-map';
 import {
   dependencyDiagnosticPolicy,
   MAKAIO_BUNDLE_PATTERN,
@@ -43,31 +38,8 @@ export interface AdapterPresetOptions {
 const CREATE_REQUIRE_BANNER = "import { createRequire } from 'module'; const require = createRequire(import.meta.url);";
 
 /**
- * Recursively rewrites framework-owned import specifiers in `.d.mts` and `.d.ts`
- * files. Necessary because rolldown-plugin-dts does not honor `resolveId`.
- * @param dir - Output directory to scan.
- */
-function rewriteDtsFiles(dir: string): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      rewriteDtsFiles(fullPath);
-    } else if (entry.name.endsWith('.d.mts') || entry.name.endsWith('.d.ts')) {
-      const content = readFileSync(fullPath, 'utf8');
-      const rewritten = rewriteFrameworkImportsInText(content);
-      if (rewritten !== content) {
-        writeFileSync(fullPath, rewritten);
-      }
-    }
-  }
-}
-
-/**
  * Rolldown plugin that externalizes framework-owned packages (rewriting to
  * `@makaio/framework/<subpath>`) and additional vendor dependencies.
- *
- * Post-processes declaration files to apply the same import rewrites, since
- * rolldown-plugin-dts does not honor `resolveId`.
  * @param extra - Additional exact matches or regex patterns to externalize.
  * @returns Rolldown plugin.
  */
@@ -91,42 +63,26 @@ function adapterExternals(extra: ReadonlyArray<string | RegExp> = []): Plugin {
 
       return null;
     },
-    writeBundle(options) {
-      const dir = options.dir;
-      if (!dir) return;
-      rewriteDtsFiles(dir);
-    },
   };
 }
-
-/**
- * Whether adapter DTS generation is disabled via environment variable.
- * Set `MAKAIO_SKIP_ADAPTER_DTS=true` to skip expensive eager declaration
- * generation in CI environments where only runtime JS validation is needed.
- */
-const skipAdapterDts = process.env['MAKAIO_SKIP_ADAPTER_DTS'] === 'true';
 
 /**
  * Base tsdown preset for adapter implementation packages.
  *
  * Externalizes all framework-owned workspace packages (rewriting specifiers to
  * `@makaio/framework/<subpath>`) while bundling remaining `@makaio/*` workspace
- * packages. Generates TypeScript declarations with post-processed import
- * rewrites.
+ * packages. Declaration emit is handled separately via tsgo (see
+ * `@makaio/build-tooling/tsgo-declarations`).
  *
  * Unlike the extension preset, adapter builds:
  * - Target Node.js only (`platform: 'node'`)
- * - Generate declarations from the full adapter tsconfig graph
  * - Skip minification (adapters are bundled into the host app)
- *
- * Declaration generation can be disabled via `MAKAIO_SKIP_ADAPTER_DTS=true`
- * for CI environments that only need runtime JS validation.
  */
 export const adapterPreset = {
   ...packageManifestSourcePolicy,
   format: 'esm',
   platform: 'node',
-  dts: skipAdapterDts ? false : { eager: true },
+  dts: false,
   minify: false,
   deps: {
     ...dependencyDiagnosticPolicy,

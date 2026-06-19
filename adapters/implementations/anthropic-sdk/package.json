@@ -13,7 +13,7 @@
   },
   "homepage": "https://github.com/makaio-ai/makaio-framework#readme",
   "main": "dist/index.mjs",
-  "types": "dist/index.d.mts",
+  "types": "dist/index.d.ts",
   "type": "module",
   "files": [
     "dist",
@@ -24,11 +24,11 @@
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.mts",
+      "types": "./dist/index.d.ts",
       "default": "./dist/index.mjs"
     },
     "./server": {
-      "types": "./dist/server.d.mts",
+      "types": "./dist/server.d.ts",
       "default": "./dist/server.mjs"
     },
     "./package.json": "./package.json"
@@ -60,11 +60,11 @@
     "directory": "node_modules/.makaio-publish",
     "exports": {
       ".": {
-        "types": "./dist/index.d.mts",
+        "types": "./dist/index.d.ts",
         "default": "./dist/index.mjs"
       },
       "./server": {
-        "types": "./dist/server.d.mts",
+        "types": "./dist/server.d.ts",
         "default": "./dist/server.mjs"
       },
       "./package.json": "./package.json"
