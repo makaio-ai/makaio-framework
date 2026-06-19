@@ -3,6 +3,10 @@ import type { AdapterClientRef } from '@makaio/contracts';
 import { isUniversalRange, versionSatisfies } from '@makaio/contracts';
 import { ClientSubjects, type ClientDefinition } from '@makaio/contracts/client';
 
+// Duplicated in client-binary-version-support.ts — kept inline to avoid
+// a cross-subsystem dependency for a single env-var read.
+const SKIP_VERSION_CHECK = process.env.MAKAIO_SKIP_CLIENT_VERSION_CHECK === '1';
+
 /** Active client definition entry from the extension contribution catalog. */
 export interface AdapterClientCatalogEntry {
   readonly packageName: string;
@@ -103,6 +107,10 @@ export async function validateAdapterClientRefs(
 
   if (options.checkBinaryVersions === false) return;
 
+  // Each binary-check guard has a distinct error message describing a
+  // different failure mode (no handler, null version, range mismatch).
+  // A shared helper would either lose that specificity or need a
+  // parameter for every variant, so the pattern is kept inline.
   const binaryChecks = clients.filter((ref) => ref.binaryVersion !== undefined);
   await Promise.all(
     binaryChecks.map(async (ref) => {
@@ -110,21 +118,36 @@ export async function validateAdapterClientRefs(
 
       const resolved = await bus.requestOptional(ClientSubjects.resolveBinary, { clientId: ref.id });
       if (!resolved.handled) {
+        if (SKIP_VERSION_CHECK) {
+          console.warn(
+            `[SKIP_VERSION_CHECK] Adapter "${adapterName}" client "${ref.id}" declares binaryVersion ${ref.binaryVersion}, but no client.resolveBinary handler is registered — check bypassed`,
+          );
+          return;
+        }
         throw new Error(
           `Adapter "${adapterName}" client "${ref.id}" declares binaryVersion ${ref.binaryVersion}, but no client.resolveBinary handler is registered`,
         );
       }
       const binaryVersion = resolved.data.version;
       if (binaryVersion === null) {
+        if (SKIP_VERSION_CHECK) {
+          console.warn(
+            `[SKIP_VERSION_CHECK] Adapter "${adapterName}" client "${ref.id}" binary did not report a version; requires ${ref.binaryVersion} — check bypassed`,
+          );
+          return;
+        }
         throw new Error(
           `Adapter "${adapterName}" client "${ref.id}" binary did not report a version; requires ${ref.binaryVersion}`,
         );
       }
-      assertSatisfiesRange(
-        binaryVersion,
-        ref.binaryVersion!,
-        `Adapter "${adapterName}" client "${ref.id}" binary version ${binaryVersion}`,
-      );
+      if (!versionSatisfies(binaryVersion, ref.binaryVersion!)) {
+        const label = `Adapter "${adapterName}" client "${ref.id}" binary version ${binaryVersion}`;
+        if (SKIP_VERSION_CHECK) {
+          console.warn(`[SKIP_VERSION_CHECK] ${label} does not satisfy ${ref.binaryVersion} — check bypassed`);
+          return;
+        }
+        throw new Error(`${label} does not satisfy ${ref.binaryVersion}`);
+      }
     }),
   );
 }
