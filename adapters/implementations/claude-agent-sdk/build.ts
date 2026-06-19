@@ -1,13 +1,11 @@
-import { build } from 'tsdown';
-import { defineAdapterConfig } from '@makaio/build-tooling/tsdown-adapter-preset';
+import { buildAdapterPackage } from '@makaio/build-tooling/tsdown-adapter-build';
 
-await build(
-  defineAdapterConfig({
-    entry: {
-      index: './src/index.ts',
-      server: './src/server.ts',
-    },
-    external: [/^@anthropic-ai\//, 'p-defer', 'p-queue'],
-    needsCreateRequire: true,
-  }),
-);
+await buildAdapterPackage({
+  packageDir: import.meta.dirname,
+  entry: {
+    index: './src/index.ts',
+    server: './src/server.ts',
+  },
+  external: [/^@anthropic-ai\//, 'p-defer', 'p-queue'],
+  needsCreateRequire: true,
+});
