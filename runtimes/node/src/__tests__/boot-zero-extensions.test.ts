@@ -4,9 +4,22 @@ import * as path from 'node:path';
 import { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus, NoHandlerError, type IMakaioBus } from '@makaio/bus-core';
-import { ArtifactSubjects, defineArtifactKind, MessageStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  ArtifactSubjects,
+  ConfigSchema,
+  ConfigSubjects,
+  defineArtifactKind,
+  MessageStorageSubjects,
+  SessionSubjects,
+  type Config,
+} from '@makaio/contracts';
+import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
+import type { IConfigStorage } from '@makaio/core';
 import type { KernelMakaioExtension, TransportProvider } from '@makaio/kernel';
-import { ExtensionSubjects } from '@makaio/kernel';
+import { ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
+import type { PersistedMachineIdentity } from '@makaio/machine-identity';
+import { ConfigProvider } from '@makaio/providers';
+import { DispatchingAuth } from '@makaio/bus-transport-websocket';
 import {
   AdapterRuntimeSubjects,
   ArtifactLifecycleHookRegistryToken,
@@ -14,6 +27,12 @@ import {
   ModelRegistryToken,
   SessionOrchestratorToken,
 } from '@makaio/services-core';
+import {
+  AdapterSubsystemSubjects,
+  type AdapterFileConfigSet,
+  type IAdapterConfigRepository,
+  type ProviderConfigFileSet,
+} from '@makaio/services-core/adapter-subsystem';
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
@@ -70,6 +89,156 @@ class FakeTransportProvider implements TransportProvider {
 }
 
 /**
+ * In-memory config storage for boot seam tests.
+ *
+ * Stores a single config snapshot and records every `saveConfig` call so tests
+ * can assert persistence side-effects.
+ */
+class MemoryConfigStorage implements IConfigStorage<Config> {
+  /** Most recent config passed to {@link saveConfig}. */
+  public saved: Config | undefined;
+
+  /**
+   * @param current - Initial config snapshot. `null` yields an empty object.
+   */
+  public constructor(private current: Partial<Config> | null = null) {}
+
+  /** Current parsed config snapshot held by the storage. */
+  public get currentConfig(): Config {
+    return ConfigSchema.parse(this.current ?? {});
+  }
+
+  public async getConfig(): Promise<Config> {
+    return this.currentConfig;
+  }
+
+  public async saveConfig(config: Config): Promise<void> {
+    this.saved = config;
+    this.current = config;
+  }
+}
+
+/**
+ * Config provider with a deterministic machine ID and call counters.
+ *
+ * Extends the real {@link ConfigProvider} so the test exercises the actual merge
+ * and validation logic while overriding identity and environment resolution.
+ */
+class FixedMachineConfigProvider extends ConfigProvider {
+  /** Number of times {@link getConfig} has been invoked. */
+  public getConfigCalls = 0;
+  /** Number of times {@link getMachineId} has been invoked. */
+  public getMachineIdCalls = 0;
+
+  /**
+   * @param storage - Backing config storage.
+   * @param fixedMachineId - Deterministic machine ID returned by {@link getMachineId}.
+   */
+  public constructor(
+    storage: IConfigStorage<Config>,
+    private readonly fixedMachineId: string,
+  ) {
+    super(storage);
+  }
+
+  public override async getConfig(overrides?: Partial<Config>): Promise<Config> {
+    this.getConfigCalls += 1;
+    return super.getConfig(overrides);
+  }
+
+  public override async getMachineId(): Promise<string> {
+    this.getMachineIdCalls += 1;
+    return this.fixedMachineId;
+  }
+
+  protected override getEnv(_key: string): string | undefined {
+    return undefined;
+  }
+}
+
+/**
+ * Adapter config repository that counts load calls and refuses all writes.
+ *
+ * Injected via `CoreBootOptions.adapterConfigRepository` to verify the boot
+ * layer delegates to the custom repository instead of creating its own.
+ */
+class CountingAdapterConfigRepository implements IAdapterConfigRepository {
+  /** Number of times {@link loadAdapterConfigs} has been invoked. */
+  public adapterLoads = 0;
+  /** Number of times {@link loadProviderConfigs} has been invoked. */
+  public providerLoads = 0;
+
+  /**
+   * @param adapterConfigs - Adapter file fixtures keyed by name.
+   * @param providerConfigs - Provider config file fixtures keyed by ID.
+   */
+  public constructor(
+    private readonly adapterConfigs: Map<string, AdapterFile>,
+    private readonly providerConfigs: Map<string, ProviderConfigFile>,
+  ) {}
+
+  public async loadAdapterConfigs(): Promise<AdapterFileConfigSet> {
+    this.adapterLoads += 1;
+    return {
+      configs: new Map([...this.adapterConfigs.entries()].map(([name, config]) => [name, structuredClone(config)])),
+    };
+  }
+
+  public async loadProviderConfigs(): Promise<ProviderConfigFileSet> {
+    this.providerLoads += 1;
+    return {
+      configs: new Map([...this.providerConfigs.entries()].map(([id, config]) => [id, structuredClone(config)])),
+    };
+  }
+
+  public async writeProviderConfig(_id: string, _config: ProviderConfigFile): Promise<void> {
+    throw new Error('Unexpected provider config write during boot seam test');
+  }
+
+  public async deleteProviderConfig(_id: string): Promise<boolean> {
+    throw new Error('Unexpected provider config delete during boot seam test');
+  }
+
+  public async writeAdapterFile(_name: string, _config: AdapterFile): Promise<void> {
+    throw new Error('Unexpected adapter config write during boot seam test');
+  }
+
+  public async deleteAdapterFile(_name: string): Promise<boolean> {
+    throw new Error('Unexpected adapter config delete during boot seam test');
+  }
+}
+
+/**
+ * Generate a {@link PersistedMachineIdentity} with real Web Crypto key pairs.
+ * @param machineId - Deterministic machine ID to embed.
+ * @returns Fully-populated persisted machine identity.
+ */
+async function createPersistedMachineIdentity(machineId: string): Promise<PersistedMachineIdentity> {
+  const [ecdhKeyPair, signingKeyPair] = await Promise.all([
+    crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey', 'deriveBits']),
+    crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']),
+  ]);
+
+  return {
+    machineId,
+    ecdhKeyPair,
+    signingKeyPair,
+    publicKey: await exportPublicKeyBase64Url(ecdhKeyPair.publicKey),
+    signingPublicKey: await exportPublicKeyBase64Url(signingKeyPair.publicKey),
+  };
+}
+
+/**
+ * Export a P-256 public key using the same base64url raw-byte shape as machine identity.
+ * @param publicKey - Public key to export.
+ * @returns Base64url-encoded raw public key bytes.
+ */
+async function exportPublicKeyBase64Url(publicKey: CryptoKey): Promise<string> {
+  const exported = await crypto.subtle.exportKey('raw', publicKey);
+  return Buffer.from(exported).toString('base64url');
+}
+
+/**
  * Build a descriptor fixture backed by an on-disk server entry module.
  * @param rootDir - Temporary root that owns the extension package directory.
  * @param name - Extension descriptor name.
@@ -111,6 +280,7 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
   let originalSkipExtensions: string | undefined;
   let originalDatabaseUrl: string | undefined;
   let originalDatabasePath: string | undefined;
+  let originalMakaioHome: string | undefined;
 
   beforeEach(async () => {
     originalSkipExtensions = process.env.MAKAIO_SKIP_EXTENSIONS;
@@ -121,6 +291,10 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
     originalDatabasePath = process.env.MAKAIO_DATABASE_PATH;
     delete process.env.MAKAIO_DATABASE_URL;
     delete process.env.MAKAIO_DATABASE_PATH;
+    // Without a configProvider override, boot resolves MAKAIO_HOME to locate
+    // the real config directory. An ambient value must not leak into tests.
+    originalMakaioHome = process.env.MAKAIO_HOME;
+    delete process.env.MAKAIO_HOME;
     tempHome = await fs.mkdtemp(path.join(tmpdir(), 'makaio-zero-ext-'));
     homedirMock.mockReturnValue(tempHome);
     MakaioBus.__resetHandlers?.();
@@ -147,6 +321,11 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
     } else {
       process.env.MAKAIO_DATABASE_PATH = originalDatabasePath;
     }
+    if (originalMakaioHome === undefined) {
+      delete process.env.MAKAIO_HOME;
+    } else {
+      process.env.MAKAIO_HOME = originalMakaioHome;
+    }
     await fs.rm(tempHome, { recursive: true, force: true });
   });
 
@@ -163,14 +342,23 @@ describe('bootMakaioRuntimeCore with zero discovered extensions', () => {
       },
     });
     const { extensions } = await MakaioBus.request(ExtensionSubjects.list, {});
+    const { identity } = await MakaioBus.request(RuntimeSubjects.machineIdentity, {});
+    const machineIdentity = identity as PersistedMachineIdentity;
     const activePackageNames = extensions.filter((pkg) => pkg.state === 'active').map((pkg) => pkg.name);
 
     expect(transport.connectedWith?.machineId).toBe(runtime.machineId);
     expect(runtime.bus).toBe(transport.connectedWith?.bus);
+    expect(machineIdentity.machineId).toBe(runtime.machineId);
     expect(MakaioBus.getSchema(SessionSubjects.created)).toBeDefined();
     expect(MakaioBus.getSchema(MessageStorageSubjects.get)).toBeDefined();
     expect(MakaioBus.getSchema(RuntimeSubjects.busPort)).toBeDefined();
     expect(MakaioBus.getSchema(AdapterRuntimeSubjects.resolveId)).toBeDefined();
+    await expect(MakaioBus.request(AdapterSubsystemSubjects.listAdapterConfigs, {})).resolves.toEqual({
+      configs: [],
+    });
+    await expect(MakaioBus.request(AdapterSubsystemSubjects.listProviderConfigs, {})).resolves.toEqual({
+      configs: [],
+    });
     expect(new Set(loadedPackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(new Set(activePackageNames)).toStrictEqual(EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES);
     expect(runtime.trayEntries).toEqual([]);
@@ -515,5 +703,156 @@ export default {
     runtime = undefined;
 
     expect(events).toStrictEqual(['host-cleanup', 'service-destroyed']);
+  });
+
+  it('uses injected config provider and machine identity as one coherent runtime identity', async () => {
+    const transport = new FakeTransportProvider();
+    const machineIdentity = await createPersistedMachineIdentity('custom-machine-id');
+    const storage = new MemoryConfigStorage(null);
+    const configProvider = new FixedMachineConfigProvider(storage, machineIdentity.machineId);
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      configProvider,
+      machineIdentity,
+      discovery: new ExplicitDescriptorDiscovery([]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const readiness = await MakaioBus.request(KernelSubjects.isReady, {});
+    const configResponse = await MakaioBus.request(ConfigSubjects.get, {});
+    const identityResponse = await MakaioBus.request(RuntimeSubjects.machineIdentity, {});
+    const updateResponse = await MakaioBus.request(ConfigSubjects.update, { config: configResponse.config });
+
+    expect(runtime.machineId).toBe('custom-machine-id');
+    expect(transport.connectedWith?.machineId).toBe('custom-machine-id');
+    expect(readiness).toEqual({ ready: true, machineId: 'custom-machine-id' });
+    expect(configResponse.config.mode).toBe('local');
+    expect(identityResponse.identity).toBe(machineIdentity);
+    expect(updateResponse).toEqual({ success: true });
+    expect(storage.saved).toEqual(configResponse.config);
+    expect(storage.currentConfig).toEqual(configResponse.config);
+    expect(configProvider.getConfigCalls).toBeGreaterThanOrEqual(1);
+    expect(configProvider.getMachineIdCalls).toBe(1);
+  });
+
+  it('fails before default identity fallback creates keys when LAN resolver is missing', async () => {
+    const dispatchingAuth = new DispatchingAuth({});
+    const transport = new FakeTransportProvider() as FakeTransportProvider & {
+      dispatchingAuth: DispatchingAuth;
+    };
+    transport.dispatchingAuth = dispatchingAuth;
+
+    await expect(
+      bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        lanBind: true,
+        discovery: new ExplicitDescriptorDiscovery([]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      }),
+    ).rejects.toThrow('[boot] peerSigningKeyResolver is required when lanBind is enabled');
+
+    expect(transport.connectedWith).toBeUndefined();
+    expect(transport.disconnectCount).toBe(0);
+    await expect(fs.stat(path.join(tempHome, 'keys'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('uses injected machine identity as the runtime machineId when config provider is defaulted', async () => {
+    const transport = new FakeTransportProvider();
+    const machineIdentity = await createPersistedMachineIdentity('provisioned-machine-id');
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      makaioHome: tempHome,
+      machineIdentity,
+      discovery: new ExplicitDescriptorDiscovery([]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const readiness = await MakaioBus.request(KernelSubjects.isReady, {});
+    const identityResponse = await MakaioBus.request(RuntimeSubjects.machineIdentity, {});
+
+    expect(runtime.machineId).toBe('provisioned-machine-id');
+    expect(transport.connectedWith?.machineId).toBe('provisioned-machine-id');
+    expect(readiness).toEqual({ ready: true, machineId: 'provisioned-machine-id' });
+    expect(identityResponse.identity).toBe(machineIdentity);
+    await expect(fs.stat(path.join(tempHome, 'keys'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails fast when injected config provider and machine identity disagree on machineId', async () => {
+    const transport = new FakeTransportProvider();
+    const machineIdentity = await createPersistedMachineIdentity('identity-machine-id');
+    const configProvider = new FixedMachineConfigProvider(new MemoryConfigStorage(null), 'config-machine-id');
+
+    await expect(
+      bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+        configProvider,
+        machineIdentity,
+        discovery: new ExplicitDescriptorDiscovery([]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      }),
+    ).rejects.toThrow(
+      "[boot] Config provider machineId 'config-machine-id' does not match " +
+        "runtime machine identity 'identity-machine-id'",
+    );
+
+    expect(transport.connectedWith).toBeUndefined();
+    expect(transport.disconnectCount).toBe(0);
+  });
+
+  it('uses an injected adapter config repository during adapter subsystem startup', async () => {
+    const transport = new FakeTransportProvider();
+    const repository = new CountingAdapterConfigRepository(
+      new Map<string, AdapterFile>(),
+      new Map<string, ProviderConfigFile>(),
+    );
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      adapterConfigRepository: repository,
+      discovery: new ExplicitDescriptorDiscovery([]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    await expect(MakaioBus.request(AdapterSubsystemSubjects.ensureReady, {})).resolves.toEqual({
+      ready: true,
+    });
+    await expect(MakaioBus.request(AdapterSubsystemSubjects.listAdapterConfigs, {})).resolves.toEqual({
+      configs: [],
+    });
+    await expect(MakaioBus.request(AdapterSubsystemSubjects.listProviderConfigs, {})).resolves.toEqual({
+      configs: [],
+    });
+    expect(repository.adapterLoads).toBe(1);
+    expect(repository.providerLoads).toBe(1);
+  });
+
+  it('uses injected machine identity for runtime identity and LAN E2E auth', async () => {
+    const machineIdentity = await createPersistedMachineIdentity('lan-machine-id');
+    const configProvider = new FixedMachineConfigProvider(new MemoryConfigStorage(null), machineIdentity.machineId);
+    const dispatchingAuth = new DispatchingAuth({});
+    const setE2EAuthSpy = vi.spyOn(dispatchingAuth, 'setE2EAuth');
+    const transport = new FakeTransportProvider() as FakeTransportProvider & {
+      dispatchingAuth: DispatchingAuth;
+    };
+    transport.dispatchingAuth = dispatchingAuth;
+
+    runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      configProvider,
+      machineIdentity,
+      lanBind: true,
+      peerSigningKeyResolver: async () => null,
+      discovery: new ExplicitDescriptorDiscovery([]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const identityResponse = await MakaioBus.request(RuntimeSubjects.machineIdentity, {});
+
+    expect(identityResponse.identity).toBe(machineIdentity);
+    expect(runtime.machineId).toBe('lan-machine-id');
+    expect(setE2EAuthSpy).toHaveBeenCalledTimes(1);
   });
 });

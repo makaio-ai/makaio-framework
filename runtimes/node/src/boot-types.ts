@@ -11,6 +11,9 @@ import type {
   WorkerNodeDispatch,
   WorkerNodeRequirements,
 } from '@makaio/contracts';
+import type { PersistedMachineIdentity } from '@makaio/machine-identity';
+import type { ConfigProvider } from '@makaio/providers';
+import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
   ContributionProcessor,
@@ -259,6 +262,40 @@ export interface CoreBootOptions {
    * A `postgres://` / `postgresql://` URL selects the Postgres backend.
    */
   readonly database?: DatabaseBootOptions;
+
+  /**
+   * Host-provided runtime config provider.
+   *
+   * When omitted, boot uses the default Node runtime provider backed by
+   * `FileConfigStorage` under {@link CoreBootOptions.makaioHome}. Custom
+   * providers own effective config resolution, persisted config updates, env
+   * overlays, and the machine-id string returned by `getMachineId()`.
+   *
+   * The returned machine ID must match the resolved runtime machine identity:
+   * either {@link CoreBootOptions.machineIdentity} when supplied, or the
+   * default identity loaded from `{makaioHome}/keys` when omitted.
+   */
+  readonly configProvider?: ConfigProvider;
+
+  /**
+   * Host-provided adapter/provider config repository.
+   *
+   * When omitted, boot uses `FileAdapterConfigRepository` under
+   * `{makaioHome}/adapters` and `{makaioHome}/provider-configs`. Custom
+   * repositories must implement the full canonical adapter/provider config
+   * persistence contract.
+   */
+  readonly adapterConfigRepository?: IAdapterConfigRepository;
+
+  /**
+   * Host-provided persisted runtime machine identity.
+   *
+   * When omitted, boot loads or creates the default identity from
+   * `{makaioHome}/keys`. This is the crypto-bearing runtime identity used by
+   * `RuntimeSubjects.machineIdentity` and LAN E2E auth, not the narrower kernel
+   * `MachineIdentity` shape.
+   */
+  readonly machineIdentity?: PersistedMachineIdentity;
 
   /**
    * Host launcher command embedded into client wiring installed from warning actions.

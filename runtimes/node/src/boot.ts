@@ -7,11 +7,11 @@
  * that already owns an HTTP server and Hono app.
  *
  * Startup sequence:
- *  1. Config resolution via FileConfigStorage + NodeRuntimeProvider
+ *  1. Config + identity resolution (including machineId mismatch guard)
  *  2. Bus creation (MakaioBus singleton) + namespace registration + busCreated phase event
  *  3. Transport — BusServerTransportProvider (WebSocket bus server on provided HTTP server)
  *  4. Storage — initializeNodeDatabase (SQLite file or Postgres URL) + RuntimeSubjects.database exposure
- *  5. Identity — loadOrCreateMachineIdentity + platform bus handler registration
+ *  5. Runtime resource bus handler registration
  *  6. Config handlers + framework package assembly
  *  7. Extension discovery and loading
  *  8. ExtensionCoordinator — all extensions (storage + services, surface-gated)
@@ -175,6 +175,7 @@ export async function bootMakaioRuntimeCore(
   const ext = resolveExtensionOptions(options, makaioHome);
 
   const skipExtensions = parseSkipExtensions();
+  const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
   // Shutdown steps are pushed in startup order. On normal shutdown they run
   // in reverse; on startup failure the same array is iterated in reverse as a
@@ -185,10 +186,22 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 1. Config
     // -----------------------------------------------------------------------
-    const configStorage = new FileConfigStorage(makaioHome);
-    const configProvider = new NodeRuntimeProvider(configStorage, makaioHome);
-    const config = await configProvider.getConfig({ mode: 'local' });
-    const machineId = await configProvider.getMachineId();
+    if (options.lanBind && transport.dispatchingAuth && !peerSigningKeyResolver) {
+      throw new Error('[boot] peerSigningKeyResolver is required when lanBind is enabled');
+    }
+
+    const configProvider = options.configProvider;
+    const resolvedConfigProvider =
+      configProvider ?? new NodeRuntimeProvider(new FileConfigStorage(makaioHome), makaioHome);
+    const config = await resolvedConfigProvider.getConfig({ mode: 'local' });
+    const machineIdentity =
+      options.machineIdentity ?? (await loadOrCreateMachineIdentity(path.join(makaioHome, 'keys')));
+    const machineId = configProvider ? await configProvider.getMachineId() : machineIdentity.machineId;
+    if (machineIdentity.machineId !== machineId) {
+      throw new Error(
+        `[boot] Config provider machineId '${machineId}' does not match runtime machine identity '${machineIdentity.machineId}'`,
+      );
+    }
 
     console.info('[boot] Config resolved (mode=%s)', config.mode);
 
@@ -230,12 +243,6 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 3. Transport (Phase 0 — resolves in ~50ms)
     // -----------------------------------------------------------------------
-    // Validate LAN mode prerequisites before connecting the transport.
-    const peerSigningKeyResolver = options.peerSigningKeyResolver;
-    if (options.lanBind && transport.dispatchingAuth && !peerSigningKeyResolver) {
-      throw new Error('[boot] peerSigningKeyResolver is required when lanBind is enabled');
-    }
-
     await transport.connect(bus, machineId);
     shutdownSteps.push(() => transport.disconnect());
 
@@ -271,10 +278,8 @@ export async function bootMakaioRuntimeCore(
     shutdownSteps.push(() => databaseClient.close());
 
     // -----------------------------------------------------------------------
-    // 5. Identity + runtime resource bus handlers
+    // 5. Runtime resource bus handlers
     // -----------------------------------------------------------------------
-    const machineIdentity = await loadOrCreateMachineIdentity(path.join(makaioHome, 'keys'));
-
     const runtimeResourceCleanups: Array<() => void> = [
       bus.on(RuntimeSubjects.database, (ctx) => {
         ctx.setResult({ db });
@@ -306,7 +311,7 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     const srcDir = path.dirname(fileURLToPath(import.meta.url));
 
-    const configCleanup = registerConfigHandlers(bus, configProvider);
+    const configCleanup = registerConfigHandlers(bus, resolvedConfigProvider);
     shutdownSteps.push(configCleanup);
     console.info('[boot] Config handlers registered');
 
@@ -398,10 +403,12 @@ export async function bootMakaioRuntimeCore(
     // Framework-level packages load unconditionally — they provide core
     // infrastructure (e.g. preferences storage) that the shell and framework
     // layer depend on regardless of whether a host descriptor is present.
-    const adapterConfigRepository = new FileAdapterConfigRepository({
-      providerConfigsDir: path.join(makaioHome, 'provider-configs'),
-      adaptersDir: path.join(makaioHome, 'adapters'),
-    });
+    const adapterConfigRepository =
+      options.adapterConfigRepository ??
+      new FileAdapterConfigRepository({
+        providerConfigsDir: path.join(makaioHome, 'provider-configs'),
+        adaptersDir: path.join(makaioHome, 'adapters'),
+      });
     const clientDefinitions = bootEligibleExtensionPackages.flatMap((pkg) => pkg.clients ?? []);
 
     const frameworkPackages = [
