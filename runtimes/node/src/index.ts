@@ -78,7 +78,11 @@ export { BusServerTransportProvider, type BusServerTransportOptions } from './bu
 export { StoredCredentialProvider, NodeCredentialProvider, type CredentialProvider } from './credential-provider.js';
 export { readFrameworkVersion } from './read-framework-version.js';
 export { FileRegistryCache } from './model-registry/file-registry-cache.js';
-export { FilesystemDescriptorDiscovery, ExplicitDescriptorDiscovery } from './extension-discovery.js';
+export {
+  FilesystemDescriptorDiscovery,
+  ExplicitDescriptorDiscovery,
+  MergedDescriptorDiscovery,
+} from './extension-discovery.js';
 export { RuntimeSubjects } from './bus/runtime/namespace.js';
 export { getRuntimeDatabase } from './bus/runtime/get-runtime-database.js';
 export type {
