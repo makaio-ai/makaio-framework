@@ -511,6 +511,10 @@
       "types": "./dist/utils/health-probe.d.mts",
       "default": "./dist/utils/health-probe.mjs"
     },
+    "./utils/package-root": {
+      "types": "./dist/utils/resolve-package-root.d.mts",
+      "default": "./dist/utils/resolve-package-root.mjs"
+    },
     "./utils/project-manifest": {
       "types": "./dist/utils/project-manifest.d.mts",
       "default": "./dist/utils/project-manifest.mjs"
