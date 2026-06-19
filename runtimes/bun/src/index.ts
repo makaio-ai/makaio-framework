@@ -36,6 +36,7 @@ export {
   FileRegistryCache,
   FilesystemDescriptorDiscovery,
   ExplicitDescriptorDiscovery,
+  MergedDescriptorDiscovery,
   type DiscoveredExtension,
   type ExtensionDiscovery,
   type FilesystemDescriptorDiscoveryOptions,
