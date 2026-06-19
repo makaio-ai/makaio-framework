@@ -16,7 +16,7 @@
 import type { ChatCompletionChunk, ChatCompletionMessageFunctionToolCall } from 'openai/resources/index.js';
 import { OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { StreamBridgeConfig, ToolCallAccumulator } from './types/index.js';
-
+import { buildUsageEventPayload, type ExtractedUsage } from './utils/usageEvent.js';
 /**
  * Convert accumulators to complete tool calls.
  * @param accumulators - Tool call accumulators to convert
@@ -29,7 +29,6 @@ function buildToolCalls(accumulators: ToolCallAccumulator[]): ChatCompletionMess
     function: { name: acc.name, arguments: acc.arguments },
   }));
 }
-
 /**
  * Update tool call accumulator with delta data.
  * @param accumulators - Array of tool call accumulators
@@ -67,7 +66,6 @@ function updateToolCallAccumulator(
     }
   }
 }
-
 /**
  * Parse DeepSeek-style XML tool calls from content.
  * Format: `<function_calls><invoke name="..."><parameter name="..." string="true">value</parameter></invoke></function_calls>`
@@ -115,7 +113,6 @@ function parseXmlToolCalls(content: string): ChatCompletionMessageFunctionToolCa
 
   return toolCalls;
 }
-
 /**
  * Parse GLM-4.5-Air-style XML tool calls from content.
  * Format: `<tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>`
@@ -150,7 +147,6 @@ function parseGlmAirXml(content: string): ChatCompletionMessageFunctionToolCall[
 
   return toolCalls;
 }
-
 /** Result of normalizing a streaming turn response. */
 interface NormalizedResult {
   content: string;
@@ -164,7 +160,7 @@ interface StreamState {
   content: string;
   reasoning: string;
   finishReason: string | null;
-  usage: { promptTokens: number; completionTokens: number } | null;
+  usage: ExtractedUsage | null;
   toolCallAccumulators: ToolCallAccumulator[];
 }
 
@@ -184,14 +180,22 @@ function createStreamState(): StreamState {
 
 /**
  * Extract usage from chunk if present.
+ *
+ * Preserves `prompt_tokens_details` (notably `cached_tokens` for prompt caching)
+ * and `completion_tokens_details` (reasoning tokens) so downstream consumers
+ * receive the full usage breakdown.
  * @param chunk - Chunk to extract usage from
- * @returns Usage object or null
+ * @returns Extracted usage with optional detail breakdowns, or null
  */
-function extractUsage(chunk: ChatCompletionChunk): { promptTokens: number; completionTokens: number } | null {
+function extractUsage(chunk: ChatCompletionChunk): ExtractedUsage | null {
   if (!chunk.usage) return null;
   return {
     promptTokens: chunk.usage.prompt_tokens,
     completionTokens: chunk.usage.completion_tokens,
+    ...(chunk.usage.prompt_tokens_details ? { promptTokensDetails: chunk.usage.prompt_tokens_details } : {}),
+    ...(chunk.usage.completion_tokens_details
+      ? { completionTokensDetails: chunk.usage.completion_tokens_details }
+      : {}),
   };
 }
 
@@ -322,12 +326,7 @@ async function processChoiceDelta(
   if (chunk.usage && !state.usage) {
     state.usage = extractUsage(chunk);
     if (state.usage) {
-      await emitEvent({
-        eventType: 'usage',
-        prompt_tokens: state.usage.promptTokens,
-        completion_tokens: state.usage.completionTokens,
-        total_tokens: state.usage.promptTokens + state.usage.completionTokens,
-      });
+      await emitEvent(buildUsageEventPayload(state.usage));
     }
   }
 }
@@ -421,12 +420,7 @@ export async function processStream(
       const usage = extractUsage(chunk);
       if (usage && !state.usage) {
         state.usage = usage;
-        await emitEvent({
-          eventType: 'usage',
-          prompt_tokens: usage.promptTokens,
-          completion_tokens: usage.completionTokens,
-          total_tokens: usage.promptTokens + usage.completionTokens,
-        });
+        await emitEvent(buildUsageEventPayload(usage));
       }
       continue;
     }

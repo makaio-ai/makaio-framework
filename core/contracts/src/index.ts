@@ -439,6 +439,7 @@ export {
   MessageStorageSubjects,
   messageToCursor,
   safeValidateSnapshot,
+  CACHE_STRATEGIES,
   SESSION_EVENT_TYPES,
   SessionContextSchema,
   SessionEventStorageNamespace,
@@ -466,6 +467,7 @@ export {
 export type {
   AgentRole,
   BranchKind,
+  CacheStrategy,
   CompressionMode,
   ContextWindowState,
   ForkChildInfo,

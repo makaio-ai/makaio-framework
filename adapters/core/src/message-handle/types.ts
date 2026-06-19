@@ -1,4 +1,5 @@
 import type {
+  CacheStrategy,
   JsonValue,
   Message,
   MessageDeliveryMode,
@@ -65,6 +66,8 @@ export interface MessageHandleOptions {
   messageHistory?: Message[];
   /** Optional per-turn metadata/context payload for prompt materialization. */
   turnContext?: Record<string, JsonValue>;
+  /** Caller-expressed caching intent for the injected history prefix. */
+  cacheStrategy?: CacheStrategy;
   /**
    * Per-turn structured-output schema descriptor.
    * When set, the agent's structured-output manager validates the terminal

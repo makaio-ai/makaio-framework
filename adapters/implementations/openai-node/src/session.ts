@@ -14,19 +14,11 @@ import { convertMessageHistory } from './utils/convertMessageHistory.js';
 import type { OpenAISessionConfig } from './types/index.js';
 import { classifyOpenAIError } from './utils/classifyOpenAIError.js';
 import { buildChatCompletionRequest } from './utils/buildChatCompletionRequest.js';
+import { getOpenAIToolName } from './utils/getOpenAIToolName.js';
 import { BaseStreamSession, type MessageToolCall } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
-import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
+import type { CacheStrategy, ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
 import { STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME } from './structured-output-finalizer.js';
-
-/**
- * Return the OpenAI tool name regardless of concrete tool kind.
- * @param tool - OpenAI chat completion tool definition
- * @returns Tool name used in model-visible requests
- */
-function getOpenAIToolName(tool: ChatCompletionTool): string {
-  return tool.type === 'function' ? tool.function.name : tool.custom.name;
-}
 
 /**
  * Session for OpenAI SDK lifecycle management.
@@ -75,6 +67,9 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    * Reset to `undefined` at the start of each new turn.
    */
   private currentResponseSchema: ResponseSchemaDescriptor | undefined;
+
+  /** Per-turn cache strategy, captured from the active MessageHandle in buildMessages. */
+  private currentCacheStrategy: CacheStrategy | undefined;
 
   /**
    * Create an OpenAI connector session.
@@ -262,8 +257,9 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    * @param mergedContent - Optional content from superseded/merged messages
    */
   protected buildMessages(handle: MessageHandle, mergedContent?: string[]): void {
-    // Snapshot the per-turn response schema for use in executeApiCall.
+    // Snapshot per-turn schemas for use in executeApiCall.
     this.currentResponseSchema = handle.responseSchema;
+    this.currentCacheStrategy = handle.cacheStrategy;
 
     // Explicit history injection replaces accumulated messages (recovery / rehydration).
     // Otherwise keep existing this.messages — they accumulate across turns (stateless API pattern).
@@ -394,6 +390,8 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         supportsReasoningEffort,
         responseSchema: this.getRequestResponseSchema(),
         supportsStructuredOutputStrict: this.config.supportsStructuredOutputStrict,
+        cacheStrategy: this.currentCacheStrategy,
+        systemPrompt: this.config.systemPrompt,
       }),
       { signal: abortSignal },
     );

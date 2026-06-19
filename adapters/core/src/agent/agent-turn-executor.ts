@@ -102,6 +102,7 @@ export class AgentTurnExecutor {
       deliveryMode: payload.deliveryMode,
       messageId: payload.messageId,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
+      cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
       turnContext: buildStructuredOutputTurnContext(
         hookResult.sessionContext?.turnContext,
         payload.responseSchema,
@@ -148,6 +149,7 @@ export class AgentTurnExecutor {
     const connectorOptions: ConnectorStartOptions = {
       systemPrompt,
       messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
+      cacheStrategy: useNativeResume ? undefined : hookResult.sessionContext?.cacheStrategy,
       turnContext: buildStructuredOutputTurnContext(
         hookResult.sessionContext?.turnContext,
         responseSchema,

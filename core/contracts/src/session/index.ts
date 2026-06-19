@@ -43,8 +43,8 @@ export type {
   SessionExtensionContext,
   SessionExtensionContextFactory,
 } from './schemas/extension-context.js';
-export { SessionContextSchema } from './session-context.js';
-export type { SessionContext } from './session-context.js';
+export { CACHE_STRATEGIES, SessionContextSchema } from './session-context.js';
+export type { CacheStrategy, SessionContext } from './session-context.js';
 export {
   UI_WARNINGS_CATEGORY,
   CONNECTOR_SWAP_WARNING_SUPPRESSED_KEY,

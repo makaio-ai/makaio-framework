@@ -277,6 +277,7 @@ export abstract class AIAgentConnector<
       options?.turnContext,
       options?.responseSchema,
       options?.internalRetry ?? false,
+      options?.cacheStrategy,
     );
     handle.adapterSessionId = this.adapterSessionId;
     // Suppress user_message.sent for internal retry turns — the retry is an
