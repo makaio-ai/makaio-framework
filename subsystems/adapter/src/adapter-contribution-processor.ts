@@ -426,10 +426,9 @@ export class AdapterContributionProcessor {
     }
 
     if (missing.length > 0) {
-      throw new Error(
-        `Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
-          `but no active extension registers them. Ensure provider extensions ` +
-          `are listed in the adapter's dependencies.`,
+      console.warn(
+        `[AdapterContributionProcessor] Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
+          `but no active extension registers them. These providers will be unavailable until their extensions are loaded.`,
       );
     }
 
@@ -497,22 +496,22 @@ export class AdapterContributionProcessor {
             },
           };
         } catch (error) {
-          if (isRegistryProviderMiss(error)) {
-            // Adapter-contributed providers may intentionally live outside the
-            // framework registry. Keep their declared models so activation does
-            // not depend on registry authorship.
-            return {
-              ...provider,
-              definition: {
-                ...provider.definition,
-                availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
-              },
-            };
+          // Model population is best-effort: fall back to the provider's
+          // declared models so a single registry/network hiccup does not
+          // prevent the entire adapter from loading.
+          if (!isRegistryProviderMiss(error)) {
+            console.warn(
+              `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}", falling back to declared models.`,
+              error,
+            );
           }
-          throw new Error(
-            `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}"`,
-            { cause: error },
-          );
+          return {
+            ...provider,
+            definition: {
+              ...provider.definition,
+              availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
+            },
+          };
         }
       }),
     );
