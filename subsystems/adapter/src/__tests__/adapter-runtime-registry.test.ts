@@ -616,7 +616,7 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('fails activation before registration when a declared provider is absent from the catalog', async () => {
+  it('loads adapter with empty providers when a declared provider is absent from the catalog', async () => {
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([
@@ -632,8 +632,9 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
-    await expect(
-      service.processAdapterContributions(
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await service.processAdapterContributions(
         '@owner/adapter-package',
         createExtension('@owner/adapter-package', [
           createContribution(
@@ -643,11 +644,14 @@ describe('AdapterContributionProcessor rollback', () => {
           ),
         ]),
         TEST_EXTENSION_CONTEXT,
-      ),
-    ).rejects.toThrow(/missing-provider.*dependencies/);
+      );
 
-    expect(service.getLoadedAdapters()).toEqual([]);
-    expect(service.getAdapterInstances().size).toBe(0);
+      expect(service.getLoadedAdapters()).toHaveLength(1);
+      expect(service.getLoadedAdapters()[0]?.providers).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('missing-provider'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('rejects a definition protocol that is absent from the adapter manifest protocols', async () => {

@@ -426,10 +426,9 @@ export class AdapterContributionProcessor {
     }
 
     if (missing.length > 0) {
-      throw new Error(
-        `Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
-          `but no active extension registers them. Ensure provider extensions ` +
-          `are listed in the adapter's dependencies.`,
+      console.warn(
+        `[AdapterContributionProcessor] Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
+          `but no active extension registers them. These providers will be unavailable until their extensions are loaded.`,
       );
     }
 
