@@ -6,8 +6,36 @@
  * adapters that use the registry pattern.
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
+
+export interface ToolRegistryLoadOptions {
+  /** Allowed tool names. Empty array intentionally disables all registry tools. */
+  allowedTools?: readonly string[];
+  /** Disallowed tool names. Takes precedence over allowedTools. */
+  disallowedTools?: readonly string[];
+}
+
+/**
+ * Apply adapter runtime tool filters to registry results before SDK conversion.
+ * @param tools - Registry tools returned by ToolSubjects.list.
+ * @param options - Optional adapter runtime tool allow/deny filters.
+ * @returns Tools that remain visible to the adapter SDK.
+ */
+function applyToolNameFilter(tools: ToolListItem[], options?: ToolRegistryLoadOptions): ToolListItem[] {
+  if (options === undefined || (options.allowedTools === undefined && options.disallowedTools === undefined)) {
+    return tools;
+  }
+
+  const allowed = options.allowedTools !== undefined ? new Set(options.allowedTools) : undefined;
+  const disallowed = options.disallowedTools !== undefined ? new Set(options.disallowedTools) : undefined;
+
+  return tools.filter((tool) => {
+    if (disallowed?.has(tool.name)) return false;
+    if (allowed !== undefined && !allowed.has(tool.name)) return false;
+    return true;
+  });
+}
 
 /**
  * Load tools from ToolRegistry via MakaioBus.
@@ -20,16 +48,69 @@ import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
  * so errors are logged and an empty array is returned.
  * @param adapterId - Adapter instance ID for logging/routing
  * @param adapterName - Adapter type name
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns List of available tools, or empty array if fetch fails
  */
-export async function loadToolsFromRegistry(adapterId: string, adapterName: string): Promise<ToolListItem[]> {
+export function loadToolsFromRegistry(
+  adapterId: string,
+  adapterName: string,
+  options?: ToolRegistryLoadOptions,
+): Promise<ToolListItem[]>;
+export function loadToolsFromRegistry(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterName: string,
+  options?: ToolRegistryLoadOptions,
+): Promise<ToolListItem[]>;
+export async function loadToolsFromRegistry(
+  busOrAdapterId: IMakaioBus | string,
+  adapterIdOrName: string,
+  maybeAdapterNameOrOptions?: string | ToolRegistryLoadOptions,
+  maybeOptions?: ToolRegistryLoadOptions,
+): Promise<ToolListItem[]> {
+  const hasInjectedBus = typeof busOrAdapterId !== 'string';
+  const bus = hasInjectedBus ? busOrAdapterId : MakaioBus;
+  const adapterId = hasInjectedBus ? adapterIdOrName : busOrAdapterId;
+  const adapterName = hasInjectedBus
+    ? typeof maybeAdapterNameOrOptions === 'string'
+      ? maybeAdapterNameOrOptions
+      : undefined
+    : adapterIdOrName;
+  const options = hasInjectedBus
+    ? maybeOptions
+    : typeof maybeAdapterNameOrOptions === 'object'
+      ? maybeAdapterNameOrOptions
+      : undefined;
+
+  if (!adapterName) {
+    console.warn('[stream-session] Tool registry load skipped: adapterName is missing');
+    return [];
+  }
+
+  return loadToolsFromRegistryWithBus(bus, adapterId, adapterName, options);
+}
+
+/**
+ * Load tools from ToolRegistry through a resolved bus instance.
+ * @param bus - Bus that owns the ToolRegistry handlers.
+ * @param adapterId - Adapter instance ID for logging/routing.
+ * @param adapterName - Adapter type name.
+ * @param options - Optional adapter runtime tool allow/deny filters.
+ * @returns List of available tools, or empty array if fetch fails.
+ */
+async function loadToolsFromRegistryWithBus(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterName: string,
+  options?: ToolRegistryLoadOptions,
+): Promise<ToolListItem[]> {
   try {
-    const response = await MakaioBus.request(ToolSubjects.list, {
+    const response = await bus.request(ToolSubjects.list, {
       adapterId,
       adapterName,
     });
 
-    return response.tools;
+    return applyToolNameFilter(response.tools, options);
   } catch (error) {
     // Log but don't fail — agent can still work without tools
     console.warn(`[${adapterName}] Failed to fetch tools from bus:`, error);

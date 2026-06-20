@@ -246,15 +246,19 @@ export class AnthropicSdkAgent extends BaseStreamAgent<
    */
   protected wireToolApprovalRpc(connector: AnthropicSdkConnector): void {
     this.addConnectorWiringCleanup(
-      registerToolApprovalHandler(connector, async () => ({
-        adapterId: this.adapterId,
-        adapterName: this.adapterName,
-        agentId: this.agentId,
-        adapterSessionId: await this.getAdapterSessionId(),
-        // sessionId is always set for agents running within a session; asserted here
-        // as the Zod schema on AgentSubjects.toolApprove enforces it at runtime.
-        sessionId: this.sessionId!,
-      })),
+      registerToolApprovalHandler(
+        connector,
+        async () => ({
+          adapterId: this.adapterId,
+          adapterName: this.adapterName,
+          agentId: this.agentId,
+          adapterSessionId: await this.getAdapterSessionId(),
+          // sessionId is always set for agents running within a session; asserted here
+          // as the Zod schema on AgentSubjects.toolApprove enforces it at runtime.
+          sessionId: this.sessionId!,
+        }),
+        this.config.globalBus,
+      ),
     );
   }
 }

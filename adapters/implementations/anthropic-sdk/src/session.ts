@@ -22,6 +22,7 @@ import { buildMessageCreateRequest } from './utils/buildMessageCreateRequest.js'
 import { BaseStreamSession } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
+import { MakaioBus } from '@makaio/bus-core';
 
 type CacheableContentBlockParam = ContentBlockParam & {
   cache_control?: CacheControlEphemeral | null;
@@ -352,6 +353,7 @@ export class AnthropicSdkSession extends BaseStreamSession<
       const toolResultBlocks = await handleToolCalls(
         result.tool_calls,
         {
+          bus: this.config.globalBus ?? MakaioBus,
           emitSdkEvent: this.config.emitSdkEvent,
           requestToolApproval: this.config.requestToolApproval,
           recordMcpCall: this.config.recordMcpCall,

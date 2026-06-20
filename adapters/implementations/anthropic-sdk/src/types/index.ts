@@ -1,4 +1,4 @@
-import type { ScopedBus } from '@makaio/bus-core';
+import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
   type BaseAgentConnectorConfig,
   type MessageHandle,
@@ -100,6 +100,7 @@ export type AnthropicToolApprovalResponse = AgentToolApproveResponse;
  */
 export interface AnthropicSdkSessionConfig {
   bus: AnthropicSdkBus;
+  globalBus?: IMakaioBus;
   adapterId: string;
   adapterName: string;
   /** Agent ID for tool execution attribution */

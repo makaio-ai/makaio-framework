@@ -42,6 +42,7 @@
 
 import type { Tool, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 
+import type { IMakaioBus } from '@makaio/bus-core';
 import { AnthropicSdkConnectorSubjects, type SdkEventMessage, type ToolCall } from './namespaces/index.js';
 import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import { type AgentToolApproveRequest, type AgentToolApproveResponse, type ToolListItem } from '@makaio/contracts';
@@ -61,6 +62,7 @@ import {
   handleToolCalls as handleToolCallsGeneric,
   type ToolCallPayload,
   type ToolExecutionContextOverrides,
+  type ToolRegistryLoadOptions,
 } from '@makaio/ai-adapters-stream-session';
 
 export type { ToolCallPayload, ToolExecutionContextOverrides };
@@ -114,16 +116,24 @@ export function toAnthropicToolFormat(tools: ToolListItem[]): Tool[] {
 
 /**
  * Convenience: Load tools and convert to Anthropic format in one call.
+ * @param bus - Bus that owns the ToolRegistry handlers
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
+ * @param options - Optional adapter runtime tool allow/deny filters
  * @returns Anthropic-formatted tools ready for messages.create
  */
-export async function fetchToolsForAnthropic(adapterId: string, adapterName: string): Promise<Tool[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+export async function fetchToolsForAnthropic(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterName: string,
+  options?: ToolRegistryLoadOptions,
+): Promise<Tool[]> {
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toAnthropicToolFormat(tools);
 }
 
 type AnthropicToolCallsCallbacks = {
+  bus: IMakaioBus;
   emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
   requestToolApproval: (
     payload: Omit<

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mergeScopedToolApproval, resolveRequiredSessionId } from '../tool-approval.js';
+import { createBusInstance } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
+import { AgentSubjects } from '@makaio/contracts';
+import { z } from 'zod';
+import { createToolApprovalHandler, mergeScopedToolApproval, resolveRequiredSessionId } from '../tool-approval.js';
 import type { ScopedToolApprovalRequest } from '../tool-approval.js';
+import type { AIAgentConnector } from '../../connector/index.js';
 
 /**
  * Full scoped payload used as a baseline across identity-field tests.
@@ -179,5 +184,49 @@ describe('mergeScopedToolApproval', () => {
       adapterName: 'context-name',
       adapterSessionId: 'context-adapter-session',
     });
+  });
+});
+
+describe('createToolApprovalHandler', () => {
+  it('forwards approval requests through the injected global bus', async () => {
+    const hostBus = createBusInstance();
+    const approvalNamespace = hostBus.registerNamespace(
+      createBusNamespace('adapter:test-approval', {
+        'tool.approval': {
+          request: z.object({ toolName: z.string() }),
+          response: z.object({ action: z.literal('allow') }),
+        },
+      }),
+    );
+    const connectorBus = hostBus.scoped(approvalNamespace);
+    const subject = approvalNamespace.subjects.tool.approval;
+
+    let receivedToolName: string | undefined;
+    hostBus.on(AgentSubjects.toolApprove, (ctx) => {
+      receivedToolName = ctx.payload.toolName;
+      ctx.setResult({ action: 'allow' });
+    });
+
+    const cleanup = createToolApprovalHandler(
+      subject,
+      (payload: { toolName: string }, _context: Record<string, never>) => ({
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        adapterSessionId: 'adapter-session-1',
+        agentId: 'agent-1',
+        sessionId: 'session-1',
+        toolCallId: 'tool-call-1',
+        toolName: payload.toolName,
+        args: {},
+      }),
+      (response) => response,
+    )(connectorBus as unknown as Pick<AIAgentConnector, 'on'>, {}, hostBus);
+
+    try {
+      await expect(connectorBus.request(subject, { toolName: 'search_symbols' })).resolves.toEqual({ action: 'allow' });
+      expect(receivedToolName).toBe('search_symbols');
+    } finally {
+      cleanup();
+    }
   });
 });

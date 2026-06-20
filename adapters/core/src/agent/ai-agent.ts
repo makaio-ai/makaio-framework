@@ -717,6 +717,7 @@ export abstract class AIAgent<
     const providerContext: ProviderContext = pendingProviderContext ?? createSentinelProviderContext();
     return {
       bus: cfg.adapterBus,
+      globalBus: cfg.globalBus,
       agentId: cfg.agentId,
       adapterId: cfg.adapterId,
       adapterName: cfg.adapterName,

@@ -42,6 +42,7 @@
 
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/index.js';
 
+import type { IMakaioBus } from '@makaio/bus-core';
 import { OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import { type AgentToolApproveRequest, type AgentToolApproveResponse, type ToolListItem } from '@makaio/contracts';
@@ -62,6 +63,7 @@ import {
   type ToolCall,
   type ToolCallPayload,
   type ToolExecutionContextOverrides,
+  type ToolRegistryLoadOptions,
 } from '@makaio/ai-adapters-stream-session';
 
 export type { ToolCallPayload, ToolExecutionContextOverrides };
@@ -118,16 +120,24 @@ export function toOpenAIToolFormat(tools: ToolListItem[]): ChatCompletionTool[] 
 
 /**
  * Convenience: Load tools and convert to OpenAI format in one call.
+ * @param bus - Bus that owns the ToolRegistry handlers
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
+ * @param options - Optional adapter runtime tool allow/deny filters
  * @returns OpenAI-formatted tools ready for chat completions
  */
-export async function fetchToolsForOpenAI(adapterId: string, adapterName: string): Promise<ChatCompletionTool[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+export async function fetchToolsForOpenAI(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterName: string,
+  options?: ToolRegistryLoadOptions,
+): Promise<ChatCompletionTool[]> {
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toOpenAIToolFormat(tools);
 }
 
 type OpenAIToolCallsCallbacks = {
+  bus: IMakaioBus;
   emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
   requestToolApproval: (
     payload: Omit<

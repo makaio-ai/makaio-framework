@@ -15,7 +15,7 @@ export {
 
 export { type ToolCall, extractToolCallPayload, toGlobalToolApproval, applyApprovedArgs } from './tool-approval.js';
 
-export { loadToolsFromRegistry, filterToolsWithSchema } from './tool-registry.js';
+export { loadToolsFromRegistry, filterToolsWithSchema, type ToolRegistryLoadOptions } from './tool-registry.js';
 
 export { executeTool, type ToolLifecycleEmitter } from './tool-execution.js';
 

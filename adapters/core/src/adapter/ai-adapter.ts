@@ -312,6 +312,7 @@ export abstract class AIAdapter<
       agentId,
       adapterId: this.adapterId,
       adapterName: this.name,
+      globalBus: this.globalBus,
       adapterBus: this.adapterBus,
       capabilities: this.capabilities,
       nativeTools: this.nativeTools,

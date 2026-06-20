@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { MakaioBus } from '@makaio/bus-core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
 import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
@@ -93,7 +94,15 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       baseURL: baseUrl ?? undefined,
     });
 
-    this.anthropicTools = await fetchToolsForAnthropic(this.adapterId, this.adapterName);
+    this.anthropicTools = await fetchToolsForAnthropic(
+      this.config.globalBus ?? MakaioBus,
+      this.adapterId,
+      this.adapterName,
+      {
+        allowedTools: this.config.allowedTools,
+        disallowedTools: this.config.disallowedTools,
+      },
+    );
   }
 
   /**
@@ -107,7 +116,15 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
    * `onTurnStarted` so it uses the canonical turn number.
    */
   protected override async refreshTools(): Promise<void> {
-    this.anthropicTools = await fetchToolsForAnthropic(this.adapterId, this.adapterName);
+    this.anthropicTools = await fetchToolsForAnthropic(
+      this.config.globalBus ?? MakaioBus,
+      this.adapterId,
+      this.adapterName,
+      {
+        allowedTools: this.config.allowedTools,
+        disallowedTools: this.config.disallowedTools,
+      },
+    );
     await super.refreshTools(); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
     const session = this.getSession();
     session?.replaceNativeTools(this.anthropicTools);
@@ -146,6 +163,7 @@ export class AnthropicSdkConnector extends BaseStreamConnector<
       allowedDirectories: this.config.allowedDirectories,
       supportedReasoningLevels: this.config.supportedReasoningLevels,
       emitSdkEvent: this.emitSdkEvent.bind(this),
+      globalBus: this.config.globalBus ?? MakaioBus,
       handleError: this.handleError.bind(this),
       requestToolApproval: (payload) =>
         this.requestToolApprovalWithHandling(AnthropicSdkConnectorSubjects.tool_approval, payload),

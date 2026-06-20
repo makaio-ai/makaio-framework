@@ -6,7 +6,7 @@
  * the shared interface and registration logic to avoid duplicating it across adapters.
  */
 
-import { MakaioBus, type OnOptions } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus, type OnOptions } from '@makaio/bus-core';
 import {
   AgentSubjects,
   AgentToolApproveSchema,
@@ -303,6 +303,7 @@ export function createToolApprovalHandler<
   return function registerToolApprovalHandler(
     connector: Pick<AIAgentConnector, 'on'>,
     context: ContextProvider,
+    globalBus: IMakaioBus = MakaioBus,
   ): () => void {
     const bus: IToolApprovalBus<TPayload, TResponse> = connector;
     return bus.on(subject, async (ctx) => {
@@ -311,7 +312,7 @@ export function createToolApprovalHandler<
         const resolvedContext: TContext =
           typeof context === 'function' ? await (context as () => Promise<TContext>)() : (context as TContext);
         const request = toGlobal(ctx.payload, resolvedContext);
-        const globalResponse = await MakaioBus.request(AgentSubjects.toolApprove, request);
+        const globalResponse = await globalBus.request(AgentSubjects.toolApprove, request);
         ctx.setResult(fromGlobal(globalResponse));
       } catch (error) {
         console.error('[createToolApprovalHandler] Tool approval request failed:', error);

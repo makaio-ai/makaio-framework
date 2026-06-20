@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type AgentToolApproveResponse } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { ToolCall } from '../namespaces/index.js';
-import { executeTool, extractToolCallPayload, handleToolCalls } from '../tool-handling.js';
+import { executeTool, extractToolCallPayload, handleToolCalls, loadToolsFromRegistry } from '../tool-handling.js';
 
 type ToolExecuteRequest = ExtractSubjectPayload<typeof ToolSubjects.execute>;
 
@@ -24,6 +24,69 @@ describe('anthropic tool-handling', () => {
     MakaioBus.__resetHandlers?.();
   });
 
+  it('loads tools through the injected bus instance', async () => {
+    const hostBus = createBusInstance();
+
+    hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          {
+            name: 'terminal_scrollback',
+            description: 'Read terminal output',
+            toolsetName: 'terminal',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+            },
+          },
+        ],
+        toolsets: [{ name: 'terminal', description: 'Terminal tools', version: '1.0.0', toolCount: 1 }],
+      });
+    });
+
+    const tools = await loadToolsFromRegistry(hostBus, 'adapter-anthropic-1', 'anthropic-sdk');
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.name).toBe('terminal_scrollback');
+  });
+
+  it('applies allowed and disallowed tool filters before SDK conversion', async () => {
+    const hostBus = createBusInstance();
+
+    hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          {
+            name: 'allowed_tool',
+            description: 'Allowed',
+            toolsetName: 'test',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'blocked_tool',
+            description: 'Blocked',
+            toolsetName: 'test',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'other_tool',
+            description: 'Other',
+            toolsetName: 'test',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+        toolsets: [{ name: 'test', description: 'Test tools', version: '1.0.0', toolCount: 3 }],
+      });
+    });
+
+    const tools = await loadToolsFromRegistry(hostBus, 'adapter-anthropic-1', 'anthropic-sdk', {
+      allowedTools: ['allowed_tool', 'blocked_tool'],
+      disallowedTools: ['blocked_tool'],
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(['allowed_tool']);
+  });
+
   it('executes approval-modified arguments instead of original tool arguments', async () => {
     let receivedPayload: ToolExecuteRequest | undefined;
 
@@ -41,6 +104,7 @@ describe('anthropic tool-handling', () => {
     await handleToolCalls(
       [toolCall],
       {
+        bus: MakaioBus,
         emitSdkEvent: async () => {},
         requestToolApproval: async () => approval,
       },
@@ -66,6 +130,7 @@ describe('anthropic tool-handling', () => {
     const events: Array<{ eventType: string; success?: boolean }> = [];
     await expect(
       executeTool(
+        MakaioBus,
         createToolCall(),
         async (event) => {
           events.push({ eventType: event.eventType, success: 'success' in event ? event.success : undefined });
@@ -132,6 +197,7 @@ describe('anthropic tool-handling', () => {
 
     await expect(
       executeTool(
+        MakaioBus,
         malformedToolCall,
         async (event) => {
           events.push({ eventType: event.eventType, success: 'success' in event ? event.success : undefined });
