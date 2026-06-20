@@ -497,22 +497,21 @@ export class AdapterContributionProcessor {
             },
           };
         } catch (error) {
-          if (isRegistryProviderMiss(error)) {
-            // Adapter-contributed providers may intentionally live outside the
-            // framework registry. Keep their declared models so activation does
-            // not depend on registry authorship.
-            return {
-              ...provider,
-              definition: {
-                ...provider.definition,
-                availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
-              },
-            };
+          if (!isRegistryProviderMiss(error)) {
+            console.warn(
+              `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}". Falling back to declared provider models.`,
+              error,
+            );
           }
-          throw new Error(
-            `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}"`,
-            { cause: error },
-          );
+          // Registry model population is a best-effort enrichment step. Adapter
+          // activation must not depend on registry freshness or availability.
+          return {
+            ...provider,
+            definition: {
+              ...provider.definition,
+              availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
+            },
+          };
         }
       }),
     );
