@@ -250,7 +250,7 @@ export abstract class AIAdapter<
   public async init(): Promise<void> {
     if (this.initialized) return;
 
-    this.adapterBus ??= (await this.namespace.scopedBus()) as TBus;
+    this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus.getContext())) as TBus;
 
     // Setup handlers
     this.setupHandlers();
