@@ -752,6 +752,43 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('passes the runtime bus as globalBus to the adapter factory', async () => {
+    const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'bus-check-adapter');
+    const adapterInstances = new Map<string, AdapterInstance>();
+    let capturedGlobalBus: unknown;
+    const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: 'bus-check-adapter', enabled: true, bindings: [] } });
+    });
+
+    try {
+      await initializeEnabledAdapters(
+        MakaioBus,
+        TEST_MACHINE_ID,
+        [
+          {
+            name: 'bus-check-adapter',
+            displayName: 'Bus Check Adapter',
+            packageName: '@owner/bus-check-package',
+            factory: async (options?: unknown) => {
+              const opts = options as Record<string, unknown>;
+              capturedGlobalBus = opts?.globalBus;
+              return { adapterId: readAdapterFactoryOptions(options).adapterId };
+            },
+            options: { adapterId },
+            providers: [],
+          },
+        ],
+        adapterInstances,
+        TEST_PLATFORM_DEFAULTS,
+      );
+
+      expect(capturedGlobalBus).toBe(MakaioBus);
+    } finally {
+      offGetConfig();
+      adapterInstances.clear();
+    }
+  });
+
   it('rolls back a directly initialized instance when adapter.initialized emission fails', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'event-failing-adapter');
     const shutdown = vi.fn().mockResolvedValue(undefined);

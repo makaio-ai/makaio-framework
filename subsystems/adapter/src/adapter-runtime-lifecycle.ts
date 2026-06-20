@@ -176,6 +176,7 @@ export async function initializeEnabledAdapters(
         platformDefaults,
         definitionProviders: adapter.providers,
         clientId,
+        globalBus: bus,
       } as AdapterInitOptions);
 
       if (instance.adapterId !== expectedAdapterId) {
