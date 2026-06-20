@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProtocolId, AdapterClientRef, AdapterProviderDefinitionContract } from '@makaio/contracts';
 import type { HelpLink } from '@makaio/services-core/settings';
 import type { z } from 'zod';
@@ -50,6 +51,14 @@ export interface AdapterInitOptions {
    * Omit for API-only adapters.
    */
   clientId?: string;
+  /**
+   * Global bus instance for cross-adapter communication.
+   *
+   * When provided, the adapter registers its RPC handlers (e.g. `adapter.startAgent`)
+   * on this bus instead of falling back to the `MakaioBus` singleton. Required for
+   * downstream consumers where the runtime bus differs from the default singleton.
+   */
+  globalBus?: IMakaioBus;
 }
 
 /**
