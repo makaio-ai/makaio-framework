@@ -411,6 +411,70 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('keeps catalog-declared provider models when registry model population fails', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['test-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    const registryHandler = vi.fn((providerId: string) => providerId);
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [
+          {
+            packageName: '@owner/provider-package',
+            definition: {
+              id: 'transient-provider',
+              name: 'Transient Provider',
+              availableModels: [
+                {
+                  name: 'transient-model',
+                  friendlyName: 'Transient Model',
+                  contextWindowSize: 8_192,
+                  labId: 'transient-lab',
+                },
+              ],
+            },
+          },
+        ],
+        clients: [],
+      });
+    });
+    const offRegistry = MakaioBus.on(ModelRegistrySubjects.getProviderModels, (ctx) => {
+      registryHandler(ctx.payload.providerId);
+      throw new Error('Injected registry refresh failure');
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/provider-package',
+        createExtension('@owner/provider-package', [
+          createContribution(
+            'test-adapter',
+            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            [{ definitionId: 'transient-provider' }],
+          ),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      const [model] = service.getLoadedAdapters()[0]?.providers[0]?.definition.availableModels ?? [];
+      expect(model).toMatchObject({ name: 'transient-model', friendlyName: 'Transient Model' });
+      expect(registryHandler).toHaveBeenCalledOnce();
+      expect(registryHandler).toHaveBeenCalledWith('transient-provider');
+    } finally {
+      offCatalog();
+      offRegistry();
+    }
+  });
+
   it('serves framework-only provider storage reads from loaded adapter definitions', async () => {
     const providerDefinition = {
       id: 'runtime-provider',
