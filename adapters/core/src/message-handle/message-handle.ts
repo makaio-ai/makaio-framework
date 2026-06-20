@@ -1,5 +1,11 @@
 import { DeferredPromise } from '@makaio/utils';
-import type { JsonValue, Message, MessageDeliveryMode, ResponseSchemaDescriptor } from '@makaio/contracts';
+import type {
+  CacheStrategy,
+  JsonValue,
+  Message,
+  MessageDeliveryMode,
+  ResponseSchemaDescriptor,
+} from '@makaio/contracts';
 import type { MessageResult, MessageState } from './types.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
 
@@ -30,6 +36,9 @@ export class MessageHandle {
   /** Curated message history from sessionContext (mutable for merge propagation) */
   private _messageHistory?: Message[];
 
+  /** Shared cache strategy type from contracts keeps handle options and session context aligned. */
+  private _cacheStrategy?: CacheStrategy;
+
   /** Turn-scoped context from PreUserMessage hooks (mutable for merge propagation) */
   private _turnContext?: Record<string, JsonValue>;
 
@@ -52,11 +61,14 @@ export class MessageHandle {
      * lifecycle events while still taking precedence over queued user turns.
      */
     public readonly internalRetry = false,
+    /** Caller-expressed caching intent for the injected history prefix */
+    cacheStrategy?: CacheStrategy,
   ) {
     this.deferredCompletion = new DeferredPromise<MessageResult>();
     this.deferredAcknowledgement = new DeferredPromise<boolean>();
     this.state = 'queued';
     this._messageHistory = messageHistory;
+    this._cacheStrategy = cacheStrategy;
     this._turnContext = turnContext;
   }
 
@@ -71,6 +83,19 @@ export class MessageHandle {
   /** Set messageHistory (used by merge strategies to propagate history) */
   public set messageHistory(value: Message[] | undefined) {
     this._messageHistory = value;
+  }
+
+  /**
+   * Caller-expressed caching intent for the injected history prefix
+   * @returns The cache strategy or undefined if not set
+   */
+  public get cacheStrategy(): CacheStrategy | undefined {
+    return this._cacheStrategy;
+  }
+
+  /** Set cacheStrategy (used by merge strategies to propagate) */
+  public set cacheStrategy(value: CacheStrategy | undefined) {
+    this._cacheStrategy = value;
   }
 
   /**

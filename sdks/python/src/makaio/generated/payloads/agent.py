@@ -431,6 +431,7 @@ class AgentSendMessageRequestSessionContextMessageHistoryItem:
 
 @dataclass(frozen=True)
 class AgentSendMessageRequestSessionContext:
+    cache_strategy: Literal["auto", "systemPrompt", "fullPrefix"] | None = None
     extracted_context: Any | None = None
     has_compression: bool | None = None
     has_connector_swap: bool | None = None

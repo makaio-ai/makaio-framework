@@ -1,4 +1,9 @@
-import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type {
+  CacheControlEphemeral,
+  ContentBlockParam,
+  MessageParam,
+  Tool,
+} from '@anthropic-ai/sdk/resources/messages/messages.js';
 import {
   type MessageHandle,
   serializeTurnContext,
@@ -17,6 +22,19 @@ import { buildMessageCreateRequest } from './utils/buildMessageCreateRequest.js'
 import { BaseStreamSession } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import type { ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
+
+type CacheableContentBlockParam = ContentBlockParam & {
+  cache_control?: CacheControlEphemeral | null;
+};
+
+/**
+ * Return whether Anthropic accepts cache_control on this input block.
+ * @param block - Anthropic content block to inspect
+ * @returns True when cache_control can be attached
+ */
+function isCacheableContentBlock(block: ContentBlockParam): block is CacheableContentBlockParam {
+  return block.type !== 'thinking';
+}
 
 /**
  * Session for Anthropic SDK lifecycle management.
@@ -165,6 +183,10 @@ export class AnthropicSdkSession extends BaseStreamSession<
         this.messages.push({ role: 'user', content });
         this.messages.push({ role: 'assistant', content: 'Acknowledged.' });
       }
+    }
+
+    if (handle.cacheStrategy === 'fullPrefix' && this.messages.length > 0) {
+      this.applyCacheBreakpointToLastHistoryMessage();
     }
 
     // Add current user message.
@@ -355,6 +377,46 @@ export class AnthropicSdkSession extends BaseStreamSession<
       this.messages.push({ role: 'user', content: toolResultBlocks });
 
       await this.runTurnIteration(turn, currentHandle, toolCallIteration + 1);
+    }
+  }
+
+  /**
+   * Mark the last content block of the last history message with an ephemeral
+   * cache_control breakpoint. This tells Anthropic to cache everything up to
+   * and including this block, guaranteeing the injected history prefix hits cache.
+   */
+  private applyCacheBreakpointToLastHistoryMessage(): void {
+    this.clearCacheBreakpoints();
+
+    for (let messageIndex = this.messages.length - 1; messageIndex >= 0; messageIndex--) {
+      const message = this.messages[messageIndex];
+      if (typeof message.content === 'string') {
+        // Convert string content to a TextBlockParam array so we can attach cache_control.
+        message.content = [{ type: 'text', text: message.content, cache_control: { type: 'ephemeral' } }];
+        return;
+      }
+
+      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex--) {
+        const block = message.content[blockIndex];
+        if (isCacheableContentBlock(block)) {
+          block.cache_control = { type: 'ephemeral' };
+          return;
+        }
+      }
+    }
+  }
+
+  /**
+   * Remove stale prompt-cache breakpoints before placing the current prefix boundary.
+   */
+  private clearCacheBreakpoints(): void {
+    for (const message of this.messages) {
+      if (typeof message.content === 'string') continue;
+      for (const block of message.content) {
+        if (isCacheableContentBlock(block)) {
+          delete block.cache_control;
+        }
+      }
     }
   }
 

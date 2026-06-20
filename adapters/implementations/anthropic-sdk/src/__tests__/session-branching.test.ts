@@ -18,7 +18,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { ContentBlockParam, MessageParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, type MessageResult } from '@makaio/ai-adapters-core';
 import { AnthropicSdkSession } from '../session.js';
@@ -90,6 +90,21 @@ function makeHandle(messageId: string, text: string): MessageHandle {
     { role: 'user', message: text, blocks: [{ type: 'text', content: text }] },
     'enqueue',
   );
+}
+
+/**
+ * Copy message history deeply enough for assertions after the live session mutates.
+ * @param history - Current Anthropic message history
+ * @returns Assertion-safe snapshot
+ */
+function snapshotHistory(history: MessageParam[]): MessageParam[] {
+  return history.map((message) => ({
+    role: message.role,
+    content:
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.map((block) => ({ ...block }) as ContentBlockParam),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -435,6 +450,94 @@ describe('applyMessageComplete — text response', () => {
     });
 
     expect(session.getHistory().at(-1)).toEqual({ role: 'assistant', content: '{"ok":true}' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: fullPrefix cache breakpoint placement
+// ---------------------------------------------------------------------------
+
+describe('fullPrefix cacheStrategy', () => {
+  it('marks accumulated history before the current user message on follow-up turns', async () => {
+    const session = makeSession(scopedBus, ADAPTER_ID, AGENT_ID);
+    const firstHandle = makeHandle('msg-cache-1', 'first');
+    const secondHandle = makeHandle('msg-cache-2', 'second');
+    const thirdHandle = makeHandle('msg-cache-3', 'third');
+    secondHandle.cacheStrategy = 'fullPrefix';
+    thirdHandle.cacheStrategy = 'fullPrefix';
+
+    let callCount = 0;
+    let secondTurnHistory: MessageParam[] = [];
+    let thirdTurnHistory: MessageParam[] = [];
+
+    session.apiCallFn = async (adapterSessionId) => {
+      callCount++;
+      if (callCount === 2) {
+        secondTurnHistory = snapshotHistory(session.getHistory());
+      }
+      if (callCount === 3) {
+        thirdTurnHistory = snapshotHistory(session.getHistory());
+      }
+      await emitMessageComplete(
+        scopedBus,
+        makeTextCompleteEvent(`answer ${callCount}`),
+        AGENT_ID,
+        ADAPTER_ID,
+        adapterSessionId,
+      );
+    };
+
+    await session.startNewTurn(firstHandle);
+    await expect(firstHandle.waitForCompletion()).resolves.toMatchObject({ outcome: 'completed' });
+    await session.startNewTurn(secondHandle);
+    await expect(secondHandle.waitForCompletion()).resolves.toMatchObject({ outcome: 'completed' });
+    await session.startNewTurn(thirdHandle);
+    await expect(thirdHandle.waitForCompletion()).resolves.toMatchObject({ outcome: 'completed' });
+
+    const secondTurnAssistant = secondTurnHistory.find((message) => message.role === 'assistant');
+    expect(secondTurnAssistant).toBeDefined();
+    expect(secondTurnAssistant?.content).toEqual([
+      { type: 'text', text: 'answer 1', cache_control: { type: 'ephemeral' } },
+    ]);
+    expect(secondTurnHistory.at(-1)).toEqual({ role: 'user', content: 'second' });
+
+    const thirdTurnAssistants = thirdTurnHistory.filter((message) => message.role === 'assistant');
+    expect(thirdTurnAssistants[0]?.content).toEqual([{ type: 'text', text: 'answer 1' }]);
+    expect(thirdTurnAssistants[1]?.content).toEqual([
+      { type: 'text', text: 'answer 2', cache_control: { type: 'ephemeral' } },
+    ]);
+  });
+
+  it('uses the last cacheable history block instead of mutating a thinking block', async () => {
+    const session = makeSession(scopedBus, ADAPTER_ID, AGENT_ID);
+    const handle = makeHandle('msg-cache-thinking', 'continue');
+    handle.cacheStrategy = 'fullPrefix';
+    handle.messageHistory = [
+      {
+        role: 'assistant',
+        blocks: [
+          { type: 'text', content: 'visible answer' },
+          { type: 'reasoning', content: 'private reasoning', metadata: { signature: 'sig-cache' } },
+        ],
+      },
+    ];
+
+    let requestHistory: MessageParam[] = [];
+    session.apiCallFn = async (adapterSessionId) => {
+      requestHistory = snapshotHistory(session.getHistory());
+      await emitMessageComplete(scopedBus, makeTextCompleteEvent('done'), AGENT_ID, ADAPTER_ID, adapterSessionId);
+    };
+
+    await session.startNewTurn(handle);
+    await expect(handle.waitForCompletion()).resolves.toMatchObject({ outcome: 'completed' });
+
+    expect(requestHistory[0]).toEqual({
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'visible answer', cache_control: { type: 'ephemeral' } },
+        { type: 'thinking', thinking: 'private reasoning', signature: 'sig-cache' },
+      ],
+    });
   });
 });
 

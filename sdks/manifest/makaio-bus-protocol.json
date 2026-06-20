@@ -1980,6 +1980,10 @@
           "sessionContext": {
             "additionalProperties": false,
             "properties": {
+              "cacheStrategy": {
+                "enum": ["auto", "systemPrompt", "fullPrefix"],
+                "type": "string"
+              },
               "extractedContext": {},
               "hasCompression": {
                 "type": "boolean"
@@ -6874,6 +6878,10 @@
           "sessionContext": {
             "additionalProperties": false,
             "properties": {
+              "cacheStrategy": {
+                "enum": ["auto", "systemPrompt", "fullPrefix"],
+                "type": "string"
+              },
               "extractedContext": {},
               "hasCompression": {
                 "type": "boolean"

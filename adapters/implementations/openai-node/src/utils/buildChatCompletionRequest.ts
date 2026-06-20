@@ -1,11 +1,13 @@
+import { createHash } from 'node:crypto';
 import type { AIReasoningLevel } from '@makaio/ai-adapters-core';
-import { ResponseSchemaNameSchema, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import { ResponseSchemaNameSchema, type CacheStrategy, type ResponseSchemaDescriptor } from '@makaio/contracts';
 import type {
   ChatCompletionCreateParamsStreaming,
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/index.js';
 import type { ReasoningEffort } from 'openai/resources/shared.js';
+import { getOpenAIToolName } from './getOpenAIToolName.js';
 
 interface BuildChatCompletionRequestInput {
   model: string;
@@ -21,6 +23,10 @@ interface BuildChatCompletionRequestInput {
    * {@link BuildChatCompletionRequestInput.responseSchema} requests it.
    */
   supportsStructuredOutputStrict: boolean;
+  /** Caller-expressed caching intent. When 'fullPrefix', sets prompt_cache_key. */
+  cacheStrategy?: CacheStrategy;
+  /** System prompt string used for cache key derivation (not sent directly — already in messages). */
+  systemPrompt?: string;
 }
 
 type OpenAIChatCompletionRequest = ChatCompletionCreateParamsStreaming;
@@ -66,12 +72,18 @@ export function buildChatCompletionRequest(input: BuildChatCompletionRequestInpu
       ? toOpenAIReasoningEffort(input.reasoningEffort)
       : undefined;
 
+  const promptCacheKey =
+    input.cacheStrategy === 'fullPrefix'
+      ? derivePromptCacheKey(input.model, input.systemPrompt, input.tools, input.reasoningEffort)
+      : undefined;
+
   return {
     model: input.model,
     messages: input.messages,
     tools: input.tools.length > 0 ? input.tools : undefined,
     stream: true,
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(promptCacheKey !== undefined ? { prompt_cache_key: promptCacheKey } : {}),
     stream_options: { include_usage: true },
     ...(input.responseSchema !== undefined && {
       response_format: {
@@ -84,4 +96,27 @@ export function buildChatCompletionRequest(input: BuildChatCompletionRequestInpu
       },
     }),
   };
+}
+
+/**
+ * Derive a deterministic cache key from the stable prefix properties of the request.
+ * Requests with the same model, system prompt, tools, and reasoning effort share
+ * a cache key so OpenAI routes them to the same cache machine.
+ * @param model - Model identifier
+ * @param systemPrompt - System prompt string
+ * @param tools - Tool definitions
+ * @param reasoningEffort - Reasoning effort level
+ * @returns SHA-256 hex prefix (first 16 characters)
+ */
+function derivePromptCacheKey(
+  model: string,
+  systemPrompt: string | undefined,
+  tools: ChatCompletionTool[],
+  reasoningEffort: AIReasoningLevel | undefined,
+): string {
+  // Cache keys use the same tool-name resolver as request materialization so
+  // function and custom tools hash consistently.
+  const toolNames = tools.map(getOpenAIToolName).sort();
+  const payload = JSON.stringify({ model, systemPrompt: systemPrompt ?? '', toolNames, reasoningEffort });
+  return createHash('sha256').update(payload).digest('hex').slice(0, 16);
 }

@@ -8,9 +8,10 @@
  * into normalized semantic bus events (chunk, reasoning_delta,
  * reasoning_complete, usage, tool_calls, message_complete).
  */
-import type { RawMessageStreamEvent, Usage, MessageDeltaUsage } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { AnthropicSdkConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { StreamBridgeConfig, ToolCallAccumulator } from './types/index.js';
+import { mergeDeltaUsage, mergeInitialUsage, type MergedUsage } from './utils/usage.js';
 
 /** Accumulated state for a single Anthropic content block during streaming. */
 interface ContentBlockState {
@@ -23,13 +24,6 @@ interface ContentBlockState {
   thinking?: string;
   /** Extended-thinking signature stored per resolved design (block.metadata.signature). */
   signature?: string;
-}
-/** Merged token usage accumulated across message_start and message_delta events. */
-interface MergedUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens?: number;
-  cacheCreationInputTokens?: number;
 }
 /** Internal aggregation state for a single streaming turn. */
 interface StreamState {
@@ -64,35 +58,6 @@ function createStreamState(): StreamState {
     usage: null,
     toolCalls: [],
     contentBlocks: new Map(),
-  };
-}
-
-/**
- * Merge Anthropic's initial Usage object (from message_start) into MergedUsage.
- * @param usage - Usage from the message_start event.
- * @returns MergedUsage with input token counts.
- */
-function mergeInitialUsage(usage: Usage): MergedUsage {
-  return {
-    inputTokens: usage.input_tokens,
-    outputTokens: 0,
-    cacheReadInputTokens: usage.cache_read_input_tokens ?? undefined,
-    cacheCreationInputTokens: usage.cache_creation_input_tokens ?? undefined,
-  };
-}
-
-/**
- * Merge output-token delta usage (from message_delta) into existing MergedUsage.
- * @param existing - MergedUsage populated from message_start.
- * @param delta - MessageDeltaUsage from the message_delta event.
- * @returns Updated MergedUsage with output token counts.
- */
-function mergeDeltaUsage(existing: MergedUsage, delta: MessageDeltaUsage): MergedUsage {
-  return {
-    ...existing,
-    outputTokens: delta.output_tokens,
-    cacheReadInputTokens: delta.cache_read_input_tokens ?? existing.cacheReadInputTokens,
-    cacheCreationInputTokens: delta.cache_creation_input_tokens ?? existing.cacheCreationInputTokens,
   };
 }
 

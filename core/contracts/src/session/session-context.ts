@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { MessageSchema, JsonValueSchema } from '../shared/index.js';
 
+export const CACHE_STRATEGIES = ['auto', 'systemPrompt', 'fullPrefix'] as const;
+export type CacheStrategy = (typeof CACHE_STRATEGIES)[number];
+
 /**
  * Context signals assembled by SessionOrchestrator and flowed to adapters.
  * Agent uses these to decide: native resume vs fresh with history.
@@ -40,6 +43,13 @@ export const SessionContextSchema = z.object({
    * If true, native resume is infeasible and adapters should use fresh mode.
    */
   hasConnectorSwap: z.boolean().optional(),
+
+  /**
+   * Caller-expressed caching intent for stateless continuation sessions.
+   * Valid values are defined by {@link CACHE_STRATEGIES}; adapters map the
+   * selected strategy to provider-specific mechanisms.
+   */
+  cacheStrategy: z.enum(CACHE_STRATEGIES).optional(),
 
   /**
    * Turn-scoped context assembled by PreUserMessage hooks and the orchestrator.

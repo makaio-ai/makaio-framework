@@ -49,7 +49,7 @@ export function buildMessageCreateRequest(input: BuildMessageCreateRequestInput)
   const system = buildSystemParam(systemPrompt);
   const thinking = buildThinkingParam(reasoningEffort, supportsReasoningEffort, maxTokens);
 
-  return {
+  const request: MessageCreateParamsStreaming = {
     model,
     messages,
     max_tokens: maxTokens,
@@ -65,6 +65,8 @@ export function buildMessageCreateRequest(input: BuildMessageCreateRequestInput)
       ? { output_config: { format: { type: 'json_schema' as const, schema: responseSchema.schema } } }
       : {}),
   };
+
+  return request;
 }
 
 /**

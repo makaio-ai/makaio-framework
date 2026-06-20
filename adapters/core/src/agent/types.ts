@@ -1,5 +1,6 @@
 import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type {
+  CacheStrategy,
   JsonValue,
   McpRuntimeSessionContext,
   McpSessionContext,
@@ -326,6 +327,11 @@ export interface ConnectorSendMessageOptions extends AgentSendMessageOptions {
    * LLM-facing message using serializeTurnContext().
    */
   turnContext?: Record<string, JsonValue>;
+  /**
+   * Caller-expressed caching intent for the injected message history.
+   * Adapters map this to provider-specific cache mechanisms.
+   */
+  cacheStrategy?: CacheStrategy;
   /**
    * Whether this message is an internal retry turn synthesized by the structured-output
    * manager. When `true`, the connector suppresses `user_message.sent` so the retry
