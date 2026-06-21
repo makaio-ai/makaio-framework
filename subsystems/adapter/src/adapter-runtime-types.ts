@@ -113,6 +113,11 @@ export interface LoadedAdapter {
   /** Adapter-wide config schema (runtime-only, for adapter-level settings). */
   adapterConfigSchema?: z.ZodObject<z.ZodRawShape>;
   /**
+   * Provider definition IDs declared by the adapter, including definitions whose
+   * provider extensions are not active yet.
+   */
+  providerDefinitionIds: readonly string[];
+  /**
    * Provider definitions with presets and per-provider schemas.
    *
    * Uses `AdapterProviderDefinitionContract` from `@makaio/contracts` as the

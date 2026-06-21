@@ -79,7 +79,7 @@ export function toAvailableAdapter(adapter: LoadedAdapter): AvailableAdapter {
     instructions: adapter.instructions,
     clientId,
     protocol: adapter.protocol,
-    providerDefinitionIds: adapter.providers.map((p) => p.definition.id),
+    providerDefinitionIds: [...adapter.providerDefinitionIds],
   };
 }
 
@@ -254,7 +254,7 @@ export async function ensureAdapterConfigs(adapters: LoadedAdapter[], bus: IMaka
             instructions: adapter.instructions,
             clientId: resolveDefaultClientId(adapter.options, adapter.clients),
             protocol: adapter.protocol,
-            providerDefinitionIds: adapter.providers.map((provider) => provider.definition.id),
+            providerDefinitionIds: [...adapter.providerDefinitionIds],
             enabled: false,
           },
         }),

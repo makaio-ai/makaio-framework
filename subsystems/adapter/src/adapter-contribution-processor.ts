@@ -525,6 +525,7 @@ export class AdapterContributionProcessor {
         adapterId: buildDeterministicAdapterId(this.machineId, adapterName),
       },
       adapterConfigSchema: def.adapterConfigSchema as LoadedAdapter['adapterConfigSchema'],
+      providerDefinitionIds: def.providers.map((provider) => provider.definitionId),
       providers: providers as LoadedAdapter['providers'],
       helpLinks: def.helpLinks as LoadedAdapter['helpLinks'],
       instructions: def.instructions,
@@ -552,7 +553,7 @@ export class AdapterContributionProcessor {
       instructions: adapter.instructions,
       clientId: resolveDefaultClientId(adapter.options, adapter.clients),
       protocol: adapter.protocol,
-      providerDefinitionIds: adapter.providers.map((provider) => provider.definition.id),
+      providerDefinitionIds: [...adapter.providerDefinitionIds],
       enabled: false,
     });
   }
@@ -578,7 +579,6 @@ export class AdapterContributionProcessor {
   private publishAdapterRegistered(adapter: LoadedAdapter): Promise<void> {
     const enabled = this.configStore.isAdapterEnabled(adapter.name);
     const adapterId = adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapter.name);
-    const providerDefinitionIds = adapter.providers.map((p) => p.definition.id);
 
     return this.registry.publishAdapterRegistered({
       adapterName: adapter.name,
@@ -586,7 +586,7 @@ export class AdapterContributionProcessor {
       packageName: adapter.packageName,
       enabled,
       adapterId,
-      providerDefinitionIds,
+      providerDefinitionIds: adapter.providerDefinitionIds,
     });
   }
 

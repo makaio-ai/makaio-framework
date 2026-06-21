@@ -250,9 +250,9 @@ export abstract class AIAdapter<
   public async init(): Promise<void> {
     if (this.initialized) return;
 
+    this.globalBus.registerNamespaces([this.namespace.definition]);
     this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus.getContext())) as TBus;
 
-    // Setup handlers
     this.setupHandlers();
 
     // Subclass hook

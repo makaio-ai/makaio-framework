@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
+  ProviderDefinitionSchema,
   type AdapterContribution,
   type ProviderDefinitionInput,
   createClientDefinition,
@@ -149,6 +150,7 @@ function createLoadedAdapter(name: string, packageName: string): LoadedAdapter {
     options: {
       adapterId: buildDeterministicAdapterId(TEST_MACHINE_ID, name),
     },
+    providerDefinitionIds: [],
     providers: [],
   };
 }
@@ -632,6 +634,14 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
+    const registeredProviderDefinitionIds: string[][] = [];
+    const offRegistered = MakaioBus.on(
+      AdapterSubsystemSubjects.adapter.registered,
+      (ctx) => {
+        registeredProviderDefinitionIds.push([...ctx.payload.providerDefinitionIds]);
+      },
+      { filter: { adapterName: 'missing-provider-adapter' } },
+    );
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await service.processAdapterContributions(
@@ -648,8 +658,78 @@ describe('AdapterContributionProcessor rollback', () => {
 
       expect(service.getLoadedAdapters()).toHaveLength(1);
       expect(service.getLoadedAdapters()[0]?.providers).toEqual([]);
+      expect(service.getLoadedAdapters()[0]?.providerDefinitionIds).toEqual(['missing-provider']);
+      expect(registeredProviderDefinitionIds).toEqual([['missing-provider']]);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('missing-provider'));
     } finally {
+      offRegistered();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('resolves declared provider definitions when their provider extension becomes active later', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['late-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const providers: ProviderDefinitionInput[] = [];
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: providers.map((definition) => ({
+          packageName: '@owner/provider-package',
+          definition: ProviderDefinitionSchema.parse(definition),
+        })),
+        clients: [],
+      });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution(
+            'late-provider-adapter',
+            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            [{ definitionId: 'late-provider' }],
+          ),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      await expect(
+        MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
+          adapterName: 'late-provider-adapter',
+        }),
+      ).resolves.toEqual({ definitions: [] });
+
+      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+
+      await expect(
+        MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
+          adapterName: 'late-provider-adapter',
+        }),
+      ).resolves.toEqual({
+        definitions: [{ id: 'late-provider', name: 'Late Provider', availableModels: [] }],
+      });
+      await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'late-provider' })).resolves.toMatchObject({
+        provider: {
+          id: 'late-provider',
+          packageName: '@owner/provider-package',
+          name: 'Late Provider',
+        },
+      });
+    } finally {
+      offCatalog();
       warnSpy.mockRestore();
     }
   });
@@ -843,6 +923,7 @@ describe('AdapterContributionProcessor rollback', () => {
               return { adapterId: readAdapterFactoryOptions(options).adapterId };
             },
             options: { adapterId },
+            providerDefinitionIds: [],
             providers: [],
           },
         ],
@@ -883,6 +964,7 @@ describe('AdapterContributionProcessor rollback', () => {
                 shutdown,
               }),
               options: { adapterId },
+              providerDefinitionIds: [],
               providers: [],
             },
           ],

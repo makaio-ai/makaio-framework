@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
+import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { createAdapterNamespace } from '../../factory/create-adapter-namespace.js';
@@ -47,6 +48,41 @@ describe('AIAdapter scoped bus context', () => {
     await adapter.init();
 
     expect(scopedBusSpy).toHaveBeenCalledWith(hostBus.getContext());
+  });
+
+  it('registers adapter namespace schemas on the injected globalBus before creating the scoped bus', async () => {
+    const hostBus = createBusInstance();
+    const namespace = createAdapterNamespace(
+      'scoped-bus-host-registration-test',
+      { chunk: z.object({ content: z.string() }) },
+      { busValidationMode: 'skip' },
+    );
+
+    const adapter = new TestAdapter({
+      name: 'scoped-bus-host-registration-test',
+      capabilities: [],
+      nativeTools: [],
+      namespace,
+      globalBus: hostBus,
+      agentFactory: (config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config),
+      configFactory: async (input: ConfigFactoryInput<TestBus>) => ({
+        bus: await namespace.scopedBus(hostBus.getContext()),
+        agentId: input.agentId ?? 'test-agent',
+        adapterId: input.adapterId ?? 'test-adapter-id',
+        adapterName: 'scoped-bus-host-registration-test',
+        model: input.model ?? 'test-model',
+        cwd: input.cwd ?? os.tmpdir(),
+      }),
+      connectorFactory: async (config: BaseAgentConnectorConfig<TestBus> & { adapterId: string }) =>
+        new MockConnector(config),
+    });
+
+    await adapter.init();
+
+    expect(hostBus.getSchema(namespace.subjects.chunk)).toBeDefined();
+    expect(
+      hostBus.getContext().namespaceRegistry.getValidationConfig('scoped-bus-host-registration-test.chunk').mode,
+    ).toBe('skip');
   });
 
   it('passes the injected globalBus to created agents', async () => {

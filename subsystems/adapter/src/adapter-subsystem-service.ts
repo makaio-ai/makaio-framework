@@ -3,7 +3,7 @@ import { BaseService } from '@makaio/service-base';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import { ProviderDefinitionSchema } from '@makaio/contracts';
-import type { ExtensionCoordinator } from '@makaio/kernel';
+import { ExtensionSubjects, type ExtensionCoordinator } from '@makaio/kernel';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { AdapterConfigStore } from './adapter-config-store.js';
 import { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
@@ -165,9 +165,22 @@ export class AdapterSubsystemService extends BaseService {
     this.registerHandler(AdapterSubsystemSubjects.listAdapters, async (ctx) => {
       ctx.setResult({ adapters: await this.configStore.buildEffectiveAdapters() });
     });
-    this.registerHandler(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, (ctx) => {
+    this.registerHandler(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, async (ctx) => {
       const adapter = this.registry.getLoadedAdapters().find((a) => a.name === ctx.payload.adapterName);
-      const definitions = (adapter?.providers ?? []).map((p) => ProviderDefinitionSchema.parse(p.definition));
+      const resolvedDefinitions = new Map(
+        (adapter?.providers ?? []).map((entry) => [entry.definition.id, entry.definition]),
+      );
+      const missingIds = (adapter?.providerDefinitionIds ?? []).filter((id) => !resolvedDefinitions.has(id));
+      if (missingIds.length > 0) {
+        const catalog = await this.bus.request(ExtensionSubjects.contributions.catalog, {});
+        for (const entry of catalog.providers) {
+          if (missingIds.includes(entry.definition.id)) resolvedDefinitions.set(entry.definition.id, entry.definition);
+        }
+      }
+      const definitions = (adapter?.providerDefinitionIds ?? []).flatMap((id) => {
+        const definition = resolvedDefinitions.get(id);
+        return definition === undefined ? [] : [ProviderDefinitionSchema.parse(definition)];
+      });
       ctx.setResult({ definitions });
     });
     this.registerHandler(AdapterSubsystemSubjects.ensureReady, (ctx) => {

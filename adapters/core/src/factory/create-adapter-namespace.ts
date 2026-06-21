@@ -3,6 +3,7 @@ import {
   createBusNamespace,
   type CreateBusNamespaceOptions,
   type FilterablePayloadIntersection,
+  type RegistrableBusNamespaceDefinition,
   type SchemaRecord,
   type SubjectRecordFromSchemaRecord,
 } from '@makaio/core';
@@ -15,9 +16,11 @@ import {
  * - Raw schema access for adapter factory internals
  * - Domain name for debugging/logging
  * @typeParam N - Namespace domain string
- * @typeParam Schemas - Schema record type
  */
-export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace<Domain>, 'subjects'>;
+export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace<Domain>, 'subjects'> & {
+  /** Original namespace definition for registration on host-provided bus instances. */
+  readonly definition: RegistrableBusNamespaceDefinition;
+};
 
 /**
  * Creates an adapter namespace with typed subject definitions.
@@ -68,8 +71,12 @@ export function createAdapterNamespace<N extends string, Schemas extends SchemaR
   SubjectRecordFromSchemaRecord<Schemas>,
   FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
   Schemas
-> {
-  return MakaioBus.registerNamespace(createBusNamespace(domain, schemas, options));
+> & {
+  readonly definition: RegistrableBusNamespaceDefinition;
+} {
+  const definition = createBusNamespace(domain, schemas, options);
+  const namespace = MakaioBus.registerNamespace(definition);
+  return Object.assign(namespace, { definition });
 }
 
 // Re-export ScopedBusFor for convenience
