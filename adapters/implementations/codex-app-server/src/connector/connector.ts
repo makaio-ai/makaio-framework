@@ -147,6 +147,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       clientId: this.config.clientId,
       harnessId: this.config.harnessId,
       bus: this.config.bus,
+      globalBus: this.globalBus,
       registerClientHandlers: () => this.registerClientHandlers(),
       handleError: (error, terminate) => this.handleError(error, terminate),
     };
