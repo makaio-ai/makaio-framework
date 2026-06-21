@@ -1,5 +1,10 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ProtocolId, AdapterClientRef, AdapterProviderDefinitionContract } from '@makaio/contracts';
+import type {
+  ProtocolId,
+  AdapterClientRef,
+  AdapterProviderDefinitionContract,
+  AdapterProviderRef,
+} from '@makaio/contracts';
 import type { HelpLink } from '@makaio/services-core/settings';
 import type { z } from 'zod';
 
@@ -117,6 +122,8 @@ export interface LoadedAdapter {
    * provider extensions are not active yet.
    */
   providerDefinitionIds: readonly string[];
+  /** Adapter provider references, including schema overrides, used for delayed provider resolution. */
+  providerRefs: readonly AdapterProviderRef[];
   /**
    * Provider definitions with presets and per-provider schemas.
    *
@@ -126,6 +133,10 @@ export interface LoadedAdapter {
    * contract and is assignment-compatible.
    */
   providers: LoadedAdapterProvider[];
+  /** Adapter-level provider config schema applied during delayed provider resolution. */
+  providerConfigSchema?: z.ZodObject<z.ZodRawShape>;
+  /** Adapter-level provider credential schema applied during delayed provider resolution. */
+  providerCredentialSchema?: z.ZodObject<z.ZodRawShape>;
   /** Help links for documentation. */
   helpLinks?: readonly HelpLink[];
   /** Setup instructions in Markdown format. */

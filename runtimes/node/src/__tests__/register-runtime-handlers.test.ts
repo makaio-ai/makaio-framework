@@ -97,6 +97,7 @@ describe('registerRuntimeHandlers', () => {
         factory: async () => ({ adapterId: 'wrong-adapter-id' }),
         options: { adapterId: 'wrong-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
+        providerRefs: [{ definitionId: providerDefinition.id }],
         providers: [{ definition: providerDefinition, providerPackageName: 'wrong-package' }],
       },
       {
@@ -105,6 +106,7 @@ describe('registerRuntimeHandlers', () => {
         factory: async () => ({ adapterId: 'bound-adapter-id' }),
         options: { adapterId: 'bound-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
+        providerRefs: [{ definitionId: providerDefinition.id }],
         providers: [{ definition: providerDefinition, providerPackageName: 'bound-package' }],
       },
     ];

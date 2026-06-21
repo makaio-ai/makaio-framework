@@ -132,6 +132,17 @@ export class AdapterRuntimeRegistry {
   }
 
   /**
+   * Check whether a live adapter instance exists for the loaded adapter.
+   * @param adapter - Loaded adapter definition to inspect.
+   * @returns True when the runtime has initialized this adapter.
+   */
+  public hasAdapterInstance(adapter: LoadedAdapter): boolean {
+    return this.adapterInstances.has(
+      adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapter.name),
+    );
+  }
+
+  /**
    * Return settings-facing available-adapter list derived from loaded adapters.
    * @returns Readonly list of adapter metadata for the settings UI.
    */
@@ -160,6 +171,20 @@ export class AdapterRuntimeRegistry {
     this.loadedAdapters.set(loadedAdapter.name, loadedAdapter);
     const packageAdapterNames = this.packageAdapters.get(packageName) ?? [];
     this.packageAdapters.set(packageName, [...packageAdapterNames, loadedAdapter.name]);
+  }
+
+  /**
+   * Replace the provider definitions on a loaded adapter.
+   * @param adapterName - Adapter driver name.
+   * @param providers - Freshly resolved provider definitions.
+   * @returns Updated loaded adapter, or undefined when the adapter is no longer registered.
+   */
+  public updateAdapterProviders(adapterName: string, providers: LoadedAdapter['providers']): LoadedAdapter | undefined {
+    const adapter = this.loadedAdapters.get(adapterName);
+    if (!adapter) return undefined;
+    const updated = { ...adapter, providers };
+    this.loadedAdapters.set(adapterName, updated);
+    return updated;
   }
 
   /**

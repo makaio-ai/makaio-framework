@@ -25,7 +25,7 @@ import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
 import { AdapterSubsystemService } from '../adapter-subsystem-service.js';
 import { initializeEnabledAdapters } from '../adapter-runtime-lifecycle.js';
 import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-client-refs.js';
-import type { AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
+import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
 
 const TEST_EXTENSION_CONTEXT: KernelExtensionContext = {
@@ -151,6 +151,7 @@ function createLoadedAdapter(name: string, packageName: string): LoadedAdapter {
       adapterId: buildDeterministicAdapterId(TEST_MACHINE_ID, name),
     },
     providerDefinitionIds: [],
+    providerRefs: [],
     providers: [],
   };
 }
@@ -682,6 +683,10 @@ describe('AdapterContributionProcessor rollback', () => {
     await service.init();
 
     const providers: ProviderDefinitionInput[] = [];
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterOptions = options as AdapterInitOptions;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+    });
     const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
       ctx.setResult({
         providers: providers.map((definition) => ({
@@ -697,11 +702,7 @@ describe('AdapterContributionProcessor rollback', () => {
       await service.processAdapterContributions(
         '@owner/adapter-package',
         createExtension('@owner/adapter-package', [
-          createContribution(
-            'late-provider-adapter',
-            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
-            [{ definitionId: 'late-provider' }],
-          ),
+          createContribution('late-provider-adapter', factory, [{ definitionId: 'late-provider' }]),
         ]),
         TEST_EXTENSION_CONTEXT,
       );
@@ -711,8 +712,16 @@ describe('AdapterContributionProcessor rollback', () => {
           adapterName: 'late-provider-adapter',
         }),
       ).resolves.toEqual({ definitions: [] });
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
 
       providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+
+      await service.processAdapterContributions(
+        '@owner/provider-package',
+        createExtension('@owner/provider-package', [], providers),
+        TEST_EXTENSION_CONTEXT,
+      );
 
       await expect(
         MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
@@ -728,6 +737,11 @@ describe('AdapterContributionProcessor rollback', () => {
           name: 'Late Provider',
         },
       });
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+      expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders?.[0]?.definition.id).toBe(
+        'late-provider',
+      );
     } finally {
       offCatalog();
       warnSpy.mockRestore();
@@ -924,6 +938,7 @@ describe('AdapterContributionProcessor rollback', () => {
             },
             options: { adapterId },
             providerDefinitionIds: [],
+            providerRefs: [],
             providers: [],
           },
         ],
@@ -965,6 +980,7 @@ describe('AdapterContributionProcessor rollback', () => {
               }),
               options: { adapterId },
               providerDefinitionIds: [],
+              providerRefs: [],
               providers: [],
             },
           ],

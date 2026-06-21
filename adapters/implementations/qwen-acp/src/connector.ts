@@ -579,6 +579,7 @@ export class QwenAcpConnector extends AIAgentConnector<QwenAcpBus> {
   /** @returns Filesystem execution context shared by read/write handlers. */
   private get fsExecutionContext() {
     return {
+      bus: this.globalBus,
       adapterId: this.adapterId,
       adapterName: this.adapterName,
       cwd: this.cwd,

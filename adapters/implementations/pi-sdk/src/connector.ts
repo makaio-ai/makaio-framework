@@ -187,7 +187,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     const [, piModel, customTools] = await Promise.all([
       resourceLoader.reload(),
       this.resolvePiModel(modelRegistry),
-      fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext),
+      fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
+        allowedTools: this.config.allowedTools,
+        disallowedTools: this.config.disallowedTools,
+      }),
     ]);
     const piConnectorConfig = this.config.providerConfig;
 
@@ -350,7 +353,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   private async refreshRegistryTools(): Promise<void> {
     if (!this.session) return;
     try {
-      const tools = await fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext);
+      const tools = await fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
+        allowedTools: this.config.allowedTools,
+        disallowedTools: this.config.disallowedTools,
+      });
       this.session.updateCustomTools(tools);
     } catch (error) {
       console.warn('[PiConnector] Tool refresh failed:', error);

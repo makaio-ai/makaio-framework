@@ -24,6 +24,7 @@ import {
   loadToolsFromRegistry,
   filterToolsWithSchema,
   boundToolResultContent,
+  type ToolRegistryLoadOptions,
 } from '@makaio/ai-adapters-stream-session';
 import { safeJsonStringify } from '@makaio/ai-adapters-core';
 import { defineTool } from '@mariozechner/pi-coding-agent';
@@ -159,6 +160,7 @@ export function toPiToolFormat(tools: ToolListItem[], context: PiToolHandlerCont
  * @param adapterId - Adapter instance ID for registry filtering
  * @param adapterName - Adapter type name for registry filtering
  * @param context - Adapter identity for bus routing in the execute handlers
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns Pi SDK ToolDefinition[] ready for `CreateAgentSessionOptions.customTools`
  */
 export async function fetchToolsForPi(
@@ -166,7 +168,8 @@ export async function fetchToolsForPi(
   adapterId: string,
   adapterName: string,
   context: PiToolHandlerContext,
+  options?: ToolRegistryLoadOptions,
 ): Promise<ToolDefinition[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toPiToolFormat(tools, { ...context, bus });
 }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageHandle, type MessageResult, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { TerminalManager } from '@makaio/ai-adapters-acp-client';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
@@ -68,8 +68,9 @@ function createDeferred<T>(): Deferred<T> {
 
 /**
  * Create a connector configured for unit tests.
+ * @param options - Optional connector overrides.
  */
-async function makeConnector() {
+async function makeConnector(options: { globalBus?: IMakaioBus } = {}) {
   const bus = await QwenAcpNamespace.scopedBus();
   return new QwenAcpConnector({
     bus,
@@ -81,6 +82,7 @@ async function makeConnector() {
     cwd: tmpdir(),
     env: {},
     allowedDirectories: ['/workspace/project'],
+    globalBus: options.globalBus,
   });
 }
 
@@ -124,9 +126,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('routes ACP read_text_file through tool.execute with execution context', async () => {
-    const connector = await makeConnector();
+    const hostBus = createBusInstance();
+    const connector = await makeConnector({ globalBus: hostBus });
     allowToolApproval(connector);
-    const requestSpy = vi.spyOn(MakaioBus, 'request').mockResolvedValue({
+    const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({
       success: true,
       data: { content: 'file contents', path: '/workspace/project/notes.md', size: 13, truncated: false },
     });
@@ -182,9 +185,10 @@ describe('QwenAcpConnector', () => {
   });
 
   it('routes ACP write_text_file through tool.execute with createDirectories enabled', async () => {
-    const connector = await makeConnector();
+    const hostBus = createBusInstance();
+    const connector = await makeConnector({ globalBus: hostBus });
     allowToolApproval(connector);
-    const requestSpy = vi.spyOn(MakaioBus, 'request').mockResolvedValue({
+    const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({
       success: true,
       data: { path: '/workspace/project/out.txt', bytesWritten: 7, created: true },
     });

@@ -1,63 +1,26 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
-import type {
-  AdapterContribution,
-  AdapterProviderRef,
-  ProtocolId,
-  ProviderAIModel,
-  ProviderDefinitionInput,
-} from '@makaio/contracts';
+import type { AdapterContribution, ProtocolId, ProviderAIModel } from '@makaio/contracts';
 import type { ProtocolRef } from '@makaio/contracts/extension';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionCoordinator } from '@makaio/kernel';
 import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
-import { ModelRegistryProviderNotFoundError, ModelRegistrySubjects } from '@makaio/services-core/model-registry';
-import type { z } from 'zod';
 import type { AdapterConfigStore } from './adapter-config-store.js';
 import type { AdapterRuntimeRegistry } from './adapter-runtime-registry.js';
 import type { PlatformDefaults } from './adapter-runtime-lifecycle.js';
-import type { LoadedAdapter, LoadedAdapterProvider } from './adapter-runtime-types.js';
+import type { LoadedAdapter } from './adapter-runtime-types.js';
 import {
   cloneAdapterClientRefs,
   resolveDefaultClientId,
   validateAdapterClientRefs,
   type AdapterClientCatalogEntry,
 } from './adapter-client-refs.js';
-
-/**
- * Clone model descriptors before injecting them into loaded adapter metadata.
- * @param models - Source models from either the registry or static provider definition.
- * @returns Defensive clone safe for runtime mutation by downstream consumers.
- */
-function cloneProviderModels(models: readonly ProviderAIModel[]): ProviderAIModel[] {
-  return models.map((model) => ({ ...model }));
-}
-
-interface ProviderDefinitionCacheEntry {
-  readonly packageName: string;
-  readonly definition: ProviderDefinitionInput;
-}
-
-/**
- * Detect a registry miss through the bus request wrapper.
- * @param error - Error thrown by the model-registry request.
- * @returns True when the registry handled the request but does not own the provider.
- */
-function isRegistryProviderMiss(error: unknown): boolean {
-  if (error instanceof ModelRegistryProviderNotFoundError) return true;
-  if (typeof error !== 'object' || error === null) return false;
-
-  const record = error as { readonly name?: unknown; readonly providerId?: unknown; readonly cause?: unknown };
-  if (record.name === 'ModelRegistryProviderNotFoundError' && typeof record.providerId === 'string') return true;
-  if (
-    error instanceof Error &&
-    /^Request to "getProviderModels" failed: Provider ".+" is not present in the model registry$/.test(error.message)
-  ) {
-    return true;
-  }
-  if (error instanceof Error && /^Provider ".+" is not present in the model registry$/.test(error.message)) return true;
-  return isRegistryProviderMiss(record.cause);
-}
+import {
+  populateProviderModels,
+  resolveLoadedAdapterProviders,
+  resolveProviderDefinitions,
+  type ProviderDefinitionCacheEntry,
+} from './adapter-provider-resolution.js';
 
 /**
  * Extract protocol IDs from a manifest protocol declaration.
@@ -179,7 +142,7 @@ export class AdapterContributionProcessor {
    */
   public register(addCleanup: (fn: () => void) => void): void {
     const processor: ContributionProcessor = {
-      filter: (pkg: KernelMakaioExtension): boolean => !!pkg.adapters?.length,
+      filter: (pkg: KernelMakaioExtension): boolean => !!pkg.adapters?.length || !!pkg.providers?.length,
       processActivated: async (
         name: string,
         pkg: KernelMakaioExtension,
@@ -258,6 +221,8 @@ export class AdapterContributionProcessor {
     }
 
     await this.publishActivatedAdapters(completed);
+    const initializedWaitingAdapters = await this.initializeAdaptersWaitingForProviders(ctx.bus, providerModelCache);
+    await this.publishActivatedAdapters(initializedWaitingAdapters);
   }
 
   /**
@@ -331,10 +296,16 @@ export class AdapterContributionProcessor {
       registered = true;
 
       if (enabled) {
-        await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
-        console.info(
-          `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
-        );
+        if (this.getMissingProviderDefinitionIds(loadedAdapter).length > 0) {
+          console.info(
+            `[AdapterContributionProcessor] Deferring adapter "${loadedAdapter.name}" initialization until declared providers are active.`,
+          );
+        } else {
+          await this.registry.initializeAdapter(loadedAdapter, this.platformDefaults);
+          console.info(
+            `[AdapterContributionProcessor] Initialized adapter: ${loadedAdapter.name} (${loadedAdapter.packageName})`,
+          );
+        }
       }
     } catch (err) {
       if (registered) {
@@ -351,6 +322,45 @@ export class AdapterContributionProcessor {
     }
 
     return loadedAdapter;
+  }
+
+  /**
+   * Initialize enabled adapters that were registered before all declared providers were active.
+   * @param bus - Bus used to resolve the current extension contribution catalog.
+   * @param providerModelCache - Per-batch provider model cache.
+   * @returns Adapters initialized by this retry pass.
+   */
+  private async initializeAdaptersWaitingForProviders(
+    bus: IMakaioBus,
+    providerModelCache: Map<string, ProviderAIModel[]>,
+  ): Promise<LoadedAdapter[]> {
+    const initialized: LoadedAdapter[] = [];
+    for (const adapter of this.registry.getLoadedAdapters()) {
+      if (this.registry.hasAdapterInstance(adapter)) continue;
+      if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
+      if (this.getMissingProviderDefinitionIds(adapter).length === 0) continue;
+
+      const providers = await resolveLoadedAdapterProviders(adapter, bus, providerModelCache);
+      const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
+      if (!refreshed || this.getMissingProviderDefinitionIds(refreshed).length > 0) continue;
+
+      await this.registry.initializeAdapter(refreshed, this.platformDefaults);
+      console.info(
+        `[AdapterContributionProcessor] Initialized adapter: ${refreshed.name} (${refreshed.packageName}) after provider activation`,
+      );
+      initialized.push(refreshed);
+    }
+    return initialized;
+  }
+
+  /**
+   * Return provider definition IDs that have not resolved on a loaded adapter.
+   * @param adapter - Loaded adapter to inspect.
+   * @returns Missing provider definition IDs.
+   */
+  private getMissingProviderDefinitionIds(adapter: LoadedAdapter): string[] {
+    const resolved = new Set(adapter.providers.map((provider) => provider.definition.id));
+    return adapter.providerDefinitionIds.filter((id) => !resolved.has(id));
   }
 
   /**
@@ -373,66 +383,6 @@ export class AdapterContributionProcessor {
     const resolvedClientCatalog =
       clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
     await validateAdapterClientRefs(loadedAdapter.name, loadedAdapter.clients, resolvedClientCatalog, bus);
-  }
-
-  /**
-   * Resolve adapter-declared provider IDs to full provider definitions.
-   *
-   * Queries the coordinator's contributions catalog for all provider definitions
-   * registered by active extensions, then matches each adapter-declared ID.
-   * @param bus - Bus used to query the contributions catalog.
-   * @param providerRefs - Adapter-declared provider references to resolve.
-   * @param adapterName - Adapter name used for error messages.
-   * @param adapterConfigSchema - Adapter-level default config schema applied to
-   *   providers that do not declare a per-provider override.
-   * @param adapterCredentialSchema - Adapter-level default credential schema
-   *   applied to providers that do not declare a per-provider override.
-   * @param providerDefinitionCache - Pre-built definition map from a batch caller.
-   *   When supplied, the catalog RPC is skipped entirely.
-   * @returns Resolved provider definitions with schemas applied.
-   */
-  private async resolveProviderDefinitions(
-    bus: IMakaioBus,
-    providerRefs: readonly AdapterProviderRef[],
-    adapterName: string,
-    adapterConfigSchema?: z.ZodObject<z.ZodRawShape>,
-    adapterCredentialSchema?: z.ZodObject<z.ZodRawShape>,
-    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
-  ): Promise<LoadedAdapterProvider[]> {
-    let definitionMap = providerDefinitionCache;
-    if (!definitionMap) {
-      definitionMap = new Map<string, ProviderDefinitionCacheEntry>();
-      const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
-      for (const entry of catalog.providers) {
-        definitionMap.set(entry.definition.id, entry);
-      }
-    }
-
-    const resolved: LoadedAdapterProvider[] = [];
-    const missing: string[] = [];
-
-    for (const ref of providerRefs) {
-      const entry = definitionMap.get(ref.definitionId);
-      if (!entry) {
-        missing.push(ref.definitionId);
-        continue;
-      }
-      resolved.push({
-        definition: entry.definition,
-        providerPackageName: entry.packageName,
-        configSchema: ref.configSchema ?? adapterConfigSchema,
-        credentialSchema: ref.credentialSchema ?? adapterCredentialSchema,
-      });
-    }
-
-    if (missing.length > 0) {
-      console.warn(
-        `[AdapterContributionProcessor] Adapter "${adapterName}" declares providers [${missing.join(', ')}] ` +
-          `but no active extension registers them. These providers will be unavailable until their extensions are loaded.`,
-      );
-    }
-
-    return resolved;
   }
 
   /**
@@ -470,7 +420,7 @@ export class AdapterContributionProcessor {
     await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus, {
       checkBinaryVersions: false,
     });
-    const resolvedProviders = await this.resolveProviderDefinitions(
+    const resolvedProviders = await resolveProviderDefinitions(
       bus,
       def.providers,
       adapterName,
@@ -478,42 +428,7 @@ export class AdapterContributionProcessor {
       def.providerCredentialSchema,
       providerDefinitionCache,
     );
-    const providers = await Promise.all(
-      resolvedProviders.map(async (provider) => {
-        const providerId = provider.definition.id;
-        try {
-          let models = providerModelCache.get(providerId);
-          if (models === undefined) {
-            const result = await bus.requestOptional(ModelRegistrySubjects.getProviderModels, { providerId });
-            models = result.handled ? result.data.models : (provider.definition.availableModels ?? []);
-            providerModelCache.set(providerId, models);
-          }
-          return {
-            ...provider,
-            definition: {
-              ...provider.definition,
-              availableModels: cloneProviderModels(models),
-            },
-          };
-        } catch (error) {
-          if (!isRegistryProviderMiss(error)) {
-            console.warn(
-              `[AdapterContributionProcessor] Failed to populate available models for provider "${providerId}" on adapter "${adapterName}". Falling back to declared provider models.`,
-              error,
-            );
-          }
-          // Registry model population is a best-effort enrichment step. Adapter
-          // activation must not depend on registry freshness or availability.
-          return {
-            ...provider,
-            definition: {
-              ...provider.definition,
-              availableModels: cloneProviderModels(provider.definition.availableModels ?? []),
-            },
-          };
-        }
-      }),
-    );
+    const providers = await populateProviderModels(bus, adapterName, resolvedProviders, providerModelCache);
 
     return {
       name: adapterName,
@@ -526,7 +441,10 @@ export class AdapterContributionProcessor {
       },
       adapterConfigSchema: def.adapterConfigSchema as LoadedAdapter['adapterConfigSchema'],
       providerDefinitionIds: def.providers.map((provider) => provider.definitionId),
+      providerRefs: [...def.providers],
       providers: providers as LoadedAdapter['providers'],
+      providerConfigSchema: def.providerConfigSchema,
+      providerCredentialSchema: def.providerCredentialSchema,
       helpLinks: def.helpLinks as LoadedAdapter['helpLinks'],
       instructions: def.instructions,
       defaultPresetId: def.defaultPresetId,

@@ -4,7 +4,7 @@ import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { ExtensionContext, ToolDefinition } from '@mariozechner/pi-coding-agent';
 import { PiSdkProviderConfigSchema } from '../schemas.js';
-import { createPiToolHandler } from '../tool-conversion.js';
+import { createPiToolHandler, fetchToolsForPi } from '../tool-conversion.js';
 
 type ToolExecuteRequest = ExtractSubjectPayload<typeof ToolSubjects.execute>;
 const extensionContext = {} as ExtensionContext;
@@ -151,5 +151,64 @@ describe('createPiToolHandler', () => {
     });
 
     await expect(executePiTool(handler, 'tool-call-1', { path: 'missing.md' })).rejects.toThrow('Cannot read file');
+  });
+});
+
+describe('fetchToolsForPi', () => {
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          registryTool,
+          {
+            name: 'write_file',
+            description: 'Write a file',
+            toolsetName: 'filesystem',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        toolsets: [],
+      });
+    });
+
+    const tools = await fetchToolsForPi(
+      hostBus,
+      'adapter-pi-1',
+      'pi-sdk',
+      {
+        bus: hostBus,
+        adapterId: 'adapter-pi-1',
+        adapterName: 'pi-sdk',
+        agentId: 'agent-1',
+        sessionId: 'session-1',
+        cwd: '/repo',
+        env: {},
+      },
+      {
+        allowedTools: ['read_file', 'write_file'],
+        disallowedTools: ['write_file'],
+      },
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual(['read_file']);
+
+    await expect(
+      fetchToolsForPi(
+        hostBus,
+        'adapter-pi-1',
+        'pi-sdk',
+        {
+          bus: hostBus,
+          adapterId: 'adapter-pi-1',
+          adapterName: 'pi-sdk',
+          agentId: 'agent-1',
+          sessionId: 'session-1',
+          cwd: '/repo',
+          env: {},
+        },
+        { allowedTools: [] },
+      ),
+    ).resolves.toEqual([]);
   });
 });
