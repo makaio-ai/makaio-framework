@@ -431,15 +431,20 @@ export abstract class ClaudeCodeAgent<
    */
   private wireToolApprovalRpc(connector: TConnector): void {
     this.addConnectorWiringCleanup(
-      registerToolApprovalHandler(connector, this.getSubjects(), async () => ({
-        adapterId: this.adapterId,
-        adapterName: this.adapterName,
-        agentId: this.agentId,
-        adapterSessionId: await this.getAdapterSessionId(),
-        // Intentionally asserted: sessionId is validated by registerToolApprovalHandler's
-        // resolved-context guard before the payload reaches AgentSubjects.toolApprove.
-        sessionId: this.sessionId!,
-      })),
+      registerToolApprovalHandler(
+        connector,
+        this.getSubjects(),
+        async () => ({
+          adapterId: this.adapterId,
+          adapterName: this.adapterName,
+          agentId: this.agentId,
+          adapterSessionId: await this.getAdapterSessionId(),
+          // Intentionally asserted: sessionId is validated by registerToolApprovalHandler's
+          // resolved-context guard before the payload reaches AgentSubjects.toolApprove.
+          sessionId: this.sessionId!,
+        }),
+        this.globalBus,
+      ),
     );
   }
 }

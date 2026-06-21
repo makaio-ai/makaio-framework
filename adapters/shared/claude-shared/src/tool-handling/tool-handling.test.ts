@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { AgentSubjects, type AgentToolApproveRequest } from '@makaio/contracts';
 import { createClaudeConnectorNamespace } from '../namespace/index.js';
 import { registerToolApprovalHandler, toGlobalToolApproval } from './tool-handling.js';
@@ -50,16 +50,22 @@ describe('registerToolApprovalHandler', () => {
     const unsubscribe = vi.fn();
     const on = vi.fn((_subject, _handler) => unsubscribe);
     const connector = { on };
+    const hostBus = createBusInstance();
 
-    const requestSpy = vi.spyOn(MakaioBus, 'request').mockResolvedValue({ action: 'allow' });
+    const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({ action: 'allow' });
 
-    const cleanup = registerToolApprovalHandler(connector, namespace.subjects, async () => ({
-      adapterId: 'adapter-override',
-      adapterName: 'claude-override',
-      adapterSessionId: 'session-override',
-      agentId: 'agent-override',
-      sessionId: 'context-session-id',
-    }));
+    const cleanup = registerToolApprovalHandler(
+      connector,
+      namespace.subjects,
+      async () => ({
+        adapterId: 'adapter-override',
+        adapterName: 'claude-override',
+        adapterSessionId: 'session-override',
+        agentId: 'agent-override',
+        sessionId: 'context-session-id',
+      }),
+      hostBus,
+    );
 
     const handler = on.mock.calls[0]?.[1] as
       | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)
@@ -100,15 +106,21 @@ describe('registerToolApprovalHandler', () => {
     );
     const on = vi.fn((_subject, _handler) => () => {});
     const connector = { on };
-    vi.spyOn(MakaioBus, 'request').mockRejectedValue(new Error('down'));
+    const hostBus = createBusInstance();
+    vi.spyOn(hostBus, 'request').mockRejectedValue(new Error('down'));
 
-    registerToolApprovalHandler(connector, namespace.subjects, {
-      adapterId: 'adapter-1',
-      adapterName: 'claude-code',
-      adapterSessionId: 'session-1',
-      agentId: 'agent-1',
-      sessionId: 'context-session-id',
-    });
+    registerToolApprovalHandler(
+      connector,
+      namespace.subjects,
+      {
+        adapterId: 'adapter-1',
+        adapterName: 'claude-code',
+        adapterSessionId: 'session-1',
+        agentId: 'agent-1',
+        sessionId: 'context-session-id',
+      },
+      hostBus,
+    );
 
     const handler = on.mock.calls[0]?.[1] as
       | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)
@@ -143,11 +155,17 @@ describe('registerToolApprovalHandler', () => {
     );
     const on = vi.fn((_subject, _handler) => () => {});
     const connector = { on };
-    const requestSpy = vi.spyOn(MakaioBus, 'request').mockResolvedValue({ action: 'allow' });
+    const hostBus = createBusInstance();
+    const requestSpy = vi.spyOn(hostBus, 'request').mockResolvedValue({ action: 'allow' });
 
-    registerToolApprovalHandler(connector, namespace.subjects, async () => {
-      throw new Error('context unavailable');
-    });
+    registerToolApprovalHandler(
+      connector,
+      namespace.subjects,
+      async () => {
+        throw new Error('context unavailable');
+      },
+      hostBus,
+    );
 
     const handler = on.mock.calls[0]?.[1] as
       | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)

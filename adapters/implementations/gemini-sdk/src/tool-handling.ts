@@ -12,7 +12,7 @@
  * - fetchToolsForGemini: Load registry tools and convert to Gemini format
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { GeminiConnectorSubjects, type GeminiToolApprovalRequest } from './namespaces/index.js';
 import { createToolApprovalHandler, type ToolApprovalContext } from '@makaio/ai-adapters-core';
 import {
@@ -78,16 +78,18 @@ export const registerToolApprovalHandler = createToolApprovalHandler(
  * Convenience: Request tool approval via MakaioBus (round-trip).
  *
  * For cases where you need to call approval directly without bus.on() wiring.
+ * @param bus - Bus that owns AgentSubjects.toolApprove handlers.
  * @param payload - SDK acp.tool_approval payload
  * @param context - Context with adapterSessionId required
  * @returns Core tool approval response
  */
 export async function requestToolApproval(
+  bus: IMakaioBus,
   payload: GeminiToolApprovalRequest,
   context: ToolApprovalContext,
 ): Promise<AgentToolApproveResponse> {
   const request = toGlobalToolApproval(payload, context);
-  return MakaioBus.request(AgentSubjects.toolApprove, request);
+  return bus.request(AgentSubjects.toolApprove, request);
 }
 
 // --------------------------------------------------------------------------

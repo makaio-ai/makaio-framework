@@ -387,13 +387,17 @@ export const getAgentTestContext = async (
     model: testConfig.options?.primaryModel?.modelName,
   });
 
-  testConfig.registerToolApprovalHandler(agent, async () => ({
-    adapterId: agent.adapterId,
-    adapterName: agent.getAdapterName(),
-    agentId: agent.getAgentId(),
-    adapterSessionId: await agent.getAdapterSessionId(),
-    sessionId: 'conformance-test-session',
-  }));
+  testConfig.registerToolApprovalHandler(
+    agent,
+    async () => ({
+      adapterId: agent.adapterId,
+      adapterName: agent.getAdapterName(),
+      agentId: agent.getAgentId(),
+      adapterSessionId: await agent.getAdapterSessionId(),
+      sessionId: 'conformance-test-session',
+    }),
+    MakaioBus,
+  );
 
   const conformanceSystemPrompt = CONFORMANCE_SYSTEM_PROMPT;
 
@@ -428,13 +432,17 @@ export const getAgentTestContext = async (
       ...options,
       model: options?.model ?? primaryModel?.modelName,
     });
-    testConfig.registerToolApprovalHandler(connector, async () => ({
-      adapterId: connector.adapterId,
-      adapterName: connector.getAdapterName(),
-      agentId: connector.getAgentId(),
-      adapterSessionId: await connector.getAdapterSessionId(),
-      sessionId: 'conformance-test-session',
-    }));
+    testConfig.registerToolApprovalHandler(
+      connector,
+      async () => ({
+        adapterId: connector.adapterId,
+        adapterName: connector.getAdapterName(),
+        agentId: connector.getAgentId(),
+        adapterSessionId: await connector.getAdapterSessionId(),
+        sessionId: 'conformance-test-session',
+      }),
+      MakaioBus,
+    );
     return connector;
   };
 

@@ -27,7 +27,7 @@ import {
   type ScopedToolApprovalRequest,
   type ToolApprovalContext,
 } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type AgentToolApproveRequest, type AgentToolApproveResponse } from '@makaio/contracts';
 import {
   createRawClientHookHandleSubject,
@@ -142,6 +142,7 @@ function buildDenyResponse(message: string): ClientHookHandleResponse {
  * encodes the response as a Cursor-protocol exit code (0 = allow, 2 = deny).
  *
  * For all other hook event names: returns a no-op allow response (exit 0).
+ * @param globalBus - Bus that owns client hook and AgentSubjects.toolApprove handlers.
  * @param connector - Connector identity fields used to route hook ownership.
  * @param contextProvider - Callback that resolves agent identity for the
  *   approval request. Called lazily per-request to avoid race conditions with
@@ -149,12 +150,13 @@ function buildDenyResponse(message: string): ClientHookHandleResponse {
  * @returns Cleanup function that unsubscribes from the global bus.
  */
 function registerHookHandleApproval(
+  globalBus: IMakaioBus,
   connector: Pick<AIAgentConnector, 'cwd' | 'adapterSessionId'>,
   contextProvider: () => Promise<ToolApprovalContext>,
 ): () => void {
   const hookHandleSubject = createRawClientHookHandleSubject('cursor');
 
-  return MakaioBus.on(hookHandleSubject, async (ctx) => {
+  return globalBus.on(hookHandleSubject, async (ctx) => {
     const hookPayload: RawClientHookPayload = ctx.payload;
 
     if (hookPayload.eventName !== CURSOR_HOOK_PRE_TOOL_USE) {
@@ -205,7 +207,7 @@ function registerHookHandleApproval(
     };
 
     try {
-      const response = await MakaioBus.request(AgentSubjects.toolApprove, approvalRequest);
+      const response = await globalBus.request(AgentSubjects.toolApprove, approvalRequest);
       if (response.action === 'allow') {
         ctx.setResult(HOOK_NOOP_RESPONSE);
       } else {
@@ -237,17 +239,19 @@ function registerHookHandleApproval(
  * - Conformance test harness via `testConfig.registerToolApprovalHandler`
  * @param connector - The connector (or any object with a scoped `on` method).
  * @param context - Agent identity context or lazy provider callback.
+ * @param globalBus - Bus that owns scoped approval, hook, and AgentSubjects.toolApprove handlers.
  * @returns Cleanup function that unsubscribes from both bus handlers.
  */
 export function registerToolApprovalHandler(
   connector: Pick<AIAgentConnector, 'on' | 'cwd' | 'adapterSessionId'>,
   context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+  globalBus: IMakaioBus,
 ): () => void {
-  const unsubScoped = registerScopedToolApprovalHandler(connector, context);
+  const unsubScoped = registerScopedToolApprovalHandler(connector, context, globalBus);
 
   const contextProvider =
     typeof context === 'function' ? (context as () => Promise<ToolApprovalContext>) : () => Promise.resolve(context);
-  const unsubHook = registerHookHandleApproval(connector, contextProvider);
+  const unsubHook = registerHookHandleApproval(globalBus, connector, contextProvider);
 
   return () => {
     unsubScoped();

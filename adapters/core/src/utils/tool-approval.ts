@@ -6,7 +6,7 @@
  * the shared interface and registration logic to avoid duplicating it across adapters.
  */
 
-import { MakaioBus, type IMakaioBus, type OnOptions } from '@makaio/bus-core';
+import type { IMakaioBus, OnOptions } from '@makaio/bus-core';
 import {
   AgentSubjects,
   AgentToolApproveSchema,
@@ -303,7 +303,7 @@ export function createToolApprovalHandler<
   return function registerToolApprovalHandler(
     connector: Pick<AIAgentConnector, 'on'>,
     context: ContextProvider,
-    globalBus: IMakaioBus = MakaioBus,
+    globalBus: IMakaioBus,
   ): () => void {
     const bus: IToolApprovalBus<TPayload, TResponse> = connector;
     return bus.on(subject, async (ctx) => {
