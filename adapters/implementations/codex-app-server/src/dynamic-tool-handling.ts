@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
 import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
 import { extractMcpCallTarget, isMcpCallTool, type ISessionToolLedger } from '@makaio/ai-adapters-core';
@@ -110,12 +110,17 @@ export function toCodexDynamicToolFormat(tools: ToolListItem[]): CodexDynamicToo
  *
  * `loadToolsFromRegistry` catches fetch failures internally and returns `[]`,
  * so this function never throws. Callers always receive a (possibly empty) array.
+ * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for policy filtering
  * @param adapterName - Adapter type name for policy filtering
  * @returns Codex-formatted dynamic tool declarations
  */
-export async function fetchToolsForCodex(adapterId: string, adapterName: string): Promise<CodexDynamicTool[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+export async function fetchToolsForCodex(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterName: string,
+): Promise<CodexDynamicTool[]> {
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
   return toCodexDynamicToolFormat(tools);
 }
 

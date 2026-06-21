@@ -18,7 +18,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolExecutionContextOverrides, type ToolListItem } from '@makaio/contracts';
 import {
   loadToolsFromRegistry,
@@ -153,16 +153,18 @@ export function toPiToolFormat(tools: ToolListItem[], context: PiToolHandlerCont
  *
  * Wraps `loadToolsFromRegistry` (which never throws) and `toPiToolFormat`.
  * Returns an empty array when no tools are registered or the registry is unavailable.
+ * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for registry filtering
  * @param adapterName - Adapter type name for registry filtering
  * @param context - Adapter identity for bus routing in the execute handlers
  * @returns Pi SDK ToolDefinition[] ready for `CreateAgentSessionOptions.customTools`
  */
 export async function fetchToolsForPi(
+  bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   context: PiToolHandlerContext,
 ): Promise<ToolDefinition[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
   return toPiToolFormat(tools, context);
 }

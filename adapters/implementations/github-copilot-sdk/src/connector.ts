@@ -271,6 +271,7 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
       const result = await performSessionInit(
         {
           bus: this.config.bus,
+          globalBus: this.globalBus,
           adapterId: this.config.adapterId ?? this.adapterId,
           adapterName: this.config.adapterName ?? this.adapterName,
           agentId: this.agentId,

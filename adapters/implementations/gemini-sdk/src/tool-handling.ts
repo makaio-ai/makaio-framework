@@ -12,7 +12,7 @@
  * - fetchToolsForGemini: Load registry tools and convert to Gemini format
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { GeminiConnectorSubjects, type GeminiToolApprovalRequest } from './namespaces/index.js';
 import { createToolApprovalHandler, type ToolApprovalContext } from '@makaio/ai-adapters-core';
 import {
@@ -128,14 +128,16 @@ export function toGeminiToolFormat(tools: ToolListItem[]): GeminiRegistryToolDec
 
 /**
  * Convenience: Load registry tools and convert to Gemini format in one call.
+ * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
  * @returns Gemini-formatted function declarations ready for GeminiChat construction
  */
 export async function fetchToolsForGemini(
+  bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
 ): Promise<GeminiRegistryToolDeclaration[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
   return toGeminiToolFormat(tools);
 }

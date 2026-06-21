@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { Config, GeminiChat, ToolCallRequestInfo } from '@google/gemini-cli-core';
 import { fetchToolsForGemini, toGeminiToolFormat } from '../src/tool-handling.js';
@@ -75,8 +75,9 @@ describe('gemini tool handling', () => {
   });
 
   it('loads registry tools through ToolSubjects.list', async () => {
+    const hostBus = createBusInstance();
     cleanups.push(
-      MakaioBus.on(ToolSubjects.list, (ctx) => {
+      hostBus.on(ToolSubjects.list, (ctx) => {
         ctx.setResult({
           tools: [
             {
@@ -91,7 +92,7 @@ describe('gemini tool handling', () => {
       }),
     );
 
-    await expect(fetchToolsForGemini('adapter-1', 'gemini-sdk')).resolves.toEqual([
+    await expect(fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk')).resolves.toEqual([
       {
         name: 'search_repo',
         description: 'Search the repository.',

@@ -23,6 +23,7 @@ import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import type { ApprovalPolicy, SandboxMode, ReasoningEffort } from './types.js';
 import type { ReasoningEffort as CodexReasoningEffort } from '../protocol/generated/ReasoningEffort.js';
 import type { AIReasoningLevel } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
  * Maps canonical {@link AIReasoningLevel} values to Codex protocol {@link CodexReasoningEffort} strings.
@@ -82,6 +83,8 @@ export interface TurnFlowContext {
   adapterName: string;
   /** Scoped bus for thread and turn construction. */
   bus: CodexAppServerBus;
+  /** Global bus for registry tool loading and execution. */
+  globalBus: IMakaioBus;
   /** Current model identifier, read at turn-start time. */
   getModel: () => string;
   /** Current reasoning effort level, read at turn-start time. */
@@ -113,7 +116,7 @@ export async function startThread(ctx: TurnFlowContext): Promise<void> {
   ctx.setThreadStartedDeferred({ promise: threadStartedPromise, resolve: resolve! });
 
   try {
-    const dynamicTools = await fetchToolsForCodex(ctx.adapterId, ctx.adapterName);
+    const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName);
 
     const threadStartParams: ThreadStartParamsWithDynamicTools = {
       model: ctx.getModel() ?? null,

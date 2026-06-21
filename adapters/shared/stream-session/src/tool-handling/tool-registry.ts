@@ -6,7 +6,7 @@
  * adapters that use the registry pattern.
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
 
 export interface ToolRegistryLoadOptions {
@@ -46,59 +46,13 @@ function applyToolNameFilter(tools: ToolListItem[], options?: ToolRegistryLoadOp
  *
  * Does not throw on failure — an agent can still operate without tools,
  * so errors are logged and an empty array is returned.
- * @param adapterId - Adapter instance ID for logging/routing
- * @param adapterName - Adapter type name
- * @param options - Optional adapter runtime tool allow/deny filters.
- * @returns List of available tools, or empty array if fetch fails
- */
-export function loadToolsFromRegistry(
-  adapterId: string,
-  adapterName: string,
-  options?: ToolRegistryLoadOptions,
-): Promise<ToolListItem[]>;
-export function loadToolsFromRegistry(
-  bus: IMakaioBus,
-  adapterId: string,
-  adapterName: string,
-  options?: ToolRegistryLoadOptions,
-): Promise<ToolListItem[]>;
-export async function loadToolsFromRegistry(
-  busOrAdapterId: IMakaioBus | string,
-  adapterIdOrName: string,
-  maybeAdapterNameOrOptions?: string | ToolRegistryLoadOptions,
-  maybeOptions?: ToolRegistryLoadOptions,
-): Promise<ToolListItem[]> {
-  const hasInjectedBus = typeof busOrAdapterId !== 'string';
-  const bus = hasInjectedBus ? busOrAdapterId : MakaioBus;
-  const adapterId = hasInjectedBus ? adapterIdOrName : busOrAdapterId;
-  const adapterName = hasInjectedBus
-    ? typeof maybeAdapterNameOrOptions === 'string'
-      ? maybeAdapterNameOrOptions
-      : undefined
-    : adapterIdOrName;
-  const options = hasInjectedBus
-    ? maybeOptions
-    : typeof maybeAdapterNameOrOptions === 'object'
-      ? maybeAdapterNameOrOptions
-      : undefined;
-
-  if (!adapterName) {
-    console.warn('[stream-session] Tool registry load skipped: adapterName is missing');
-    return [];
-  }
-
-  return loadToolsFromRegistryWithBus(bus, adapterId, adapterName, options);
-}
-
-/**
- * Load tools from ToolRegistry through a resolved bus instance.
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for logging/routing.
  * @param adapterName - Adapter type name.
  * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns List of available tools, or empty array if fetch fails.
  */
-async function loadToolsFromRegistryWithBus(
+export async function loadToolsFromRegistry(
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,

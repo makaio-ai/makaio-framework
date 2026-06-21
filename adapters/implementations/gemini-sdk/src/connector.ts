@@ -204,7 +204,7 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   private async fetchTools(): Promise<void> {
     this.registryFetchAttempts += 1;
     try {
-      this.registryToolDeclarations = await fetchToolsForGemini(this.adapterId, this.adapterName);
+      this.registryToolDeclarations = await fetchToolsForGemini(this.globalBus, this.adapterId, this.adapterName);
       this.registryToolNames = new Set(this.registryToolDeclarations.map((t) => t.name));
       this.registryToolsFetched = true;
     } catch (error) {

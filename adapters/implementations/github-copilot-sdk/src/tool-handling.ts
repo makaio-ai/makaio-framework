@@ -17,7 +17,7 @@
  * - fetchToolsForCopilot: Load from registry + convert in one call
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   type ToolListItem,
   ToolSubjects,
@@ -50,6 +50,8 @@ export type CopilotDirectApprovalRequestOptions = MergeScopedToolApprovalOptions
  * Adapter identity context used to route bus-bridged tool handler calls.
  */
 export interface CopilotToolHandlerContext {
+  /** Bus that owns the ToolRegistry handlers. */
+  bus: IMakaioBus;
   /** Adapter instance ID */
   adapterId: string;
   /** Adapter type name */
@@ -397,6 +399,6 @@ export function toCopilotToolFormat(
 export async function fetchToolsForCopilot(
   context: CopilotToolHandlerContext,
 ): Promise<Tool<Record<string, unknown>>[]> {
-  const tools = await loadToolsFromRegistry(context.adapterId, context.adapterName);
+  const tools = await loadToolsFromRegistry(context.bus, context.adapterId, context.adapterName);
   return toCopilotToolFormat(tools, context);
 }

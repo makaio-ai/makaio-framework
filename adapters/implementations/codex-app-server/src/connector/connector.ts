@@ -188,6 +188,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       adapterId: this.adapterId,
       adapterName: this.adapterName,
       bus: this.config.bus,
+      globalBus: this.globalBus,
       getModel: () => this.model,
       getReasoningEffort: () => this.currentReasoningEffort,
       getApprovalPolicy: () => this._approvalPolicy,
