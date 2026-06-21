@@ -44,6 +44,10 @@ export interface SessionInitContext {
   toolLedger?: ISessionToolLedger;
   /** Current turn number supplier for ledger bookkeeping. */
   getCurrentTurnNumber: () => number;
+  /** Runtime allowlist for registry tools. Empty array intentionally disables all registry tools. */
+  allowedTools?: readonly string[];
+  /** Runtime denylist for registry tools. Takes precedence over allowedTools. */
+  disallowedTools?: readonly string[];
 }
 
 /**
@@ -150,6 +154,8 @@ export async function performSessionInit(
       agentId: ctx.agentId,
       toolLedger: ctx.toolLedger,
       getCurrentTurnNumber: ctx.getCurrentTurnNumber,
+      allowedTools: ctx.allowedTools,
+      disallowedTools: ctx.disallowedTools,
     });
     assertCurrent();
 

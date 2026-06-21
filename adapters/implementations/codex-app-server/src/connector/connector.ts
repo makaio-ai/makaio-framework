@@ -197,6 +197,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       getSandboxMode: () => this._sandboxMode,
       resolveSystemPrompt: () => this.resolveSystemPrompt(),
       cwd: this.cwd,
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
     };
   }
 

@@ -97,6 +97,10 @@ export interface TurnFlowContext {
   resolveSystemPrompt: () => string | null;
   /** Working directory passed to `thread/start`. */
   cwd: string;
+  /** Runtime allowlist for registry tools. Empty array intentionally disables all registry tools. */
+  allowedTools?: readonly string[];
+  /** Runtime denylist for registry tools. Takes precedence over allowedTools. */
+  disallowedTools?: readonly string[];
 }
 
 /**
@@ -116,7 +120,10 @@ export async function startThread(ctx: TurnFlowContext): Promise<void> {
   ctx.setThreadStartedDeferred({ promise: threadStartedPromise, resolve: resolve! });
 
   try {
-    const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName);
+    const dynamicTools = await fetchToolsForCodex(ctx.globalBus, ctx.adapterId, ctx.adapterName, {
+      allowedTools: ctx.allowedTools,
+      disallowedTools: ctx.disallowedTools,
+    });
 
     const threadStartParams: ThreadStartParamsWithDynamicTools = {
       model: ctx.getModel() ?? null,

@@ -5,13 +5,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { createBusInstance } from '@makaio/bus-core';
 import {
   toGlobalToolApproval,
   toGlobalFileApproval,
   fromGlobalToolApproval,
   type ToolApprovalContext,
 } from '../tool-handling.js';
-import type { AgentToolApproveRequest, AgentToolApproveResponse } from '@makaio/contracts';
+import { fetchToolsForCodex } from '../dynamic-tool-handling.js';
+import { ToolSubjects, type AgentToolApproveRequest, type AgentToolApproveResponse } from '@makaio/contracts';
 
 const mockContext: ToolApprovalContext = {
   adapterId: 'test-adapter',
@@ -194,5 +196,51 @@ describe('tool-handling', () => {
       // Note: The shouldAbort flag is not mapped to the app-server response format
       // The app-server uses the decision value directly
     });
+  });
+});
+
+describe('dynamic tool loading', () => {
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    const off = hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          {
+            name: 'search_repo',
+            description: 'Search the repository.',
+            toolsetName: 'registry',
+            inputSchema: { type: 'object' },
+          },
+          {
+            name: 'write_file',
+            description: 'Write a file.',
+            toolsetName: 'registry',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        toolsets: [],
+      });
+    });
+
+    try {
+      await expect(
+        fetchToolsForCodex(hostBus, 'adapter-1', 'codex-app-server', {
+          allowedTools: ['search_repo', 'write_file'],
+          disallowedTools: ['write_file'],
+        }),
+      ).resolves.toEqual([
+        {
+          name: 'search_repo',
+          description: 'Search the repository.',
+          inputSchema: { type: 'object' },
+        },
+      ]);
+
+      await expect(fetchToolsForCodex(hostBus, 'adapter-1', 'codex-app-server', { allowedTools: [] })).resolves.toEqual(
+        [],
+      );
+    } finally {
+      off();
+    }
   });
 });

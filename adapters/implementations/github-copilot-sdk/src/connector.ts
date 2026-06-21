@@ -283,6 +283,8 @@ export class GitHubCopilotConnector extends ProceduralAgentConnector<GitHubCopil
           providerContext: this.config.providerContext,
           toolLedger: this.config.toolLedger,
           getCurrentTurnNumber: () => this.pendingTurnNumber ?? this.currentTurnNumber,
+          allowedTools: this.config.allowedTools,
+          disallowedTools: this.config.disallowedTools,
         },
         {
           emitSdkEvent: async (event) => {

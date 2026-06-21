@@ -26,7 +26,11 @@ import {
   type AgentToolApproveResponse,
 } from '@makaio/contracts';
 import { safeStringify } from '@makaio/utils';
-import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
+import {
+  loadToolsFromRegistry,
+  filterToolsWithSchema,
+  type ToolRegistryLoadOptions,
+} from '@makaio/ai-adapters-stream-session';
 import type { Tool, ToolInvocation } from '@github/copilot-sdk';
 import { GitHubCopilotConnectorSubjects } from './namespaces/index.js';
 import type { SdkPermissionRequest, SdkPermissionRequestResult } from './types/index.js';
@@ -62,6 +66,10 @@ export interface CopilotToolHandlerContext {
   toolLedger?: ISessionToolLedger;
   /** Current turn number supplier for ledger bookkeeping. */
   getCurrentTurnNumber?: () => number;
+  /** Runtime allowlist for registry tools. Empty array intentionally disables all registry tools. */
+  allowedTools?: readonly string[];
+  /** Runtime denylist for registry tools. Takes precedence over allowedTools. */
+  disallowedTools?: readonly string[];
 }
 
 /**
@@ -402,6 +410,10 @@ export function toCopilotToolFormat(
 export async function fetchToolsForCopilot(
   context: CopilotToolHandlerContext,
 ): Promise<Tool<Record<string, unknown>>[]> {
-  const tools = await loadToolsFromRegistry(context.bus, context.adapterId, context.adapterName);
+  const options: ToolRegistryLoadOptions = {
+    allowedTools: context.allowedTools,
+    disallowedTools: context.disallowedTools,
+  };
+  const tools = await loadToolsFromRegistry(context.bus, context.adapterId, context.adapterName, options);
   return toCopilotToolFormat(tools, context);
 }

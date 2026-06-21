@@ -412,6 +412,33 @@ describe('fetchToolsForCopilot', () => {
     expect(typeof result[0]!.handler).toBe('function');
   });
 
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    cleanups.push(
+      hostBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            makeToolListItem({ name: 'search_repo' }),
+            makeToolListItem({ name: 'write_file', description: 'Write a file.' }),
+          ],
+          toolsets: [],
+        });
+      }),
+    );
+
+    const result = await fetchToolsForCopilot(
+      makeContext({
+        bus: hostBus,
+        allowedTools: ['search_repo', 'write_file'],
+        disallowedTools: ['write_file'],
+      }),
+    );
+
+    expect(result.map((tool) => tool.name)).toEqual(['search_repo']);
+
+    await expect(fetchToolsForCopilot(makeContext({ bus: hostBus, allowedTools: [] }))).resolves.toEqual([]);
+  });
+
   it('filters out registry tools without inputSchema', async () => {
     cleanups.push(
       MakaioBus.on(ToolSubjects.list, (ctx) => {

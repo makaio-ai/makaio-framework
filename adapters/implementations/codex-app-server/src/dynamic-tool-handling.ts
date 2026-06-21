@@ -9,7 +9,11 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
-import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
+import {
+  loadToolsFromRegistry,
+  filterToolsWithSchema,
+  type ToolRegistryLoadOptions,
+} from '@makaio/ai-adapters-stream-session';
 import { extractMcpCallTarget, isMcpCallTool, type ISessionToolLedger } from '@makaio/ai-adapters-core';
 import type { ThreadStartParams } from './protocol/generated/v2/index.js';
 
@@ -113,14 +117,16 @@ export function toCodexDynamicToolFormat(tools: ToolListItem[]): CodexDynamicToo
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for policy filtering
  * @param adapterName - Adapter type name for policy filtering
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns Codex-formatted dynamic tool declarations
  */
 export async function fetchToolsForCodex(
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
+  options?: ToolRegistryLoadOptions,
 ): Promise<CodexDynamicTool[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toCodexDynamicToolFormat(tools);
 }
 
