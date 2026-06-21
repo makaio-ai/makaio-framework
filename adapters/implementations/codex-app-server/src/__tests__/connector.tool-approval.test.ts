@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { HarnessSubjects, ToolSubjects } from '@makaio/contracts';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import {
@@ -321,6 +321,11 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
   });
 
   it('should request dynamic_tool_call_approval_request before executing', async () => {
+    const hostBus = createBusInstance();
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({ globalBus: hostBus });
+    await startConnectorWithTurn(ctx, 'Run registry tool');
+
     const approvalRequests: unknown[] = [];
     ctx.mockBus.on(CodexAppServerNamespace.subjects.dynamic_tool_call_approval_request, (busCtx) => {
       approvalRequests.push(busCtx.payload);
@@ -328,7 +333,7 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
     });
 
     const executePayloads: unknown[] = [];
-    MakaioBus.on(ToolSubjects.execute, (busCtx) => {
+    hostBus.on(ToolSubjects.execute, (busCtx) => {
       executePayloads.push(busCtx.payload);
       busCtx.setResult({ success: true, data: { result: 'ok' } });
     });
@@ -364,12 +369,17 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
   });
 
   it('should return error content and skip execution when approval is denied', async () => {
+    const hostBus = createBusInstance();
+    cleanupConnectorTestContext(ctx);
+    ctx = await createConnectorTestContext({ globalBus: hostBus });
+    await startConnectorWithTurn(ctx, 'Run registry tool');
+
     ctx.mockBus.on(CodexAppServerNamespace.subjects.dynamic_tool_call_approval_request, (busCtx) => {
       busCtx.setResult({ decision: 'decline', message: 'Not allowed' });
     });
 
     const executeRequests: unknown[] = [];
-    MakaioBus.on(ToolSubjects.execute, (busCtx) => {
+    hostBus.on(ToolSubjects.execute, (busCtx) => {
       executeRequests.push(busCtx.payload);
       busCtx.setResult({ success: true, data: {} });
     });
@@ -396,7 +406,9 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
   it('records mcp_call targets in the session tool ledger', async () => {
     const recordCall = vi.fn();
     cleanupConnectorTestContext(ctx);
+    const hostBus = createBusInstance();
     ctx = await createConnectorTestContext({
+      globalBus: hostBus,
       toolLedger: { recordCall } as never,
     });
     await startConnectorWithTurn(ctx, 'Use registry tools');
@@ -405,7 +417,7 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
       busCtx.setResult({ decision: 'accept' });
     });
 
-    MakaioBus.on(ToolSubjects.execute, (busCtx) => {
+    hostBus.on(ToolSubjects.execute, (busCtx) => {
       busCtx.setResult({ success: true, data: { result: 'ok' } });
     });
 

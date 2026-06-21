@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
 import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
 import { extractMcpCallTarget, isMcpCallTool, type ISessionToolLedger } from '@makaio/ai-adapters-core';
@@ -144,6 +144,8 @@ export interface DynamicToolCallCacheEntry {
  * Execution context for dynamic tool calls.
  */
 export interface DynamicToolCallContext {
+  /** Global bus that owns ToolRegistry execution handlers. */
+  bus: IMakaioBus;
   /** Session ID for multi-session task correlation */
   sessionId?: string;
   /** Provider-assigned session identifier forwarded to tool execution context. */
@@ -206,7 +208,7 @@ export async function handleDynamicToolCall(
   context: DynamicToolCallContext,
 ): Promise<DynamicToolCallResponse> {
   try {
-    const result = await MakaioBus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(ToolSubjects.execute, {
       toolName: params.name,
       input: params.arguments,
       adapterId: context.adapterId,

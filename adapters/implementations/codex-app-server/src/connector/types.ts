@@ -4,6 +4,7 @@
  */
 
 import type { ISessionToolLedger, MessageHandle } from '@makaio/ai-adapters-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { AIReasoningLevel, ProviderContext } from '@makaio/contracts';
 import type { StdioTransport } from '../utils/createStdioTransport.js';
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
@@ -44,6 +45,8 @@ export type ReasoningEffort = AIReasoningLevel;
  */
 export interface CodexAppServerConfig {
   bus: CodexAppServerBus;
+  /** Global bus for cross-namespace runtime requests. */
+  globalBus?: IMakaioBus;
   adapterId: string;
   adapterName: string;
   agentId: string;

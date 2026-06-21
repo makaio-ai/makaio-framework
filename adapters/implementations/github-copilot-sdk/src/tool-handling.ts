@@ -17,7 +17,7 @@
  * - fetchToolsForCopilot: Load from registry + convert in one call
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import {
   type ToolListItem,
   ToolSubjects,
@@ -109,12 +109,14 @@ export const registerToolApprovalHandler = createToolApprovalHandler(
  *
  * Accepts the scoped payload shape so callers may omit identity fields and rely on
  * explicit trusted fallback when context is unavailable.
+ * @param bus - Bus that owns AgentSubjects.toolApprove handlers.
  * @param payload - SDK can_use_tool payload
  * @param context - Optional context override
  * @param options - Controls whether trusted callers may reuse payload session and/or identity fields
  * @returns Core tool approval response
  */
 export async function requestToolApproval(
+  bus: IMakaioBus,
   payload: ScopedToolApprovalRequest,
   context?: Partial<ToolApprovalContext>,
   options: CopilotDirectApprovalRequestOptions = {},
@@ -123,7 +125,7 @@ export async function requestToolApproval(
     allowPayloadSessionFallback: options.allowPayloadSessionFallback ?? false,
     allowPayloadIdentityFallback: options.allowPayloadIdentityFallback ?? false,
   });
-  return MakaioBus.request(AgentSubjects.toolApprove, request);
+  return bus.request(AgentSubjects.toolApprove, request);
 }
 
 // --------------------------------------------------------------------------
@@ -237,7 +239,7 @@ async function executeCopilotTool(
   // ToolSubjects.started is already emitted by the handler in toCopilotToolFormat
   // before approval — this helper only runs post-approval, so no duplicate emission.
   try {
-    const result = await MakaioBus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(ToolSubjects.execute, {
       toolName: tool.name,
       input: execArgs,
       adapterId: context.adapterId,
@@ -249,7 +251,7 @@ async function executeCopilotTool(
       },
     });
     if (!result.success) {
-      void MakaioBus.emit(ToolSubjects.error, {
+      void context.bus.emit(ToolSubjects.error, {
         toolName: tool.name,
         toolsetName,
         executionId,
@@ -259,7 +261,7 @@ async function executeCopilotTool(
       return JSON.stringify({ error: result.error.message, code: result.error.code });
     }
     const output = typeof result.data === 'string' ? result.data : safeStringify(result.data ?? null);
-    void MakaioBus.emit(ToolSubjects.completed, {
+    void context.bus.emit(ToolSubjects.completed, {
       toolName: tool.name,
       toolsetName,
       executionId,
@@ -279,7 +281,7 @@ async function executeCopilotTool(
 
     return output;
   } catch (error) {
-    void MakaioBus.emit(ToolSubjects.error, {
+    void context.bus.emit(ToolSubjects.error, {
       toolName: tool.name,
       toolsetName,
       executionId,
@@ -321,7 +323,7 @@ export function toCopilotToolFormat(
       const executionId = invocation.toolCallId;
       const toolsetName = tool.toolsetName;
       const startedAt = Date.now();
-      void MakaioBus.emit(ToolSubjects.started, {
+      void context.bus.emit(ToolSubjects.started, {
         toolName: tool.name,
         toolsetName,
         executionId,
@@ -331,6 +333,7 @@ export function toCopilotToolFormat(
       let approvalResponse: Awaited<ReturnType<typeof requestToolApproval>>;
       try {
         approvalResponse = await requestToolApproval(
+          context.bus,
           {
             toolName: tool.name,
             args: args ?? {},
@@ -346,7 +349,7 @@ export function toCopilotToolFormat(
         );
       } catch (approvalError) {
         // Treat bus/handler failures as a soft denial — do not propagate to the SDK.
-        void MakaioBus.emit(ToolSubjects.error, {
+        void context.bus.emit(ToolSubjects.error, {
           toolName: tool.name,
           toolsetName,
           executionId,
@@ -363,7 +366,7 @@ export function toCopilotToolFormat(
       if (approvalResponse.action === 'deny') {
         const message = approvalResponse.message ?? 'Tool execution was denied.';
         if (approvalResponse.shouldAbort) {
-          void MakaioBus.emit(ToolSubjects.error, {
+          void context.bus.emit(ToolSubjects.error, {
             toolName: tool.name,
             toolsetName,
             executionId,
@@ -372,7 +375,7 @@ export function toCopilotToolFormat(
           });
           return JSON.stringify({ error: message, shouldAbort: true });
         }
-        void MakaioBus.emit(ToolSubjects.error, {
+        void context.bus.emit(ToolSubjects.error, {
           toolName: tool.name,
           toolsetName,
           executionId,

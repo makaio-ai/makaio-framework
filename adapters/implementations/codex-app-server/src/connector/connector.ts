@@ -80,6 +80,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   public constructor(config: CodexAppServerConfig) {
     super({
       bus: config.bus,
+      globalBus: config.globalBus,
       adapterId: config.adapterId,
       adapterName: config.adapterName ?? 'codex-app-server',
       agentId: config.agentId,
@@ -305,6 +306,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     params: DynamicToolCallServerRequest['params'],
   ): Promise<DynamicToolCallResponse> {
     return handleDynamicToolCallApprovalRequest(params, {
+      bus: this.globalBus,
       requestToolApproval: this.requestToolApproval.bind(this) as (
         subject: unknown,
         payload: unknown,

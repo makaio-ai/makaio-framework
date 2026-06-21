@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { ExtensionContext, ToolDefinition } from '@mariozechner/pi-coding-agent';
@@ -48,9 +48,10 @@ describe('createPiToolHandler', () => {
   });
 
   it('forwards full execution context to registry tool calls', async () => {
+    const hostBus = createBusInstance();
     let receivedPayload: ToolExecuteRequest | undefined;
 
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       receivedPayload = ctx.payload;
       ctx.setResult({
         success: true,
@@ -59,6 +60,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',
@@ -102,9 +104,10 @@ describe('createPiToolHandler', () => {
   });
 
   it('uses approval-rewritten input for registry execution', async () => {
+    const hostBus = createBusInstance();
     let receivedPayload: ToolExecuteRequest | undefined;
 
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       receivedPayload = ctx.payload;
       ctx.setResult({
         success: true,
@@ -113,6 +116,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',
@@ -128,7 +132,8 @@ describe('createPiToolHandler', () => {
   });
 
   it('throws when registry execution fails so Pi marks the tool result as an error', async () => {
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    const hostBus = createBusInstance();
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       ctx.setResult({
         success: false,
         error: { code: 'READ_FAILED', message: 'Cannot read file' },
@@ -136,6 +141,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',

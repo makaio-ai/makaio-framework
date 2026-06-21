@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { Config, GeminiChat, ToolCallRequestInfo } from '@google/gemini-cli-core';
 import { fetchToolsForGemini, toGeminiToolFormat } from '../src/tool-handling.js';
@@ -102,6 +102,7 @@ describe('gemini tool handling', () => {
   });
 
   it('falls back to the central tool registry when Gemini native lookup misses', async () => {
+    const hostBus = createBusInstance();
     const emitSdkEvent = vi.fn(async () => {});
     const requestToolApproval = vi.fn(async () => ({ action: 'allow' as const }));
 
@@ -109,7 +110,7 @@ describe('gemini tool handling', () => {
     const geminiChat = createMockGeminiChat();
 
     cleanups.push(
-      MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      hostBus.on(ToolSubjects.execute, (ctx) => {
         ctx.setResult({
           success: true,
           data: { output: 'central result' },
@@ -126,6 +127,7 @@ describe('gemini tool handling', () => {
     };
 
     const result = await executeToolCalls([toolCall], {
+      bus: hostBus,
       geminiConfig,
       geminiChat,
       emitSdkEvent,
@@ -161,6 +163,7 @@ describe('gemini tool handling', () => {
   });
 
   it('records mcp_call targets in the session tool ledger', async () => {
+    const hostBus = createBusInstance();
     const emitSdkEvent = vi.fn(async () => {});
     const requestToolApproval = vi.fn(async () => ({ action: 'allow' as const }));
     const recordCall = vi.fn();
@@ -169,7 +172,7 @@ describe('gemini tool handling', () => {
     const geminiChat = createMockGeminiChat();
 
     cleanups.push(
-      MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      hostBus.on(ToolSubjects.execute, (ctx) => {
         ctx.setResult({
           success: true,
           data: { output: 'ok' },
@@ -186,6 +189,7 @@ describe('gemini tool handling', () => {
     };
 
     await executeToolCalls([toolCall], {
+      bus: hostBus,
       geminiConfig,
       geminiChat,
       emitSdkEvent,

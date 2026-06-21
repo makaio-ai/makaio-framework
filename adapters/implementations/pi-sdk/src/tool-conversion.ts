@@ -18,7 +18,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolExecutionContextOverrides, type ToolListItem } from '@makaio/contracts';
 import {
   loadToolsFromRegistry,
@@ -37,6 +37,8 @@ import type { ToolDefinition } from '@mariozechner/pi-coding-agent';
  * global bus and attribute results to the correct session.
  */
 export interface PiToolHandlerContext {
+  /** Global bus that owns ToolRegistry execution handlers. */
+  bus: IMakaioBus;
   /** Adapter instance ID */
   adapterId: string;
   /** Adapter type name */
@@ -105,7 +107,7 @@ export function createPiToolHandler(
 ): ToolDefinition['execute'] {
   return async (toolCallId, params) => {
     const input = context.consumeApprovedToolInput?.(toolCallId) ?? params;
-    const result = await MakaioBus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(ToolSubjects.execute, {
       toolName: tool.name,
       input,
       adapterId: context.adapterId,
@@ -166,5 +168,5 @@ export async function fetchToolsForPi(
   context: PiToolHandlerContext,
 ): Promise<ToolDefinition[]> {
   const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
-  return toPiToolFormat(tools, context);
+  return toPiToolFormat(tools, { ...context, bus });
 }

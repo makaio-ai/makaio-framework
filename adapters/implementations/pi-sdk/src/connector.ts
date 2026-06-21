@@ -245,6 +245,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    */
   private get toolContext(): PiToolHandlerContext {
     return {
+      bus: this.globalBus,
       adapterId: this.adapterId,
       adapterName: this.adapterName,
       agentId: this.agentId,

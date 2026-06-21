@@ -264,6 +264,7 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
 
     this.session = new GeminiConnectorSession({
       bus: this.config.bus ?? (await GeminiConnectorNamespace.scopedBus()),
+      globalBus: this.globalBus,
       adapterId: this.config.adapterId ?? '',
       adapterName: this.config.adapterName ?? '',
       agentId: this.agentId,

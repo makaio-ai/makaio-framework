@@ -361,6 +361,7 @@ export class GeminiConnectorSession extends BaseConnectorSession<GeminiSessionCo
       }
 
       const { responseParts } = await executeToolCalls(toolCalls, {
+        bus: this.config.globalBus,
         geminiConfig: this.config.geminiConfig,
         geminiChat: this.config.geminiChat,
         turnAbortController: { signal: abortSignal, abort: () => {} } as AbortController,

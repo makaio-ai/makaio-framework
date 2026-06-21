@@ -1,4 +1,4 @@
-import type { ScopedBus } from '@makaio/bus-core';
+import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import { BaseAgentConnectorConfig, MessageHandle, type ISessionToolLedger } from '@makaio/ai-adapters-core';
 import { GeminiConnectorBus, type SdkEvent } from '../namespaces/index.js';
 import { type Config, type GeminiChat } from '@google/gemini-cli-core';
@@ -57,6 +57,8 @@ export type GeminiConnectorConfig = BaseAgentConnectorConfig<GeminiBus, GeminiSd
  */
 export interface GeminiSessionConfig {
   bus: GeminiConnectorBus;
+  /** Global bus for ToolRegistry execution. */
+  globalBus: IMakaioBus;
   adapterId: string;
   adapterName: string;
   agentId: string;
