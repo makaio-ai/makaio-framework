@@ -149,12 +149,14 @@ export async function populateProviderModels(
  * @param adapter - Loaded adapter whose providers should be refreshed.
  * @param bus - Bus used to query extension and model registry subjects.
  * @param providerModelCache - Per-batch model cache.
+ * @param providerDefinitionCache - Optional pre-built definition map that may include the currently activating package.
  * @returns Fresh provider definitions for the adapter.
  */
 export async function resolveLoadedAdapterProviders(
   adapter: LoadedAdapter,
   bus: IMakaioBus,
   providerModelCache: Map<string, ProviderAIModel[]>,
+  providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
 ): Promise<LoadedAdapterProvider[]> {
   const providers = await resolveProviderDefinitions(
     bus,
@@ -162,6 +164,7 @@ export async function resolveLoadedAdapterProviders(
     adapter.name,
     adapter.providerConfigSchema,
     adapter.providerCredentialSchema,
+    providerDefinitionCache,
   );
   return populateProviderModels(bus, adapter.name, providers, providerModelCache);
 }

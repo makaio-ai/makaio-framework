@@ -221,7 +221,11 @@ export class AdapterContributionProcessor {
     }
 
     await this.publishActivatedAdapters(completed);
-    const initializedWaitingAdapters = await this.initializeAdaptersWaitingForProviders(ctx.bus, providerModelCache);
+    const initializedWaitingAdapters = await this.initializeAdaptersWaitingForProviders(
+      ctx.bus,
+      providerModelCache,
+      providerDefinitionCache,
+    );
     await this.publishActivatedAdapters(initializedWaitingAdapters);
   }
 
@@ -328,11 +332,13 @@ export class AdapterContributionProcessor {
    * Initialize enabled adapters that were registered before all declared providers were active.
    * @param bus - Bus used to resolve the current extension contribution catalog.
    * @param providerModelCache - Per-batch provider model cache.
+   * @param providerDefinitionCache - Per-batch provider definition cache, including the currently activating package.
    * @returns Adapters initialized by this retry pass.
    */
   private async initializeAdaptersWaitingForProviders(
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
+    providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry>,
   ): Promise<LoadedAdapter[]> {
     const initialized: LoadedAdapter[] = [];
     for (const adapter of this.registry.getLoadedAdapters()) {
@@ -341,7 +347,12 @@ export class AdapterContributionProcessor {
         if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
         if (this.getMissingProviderDefinitionIds(adapter).length === 0) continue;
 
-        const providers = await resolveLoadedAdapterProviders(adapter, bus, providerModelCache);
+        const providers = await resolveLoadedAdapterProviders(
+          adapter,
+          bus,
+          providerModelCache,
+          providerDefinitionCache,
+        );
         const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
         if (!refreshed || this.getMissingProviderDefinitionIds(refreshed).length > 0) continue;
 

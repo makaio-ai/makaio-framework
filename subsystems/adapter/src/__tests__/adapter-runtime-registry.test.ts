@@ -748,6 +748,65 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('uses providers from the activating extension when retrying deferred adapter initialization', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['activating-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }],
+      ]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterOptions = options as AdapterInitOptions;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+    });
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({ providers: [], clients: [] });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('activating-provider-adapter', factory, [{ definitionId: 'activating-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
+
+      await service.processAdapterContributions(
+        '@owner/provider-package',
+        createExtension(
+          '@owner/provider-package',
+          [],
+          [{ id: 'activating-provider', name: 'Activating Provider', availableModels: [] }],
+        ),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+      expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders?.[0]).toMatchObject({
+        providerPackageName: '@owner/provider-package',
+        definition: { id: 'activating-provider', name: 'Activating Provider' },
+      });
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+    }
+  });
+
   it('does not fail provider package activation when deferred adapter initialization fails', async () => {
     const repository = new MemoryRepository(
       new Map(),
