@@ -748,6 +748,66 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('does not fail provider package activation when deferred adapter initialization fails', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['late-failing-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const providers: ProviderDefinitionInput[] = [];
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: providers.map((definition) => ({
+          packageName: '@owner/provider-package',
+          definition: ProviderDefinitionSchema.parse(definition),
+        })),
+        clients: [],
+      });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('late-failing-adapter', async () => {
+            throw new Error('Injected deferred init failure');
+          }, [{ definitionId: 'late-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+
+      await expect(
+        service.processAdapterContributions(
+          '@owner/provider-package',
+          createExtension('@owner/provider-package', [], providers),
+          TEST_EXTENSION_CONTEXT,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Deferred initialization failed for adapter "late-failing-adapter"'),
+        expect.any(Error),
+      );
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it('rejects a definition protocol that is absent from the adapter manifest protocols', async () => {
     const repository = new MemoryRepository(
       new Map(),

@@ -336,19 +336,26 @@ export class AdapterContributionProcessor {
   ): Promise<LoadedAdapter[]> {
     const initialized: LoadedAdapter[] = [];
     for (const adapter of this.registry.getLoadedAdapters()) {
-      if (this.registry.hasAdapterInstance(adapter)) continue;
-      if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
-      if (this.getMissingProviderDefinitionIds(adapter).length === 0) continue;
+      try {
+        if (this.registry.hasAdapterInstance(adapter)) continue;
+        if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
+        if (this.getMissingProviderDefinitionIds(adapter).length === 0) continue;
 
-      const providers = await resolveLoadedAdapterProviders(adapter, bus, providerModelCache);
-      const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
-      if (!refreshed || this.getMissingProviderDefinitionIds(refreshed).length > 0) continue;
+        const providers = await resolveLoadedAdapterProviders(adapter, bus, providerModelCache);
+        const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
+        if (!refreshed || this.getMissingProviderDefinitionIds(refreshed).length > 0) continue;
 
-      await this.registry.initializeAdapter(refreshed, this.platformDefaults);
-      console.info(
-        `[AdapterContributionProcessor] Initialized adapter: ${refreshed.name} (${refreshed.packageName}) after provider activation`,
-      );
-      initialized.push(refreshed);
+        await this.registry.initializeAdapter(refreshed, this.platformDefaults);
+        console.info(
+          `[AdapterContributionProcessor] Initialized adapter: ${refreshed.name} (${refreshed.packageName}) after provider activation`,
+        );
+        initialized.push(refreshed);
+      } catch (error) {
+        console.error(
+          `[AdapterContributionProcessor] Deferred initialization failed for adapter "${adapter.name}".`,
+          error,
+        );
+      }
     }
     return initialized;
   }
