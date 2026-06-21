@@ -98,6 +98,7 @@ export async function handleInfer<TBus extends ScopedBus<string>, TConnector ext
   // Build ConfigFactoryInput for the ephemeral connector
   const configInput: ConfigFactoryInput<TBus> = {
     bus: deps.adapterBus,
+    globalBus: deps.globalBus,
     agentId: ephemeralAgentId,
     adapterId: deps.adapterId,
     adapterName: deps.adapterName,
