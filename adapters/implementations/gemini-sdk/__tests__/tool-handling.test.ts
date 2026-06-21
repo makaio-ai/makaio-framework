@@ -101,6 +101,50 @@ describe('gemini tool handling', () => {
     ]);
   });
 
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    cleanups.push(
+      hostBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            {
+              name: 'search_repo',
+              description: 'Search the repository.',
+              toolsetName: 'registry',
+              inputSchema: { type: 'object' },
+            },
+            {
+              name: 'write_file',
+              description: 'Write a file.',
+              toolsetName: 'registry',
+              inputSchema: { type: 'object' },
+            },
+          ],
+          toolsets: [],
+        });
+      }),
+    );
+
+    await expect(
+      fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk', {
+        allowedTools: ['search_repo', 'write_file'],
+        disallowedTools: ['write_file'],
+      }),
+    ).resolves.toEqual([
+      {
+        name: 'search_repo',
+        description: 'Search the repository.',
+        parametersJsonSchema: { type: 'object' },
+      },
+    ]);
+
+    await expect(
+      fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk', {
+        allowedTools: [],
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it('falls back to the central tool registry when Gemini native lookup misses', async () => {
     const hostBus = createBusInstance();
     const emitSdkEvent = vi.fn(async () => {});

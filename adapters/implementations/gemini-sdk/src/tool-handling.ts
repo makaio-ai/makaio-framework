@@ -21,7 +21,11 @@ import {
   type AgentToolApproveResponse,
   type ToolListItem,
 } from '@makaio/contracts';
-import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
+import {
+  loadToolsFromRegistry,
+  filterToolsWithSchema,
+  type ToolRegistryLoadOptions,
+} from '@makaio/ai-adapters-stream-session';
 
 export type { ToolApprovalContext } from '@makaio/ai-adapters-core';
 
@@ -133,13 +137,15 @@ export function toGeminiToolFormat(tools: ToolListItem[]): GeminiRegistryToolDec
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns Gemini-formatted function declarations ready for GeminiChat construction
  */
 export async function fetchToolsForGemini(
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
+  options?: ToolRegistryLoadOptions,
 ): Promise<GeminiRegistryToolDeclaration[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toGeminiToolFormat(tools);
 }
