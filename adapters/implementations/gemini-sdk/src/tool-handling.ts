@@ -12,7 +12,7 @@
  * - fetchToolsForGemini: Load registry tools and convert to Gemini format
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { GeminiConnectorSubjects, type GeminiToolApprovalRequest } from './namespaces/index.js';
 import { createToolApprovalHandler, type ToolApprovalContext } from '@makaio/ai-adapters-core';
 import {
@@ -21,7 +21,11 @@ import {
   type AgentToolApproveResponse,
   type ToolListItem,
 } from '@makaio/contracts';
-import { loadToolsFromRegistry, filterToolsWithSchema } from '@makaio/ai-adapters-stream-session';
+import {
+  loadToolsFromRegistry,
+  filterToolsWithSchema,
+  type ToolRegistryLoadOptions,
+} from '@makaio/ai-adapters-stream-session';
 
 export type { ToolApprovalContext } from '@makaio/ai-adapters-core';
 
@@ -78,16 +82,18 @@ export const registerToolApprovalHandler = createToolApprovalHandler(
  * Convenience: Request tool approval via MakaioBus (round-trip).
  *
  * For cases where you need to call approval directly without bus.on() wiring.
+ * @param bus - Bus that owns AgentSubjects.toolApprove handlers.
  * @param payload - SDK acp.tool_approval payload
  * @param context - Context with adapterSessionId required
  * @returns Core tool approval response
  */
 export async function requestToolApproval(
+  bus: IMakaioBus,
   payload: GeminiToolApprovalRequest,
   context: ToolApprovalContext,
 ): Promise<AgentToolApproveResponse> {
   const request = toGlobalToolApproval(payload, context);
-  return MakaioBus.request(AgentSubjects.toolApprove, request);
+  return bus.request(AgentSubjects.toolApprove, request);
 }
 
 // --------------------------------------------------------------------------
@@ -128,14 +134,18 @@ export function toGeminiToolFormat(tools: ToolListItem[]): GeminiRegistryToolDec
 
 /**
  * Convenience: Load registry tools and convert to Gemini format in one call.
+ * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns Gemini-formatted function declarations ready for GeminiChat construction
  */
 export async function fetchToolsForGemini(
+  bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
+  options?: ToolRegistryLoadOptions,
 ): Promise<GeminiRegistryToolDeclaration[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
   return toGeminiToolFormat(tools);
 }

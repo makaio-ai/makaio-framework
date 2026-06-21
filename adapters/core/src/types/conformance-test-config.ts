@@ -1,5 +1,5 @@
 import type { BaseAgentConnectorConfig, AIAgentConnector } from '../agent/index.js';
-import type { ScopedBus } from '@makaio/bus-core';
+import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import type { AIAdapterInitOptions } from './ai-adapter-init-options.js';
 import type { AIAdapter } from '../adapter/ai-adapter.js';
 import type { AIAgent } from '../agent/ai-agent.js';
@@ -80,6 +80,7 @@ export interface ConformanceTestConfig<
   registerToolApprovalHandler(
     connector: TConnector,
     context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+    globalBus: IMakaioBus,
   ): () => void;
 
   /**

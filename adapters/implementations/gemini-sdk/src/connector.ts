@@ -14,7 +14,6 @@ import {
 } from '@makaio/ai-adapters-core';
 import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
 import { type Config, GeminiChat } from '@google/gemini-cli-core';
-import { MakaioBus } from '@makaio/bus-core';
 import { type SystemPrompt } from '@makaio/contracts';
 import type { GeminiConnectorConfig } from './types/index.js';
 import { type GeminiConnectorBus, GeminiConnectorNamespace, type SdkEvent } from './namespaces/index.js';
@@ -204,7 +203,10 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
   private async fetchTools(): Promise<void> {
     this.registryFetchAttempts += 1;
     try {
-      this.registryToolDeclarations = await fetchToolsForGemini(this.adapterId, this.adapterName);
+      this.registryToolDeclarations = await fetchToolsForGemini(this.globalBus, this.adapterId, this.adapterName, {
+        allowedTools: this.config.allowedTools,
+        disallowedTools: this.config.disallowedTools,
+      });
       this.registryToolNames = new Set(this.registryToolDeclarations.map((t) => t.name));
       this.registryToolsFetched = true;
     } catch (error) {
@@ -238,7 +240,7 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     // Harness lookups remain global-bus scoped: harness subjects live in the
     // global namespace, while credential refs resolve through the connector bus.
     const disabledNativeTools = await resolveDisabledNativeTools(
-      MakaioBus,
+      this.globalBus,
       this.adapterName,
       this.config.harnessId,
       this.config.clientId,
@@ -263,7 +265,8 @@ export class GeminiConnector extends ProceduralAgentConnector<GeminiConnectorBus
     }
 
     this.session = new GeminiConnectorSession({
-      bus: this.config.bus ?? (await GeminiConnectorNamespace.scopedBus()),
+      bus: this.config.bus ?? (await GeminiConnectorNamespace.scopedBus(this.globalBus.getContext())),
+      globalBus: this.globalBus,
       adapterId: this.config.adapterId ?? '',
       adapterName: this.config.adapterName ?? '',
       agentId: this.agentId,

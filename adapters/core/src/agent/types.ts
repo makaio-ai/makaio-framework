@@ -52,6 +52,10 @@ export interface AgentRuntimeInput {
   env?: Record<string, string>;
   /** Reasoning effort for supporting adapters */
   reasoningEffort?: AIReasoningLevel;
+  /** Allowed tool names. Empty array disables all adapter-visible tools. */
+  allowedTools?: string[];
+  /** Disallowed tool names. Takes precedence over allowedTools. */
+  disallowedTools?: string[];
 }
 
 /**
@@ -81,6 +85,7 @@ export type ExecutionContext = AgentContext;
 
 export interface MinimalAgentConnectorConfig<TBus extends ScopedBus<string> = ScopedBus<string>> {
   bus: TBus;
+  globalBus?: IMakaioBus;
 }
 
 /**

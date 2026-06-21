@@ -6,6 +6,7 @@
  */
 
 import type { AgentToolApproveResponse } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { isMcpCallTool, extractMcpCallTarget } from '@makaio/ai-adapters-core';
 
 import type { ToolCall } from '../namespaces/schemas/tool-calls.js';
@@ -17,6 +18,8 @@ import { boundToolResultContent, type ToolCallPayload, type ToolExecutionContext
  * Callbacks needed by {@link handleToolCalls}. Adapter-agnostic.
  */
 export type HandleToolCallsCallbacks = {
+  /** Host bus used for cross-namespace tool execution. */
+  bus: IMakaioBus;
   /** Emit SDK lifecycle events (tool_started, tool_completed). */
   emitSdkEvent: ToolLifecycleEmitter;
   /**
@@ -95,7 +98,7 @@ export async function handleToolCalls<TResult>(
     }
 
     applyApprovedArgs(toolCall, approval);
-    const executionResult = await executeTool(toolCall, callbacks.emitSdkEvent, contextOverrides);
+    const executionResult = await executeTool(callbacks.bus, toolCall, callbacks.emitSdkEvent, contextOverrides);
 
     if (executionResult.success) {
       // Record mcp_call invocations in the session tool ledger after successful

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { ExtensionContext, ToolDefinition } from '@mariozechner/pi-coding-agent';
 import { PiSdkProviderConfigSchema } from '../schemas.js';
-import { createPiToolHandler } from '../tool-conversion.js';
+import { createPiToolHandler, fetchToolsForPi } from '../tool-conversion.js';
 
 type ToolExecuteRequest = ExtractSubjectPayload<typeof ToolSubjects.execute>;
 const extensionContext = {} as ExtensionContext;
@@ -48,9 +48,10 @@ describe('createPiToolHandler', () => {
   });
 
   it('forwards full execution context to registry tool calls', async () => {
+    const hostBus = createBusInstance();
     let receivedPayload: ToolExecuteRequest | undefined;
 
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       receivedPayload = ctx.payload;
       ctx.setResult({
         success: true,
@@ -59,6 +60,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',
@@ -102,9 +104,10 @@ describe('createPiToolHandler', () => {
   });
 
   it('uses approval-rewritten input for registry execution', async () => {
+    const hostBus = createBusInstance();
     let receivedPayload: ToolExecuteRequest | undefined;
 
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       receivedPayload = ctx.payload;
       ctx.setResult({
         success: true,
@@ -113,6 +116,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',
@@ -128,7 +132,8 @@ describe('createPiToolHandler', () => {
   });
 
   it('throws when registry execution fails so Pi marks the tool result as an error', async () => {
-    MakaioBus.on(ToolSubjects.execute, (ctx) => {
+    const hostBus = createBusInstance();
+    hostBus.on(ToolSubjects.execute, (ctx) => {
       ctx.setResult({
         success: false,
         error: { code: 'READ_FAILED', message: 'Cannot read file' },
@@ -136,6 +141,7 @@ describe('createPiToolHandler', () => {
     });
 
     const handler = createPiToolHandler(registryTool, {
+      bus: hostBus,
       adapterId: 'adapter-pi-1',
       adapterName: 'pi-sdk',
       agentId: 'agent-1',
@@ -145,5 +151,64 @@ describe('createPiToolHandler', () => {
     });
 
     await expect(executePiTool(handler, 'tool-call-1', { path: 'missing.md' })).rejects.toThrow('Cannot read file');
+  });
+});
+
+describe('fetchToolsForPi', () => {
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          registryTool,
+          {
+            name: 'write_file',
+            description: 'Write a file',
+            toolsetName: 'filesystem',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        toolsets: [],
+      });
+    });
+
+    const tools = await fetchToolsForPi(
+      hostBus,
+      'adapter-pi-1',
+      'pi-sdk',
+      {
+        bus: hostBus,
+        adapterId: 'adapter-pi-1',
+        adapterName: 'pi-sdk',
+        agentId: 'agent-1',
+        sessionId: 'session-1',
+        cwd: '/repo',
+        env: {},
+      },
+      {
+        allowedTools: ['read_file', 'write_file'],
+        disallowedTools: ['write_file'],
+      },
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual(['read_file']);
+
+    await expect(
+      fetchToolsForPi(
+        hostBus,
+        'adapter-pi-1',
+        'pi-sdk',
+        {
+          bus: hostBus,
+          adapterId: 'adapter-pi-1',
+          adapterName: 'pi-sdk',
+          agentId: 'agent-1',
+          sessionId: 'session-1',
+          cwd: '/repo',
+          env: {},
+        },
+        { allowedTools: [] },
+      ),
+    ).resolves.toEqual([]);
   });
 });

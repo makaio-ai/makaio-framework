@@ -8,7 +8,7 @@ import {
 } from '@google/gemini-cli-core';
 import { GeminiConnectorSubjects, type SdkEvent } from '../namespaces/index.js';
 import type { GeminiConnector } from '../connector.js';
-import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
+import { NoHandlerError, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import { safeStringify } from '@makaio/utils';
 import { extractMcpCallTarget, isMcpCallTool, type ISessionToolLedger } from '@makaio/ai-adapters-core';
@@ -20,6 +20,8 @@ export type ToolApprovalFn = GeminiConnector['requestToolApproval'];
 export type HandleErrorFn = GeminiConnector['handleError'];
 
 export type ExecuteToolCallsOptions = {
+  /** Global bus that owns ToolRegistry execution handlers. */
+  bus: IMakaioBus;
   turnAbortController?: AbortController;
   geminiChat: GeminiChat;
   geminiConfig: Config;
@@ -38,7 +40,7 @@ export type ExecuteToolCallsOptions = {
   /**
    * Names of tools loaded from the central ToolRegistry.
    * When the SDK's internal ToolRegistry does not contain a tool name from this set,
-   * execution falls back to MakaioBus.request(ToolSubjects.execute, ...).
+   * execution falls back to ToolSubjects.execute on the injected host bus.
    */
   registryToolNames?: ReadonlySet<string>;
   /** Session tool ledger for recording mcp_call usage. */
@@ -63,6 +65,7 @@ export async function executeToolCalls(
 ): Promise<{ responseParts: GeminiPart[] }> {
   const {
     turnAbortController,
+    bus,
     geminiConfig,
     geminiChat,
     emitSdkEvent,
@@ -233,9 +236,9 @@ export async function executeToolCalls(
           invocation,
         });
       } else if (registryToolNames?.has(normalizedToolName)) {
-        // Registry tool fallback path: execute via MakaioBus
+        // Registry tool fallback path: execute via the host ToolRegistry bus.
         try {
-          const result = await MakaioBus.request(ToolSubjects.execute, {
+          const result = await bus.request(ToolSubjects.execute, {
             toolName: normalizedToolName,
             input: approvedArgs,
             adapterId,

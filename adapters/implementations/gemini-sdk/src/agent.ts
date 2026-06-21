@@ -398,18 +398,22 @@ export class GeminiAgent extends AIAgent<GeminiConnectorBus, GeminiConnector> {
    */
   private wireToolApprovalRpc(connector: GeminiConnector): void {
     this.addConnectorWiringCleanup(
-      registerToolApprovalHandler(connector, async () => {
-        if (this.sessionId == null) {
-          throw new Error('Agent sessionId is required for tool approval');
-        }
-        return {
-          adapterId: this.adapterId,
-          adapterName: this.adapterName,
-          agentId: this.agentId,
-          adapterSessionId: await this.getAdapterSessionId(),
-          sessionId: this.sessionId,
-        };
-      }),
+      registerToolApprovalHandler(
+        connector,
+        async () => {
+          if (this.sessionId == null) {
+            throw new Error('Agent sessionId is required for tool approval');
+          }
+          return {
+            adapterId: this.adapterId,
+            adapterName: this.adapterName,
+            agentId: this.agentId,
+            adapterSessionId: await this.getAdapterSessionId(),
+            sessionId: this.sessionId,
+          };
+        },
+        this.globalBus,
+      ),
     );
   }
 }

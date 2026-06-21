@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { resolveDisabledNativeTools } from '@makaio/ai-adapters-core';
 import type { ProviderContext } from '@makaio/contracts';
 import type { InitializeParams } from '../protocol/generated/index.js';
@@ -58,6 +58,8 @@ export interface ConnectionManagerContext {
   harnessId: string | undefined;
   /** Scoped bus used for credential resolution. */
   bus: SessionEnvironmentOptions['bus'];
+  /** Global bus used for cross-namespace harness policy lookup. */
+  globalBus: IMakaioBus;
   /**
    * Registers JSON-RPC notification and server-request handlers on the newly created client.
    * Called immediately after the client is assigned so handlers are in place before any
@@ -156,7 +158,7 @@ async function performConnectionInit(ctx: ConnectionManagerContext): Promise<voi
     // Harness lookups remain global-bus scoped: harness subjects live in the
     // global namespace, while credential refs resolve through the connector bus.
     ctx.setDisabledNativeTools(
-      new Set(await resolveDisabledNativeTools(MakaioBus, ctx.adapterName, ctx.harnessId, ctx.clientId)),
+      new Set(await resolveDisabledNativeTools(ctx.globalBus, ctx.adapterName, ctx.harnessId, ctx.clientId)),
     );
 
     // Superset of generated InitializeParams — adds experimentalApi capability for item/tool/call.

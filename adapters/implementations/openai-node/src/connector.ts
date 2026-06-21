@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import type { ChatCompletionTool } from 'openai/resources/index.js';
+import { MakaioBus } from '@makaio/bus-core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
 import { resolveConnectorCredentials } from '@makaio/ai-adapters-core/config';
@@ -105,7 +106,10 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       baseURL: baseUrl,
     });
 
-    this.openAITools = await fetchToolsForOpenAI(this.adapterId, this.adapterName);
+    this.openAITools = await fetchToolsForOpenAI(this.config.globalBus ?? MakaioBus, this.adapterId, this.adapterName, {
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
+    });
   }
 
   /**
@@ -119,7 +123,10 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
    * `onTurnStarted` so it uses the canonical turn number.
    */
   protected override async refreshTools(): Promise<void> {
-    this.openAITools = await fetchToolsForOpenAI(this.adapterId, this.adapterName);
+    this.openAITools = await fetchToolsForOpenAI(this.config.globalBus ?? MakaioBus, this.adapterId, this.adapterName, {
+      allowedTools: this.config.allowedTools,
+      disallowedTools: this.config.disallowedTools,
+    });
     await super.refreshTools(); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
     const session = this.getSession();
     session?.replaceNativeTools(this.openAITools);
@@ -164,6 +171,7 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       allowedDirectories: this.config.allowedDirectories,
       supportedReasoningLevels: this.config.supportedReasoningLevels,
       emitSdkEvent: this.emitSdkEvent.bind(this),
+      globalBus: this.config.globalBus ?? MakaioBus,
       handleError: this.handleError.bind(this),
       requestToolApproval: (payload) =>
         this.requestToolApprovalWithHandling(OpenAINodeConnectorSubjects.tool_approval, payload),

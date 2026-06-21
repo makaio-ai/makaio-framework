@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createBusInstance } from '@makaio/bus-core';
 import type { AgentToolApproveResponse } from '@makaio/contracts';
 import { GeminiConnectorNamespace } from '../src/namespaces/index.js';
 import { GeminiConnectorSession } from '../src/session.js';
@@ -6,6 +7,7 @@ import { GeminiConnectorSession } from '../src/session.js';
 describe('gemini-sdk session history rollback', () => {
   it('rolls history back to the captured length when retries follow a failed attempt', async () => {
     const bus = await GeminiConnectorNamespace.scopedBus();
+    const globalBus = createBusInstance();
     let history = [{ role: 'user' }, { role: 'model' }, { role: 'user' }];
     const geminiChat = {
       getHistory: () => history,
@@ -16,6 +18,7 @@ describe('gemini-sdk session history rollback', () => {
 
     const session = new GeminiConnectorSession({
       bus,
+      globalBus,
       adapterId: 'adapter-test',
       adapterName: 'gemini-sdk',
       agentId: 'agent-test',
@@ -43,6 +46,7 @@ describe('gemini-sdk session history rollback', () => {
 
   it('does not remove history when a failed attempt never appended a new entry', async () => {
     const bus = await GeminiConnectorNamespace.scopedBus();
+    const globalBus = createBusInstance();
     let history = [{ role: 'user' }, { role: 'model' }];
     const geminiChat = {
       getHistory: () => history,
@@ -53,6 +57,7 @@ describe('gemini-sdk session history rollback', () => {
 
     const session = new GeminiConnectorSession({
       bus,
+      globalBus,
       adapterId: 'adapter-test',
       adapterName: 'gemini-sdk',
       agentId: 'agent-test',

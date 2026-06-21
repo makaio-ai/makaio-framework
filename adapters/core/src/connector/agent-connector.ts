@@ -1,6 +1,7 @@
 // NOTE: do NOT change without explicit human approval
 /* eslint max-lines: ["error", { "max": 575 }] */
-import { NoHandlerError, OnOptions, RequestError, type IFilteredBus, type ScopedBus } from '@makaio/bus-core';
+import { MakaioBus, NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
+import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
   DirectoryNotFoundError,
   type HandlerForSubjectDefinition,
@@ -35,7 +36,6 @@ import { resolveTimeouts, type TrackedTimeoutConfig } from '@makaio/utils';
 
 type Forbid<T, K extends PropertyKey> = Omit<T, K> & { [P in K]?: never };
 type ForbiddenKeys = 'agentId' | 'adapterId' | 'adapterSessionId' | 'adapterName' | 'sessionId';
-
 /** Extract Subjects type parameter from a ScopedBus */
 type ExtractScopedBusSubjects<T> = T extends { withFilter: (...args: unknown[]) => IFilteredBus<string, infer S> }
   ? S
@@ -63,8 +63,9 @@ export abstract class AIAgentConnector<
   protected readonly sessionId?: string;
   /** Currently active message handle waiting for completion. */
   protected pendingMessageHandle?: MessageHandle;
-  /** Scoped event bus for adapter-specific emission. */
+  /** Scoped event bus for adapter-specific emission; global bus owns cross-namespace runtime requests. */
   private readonly scopedBus: Pick<IFilteredBus<TBus['namespace'], ExtractScopedBusSubjects<TBus>>, 'emit' | 'request'>;
+  protected readonly globalBus: IMakaioBus;
   /** Filtered event bus for agent-specific (filtered by agentId) message handling. */
   private readonly filteredBus: Pick<IFilteredBus<TBus['namespace'], ExtractScopedBusSubjects<TBus>>, 'on' | 'once'>;
   /** Optional error handler callback. */
@@ -112,6 +113,7 @@ export abstract class AIAgentConnector<
     if (!fs.existsSync(cwd)) throw new DirectoryNotFoundError(cwd);
     this.agentId = config.agentId ?? crypto.randomUUID();
     this.scopedBus = config.bus;
+    this.globalBus = config.globalBus ?? MakaioBus;
     this.filteredBus = config.bus.withFilter({
       agentId: this.agentId,
     });

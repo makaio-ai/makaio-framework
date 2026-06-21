@@ -86,8 +86,8 @@ export const createTestConfig = async (
         requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
       }),
     bus,
-    registerToolApprovalHandler: (connector, context) =>
-      registerToolApprovalHandler(connector, ClaudeCodeConnectorSubjects, context),
+    registerToolApprovalHandler: (connector, context, globalBus) =>
+      registerToolApprovalHandler(connector, ClaudeCodeConnectorSubjects, context, globalBus),
     capabilities: {
       supportsReplace: true,
       supportsInterrupt: true,

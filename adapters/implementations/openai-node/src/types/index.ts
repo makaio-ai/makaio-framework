@@ -1,4 +1,4 @@
-import type { ScopedBus } from '@makaio/bus-core';
+import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
   type BaseAgentConnectorConfig,
   type MessageHandle,
@@ -98,6 +98,7 @@ export type ToolApprovalResponse = ExtractSubjectResponse<typeof OpenAINodeConne
 /** Configuration for OpenAI session lifecycle management */
 export interface OpenAISessionConfig {
   bus: OpenAINodeConnectorBus;
+  globalBus?: IMakaioBus;
   adapterId: string;
   adapterName: string;
   /** Agent ID for tool execution attribution */

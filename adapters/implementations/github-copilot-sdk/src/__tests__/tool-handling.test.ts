@@ -6,9 +6,9 @@
  *   success/denial/abort result shapes
  * - `fetchToolsForCopilot`: empty-array fallback when registry is unavailable
  *
- * Strategy: All I/O goes through the real MakaioBus so we test the actual
- * integration path rather than mocked internals. Bus handlers are registered
- * per test via `afterEach` cleanups and cleared via `MakaioBus.__resetHandlers`.
+ * Strategy: All I/O goes through real bus instances so we test the actual
+ * integration path rather than mocked internals. Singleton bus handlers are
+ * registered per test via `afterEach` cleanups and cleared via `MakaioBus.__resetHandlers`.
  *
  * Vitest runs tests within a single file sequentially by default, so the
  * shared `MakaioBus.__resetHandlers()` cleanup is safe without
@@ -16,7 +16,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { ToolInvocation } from '@github/copilot-sdk';
 import { toCopilotToolFormat, fetchToolsForCopilot } from '../tool-handling.js';
@@ -28,6 +28,7 @@ import type { CopilotToolHandlerContext } from '../tool-handling.js';
 
 function makeContext(overrides: Partial<CopilotToolHandlerContext> = {}): CopilotToolHandlerContext {
   return {
+    bus: MakaioBus,
     adapterId: 'adapter-1',
     adapterName: 'github-copilot-sdk',
     agentId: 'agent-1',
@@ -383,8 +384,9 @@ describe('fetchToolsForCopilot', () => {
   });
 
   it('converts tools loaded from the registry to SDK format', async () => {
+    const hostBus = createBusInstance();
     cleanups.push(
-      MakaioBus.on(ToolSubjects.list, (ctx) => {
+      hostBus.on(ToolSubjects.list, (ctx) => {
         ctx.setResult({
           tools: [
             {
@@ -399,7 +401,7 @@ describe('fetchToolsForCopilot', () => {
       }),
     );
 
-    const result = await fetchToolsForCopilot(makeContext());
+    const result = await fetchToolsForCopilot(makeContext({ bus: hostBus }));
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -408,6 +410,33 @@ describe('fetchToolsForCopilot', () => {
       parameters: { type: 'object', properties: { path: { type: 'string' } } },
     });
     expect(typeof result[0]!.handler).toBe('function');
+  });
+
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    cleanups.push(
+      hostBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            makeToolListItem({ name: 'search_repo' }),
+            makeToolListItem({ name: 'write_file', description: 'Write a file.' }),
+          ],
+          toolsets: [],
+        });
+      }),
+    );
+
+    const result = await fetchToolsForCopilot(
+      makeContext({
+        bus: hostBus,
+        allowedTools: ['search_repo', 'write_file'],
+        disallowedTools: ['write_file'],
+      }),
+    );
+
+    expect(result.map((tool) => tool.name)).toEqual(['search_repo']);
+
+    await expect(fetchToolsForCopilot(makeContext({ bus: hostBus, allowedTools: [] }))).resolves.toEqual([]);
   });
 
   it('filters out registry tools without inputSchema', async () => {

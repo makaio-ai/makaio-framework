@@ -11,7 +11,6 @@ import {
   type LedgerSessionContext,
   type AIReasoningLevel,
 } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
 import type { ScopedBus } from '@makaio/bus-core';
 import { McpSubjects, type McpSessionContext, type ToolListItem } from '@makaio/contracts';
 
@@ -349,7 +348,7 @@ export abstract class BaseStreamConnector<
     if (!ctx || !('sessionId' in ctx)) return;
 
     try {
-      this.mcpSessionContextCache = await MakaioBus.request(McpSubjects.session.resolve, {
+      this.mcpSessionContextCache = await this.globalBus.request(McpSubjects.session.resolve, {
         sessionId: ctx.sessionId,
         profileId: ctx.profileId,
         projectId: ctx.projectId,

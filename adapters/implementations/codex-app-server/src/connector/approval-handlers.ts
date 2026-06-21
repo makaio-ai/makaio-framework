@@ -16,6 +16,7 @@ import {
   type DynamicToolCallServerRequest,
   type DynamicToolCallResponse,
 } from '../dynamic-tool-handling.js';
+import type { IMakaioBus } from '@makaio/bus-core';
 
 /**
  * Approval response returned to the server.
@@ -152,6 +153,8 @@ export async function handleFileChangeApprovalRequest(
  * Context needed for dynamic tool call approval and execution.
  */
 export interface DynamicToolApprovalContext {
+  /** Global bus that owns ToolRegistry execution handlers. */
+  bus: IMakaioBus;
   /** Bound requestToolApproval from AIAgentConnector — typed loosely to avoid coupling */
   requestToolApproval: (subject: unknown, payload: unknown) => Promise<ApprovalResponse>;
   /** Scoped bus emit function for emitting lifecycle events */
@@ -288,6 +291,7 @@ export async function handleDynamicToolCallApprovalRequest(
   }
 
   const response = await handleDynamicToolCall(params, {
+    bus: ctx.bus,
     sessionId: ctx.sessionId,
     adapterSessionId: ctx.adapterSessionId,
     agentId: ctx.agentId,

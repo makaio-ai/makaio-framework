@@ -7,7 +7,7 @@
  * carefully (try/catch with error event emission).
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { type ToolExecuteResult, ToolSubjects } from '@makaio/contracts';
 import type { ToolStartedEvent, ToolCompletedEvent } from '@makaio/ai-adapters-core';
 
@@ -30,12 +30,14 @@ export type ToolLifecycleEmitter = (event: ToolStartedEvent | ToolCompletedEvent
  * Emits tool_started before execution and tool_completed after (on both
  * success and failure paths). On bus error the error is re-thrown after
  * the tool_completed failure event is emitted.
+ * @param bus - Bus that owns the ToolRegistry handlers
  * @param toolCall - The normalized tool call to execute
  * @param emitSdkEvent - Callback to emit SDK lifecycle events
  * @param contextOverrides - Execution context (cwd, env, sessionId, agentId, turnId)
  * @returns Tool execution result
  */
 export async function executeTool(
+  bus: IMakaioBus,
   toolCall: ToolCall,
   emitSdkEvent: ToolLifecycleEmitter,
   contextOverrides: ToolExecutionContextOverrides,
@@ -52,7 +54,7 @@ export async function executeTool(
 
     // Execute tool via bus RPC (cross-namespace request via global MakaioBus).
     // Inject toolCallId so tools can access the originating tool call ID.
-    const result = await MakaioBus.request(ToolSubjects.execute, {
+    const result = await bus.request(ToolSubjects.execute, {
       toolName: toolCall.function.name,
       input,
       adapterId: contextOverrides.adapterId,

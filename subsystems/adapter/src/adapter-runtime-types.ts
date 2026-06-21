@@ -1,4 +1,10 @@
-import type { ProtocolId, AdapterClientRef, AdapterProviderDefinitionContract } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type {
+  ProtocolId,
+  AdapterClientRef,
+  AdapterProviderDefinitionContract,
+  AdapterProviderRef,
+} from '@makaio/contracts';
 import type { HelpLink } from '@makaio/services-core/settings';
 import type { z } from 'zod';
 
@@ -50,6 +56,14 @@ export interface AdapterInitOptions {
    * Omit for API-only adapters.
    */
   clientId?: string;
+  /**
+   * Global bus instance for cross-adapter communication.
+   *
+   * When provided, the adapter registers its RPC handlers (e.g. `adapter.startAgent`)
+   * on this bus instead of falling back to the `MakaioBus` singleton. Required for
+   * downstream consumers where the runtime bus differs from the default singleton.
+   */
+  globalBus?: IMakaioBus;
 }
 
 /**
@@ -104,6 +118,13 @@ export interface LoadedAdapter {
   /** Adapter-wide config schema (runtime-only, for adapter-level settings). */
   adapterConfigSchema?: z.ZodObject<z.ZodRawShape>;
   /**
+   * Provider definition IDs declared by the adapter, including definitions whose
+   * provider extensions are not active yet.
+   */
+  providerDefinitionIds: readonly string[];
+  /** Adapter provider references, including schema overrides, used for delayed provider resolution. */
+  providerRefs: readonly AdapterProviderRef[];
+  /**
    * Provider definitions with presets and per-provider schemas.
    *
    * Uses `AdapterProviderDefinitionContract` from `@makaio/contracts` as the
@@ -112,6 +133,10 @@ export interface LoadedAdapter {
    * contract and is assignment-compatible.
    */
   providers: LoadedAdapterProvider[];
+  /** Adapter-level provider config schema applied during delayed provider resolution. */
+  providerConfigSchema?: z.ZodObject<z.ZodRawShape>;
+  /** Adapter-level provider credential schema applied during delayed provider resolution. */
+  providerCredentialSchema?: z.ZodObject<z.ZodRawShape>;
   /** Help links for documentation. */
   helpLinks?: readonly HelpLink[];
   /** Setup instructions in Markdown format. */

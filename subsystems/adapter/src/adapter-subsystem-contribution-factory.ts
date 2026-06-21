@@ -29,7 +29,7 @@ export function createAdapterSubsystemContributionProcessor(
   deps: AdapterSubsystemContributionProcessorDeps,
 ): ContributionProcessor {
   return {
-    filter: (pkg) => !!pkg.adapters?.length,
+    filter: (pkg) => !!pkg.adapters?.length || !!pkg.providers?.length,
 
     async processActivated(name, pkg, ctx) {
       const service = deps.getAdapterSubsystemService();

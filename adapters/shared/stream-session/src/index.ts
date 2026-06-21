@@ -23,6 +23,7 @@ export type {
   ToolCallPayload,
   ToolExecutionContextOverrides,
   ToolLifecycleEmitter,
+  ToolRegistryLoadOptions,
   ToolResultBuilder,
 } from './tool-handling/index.js';
 export {

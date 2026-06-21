@@ -346,18 +346,22 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
    */
   private wireToolApprovalRpc(connector: PiConnector): void {
     this.addConnectorWiringCleanup(
-      registerToolApprovalHandler(connector, async () => {
-        if (this.sessionId == null) {
-          throw new Error('[PiAgent] sessionId is required for tool approval');
-        }
-        return {
-          adapterId: this.adapterId,
-          adapterName: this.adapterName,
-          agentId: this.agentId,
-          adapterSessionId: await this.getAdapterSessionId(),
-          sessionId: this.sessionId,
-        };
-      }),
+      registerToolApprovalHandler(
+        connector,
+        async () => {
+          if (this.sessionId == null) {
+            throw new Error('[PiAgent] sessionId is required for tool approval');
+          }
+          return {
+            adapterId: this.adapterId,
+            adapterName: this.adapterName,
+            agentId: this.agentId,
+            adapterSessionId: await this.getAdapterSessionId(),
+            sessionId: this.sessionId,
+          };
+        },
+        this.globalBus,
+      ),
     );
   }
 }

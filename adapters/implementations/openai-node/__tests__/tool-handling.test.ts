@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type AgentToolApproveResponse } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import type { ChatCompletionMessageFunctionToolCall } from 'openai/resources/index.js';
-import { executeTool, handleToolCalls } from '../src/tool-handling.js';
+import { executeTool, fetchToolsForOpenAI, handleToolCalls } from '../src/tool-handling.js';
 import { OpenAINodeConnectorSubjects } from '../src/namespaces/index.js';
 
 type ToolExecuteRequest = ExtractSubjectPayload<typeof ToolSubjects.execute>;
@@ -28,6 +28,36 @@ describe('tool-handling turnContext forwarding', () => {
     MakaioBus.__resetHandlers?.();
   });
 
+  it('applies allowed tool filters before OpenAI SDK conversion', async () => {
+    const hostBus = createBusInstance();
+
+    hostBus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [
+          {
+            name: 'allowed_tool',
+            description: 'Allowed',
+            toolsetName: 'test',
+            inputSchema: { type: 'object', properties: {} },
+          },
+          {
+            name: 'other_tool',
+            description: 'Other',
+            toolsetName: 'test',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
+        toolsets: [{ name: 'test', description: 'Test tools', version: '1.0.0', toolCount: 2 }],
+      });
+    });
+
+    const tools = await fetchToolsForOpenAI(hostBus, 'adapter-openai-1', 'openai-node', {
+      allowedTools: ['allowed_tool'],
+    });
+
+    expect(tools.map((tool) => (tool.type === 'function' ? tool.function.name : undefined))).toEqual(['allowed_tool']);
+  });
+
   it('forwards turnContext in executeTool contextOverrides', async () => {
     let receivedPayload: ToolExecuteRequest | undefined;
 
@@ -41,6 +71,7 @@ describe('tool-handling turnContext forwarding', () => {
 
     const sdkEvents: Array<{ eventType: string }> = [];
     const result = await executeTool(
+      MakaioBus,
       createToolCall(),
       async (event) => {
         sdkEvents.push({ eventType: event.eventType });
@@ -90,6 +121,7 @@ describe('tool-handling turnContext forwarding', () => {
     const messages = await handleToolCalls(
       [createToolCall()],
       {
+        bus: MakaioBus,
         emitSdkEvent: async () => {},
         requestToolApproval: async () => approval,
       },
@@ -140,6 +172,7 @@ describe('tool-handling turnContext forwarding', () => {
     const messages = await handleToolCalls(
       [createToolCall()],
       {
+        bus: MakaioBus,
         emitSdkEvent: async () => {},
         requestToolApproval: async () => approval,
       },
@@ -172,6 +205,7 @@ describe('tool-handling turnContext forwarding', () => {
     await handleToolCalls(
       [toolCall],
       {
+        bus: MakaioBus,
         emitSdkEvent: async () => {},
         requestToolApproval: async () => approval,
       },
@@ -198,6 +232,7 @@ describe('tool-handling turnContext forwarding', () => {
     await handleToolCalls(
       [createToolCall()],
       {
+        bus: MakaioBus,
         emitSdkEvent: async () => {},
         requestToolApproval: async (payload) => {
           approvalPayload = payload;

@@ -16,7 +16,7 @@ import type { AgentToolApproveRequest, AgentToolApproveResponse } from '@makaio/
 import { AgentSubjects } from '@makaio/contracts';
 import { AIAgentConnector } from '@makaio/ai-adapters-core';
 import type { ToolApprovalContext } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type {
   CommandExecutionRequestApprovalParams,
   FileChangeRequestApprovalParams,
@@ -158,11 +158,13 @@ export function fromGlobalToolApproval(response: AgentToolApproveResponse): Code
  * Used by both createTestConfig (test harness) and agent.ts (production).
  * @param connector - Connector for Codex App-Server adapter (needs `on` and `getTimeoutMs` methods)
  * @param context - Adapter context (can be lazy callback)
+ * @param globalBus - Bus that owns AgentSubjects.toolApprove handlers.
  * @returns Unsubscribe function that removes both handlers
  */
 export function registerToolApprovalHandler(
   connector: AIAgentConnector,
   context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+  globalBus: IMakaioBus,
 ): () => void {
   // Use connector's configured timeout (must be shorter than JSON-RPC server's request timeout)
   const timeout = connector.getTimeoutMs('toolApproval');
@@ -220,7 +222,7 @@ export function registerToolApprovalHandler(
         logToolApprovalDebug('requesting global approval', { agentId: request.agentId, timestamp: Date.now() });
       }
 
-      globalResponse = await MakaioBus.request(AgentSubjects.toolApprove, request, { timeout });
+      globalResponse = await globalBus.request(AgentSubjects.toolApprove, request, { timeout });
     } catch (error) {
       console.error('[registerToolApprovalHandler] Tool approval request failed:', error);
       const errorDetails = error instanceof Error ? `: ${error.message}` : '';

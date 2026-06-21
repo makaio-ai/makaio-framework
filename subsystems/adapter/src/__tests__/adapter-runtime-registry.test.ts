@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   AdapterSubjects,
+  ProviderDefinitionSchema,
   type AdapterContribution,
   type ProviderDefinitionInput,
   createClientDefinition,
@@ -24,7 +25,7 @@ import { AdapterRuntimeRegistry } from '../adapter-runtime-registry.js';
 import { AdapterSubsystemService } from '../adapter-subsystem-service.js';
 import { initializeEnabledAdapters } from '../adapter-runtime-lifecycle.js';
 import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-client-refs.js';
-import type { AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
+import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
 
 const TEST_EXTENSION_CONTEXT: KernelExtensionContext = {
@@ -149,6 +150,8 @@ function createLoadedAdapter(name: string, packageName: string): LoadedAdapter {
     options: {
       adapterId: buildDeterministicAdapterId(TEST_MACHINE_ID, name),
     },
+    providerDefinitionIds: [],
+    providerRefs: [],
     providers: [],
   };
 }
@@ -616,7 +619,7 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('fails activation before registration when a declared provider is absent from the catalog', async () => {
+  it('loads adapter with empty providers when a declared provider is absent from the catalog', async () => {
     const repository = new MemoryRepository(
       new Map(),
       new Map<string, AdapterFile>([
@@ -632,8 +635,17 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
-    await expect(
-      service.processAdapterContributions(
+    const registeredProviderDefinitionIds: string[][] = [];
+    const offRegistered = MakaioBus.on(
+      AdapterSubsystemSubjects.adapter.registered,
+      (ctx) => {
+        registeredProviderDefinitionIds.push([...ctx.payload.providerDefinitionIds]);
+      },
+      { filter: { adapterName: 'missing-provider-adapter' } },
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await service.processAdapterContributions(
         '@owner/adapter-package',
         createExtension('@owner/adapter-package', [
           createContribution(
@@ -643,11 +655,216 @@ describe('AdapterContributionProcessor rollback', () => {
           ),
         ]),
         TEST_EXTENSION_CONTEXT,
-      ),
-    ).rejects.toThrow(/missing-provider.*dependencies/);
+      );
 
-    expect(service.getLoadedAdapters()).toEqual([]);
-    expect(service.getAdapterInstances().size).toBe(0);
+      expect(service.getLoadedAdapters()).toHaveLength(1);
+      expect(service.getLoadedAdapters()[0]?.providers).toEqual([]);
+      expect(service.getLoadedAdapters()[0]?.providerDefinitionIds).toEqual(['missing-provider']);
+      expect(registeredProviderDefinitionIds).toEqual([['missing-provider']]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('missing-provider'));
+    } finally {
+      offRegistered();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('resolves declared provider definitions when their provider extension becomes active later', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['late-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const providers: ProviderDefinitionInput[] = [];
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterOptions = options as AdapterInitOptions;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+    });
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: providers.map((definition) => ({
+          packageName: '@owner/provider-package',
+          definition: ProviderDefinitionSchema.parse(definition),
+        })),
+        clients: [],
+      });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('late-provider-adapter', factory, [{ definitionId: 'late-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      await expect(
+        MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
+          adapterName: 'late-provider-adapter',
+        }),
+      ).resolves.toEqual({ definitions: [] });
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
+
+      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+
+      await service.processAdapterContributions(
+        '@owner/provider-package',
+        createExtension('@owner/provider-package', [], providers),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      await expect(
+        MakaioBus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
+          adapterName: 'late-provider-adapter',
+        }),
+      ).resolves.toEqual({
+        definitions: [{ id: 'late-provider', name: 'Late Provider', availableModels: [] }],
+      });
+      await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'late-provider' })).resolves.toMatchObject({
+        provider: {
+          id: 'late-provider',
+          packageName: '@owner/provider-package',
+          name: 'Late Provider',
+        },
+      });
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+      expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders?.[0]?.definition.id).toBe(
+        'late-provider',
+      );
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('uses providers from the activating extension when retrying deferred adapter initialization', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['activating-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }],
+      ]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterOptions = options as AdapterInitOptions;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+    });
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({ providers: [], clients: [] });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('activating-provider-adapter', factory, [{ definitionId: 'activating-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
+
+      await service.processAdapterContributions(
+        '@owner/provider-package',
+        createExtension(
+          '@owner/provider-package',
+          [],
+          [{ id: 'activating-provider', name: 'Activating Provider', availableModels: [] }],
+        ),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+      expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders?.[0]).toMatchObject({
+        providerPackageName: '@owner/provider-package',
+        definition: { id: 'activating-provider', name: 'Activating Provider' },
+      });
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not fail provider package activation when deferred adapter initialization fails', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([['late-failing-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }]]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const providers: ProviderDefinitionInput[] = [];
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: providers.map((definition) => ({
+          packageName: '@owner/provider-package',
+          definition: ProviderDefinitionSchema.parse(definition),
+        })),
+        clients: [],
+      });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('late-failing-adapter', async () => {
+            throw new Error('Injected deferred init failure');
+          }, [{ definitionId: 'late-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      providers.push({ id: 'late-provider', name: 'Late Provider', availableModels: [] });
+
+      await expect(
+        service.processAdapterContributions(
+          '@owner/provider-package',
+          createExtension('@owner/provider-package', [], providers),
+          TEST_EXTENSION_CONTEXT,
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Deferred initialization failed for adapter "late-failing-adapter"'),
+        expect.any(Error),
+      );
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it('rejects a definition protocol that is absent from the adapter manifest protocols', async () => {
@@ -816,6 +1033,45 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('passes the runtime bus as globalBus to the adapter factory', async () => {
+    const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'bus-check-adapter');
+    const adapterInstances = new Map<string, AdapterInstance>();
+    let capturedGlobalBus: unknown;
+    const offGetConfig = MakaioBus.on(AdapterSubsystemSubjects.getAdapterConfig, (ctx) => {
+      ctx.setResult({ config: { name: 'bus-check-adapter', enabled: true, bindings: [] } });
+    });
+
+    try {
+      await initializeEnabledAdapters(
+        MakaioBus,
+        TEST_MACHINE_ID,
+        [
+          {
+            name: 'bus-check-adapter',
+            displayName: 'Bus Check Adapter',
+            packageName: '@owner/bus-check-package',
+            factory: async (options?: unknown) => {
+              const opts = options as Record<string, unknown>;
+              capturedGlobalBus = opts?.globalBus;
+              return { adapterId: readAdapterFactoryOptions(options).adapterId };
+            },
+            options: { adapterId },
+            providerDefinitionIds: [],
+            providerRefs: [],
+            providers: [],
+          },
+        ],
+        adapterInstances,
+        TEST_PLATFORM_DEFAULTS,
+      );
+
+      expect(capturedGlobalBus).toBe(MakaioBus);
+    } finally {
+      offGetConfig();
+      adapterInstances.clear();
+    }
+  });
+
   it('rolls back a directly initialized instance when adapter.initialized emission fails', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'event-failing-adapter');
     const shutdown = vi.fn().mockResolvedValue(undefined);
@@ -842,6 +1098,8 @@ describe('AdapterContributionProcessor rollback', () => {
                 shutdown,
               }),
               options: { adapterId },
+              providerDefinitionIds: [],
+              providerRefs: [],
               providers: [],
             },
           ],

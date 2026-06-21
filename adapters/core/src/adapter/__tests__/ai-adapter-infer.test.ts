@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
@@ -165,7 +165,7 @@ function buildAdapter<T extends TestAdapter>(
   name: string,
   behavior: ConnectorBehavior,
   capture: AdapterCapture,
-  options?: { definitionProviders?: AdapterProviderDefinition[] },
+  options?: { definitionProviders?: AdapterProviderDefinition[]; globalBus?: IMakaioBus },
 ): T {
   const { bus: scopedBus } = createMockScopedBus();
   const namespace = createAdapterNamespace(name, {});
@@ -176,7 +176,7 @@ function buildAdapter<T extends TestAdapter>(
     nativeTools: [],
     namespace,
     scopedBus,
-    globalBus: MakaioBus,
+    globalBus: options?.globalBus ?? MakaioBus,
     agentFactory: (config: AIAgentConfig<TestBus, ConfigurableConnector>) => {
       capture.agentConfigs.push(config);
       return new TestAgent(config);
@@ -256,6 +256,28 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.connectors[0]?.capturedStartMessage?.message).toBe('infer this');
     expect(capture.connectors[0]?.capturedStartSystemPrompt).toBe('classification-system-prompt');
     expect(capture.connectors[0]?.closeCalls).toBe(1);
+  });
+
+  it('passes the injected globalBus through infer config factory input', async () => {
+    const hostBus = createBusInstance();
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    adapter = buildAdapter(TestAdapter, 'test-adapter-infer-host-bus', { inferredText: 'host-bus-ok' }, capture, {
+      globalBus: hostBus,
+    });
+    await adapter.init();
+
+    const result = await hostBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer this',
+    });
+
+    expect(result.text).toBe('host-bus-ok');
+    expect(capture.configFactoryInputs).toHaveLength(1);
+    expect(capture.configFactoryInputs[0]?.globalBus).toBe(hostBus);
   });
 
   it('forwards responseSchema from infer payload to connector initialize and start', async () => {

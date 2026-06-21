@@ -18,12 +18,13 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolExecutionContextOverrides, type ToolListItem } from '@makaio/contracts';
 import {
   loadToolsFromRegistry,
   filterToolsWithSchema,
   boundToolResultContent,
+  type ToolRegistryLoadOptions,
 } from '@makaio/ai-adapters-stream-session';
 import { safeJsonStringify } from '@makaio/ai-adapters-core';
 import { defineTool } from '@mariozechner/pi-coding-agent';
@@ -37,6 +38,8 @@ import type { ToolDefinition } from '@mariozechner/pi-coding-agent';
  * global bus and attribute results to the correct session.
  */
 export interface PiToolHandlerContext {
+  /** Global bus that owns ToolRegistry execution handlers. */
+  bus: IMakaioBus;
   /** Adapter instance ID */
   adapterId: string;
   /** Adapter type name */
@@ -105,7 +108,7 @@ export function createPiToolHandler(
 ): ToolDefinition['execute'] {
   return async (toolCallId, params) => {
     const input = context.consumeApprovedToolInput?.(toolCallId) ?? params;
-    const result = await MakaioBus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(ToolSubjects.execute, {
       toolName: tool.name,
       input,
       adapterId: context.adapterId,
@@ -153,16 +156,20 @@ export function toPiToolFormat(tools: ToolListItem[], context: PiToolHandlerCont
  *
  * Wraps `loadToolsFromRegistry` (which never throws) and `toPiToolFormat`.
  * Returns an empty array when no tools are registered or the registry is unavailable.
+ * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for registry filtering
  * @param adapterName - Adapter type name for registry filtering
  * @param context - Adapter identity for bus routing in the execute handlers
+ * @param options - Optional adapter runtime tool allow/deny filters.
  * @returns Pi SDK ToolDefinition[] ready for `CreateAgentSessionOptions.customTools`
  */
 export async function fetchToolsForPi(
+  bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   context: PiToolHandlerContext,
+  options?: ToolRegistryLoadOptions,
 ): Promise<ToolDefinition[]> {
-  const tools = await loadToolsFromRegistry(adapterId, adapterName);
-  return toPiToolFormat(tools, context);
+  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
+  return toPiToolFormat(tools, { ...context, bus });
 }

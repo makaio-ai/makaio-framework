@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { Config, GeminiChat, ToolCallRequestInfo } from '@google/gemini-cli-core';
 import { fetchToolsForGemini, toGeminiToolFormat } from '../src/tool-handling.js';
@@ -75,8 +75,9 @@ describe('gemini tool handling', () => {
   });
 
   it('loads registry tools through ToolSubjects.list', async () => {
+    const hostBus = createBusInstance();
     cleanups.push(
-      MakaioBus.on(ToolSubjects.list, (ctx) => {
+      hostBus.on(ToolSubjects.list, (ctx) => {
         ctx.setResult({
           tools: [
             {
@@ -91,7 +92,7 @@ describe('gemini tool handling', () => {
       }),
     );
 
-    await expect(fetchToolsForGemini('adapter-1', 'gemini-sdk')).resolves.toEqual([
+    await expect(fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk')).resolves.toEqual([
       {
         name: 'search_repo',
         description: 'Search the repository.',
@@ -100,7 +101,52 @@ describe('gemini tool handling', () => {
     ]);
   });
 
+  it('applies runtime tool filters before converting registry tools', async () => {
+    const hostBus = createBusInstance();
+    cleanups.push(
+      hostBus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [
+            {
+              name: 'search_repo',
+              description: 'Search the repository.',
+              toolsetName: 'registry',
+              inputSchema: { type: 'object' },
+            },
+            {
+              name: 'write_file',
+              description: 'Write a file.',
+              toolsetName: 'registry',
+              inputSchema: { type: 'object' },
+            },
+          ],
+          toolsets: [],
+        });
+      }),
+    );
+
+    await expect(
+      fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk', {
+        allowedTools: ['search_repo', 'write_file'],
+        disallowedTools: ['write_file'],
+      }),
+    ).resolves.toEqual([
+      {
+        name: 'search_repo',
+        description: 'Search the repository.',
+        parametersJsonSchema: { type: 'object' },
+      },
+    ]);
+
+    await expect(
+      fetchToolsForGemini(hostBus, 'adapter-1', 'gemini-sdk', {
+        allowedTools: [],
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it('falls back to the central tool registry when Gemini native lookup misses', async () => {
+    const hostBus = createBusInstance();
     const emitSdkEvent = vi.fn(async () => {});
     const requestToolApproval = vi.fn(async () => ({ action: 'allow' as const }));
 
@@ -108,7 +154,7 @@ describe('gemini tool handling', () => {
     const geminiChat = createMockGeminiChat();
 
     cleanups.push(
-      MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      hostBus.on(ToolSubjects.execute, (ctx) => {
         ctx.setResult({
           success: true,
           data: { output: 'central result' },
@@ -125,6 +171,7 @@ describe('gemini tool handling', () => {
     };
 
     const result = await executeToolCalls([toolCall], {
+      bus: hostBus,
       geminiConfig,
       geminiChat,
       emitSdkEvent,
@@ -160,6 +207,7 @@ describe('gemini tool handling', () => {
   });
 
   it('records mcp_call targets in the session tool ledger', async () => {
+    const hostBus = createBusInstance();
     const emitSdkEvent = vi.fn(async () => {});
     const requestToolApproval = vi.fn(async () => ({ action: 'allow' as const }));
     const recordCall = vi.fn();
@@ -168,7 +216,7 @@ describe('gemini tool handling', () => {
     const geminiChat = createMockGeminiChat();
 
     cleanups.push(
-      MakaioBus.on(ToolSubjects.execute, (ctx) => {
+      hostBus.on(ToolSubjects.execute, (ctx) => {
         ctx.setResult({
           success: true,
           data: { output: 'ok' },
@@ -185,6 +233,7 @@ describe('gemini tool handling', () => {
     };
 
     await executeToolCalls([toolCall], {
+      bus: hostBus,
       geminiConfig,
       geminiChat,
       emitSdkEvent,

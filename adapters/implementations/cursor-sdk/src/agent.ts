@@ -345,18 +345,22 @@ export class CursorSdkAgent extends AIAgent<CursorSdkBus, CursorSdkConnector> {
    */
   private wireToolApprovalRpc(connector: CursorSdkConnector): void {
     this.addConnectorWiringCleanup(
-      registerToolApprovalHandler(connector, async () => {
-        if (this.sessionId == null) {
-          throw new Error('[CursorSdkAgent] sessionId is required for tool approval');
-        }
-        return {
-          adapterId: this.adapterId,
-          adapterName: this.adapterName,
-          agentId: this.agentId,
-          adapterSessionId: await this.getAdapterSessionId(),
-          sessionId: this.sessionId,
-        };
-      }),
+      registerToolApprovalHandler(
+        connector,
+        async () => {
+          if (this.sessionId == null) {
+            throw new Error('[CursorSdkAgent] sessionId is required for tool approval');
+          }
+          return {
+            adapterId: this.adapterId,
+            adapterName: this.adapterName,
+            agentId: this.agentId,
+            adapterSessionId: await this.getAdapterSessionId(),
+            sessionId: this.sessionId,
+          };
+        },
+        this.globalBus,
+      ),
     );
   }
 }

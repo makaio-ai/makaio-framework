@@ -1,6 +1,7 @@
 import { CopilotClient, type SessionConfig } from '@github/copilot-sdk';
 import { resolveSessionEnvironment, type SessionEnvironmentOptions } from '@makaio/ai-adapters-core/config';
 import type { SystemPrompt } from '@makaio/contracts';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { CopilotSessionEvent, GitHubCopilotConnectorBus } from './namespaces/index.js';
 import { fetchToolsForCopilot } from './tool-handling.js';
 import { CopilotConnectorSession } from './session.js';
@@ -16,6 +17,8 @@ import type { MessageHandle, ISessionToolLedger } from '@makaio/ai-adapters-core
 export interface SessionInitContext {
   /** Scoped bus for this connector instance. */
   bus: GitHubCopilotConnectorBus;
+  /** Global bus for registry tool loading and execution. */
+  globalBus: IMakaioBus;
   /** Adapter instance ID. */
   adapterId: string;
   /** Adapter type name. */
@@ -41,6 +44,10 @@ export interface SessionInitContext {
   toolLedger?: ISessionToolLedger;
   /** Current turn number supplier for ledger bookkeeping. */
   getCurrentTurnNumber: () => number;
+  /** Runtime allowlist for registry tools. Empty array intentionally disables all registry tools. */
+  allowedTools?: readonly string[];
+  /** Runtime denylist for registry tools. Takes precedence over allowedTools. */
+  disallowedTools?: readonly string[];
 }
 
 /**
@@ -141,11 +148,14 @@ export async function performSessionInit(
     // Load registry tools and convert to Copilot SDK format.
     // fetchToolsForCopilot never throws — returns [] when no tools are registered.
     const registryTools = await fetchToolsForCopilot({
+      bus: ctx.globalBus,
       adapterId: ctx.adapterId,
       adapterName: ctx.adapterName,
       agentId: ctx.agentId,
       toolLedger: ctx.toolLedger,
       getCurrentTurnNumber: ctx.getCurrentTurnNumber,
+      allowedTools: ctx.allowedTools,
+      disallowedTools: ctx.disallowedTools,
     });
     assertCurrent();
 

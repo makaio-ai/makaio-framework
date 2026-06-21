@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
 import type {
   ReadTextFileRequest,
@@ -8,6 +8,7 @@ import type {
 } from '@agentclientprotocol/sdk';
 
 interface AcpToolExecutionContext {
+  bus: IMakaioBus;
   adapterId: string;
   adapterName: string;
   cwd: string;
@@ -36,7 +37,7 @@ export async function executeAcpReadTextFile(
   params: ReadTextFileRequest,
   context: AcpToolExecutionContext,
 ): Promise<ReadTextFileResponse> {
-  const result = await MakaioBus.request(ToolSubjects.execute, {
+  const result = await context.bus.request(ToolSubjects.execute, {
     toolName: 'read_file',
     input: {
       path: params.path,
@@ -85,7 +86,7 @@ export async function executeAcpWriteTextFile(
   params: WriteTextFileRequest,
   context: AcpToolExecutionContext,
 ): Promise<WriteTextFileResponse> {
-  const result = await MakaioBus.request(ToolSubjects.execute, {
+  const result = await context.bus.request(ToolSubjects.execute, {
     toolName: 'write_file',
     input: {
       path: params.path,

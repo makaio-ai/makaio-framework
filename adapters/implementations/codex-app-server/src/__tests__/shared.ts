@@ -8,6 +8,7 @@
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { ISessionToolLedger } from '@makaio/ai-adapters-core';
 import type { AIReasoningLevel } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
@@ -138,6 +139,7 @@ interface ThreadStartedNotificationReceiver {
  * Options for creating a connector test context
  */
 export interface CreateConnectorTestContextOptions {
+  globalBus?: IMakaioBus;
   reasoningEffort?: AIReasoningLevel;
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
