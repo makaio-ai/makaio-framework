@@ -199,9 +199,7 @@ jobs:
 
       - name: Publish selected packages
         if: steps.request.outputs.dry-run != 'true'
-        run: |
-          export YARN_NPM_AUTH_TOKEN="${NODE_AUTH_TOKEN:?NODE_AUTH_TOKEN is required for npm publish}"
-          bun scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
+        run: bun scripts/dev-publish.ts publish --manifest "$DEV_PUBLISH_MANIFEST"
 
       - name: Push annotated dev tags
         if: steps.request.outputs.dry-run != 'true'
