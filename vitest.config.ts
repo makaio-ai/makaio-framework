@@ -72,7 +72,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     reporters: [resolve(root, 'scripts/lib/token-efficient-reporter.ts')],
-    setupFiles: [resolve(root, 'vitest.setup.ts')],
+    setupFiles: ['dotenv/config', resolve(root, 'vitest.setup.ts')],
     pool: 'threads',
     fileParallelism: true,
     onConsoleLog: () => (process.env.MAKAIO_DEBUG ? undefined : false),

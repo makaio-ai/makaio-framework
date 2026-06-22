@@ -70,7 +70,7 @@
     "test:all": "MAKAIO_TEST_CATEGORIES=unit,ui,integration vitest run",
     "generate:sdk": "bun scripts/generate-sdk-bindings.ts",
     "smoke:managed-binaries": "bun scripts/smoke-managed-binaries.ts",
-    "test:conformance": "bun scripts/test-adapters.ts",
+    "test:conformance": "tsx scripts/test-adapters.ts",
     "test:e2e": "yarn test:e2e:browser && yarn test:e2e:desktop && yarn test:e2e:cli",
     "test:e2e:browser": "vitest run --config ui/vitest.browser.config.ts",
     "test:e2e:desktop": "yarn test:e2e:desktop:electrobun",
