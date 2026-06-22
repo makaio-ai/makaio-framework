@@ -58,6 +58,3 @@ export {
 // Utilities
 export { buildCliArgs } from './utils/build-cli-args.js';
 export { buildPromptContent } from './utils/build-prompt.js';
-
-// Conformance test config
-export { createTestConfig } from './conformance.js';

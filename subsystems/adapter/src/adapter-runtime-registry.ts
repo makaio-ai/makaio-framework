@@ -188,6 +188,19 @@ export class AdapterRuntimeRegistry {
   }
 
   /**
+   * Remove provider definitions contributed by a stopped provider package from
+   * all loaded adapters.
+   * @param packageName - Provider package that stopped or was disabled.
+   */
+  public removeProviderPackage(packageName: string): void {
+    for (const adapter of this.loadedAdapters.values()) {
+      const providers = adapter.providers.filter((provider) => provider.providerPackageName !== packageName);
+      if (providers.length === adapter.providers.length) continue;
+      this.loadedAdapters.set(adapter.name, { ...adapter, providers });
+    }
+  }
+
+  /**
    * Shut down the live instance (if any) for a named adapter and remove it
    * from all in-memory tracking maps.
    * @param adapterName - Adapter driver name to deregister.

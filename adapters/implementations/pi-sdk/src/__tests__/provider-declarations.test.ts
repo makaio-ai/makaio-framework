@@ -19,7 +19,9 @@ describe('pi-sdk provider declarations', () => {
   });
 
   it('loads provider extensions before the adapter contribution is processed', () => {
-    expect(piSdkPackage.dependencies).toEqual(providerIds.map((definitionId) => dep(`provider-${definitionId}`)));
+    expect(piSdkPackage.dependencies).toEqual(
+      providerIds.map((definitionId) => dep(`provider-${definitionId}`, undefined, true)),
+    );
   });
 
   it('keeps conformance helpers behind the test-only entrypoint', () => {

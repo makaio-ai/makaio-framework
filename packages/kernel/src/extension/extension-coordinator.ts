@@ -367,6 +367,29 @@ export class ExtensionCoordinator {
   }
 
   /**
+   * Collect provider definition IDs from extensions that can still provide them.
+   *
+   * Active entries are already visible through the contribution catalog.
+   * Enabled `discovered` and `initializing` entries are still eligible to
+   * activate later in the same boot or enablement pass, so adapters should
+   * defer for their providers. Disabled and terminal inactive entries are
+   * excluded so optional-provider adapters do not wait on providers that
+   * cannot become catalog-visible.
+   * @returns Set of provider definition IDs from active or activation-eligible extensions.
+   */
+  public getLoadedProviderDefinitionIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (!entry.enabled) continue;
+      if (entry.state === 'failed' || entry.state === 'skipped' || entry.state === 'stopped') continue;
+      for (const provider of entry.pkg.providers ?? []) {
+        ids.add(provider.id);
+      }
+    }
+    return ids;
+  }
+
+  /**
    * Iterate all active extensions in dependency order with their contexts.
    *
    * Intended for host-owned integration code that needs a snapshot of active

@@ -22,7 +22,12 @@ export const anthropicSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: AnthropicSdkAdapterName,
   displayName: 'Anthropic SDK',
   version: '0.1.0',
-  dependencies: [dep('provider-anthropic'), dep('provider-z-ai'), dep('provider-alibaba'), dep('provider-opencode-go')],
+  dependencies: [
+    dep('provider-anthropic', undefined, true),
+    dep('provider-z-ai', undefined, true),
+    dep('provider-alibaba', undefined, true),
+    dep('provider-opencode-go', undefined, true),
+  ],
   adapters: [
     {
       manifest: {

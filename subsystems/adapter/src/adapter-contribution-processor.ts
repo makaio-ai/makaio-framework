@@ -194,6 +194,7 @@ export class AdapterContributionProcessor {
       providerDefinitionCache.set(definition.id, { packageName, definition });
     }
     const clientCatalog = catalog.clients as readonly AdapterClientCatalogEntry[];
+    const loadedProviderIds = this.coordinator.getLoadedProviderDefinitionIds();
 
     try {
       for (const contribution of contributions) {
@@ -204,6 +205,7 @@ export class AdapterContributionProcessor {
           providerModelCache,
           providerDefinitionCache,
           clientCatalog,
+          loadedProviderIds,
         );
         activated.push(contribution.definition.name);
         completed.push(loadedAdapter);
@@ -225,6 +227,7 @@ export class AdapterContributionProcessor {
       ctx.bus,
       providerModelCache,
       providerDefinitionCache,
+      loadedProviderIds,
     );
     await this.publishActivatedAdapters(initializedWaitingAdapters);
   }
@@ -247,11 +250,15 @@ export class AdapterContributionProcessor {
     contribution: AdapterContribution,
     bus: IMakaioBus = MakaioBus,
   ): Promise<void> {
+    const loadedProviderIds = this.coordinator.getLoadedProviderDefinitionIds();
     const loadedAdapter = await this.activateAdapterContribution(
       packageName,
       contribution,
       bus,
       new Map<string, ProviderAIModel[]>(),
+      undefined,
+      undefined,
+      loadedProviderIds,
     );
     await this.publishActivatedAdapters([loadedAdapter]);
   }
@@ -269,6 +276,7 @@ export class AdapterContributionProcessor {
    * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
    * @param clientCatalog - Pre-built active client catalog from the batch caller.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
    * @returns Loaded adapter after successful registration and optional initialization.
    */
   private async activateAdapterContribution(
@@ -276,8 +284,9 @@ export class AdapterContributionProcessor {
     contribution: AdapterContribution,
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
-    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
-    clientCatalog?: readonly AdapterClientCatalogEntry[],
+    providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry> | undefined,
+    clientCatalog: readonly AdapterClientCatalogEntry[] | undefined,
+    loadedProviderIds: ReadonlySet<string>,
   ): Promise<LoadedAdapter> {
     const loadedAdapter = await this.buildLoadedAdapter(
       packageName,
@@ -300,7 +309,7 @@ export class AdapterContributionProcessor {
       registered = true;
 
       if (enabled) {
-        if (this.getMissingProviderDefinitionIds(loadedAdapter).length > 0) {
+        if (this.getMissingProviderDefinitionIds(loadedAdapter, loadedProviderIds).length > 0) {
           console.info(
             `[AdapterContributionProcessor] Deferring adapter "${loadedAdapter.name}" initialization until declared providers are active.`,
           );
@@ -333,28 +342,33 @@ export class AdapterContributionProcessor {
    * @param bus - Bus used to resolve the current extension contribution catalog.
    * @param providerModelCache - Per-batch provider model cache.
    * @param providerDefinitionCache - Per-batch provider definition cache, including the currently activating package.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
    * @returns Adapters initialized by this retry pass.
    */
   private async initializeAdaptersWaitingForProviders(
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
     providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry>,
+    loadedProviderIds: ReadonlySet<string>,
   ): Promise<LoadedAdapter[]> {
     const initialized: LoadedAdapter[] = [];
     for (const adapter of this.registry.getLoadedAdapters()) {
       try {
         if (this.registry.hasAdapterInstance(adapter)) continue;
         if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
-        if (this.getMissingProviderDefinitionIds(adapter).length === 0) continue;
 
-        const providers = await resolveLoadedAdapterProviders(
-          adapter,
-          bus,
-          providerModelCache,
-          providerDefinitionCache,
-        );
-        const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
-        if (!refreshed || this.getMissingProviderDefinitionIds(refreshed).length > 0) continue;
+        let refreshed = adapter;
+        if (this.getMissingProviderDefinitionIds(adapter, loadedProviderIds).length > 0) {
+          const providers = await resolveLoadedAdapterProviders(
+            adapter,
+            bus,
+            providerModelCache,
+            providerDefinitionCache,
+          );
+          const updated = this.registry.updateAdapterProviders(adapter.name, providers);
+          if (!updated || this.getMissingProviderDefinitionIds(updated, loadedProviderIds).length > 0) continue;
+          refreshed = updated;
+        }
 
         await this.registry.initializeAdapter(refreshed, this.platformDefaults);
         console.info(
@@ -372,13 +386,21 @@ export class AdapterContributionProcessor {
   }
 
   /**
-   * Return provider definition IDs that have not resolved on a loaded adapter.
+   * Return provider definition IDs that have not resolved on a loaded adapter
+   * and whose provider extension is active or still eligible to activate.
+   *
+   * Provider IDs absent from {@link loadedProviderIds} correspond to extensions
+   * that are not installed or cannot still become active, including disabled,
+   * skipped, stopped, or failed packages. Those IDs are excluded so
+   * optional-provider adapters do not defer initialization indefinitely waiting
+   * for providers the catalog cannot resolve.
    * @param adapter - Loaded adapter to inspect.
-   * @returns Missing provider definition IDs.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
+   * @returns Missing provider definition IDs that may still resolve.
    */
-  private getMissingProviderDefinitionIds(adapter: LoadedAdapter): string[] {
+  private getMissingProviderDefinitionIds(adapter: LoadedAdapter, loadedProviderIds: ReadonlySet<string>): string[] {
     const resolved = new Set(adapter.providers.map((provider) => provider.definition.id));
-    return adapter.providerDefinitionIds.filter((id) => !resolved.has(id));
+    return adapter.providerDefinitionIds.filter((id) => !resolved.has(id) && loadedProviderIds.has(id));
   }
 
   /**
@@ -504,6 +526,7 @@ export class AdapterContributionProcessor {
    */
   public async onPackageStopped(packageName: string): Promise<void> {
     await this.registry.deregisterPackage(packageName);
+    this.registry.removeProviderPackage(packageName);
   }
 
   /**

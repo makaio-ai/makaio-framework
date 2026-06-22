@@ -24,7 +24,7 @@ export const piSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: PiSdkAdapterName,
   displayName: 'Pi SDK',
   version: '0.1.0',
-  dependencies: providerIds.map((definitionId) => dep(`provider-${definitionId}`)),
+  dependencies: providerIds.map((definitionId) => dep(`provider-${definitionId}`, undefined, true)),
   adapters: [
     {
       manifest: {

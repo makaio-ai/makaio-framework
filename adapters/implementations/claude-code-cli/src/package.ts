@@ -26,7 +26,7 @@ export const claudeCodeCliPackage: MakaioNodeExtension<IMakaioBus> = {
   name: ClaudeCodeCliAdapterName,
   displayName,
   version: '0.1.0',
-  dependencies: [dep('provider-anthropic')],
+  dependencies: [dep('provider-anthropic', undefined, true)],
   adapters: [
     {
       manifest: {

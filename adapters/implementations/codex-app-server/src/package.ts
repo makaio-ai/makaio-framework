@@ -24,7 +24,7 @@ export const codexAppServerPackage: MakaioNodeExtension<IMakaioBus> = {
   name: CodexAppServerAdapterName,
   displayName: 'Codex App-Server',
   version: '0.1.0',
-  dependencies: [dep('provider-openai-codex')],
+  dependencies: [dep('provider-openai-codex', undefined, true)],
   adapters: [
     {
       manifest: {
