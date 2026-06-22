@@ -5502,7 +5502,7 @@ __metadata:
     glob: "npm:13.0.6"
     hono: "npm:^4.12.25"
     minimatch: "npm:^10.0.3"
-    piscina: "npm:^5.1.4"
+    piscina: "npm:^5.2.0"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
@@ -22068,15 +22068,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"piscina@npm:^5.1.4":
-  version: 5.1.4
-  resolution: "piscina@npm:5.1.4"
+"piscina@npm:^5.2.0":
+  version: 5.2.0
+  resolution: "piscina@npm:5.2.0"
   dependencies:
     "@napi-rs/nice": "npm:^1.0.4"
   dependenciesMeta:
     "@napi-rs/nice":
       optional: true
-  checksum: 10c0/5de5673bfea6ed045e4fe5b63c1bfab0f287862d689a3ebfb15848ff20b78ecff0735fe673edb209a921b113bb0b3b3455f8bb710cb3b78f66178f8785686e8f
+  checksum: 10c0/61f4377dc7aeff2b3f71c2c03861fad97786b6fdad8a320e6281dd77bcadd4f2c8260a6274184d1c74ea30fddc293f30b10978f371b45a367b03145de3c84d1e
   languageName: node
   linkType: hard
 
