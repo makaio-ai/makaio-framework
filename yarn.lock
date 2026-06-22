@@ -4404,7 +4404,7 @@ __metadata:
     "@makaio/setup": "workspace:*"
     "@makaio/test-utils": "workspace:*"
     "@makaio/utils": "workspace:*"
-    "@types/react": "npm:^19.2.17"
+    "@types/react": "npm:^19.2.15"
     commander: "npm:^14.0.3"
     esbuild: "npm:^0.28.0"
     hono: "npm:^4.12.23"
