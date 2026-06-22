@@ -29,7 +29,7 @@
     "@makaio/setup": "workspace:*",
     "@makaio/utils": "workspace:*",
     "commander": "^14.0.3",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "hono": "^4.12.25",
     "ink": "^6.5.1",
     "react": "^19.0.0",
