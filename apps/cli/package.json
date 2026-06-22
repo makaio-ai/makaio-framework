@@ -6,12 +6,13 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./install-transaction": "./src/install-transaction-public.ts"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.2.15",
     "ink-testing-library": "^3.0.0"
   },
   "dependencies": {
