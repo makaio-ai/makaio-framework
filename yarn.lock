@@ -4326,7 +4326,7 @@ __metadata:
     "@makaio/bus-transport-websocket": "workspace:*"
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
   peerDependencies:
     vite: ^8.0.12
   languageName: unknown
@@ -4407,7 +4407,7 @@ __metadata:
     "@types/react": "npm:^19.2.15"
     commander: "npm:^14.0.3"
     esbuild: "npm:^0.28.0"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     ink: "npm:^6.5.1"
     ink-testing-library: "npm:^3.0.0"
     react: "npm:^19.0.0"
@@ -4570,7 +4570,7 @@ __metadata:
     dotenv: "npm:^17.2.3"
     electrobun: "npm:^1.16.0"
     get-port: "npm:^7.0.0"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
@@ -4614,7 +4614,7 @@ __metadata:
     electron-builder: "npm:^26.15.2"
     esbuild: "npm:^0.28.0"
     get-port: "npm:^7.0.0"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     lucide-react: "npm:^0.562.0"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
@@ -5054,7 +5054,7 @@ __metadata:
     find-up: "npm:^7.0.0"
     glob: "npm:13.0.6"
     globby: "npm:^14.1.0"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     human-id: "npm:^4.2.0"
     jsdom: "npm:^26.1.0"
     knip: "npm:^6.16.1"
@@ -5100,7 +5100,7 @@ __metadata:
     ajv-formats: "npm:^3.0.1"
     drizzle-orm: "npm:^0.45.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     type-fest: "npm:^5.2.0"
     ws: "npm:^8.21.0"
     zod: "npm:^4.1.13"
@@ -5424,7 +5424,7 @@ __metadata:
   dependencies:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
   languageName: unknown
   linkType: soft
 
@@ -5463,7 +5463,7 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/runtime-node": "workspace:*"
     "@types/bun": "npm:^1.3.14"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
   languageName: unknown
   linkType: soft
 
@@ -5500,7 +5500,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     drizzle-orm: "npm:0.45.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.12.23"
+    hono: "npm:^4.12.25"
     minimatch: "npm:^10.0.3"
     piscina: "npm:^5.1.4"
     tsdown: "npm:0.22.0"
@@ -17555,10 +17555,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hono@npm:4.12.23":
-  version: 4.12.23
-  resolution: "hono@npm:4.12.23"
-  checksum: 10c0/58945bb3aeb16d710b4a6c2809ba02b86b7269f6a3a67e126fc81cee5e9ae8ad2d9aa553db03c4f1a104ec03e423072e33932cb23eb3bbc48774acc72fc9c346
+"hono@npm:4.12.25":
+  version: 4.12.25
+  resolution: "hono@npm:4.12.25"
+  checksum: 10c0/9216d647fe2f39b17855b0e74913688b837e3fa9519d367c7beeec399265b36608a820928cc33ab926eee58fe2daf7e33296235b52e56dbfac0fbcd51a5e818e
   languageName: node
   linkType: hard
 
