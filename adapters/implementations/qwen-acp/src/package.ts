@@ -24,7 +24,7 @@ export const qwenAcpPackage: MakaioNodeExtension<IMakaioBus> = {
   name: QwenAcpAdapterName,
   displayName: 'Qwen Code (ACP)',
   version: '0.1.0',
-  dependencies: [dep('provider-qwen-acp')],
+  dependencies: [dep('provider-qwen-acp', undefined, true)],
   adapters: [
     {
       manifest: {

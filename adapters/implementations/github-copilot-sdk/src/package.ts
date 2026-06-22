@@ -24,7 +24,7 @@ export const githubCopilotSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: GitHubCopilotSdkAdapterName,
   displayName: 'GitHub Copilot',
   version: '0.1.0',
-  dependencies: [dep('provider-github-copilot')],
+  dependencies: [dep('provider-github-copilot', undefined, true)],
   adapters: [
     {
       manifest: {

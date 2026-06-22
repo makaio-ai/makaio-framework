@@ -25,7 +25,12 @@ export const claudeCodeTmuxPackage: MakaioExtension = {
   name: ADAPTER_NAME,
   displayName,
   version: '0.1.0',
-  dependencies: [dep('provider-anthropic'), dep('claude-code'), dep('client-hooks'), dep('claude-code-statusline')],
+  dependencies: [
+    dep('provider-anthropic', undefined, true),
+    dep('claude-code'),
+    dep('client-hooks'),
+    dep('claude-code-statusline'),
+  ],
   adapters: [
     {
       manifest: {

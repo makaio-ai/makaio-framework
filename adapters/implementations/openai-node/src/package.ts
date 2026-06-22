@@ -23,12 +23,12 @@ export const openaiNodePackage: MakaioNodeExtension<IMakaioBus> = {
   displayName: 'OpenAI',
   version: '0.1.0',
   dependencies: [
-    dep('provider-openai'),
-    dep('provider-nanogpt'),
-    dep('provider-openrouter'),
-    dep('provider-z-ai'),
-    dep('provider-alibaba'),
-    dep('provider-opencode-go'),
+    dep('provider-openai', undefined, true),
+    dep('provider-nanogpt', undefined, true),
+    dep('provider-openrouter', undefined, true),
+    dep('provider-z-ai', undefined, true),
+    dep('provider-alibaba', undefined, true),
+    dep('provider-opencode-go', undefined, true),
   ],
   adapters: [
     {

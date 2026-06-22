@@ -24,7 +24,7 @@ export const geminiSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: GeminiSdkAdapterName,
   displayName: 'Gemini SDK',
   version: '0.1.0',
-  dependencies: [dep('provider-google')],
+  dependencies: [dep('provider-google', undefined, true)],
   adapters: [
     {
       manifest: {

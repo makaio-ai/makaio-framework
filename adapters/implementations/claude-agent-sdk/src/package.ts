@@ -27,7 +27,12 @@ export const claudeAgentSdkPackage: MakaioNodeExtension<IMakaioBus> = {
   name: extensionName,
   displayName,
   version: '0.1.0',
-  dependencies: [dep('provider-anthropic'), dep('provider-z-ai'), dep('provider-kimi'), dep('provider-opencode-go')],
+  dependencies: [
+    dep('provider-anthropic', undefined, true),
+    dep('provider-z-ai', undefined, true),
+    dep('provider-kimi', undefined, true),
+    dep('provider-opencode-go', undefined, true),
+  ],
   adapters: [
     {
       manifest: {
