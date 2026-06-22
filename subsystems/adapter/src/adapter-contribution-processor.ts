@@ -356,16 +356,19 @@ export class AdapterContributionProcessor {
       try {
         if (this.registry.hasAdapterInstance(adapter)) continue;
         if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
-        if (this.getMissingProviderDefinitionIds(adapter, loadedProviderIds).length === 0) continue;
 
-        const providers = await resolveLoadedAdapterProviders(
-          adapter,
-          bus,
-          providerModelCache,
-          providerDefinitionCache,
-        );
-        const refreshed = this.registry.updateAdapterProviders(adapter.name, providers);
-        if (!refreshed || this.getMissingProviderDefinitionIds(refreshed, loadedProviderIds).length > 0) continue;
+        let refreshed = adapter;
+        if (this.getMissingProviderDefinitionIds(adapter, loadedProviderIds).length > 0) {
+          const providers = await resolveLoadedAdapterProviders(
+            adapter,
+            bus,
+            providerModelCache,
+            providerDefinitionCache,
+          );
+          const updated = this.registry.updateAdapterProviders(adapter.name, providers);
+          if (!updated || this.getMissingProviderDefinitionIds(updated, loadedProviderIds).length > 0) continue;
+          refreshed = updated;
+        }
 
         await this.registry.initializeAdapter(refreshed, this.platformDefaults);
         console.info(
@@ -523,6 +526,7 @@ export class AdapterContributionProcessor {
    */
   public async onPackageStopped(packageName: string): Promise<void> {
     await this.registry.deregisterPackage(packageName);
+    this.registry.removeProviderPackage(packageName);
   }
 
   /**

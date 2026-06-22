@@ -566,6 +566,65 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
+  it('removes stopped provider packages from loaded adapter provider fallback records', async () => {
+    const providerDefinition = {
+      id: 'runtime-provider',
+      name: 'Runtime Provider',
+      availableModels: [],
+    } satisfies ProviderDefinitionInput;
+    const repository = new MemoryRepository();
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator(),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+    let activeProviders: ProviderDefinitionInput[] = [providerDefinition];
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: activeProviders.map((definition) => ({
+          packageName: '@owner/runtime-provider-package',
+          definition: ProviderDefinitionSchema.parse(definition),
+        })),
+        clients: [],
+      });
+    });
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/runtime-adapter-extension',
+        createExtension('@owner/runtime-adapter-extension', [
+          createContribution(
+            'runtime-adapter',
+            async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
+            [{ definitionId: 'runtime-provider' }],
+          ),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getLoadedAdapters()[0]?.providers.map((entry) => entry.definition.id)).toEqual([
+        'runtime-provider',
+      ]);
+      await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'runtime-provider' })).resolves.toMatchObject({
+        provider: { id: 'runtime-provider', packageName: '@owner/runtime-provider-package' },
+      });
+
+      activeProviders = [];
+      await service.stopAdapterContributions('@owner/runtime-provider-package');
+
+      expect(service.getLoadedAdapters()[0]?.providers).toEqual([]);
+      await expect(MakaioBus.request(ProviderStorageSubjects.get, { id: 'runtime-provider' })).resolves.toEqual({
+        provider: null,
+      });
+      await expect(MakaioBus.request(ProviderStorageSubjects.list, {})).resolves.toEqual({ providers: [] });
+    } finally {
+      offCatalog();
+    }
+  });
+
   it('lets host provider storage handlers override loaded adapter fallback records', async () => {
     const repository = new MemoryRepository();
     service = new AdapterSubsystemService({
@@ -742,6 +801,65 @@ describe('AdapterContributionProcessor rollback', () => {
       expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders?.[0]?.definition.id).toBe(
         'late-provider',
       );
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('initializes deferred adapters when pending provider extensions stop being activation-eligible', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['optional-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }],
+      ]),
+    );
+    const loadedProviderIds = new Set(['late-provider']);
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator({ loadedProviderDefinitionIds: loadedProviderIds }),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const factory = vi.fn(async (options?: unknown) => {
+      const adapterOptions = options as AdapterInitOptions;
+      return { adapterId: readAdapterFactoryOptions(options).adapterId, providers: adapterOptions.definitionProviders };
+    });
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({ providers: [], clients: [] });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('optional-provider-adapter', factory, [{ definitionId: 'late-provider' }]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(0);
+      expect(factory).not.toHaveBeenCalled();
+
+      loadedProviderIds.delete('late-provider');
+
+      await service.processAdapterContributions(
+        '@owner/unrelated-provider-package',
+        createExtension(
+          '@owner/unrelated-provider-package',
+          [],
+          [{ id: 'unrelated-provider', name: 'Unrelated Provider', availableModels: [] }],
+        ),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+      expect((factory.mock.calls[0]?.[0] as AdapterInitOptions).definitionProviders).toEqual([]);
     } finally {
       offCatalog();
       warnSpy.mockRestore();
