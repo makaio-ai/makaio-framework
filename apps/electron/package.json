@@ -51,7 +51,7 @@
     "@vitejs/plugin-react": "^6.0.2",
     "electron": "39.8.5",
     "electron-builder": "^26.15.2",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "get-port": "^7.0.0",
     "sass": "^1.100.0",
     "tsx": "^4.22.4",
