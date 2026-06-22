@@ -635,12 +635,16 @@ describe('ExtensionCoordinator', () => {
       loadEnabled: (name) => name !== 'disabled-ext',
     });
     coordinator.load(packages);
+
+    expect(coordinator.getLoadedProviderDefinitionIds()).toEqual(new Set(['openai']));
+
     await coordinator.startAll();
 
     const result = await bus.request(ExtensionSubjects.contributions.catalog, {});
 
     expect(result.providers).toEqual([{ packageName: 'catalog-ext', definition: providerDefinition }]);
     expect(result.clients).toEqual([{ packageName: 'catalog-ext', definition: clientDefinition }]);
+    expect(coordinator.getLoadedProviderDefinitionIds()).toEqual(new Set(['openai']));
 
     await coordinator.shutdown();
   });

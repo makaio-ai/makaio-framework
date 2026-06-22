@@ -276,7 +276,7 @@ export class AdapterContributionProcessor {
    * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
    * @param clientCatalog - Pre-built active client catalog from the batch caller.
-   * @param loadedProviderIds - Universe of provider definition IDs from all loaded extensions.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
    * @returns Loaded adapter after successful registration and optional initialization.
    */
   private async activateAdapterContribution(
@@ -284,9 +284,9 @@ export class AdapterContributionProcessor {
     contribution: AdapterContribution,
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
-    providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
-    clientCatalog?: readonly AdapterClientCatalogEntry[],
-    loadedProviderIds?: ReadonlySet<string>,
+    providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry> | undefined,
+    clientCatalog: readonly AdapterClientCatalogEntry[] | undefined,
+    loadedProviderIds: ReadonlySet<string>,
   ): Promise<LoadedAdapter> {
     const loadedAdapter = await this.buildLoadedAdapter(
       packageName,
@@ -309,7 +309,7 @@ export class AdapterContributionProcessor {
       registered = true;
 
       if (enabled) {
-        if (this.getMissingProviderDefinitionIds(loadedAdapter, loadedProviderIds ?? new Set()).length > 0) {
+        if (this.getMissingProviderDefinitionIds(loadedAdapter, loadedProviderIds).length > 0) {
           console.info(
             `[AdapterContributionProcessor] Deferring adapter "${loadedAdapter.name}" initialization until declared providers are active.`,
           );
@@ -342,7 +342,7 @@ export class AdapterContributionProcessor {
    * @param bus - Bus used to resolve the current extension contribution catalog.
    * @param providerModelCache - Per-batch provider model cache.
    * @param providerDefinitionCache - Per-batch provider definition cache, including the currently activating package.
-   * @param loadedProviderIds - Universe of provider definition IDs from all loaded extensions.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
    * @returns Adapters initialized by this retry pass.
    */
   private async initializeAdaptersWaitingForProviders(
@@ -384,14 +384,15 @@ export class AdapterContributionProcessor {
 
   /**
    * Return provider definition IDs that have not resolved on a loaded adapter
-   * and whose provider extension is still loaded (i.e., may activate later).
+   * and whose provider extension is active or still eligible to activate.
    *
    * Provider IDs absent from {@link loadedProviderIds} correspond to extensions
-   * that are not installed at all. Those IDs are excluded so the adapter does
-   * not defer initialization indefinitely waiting for a provider that will
-   * never appear.
+   * that are not installed or cannot still become active, including disabled,
+   * skipped, stopped, or failed packages. Those IDs are excluded so
+   * optional-provider adapters do not defer initialization indefinitely waiting
+   * for providers the catalog cannot resolve.
    * @param adapter - Loaded adapter to inspect.
-   * @param loadedProviderIds - Universe of provider definition IDs from all loaded extensions.
+   * @param loadedProviderIds - Universe of active or activation-eligible provider definition IDs.
    * @returns Missing provider definition IDs that may still resolve.
    */
   private getMissingProviderDefinitionIds(adapter: LoadedAdapter, loadedProviderIds: ReadonlySet<string>): string[] {

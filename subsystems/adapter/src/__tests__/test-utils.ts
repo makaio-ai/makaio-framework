@@ -6,12 +6,12 @@ import type { PlatformDefaults } from '../adapter-runtime-lifecycle.js';
  */
 export interface StubCoordinatorOptions {
   /**
-   * Provider definition IDs the stub reports as loaded.
+   * Provider definition IDs the stub reports as active or activation-eligible.
    *
    * When omitted, defaults to an empty set — effectively treating all
    * provider IDs as uninstalled. Tests exercising deferred initialization
-   * must supply the provider IDs that should appear "loaded but not yet
-   * active" so the deferred init path waits for them.
+   * must supply the provider IDs that should appear active or still eligible
+   * to activate in the coordinator so the deferred init path waits for them.
    */
   readonly loadedProviderDefinitionIds?: ReadonlySet<string>;
 }
@@ -21,7 +21,7 @@ export interface StubCoordinatorOptions {
  *
  * Only implements the methods required by `AdapterSubsystemService`:
  * - `registerContributionProcessor` — returns a no-op unregister function
- * - `getLoadedProviderDefinitionIds` — returns the supplied set (or empty)
+ * - `getLoadedProviderDefinitionIds` — returns the supplied provider-id set (or empty)
  *
  * Tests that need full coordinator behavior should use an integration test
  * harness instead.
