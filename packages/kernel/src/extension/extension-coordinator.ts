@@ -367,6 +367,27 @@ export class ExtensionCoordinator {
   }
 
   /**
+   * Collect all provider definition IDs declared by loaded extensions.
+   *
+   * Iterates every loaded extension regardless of lifecycle state and extracts
+   * provider definition IDs from their {@link KernelMakaioExtension.providers}
+   * arrays. The returned set represents the universe of provider definitions
+   * that may eventually become active. Consumers use this to distinguish
+   * providers whose extension is loaded but not yet active (present in the
+   * set) from providers whose extension is not installed at all (absent).
+   * @returns Set of provider definition IDs from all loaded extensions.
+   */
+  public getLoadedProviderDefinitionIds(): ReadonlySet<string> {
+    const ids = new Set<string>();
+    for (const entry of this.entries.values()) {
+      for (const provider of entry.pkg.providers ?? []) {
+        ids.add(provider.id);
+      }
+    }
+    return ids;
+  }
+
+  /**
    * Iterate all active extensions in dependency order with their contexts.
    *
    * Intended for host-owned integration code that needs a snapshot of active

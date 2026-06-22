@@ -676,7 +676,7 @@ describe('AdapterContributionProcessor rollback', () => {
     service = new AdapterSubsystemService({
       bus: MakaioBus,
       configRepository: repository,
-      coordinator: createStubCoordinator(),
+      coordinator: createStubCoordinator({ loadedProviderDefinitionIds: new Set(['late-provider']) }),
       machineId: TEST_MACHINE_ID,
       platformDefaults: TEST_PLATFORM_DEFAULTS,
     });
@@ -758,7 +758,7 @@ describe('AdapterContributionProcessor rollback', () => {
     service = new AdapterSubsystemService({
       bus: MakaioBus,
       configRepository: repository,
-      coordinator: createStubCoordinator(),
+      coordinator: createStubCoordinator({ loadedProviderDefinitionIds: new Set(['activating-provider']) }),
       machineId: TEST_MACHINE_ID,
       platformDefaults: TEST_PLATFORM_DEFAULTS,
     });
@@ -815,7 +815,7 @@ describe('AdapterContributionProcessor rollback', () => {
     service = new AdapterSubsystemService({
       bus: MakaioBus,
       configRepository: repository,
-      coordinator: createStubCoordinator(),
+      coordinator: createStubCoordinator({ loadedProviderDefinitionIds: new Set(['late-provider']) }),
       machineId: TEST_MACHINE_ID,
       platformDefaults: TEST_PLATFORM_DEFAULTS,
     });
@@ -864,6 +864,64 @@ describe('AdapterContributionProcessor rollback', () => {
       offCatalog();
       warnSpy.mockRestore();
       errorSpy.mockRestore();
+    }
+  });
+
+  it('initializes immediately when unresolved provider IDs belong to uninstalled extensions', async () => {
+    const repository = new MemoryRepository(
+      new Map(),
+      new Map<string, AdapterFile>([
+        ['multi-provider-adapter', { $schema: 'makaio/adapter-config/v1', enabled: true }],
+      ]),
+    );
+    service = new AdapterSubsystemService({
+      bus: MakaioBus,
+      configRepository: repository,
+      coordinator: createStubCoordinator({
+        loadedProviderDefinitionIds: new Set(['installed-provider']),
+      }),
+      machineId: TEST_MACHINE_ID,
+      platformDefaults: TEST_PLATFORM_DEFAULTS,
+    });
+    await service.init();
+
+    const factory = vi.fn(async (options?: unknown) => ({
+      adapterId: readAdapterFactoryOptions(options).adapterId,
+    }));
+    const offCatalog = MakaioBus.on(ExtensionSubjects.contributions.catalog, (ctx) => {
+      ctx.setResult({
+        providers: [
+          {
+            packageName: '@owner/installed-provider-package',
+            definition: ProviderDefinitionSchema.parse({
+              id: 'installed-provider',
+              name: 'Installed Provider',
+              availableModels: [],
+            }),
+          },
+        ],
+        clients: [],
+      });
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await service.processAdapterContributions(
+        '@owner/adapter-package',
+        createExtension('@owner/adapter-package', [
+          createContribution('multi-provider-adapter', factory, [
+            { definitionId: 'installed-provider' },
+            { definitionId: 'uninstalled-provider' },
+          ]),
+        ]),
+        TEST_EXTENSION_CONTEXT,
+      );
+
+      expect(service.getAdapterInstances().size).toBe(1);
+      expect(factory).toHaveBeenCalledOnce();
+    } finally {
+      offCatalog();
+      warnSpy.mockRestore();
     }
   });
 
