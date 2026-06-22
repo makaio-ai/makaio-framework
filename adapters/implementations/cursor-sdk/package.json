@@ -52,7 +52,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "@types/node": "^24.3.0",
+    "@types/node": "^26.0.0",
     "vitest": "4.1.7"
   },
   "publishConfig": {

@@ -58,7 +58,7 @@
     "@makaio/provider-openrouter": "workspace:*",
     "@makaio/provider-z-ai": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "@types/node": "^24.3.0",
+    "@types/node": "^26.0.0",
     "openai": "6.39.0"
   },
   "publishConfig": {
