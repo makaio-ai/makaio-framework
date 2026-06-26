@@ -11,6 +11,8 @@ import {
   ArtifactRevisionSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
+import { ArtifactContextSelectorSchema } from './context-selectors.js';
+import { ResolvedArtifactContextWireSchema } from './context-resolution.js';
 
 /**
  * Framework-level artifact bus schemas.
@@ -85,6 +87,19 @@ export const ArtifactSchemas = {
     response: ArtifactCompareResponseSchema,
   },
 
+  /** Resolve a selector-driven outbound artifact context graph (RPC). */
+  resolveContext: {
+    request: z.object({
+      /** Exact artifact revision to resolve from. */
+      ref: ArtifactRefSchema,
+      /** Optional caller selectors. Missing relation types fall through to kind defaults. */
+      selectors: ArtifactContextSelectorSchema.optional(),
+      /** Maximum total traversal depth safety limit. */
+      maxDepth: z.number().int().min(1).max(20).default(5),
+    }),
+    response: z.object({ context: ResolvedArtifactContextWireSchema }),
+  },
+
   /** Emitted when a new artifact is created. */
   created: z.object({ artifact: ArtifactRevisionSchema }),
 
@@ -145,6 +160,7 @@ export const ArtifactNamespace = createBusNamespace('artifact', ArtifactSchemas)
  * - `ArtifactSubjects.resolve` — resolve artifact by ref (RPC)
  * - `ArtifactSubjects.query` — query artifacts (RPC)
  * - `ArtifactSubjects.compare` — compare two revisions (RPC)
+ * - `ArtifactSubjects.resolveContext` — resolve artifact context graph (RPC)
  * - `ArtifactSubjects.created` — artifact created event
  * - `ArtifactSubjects.revised` — artifact revised event
  * - `ArtifactSubjects['relation.added']` — relation added event
@@ -206,6 +222,12 @@ export type ArtifactResolveResponse = z.infer<(typeof ArtifactSchemas)['resolve'
 
 /** Response payload for querying artifacts. */
 export type ArtifactQueryResponse = z.infer<(typeof ArtifactSchemas)['query']['response']>;
+
+/** Request payload for resolving artifact context. */
+export type ArtifactResolveContextRequest = z.infer<(typeof ArtifactSchemas)['resolveContext']['request']>;
+
+/** Response payload for resolving artifact context. */
+export type ArtifactResolveContextResponse = z.infer<(typeof ArtifactSchemas)['resolveContext']['response']>;
 
 // ---------------------------------------------------------------------------
 // Event payload types

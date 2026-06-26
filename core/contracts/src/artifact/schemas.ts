@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { ArtifactProjectionPolicySchema } from '../materialization/schemas.js';
 
@@ -416,6 +417,14 @@ export const ArtifactKindRegistrationSchema = z.object({
    * When absent, materialization adapters apply their own defaults.
    */
   projection: ArtifactProjectionPolicySchema.optional(),
+  /**
+   * Default context resolution selectors for this kind.
+   *
+   * These selectors are public kind metadata used by artifact context
+   * resolution. They describe which outbound relations should be followed
+   * when a caller does not provide an override for the relation type.
+   */
+  defaultContext: ArtifactContextSelectorSchema.optional(),
 });
 
 /**

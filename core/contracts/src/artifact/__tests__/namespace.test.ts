@@ -18,6 +18,7 @@ describe('Artifact namespace', () => {
         'relation-type.list',
         'relation-type.register',
         'resolve',
+        'resolveContext',
         'revise',
         'revised',
         'status.changed',
@@ -108,5 +109,34 @@ describe('Artifact namespace', () => {
         expect(parsed.data.status?.values).toEqual(['pending', 'active', 'done']);
       }
     });
+  });
+
+  it('validates artifact.resolveContext request and response payloads', () => {
+    const rootRef = { refClass: 'artifact' as const, kind: 'system', id: 'system-1', revision: 'rev-system' };
+    const request = ArtifactSchemas.resolveContext.request.parse({
+      ref: rootRef,
+      selectors: { contains: { kinds: ['repo'], hint: 'inline' } },
+    });
+
+    expect(request.maxDepth).toBe(5);
+
+    const root = {
+      ...rootRef,
+      schemaVersion: '1',
+      scope: { level: 'global' },
+      data: { name: 'Makaio' },
+      relations: [],
+      actor: { kind: 'agent', id: 'agent-1' },
+      timestamp: 1700000000000,
+    };
+
+    const response = ArtifactSchemas.resolveContext.response.parse({
+      context: { rootRef, refs: [], resolved: [root] },
+    });
+
+    expect(response.context.rootRef).toEqual(rootRef);
+    expect(response.context.refs).toEqual([]);
+    expect(response.context.resolved).toHaveLength(1);
+    expect(response.context.resolved[0]?.id).toBe('system-1');
   });
 });
