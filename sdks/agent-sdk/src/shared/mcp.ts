@@ -21,6 +21,19 @@ interface SdkMcpHttpBridge {
   readonly close: () => Promise<void>;
 }
 
+interface SdkMcpToolRegistrar {
+  registerTool(
+    name: string,
+    config: {
+      description: string;
+      inputSchema: SdkMcpToolDefinition['inputSchema'];
+      annotations?: SdkMcpToolDefinition['annotations'];
+      _meta?: Record<string, unknown>;
+    },
+    handler: SdkMcpToolDefinition['handler'],
+  ): void;
+}
+
 /**
  * Create an in-process MCP server configuration.
  *
@@ -49,8 +62,10 @@ const registerSdkMcpTool = (server: McpServer, tool: SdkMcpToolDefinition, alway
     alwaysLoad || tool._meta !== undefined
       ? { ...(alwaysLoad ? { 'anthropic/alwaysLoad': true } : {}), ...(tool._meta ?? {}) }
       : undefined;
+  const handler: SdkMcpToolDefinition['handler'] = (args, extra) => tool.handler(args, extra);
+  const registrar = server as SdkMcpToolRegistrar;
 
-  server.registerTool(
+  registrar.registerTool(
     tool.name,
     {
       description: tool.description,
@@ -58,7 +73,7 @@ const registerSdkMcpTool = (server: McpServer, tool: SdkMcpToolDefinition, alway
       ...(tool.annotations !== undefined && { annotations: tool.annotations }),
       ...(meta !== undefined && { _meta: meta }),
     },
-    tool.handler,
+    handler,
   );
 };
 
