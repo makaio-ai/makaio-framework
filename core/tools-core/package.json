@@ -12,13 +12,13 @@
   },
   "dependencies": {
     "@makaio/core": "workspace:*",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
-    "tsx": "^4.22.4"
+    "tsx": "^4.22.3"
   },
   "scripts": {
     "build": "tsdown",

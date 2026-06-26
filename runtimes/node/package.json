@@ -58,19 +58,19 @@
     "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.2",
     "glob": "13.0.6",
-    "hono": "^4.12.25",
+    "hono": "^4.12.23",
     "minimatch": "^10.0.3",
-    "piscina": "^5.2.0",
+    "piscina": "^5.1.4",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "4.1.7"
   },
   "license": "MIT",
   "scripts": {

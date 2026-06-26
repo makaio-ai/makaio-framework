@@ -19,15 +19,15 @@
     "@makaio/kernel": "workspace:*",
     "@makaio/services-package-manager": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
-    "tsx": "^4.22.4",
-    "vitest": "4.1.8"
+    "tsx": "^4.22.3",
+    "vitest": "4.1.7"
   },
   "publishConfig": {
     "exports": {

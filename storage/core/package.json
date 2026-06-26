@@ -21,7 +21,7 @@
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/core": "workspace:*",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "inlinedDependencies": {
     "type-fest": "5.3.1"

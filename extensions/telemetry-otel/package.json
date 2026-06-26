@@ -33,14 +33,14 @@
     "@opentelemetry/resources": "2.7.1",
     "@opentelemetry/sdk-trace-base": "2.7.1",
     "@opentelemetry/semantic-conventions": "^1.39.0",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "4.1.7"
   },
   "publishConfig": {
     "exports": {

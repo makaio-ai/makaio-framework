@@ -23,7 +23,7 @@
     "ajv": "^8.18.0",
     "croner": "^9.0.0",
     "drizzle-orm": "0.45.2",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
@@ -31,7 +31,7 @@
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
-    "vitest": "4.1.8"
+    "vitest": "4.1.7"
   },
   "scripts": {
     "build": "tsdown",
