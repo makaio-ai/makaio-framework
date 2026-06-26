@@ -63,7 +63,7 @@
     "piscina": "^5.2.0",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

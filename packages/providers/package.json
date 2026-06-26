@@ -14,7 +14,7 @@
     "@makaio/core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "merge-anything": "^6.0.6",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

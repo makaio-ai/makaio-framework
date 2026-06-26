@@ -49,7 +49,7 @@
     "drizzle-orm": "0.45.2",
     "ink": "^6.0.0",
     "smol-toml": "^1.3.0",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

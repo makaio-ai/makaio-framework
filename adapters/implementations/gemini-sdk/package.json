@@ -41,7 +41,7 @@
   },
   "dependencies": {
     "p-queue": "^9.3.0",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@google/gemini-cli-core": ">=0.29.5 <0.40.0",

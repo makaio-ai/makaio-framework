@@ -39,7 +39,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@cursor/sdk": "^1.0.0",

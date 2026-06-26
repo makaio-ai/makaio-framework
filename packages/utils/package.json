@@ -29,7 +29,7 @@
   "dependencies": {
     "glob": "13.0.6",
     "p-defer": "^4.0.1",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "publishConfig": {
     "exports": {

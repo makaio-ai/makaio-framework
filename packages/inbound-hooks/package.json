@@ -13,7 +13,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/core": "workspace:*",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

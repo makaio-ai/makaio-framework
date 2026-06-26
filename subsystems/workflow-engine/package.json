@@ -23,7 +23,7 @@
     "ajv": "^8.18.0",
     "croner": "^9.0.0",
     "drizzle-orm": "0.45.2",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

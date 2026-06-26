@@ -15,7 +15,7 @@
     "@makaio/core": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/tools-core": "workspace:*",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.3.0"

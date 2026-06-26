@@ -4090,7 +4090,7 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@anthropic-ai/sdk": ">=0.91.1 <1.0.0"
     "@makaio/framework": ^1.0.0
@@ -4115,7 +4115,7 @@ __metadata:
     p-defer: "npm:^4.0.1"
     p-queue: "npm:^9.3.0"
     tsx: "npm:^4.22.3"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@anthropic-ai/claude-agent-sdk": ^0.2.50
     "@makaio/framework": ^1.0.0
@@ -4136,7 +4136,7 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4157,7 +4157,7 @@ __metadata:
     "@makaio/subsystem-native-session-supervisor": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4178,7 +4178,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     p-queue: "npm:^9.3.0"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4196,7 +4196,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@cursor/sdk": ^1.0.0
     "@makaio/framework": ^1.0.0
@@ -4222,7 +4222,7 @@ __metadata:
     p-queue: "npm:^9.3.0"
     tsx: "npm:^4.22.3"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@google/gemini-cli-core": ">=0.29.5 <0.40.0"
     "@google/genai": ">=1.42.0 <2.0.0"
@@ -4250,7 +4250,7 @@ __metadata:
     quick-lru: "npm:^7.3.0"
     tsx: "npm:^4.22.3"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@github/copilot-sdk": ^0.2.2
     "@makaio/framework": ^1.0.0
@@ -4276,7 +4276,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     openai: "npm:6.39.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
     openai: ">=6.22.0 <7.0.0"
@@ -4299,7 +4299,7 @@ __metadata:
     "@mariozechner/pi-coding-agent": "npm:0.73.1"
     "@types/node": "npm:^24.3.0"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
     "@mariozechner/pi-agent-core": ">=0.72.0 <0.74.0"
@@ -4322,7 +4322,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4370,7 +4370,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^3.24.0"
+    zod: "npm:^4.4.3"
     zod-to-json-schema: "npm:^3.25.1"
   peerDependencies:
     "@anthropic-ai/claude-agent-sdk": ">=0.2.50"
@@ -4412,7 +4412,7 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/services-log-import": "workspace:*"
     "@makaio/utils": "workspace:*"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4435,7 +4435,7 @@ __metadata:
     emittery: "npm:^1.2.0"
     tsdown: "npm:0.22.0"
     type-fest: "npm:^5.2.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4449,7 +4449,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4496,7 +4496,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
     type-fest: "npm:^5.2.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4562,7 +4562,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     ws: "npm:^8.21.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     ws: ^8.21.0
   languageName: unknown
@@ -4593,7 +4593,7 @@ __metadata:
     ink: "npm:^6.5.1"
     ink-testing-library: "npm:^3.0.0"
     react: "npm:^19.0.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4612,7 +4612,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4630,7 +4630,7 @@ __metadata:
     "@makaio/subsystem-client": "workspace:*"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4700,7 +4700,7 @@ __metadata:
     "@types/semver": "npm:^7.7.0"
     semver: "npm:^7.8.0"
     tsx: "npm:^4.22.3"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4714,7 +4714,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:0.22.0"
     type-fest: "npm:^5.2.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4760,7 +4760,7 @@ __metadata:
     tsx: "npm:^4.22.4"
     vite: "npm:^8.0.16"
     ws: "npm:^8.21.0"
-    zod: "npm:^4.0.0"
+    zod: "npm:^4.4.3"
     zustand: "npm:^5.0.14"
   languageName: unknown
   linkType: soft
@@ -4804,7 +4804,7 @@ __metadata:
     tsx: "npm:^4.22.4"
     vite: "npm:^8.0.16"
     yaml: "npm:^2.9.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
     zustand: "npm:^5.0.14"
   languageName: unknown
   linkType: soft
@@ -4854,7 +4854,7 @@ __metadata:
     typescript: "npm:^6.0.3"
     unrun: "npm:^0.3.1"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/bus-core": "*"
     react: ^19.2.6
@@ -4875,7 +4875,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4895,7 +4895,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4913,7 +4913,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -4931,7 +4931,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4950,7 +4950,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4971,7 +4971,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   bin:
@@ -4992,7 +4992,7 @@ __metadata:
     type-fest: "npm:^4.31.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -5008,7 +5008,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
   languageName: unknown
@@ -5024,7 +5024,7 @@ __metadata:
     "@makaio/service-base": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5044,7 +5044,7 @@ __metadata:
     typescript: "npm:^6.0.3"
     unrun: "npm:^0.3.1"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/bus-core": "*"
     "@makaio/framework": ^1.0.0
@@ -5073,7 +5073,7 @@ __metadata:
     tsx: "npm:^4.22.4"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5096,7 +5096,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5112,7 +5112,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5135,7 +5135,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5159,7 +5159,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5179,7 +5179,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     "@makaio/framework": ^1.0.0
     "@makaio/runtime-node": ^1.0.0
@@ -5260,7 +5260,7 @@ __metadata:
     vitest: "npm:4.1.7"
     vitest-browser-react: "npm:^2.0.4"
     ws: "npm:^8.21.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     drizzle-orm: ^0.45.2
   dependenciesMeta:
@@ -5285,7 +5285,7 @@ __metadata:
     hono: "npm:^4.12.25"
     type-fest: "npm:^5.2.0"
     ws: "npm:^8.21.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   peerDependencies:
     react: ^18.0.0 || ^19.0.0
     react-dom: ^18.0.0 || ^19.0.0
@@ -5336,7 +5336,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5352,7 +5352,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5366,7 +5366,7 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@makaio/service-base": "workspace:*"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5410,7 +5410,7 @@ __metadata:
     drizzle-orm: "npm:0.45.2"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5596,7 +5596,7 @@ __metadata:
     merge-anything: "npm:^6.0.6"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5617,7 +5617,7 @@ __metadata:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5631,7 +5631,7 @@ __metadata:
     minimatch: "npm:^10.0.3"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5690,7 +5690,7 @@ __metadata:
     vitest: "npm:4.1.8"
     ws: "npm:^8.21.0"
     yaml: "npm:^2.9.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5740,7 +5740,7 @@ __metadata:
     "@makaio/tools-core": "workspace:*"
     "@makaio/utils": "workspace:*"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5766,7 +5766,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
     type-fest: "npm:^4.31.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5787,7 +5787,7 @@ __metadata:
     "@yarnpkg/fslib": "npm:^3.1.4"
     semver: "npm:^7.8.0"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5806,7 +5806,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5841,7 +5841,7 @@ __metadata:
     "@makaio/core": "workspace:*"
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5951,7 +5951,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -6029,7 +6029,7 @@ __metadata:
     drizzle-orm: "npm:0.45.2"
     tsdown: "npm:0.22.0"
     vitest: "npm:4.1.8"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -6060,7 +6060,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -6075,7 +6075,7 @@ __metadata:
     tsdown: "npm:0.22.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.7"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -6127,7 +6127,7 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/utils": "workspace:*"
     tsdown: "npm:0.22.0"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -6171,7 +6171,7 @@ __metadata:
     p-defer: "npm:^4.0.1"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.22.4"
-    zod: "npm:^4.1.13"
+    zod: "npm:^4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -27516,14 +27516,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^3.24.0, zod@npm:^3.24.1, zod@npm:^3.25.76":
+"zod@npm:^3.24.1, zod@npm:^3.25.76":
   version: 3.25.76
   resolution: "zod@npm:3.25.76"
   checksum: 10c0/5718ec35e3c40b600316c5b4c5e4976f7fee68151bc8f8d90ec18a469be9571f072e1bbaace10f1e85cf8892ea12d90821b200e980ab46916a6166a4260a983c
   languageName: node
   linkType: hard
 
-"zod@npm:^3.25 || ^4.0, zod@npm:^3.25.0 || ^4.0.0, zod@npm:^4.0.0, zod@npm:^4.1.11, zod@npm:^4.1.13, zod@npm:^4.3.6":
+"zod@npm:^3.25 || ^4.0, zod@npm:^3.25.0 || ^4.0.0, zod@npm:^4.1.11, zod@npm:^4.3.6, zod@npm:^4.4.3":
   version: 4.4.3
   resolution: "zod@npm:4.4.3"
   checksum: 10c0/7ea31b558e88f9faf44f31dd185e2e1cbf51fed3081787fb96cc2534749b50c0acfc6da7f0922a7353ed092dd358c7d50c28ea96c94d04af64191bd33152eca3

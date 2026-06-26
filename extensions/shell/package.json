@@ -31,7 +31,7 @@
     "safe-regex2": "^5.1.1",
     "strip-ansi": "^7.1.0",
     "tree-kill": "^1.2.2",
-    "zod": "^4.1.13"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
