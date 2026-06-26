@@ -41,7 +41,7 @@
   "dependencies": {
     "p-defer": "^4.0.1",
     "p-queue": "^9.3.0",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.50",

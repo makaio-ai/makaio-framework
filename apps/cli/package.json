@@ -29,11 +29,11 @@
     "@makaio/setup": "workspace:*",
     "@makaio/utils": "workspace:*",
     "commander": "^14.0.3",
-    "esbuild": "^0.28.1",
-    "hono": "^4.12.25",
+    "esbuild": "^0.28.0",
+    "hono": "^4.12.23",
     "ink": "^6.5.1",
     "react": "^19.0.0",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "license": "MIT",
   "scripts": {

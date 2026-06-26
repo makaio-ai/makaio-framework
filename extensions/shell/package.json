@@ -31,14 +31,14 @@
     "safe-regex2": "^5.1.1",
     "strip-ansi": "^7.1.0",
     "tree-kill": "^1.2.2",
-    "zod": "^4.1.13"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
-    "vitest": "4.1.8"
+    "vitest": "4.1.7"
   },
   "publishConfig": {
     "exports": {
