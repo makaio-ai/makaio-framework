@@ -4591,7 +4591,7 @@ __metadata:
     esbuild: "npm:^0.28.0"
     hono: "npm:^4.12.23"
     ink: "npm:^6.5.1"
-    ink-testing-library: "npm:^3.0.0"
+    ink-testing-library: "npm:^4.0.0"
     react: "npm:^19.0.0"
     zod: "npm:4.4.3"
   languageName: unknown
@@ -4845,7 +4845,7 @@ __metadata:
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.2"
     ink: "npm:^6.0.0"
-    ink-testing-library: "npm:^3.0.0"
+    ink-testing-library: "npm:^4.0.0"
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
     smol-toml: "npm:^1.3.0"
@@ -18147,15 +18147,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ink-testing-library@npm:^3.0.0":
-  version: 3.0.0
-  resolution: "ink-testing-library@npm:3.0.0"
+"ink-testing-library@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "ink-testing-library@npm:4.0.0"
   peerDependencies:
     "@types/react": ">=18.0.0"
   peerDependenciesMeta:
     "@types/react":
       optional: true
-  checksum: 10c0/b1b98ba50c8dc00b7e2e29ab7e508770d448584af7ae2c9b71939ede28884d2d4a9b7e47c2cdeab97acb0ac5c50948b6a5e435263920b8b4b99df5159b0a5b35
+  checksum: 10c0/88d9b70c1e3881cf2d32d678a27e689bfc03c02553d8c06bc4db97ac06d812be9b74f29009a66673f2cc036e01545894bf412dce50ed7ac668f3c68e8c046efd
   languageName: node
   linkType: hard
 
