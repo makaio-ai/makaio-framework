@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ArtifactContextSelector } from './context-selectors.js';
 import type { ArtifactKindRegistration, ArtifactRevision, ArtifactScope } from './schemas.js';
 import type { ArtifactProjectionPolicy } from '../materialization/schemas.js';
 import type { ArtifactLifecycleHookDefinition } from './lifecycle-hooks.js';
@@ -51,6 +52,8 @@ export interface ArtifactKindDefinition<TData extends Record<string, unknown>, T
    * defaults.
    */
   readonly projection?: ArtifactProjectionPolicy;
+  /** Optional default context selectors for artifact context resolution. */
+  readonly defaultContext?: ArtifactContextSelector;
   /**
    * Optional live-only lifecycle hooks owned by this kind definition.
    *
@@ -165,6 +168,8 @@ interface DefineArtifactKindOptions<TData extends Record<string, unknown>, TScop
    * external providers.
    */
   readonly projection?: ArtifactProjectionPolicy;
+  /** Optional default context selectors for artifact context resolution. */
+  readonly defaultContext?: ArtifactContextSelector;
   /**
    * Optional live-only lifecycle hooks. Not included in `toRegistration()`.
    *
@@ -259,6 +264,7 @@ export function defineArtifactKind<TData extends Record<string, unknown>, TScope
             },
           }
         : {}),
+      ...(options.defaultContext ? { defaultContext: structuredClone(options.defaultContext) } : {}),
     }),
   };
 }

@@ -135,8 +135,13 @@ export {
   ArtifactLifecycleHookRegistry,
   ArtifactLifecycleHookRejectedError,
   createArtifactLifecycleHookContributionProcessor,
+  resolveArtifactContext,
+  type ArtifactContextKindRegistry,
+  type ResolveArtifactContextOptions,
+  type RunAfterInput,
+  type RunBeforeInput,
+  type RunBeforeResult,
 } from './artifact/index.js';
-export type { RunAfterInput, RunBeforeInput, RunBeforeResult } from './artifact/index.js';
 export { FacetNamespaceRegistry, createFacetNamespaceContributionProcessor } from './facet/index.js';
 export { SurfaceBindingRegistry, createSurfaceBindingContributionProcessor } from './materialization/index.js';
 export { createToolContributionProcessor, ToolRegistry } from './tools/index.js';
@@ -274,13 +279,11 @@ export {
   ResolveIdResponseSchema,
   ResolveNameRequestSchema,
   ResolveNameResponseSchema,
-} from './adapter-runtime/index.js';
-export type {
-  RegisteredAdapterRuntimeIdentityHandlers,
-  ResolveIdRequest,
-  ResolveIdResponse,
-  ResolveNameRequest,
-  ResolveNameResponse,
+  type RegisteredAdapterRuntimeIdentityHandlers,
+  type ResolveIdRequest,
+  type ResolveIdResponse,
+  type ResolveNameRequest,
+  type ResolveNameResponse,
 } from './adapter-runtime/index.js';
 export {
   AgentInstanceStatusSchema,
@@ -288,8 +291,9 @@ export {
   AgentRuntimeSchemas,
   AgentRuntimeSelectionSchema,
   AgentRuntimeSubjects,
+  type AgentInstanceStatus,
+  type AgentRuntimeSelection,
 } from './agent-runtime/index.js';
-export type { AgentInstanceStatus, AgentRuntimeSelection } from './agent-runtime/index.js';
 export { CodebaseChangedEventSchema, CodebaseNamespace, CodebaseSchemas, CodebaseSubjects } from './codebase/index.js';
 export type { CodebaseChangedEvent } from './codebase/index.js';
 export {
@@ -303,15 +307,13 @@ export {
   ExtractedContextSchema,
   TechnicalDetailsSchema,
   TodoEntrySchema,
-} from './compression/index.js';
-export type {
-  BugEntry,
-  CompressionEvent,
-  CompressRequest,
-  CompressResponse,
-  ExtractedContext,
-  TechnicalDetails,
-  TodoEntry,
+  type BugEntry,
+  type CompressionEvent,
+  type CompressRequest,
+  type CompressResponse,
+  type ExtractedContext,
+  type TechnicalDetails,
+  type TodoEntry,
 } from './compression/index.js';
 export {
   ContainerCreatedSchema,
@@ -343,27 +345,25 @@ export {
   StatusResponseSchema,
   StopRequestSchema,
   StopResponseSchema,
-} from './execution-target/index.js';
-export type {
-  ContainerCreated,
-  ContainerDestroyed,
-  ContainerIsolatedSpawnRequest,
-  ContainerLocalSpawnRequest,
-  ContainerRuntime,
-  ContainerStarted,
-  ContainerState,
-  ContainerStopped,
-  ExecutionTarget,
-  ExecutionTargetInput,
-  ExecutionTargetListQuery,
-  ExecutionTargetResolveRequest,
-  ExecutionTargetType,
-  SpawnRequest,
-  SpawnResponse,
-  StatusRequest,
-  StatusResponse,
-  StopRequest,
-  StopResponse,
+  type ContainerCreated,
+  type ContainerDestroyed,
+  type ContainerIsolatedSpawnRequest,
+  type ContainerLocalSpawnRequest,
+  type ContainerRuntime,
+  type ContainerStarted,
+  type ContainerState,
+  type ContainerStopped,
+  type ExecutionTarget,
+  type ExecutionTargetInput,
+  type ExecutionTargetListQuery,
+  type ExecutionTargetResolveRequest,
+  type ExecutionTargetType,
+  type SpawnRequest,
+  type SpawnResponse,
+  type StatusRequest,
+  type StatusResponse,
+  type StopRequest,
+  type StopResponse,
 } from './execution-target/index.js';
 export {
   PreferenceItemSchema,

@@ -182,4 +182,44 @@ describe('defineArtifactKind', () => {
     expect(kind.hooks?.hooks[0]?.handler).toBe(beforeCreate);
     expect(kind.toRegistration()).not.toHaveProperty('hooks');
   });
+
+  it('serializes default context selectors into kind registration metadata', () => {
+    const kind = defineArtifactKind({
+      kind: 'system',
+      description: 'System artifact with default context selectors.',
+      schemaVersion: '1',
+      dataSchema: z.object({ name: z.string() }),
+      conflictPolicy: 'supersedes',
+      defaultContext: {
+        contains: { kinds: ['repo'], hint: 'inline' },
+        derives_from: { hint: 'link', depth: 1 },
+      },
+    });
+
+    const registration = ArtifactKindRegistrationSchema.parse(kind.toRegistration());
+    expect(registration.defaultContext).toEqual({
+      contains: { kinds: ['repo'], hint: 'inline' },
+      derives_from: { hint: 'link', depth: 1 },
+    });
+  });
+
+  it('defensively copies default context when serializing kind registrations', () => {
+    const defaultContext = {
+      contains: { kinds: ['repo'], hint: 'inline' },
+    };
+    const kind = defineArtifactKind({
+      kind: 'system-copy',
+      description: 'System artifact for default context copy tests.',
+      schemaVersion: '1',
+      dataSchema: z.object({ name: z.string() }),
+      conflictPolicy: 'supersedes',
+      defaultContext,
+    });
+
+    const reg1 = kind.toRegistration();
+    // Force-mutate through the readonly constraint to verify structural cloning.
+    (reg1.defaultContext!.contains! as Record<string, unknown>).kinds = ['mutated'];
+
+    expect(kind.toRegistration().defaultContext?.contains?.kinds).toEqual(['repo']);
+  });
 });

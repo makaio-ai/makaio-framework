@@ -65,6 +65,36 @@ export type {
   BeforeArtifactHookContext,
   BeforeArtifactHookRegistration,
 } from './lifecycle-hooks.js';
+export {
+  ARTIFACT_CONTEXT_RENDER_HINTS,
+  ArtifactContextRelationSelectorSchema,
+  ArtifactContextRenderHintSchema,
+  ArtifactContextSelectorSchema,
+} from './context-selectors.js';
+export type {
+  ArtifactContextKnownRenderHint,
+  ArtifactContextRelationSelector,
+  ArtifactContextRenderHint,
+  ArtifactContextSelector,
+} from './context-selectors.js';
+export {
+  ArtifactContextRefEntrySchema,
+  ArtifactContextUnresolvedReasonSchema,
+  ResolvedArtifactContextWireSchema,
+} from './context-resolution.js';
+export type {
+  ArtifactContextRefEntry,
+  ArtifactContextUnresolvedReason,
+  ResolvedArtifactContextWire,
+} from './context-resolution.js';
+export { hydrateArtifactContextTree } from './hydrate-context.js';
+export type {
+  ArtifactContextRootNode,
+  ArtifactContextNode,
+  ArtifactContextTree,
+  ResolvedArtifactContextNode,
+  UnresolvedArtifactContextNode,
+} from './context-tree.js';
 export { ArtifactNamespace, ArtifactSchemas, ArtifactSubjects } from './namespace.js';
 export type {
   ArtifactCreatedPayload,
@@ -82,6 +112,8 @@ export type {
   ArtifactRelationTypeListResponse,
   ArtifactRelationTypeRegisterRequest,
   ArtifactRelationTypeRegisterResponse,
+  ArtifactResolveContextRequest,
+  ArtifactResolveContextResponse,
   ArtifactResolveRequest,
   ArtifactResolveResponse,
   ArtifactRevisedPayload,
