@@ -45,7 +45,7 @@
     "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "0.98.0",
+    "@anthropic-ai/sdk": "0.106.0",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/ai-adapters-stream-session": "workspace:*",
     "@makaio/build-tooling": "workspace:*",

@@ -305,9 +305,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@anthropic-ai/sdk@npm:0.98.0":
-  version: 0.98.0
-  resolution: "@anthropic-ai/sdk@npm:0.98.0"
+"@anthropic-ai/sdk@npm:0.106.0":
+  version: 0.106.0
+  resolution: "@anthropic-ai/sdk@npm:0.106.0"
   dependencies:
     json-schema-to-ts: "npm:^3.1.1"
     standardwebhooks: "npm:^1.0.0"
@@ -318,7 +318,7 @@ __metadata:
       optional: true
   bin:
     anthropic-ai-sdk: bin/cli
-  checksum: 10c0/bf4a494814bede2601ede5ae83a8be5b285e69126b2fa45ccbdc78edfd045a4f747c152a8c5cb355a6db4b046678279917870fdff36a504148f187f1412a30e8
+  checksum: 10c0/65961f0f86a0c263e4ebb5b754d3abbae432ec742946dfbaba33cde22679334aff097afb04c5c6d8d1a794e046a560e6e68f564f4357592b4aa0bd7be0a17d80
   languageName: node
   linkType: hard
 
@@ -4081,7 +4081,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/adapter-anthropic-sdk@workspace:adapters/implementations/anthropic-sdk"
   dependencies:
-    "@anthropic-ai/sdk": "npm:0.98.0"
+    "@anthropic-ai/sdk": "npm:0.106.0"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/ai-adapters-stream-session": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
