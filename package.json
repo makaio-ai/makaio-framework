@@ -131,7 +131,7 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
+    "@biomejs/biome": "2.5.1",
     "@changesets/cli": "^2.29.0",
     "@eslint/js": "^9.36.0",
     "@makaio/build-tooling": "workspace:*",
@@ -163,7 +163,7 @@
     "prettier": "3.8.3",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "stylelint": "^16.26.1",
+    "stylelint": "^17.14.0",
     "tsdown": "0.22.0",
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
