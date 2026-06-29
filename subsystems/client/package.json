@@ -36,7 +36,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0",
+    "tsdown": "0.22.3",
     "tsx": "^4.22.3",
     "vitest": "4.1.7"
   },
