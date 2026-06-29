@@ -51,7 +51,7 @@
     "@makaio/framework": "^1.0.0"
   },
   "devDependencies": {
-    "@github/copilot-sdk": "0.2.2",
+    "@github/copilot-sdk": "1.0.4",
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/ai-adapters-stream-session": "workspace:*",
     "@makaio/build-tooling": "workspace:*",
