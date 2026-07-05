@@ -77,6 +77,8 @@ export {
   ChannelAuthError,
   ChannelClosedError,
   ChannelOnlyError,
+  CONNECTION_LOST_ERROR_CODE,
+  ConnectionLostError,
   LocalSubjectError,
   NO_HANDLER_ERROR_CODE,
   NoHandlerError,

@@ -199,17 +199,30 @@ export class CorrelationTracker {
   }
 
   /**
+   * Reject all pending requests with the given error.
+   *
+   * Clears all timeouts, removes abort listeners, rejects every pending
+   * promise, and empties the map. New entries can still be tracked after
+   * this call — use this for connection-loss scenarios where the transport
+   * will reconnect.
+   * @param error - Error to reject all pending requests with
+   */
+  public rejectAll(error: Error): void {
+    for (const [_correlationId, pending] of this.pending.entries()) {
+      clearTimeout(pending.timeoutId);
+      pending.removeAbortListener?.();
+      pending.reject(error);
+    }
+
+    this.pending.clear();
+  }
+
+  /**
    * Clean up all pending requests.
    *
    * Clears all timeouts and rejects all pending requests with a disconnection error.
    */
   public cleanup(): void {
-    for (const [_correlationId, pending] of this.pending.entries()) {
-      clearTimeout(pending.timeoutId);
-      pending.removeAbortListener?.();
-      pending.reject(new Error('Transport disconnected'));
-    }
-
-    this.pending.clear();
+    this.rejectAll(new Error('Transport disconnected'));
   }
 }

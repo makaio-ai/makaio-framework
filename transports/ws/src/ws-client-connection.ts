@@ -12,6 +12,7 @@
 
 import type { WebSocketLike, TransportAuth, ClientTransportCodec } from './types.js';
 import type { BusMessage, BusReceiveHandler, CorrelationTracker } from '@makaio/bus-core';
+import { ConnectionLostError } from '@makaio/bus-core';
 import { sendEncoded, waitForSocketOpen } from './transport-helpers.js';
 import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
@@ -79,11 +80,40 @@ export interface ConnectionDeps {
   notifyConnected(): void;
   /** Called when a connection is lost unexpectedly (not on clean disconnect). */
   notifyDisconnected(): void;
+
+  /**
+   * Shared set tracking the current socket session's in-flight
+   * `handleInboundMessage` promises.
+   *
+   * The transport passes its own `inFlightMessages` Set by reference so that
+   * mutations (add/delete/clear) are reflected on the transport instance.
+   * Entries are added in `attachMessageListener` and auto-deleted when each
+   * promise settles. `connectOnce` clears the set at the start of a new session
+   * (after draining). `drainAndRejectPendingCorrelations` awaits all entries
+   * before calling `rejectAll` so that a response frame being decoded
+   * concurrently with a socket close still resolves its correlation.
+   */
+  inFlightMessages: Set<Promise<void>>;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers — socket listener management
 // ---------------------------------------------------------------------------
+
+/**
+ * Drain pending in-flight `handleInboundMessage` promises, then reject all
+ * pending correlations with a `ConnectionLostError`.
+ *
+ * Must be awaited at every socket-close site before calling
+ * `correlations.rejectAll`. This ensures that a response frame arriving just
+ * before the close event still gets a chance to decode and resolve its
+ * correlation rather than being overtaken by the rejection.
+ * @param deps - Connection lifecycle dependencies
+ */
+async function drainAndRejectPendingCorrelations(deps: ConnectionDeps): Promise<void> {
+  await Promise.allSettled(deps.inFlightMessages);
+  deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+}
 
 /**
  * Attach the message listener to the given socket and store the reference in
@@ -93,7 +123,7 @@ export interface ConnectionDeps {
  */
 function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
   const listener = (event: { data: string | Buffer }): void => {
-    void handleInboundMessage(event.data, {
+    const p = handleInboundMessage(event.data, {
       name: deps.name,
       debug: deps.debug,
       auth: deps.auth,
@@ -111,7 +141,10 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
         if (ws.readyState !== 1) return;
         await sendEncoded({ type: 'subscription-ack', ackId }, deps.codec, ws);
       },
+    }).finally(() => {
+      deps.inFlightMessages.delete(p);
     });
+    deps.inFlightMessages.add(p);
   };
   deps.setMessageListener(listener);
   ws.addEventListener('message', listener);
@@ -150,6 +183,18 @@ export function removeSocketListeners(ws: WebSocketLike, deps: ConnectionDeps): 
  * @param deps - Connection lifecycle dependencies
  */
 export async function connectOnce(deps: ConnectionDeps): Promise<void> {
+  // Drain any in-flight handleInboundMessage calls from the previous session
+  // before rejecting correlations. A response frame may have arrived just before
+  // the socket closed; awaiting the drain gives codec.decode a chance to finish
+  // so the correlation resolves correctly rather than being rejected.
+  // Then reject any remaining (unresolved) correlations from the previous session —
+  // their responses were truly lost when the old socket closed.
+  await drainAndRejectPendingCorrelations(deps);
+
+  // Clear the in-flight set for the new socket session. All previous promises
+  // are already settled (the drain above awaited them), so clearing is safe.
+  deps.inFlightMessages.clear();
+
   // Resolve any stale ready promise from the previous session to avoid hanging awaiters.
   deps.resolveReady();
   deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: reconnecting before subscription ack'));
@@ -288,6 +333,12 @@ export async function runReconnectLoop(
       if (signal.aborted) break;
 
       if (hadConnection) {
+        // Drain any in-flight handleInboundMessage calls then reject remaining
+        // correlations — their responses were on the old socket and will never
+        // arrive. Draining first ensures responses that arrived just before the
+        // close still resolve. This must happen before the backoff sleep so
+        // callers get a prompt, honest error.
+        await drainAndRejectPendingCorrelations(deps);
         if (deps.debug) {
           console.info(
             `[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection lost, starting reconnect loop (maxMs=${config.maxMs})`,
@@ -317,7 +368,8 @@ export async function runReconnectLoop(
 
           const newWs = deps.getSocket();
           if (newWs !== null) {
-            const closeListener = (): void => {
+            const closeListener = async (): Promise<void> => {
+              await drainAndRejectPendingCorrelations(deps);
               deps.auth?.cleanup();
               deps.setAuthComplete(false);
               if (deps.debug) {
@@ -370,7 +422,8 @@ export function installNoReconnectCloseListener(
   deps: ConnectionDeps,
   clearReconnectAbort: () => void,
 ): void {
-  const onClose = (): void => {
+  const onClose = async (): Promise<void> => {
+    await drainAndRejectPendingCorrelations(deps);
     deps.auth?.cleanup();
     removeSocketListeners(ws, deps);
     deps.setAuthComplete(false);
