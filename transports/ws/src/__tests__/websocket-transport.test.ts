@@ -180,16 +180,22 @@ describe('Client mode behavior', () => {
 
   it('rejects manual reconnect on a closed caller-owned socket', async () => {
     const ws = new MockWebSocket();
-    const transport = makeMockTransport(ws);
+    const onDisconnected = vi.fn();
+    const transport = makeMockTransport(ws, { onDisconnected });
 
     try {
       await transport.connect();
 
       ws.close();
 
-      // After close fires the no-reconnect listener clears reconnectAbort,
-      // allowing connect() to be called again. connectOnce then calls wsFactory
-      // which returns the closed socket — waitForSocketOpen rejects immediately.
+      // The close listener is async (drains in-flight messages before clearing
+      // reconnectAbort). Wait for it to fire onDisconnected so we know it has
+      // completed and reconnectAbort is cleared, allowing connect() to proceed.
+      await waitForCondition(() => onDisconnected.mock.calls.length > 0, 1000, 'onDisconnected not called after close');
+
+      // After the close listener finishes it clears reconnectAbort, allowing
+      // connect() to be called again. connectOnce then calls wsFactory which
+      // returns the closed socket — waitForSocketOpen rejects immediately.
       await expect(transport.connect()).rejects.toThrow('WebSocket closed before opening');
     } finally {
       await transport.disconnect();
@@ -245,6 +251,9 @@ describe('Client mode behavior', () => {
       await transport.connect();
       ws.close();
 
+      // The close listener is async (drains in-flight messages before notifying);
+      // wait for it to settle before asserting.
+      await waitForCondition(() => onDisconnected.mock.calls.length > 0, 1000, 'onDisconnected not called after close');
       expect(onDisconnected).toHaveBeenCalledTimes(1);
     } finally {
       await transport.disconnect();

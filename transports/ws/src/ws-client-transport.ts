@@ -75,6 +75,15 @@ export class WebSocketClientTransport implements BusTransport {
   /** AbortController for the active reconnect loop; `null` when not connected. */
   private reconnectAbort: AbortController | null = null;
 
+  /**
+   * In-flight `handleInboundMessage` promises for the current socket session.
+   *
+   * Reset to a new `Set` at the start of each connection attempt so that the
+   * drain-before-rejectAll logic in `drainAndRejectPendingCorrelations` only
+   * waits on the promises belonging to the active session.
+   */
+  private inFlightMessages = new Set<Promise<void>>();
+
   /** AbortController for the current backoff sleep; aborting wakes the sleep early. */
   private backoffWakeAbort: AbortController | null = null;
 
@@ -451,6 +460,7 @@ export class WebSocketClientTransport implements BusTransport {
         this.onDisconnectedCallback?.();
         this.onDisconnected?.();
       },
+      inFlightMessages: this.inFlightMessages,
     };
   }
 

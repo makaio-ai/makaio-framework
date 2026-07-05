@@ -310,6 +310,65 @@ describe('WebSocketClientTransport — unsubscribe', () => {
 
     await transport.disconnect();
   });
+
+  it('contains inbound subscription acknowledgement send failures', async () => {
+    const ackEncodeError = new Error('subscription ack encode failed');
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unhandledRejection = vi.fn();
+    process.on('unhandledRejection', unhandledRejection);
+
+    const mock = new MockWebSocket();
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: () => mock,
+      autoReconnect: false,
+      debug: true,
+      codec: {
+        encode: async (message) => {
+          if (message.type === 'subscription-ack') {
+            throw ackEncodeError;
+          }
+          return JSON.stringify(message);
+        },
+        decode: async (message) => message as import('@makaio/bus-core').BusMessage,
+      },
+    });
+
+    let handled = false;
+    transport.onReceive(async (message) => {
+      if (message.type === 'subscribe') {
+        handled = true;
+      }
+    });
+
+    try {
+      await transport.connect();
+
+      mock.receiveMessage(
+        JSON.stringify({
+          type: 'subscribe',
+          ackId: 'peer-subscribe-encode-fails',
+          subjects: { 'peer.topic': [] },
+        }),
+      );
+
+      await waitForCondition(() => consoleErrorSpy.mock.calls.length > 0, 1000, 'ack failure was not logged');
+      await Promise.resolve();
+
+      expect(handled).toBe(true);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '[WebSocketClientTransport:ws-client] Handler dispatch error:',
+        ackEncodeError,
+      );
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', unhandledRejection);
+      consoleErrorSpy.mockRestore();
+      if (transport.isReady()) {
+        await transport.disconnect();
+      }
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -508,6 +567,249 @@ describe('WebSocketClientTransport — reconnect backoff', () => {
     expect(callCount).toBeGreaterThanOrEqual(2);
 
     await trackingTransport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// in-flight request rejection on reconnect
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — in-flight request rejection on reconnect', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('rejects pending request correlations when socket closes and reconnects', async () => {
+    const mocks: MockWebSocket[] = [];
+    const factory = (): MockWebSocket => {
+      const m = new MockWebSocket();
+      mocks.push(m);
+      return m;
+    };
+
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: factory,
+      autoReconnect: { baseMs: 50, maxMs: 200 },
+    });
+
+    await transport.connect();
+    const firstSocket = mocks[0];
+
+    // Send a request — the response will never arrive because we close the socket.
+    const requestPromise = transport.send({
+      type: 'request' as const,
+      subject: 'test.action',
+      namespace: 'test',
+      messageId: 'msg-inflight',
+      correlationId: 'corr-inflight-1',
+      payload: { data: 'value' },
+    });
+
+    // Wait for the send to actually transmit (codec encode is async).
+    await waitForCondition(
+      () => firstSocket.sentMessages.some((m) => m.includes('corr-inflight-1')),
+      1000,
+      'request was not sent on the wire',
+    );
+
+    // Socket drops — response is lost.
+    firstSocket.close();
+
+    // The reconnect loop detects the close and rejects pending correlations.
+    // The in-flight request must be rejected with a connection-loss error,
+    // NOT left pending until timeout and NOT surfaced as NO_HANDLER.
+    await expect(requestPromise).rejects.toThrow(/connection lost/i);
+
+    await transport.disconnect();
+  });
+
+  it('rejects in-flight requests before the reconnect backoff delay', async () => {
+    const mocks: MockWebSocket[] = [];
+    const factory = (): MockWebSocket => {
+      const m = new MockWebSocket();
+      mocks.push(m);
+      return m;
+    };
+
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: factory,
+      autoReconnect: { baseMs: 5000, maxMs: 10000 },
+    });
+
+    await transport.connect();
+    const firstSocket = mocks[0];
+
+    // Send a request with a long timeout so it would not time out on its own.
+    const requestPromise = transport.send(
+      {
+        type: 'request' as const,
+        subject: 'test.action',
+        namespace: 'test',
+        messageId: 'msg-inflight-2',
+        correlationId: 'corr-inflight-2',
+        payload: {},
+      },
+      30_000,
+    );
+
+    // Wait for the send to actually transmit.
+    await waitForCondition(
+      () => firstSocket.sentMessages.some((m) => m.includes('corr-inflight-2')),
+      1000,
+      'request was not sent on the wire',
+    );
+
+    // Socket drops.
+    firstSocket.close();
+
+    // Must already be rejected — not still pending even though backoff hasn't started.
+    await expect(requestPromise).rejects.toThrow(/connection lost/i);
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// in-flight drain before rejectAll
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — in-flight drain before rejectAll', () => {
+  it('resolves correlation when socket closes mid async codec.decode', async () => {
+    // Use a codec whose decode() is delayed so that rejectAll fires first in
+    // broken code, but after the drain fix the correlation resolves correctly.
+    let resolveDecodeBarrier!: () => void;
+    const decodeBarrier = new Promise<void>((res) => {
+      resolveDecodeBarrier = res;
+    });
+
+    const mock = new MockWebSocket();
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: () => mock,
+      autoReconnect: false,
+      codec: {
+        encode: async (msg) => JSON.stringify(msg),
+        decode: async (msg) => {
+          // Hold the decode until we release it — simulates a slow async step
+          await decodeBarrier;
+          return msg as import('@makaio/bus-core').BusMessage;
+        },
+      },
+    });
+
+    await transport.connect();
+
+    // Register a handler so the message gets processed after decode
+    transport.onReceive(async () => {});
+
+    // Issue a request — correlation is tracked
+    const requestPromise = transport.send({
+      type: 'request' as const,
+      subject: 'test.drain',
+      namespace: 'test',
+      messageId: 'msg-drain-1',
+      correlationId: 'corr-drain-1',
+      payload: {},
+    });
+
+    // Wait for the request to be sent on the wire
+    await waitForCondition(
+      () => mock.sentMessages.some((m) => m.includes('corr-drain-1')),
+      1000,
+      'request was not sent on the wire',
+    );
+
+    // Server sends the response frame — this kicks off handleInboundMessage
+    // but codec.decode is held by the barrier so it hasn't resolved yet
+    mock.receiveMessage(
+      JSON.stringify({
+        type: 'response',
+        correlationId: 'corr-drain-1',
+        result: { answer: 42 },
+      }),
+    );
+
+    // Close the socket immediately — before decode resolves
+    mock.close();
+
+    // Now release the decode barrier — the response should still resolve
+    resolveDecodeBarrier();
+
+    // With the drain fix: the correlation resolves with the response result.
+    // Without the fix: rejectAll fires first → ConnectionLostError.
+    await expect(requestPromise).resolves.toEqual({ answer: 42 });
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// drain does not block on stuck application handlers
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — drain does not block on stuck application handlers', () => {
+  it('rejects pending outgoing correlations promptly even when an inbound REQUEST handler never resolves', async () => {
+    const mock = new MockWebSocket();
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: () => mock,
+      autoReconnect: false,
+    });
+
+    // Register a handler that returns a never-resolving promise for request messages.
+    transport.onReceive(async (message) => {
+      if (message.type === 'request') {
+        await new Promise<void>(() => {
+          // intentionally never resolves
+        });
+      }
+    });
+
+    await transport.connect();
+
+    // Issue an outgoing request — this creates a pending correlation.
+    const outgoingRequestPromise = transport.send({
+      type: 'request' as const,
+      subject: 'test.action',
+      namespace: 'test',
+      messageId: 'msg-stuck-handler-out',
+      correlationId: 'corr-stuck-handler-out',
+      payload: {},
+    });
+
+    // Wait for outgoing request to be on the wire.
+    await waitForCondition(
+      () => mock.sentMessages.some((m) => m.includes('corr-stuck-handler-out')),
+      1000,
+      'outgoing request was not sent on the wire',
+    );
+
+    // Server sends an inbound REQUEST — this triggers the never-resolving handler.
+    mock.receiveMessage(
+      JSON.stringify({
+        type: 'request',
+        subject: 'test.inbound',
+        namespace: 'test',
+        messageId: 'msg-stuck-handler-in',
+        correlationId: 'corr-stuck-handler-in',
+        payload: {},
+      }),
+    );
+
+    // Give the inbound handler a tick to start (but not finish — it never finishes).
+    await Promise.resolve();
+
+    // Close the socket — drainAndRejectPendingCorrelations must NOT wait on the
+    // stuck handler; it must only wait for the correlation phase to complete.
+    mock.close();
+
+    // The pending outgoing correlation must be rejected promptly with
+    // ConnectionLostError — the test timeout proves "promptly".
+    await expect(outgoingRequestPromise).rejects.toThrow(/connection lost/i);
+
+    await transport.disconnect();
   });
 });
 
