@@ -21,7 +21,7 @@
     "@makaio/ui-theme": "workspace:*",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
-    "react-resizable-panels": "^4.11.2",
+    "react-resizable-panels": "4.12.0",
     "react-use": "^17.6.0"
   },
   "peerDependencies": {
@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@types/react": "^19.2.17",
+    "@types/react": "^19.2.15",
     "@types/react-dom": "^19.0.0",
     "tsdown": "0.22.0"
   },
