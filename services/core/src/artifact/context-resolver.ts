@@ -56,6 +56,7 @@ interface ResolverState {
   readonly resolvedByKey: Map<string, ArtifactRevision | null>;
   readonly kindDefaultsCache: Map<string, ArtifactContextSelector | undefined>;
   readonly walkedByKey: Set<string>;
+  readonly refIndexByKey: Map<string, number>;
   readonly resolved: ArtifactRevision[];
   readonly refs: ArtifactContextRefEntry[];
 }
@@ -77,6 +78,7 @@ export async function resolveArtifactContext(
     resolvedByKey: new Map(),
     kindDefaultsCache: new Map(),
     walkedByKey: new Set(),
+    refIndexByKey: new Map(),
     resolved: [],
     refs: [],
   };
@@ -114,7 +116,7 @@ async function walkArtifact(
   depth: number,
   path: ReadonlySet<string>,
 ): Promise<void> {
-  const walkKey = artifactWalkKey(artifact, selectors, depth);
+  const walkKey = artifactWalkKey(artifact, selectors, depth, path);
   if (state.walkedByKey.has(walkKey)) {
     return;
   }
@@ -150,34 +152,30 @@ async function resolveRelation(
   const hint = selector?.hint ?? 'link';
 
   if (!selectorMatches(selector, relation.target)) {
-    state.refs.push(unresolved(sourceRef, relation, hint, 'not-selected'));
+    recordRef(state, unresolved(sourceRef, relation, hint, 'not-selected'));
     return;
   }
 
   if (relation.target.refClass !== 'artifact') {
-    state.refs.push(unresolved(sourceRef, relation, hint, 'unsupported-ref-class'));
-    return;
-  }
-
-  if (depth >= state.maxDepth) {
-    state.refs.push(unresolved(sourceRef, relation, hint, 'depth-exceeded'));
+    recordRef(state, unresolved(sourceRef, relation, hint, 'unsupported-ref-class'));
     return;
   }
 
   const targetKey = artifactRefKey(relation.target);
-  if (path.has(targetKey)) {
-    state.refs.push(unresolved(sourceRef, relation, hint, 'cycle-detected'));
+  const isBackEdge = path.has(targetKey);
+  if (depth >= state.maxDepth && !isBackEdge) {
+    recordRef(state, unresolved(sourceRef, relation, hint, 'depth-exceeded'));
     return;
   }
 
   const alreadyResolved = state.resolvedByKey.has(targetKey);
   const target = await resolveRef(state, relation.target);
   if (!target) {
-    state.refs.push(unresolved(sourceRef, relation, hint, 'not-found'));
+    recordRef(state, unresolved(sourceRef, relation, hint, 'not-found'));
     return;
   }
 
-  state.refs.push({
+  recordRef(state, {
     sourceRef,
     target: relation.target,
     relationType: relation.type,
@@ -186,6 +184,9 @@ async function resolveRelation(
   });
   if (!alreadyResolved) {
     state.resolved.push(target);
+  }
+  if (isBackEdge) {
+    return;
   }
 
   const remainingDepth = (selector.depth ?? 1) - 1;
@@ -319,6 +320,25 @@ function unresolved(
 }
 
 /**
+ * Record a relation entry once in the pathless wire graph.
+ * @param state - Resolver state accumulator.
+ * @param entry - Relation entry to record.
+ */
+function recordRef(state: ResolverState, entry: ArtifactContextRefEntry): void {
+  const key = refEntryKey(entry);
+  const existingIndex = state.refIndexByKey.get(key);
+  if (existingIndex === undefined) {
+    state.refIndexByKey.set(key, state.refs.length);
+    state.refs.push(entry);
+    return;
+  }
+
+  if (entry.status === 'resolved' && state.refs[existingIndex]?.status === 'unresolved') {
+    state.refs[existingIndex] = entry;
+  }
+}
+
+/**
  * Convert an artifact revision to an artifact ref.
  * @param artifact - Artifact revision.
  * @returns Artifact reference.
@@ -342,16 +362,42 @@ function artifactRefKey(ref: ArtifactRef): string {
 }
 
 /**
+ * Build a key for a source relation in the pathless wire graph.
+ * @param entry - Context relation entry to key.
+ * @returns Stable relation identity key.
+ */
+function refEntryKey(entry: ArtifactContextRefEntry): string {
+  return JSON.stringify([artifactRefKey(entry.sourceRef), entry.relationType, relationTargetKey(entry.target)]);
+}
+
+/**
+ * Build a key for an artifact relation target.
+ * @param target - Relation target to key.
+ * @returns Stable target identity key.
+ */
+function relationTargetKey(target: ArtifactRelationTarget): string {
+  if (target.refClass === 'artifact') {
+    return JSON.stringify(['artifact', target.kind, target.id, target.revision]);
+  }
+  if (target.refClass === 'local') {
+    return JSON.stringify(['local', artifactRefKey(target.artifact), target.localId]);
+  }
+  return JSON.stringify(['evidence', target.kind, target.id, target.revision ?? null, target.locator ?? null]);
+}
+
+/**
  * Build a traversal key for a pathless graph walk.
  * @param artifact - Artifact revision being walked.
  * @param selectors - Selector context applied to the artifact.
  * @param depth - Current traversal depth.
+ * @param path - Current path membership for cycle-sensitive expansion.
  * @returns Composite traversal key.
  */
 function artifactWalkKey(
   artifact: ArtifactRevision,
   selectors: ArtifactContextSelector | undefined,
   depth: number,
+  path: ReadonlySet<string>,
 ): string {
-  return JSON.stringify([artifact.kind, artifact.id, artifact.revision, depth, selectors ?? null]);
+  return JSON.stringify([artifact.kind, artifact.id, artifact.revision, depth, selectors ?? null, [...path].sort()]);
 }

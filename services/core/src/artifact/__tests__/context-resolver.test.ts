@@ -581,7 +581,7 @@ describe('resolveArtifactContext', () => {
     ]);
   });
 
-  it('marks cycles without dropping the relation entry', async () => {
+  it('emits artifact cycle back-edges as resolved wire refs', async () => {
     const systemRef = ref('system', 'system-1', 'rev-system');
     const system = artifact('system', 'system-1', 'rev-system', [{ type: 'contains', target: systemRef }]);
     cleanups.push(
@@ -601,10 +601,191 @@ describe('resolveArtifactContext', () => {
 
     expect(context.refs[0]).toEqual(
       expect.objectContaining({
-        status: 'unresolved',
-        reason: 'cycle-detected',
+        status: 'resolved',
+        target: systemRef,
       }),
     );
+  });
+
+  it('emits artifact cycle back-edges as resolved even at max depth', async () => {
+    const systemRef = ref('system', 'system-1', 'rev-system');
+    const system = artifact('system', 'system-1', 'rev-system', [{ type: 'contains', target: systemRef }]);
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        ctx.setResult({
+          artifact: ctx.payload.ref.id === 'system-1' ? system : null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: systemRef,
+      maxDepth: 0,
+      selectors: { contains: { kinds: ['system'], hint: 'inline' } },
+    });
+
+    expect(context.refs[0]).toEqual(
+      expect.objectContaining({
+        status: 'resolved',
+        target: systemRef,
+      }),
+    );
+  });
+
+  it('keeps shared-descendant back-edges path-local by emitting resolved refs', async () => {
+    const parentARef = ref('repo', 'parent-a', 'rev-a');
+    const parentBRef = ref('repo', 'parent-b', 'rev-b');
+    const sharedRef = ref('contributor', 'shared', 'rev-shared');
+    const shared = artifact('contributor', 'shared', 'rev-shared', [
+      {
+        type: 'contains',
+        target: parentARef,
+      },
+    ]);
+    const parentA = artifact('repo', 'parent-a', 'rev-a', [
+      {
+        type: 'contains',
+        target: sharedRef,
+      },
+    ]);
+    const parentB = artifact('repo', 'parent-b', 'rev-b', [
+      {
+        type: 'contains',
+        target: sharedRef,
+      },
+    ]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      {
+        type: 'contains',
+        target: parentARef,
+      },
+      {
+        type: 'derives_from',
+        target: parentBRef,
+      },
+    ]);
+    const artifacts = new Map(
+      [system, parentA, parentB, shared].map((entry) => [refKey(ref(entry.kind, entry.id, entry.revision)), entry]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        ctx.setResult({
+          artifact: artifacts.get(refKey(ctx.payload.ref)) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      selectors: {
+        contains: { depth: 3, kinds: ['repo', 'contributor'], hint: 'inline' },
+        derives_from: {
+          kinds: ['repo'],
+          hint: 'inline',
+          nested: {
+            contains: { depth: 2, kinds: ['repo', 'contributor'], hint: 'inline' },
+          },
+        },
+      },
+    });
+
+    expect(
+      context.refs
+        .filter((entry) => entry.sourceRef.id === 'shared')
+        .map((entry) => [
+          entry.relationType,
+          entry.status,
+          entry.target.refClass === 'artifact' ? entry.target.id : '',
+        ]),
+    ).toEqual([['contains', 'resolved', 'parent-a']]);
+  });
+
+  it('expands a shared source again when a later path makes its back-edge acyclic', async () => {
+    const parentARef = ref('repo', 'parent-a', 'rev-a');
+    const parentCRef = ref('repo', 'parent-c', 'rev-c');
+    const sharedRef = ref('contributor', 'shared', 'rev-shared');
+    const leafRef = ref('contributor', 'leaf', 'rev-leaf');
+    const parentA = artifact('repo', 'parent-a', 'rev-a', [
+      {
+        type: 'contains',
+        target: sharedRef,
+      },
+      {
+        type: 'links',
+        target: leafRef,
+      },
+    ]);
+    const parentC = artifact('repo', 'parent-c', 'rev-c', [
+      {
+        type: 'contains',
+        target: sharedRef,
+      },
+    ]);
+    const shared = artifact('contributor', 'shared', 'rev-shared', [
+      {
+        type: 'contains',
+        target: parentARef,
+      },
+    ]);
+    const leaf = artifact('contributor', 'leaf', 'rev-leaf');
+    const system = artifact('system', 'system-1', 'rev-system', [
+      {
+        type: 'starts',
+        target: parentARef,
+      },
+      {
+        type: 'starts',
+        target: parentCRef,
+      },
+    ]);
+    const artifacts = new Map(
+      [system, parentA, parentC, shared, leaf].map((entry) => [
+        refKey(ref(entry.kind, entry.id, entry.revision)),
+        entry,
+      ]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        ctx.setResult({
+          artifact: artifacts.get(refKey(ctx.payload.ref)) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      selectors: {
+        starts: {
+          kinds: ['repo'],
+          hint: 'inline',
+          nested: {
+            contains: {
+              depth: 2,
+              kinds: ['repo', 'contributor'],
+              hint: 'inline',
+              nested: {
+                links: { kinds: ['contributor'], hint: 'inline' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      context.refs.map((entry) => [
+        entry.sourceRef.id,
+        entry.relationType,
+        entry.status,
+        entry.target.refClass === 'artifact' ? entry.target.id : '',
+      ]),
+    ).toContainEqual(['parent-a', 'links', 'resolved', 'leaf']);
   });
 
   it('marks selected non-artifact targets as unsupported-ref-class', async () => {
