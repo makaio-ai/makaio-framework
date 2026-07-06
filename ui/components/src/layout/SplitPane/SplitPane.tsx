@@ -1,6 +1,14 @@
 import type { ReactNode } from 'react';
 import { useCallback } from 'react';
-import { Group, Panel, Separator, useDefaultLayout, type Layout, type LayoutStorage } from 'react-resizable-panels';
+import {
+  Group,
+  Panel,
+  Separator,
+  useDefaultLayout,
+  type Layout,
+  type LayoutChangedMeta,
+  type LayoutStorage,
+} from 'react-resizable-panels';
 import type { Pane, SplitPane as SplitPaneType, PaneContent } from './types.js';
 import styles from './SplitPane.module.scss';
 
@@ -135,8 +143,8 @@ function SplitPaneGroup(props: SplitPaneGroupProps): ReactNode {
   });
 
   const handleLayoutChanged = useCallback(
-    (layout: Layout) => {
-      onLayoutChanged(layout);
+    (layout: Layout, meta: LayoutChangedMeta) => {
+      onLayoutChanged(layout, meta);
       if (onLayoutChange && pane.id === rootId) {
         const sizes = pane.children.map((child) => layout[child.id] ?? 0);
         onLayoutChange(sizes);
