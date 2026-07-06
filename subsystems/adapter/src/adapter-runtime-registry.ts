@@ -1,8 +1,9 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import {
+  closeAdapterInstance,
   initializeEnabledAdapters,
+  resolveLoadedAdapterId,
   shutdownAdapterInstances,
   toAvailableAdapter,
   type PlatformDefaults,
@@ -137,9 +138,16 @@ export class AdapterRuntimeRegistry {
    * @returns True when the runtime has initialized this adapter.
    */
   public hasAdapterInstance(adapter: LoadedAdapter): boolean {
-    return this.adapterInstances.has(
-      adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapter.name),
-    );
+    return this.adapterInstances.has(this.resolveLoadedAdapterId(adapter));
+  }
+
+  /**
+   * Resolve the runtime adapter ID for a loaded adapter.
+   * @param adapter - Loaded adapter definition to inspect.
+   * @returns Explicit adapter ID or deterministic runtime ID.
+   */
+  public resolveLoadedAdapterId(adapter: LoadedAdapter): string {
+    return resolveLoadedAdapterId(adapter, this.machineId);
   }
 
   /**
@@ -191,32 +199,48 @@ export class AdapterRuntimeRegistry {
    * Remove provider definitions contributed by a stopped provider package from
    * all loaded adapters.
    * @param packageName - Provider package that stopped or was disabled.
+   * @param platformDefaults - Platform-provided defaults forwarded to restarted adapter factories.
+   * @returns Loaded adapters whose provider definitions changed.
    */
-  public removeProviderPackage(packageName: string): void {
+  public async removeProviderPackage(
+    packageName: string,
+    platformDefaults: PlatformDefaults,
+  ): Promise<LoadedAdapter[]> {
+    const updatedAdapters: LoadedAdapter[] = [];
     for (const adapter of this.loadedAdapters.values()) {
       const providers = adapter.providers.filter((provider) => provider.providerPackageName !== packageName);
       if (providers.length === adapter.providers.length) continue;
-      this.loadedAdapters.set(adapter.name, { ...adapter, providers });
+      const updated = { ...adapter, providers };
+      this.loadedAdapters.set(adapter.name, updated);
+      updatedAdapters.push(updated);
+      if (this.hasAdapterInstance(updated)) {
+        try {
+          await this.restartAdapterInstance(updated, platformDefaults);
+        } catch (error) {
+          console.error(
+            `[AdapterRuntimeRegistry] Error restarting adapter "${updated.name}" after provider package "${packageName}" stopped:`,
+            error,
+          );
+        }
+      }
     }
+    return updatedAdapters;
   }
 
   /**
    * Shut down the live instance (if any) for a named adapter and remove it
-   * from all in-memory tracking maps.
+   * from in-memory tracking only after shutdown succeeds.
    * @param adapterName - Adapter driver name to deregister.
    */
   public async deregisterAdapter(adapterName: string): Promise<void> {
     const adapter = this.loadedAdapters.get(adapterName);
-    if (adapter) {
-      const adapterId = adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapterName);
-      const instance = this.adapterInstances.get(adapterId);
-      if (instance) {
-        const shuttable = instance as AdapterInstance & { shutdown?: () => Promise<void> };
-        if (typeof shuttable.shutdown === 'function') {
-          await shuttable.shutdown();
-        }
-        this.adapterInstances.delete(adapterId);
-      }
+    if (!adapter) return;
+
+    const adapterId = this.resolveLoadedAdapterId(adapter);
+    const instance = this.adapterInstances.get(adapterId);
+    if (instance) {
+      await closeAdapterInstance(adapterId, instance);
+      this.adapterInstances.delete(adapterId);
     }
     this.loadedAdapters.delete(adapterName);
   }
@@ -238,23 +262,27 @@ export class AdapterRuntimeRegistry {
   /**
    * Deregister all adapters contributed by a stopped package.
    *
-   * Best-effort: errors are logged but never thrown — shutdown must not be
-   * blocked.
+   * Best-effort: errors are logged but never thrown. Package tracking is
+   * retained when any adapter close fails so a later stop can retry cleanup.
    * @param packageName - Name of the package that transitioned to `stopped`.
    */
   public async deregisterPackage(packageName: string): Promise<void> {
     const adapterNames = this.packageAdapters.get(packageName);
     if (!adapterNames?.length) return;
 
+    let failed = false;
     for (const adapterName of adapterNames) {
       try {
         await this.deregisterAdapter(adapterName);
       } catch (err) {
+        failed = true;
         console.error(`[AdapterRuntimeRegistry] Error shutting down adapter "${adapterName}":`, err);
       }
     }
 
-    this.packageAdapters.delete(packageName);
+    if (!failed) {
+      this.packageAdapters.delete(packageName);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -301,6 +329,31 @@ export class AdapterRuntimeRegistry {
    */
   public async initializeAdapter(adapter: LoadedAdapter, platformDefaults: PlatformDefaults): Promise<void> {
     await initializeEnabledAdapters(this.bus, this.machineId, [adapter], this.adapterInstances, platformDefaults);
+  }
+
+  /**
+   * Recreate an enabled live adapter instance from the current loaded
+   * definition.
+   *
+   * Used when provider definitions change while the adapter package remains
+   * active. The stale instance is removed before reinitialization so disabled
+   * provider metadata cannot remain observable if the replacement fails.
+   * @param adapter - Loaded adapter definition to instantiate.
+   * @param platformDefaults - Platform-provided defaults forwarded to the factory.
+   */
+  public async restartAdapterInstance(adapter: LoadedAdapter, platformDefaults: PlatformDefaults): Promise<void> {
+    const adapterId = this.resolveLoadedAdapterId(adapter);
+    const instance = this.adapterInstances.get(adapterId);
+    if (instance) {
+      try {
+        await closeAdapterInstance(adapterId, instance);
+      } catch (error) {
+        console.error(`[AdapterRuntimeRegistry] Error shutting down adapter "${adapter.name}" before restart:`, error);
+        throw error;
+      }
+      this.adapterInstances.delete(adapterId);
+    }
+    await this.initializeAdapter(adapter, platformDefaults);
   }
 
   // ---------------------------------------------------------------------------

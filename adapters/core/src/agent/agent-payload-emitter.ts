@@ -70,9 +70,9 @@ export class AgentPayloadEmitter {
     overrideMessageId?: string,
     options?: EmitGlobalOptions,
   ): Promise<T & AgentContext & AgentPayloadEventFields> {
-    const messageId = overrideMessageId ?? this.config.getCurrentMessageId();
-    const turnId = this.config.getCurrentTurnId();
     const payloadEventFields = payload as Partial<AgentPayloadEventFields>;
+    const messageId = overrideMessageId ?? this.config.getCurrentMessageId();
+    const turnId = payloadEventFields.turnId ?? this.config.getCurrentTurnId();
     const includeEventMetadata = options?.includeEventMetadata ?? true;
     const eventMetadataDefaults = includeEventMetadata ? this.config.getEventMetadataDefaults() : {};
     const adapterSessionId =
@@ -113,7 +113,7 @@ export class AgentPayloadEmitter {
    */
   public async emitGlobal<S extends SubjectDefinition>(
     subject: S,
-    payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { messageId?: string },
+    payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { messageId?: string; turnId?: string },
     options?: EmitGlobalOptions,
   ): Promise<void> {
     const enrichedPayload = await this.enrichPayload(payload as object, payload.messageId, options);

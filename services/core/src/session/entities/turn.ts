@@ -22,6 +22,9 @@ export interface TurnResult {
   errors: string[];
 }
 
+/** Terminal outcome stored for one agent in a turn. */
+type AgentTerminalOutcome = 'completed' | 'errored';
+
 /**
  * State change returned by Turn mutation methods.
  * Orchestrator uses this to decide whether to emit turn.completed.
@@ -103,6 +106,9 @@ export class Turn {
   /** Messages sent during this turn */
   private readonly _messageIds: string[] = [];
 
+  /** Message IDs currently claiming this turn while their storage append is in-flight. */
+  private readonly _pendingMessageAppends = new Set<string>();
+
   /** Agents that have completed successfully */
   private readonly _completedAgents = new Set<string>();
 
@@ -151,6 +157,14 @@ export class Turn {
   }
 
   /**
+   * Whether a user message has claimed this turn before its storage append completes.
+   * @returns True when at least one message append is in-flight
+   */
+  public get hasPendingMessageAppends(): boolean {
+    return this._pendingMessageAppends.size > 0;
+  }
+
+  /**
    * Agents that have completed successfully.
    * @returns Read-only set of completed agent IDs
    */
@@ -175,7 +189,24 @@ export class Turn {
    * @param messageId - The message ID to add
    */
   public addMessage(messageId: string): void {
+    this._pendingMessageAppends.delete(messageId);
     this._messageIds.push(messageId);
+  }
+
+  /**
+   * Claim this turn for a message whose durable append has started.
+   * @param messageId - Message ID whose append is in-flight
+   */
+  public claimMessageAppend(messageId: string): void {
+    this._pendingMessageAppends.add(messageId);
+  }
+
+  /**
+   * Release a failed message append claim without adding the message.
+   * @param messageId - Message ID whose append failed
+   */
+  public releaseMessageAppend(messageId: string): void {
+    this._pendingMessageAppends.delete(messageId);
   }
 
   /**
@@ -184,6 +215,9 @@ export class Turn {
    * @returns State change indicating if turn is now complete
    */
   public markAgentCompleted(agentId: string): TurnStateChange {
+    if (this.getAgentTerminalOutcome(agentId) !== undefined) {
+      return { turnComplete: false };
+    }
     this._completedAgents.add(agentId);
     return this.checkCompletion();
   }
@@ -195,6 +229,9 @@ export class Turn {
    * @returns State change indicating if turn is now complete
    */
   public markAgentErrored(agentId: string, error: string): TurnStateChange {
+    if (this.getAgentTerminalOutcome(agentId) !== undefined) {
+      return { turnComplete: false };
+    }
     this._erroredAgents.set(agentId, error);
     return this.checkCompletion();
   }
@@ -217,7 +254,7 @@ export class Turn {
    * @returns True if all agents have completed or errored
    */
   public isComplete(): boolean {
-    const completedCount = this._completedAgents.size + this._erroredAgents.size;
+    const completedCount = new Set([...this._completedAgents, ...this._erroredAgents.keys()]).size;
     return completedCount >= this._agentIds.length;
   }
 
@@ -263,6 +300,17 @@ export class Turn {
   // ============================================================================
   // Private helpers
   // ============================================================================
+
+  /**
+   * Return the recorded terminal outcome for an agent, if any.
+   * @param agentId - Agent ID to inspect.
+   * @returns Terminal outcome already recorded for the agent.
+   */
+  private getAgentTerminalOutcome(agentId: string): AgentTerminalOutcome | undefined {
+    if (this._completedAgents.has(agentId)) return 'completed';
+    if (this._erroredAgents.has(agentId)) return 'errored';
+    return undefined;
+  }
 
   /**
    * Check if turn should complete and return appropriate state change.

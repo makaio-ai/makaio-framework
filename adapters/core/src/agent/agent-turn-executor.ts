@@ -10,6 +10,8 @@ import { buildStructuredOutputTurnContext } from './structured-output-turn-conte
 /**
  * Runtime dependencies for AgentTurnExecutor.
  */
+export type AgentMessageHandleCallback = (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
+
 export interface AgentTurnExecutorConfig {
   /** Stable agent identifier. */
   agentId: string;
@@ -26,7 +28,7 @@ export interface AgentTurnExecutorConfig {
   /** Native resume decision function. */
   shouldUseNativeResume: ShouldUseNativeResumeFn;
   /** Completion/lifecycle tracker hook. */
-  onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
+  onMessageHandle: AgentMessageHandleCallback;
   /** Side-effect callback to mark agent status active before dispatch. */
   onBeforeDispatch?: () => void | Promise<void>;
   /** When true, PreUserMessage hooks are skipped. */
@@ -59,7 +61,7 @@ export class AgentTurnExecutor {
   private readonly globalBus: IMakaioBus;
   private readonly getConnector: () => AIAgentConnector;
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
-  private readonly onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
+  private readonly onMessageHandle: AgentMessageHandleCallback;
   private readonly onBeforeDispatch?: () => void | Promise<void>;
   private readonly ephemeral: boolean;
 
@@ -112,7 +114,7 @@ export class AgentTurnExecutor {
     });
 
     this.firePostUserMessageHooks(handle.messageId);
-    await this.onMessageHandle(handle);
+    await this.onMessageHandle(handle, payload.turnId);
 
     return { messageId: handle.messageId };
   }
@@ -161,7 +163,7 @@ export class AgentTurnExecutor {
     const startResult = await connector.start(normalizedMessage, connectorOptions);
 
     this.firePostUserMessageHooks(startResult.messageHandle.messageId);
-    await this.onMessageHandle(startResult.messageHandle);
+    await this.onMessageHandle(startResult.messageHandle, undefined);
 
     return startResult;
   }

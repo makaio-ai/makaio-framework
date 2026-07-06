@@ -17,8 +17,28 @@ import { rewriteFrameworkImportsInText } from '@makaio/build-tooling/framework-i
 import { createLocalBinPathEnv } from '@makaio/build-tooling/process-env';
 
 const require = createRequire(import.meta.url);
+
+interface PackageJsonWithBin {
+  readonly bin?: string | Record<string, string>;
+}
+
+/**
+ * Resolve the package-declared `tsgo` executable path.
+ * @param packageJsonPath - Resolved `@typescript/native-preview/package.json` path.
+ * @returns Absolute path to the package's `tsgo` binary.
+ */
+function resolveTsgoBinPath(packageJsonPath: string): string {
+  const packageRoot = dirname(packageJsonPath);
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJsonWithBin;
+  const binPath = typeof packageJson.bin === 'string' ? packageJson.bin : packageJson.bin?.tsgo;
+  if (!binPath) {
+    throw new Error('@typescript/native-preview package.json does not declare a tsgo binary.');
+  }
+  return join(packageRoot, binPath);
+}
+
 const tsgoPackageJson = require.resolve('@typescript/native-preview/package.json');
-const tsgoBinPath = join(dirname(tsgoPackageJson), 'bin', 'tsgo.js');
+const tsgoBinPath = resolveTsgoBinPath(tsgoPackageJson);
 
 /**
  * Options for {@link emitDeclarations}.

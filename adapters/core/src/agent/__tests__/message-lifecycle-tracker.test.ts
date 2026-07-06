@@ -172,4 +172,138 @@ describe('MessageLifecycleTracker', () => {
       structuredOutputValidation: validation,
     });
   });
+
+  it('passes the terminal turnId to completion observers before clearing current lifecycle state', async () => {
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async () => {},
+    });
+    const handle = new MessageHandle(
+      'message-with-turn',
+      {
+        role: 'user',
+        blocks: [{ type: 'text', content: 'Hello' }],
+      },
+      'enqueue',
+    );
+    const observed: Array<string | undefined> = [];
+
+    tracker.setCurrentTurnId('turn-1');
+    tracker.track(handle, (_messageId, _result, turnId) => {
+      observed.push(turnId);
+    });
+
+    handle.markAcknowledged();
+    handle.markCompleted({
+      outcome: 'completed',
+      result: { message: 'Done' },
+    });
+    await flushMicrotasks();
+
+    expect(observed).toEqual(['turn-1']);
+    expect(tracker.getCurrentTurnId()).toBeUndefined();
+  });
+
+  it('does not fall back to current turn state when the tracked snapshot is explicitly undefined', async () => {
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async () => {},
+    });
+    const handle = new MessageHandle(
+      'message-without-turn',
+      {
+        role: 'user',
+        blocks: [{ type: 'text', content: 'Hello' }],
+      },
+      'enqueue',
+    );
+    const observed: Array<string | undefined> = [];
+
+    tracker.setCurrentTurnId('later-turn');
+    tracker.track(
+      handle,
+      (_messageId, _result, turnId) => {
+        observed.push(turnId);
+      },
+      undefined,
+      { turnId: undefined },
+    );
+
+    handle.markAcknowledged();
+    handle.markCompleted({
+      outcome: 'completed',
+      result: { message: 'Done' },
+    });
+    await flushMicrotasks();
+
+    expect(observed).toEqual([undefined]);
+  });
+
+  it('keeps each tracked handle bound to its captured turnId when completions overlap', async () => {
+    const emissions: CapturedEmission[] = [];
+    const terminalObserved: Array<{ messageId: string; turnId: string | undefined }> = [];
+    const tracker = new MessageLifecycleTracker({
+      emitGlobal: async (subject, payload) => {
+        emissions.push({ subject, payload });
+      },
+    });
+    const firstHandle = new MessageHandle(
+      'message-a',
+      {
+        role: 'user',
+        blocks: [{ type: 'text', content: 'A' }],
+      },
+      'enqueue',
+    );
+    const secondHandle = new MessageHandle(
+      'message-b',
+      {
+        role: 'user',
+        blocks: [{ type: 'text', content: 'B' }],
+      },
+      'enqueue',
+    );
+
+    tracker.setCurrentTurnId('turn-a');
+    tracker.track(firstHandle, (messageId, _result, turnId) => {
+      terminalObserved.push({ messageId, turnId });
+    });
+    tracker.setCurrentTurnId('turn-b');
+    tracker.track(secondHandle, (messageId, _result, turnId) => {
+      terminalObserved.push({ messageId, turnId });
+    });
+
+    firstHandle.markAcknowledged();
+    secondHandle.markAcknowledged();
+    await flushMicrotasks();
+
+    secondHandle.markCompleted({
+      outcome: 'completed',
+      result: { message: 'B done' },
+    });
+    await flushMicrotasks();
+
+    firstHandle.markCompleted({
+      outcome: 'completed',
+      result: { message: 'A done' },
+    });
+    await flushMicrotasks();
+
+    expect(terminalObserved).toEqual([
+      { messageId: 'message-b', turnId: 'turn-b' },
+      { messageId: 'message-a', turnId: 'turn-a' },
+    ]);
+
+    const lifecyclePayloads = emissions.map((event) => event.payload as { messageId?: string; turnId?: string });
+    expect(lifecyclePayloads.filter((payload) => payload.messageId === 'message-a')).toEqual([
+      expect.objectContaining({ turnId: 'turn-a' }),
+      expect.objectContaining({ turnId: 'turn-a' }),
+      expect.objectContaining({ turnId: 'turn-a' }),
+      expect.objectContaining({ turnId: 'turn-a' }),
+    ]);
+    expect(lifecyclePayloads.filter((payload) => payload.messageId === 'message-b')).toEqual([
+      expect.objectContaining({ turnId: 'turn-b' }),
+      expect.objectContaining({ turnId: 'turn-b' }),
+      expect.objectContaining({ turnId: 'turn-b' }),
+      expect.objectContaining({ turnId: 'turn-b' }),
+    ]);
+  });
 });

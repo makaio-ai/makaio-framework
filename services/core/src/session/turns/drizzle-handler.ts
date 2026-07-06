@@ -304,34 +304,49 @@ function registerCompleteHandler(bus: IMakaioBus, db: MakaioDatabase): () => voi
   return bus.on(TurnStorageSubjects.complete, async (ctx) => {
     const { turnId, status, expectedStatus, error, usage } = ctx.payload;
     const now = Date.now();
-    const updateFields: Partial<TurnsTable['$inferInsert']> = {
+
+    const transitionWhere = expectedStatus
+      ? and(
+          eq(turns.turnId, turnId),
+          eq(turns.status, expectedStatus),
+          sql`${turns.status} not in ('completed', 'error')`,
+        )
+      : and(eq(turns.turnId, turnId), sql`${turns.status} not in ('completed', 'error')`);
+    const transitionFields: Partial<TurnsTable['$inferInsert']> = {
       completedAt: now,
       status,
       error: error ?? null,
+      ...(usage !== undefined && { usage: JSON.stringify(usage) }),
     };
-
-    if (usage !== undefined) {
-      updateFields.usage = JSON.stringify(usage);
-    }
-
-    const whereClause = expectedStatus
-      ? and(eq(turns.turnId, turnId), eq(turns.status, expectedStatus))
-      : eq(turns.turnId, turnId);
-
-    const updatedRows = await db.update(turns).set(updateFields).where(whereClause).returning();
-
-    if (updatedRows.length > 0) {
-      ctx.setResult({ turn: rowToTurn(updatedRows[0]), transitioned: true });
+    const [transitionedRow] = await db.update(turns).set(transitionFields).where(transitionWhere).returning();
+    if (transitionedRow) {
+      ctx.setResult({ turn: rowToTurn(transitionedRow), transitioned: true });
       return;
     }
 
-    const [row] = await db.select().from(turns).where(eq(turns.turnId, turnId)).limit(1);
-
-    if (!row) {
+    const [existingRow] = await db.select().from(turns).where(eq(turns.turnId, turnId)).limit(1);
+    if (!existingRow) {
       throw new Error(`Turn not found: ${turnId}`);
     }
 
-    ctx.setResult({ turn: rowToTurn(row), transitioned: false });
+    if (expectedStatus) {
+      ctx.setResult({ turn: rowToTurn(existingRow), transitioned: false });
+      return;
+    }
+
+    const isTerminal = existingRow.status === 'completed' || existingRow.status === 'error';
+    if (!isTerminal || usage === undefined) {
+      ctx.setResult({ turn: rowToTurn(existingRow), transitioned: false });
+      return;
+    }
+
+    const [updatedRow] = await db
+      .update(turns)
+      .set({ usage: JSON.stringify(usage) })
+      .where(and(eq(turns.turnId, turnId), sql`${turns.status} in ('completed', 'error')`))
+      .returning();
+
+    ctx.setResult({ turn: rowToTurn(updatedRow ?? existingRow), transitioned: false });
   });
 }
 

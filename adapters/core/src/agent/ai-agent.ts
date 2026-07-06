@@ -946,7 +946,7 @@ export abstract class AIAgent<
 
   protected async onBeforeEmitCompletion() {}
 
-  protected async onMessageHandle(messageHandle: MessageHandle) {
+  protected async onMessageHandle(messageHandle: MessageHandle, turnId?: string) {
     // Reset per-turn dedup so adapters that don't emit agent.started per turn
     // (e.g., codex emits thread_started once) can still fire agent.complete.
     this.lifecycleEmitter.resetTurnState();
@@ -1001,11 +1001,12 @@ export abstract class AIAgent<
 
     this.lifecycleTracker.track(
       messageHandle,
-      (messageId, result) => {
+      (messageId, result, turnId) => {
         const errorStr = result.error instanceof Error ? result.error.message : result.error;
         void this.emitCompletion({
           message: result.result?.message,
           messageId,
+          ...(turnId !== undefined && { turnId }),
           outcome: result.outcome,
           ...(errorStr && { error: errorStr }),
           ...(result.structuredOutputValidation !== undefined
@@ -1014,6 +1015,7 @@ export abstract class AIAgent<
         });
       },
       transformTerminal,
+      { turnId },
     );
   }
 

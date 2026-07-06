@@ -9,10 +9,12 @@
  * - Concurrent completion guard
  * - Buffered usage during completion persistence
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { TurnIngestionMarker, TurnInitiator, TurnUsage } from '@makaio/contracts';
+import { MessageStorageSubjects } from '../messages/namespace.js';
+import { SessionEventStorageSubjects } from '../session-events/index.js';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { SessionTurnManager } from '../session-turn-manager.js';
 import { resetBusHandlers, waitForAsync } from './shared.js';
@@ -83,6 +85,39 @@ function registerTurnStorageHandlers(): UnsubFn {
   );
 
   return () => unsubs.forEach((u) => u());
+}
+
+/**
+ * Register message storage read path that keeps assistant persistence pending.
+ * @param unsubs - Array to push cleanup function into
+ * @param onProbe - Callback invoked when the completion barrier probes messages
+ */
+function registerEmptyMessageStorageProbe(unsubs: UnsubFn[], onProbe: () => void): void {
+  unsubs.push(
+    MakaioBus.on(MessageStorageSubjects.getByTurn, (ctx) => {
+      onProbe();
+      ctx.setResult({ messages: [] });
+    }),
+  );
+}
+
+/**
+ * Emit a stored assistant message for a turn.
+ * @param turn - Turn identity the assistant message belongs to
+ * @param messageId - Message identifier to emit
+ */
+async function emitAssistantStored(turn: { turnId: string; sessionId: string }, messageId: string): Promise<void> {
+  await MakaioBus.emit(MessageStorageSubjects.stored, {
+    message: {
+      messageId,
+      turnId: turn.turnId,
+      sessionId: turn.sessionId,
+      role: 'assistant',
+      contentText: 'done',
+      blocks: [],
+      timestamp: Date.now(),
+    },
+  });
 }
 
 /**
@@ -161,6 +196,20 @@ async function emitAgentComplete(agentId: string, turnId: string): Promise<void>
     adapterName: 'test-adapter',
     adapterSessionId: `session-${agentId}`,
     turnId,
+    messageId: `msg-${agentId}`,
+  });
+}
+
+/**
+ * Emit a legacy agent.complete event without turnId.
+ * @param agentId - Agent that completed
+ */
+async function emitAgentCompleteWithoutTurnId(agentId: string): Promise<void> {
+  await MakaioBus.emit(AgentSubjects.complete, {
+    agentId,
+    adapterId: `adapter-${agentId}`,
+    adapterName: 'test-adapter',
+    adapterSessionId: `session-${agentId}`,
     messageId: `msg-${agentId}`,
   });
 }
@@ -360,6 +409,74 @@ describe('SessionTurnManager', () => {
       expect(turnCompleted[0]?.error).toBeUndefined();
     });
 
+    it('does not emit turn.completed when storage reports no terminal transition', async () => {
+      manager = new SessionTurnManager(MakaioBus);
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const turn = await manager.createTurn('sess-lost-transition', ['agent-a']);
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, (ctx) => {
+          expect(ctx.payload.expectedStatus).toBe('active');
+          ctx.setResult({
+            turn: {
+              turnId: turn.turnId,
+              sessionId: turn.sessionId,
+              turnNumber: turn.turnNumber,
+              startedAt: turn.startedAt,
+              completedAt: Date.now(),
+              status: 'completed',
+            },
+            transitioned: false,
+          });
+        }),
+      );
+
+      await manager.completeTurn(turn, { success: true, errors: [] });
+
+      expect(turnCompleted).toHaveLength(0);
+      expect(manager.getActiveTurn(turn.sessionId)).toBeUndefined();
+    });
+
+    it('does not terminalize a setup-failed turn that already has a message', async () => {
+      const completeCalls: Array<{ turnId: string }> = [];
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeCalls.push({ turnId: ctx.payload.turnId });
+          await ctx.next();
+        }),
+      );
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+
+      const turn = await manager.createTurn('sess-claimed-setup-turn', ['agent-a']);
+      turn.addMessage('claimed-message');
+
+      await manager.failActiveTurnSetup(turn, 'setup-failed');
+
+      expect(completeCalls).toHaveLength(0);
+      expect(manager.getActiveTurn(turn.sessionId)).toBe(turn);
+    });
+
+    it('does not terminalize a setup-failed turn with a pending message append', async () => {
+      const completeCalls: Array<{ turnId: string }> = [];
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeCalls.push({ turnId: ctx.payload.turnId });
+          await ctx.next();
+        }),
+      );
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+
+      const turn = await manager.createTurn('sess-pending-setup-turn', ['agent-a']);
+      turn.claimMessageAppend('pending-message');
+
+      await manager.failActiveTurnSetup(turn, 'setup-failed');
+
+      expect(completeCalls).toHaveLength(0);
+      expect(manager.getActiveTurn(turn.sessionId)).toBe(turn);
+    });
+
     it('emits accumulated usage on turn.completed', async () => {
       unsubs.push(registerTurnStorageHandlers());
       manager = new SessionTurnManager(MakaioBus);
@@ -412,6 +529,297 @@ describe('SessionTurnManager', () => {
 
       expect(manager.getActiveTurn('sess-3')).toBeUndefined();
       expect(manager.findActiveTurnByTurnId(turn.turnId)).toBeUndefined();
+    });
+
+    it('clears active routing before assistant persistence barrier settles', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let resolveBarrierProbe!: () => void;
+      const barrierProbe = new Promise<void>((resolve) => {
+        resolveBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => resolveBarrierProbe());
+      manager = new SessionTurnManager(MakaioBus);
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const turn = await manager.createTurn('sess-barrier-clear', ['agent-a']);
+      turn.addMessage('msg-1');
+
+      const completion = manager.completeTurn(turn, { success: true, errors: [] });
+      await barrierProbe;
+      await waitForAsync();
+
+      expect(manager.getActiveTurn('sess-barrier-clear')).toBeUndefined();
+      expect(manager.findActiveTurnByTurnId(turn.turnId)).toBeUndefined();
+      expect(turnCompleted).toHaveLength(0);
+
+      await emitAssistantStored(turn, 'assistant-stored-1');
+      await completion;
+
+      expect(turnCompleted).toHaveLength(1);
+    });
+
+    it('allows the next turn in the session to complete while the prior turn waits for assistant persistence', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let probeCount = 0;
+      let resolveFirstBarrierProbe!: () => void;
+      const firstBarrierProbe = new Promise<void>((resolve) => {
+        resolveFirstBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => {
+        probeCount += 1;
+        if (probeCount === 1) {
+          resolveFirstBarrierProbe();
+        }
+      });
+      manager = new SessionTurnManager(MakaioBus);
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const firstTurn = await manager.createTurn('sess-next-during-barrier', ['agent-a']);
+      firstTurn.addMessage('msg-1');
+
+      const firstCompletion = manager.completeTurn(firstTurn, { success: true, errors: [] });
+      await firstBarrierProbe;
+      await waitForAsync();
+
+      const secondTurn = await manager.createTurn('sess-next-during-barrier', ['agent-a']);
+      secondTurn.addMessage('msg-2');
+      const secondCompletion = manager.completeTurn(secondTurn, { success: true, errors: [] });
+
+      await waitForAsync();
+      await emitAssistantStored(secondTurn, 'assistant-stored-2');
+      await secondCompletion;
+
+      expect(turnCompleted.map((event) => event.turnId)).toEqual([secondTurn.turnId]);
+
+      await emitAssistantStored(firstTurn, 'assistant-stored-1');
+      await firstCompletion;
+
+      expect(turnCompleted.map((event) => event.turnId)).toEqual([secondTurn.turnId, firstTurn.turnId]);
+    });
+
+    it('correlates agent completion by turnId while a prior turn waits for assistant persistence', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let resolveFirstBarrierProbe!: () => void;
+      const firstBarrierProbe = new Promise<void>((resolve) => {
+        resolveFirstBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => resolveFirstBarrierProbe());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const firstTurn = await manager.createTurn('sess-complete-by-turn-id', ['agent-a']);
+      firstTurn.addMessage('msg-1');
+
+      const firstCompletion = manager.completeTurn(firstTurn, { success: true, errors: [] });
+      await firstBarrierProbe;
+      await waitForAsync();
+
+      const secondTurn = await manager.createTurn('sess-complete-by-turn-id', ['agent-a']);
+      secondTurn.addMessage('msg-2');
+
+      await emitAgentComplete('agent-a', firstTurn.turnId);
+      await waitForAsync();
+
+      expect(secondTurn.completedAgents.has('agent-a')).toBe(false);
+
+      await emitAssistantStored(firstTurn, 'assistant-stored-1');
+      await firstCompletion;
+    });
+
+    it('drops uncorrelated agent completion when a prior turn for the agent is still completing', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let resolveFirstBarrierProbe!: () => void;
+      const firstBarrierProbe = new Promise<void>((resolve) => {
+        resolveFirstBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => resolveFirstBarrierProbe());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const firstTurn = await manager.createTurn('sess-uncorrelated-complete', ['agent-a']);
+      firstTurn.addMessage('msg-1');
+
+      const firstCompletion = manager.completeTurn(firstTurn, { success: true, errors: [] });
+      await firstBarrierProbe;
+      await waitForAsync();
+
+      const secondTurn = await manager.createTurn('sess-uncorrelated-complete', ['agent-a']);
+      secondTurn.addMessage('msg-2');
+
+      await emitAgentCompleteWithoutTurnId('agent-a');
+      await waitForAsync();
+
+      expect(secondTurn.completedAgents.has('agent-a')).toBe(false);
+
+      await emitAssistantStored(firstTurn, 'assistant-stored-1');
+      await firstCompletion;
+    });
+
+    it('clears completion state after a post-lifecycle emit failure', async () => {
+      const completeCalls: string[] = [];
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeCalls.push(ctx.payload.turnId);
+          await ctx.next();
+        }),
+      );
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      let failNextCompletionEmit = true;
+      unsubs.push(
+        MakaioBus.on(SessionSubjects.turn.completed, () => {
+          if (!failNextCompletionEmit) {
+            return;
+          }
+          failNextCompletionEmit = false;
+          throw new Error('subscriber failed');
+        }),
+      );
+      const turnCompleted = collectTurnCompleted(unsubs);
+
+      const firstTurn = await manager.createTurn('sess-emit-failure-cleanup', ['agent-a']);
+      firstTurn.addMessage('msg-1');
+
+      await expect(manager.completeTurn(firstTurn, { success: true, errors: [] })).rejects.toThrow('subscriber failed');
+
+      expect(completeCalls).toEqual([firstTurn.turnId]);
+      expect(turnCompleted).toHaveLength(1);
+      expect(turnCompleted[0]?.turnId).toBe(firstTurn.turnId);
+
+      const secondTurn = await manager.createTurn('sess-emit-failure-cleanup', ['agent-a']);
+      secondTurn.addMessage('msg-2');
+
+      await emitAgentCompleteWithoutTurnId('agent-a');
+      await waitForAsync();
+
+      expect(secondTurn.completedAgents.has('agent-a')).toBe(true);
+      expect(completeCalls).toEqual([firstTurn.turnId, secondTurn.turnId]);
+      expect(turnCompleted).toHaveLength(2);
+      expect(turnCompleted[1]?.turnId).toBe(secondTurn.turnId);
+    });
+
+    it('retries completion emission after a post-persistence lifecycle append failure', async () => {
+      const completeCalls: string[] = [];
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeCalls.push(ctx.payload.turnId);
+          await ctx.next();
+        }),
+      );
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      let failNextLifecycleAppend = true;
+      const lifecycleEventIds: string[] = [];
+      unsubs.push(
+        MakaioBus.on(SessionEventStorageSubjects.append, (ctx) => {
+          lifecycleEventIds.push(ctx.payload.event.eventId);
+          if (failNextLifecycleAppend) {
+            failNextLifecycleAppend = false;
+            throw new Error('append failed');
+          }
+          ctx.setResult({ success: true });
+        }),
+      );
+      const turnCompleted = collectTurnCompleted(unsubs);
+
+      const turn = await manager.createTurn('sess-lifecycle-append-retry', ['agent-a']);
+      turn.addMessage('msg-1');
+
+      await expect(manager.completeTurn(turn, { success: true, errors: [] })).rejects.toThrow('append failed');
+      await manager.completeTurn(turn, { success: true, errors: [] });
+
+      expect(completeCalls).toEqual([turn.turnId]);
+      expect(lifecycleEventIds).toEqual([`turn.completed:${turn.turnId}`, `turn.completed:${turn.turnId}`]);
+      expect(turnCompleted).toHaveLength(1);
+      expect(turnCompleted[0]?.turnId).toBe(turn.turnId);
+    });
+
+    it('keeps the next turn usage accumulator when a prior turn finishes its barrier', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let resolveFirstBarrierProbe!: () => void;
+      const firstBarrierProbe = new Promise<void>((resolve) => {
+        resolveFirstBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => resolveFirstBarrierProbe());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const firstTurn = await manager.createTurn('sess-usage-after-prior-barrier', ['agent-a']);
+      firstTurn.addMessage('msg-1');
+
+      const firstCompletion = manager.completeTurn(firstTurn, { success: true, errors: [] });
+      await firstBarrierProbe;
+      await waitForAsync();
+
+      const secondTurn = await manager.createTurn('sess-usage-after-prior-barrier', ['agent-a']);
+      secondTurn.addMessage('msg-2');
+
+      await emitAssistantStored(firstTurn, 'assistant-stored-1');
+      await firstCompletion;
+
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        agentId: 'agent-a',
+        turnId: secondTurn.turnId,
+        inputTokens: 17,
+        outputTokens: 5,
+      });
+      const secondCompletion = manager.completeTurn(secondTurn, { success: true, errors: [] });
+      await waitForAsync();
+      await emitAssistantStored(secondTurn, 'assistant-stored-2');
+      await secondCompletion;
+
+      expect(turnCompleted[1]?.usage).toEqual({
+        total: { inputTokens: 17, outputTokens: 5 },
+        byAgent: { 'agent-a': { inputTokens: 17, outputTokens: 5 } },
+      });
+    });
+
+    it('merges usage emitted for the same turn while waiting for assistant persistence', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      let resolveBarrierProbe!: () => void;
+      const barrierProbe = new Promise<void>((resolve) => {
+        resolveBarrierProbe = resolve;
+      });
+      registerEmptyMessageStorageProbe(unsubs, () => resolveBarrierProbe());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const turn = await manager.createTurn('sess-same-turn-barrier-usage', ['agent-a']);
+      turn.addMessage('msg-1');
+
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        agentId: 'agent-a',
+        turnId: turn.turnId,
+        inputTokens: 11,
+        outputTokens: 3,
+      });
+
+      const completion = manager.completeTurn(turn, { success: true, errors: [] });
+      await barrierProbe;
+      await waitForAsync();
+
+      await MakaioBus.emit(AgentSubjects.usage, {
+        ...BASE_USAGE_FIELDS,
+        agentId: 'agent-a',
+        turnId: turn.turnId,
+        inputTokens: 7,
+        outputTokens: 2,
+      });
+      await emitAssistantStored(turn, 'assistant-stored-1');
+      await completion;
+
+      expect(turnCompleted[0]?.usage).toEqual({
+        total: { inputTokens: 18, outputTokens: 5 },
+        byAgent: { 'agent-a': { inputTokens: 18, outputTokens: 5 } },
+      });
     });
 
     it('propagates initiator in turn.completed event', async () => {
@@ -539,6 +947,32 @@ describe('SessionTurnManager', () => {
       expect(userMsgCompleted.every((e) => e.agentId === 'agent-1')).toBe(true);
     });
 
+    it('ignores duplicate mixed-outcome completion for an agent already terminal on the turn', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const userMsgCompleted = collectUserMessageCompleted(unsubs);
+      const turn = await manager.createTurn('sess-duplicate-mixed-complete', ['agent-1', 'agent-2']);
+      turn.addMessage('msg-a');
+
+      await emitAgentComplete('agent-1', turn.turnId);
+      await waitForAsync();
+      await emitAgentError('agent-1', turn.turnId, 'late failure');
+      await waitForAsync();
+
+      expect(userMsgCompleted).toHaveLength(1);
+      expect(userMsgCompleted[0]).toMatchObject({ agentId: 'agent-1', outcome: 'completed' });
+      expect(turnCompleted).toHaveLength(0);
+
+      await emitAgentComplete('agent-2', turn.turnId);
+      await waitForAsync();
+
+      expect(turnCompleted).toHaveLength(1);
+      expect(turnCompleted[0]).toMatchObject({ success: true });
+    });
+
     it('ignores agent.complete events for unknown agents (not in any active turn)', async () => {
       unsubs.push(registerTurnStorageHandlers());
       manager = new SessionTurnManager(MakaioBus);
@@ -551,6 +985,29 @@ describe('SessionTurnManager', () => {
       await waitForAsync();
 
       expect(turnCompleted).toHaveLength(0);
+    });
+
+    it('ignores agent.complete events whose turnId belongs to a different agent', async () => {
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      const turnCompleted = collectTurnCompleted(unsubs);
+      const userMsgCompleted = collectUserMessageCompleted(unsubs);
+      const turn = await manager.createTurn('sess-mismatched-agent-complete', ['agent-1']);
+      turn.addMessage('msg-1');
+
+      await emitAgentComplete('agent-2', turn.turnId);
+      await waitForAsync();
+
+      expect(turn.completedAgents.size).toBe(0);
+      expect(userMsgCompleted).toHaveLength(0);
+      expect(turnCompleted).toHaveLength(0);
+
+      await emitAgentComplete('agent-1', turn.turnId);
+      await waitForAsync();
+
+      expect(turnCompleted).toHaveLength(1);
     });
   });
 
@@ -732,7 +1189,7 @@ describe('SessionTurnManager', () => {
         outputTokens: 20,
       });
 
-      // Start completion (this will set completingSessions and call TurnStorageSubjects.complete)
+      // Start completion (this will set the turn completion guard and call TurnStorageSubjects.complete)
       const completionPromise = manager.completeTurn(turn, { success: true, errors: [] });
 
       // Wait until completion persistence has started
@@ -767,6 +1224,67 @@ describe('SessionTurnManager', () => {
       expect(lastUsage).toBeDefined();
       expect(lastUsage!.total.inputTokens).toBe(150);
       expect(lastUsage!.total.outputTokens).toBe(50);
+    });
+
+    it('still emits turn.completed when buffered usage persistence fails after terminal storage', async () => {
+      const completeCalls: Array<{ usage: unknown }> = [];
+      let completeCallCount = 0;
+      let resolveFirstCompleteStarted!: () => void;
+      let releaseFirstComplete!: () => void;
+      const firstCompleteStarted = new Promise<void>((resolve) => {
+        resolveFirstCompleteStarted = resolve;
+      });
+      const firstCompleteRelease = new Promise<void>((resolve) => {
+        releaseFirstComplete = resolve;
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      unsubs.push(
+        MakaioBus.on(TurnStorageSubjects.complete, async (ctx) => {
+          completeCallCount += 1;
+          completeCalls.push({ usage: ctx.payload.usage });
+          if (completeCallCount === 1) {
+            resolveFirstCompleteStarted();
+            await firstCompleteRelease;
+            await ctx.next();
+            return;
+          }
+          throw new Error('usage merge unavailable');
+        }),
+      );
+      unsubs.push(registerTurnStorageHandlers());
+      manager = new SessionTurnManager(MakaioBus);
+      manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
+
+      try {
+        const turnCompleted = collectTurnCompleted(unsubs);
+        const turn = await manager.createTurn('sess-buffered-usage-failure', ['agent-1']);
+        turn.addMessage('msg-1');
+
+        const completionPromise = manager.completeTurn(turn, { success: true, errors: [] });
+        await firstCompleteStarted;
+
+        await MakaioBus.emit(AgentSubjects.usage, {
+          ...BASE_USAGE_FIELDS,
+          agentId: 'agent-1',
+          turnId: turn.turnId,
+          inputTokens: 23,
+          outputTokens: 7,
+        });
+        releaseFirstComplete();
+
+        await completionPromise;
+
+        expect(completeCalls).toHaveLength(2);
+        expect(turnCompleted).toHaveLength(1);
+        expect(turnCompleted[0]?.usage).toEqual({
+          total: { inputTokens: 23, outputTokens: 7 },
+          byAgent: { 'agent-1': { inputTokens: 23, outputTokens: 7 } },
+        });
+        expect(warnSpy).toHaveBeenCalledOnce();
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 
