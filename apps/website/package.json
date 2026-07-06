@@ -19,8 +19,8 @@
     "@makaio/type-lens": "workspace:*",
     "astro": "^6.3.3",
     "rehype-mermaid": "^3.0.0",
-    "sharp": "^0.34.3",
-    "starlight-llms-txt": "^0.10.0",
+    "sharp": "^0.35.3",
+    "starlight-llms-txt": "^0.11.0",
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.12.0",
     "typescript": "^6.0.3"

@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
-    "pg": "^8.21.0"
+    "pg": "^8.22.0"
   },
   "peerDependencies": {
     "@makaio/framework": "^1.0.0"
@@ -36,7 +36,7 @@
     "@makaio/storage-drizzle": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
-    "tsdown": "0.22.0",
+    "tsdown": "0.22.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   },
