@@ -188,14 +188,12 @@ describe('Client mode behavior', () => {
 
       ws.close();
 
-      // The close listener is async (drains in-flight messages before clearing
-      // reconnectAbort). Wait for it to fire onDisconnected so we know it has
-      // completed and reconnectAbort is cleared, allowing connect() to proceed.
+      // The close listener clears reconnectAbort before firing onDisconnected,
+      // allowing connect() to proceed even while correlation cleanup finishes.
       await waitForCondition(() => onDisconnected.mock.calls.length > 0, 1000, 'onDisconnected not called after close');
 
-      // After the close listener finishes it clears reconnectAbort, allowing
-      // connect() to be called again. connectOnce then calls wsFactory which
-      // returns the closed socket — waitForSocketOpen rejects immediately.
+      // connectOnce calls wsFactory, which returns the closed caller-owned
+      // socket, so waitForSocketOpen rejects immediately.
       await expect(transport.connect()).rejects.toThrow('WebSocket closed before opening');
     } finally {
       await transport.disconnect();

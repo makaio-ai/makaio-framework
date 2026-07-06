@@ -204,13 +204,14 @@ export const CompressResponseSchema = z.object({
 });
 
 // ============================================================================
-// Bus-oriented branch events (for SessionLogger persistence)
+// Bus-oriented branch events (persisted to session-event storage)
 //
 // NOTE: These schemas include `sessionId` at the top level for bus routing.
 // The corresponding storage schemas in event.ts define payloads without
-// sessionId (it's on the event envelope). SessionLogger bridges between them:
-// - Receives bus event with sessionId in payload
-// - Creates MakaioSessionEvent with sessionId on envelope, payload from event
+// sessionId (it's on the event envelope). The session service's lifecycle
+// event writers bridge between them:
+// - Receive the bus event with sessionId in the payload
+// - Create a MakaioSessionEvent with sessionId on the envelope, payload from the event
 //
 // Payload fields here should match event.ts payload shapes (excluding sessionId).
 // ============================================================================
@@ -364,42 +365,42 @@ export const LifecycleSchemas = {
   compressionRequested: CompressionRequestedEventSchema,
 
   /**
-   * Branch created event (for storage/persistence via SessionLogger).
+   * Branch created event (persisted to session-event storage).
    * Subject: `session.branch.created`
    * Type: Event (fire-and-forget)
    *
-   * Emitted by fork handler. SessionLogger subscribes and persists
-   * with transform applied (e.g., PII redaction).
+   * Emitted by fork handler. The session service's lifecycle event writers
+   * subscribe and persist with transform applied (e.g., PII redaction).
    */
   'branch.created': BranchCreatedEventSchema,
 
   /**
-   * Branch merged event (for storage/persistence via SessionLogger).
+   * Branch merged event.
    * Subject: `session.branch.merged`
    * Type: Event (fire-and-forget)
    *
-   * Emitted by merge handler. SessionLogger subscribes and persists
-   * with transform applied.
+   * Emitted by the merge handler, which owns idempotent persistence of the
+   * corresponding session-event row directly (stable eventId).
    */
   'branch.merged': BranchMergedEventSchema,
 
   /**
-   * Context squash event (for storage/persistence via SessionLogger).
+   * Context squash event.
    * Subject: `session.squash`
    * Type: Event (fire-and-forget)
    *
-   * Emitted when context is compressed. SessionLogger subscribes and
-   * persists with transform applied.
+   * Emitted when context is compressed. The compress handler owns idempotent
+   * persistence of the corresponding session-event row directly (stable eventId).
    */
   squash: SquashEventSchema,
 
   /**
-   * Session created event (for storage/persistence via SessionLogger).
+   * Session created event.
    * Subject: `session.created`
    * Type: Event (fire-and-forget)
    *
-   * Emitted when a new session is created. SessionLogger subscribes and
-   * persists with transform applied.
+   * Emitted when a new session is created (session.create handler and the
+   * import/registration seams). Consumed for entity-cache reactivity.
    */
   created: SessionCreatedEventSchema,
 

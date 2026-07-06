@@ -242,6 +242,46 @@ describe('registerMemorySessionStorage', () => {
       });
     });
 
+    it('upgrades a discovered import stub to tracking when hook registration arrives', async () => {
+      const discovered = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        externalSessionId: 'memory-tracking-upgrade',
+        source: 'claude-code',
+        adapterId: 'memory-adapter-1',
+        cwd: '/repo',
+        logFilePath: '/logs/memory-tracking-upgrade.jsonl',
+        startedAt: 4_000,
+        title: 'Watcher stub',
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+      });
+
+      const tracked = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        externalSessionId: 'memory-tracking-upgrade',
+        source: 'claude-code',
+        adapterId: 'memory-adapter-1',
+        clientId: 'claude-code',
+        cwd: '/repo',
+        logFilePath: '/logs/memory-tracking-upgrade.jsonl',
+        startedAt: 4_000,
+        title: 'Hook registration',
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        importStatus: 'tracking',
+      });
+
+      expect(tracked).toEqual({ sessionId: discovered.sessionId, created: false });
+      const stored = await MakaioBus.request(SessionStorageSubjects.get, {
+        sessionId: discovered.sessionId,
+      });
+      expect(stored.session).toMatchObject({
+        status: 'discovered',
+        importStatus: 'tracking',
+        clientId: 'claude-code',
+      });
+    });
+
     it('does not adopt an unsourced adapter-session row into a sourced import', async () => {
       await MakaioBus.request(SessionStorageSubjects.set, {
         sessionId: 'memory-existing-unsourced',

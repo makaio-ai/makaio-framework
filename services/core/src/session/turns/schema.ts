@@ -76,6 +76,18 @@ export const turnsDual = defineDualTable(
      * Stored as hand-stringified JSON because turn.create uses a raw SQL CTE.
      */
     initiator: c.text('initiator'),
+
+    /**
+     * Content-derived idempotency anchor for turns ingested from external
+     * transcripts — the adapterMessageId (external record uuid) of the
+     * turn-start user message. NULL for turns created by the managed
+     * orchestration path (storage:turn.create).
+     *
+     * Backs the ON CONFLICT target of storage:turn.ingestCompleted so
+     * re-parsing the same transcript (including compaction re-reads from
+     * byte 0) resolves to the existing turn row and never renumbers.
+     */
+    turnAnchorId: c.text('turn_anchor_id'),
   }),
   {
     sqlite: (t) => [
@@ -91,10 +103,21 @@ export const turnsDual = defineDualTable(
        * duplicate turn numbers when concurrent inserts race on MAX().
        */
       uniqueIndex('uniq_turns_session_number').on(t.sessionId, t.turnNumber),
+
+      /**
+       * Enforce unique (sessionId, turnAnchorId) pairs for ingested turns.
+       * Backs the ON CONFLICT target of storage:turn.ingestCompleted.
+       * NULL anchors are distinct on both dialects (SQLite semantics;
+       * Postgres default NULLS DISTINCT), so managed-path turns
+       * (anchor NULL) are unaffected.
+       */
+      uniqueIndex('uniq_turns_session_anchor').on(t.sessionId, t.turnAnchorId),
     ],
     postgres: (t) => [
       pgIndex('idx_turns_session').on(t.sessionId, t.startedAt),
       pgUniqueIndex('uniq_turns_session_number').on(t.sessionId, t.turnNumber),
+      // NULL anchors stay distinct: default NULLS DISTINCT (no NULLS NOT DISTINCT).
+      pgUniqueIndex('uniq_turns_session_anchor').on(t.sessionId, t.turnAnchorId),
     ],
   },
 );

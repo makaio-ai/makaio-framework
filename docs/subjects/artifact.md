@@ -34,6 +34,7 @@ next: false
 | `relation-type.register` | [`artifact.relation-type.register`](#artifact.relation-type.register) | rpc | — |
 | `relation.added` | [`artifact.relation.added`](#artifact.relation.added) | event | — |
 | `resolve` | [`artifact.resolve`](#artifact.resolve) | rpc | — |
+| `resolveContext` | [`artifact.resolveContext`](#artifact.resolveContext) | rpc | — |
 | `revise` | [`artifact.revise`](#artifact.revise) | rpc | — |
 | `revised` | [`artifact.revised`](#artifact.revised) | event | — |
 | `status.changed` | [`artifact.status.changed`](#artifact.status.changed) | event | — |
@@ -129,7 +130,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `kinds` | `{ kind: string; description: string; schemaVersion: string; dataSchema: Record<string, unknown>; conflictPolicy: "supersedes" \| "manual" \| "coexist"; scopeSchema?: Record<string, unknown> \| undefined; observationSchema?: Record<string, unknown> \| undefined; discriminator?: string \| string[] \| undefined; status?: { path: string; values?: string[] \| undefined; } \| undefined; lifecycle?: { defaultRelevance?: "active" \| "fading" \| "retired" \| "archived" \| undefined; decayPolicy?: string \| undefined; } \| undefined; indexedFields?: string[] \| undefined; searchableFields?: string[] \| undefined; projection?: { mode: "none" \| "surface" \| "comment"; defaultRole?: "workpiece" \| "artifact" \| undefined; semanticEvents?: ("created" \| "revised" \| "status-changed" \| "observation-added")[] \| undefined; projectedFields?: { path: string; semantic?: "status" \| "workflow" \| "priority" \| undefined; }[] \| undefined; } \| undefined; }[]` | yes |
+| `kinds` | `{ kind: string; description: string; schemaVersion: string; dataSchema: Record<string, unknown>; conflictPolicy: "supersedes" \| "manual" \| "coexist"; scopeSchema?: Record<string, unknown> \| undefined; observationSchema?: Record<string, unknown> \| undefined; discriminator?: string \| string[] \| undefined; status?: { path: string; values?: string[] \| undefined; } \| undefined; lifecycle?: { defaultRelevance?: "active" \| "fading" \| "retired" \| "archived" \| undefined; decayPolicy?: string \| undefined; } \| undefined; indexedFields?: string[] \| undefined; searchableFields?: string[] \| undefined; projection?: { mode: "none" \| "surface" \| "comment"; defaultRole?: "workpiece" \| "artifact" \| undefined; semanticEvents?: ("created" \| "revised" \| "status-changed" \| "observation-added")[] \| undefined; projectedFields?: { path: string; semantic?: "status" \| "workflow" \| "priority" \| undefined; }[] \| undefined; } \| undefined; defaultContext?: Readonly<Record<string, ArtifactContextRelationSelector>> \| undefined; }[]` | yes |
 
 ### <a id="artifact.kind.register"></a>`artifact.kind.register` (rpc)
 
@@ -144,6 +145,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `conflictPolicy` | `"supersedes" \| "manual" \| "coexist"` | yes |
 | `dataSchema` | `Record<string, unknown>` | yes |
+| `defaultContext` | `Readonly<Record<string, ArtifactContextRelationSelector>> \| undefined` | no |
 | `description` | `string` | yes |
 | `discriminator` | `string \| string[] \| undefined` | no |
 | `indexedFields` | `string[] \| undefined` | no |
@@ -274,6 +276,27 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `artifact` | `{ kind: string; id: string; revision: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; schemaVersion: string; data: Record<string, unknown>; relations: { type: string; target: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; }; }[]; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; confidence?: { level: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified"; basis: { kind: string; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; detail?: string \| undefined; evidenceRef?: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; } \| undefined; }[]; } \| undefined; representations?: { markdown?: string \| undefined; summary?: string \| undefined; plaintext?: string \| undefined; } \| undefined; createdAt?: number \| undefined; } \| null` | yes |
+
+### <a id="artifact.resolveContext"></a>`artifact.resolveContext` (rpc)
+
+Resolve a selector-driven outbound artifact context graph (RPC).
+
+Subject: `artifact.resolveContext`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `maxDepth` | `number \| undefined` | no |
+| `ref` | `{ kind: string; id: string; revision: string; refClass?: "artifact" \| undefined; }` | yes |
+| `selectors` | `Readonly<Record<string, ArtifactContextRelationSelector>> \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `context` | `{ rootRef: { refClass: "artifact"; kind: string; id: string; revision: string; }; refs: { target: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; }; sourceRef: { refClass: "artifact"; kind: string; id: string; revision: string; }; relationType: string; hint: string; status: "resolved" \| "unresolved"; reason?: "not-selected" \| "not-found" \| "depth-exceeded" \| "unsupported-ref-class" \| "cycle-detected" \| undefined; }[]; resolved: { kind: string; id: string; revision: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; schemaVersion: string; data: Record<string, unknown>; relations: { type: string; target: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; }; }[]; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; confidence?: { level: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified"; basis: { kind: string; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; detail?: string \| undefined; evidenceRef?: { refClass: "artifact"; kind: string; id: string; revision: string; } \| { refClass: "local"; artifact: { refClass: "artifact"; kind: string; id: string; revision: string; }; localId: string; } \| { refClass: "evidence"; kind: string; id: string; revision?: string \| undefined; locator?: string \| undefined; } \| undefined; }[]; } \| undefined; representations?: { markdown?: string \| undefined; summary?: string \| undefined; plaintext?: string \| undefined; } \| undefined; createdAt?: number \| undefined; }[]; }` | yes |
 
 ### <a id="artifact.revise"></a>`artifact.revise` (rpc)
 

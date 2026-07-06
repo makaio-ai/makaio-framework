@@ -1,5 +1,11 @@
-import { eq, and, asc, desc, sql } from 'drizzle-orm';
-import { getRawSqlExecutor, getStorageEngine, resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { eq, and, asc, desc, sql, type SQL } from 'drizzle-orm';
+import {
+  getRawSqlExecutor,
+  getStorageEngine,
+  resolveSchema,
+  type MakaioDatabase,
+  type RawSqlExecutor,
+} from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   TurnInitiatorSchema,
@@ -33,6 +39,31 @@ const TURN_NUMBER_UNIQUE_INDEX = 'uniq_turns_session_number';
  * is effectively the number of simultaneously in-flight creates per session.
  */
 const TURN_CREATE_MAX_ATTEMPTS = 32;
+
+/**
+ * Run a CTE-based turn insert with bounded retry for dialects where MAX-based
+ * turn-number assignment can race under concurrent writes.
+ * @param rawSql - Raw SQL executor for the active database
+ * @param buildStatement - Builds the INSERT statement for the current attempt
+ */
+async function runTurnNumberInsertWithRetry(rawSql: RawSqlExecutor, buildStatement: () => SQL): Promise<void> {
+  const engine = getStorageEngine(rawSql.dialect);
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rawSql.run(buildStatement());
+      return;
+    } catch (error) {
+      if (
+        attempt >= TURN_CREATE_MAX_ATTEMPTS ||
+        !engine.capabilities.maxCounterAssignmentRaces ||
+        !engine.errors.isUniqueViolationError(error, TURN_NUMBER_UNIQUE_INDEX)
+      ) {
+        throw error;
+      }
+    }
+  }
+}
 
 /**
  * Parse stored usage JSON into a TurnUsage object.
@@ -119,6 +150,7 @@ function rowToTurn(row: SelectTurn): Turn {
 export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const unsubs = [
     registerCreateHandler(bus, db),
+    registerIngestCompletedHandler(bus, db),
     registerCompleteHandler(bus, db),
     registerSetHandler(bus, db),
     registerGetHandler(bus, db),
@@ -138,7 +170,6 @@ export function registerDrizzleTurnStorage(bus: IMakaioBus, db: MakaioDatabase):
  */
 function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
   const rawSql = getRawSqlExecutor(db);
-  const engine = getStorageEngine(rawSql.dialect);
   const { turns } = resolveSchema(db, turnsSchema);
 
   return bus.on(TurnStorageSubjects.create, async (ctx) => {
@@ -166,9 +197,9 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
     // index via the engine's classifier: where the race is impossible, any
     // unique violation (e.g. a caller-supplied duplicate turnId) rethrows
     // immediately.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await rawSql.run(sql`
+    await runTurnNumberInsertWithRetry(
+      rawSql,
+      () => sql`
           WITH next_num AS (
             SELECT COALESCE(MAX(turn_number), 0) + 1 AS n
             FROM turns
@@ -177,18 +208,8 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
           INSERT INTO turns (turn_id, session_id, turn_number, started_at, status, initiator)
           SELECT ${id}, ${sessionId}, n, ${now}, ${'active'}, ${serializedInitiator}
           FROM next_num
-        `);
-        break;
-      } catch (error) {
-        if (
-          attempt >= TURN_CREATE_MAX_ATTEMPTS ||
-          !engine.capabilities.maxCounterAssignmentRaces ||
-          !engine.errors.isUniqueViolationError(error, TURN_NUMBER_UNIQUE_INDEX)
-        ) {
-          throw error;
-        }
-      }
-    }
+        `,
+    );
 
     // Read back the assigned turnNumber — the CTE result isn't returned by INSERT.
     const [inserted] = await db.select({ turnNumber: turns.turnNumber }).from(turns).where(eq(turns.turnId, id));
@@ -203,6 +224,72 @@ function registerCreateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void 
     };
 
     ctx.setResult({ turn });
+  });
+}
+
+/**
+ * Register handler for storage:turn.ingestCompleted.
+ *
+ * Idempotent upsert of an externally-completed turn keyed on
+ * `(sessionId, turnAnchorId)`. Mirrors {@link registerCreateHandler}'s
+ * CTE-based single-statement turn-number assignment, extended with an
+ * `ON CONFLICT` clause on the anchor index:
+ *
+ * - First ingestion inserts the row with `turnNumber = MAX + 1`.
+ * - Re-ingestion of the same anchor updates completion fields only
+ *   (`completed_at`, `status`, `error`, `usage`) and never touches
+ *   `turn_id`, `turn_number`, `started_at`, or `initiator` —
+ *   `(sessionId, turnNumber)` is a stable downstream watermark.
+ *
+ * The `WHERE true` disambiguator is required by SQLite's parser for
+ * `INSERT ... SELECT` combined with `ON CONFLICT` (and is a no-op on
+ * Postgres). The bounded retry loop targets ONLY the turn-number index:
+ * anchor conflicts are absorbed by `ON CONFLICT`; a turn-number race
+ * (Postgres READ COMMITTED, see {@link registerCreateHandler}) retries
+ * with a fresh MAX; any other unique violation rethrows.
+ * @param bus - The bus instance to register handlers on
+ * @param db - The Drizzle database instance
+ * @returns Cleanup function to unregister the handler
+ */
+function registerIngestCompletedHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const rawSql = getRawSqlExecutor(db);
+  const { turns } = resolveSchema(db, turnsSchema);
+
+  return bus.on(TurnStorageSubjects.ingestCompleted, async (ctx) => {
+    const { sessionId, turnAnchorId, startedAt, completedAt, status, error, usage, initiator } = ctx.payload;
+    const candidateId = crypto.randomUUID();
+    const serializedInitiator = serializeInitiator(initiator);
+    const serializedUsage = usage !== undefined ? JSON.stringify(usage) : null;
+
+    await runTurnNumberInsertWithRetry(
+      rawSql,
+      () => sql`
+          WITH next_num AS (
+            SELECT COALESCE(MAX(turn_number), 0) + 1 AS n
+            FROM turns
+            WHERE session_id = ${sessionId}
+          )
+          INSERT INTO turns (turn_id, session_id, turn_number, started_at, completed_at, status, error, usage, initiator, turn_anchor_id)
+          SELECT ${candidateId}, ${sessionId}, n, ${startedAt}, ${completedAt}, ${status}, ${error ?? null}, ${serializedUsage}, ${serializedInitiator}, ${turnAnchorId}
+          FROM next_num
+          WHERE true
+          ON CONFLICT(session_id, turn_anchor_id) DO UPDATE SET
+            completed_at = excluded.completed_at,
+            status = excluded.status,
+            error = excluded.error,
+            usage = excluded.usage
+        `,
+    );
+
+    // Read back by the anchor key — on conflict the surviving row keeps its
+    // original turnId, which is how first-ingestion is detected.
+    const [row] = await db
+      .select()
+      .from(turns)
+      .where(and(eq(turns.sessionId, sessionId), eq(turns.turnAnchorId, turnAnchorId)))
+      .limit(1);
+
+    ctx.setResult({ turn: rowToTurn(row), created: row.turnId === candidateId });
   });
 }
 

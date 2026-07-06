@@ -226,6 +226,7 @@ export async function registerFromProvider(
       adapterName: providerValue.adapterName,
     }),
     logFilePattern: providerValue.registration.logFilePattern,
+    clientId: providerValue.registration.clientId,
   });
 
   const factory = buildOrchestratorFactory(

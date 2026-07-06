@@ -23,6 +23,29 @@ export { TurnInitiatorSchema };
 export type TurnInitiator = z.infer<typeof TurnInitiatorSchema>;
 
 /**
+ * How a `session.turn.*` event entered the system.
+ *
+ * - `'live'` — the turn is ingested as it happens: managed orchestration
+ *   (session.sendMessage driving the turn) or a hook-triggered import of the
+ *   turn that just finished in an observed client.
+ * - `'backfill'` — the turn is replayed from history: watcher discovery of an
+ *   existing transcript or an on-demand import of past sessions.
+ *
+ * This is an **emission property, not a session property**. The same observed
+ * session can be live-followed today and backfilled for yesterday, so the
+ * marker describes each individual emission and must never be persisted on the
+ * turns table. Session classification lives on the session row instead
+ * (`source` / `adapterName` / `adapterSessionId`).
+ *
+ * Orthogonal to {@link TurnInitiatorSchema}, which encodes actor provenance
+ * (user | extension | system) of whoever started the turn.
+ */
+export const TurnIngestionMarkerSchema = z.enum(['live', 'backfill']);
+
+/** Parsed type for {@link TurnIngestionMarkerSchema}. */
+export type TurnIngestionMarker = z.infer<typeof TurnIngestionMarkerSchema>;
+
+/**
  * Base fields for turn events.
  */
 const BaseTurnEventSchema = z.object({
@@ -51,6 +74,8 @@ const TurnCompletedEventSchema = BaseTurnEventSchema.extend({
   usage: TurnUsageSchema.optional(),
   /** Origin of the turn (for loop prevention and audit) */
   initiator: TurnInitiatorSchema.optional(),
+  /** How this emission entered the system: live ingestion or historical backfill. */
+  ingestionMarker: TurnIngestionMarkerSchema.optional(),
 });
 
 const SessionCustomAgentSelectionSchema = AgentSelectionBaseSchema.safeExtend({
@@ -316,6 +341,8 @@ export const OrchestratorSchemas = {
     agentIds: z.array(z.string()),
     /** Origin of the turn (for loop prevention and audit) */
     initiator: TurnInitiatorSchema.optional(),
+    /** How this emission entered the system: live ingestion or historical backfill. */
+    ingestionMarker: TurnIngestionMarkerSchema.optional(),
   }),
 
   /**

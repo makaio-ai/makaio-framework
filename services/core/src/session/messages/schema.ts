@@ -1,4 +1,4 @@
-import { sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 import { epochMs } from '@makaio/storage-drizzle/columns/sqlite';
 import { sessionsDual } from '../storage/schema.js';
 import { turnsDual } from '../turns/schema.js';
@@ -115,10 +115,18 @@ export const messages = sqliteTable(
     index('idx_messages_agent').on(table.agentId, table.timestamp),
 
     /**
-     * Index for adapter message ID queries.
-     * Used for fork detection across sessions.
+     * Unique per-session adapter message identity.
+     *
+     * Within one session an adapterMessageId maps to exactly one row — the
+     * hard idempotency backstop for `storage:message.upsertByAdapterMessageId`
+     * under concurrent imports of the same transcript (hook trigger racing
+     * the watcher). Deliberately NOT globally unique: forked sessions can
+     * carry copies of ancestor messages under the same adapter ID
+     * (shared-ancestry fork detection). NULL adapterMessageIds (managed-path
+     * appends) are unconstrained. Leading column serves the global
+     * adapter-message-ID lookups (fork detection, upsert pre-check).
      */
-    index('idx_messages_adapter_message_id').on(table.adapterMessageId),
+    uniqueIndex('uniq_messages_adapter_message_id_session').on(table.adapterMessageId, table.sessionId),
   ],
 );
 

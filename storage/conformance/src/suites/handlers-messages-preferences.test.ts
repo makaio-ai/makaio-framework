@@ -16,8 +16,10 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   registerDrizzleSessionStorage,
   registerDrizzleMessageStorage,
+  registerDrizzleTurnStorage,
   SessionStorageSubjects,
   MessageStorageSubjects,
+  TurnStorageSubjects,
 } from '@makaio/services-core/session';
 import { PreferencesSubjects } from '@makaio/services-core/preferences';
 import { registerDrizzlePreferencesStorage } from '@makaio/preferences';
@@ -83,6 +85,7 @@ describeStorageConformance('handlers-messages-preferences', (config) => {
   beforeAll(() => {
     // Message handlers require session FK to be satisfied
     cleanups.push(registerDrizzleSessionStorage(MakaioBus, getCtx().db));
+    cleanups.push(registerDrizzleTurnStorage(MakaioBus, getCtx().db));
     cleanups.push(registerDrizzleMessageStorage(MakaioBus, getCtx().db));
     // Preferences have their own isolated table; no session FK
     cleanups.push(registerDrizzlePreferencesStorage(MakaioBus, getCtx().db));
@@ -94,6 +97,48 @@ describeStorageConformance('handlers-messages-preferences', (config) => {
     for (const fn of cleanups.reverse()) {
       fn();
     }
+  });
+
+  describe('sessions — importUpsert metadata merge', () => {
+    it('preserves existing metadata keys while adding incoming keys', async () => {
+      const externalSessionId = `ext-meta-${crypto.randomUUID()}`;
+      const source = 'conformance-importer';
+
+      const first = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        externalSessionId,
+        source,
+        cwd: null,
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        metadata: {
+          keep: true,
+          nullable: null,
+          structured: { existing: 1 },
+        },
+      });
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        externalSessionId,
+        source,
+        cwd: null,
+        kind: 'root',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        metadata: {
+          keep: false,
+          nullable: 'incoming',
+          added: { next: 2 },
+        },
+      });
+
+      const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: first.sessionId });
+      expect(session?.metadata).toEqual({
+        keep: true,
+        nullable: null,
+        structured: { existing: 1 },
+        added: { next: 2 },
+      });
+    });
   });
 
   // ─── Message tests ───────────────────────────────────────────────────────
@@ -163,6 +208,111 @@ describeStorageConformance('handlers-messages-preferences', (config) => {
       expect(aResult.messages[0].contentText).toBe('session A message');
       expect(bResult.messages).toHaveLength(1);
       expect(bResult.messages[0].contentText).toBe('session B message');
+    });
+  });
+
+  describe('message upsertByAdapterMessageId — per-session idempotency backstop', () => {
+    /**
+     * Build the upsert payload for a transcript-derived message.
+     * @param sessionId - Target session.
+     * @param adapterMessageId - Adapter's stable message identifier.
+     * @returns Payload for MessageStorageSubjects.upsertByAdapterMessageId.
+     */
+    function makeUpsert(sessionId: string, adapterMessageId: string) {
+      return {
+        sessionId,
+        adapterMessageId,
+        turnId: null,
+        role: 'user' as const,
+        contentText: 'imported record',
+        blocks: [{ type: 'text' as const, content: 'imported record' }],
+        timestamp: Date.now(),
+      };
+    }
+
+    it('concurrent upserts of the same (session, adapterMessageId) produce exactly one row', async () => {
+      const sessionId = `sess-upsert-race-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId }) });
+
+      // Hook-triggered and watcher-triggered imports of the same transcript
+      // record race through the select→insert seam; the unique
+      // (adapter_message_id, session_id) index must collapse them to one row.
+      const N = 8;
+      const results = await Promise.all(
+        Array.from({ length: N }, () =>
+          MakaioBus.request(MessageStorageSubjects.upsertByAdapterMessageId, makeUpsert(sessionId, 'rec-uuid-1')),
+        ),
+      );
+
+      const messageIds = new Set(results.map((r) => r.messageId));
+      expect(messageIds.size).toBe(1);
+      expect(results.filter((r) => r.created)).toHaveLength(1);
+
+      const listResult = await MakaioBus.request(MessageStorageSubjects.getBySession, { sessionId });
+      expect(listResult.messages).toHaveLength(1);
+    });
+
+    it('a different session can still carry a copy of the same adapterMessageId (fork ancestry)', async () => {
+      const sessionA = `sess-copy-a-${crypto.randomUUID()}`;
+      const sessionB = `sess-copy-b-${crypto.randomUUID()}`;
+      for (const sessionId of [sessionA, sessionB]) {
+        await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId }) });
+      }
+
+      // The append path (fork projection) writes ancestor copies directly —
+      // the uniqueness scope is per session, never global.
+      const shared = 'shared-ancestor-uuid';
+      for (const sessionId of [sessionA, sessionB]) {
+        await MakaioBus.request(MessageStorageSubjects.append, {
+          message: makeUpsert(sessionId, shared),
+          emitEvent: false,
+        });
+      }
+
+      const aResult = await MakaioBus.request(MessageStorageSubjects.getBySession, { sessionId: sessionA });
+      const bResult = await MakaioBus.request(MessageStorageSubjects.getBySession, { sessionId: sessionB });
+      expect(aResult.messages).toHaveLength(1);
+      expect(bResult.messages).toHaveLength(1);
+      expect(aResult.messages[0].adapterMessageId).toBe(shared);
+      expect(bResult.messages[0].adapterMessageId).toBe(shared);
+    });
+
+    it('upsertByAdapterMessageId scopes uniqueness per session, not globally', async () => {
+      const sessionA = `sess-upsert-a-${crypto.randomUUID()}`;
+      const sessionB = `sess-upsert-b-${crypto.randomUUID()}`;
+      for (const sessionId of [sessionA, sessionB]) {
+        await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId }) });
+      }
+
+      const shared = 'shared-ancestor-uuid-2';
+      const [a, b] = await Promise.all([
+        MakaioBus.request(MessageStorageSubjects.upsertByAdapterMessageId, makeUpsert(sessionA, shared)),
+        MakaioBus.request(MessageStorageSubjects.upsertByAdapterMessageId, makeUpsert(sessionB, shared)),
+      ]);
+
+      expect(a.created).toBe(true);
+      expect(b.created).toBe(true);
+      expect(a.messageId).not.toBe(b.messageId);
+    });
+
+    it('attaches an existing unassigned adapter message to a later imported turn', async () => {
+      const sessionId = `sess-upsert-attach-${crypto.randomUUID()}`;
+      await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session: makeSession({ sessionId }) });
+      const { turn } = await MakaioBus.request(TurnStorageSubjects.create, { sessionId });
+      const adapterMessageId = 'partial-then-complete-user';
+
+      const first = await MakaioBus.request(
+        MessageStorageSubjects.upsertByAdapterMessageId,
+        makeUpsert(sessionId, adapterMessageId),
+      );
+      const second = await MakaioBus.request(MessageStorageSubjects.upsertByAdapterMessageId, {
+        ...makeUpsert(sessionId, adapterMessageId),
+        turnId: turn.turnId,
+      });
+
+      expect(second).toEqual({ messageId: first.messageId, created: false });
+      const byTurn = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: turn.turnId });
+      expect(byTurn.messages.map((message) => message.messageId)).toEqual([first.messageId]);
     });
   });
 

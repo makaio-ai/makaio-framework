@@ -18,6 +18,14 @@ export const LogImporterInfoSchema = z.object({
   isRunning: z.boolean(),
   /** Whether this importer supports manual scan/import (defaults to true) */
   supportsManualImport: z.boolean().default(true),
+  /**
+   * Stable client application id (e.g., 'claude-code') whose native hooks
+   * observe the sessions this importer ingests. Enables client-agnostic
+   * framework components to resolve the importer for a `client.session.*`
+   * event. Any string is valid — framework logic never hard-codes specific
+   * client ids.
+   */
+  clientId: z.string().optional(),
 });
 
 export type LogImporterInfo = z.infer<typeof LogImporterInfoSchema>;

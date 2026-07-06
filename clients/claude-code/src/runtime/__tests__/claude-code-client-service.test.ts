@@ -121,6 +121,58 @@ describe('ClaudeCodeClientService', () => {
     });
   });
 
+  it('emits both client.session.turn.started and client.session.userPrompt.submitted for UserPromptSubmit', async () => {
+    const emissions: Array<{ subject: string; payload: unknown }> = [];
+    const cleanups = [
+      bus.on(ClientSubjects.session.turn.started, ({ payload }) => {
+        emissions.push({ subject: 'turn.started', payload });
+      }),
+      bus.on(ClientSubjects.session.userPrompt.submitted, ({ payload }) => {
+        emissions.push({ subject: 'userPrompt.submitted', payload });
+      }),
+    ];
+
+    await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+      eventName: CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT,
+      receivedAt: RECEIVED_AT,
+      payload: { session_id: SESSION_ID, prompt: 'Refactor the parser' },
+    });
+
+    for (const cleanup of cleanups) cleanup();
+
+    expect(emissions).toHaveLength(2);
+    expect(emissions[0]).toMatchObject({
+      subject: 'turn.started',
+      payload: { clientId: 'claude-code', source: 'native-hook', adapterSessionId: SESSION_ID },
+    });
+    expect(emissions[1]).toMatchObject({
+      subject: 'userPrompt.submitted',
+      payload: { adapterSessionId: SESSION_ID, prompt: 'Refactor the parser' },
+    });
+  });
+
+  it('forwards transcriptPath from a Stop hook to client.session.turn.completed subscribers', async () => {
+    const transcriptPath = '/home/user/.claude/projects/demo/sess-test-001.jsonl';
+    const received: unknown[] = [];
+    const cleanup = bus.on(ClientSubjects.session.turn.completed, ({ payload }) => {
+      received.push(payload);
+    });
+
+    await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+      eventName: CLAUDE_CODE_HOOK_STOP,
+      receivedAt: RECEIVED_AT,
+      payload: { session_id: SESSION_ID, transcript_path: transcriptPath },
+    });
+
+    cleanup();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      adapterSessionId: SESSION_ID,
+      transcriptPath,
+    });
+  });
+
   it('forwards bridge metadata to normalized payloads', async () => {
     const received: unknown[] = [];
     const cleanup = bus.on(ClientSubjects.session.started, ({ payload }) => {
@@ -1265,6 +1317,54 @@ describe('ClaudeCodeClientService', () => {
         source: 'native-hook',
         adapterSessionId: SESSION_ID,
       });
+    });
+
+    it('suppresses only session.started for managed sessions — turn and tool events still emit', async () => {
+      // The gate is intentionally asymmetric: only client.session.started has an
+      // adapter-path equivalent.  turn.started, turn.completed, and tool events
+      // must keep flowing for adapter-managed sessions.
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-007' });
+
+      const startedEvents: unknown[] = [];
+      const turnStartedEvents: unknown[] = [];
+      const turnCompletedEvents: unknown[] = [];
+      const toolPreEvents: unknown[] = [];
+      const cleanups = [
+        bus.on(ClientSubjects.session.started, ({ payload }) => {
+          startedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.turn.started, ({ payload }) => {
+          turnStartedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.turn.completed, ({ payload }) => {
+          turnCompletedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.tool.pre, ({ payload }) => {
+          toolPreEvents.push(payload);
+        }),
+      ];
+
+      const hookEvents: Array<{ eventName: string; payload: Record<string, unknown> }> = [
+        { eventName: CLAUDE_CODE_HOOK_SESSION_START, payload: { session_id: SESSION_ID } },
+        { eventName: CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT, payload: { session_id: SESSION_ID, prompt: 'go' } },
+        { eventName: CLAUDE_CODE_HOOK_PRE_TOOL_USE, payload: { session_id: SESSION_ID, tool_name: 'bash' } },
+        { eventName: CLAUDE_CODE_HOOK_STOP, payload: { session_id: SESSION_ID } },
+      ];
+      for (const hook of hookEvents) {
+        await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+          eventName: hook.eventName,
+          receivedAt: RECEIVED_AT,
+          payload: hook.payload,
+        });
+      }
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(startedEvents).toHaveLength(0);
+      expect(turnStartedEvents).toHaveLength(1);
+      expect(turnStartedEvents[0]).toMatchObject({ adapterSessionId: SESSION_ID });
+      expect(turnCompletedEvents).toHaveLength(1);
+      expect(toolPreEvents).toHaveLength(1);
     });
 
     it('tool hook events are forwarded unconditionally even for managed sessions', async () => {

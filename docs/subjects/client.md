@@ -547,10 +547,12 @@ Type: Event
 |-------|------|----------|
 | `adapterSessionId` | `string \| undefined` | no |
 | `clientId` | `string` | yes |
+| `cwd` | `string \| undefined` | no |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
 | `observedAt` | `number` | yes |
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
+| `transcriptPath` | `string \| undefined` | no |
 
 ### <a id="client.session.tool.post"></a>`client.session.tool.post` (event)
 
@@ -615,6 +617,7 @@ Type: Event
 | `observedAt` | `number` | yes |
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
+| `transcriptPath` | `string \| undefined` | no |
 
 ### <a id="client.session.turn.started"></a>`client.session.turn.started` (event)
 
@@ -622,6 +625,12 @@ Payload for `client.session.turn.started`.
 
 Emitted when an adapter observes the beginning of an assistant turn inside
 an ongoing client session.
+
+Intentionally base-only: unlike `ClientSessionTurnCompletedSchema`,
+this event carries no `transcriptPath`. The Stop hook (`turn.completed`) is
+the import trigger for observed sessions; `turn.started` (mapped from
+UserPromptSubmit) is cadence-only. Do not "fix" this asymmetry by adding
+transcript fields here.
 
 Subject: `client.session.turn.started`
 Type: Event

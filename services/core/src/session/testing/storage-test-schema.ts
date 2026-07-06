@@ -49,7 +49,8 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       import_status TEXT CHECK (
         import_status IS NULL
         OR import_status IN ('discovered', 'imported', 'tracking')
-      )
+      ),
+      is_sidechain INTEGER
     )
   `,
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_source_adapter_session_id ON sessions(source, adapter_session_id)`,
@@ -112,7 +113,8 @@ export const MESSAGES_FTS_TEST_SCHEMA_SQL: SQL[] = [
       completed_at INTEGER,
       status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'error')),
       error TEXT,
-      initiator TEXT
+      initiator TEXT,
+      turn_anchor_id TEXT
     )
   `,
   sql`
@@ -130,6 +132,10 @@ export const MESSAGES_FTS_TEST_SCHEMA_SQL: SQL[] = [
       edit_of TEXT,
       origin TEXT
     )
+  `,
+  sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_messages_adapter_message_id_session
+    ON messages(adapter_message_id, session_id)
   `,
   sql`
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

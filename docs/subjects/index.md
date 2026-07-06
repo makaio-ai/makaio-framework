@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 104 |
-| Subjects | 933 (398 events, 535 RPCs) |
+| Subjects | 945 (399 events, 546 RPCs) |
 | framework | 100 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -29,7 +29,7 @@ next: false
 | [adapters/](./adapters/index.md) | 1 | 3 |
 | [clients/](./clients/index.md) | 2 | 24 |
 | [extensions/](./extensions/index.md) | 4 | 18 |
-| [services/](./services/index.md) | 32 | 220 |
+| [services/](./services/index.md) | 32 | 222 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
 ## Core Namespaces
@@ -49,7 +49,7 @@ next: false
 | [`agent`](./agent.md) | bus | 34 | 23E / 11R |
 | [`agentResolution`](./agentresolution.md) | bus | 1 | 0E / 1R |
 | [`approval`](./approval.md) | bus | 2 | 0E / 2R |
-| [`artifact`](./artifact.md) | bus | 15 | 6E / 9R |
+| [`artifact`](./artifact.md) | bus | 16 | 6E / 10R |
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
@@ -83,7 +83,7 @@ next: false
 | [`storage:sessionEvent`](./storage-sessionevent.md) | storage | 5 | 0E / 5R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 25 | 0E / 25R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 29 | 0E / 29R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
@@ -96,7 +96,7 @@ next: false
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
 | [`widget`](./widget.md) | bus | 4 | 4E / 0R |
 | [`worker-node`](./worker-node.md) | bus | 12 | 10E / 2R |
-| [`workflow`](./workflow.md) | bus | 48 | 25E / 23R |
+| [`workflow`](./workflow.md) | bus | 53 | 26E / 27R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 
 ---

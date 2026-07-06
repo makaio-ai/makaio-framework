@@ -8,7 +8,8 @@ import { sessionsDual } from '../storage/schema.js';
  * Session events table schema.
  *
  * Stores immutable, append-only session events for unified history reconstruction.
- * Events are persisted by SessionLogger via storage service.
+ * Lifecycle rows are persisted at their emit sites via the session lifecycle
+ * event helpers (see session-lifecycle-events.ts).
  *
  * **Event Types:**
  * - Message references (type='message' with messageId FK to messages table)

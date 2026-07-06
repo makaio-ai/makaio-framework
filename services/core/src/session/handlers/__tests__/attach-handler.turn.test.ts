@@ -1,9 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { SessionSubjects } from '@makaio/contracts';
+import { AdapterSubjects, SessionSubjects } from '@makaio/contracts';
 import type { MessageInput } from '@makaio/contracts';
 import { ATTACH_TEST_IDS, createAttachHandlerContext, type AttachHandlerTestContext } from './shared.js';
 import { waitForAsync } from '../../__tests__/shared.js';
+import { MessageStorageSubjects } from '../../messages/namespace.js';
+import { SessionEventStorageSubjects } from '../../session-events/index.js';
+import { TurnStorageSubjects } from '../../turns/index.js';
 
 describe('registerAttachHandler - turn tracking', () => {
   const { sessionId, adapterName, agentId, messageId } = ATTACH_TEST_IDS;
@@ -76,6 +79,113 @@ describe('registerAttachHandler - turn tracking', () => {
       expect(turnStartedEvents[0].sessionId).toBe(sessionId);
       expect(turnStartedEvents[0].messageId).toBe(messageId);
       expect(turnStartedEvents[0].agentIds).toContain(agentId);
+    });
+
+    it('persists the initial user message before emitting turn events', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+
+      const lifecycleOrder: string[] = [];
+      const appendedMessages: unknown[] = [];
+      ctx.trackUnsubscribe(
+        MakaioBus.on(MessageStorageSubjects.append, (context) => {
+          lifecycleOrder.push('append');
+          appendedMessages.push(context.payload.message);
+          context.setResult({
+            message: {
+              ...context.payload.message,
+              messageId: context.payload.message.messageId ?? messageId,
+            },
+          });
+        }),
+      );
+      ctx.trackUnsubscribe(
+        MakaioBus.on(SessionSubjects.turn.started, () => {
+          lifecycleOrder.push('turn.started');
+        }),
+      );
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await MakaioBus.request(SessionSubjects.agent.attach, {
+        sessionId,
+        agent: { kind: 'adapter', adapterName },
+        initialMessage: 'Hello, agent!',
+      });
+
+      await waitForAsync();
+
+      expect(lifecycleOrder).toEqual(['append', 'turn.started']);
+      expect(appendedMessages[0]).toMatchObject({
+        messageId,
+        sessionId,
+        role: 'user',
+        contentText: 'Hello, agent!',
+        blocks: [{ type: 'text', content: 'Hello, agent!' }],
+      });
+      expect(appendedMessages[0]).toHaveProperty('turnId');
+    });
+
+    it('does not register an active turn or emit turn events when initial message persistence fails', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+
+      const turnStartedEvents = collectAttachTurnStartedEvents(ctx);
+      const completedTurns = recordCompletedTurns(ctx, sessionId);
+      const stoppedAgents = recordStoppedAgents(ctx);
+      registerFailingInitialMessageAppend(ctx, 'append unavailable');
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await expect(
+        MakaioBus.request(SessionSubjects.agent.attach, {
+          sessionId,
+          agent: { kind: 'adapter', adapterName },
+          initialMessage: 'Hello, agent!',
+        }),
+      ).rejects.toThrow('append unavailable');
+
+      await waitForAsync();
+
+      expect(ctx.activeTurns.has(sessionId)).toBe(false);
+      expect(turnStartedEvents).toHaveLength(0);
+      expect(completedTurns).toHaveLength(1);
+      expect(completedTurns[0]).toMatchObject({
+        status: 'error',
+        expectedStatus: 'active',
+        error: 'initial-message-persistence-failed',
+      });
+      expect(stoppedAgents).toHaveLength(1);
+      expect(stoppedAgents[0]).toMatchObject({ agentId });
+      expect(stoppedAgents[0].adapterId).toBeTruthy();
+    });
+
+    it('clears the active turn and rolls back the agent when turn-start persistence fails', async () => {
+      ctx.trackUnsubscribe(ctx.registerSessionGetHandler(ctx.createMockSession()));
+      const { unsubscribe } = ctx.registerStartAgentHandler();
+      ctx.trackUnsubscribe(unsubscribe);
+
+      const appendedMessages = recordSuccessfulInitialMessageAppends(ctx, messageId);
+      const turnStartedEvents = collectAttachTurnStartedEvents(ctx);
+      const stoppedAgents = recordStoppedAgents(ctx);
+      registerFailingTurnStartedPersistence(ctx, 'session event unavailable');
+      ctx.trackUnsubscribe(ctx.registerHandler());
+
+      await expect(
+        MakaioBus.request(SessionSubjects.agent.attach, {
+          sessionId,
+          agent: { kind: 'adapter', adapterName },
+          initialMessage: 'Hello, agent!',
+        }),
+      ).rejects.toThrow('session event unavailable');
+
+      await waitForAsync();
+
+      expect(appendedMessages).toHaveLength(1);
+      expect(ctx.activeTurns.has(sessionId)).toBe(false);
+      expect(turnStartedEvents).toHaveLength(0);
+      expect(stoppedAgents).toHaveLength(1);
+      expect(stoppedAgents[0]).toMatchObject({ agentId });
     });
 
     it('emits user_message.sent event', async () => {
@@ -258,3 +368,116 @@ describe('registerAttachHandler - turn tracking', () => {
     });
   });
 });
+
+/**
+ * Register a failing initial-message append handler.
+ * @param ctx - Attach test context owning cleanup
+ * @param message - Error message to throw
+ */
+function registerFailingInitialMessageAppend(ctx: AttachHandlerTestContext, message: string): void {
+  ctx.trackUnsubscribe(
+    MakaioBus.on(MessageStorageSubjects.append, () => {
+      throw new Error(message);
+    }),
+  );
+}
+
+/**
+ * Record successful initial-message appends.
+ * @param ctx - Attach test context owning cleanup
+ * @param fallbackMessageId - Message id used when the payload does not carry one
+ * @returns Captured append payloads
+ */
+function recordSuccessfulInitialMessageAppends(ctx: AttachHandlerTestContext, fallbackMessageId: string): unknown[] {
+  const appendedMessages: unknown[] = [];
+  ctx.trackUnsubscribe(
+    MakaioBus.on(MessageStorageSubjects.append, (context) => {
+      appendedMessages.push(context.payload);
+      context.setResult({
+        message: {
+          ...context.payload.message,
+          messageId: context.payload.message.messageId ?? fallbackMessageId,
+        },
+      });
+    }),
+  );
+  return appendedMessages;
+}
+
+/**
+ * Record turn completion rollback calls.
+ * @param ctx - Attach test context owning cleanup
+ * @param sessionId - Session id to place on mocked completed turns
+ * @returns Captured turn completion payloads
+ */
+function recordCompletedTurns(
+  ctx: AttachHandlerTestContext,
+  sessionId: string,
+): Array<{ turnId: string; status: string; expectedStatus?: string; error?: string }> {
+  const completedTurns: Array<{ turnId: string; status: string; expectedStatus?: string; error?: string }> = [];
+  ctx.trackUnsubscribe(
+    MakaioBus.on(TurnStorageSubjects.complete, (context) => {
+      completedTurns.push(context.payload);
+      context.setResult({
+        turn: {
+          turnId: context.payload.turnId,
+          sessionId,
+          turnNumber: 1,
+          startedAt: Date.now(),
+          completedAt: Date.now(),
+          status: context.payload.status,
+          error: context.payload.error,
+        },
+        transitioned: true,
+      });
+    }),
+  );
+  return completedTurns;
+}
+
+/**
+ * Record adapter stop calls.
+ * @param ctx - Attach test context owning cleanup
+ * @returns Captured stop-agent payloads
+ */
+function recordStoppedAgents(ctx: AttachHandlerTestContext): Array<{ adapterId: string; agentId: string }> {
+  const stoppedAgents: Array<{ adapterId: string; agentId: string }> = [];
+  ctx.trackUnsubscribe(
+    MakaioBus.on(AdapterSubjects.stopAgent, (context) => {
+      stoppedAgents.push(context.payload);
+      context.setResult({ success: true });
+    }),
+  );
+  return stoppedAgents;
+}
+
+/**
+ * Collect emitted attach turn-start events.
+ * @param ctx - Attach test context owning cleanup
+ * @returns Captured turn-start payloads
+ */
+function collectAttachTurnStartedEvents(ctx: AttachHandlerTestContext): unknown[] {
+  const turnStartedEvents: unknown[] = [];
+  ctx.trackUnsubscribe(
+    MakaioBus.on(SessionSubjects.turn.started, ({ payload }) => {
+      turnStartedEvents.push(payload);
+    }),
+  );
+  return turnStartedEvents;
+}
+
+/**
+ * Register a failing session-events append for turn.started.
+ * @param ctx - Attach test context owning cleanup
+ * @param message - Error message to throw
+ */
+function registerFailingTurnStartedPersistence(ctx: AttachHandlerTestContext, message: string): void {
+  ctx.trackUnsubscribe(
+    MakaioBus.on(SessionEventStorageSubjects.append, (context) => {
+      if (context.payload.event.type === 'turn.started') {
+        throw new Error(message);
+      }
+      context.setResult({ success: true });
+    }),
+  );
+}

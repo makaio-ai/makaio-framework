@@ -153,6 +153,12 @@ export const MakaioSessionSchema = z.object({
    * - 'tracking': Imported but source file is still actively being written to
    */
   importStatus: ImportStatusSchema.optional(),
+  /**
+   * Whether the external tool marked this session as a sidechain/subagent
+   * perspective (e.g. Claude Code's per-record `isSidechain` flag).
+   * Undefined means unknown or a live session.
+   */
+  isSidechain: z.boolean().optional(),
 });
 
 export type MakaioSession = z.infer<typeof MakaioSessionSchema>;

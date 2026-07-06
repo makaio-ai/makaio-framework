@@ -38,9 +38,10 @@
  *
  * The subscription listens to the **catch-all** `hook.received` subject without
  * any event-name pre-filtering.  Filtering happens inside
- * {@link normalizeClaudeCodeHook}, which returns `null` for unknown events.
- * This guarantees that raw hook ingress reaches the bus before any semantic
- * narrowing — preventing the adapter-level subtype filtering anti-pattern.
+ * {@link normalizeClaudeCodeHook}, which returns an empty array for unknown
+ * events.  This guarantees that raw hook ingress reaches the bus before any
+ * semantic narrowing — preventing the adapter-level subtype filtering
+ * anti-pattern.
  *
  * ## Adapter-managed session gate
  *
@@ -78,7 +79,7 @@ import { BaseService } from '@makaio/service-base';
 import { z } from 'zod';
 import { ClaudeCodeClientSettings } from './client-settings.js';
 import { handleClaudeCodeConfigPrime } from './config-prime-handler.js';
-import { normalizeClaudeCodeHook } from './hook-normalizer.js';
+import { normalizeClaudeCodeHook, type ClaudeCodeNormalizedEvent } from './hook-normalizer.js';
 import { normalizeClaudeCodeStatusline, type StatuslineIdentityContext } from './statusline-normalizer.js';
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
@@ -617,22 +618,35 @@ export class ClaudeCodeClientService extends BaseService {
   }
 
   /**
-   * Translate a raw hook event into a normalized `client.session.*` emission.
+   * Translate a raw hook event into normalized `client.session.*` emissions.
    *
    * Unknown / Claude-specific events produce no emission and are silently
    * ignored. The raw event is always available on `client:claude-code.*` for
    * consumers that need Claude-native detail.
    *
-   * `client.session.started` is suppressed when the `adapterSessionId` from
-   * the hook payload is already known to be owned by an adapter-managed runtime
-   * (see {@link handleRuntimeStarted}).  All other events are forwarded
-   * unconditionally — tool events have no adapter-path equivalent.
+   * A single hook may normalize into multiple events (e.g. `UserPromptSubmit`
+   * yields `turn.started` followed by `userPrompt.submitted`); they are
+   * emitted sequentially in normalizer order.
    * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeClaudeCodeHook>[0]): Promise<void> {
-    const normalized = normalizeClaudeCodeHook(raw);
-    if (normalized === null) return;
+    for (const normalized of normalizeClaudeCodeHook(raw)) {
+      await this.emitNormalizedEvent(normalized);
+    }
+  }
 
+  /**
+   * Emit a single normalized hook event on its global `client.session.*`
+   * subject.
+   *
+   * `client.session.started` is suppressed when the `adapterSessionId` from
+   * the hook payload is already known to be owned by an adapter-managed runtime
+   * (see {@link handleRuntimeStarted}).  All other events — including
+   * `turn.started` and `turn.completed` — are forwarded unconditionally: tool
+   * and turn events have no adapter-path equivalent.
+   * @param normalized - Normalized event produced by {@link normalizeClaudeCodeHook}
+   */
+  private async emitNormalizedEvent(normalized: ClaudeCodeNormalizedEvent): Promise<void> {
     switch (normalized.subject) {
       case ClientSubjects.session.started:
         if (
@@ -648,6 +662,9 @@ export class ClaudeCodeClientService extends BaseService {
         break;
       case ClientSubjects.session.userPrompt.submitted:
         await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
+        break;
+      case ClientSubjects.session.turn.started:
+        await this.bus.emit(ClientSubjects.session.turn.started, normalized.payload);
         break;
       case ClientSubjects.session.turn.completed:
         await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);

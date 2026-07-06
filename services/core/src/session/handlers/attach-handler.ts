@@ -20,8 +20,8 @@ import { activateProviderContext } from '../../provider-context/index.js';
 import { extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
-import { TurnStorageSubjects } from '../turns/index.js';
 import { resolveAttachProviderSelection } from './attach-provider-selection.js';
+import { setupTurnTrackingOrRollbackAgent, stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
 import {
   extractRuntimeOptions,
   mergeRuntimeOptions,
@@ -153,7 +153,15 @@ async function attachAgent(
 
   const turnInfo =
     initialMessage && startResult.messageId
-      ? await setupTurnTracking(bus, activeTurns, sessionId, startResult.agentId, startResult.messageId, initialMessage)
+      ? await setupTurnTrackingOrRollbackAgent(
+          bus,
+          activeTurns,
+          startResult,
+          sessionId,
+          startResult.agentId,
+          startResult.messageId,
+          initialMessage,
+        )
       : undefined;
 
   return {
@@ -484,76 +492,7 @@ async function persistIdentityOrRollback(
       adapterId: startResult.adapterId,
       error,
     });
-    try {
-      await bus.request(AdapterSubjects.stopAgent, {
-        adapterId: startResult.adapterId,
-        agentId: startResult.agentId,
-      });
-    } catch (stopError) {
-      console.error('[attach-handler] Failed to rollback started agent after identity persistence failure', {
-        sessionId: identity.sessionId,
-        agentId: startResult.agentId,
-        adapterId: startResult.adapterId,
-        error: stopError,
-      });
-    }
+    await stopStartedAgentAfterFailure(bus, startResult, identity.sessionId, 'identity persistence failure');
     throw error;
   }
-}
-
-/**
- * Sets up turn tracking and emits turn/message events.
- *
- * Persists the turn via storage to obtain a monotonic `turnNumber` before
- * emitting lifecycle events (which include `turnNumber` in their schema).
- * @param bus - Bus instance for event emission and storage
- * @param activeTurns - Shared turn state map
- * @param sessionId - Target session ID
- * @param agentId - Agent processing the message
- * @param messageId - User message ID
- * @param content - Message content
- * @returns Turn tracking info
- */
-async function setupTurnTracking(
-  bus: IMakaioBus,
-  activeTurns: Map<string, Turn>,
-  sessionId: string,
-  agentId: string,
-  messageId: string,
-  content: MessageInput,
-): Promise<{ messageId: string; turnId: string }> {
-  const { turn: storedTurn } = await bus.request(TurnStorageSubjects.create, { sessionId });
-  const turn = new Turn({
-    sessionId,
-    agentIds: [agentId],
-    turnId: storedTurn.turnId,
-    turnNumber: storedTurn.turnNumber,
-  });
-  turn.addMessage(messageId);
-  activeTurns.set(sessionId, turn);
-
-  await bus.emit(SessionSubjects.turn.started, {
-    sessionId,
-    turnId: turn.turnId,
-    turnNumber: turn.turnNumber,
-    messageId,
-    agentIds: [...turn.agentIds],
-  });
-  await bus.emit(SessionSubjects.user_message.sent, {
-    sessionId,
-    turnId: turn.turnId,
-    turnNumber: turn.turnNumber,
-    messageId,
-    content,
-    agentIds: [...turn.agentIds],
-  });
-  await bus.emit(SessionSubjects.user_message.acknowledged, {
-    sessionId,
-    turnId: turn.turnId,
-    turnNumber: turn.turnNumber,
-    messageId,
-    agentId,
-  });
-
-  return { messageId, turnId: turn.turnId };
 }

@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
+import { appendSessionLifecycleEvent, emitSessionTurnStarted } from '../session-lifecycle-events.js';
 import { Turn, type TurnConfig } from './turn.js';
 
 /**
@@ -95,12 +96,16 @@ export class MakaioSession {
     // Add initial message to turn
     turn.addMessage(options.messageId);
 
-    // Emit from within the entity - the key architectural pattern
-    await this.emit(SessionSubjects.turn.started, {
+    // Emit from within the entity - the key architectural pattern.
+    // Routed through the sanctioned turn.started emit helper so the
+    // session_events lifecycle row persists before consumers see the event.
+    await emitSessionTurnStarted(this.bus, {
+      sessionId: this.sessionId,
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
       agentIds: [...turn.agentIds],
       messageId: options.messageId,
+      ingestionMarker: 'live',
     });
 
     return turn;
@@ -130,15 +135,25 @@ export class MakaioSession {
       throw new Error(`Turn ${turn.turnId} is not complete yet`);
     }
 
-    this._completedTurnIds.add(turn.turnId);
     const result = turn.getResult();
 
-    await this.emit(SessionSubjects.turn.completed, {
+    const completedPayload = {
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
       success: result.success,
       error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+    };
+
+    await appendSessionLifecycleEvent(this.bus, {
+      type: 'turn.completed',
+      sessionId: this.sessionId,
+      payload: {
+        sessionId: this.sessionId,
+        ...completedPayload,
+      },
     });
+    await this.emit(SessionSubjects.turn.completed, completedPayload);
+    this._completedTurnIds.add(turn.turnId);
   }
 
   /**

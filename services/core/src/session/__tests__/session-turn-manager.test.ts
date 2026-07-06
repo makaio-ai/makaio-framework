@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { TurnInitiator, TurnUsage } from '@makaio/contracts';
+import type { TurnIngestionMarker, TurnInitiator, TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { SessionTurnManager } from '../session-turn-manager.js';
 import { resetBusHandlers, waitForAsync } from './shared.js';
@@ -98,6 +98,7 @@ function collectTurnCompleted(unsubs: UnsubFn[]): Array<{
   error?: string;
   usage?: TurnUsage;
   initiator?: TurnInitiator;
+  ingestionMarker?: TurnIngestionMarker;
 }> {
   const received: Array<{
     sessionId: string;
@@ -107,11 +108,12 @@ function collectTurnCompleted(unsubs: UnsubFn[]): Array<{
     error?: string;
     usage?: TurnUsage;
     initiator?: TurnInitiator;
+    ingestionMarker?: TurnIngestionMarker;
   }> = [];
   unsubs.push(
     MakaioBus.on(SessionSubjects.turn.completed, (ctx) => {
-      const { sessionId, turnId, turnNumber, success, error, usage, initiator } = ctx.payload;
-      received.push({ sessionId, turnId, turnNumber, success, error, usage, initiator });
+      const { sessionId, turnId, turnNumber, success, error, usage, initiator, ingestionMarker } = ctx.payload;
+      received.push({ sessionId, turnId, turnNumber, success, error, usage, initiator, ingestionMarker });
     }),
   );
   return received;
@@ -352,6 +354,8 @@ describe('SessionTurnManager', () => {
         turnId: turn.turnId,
         turnNumber: turn.turnNumber,
         success: true,
+        // Managed-path completions are stamped as live emissions.
+        ingestionMarker: 'live',
       });
       expect(turnCompleted[0]?.error).toBeUndefined();
     });

@@ -56,7 +56,21 @@ export type ClientSessionObservedBase = z.infer<typeof ClientSessionObservedBase
  * This is a normalized observed signal — not a command. The session may not
  * yet be linked to a framework session at emission time.
  */
-export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend({});
+export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend({
+  /**
+   * Absolute path to the client's transcript/log file as reported by the
+   * client runtime at session start (Claude Code hook payloads carry
+   * `transcript_path` on every hook event per Anthropic's hooks contract).
+   * Consumers use it to trigger targeted log imports without a prior
+   * discovery scan.
+   */
+  transcriptPath: z.string().optional(),
+  /**
+   * Working directory reported by the client runtime at session start;
+   * used to enrich session registration.
+   */
+  cwd: z.string().optional(),
+});
 
 export type ClientSessionStarted = z.infer<typeof ClientSessionStartedSchema>;
 
@@ -79,6 +93,12 @@ export type ClientSessionUserPromptSubmitted = z.infer<typeof ClientSessionUserP
  *
  * Emitted when an adapter observes the beginning of an assistant turn inside
  * an ongoing client session.
+ *
+ * Intentionally base-only: unlike {@link ClientSessionTurnCompletedSchema},
+ * this event carries no `transcriptPath`. The Stop hook (`turn.completed`) is
+ * the import trigger for observed sessions; `turn.started` (mapped from
+ * UserPromptSubmit) is cadence-only. Do not "fix" this asymmetry by adding
+ * transcript fields here.
  */
 export const ClientSessionTurnStartedSchema = ClientSessionObservedBaseSchema.extend({});
 
@@ -90,7 +110,13 @@ export type ClientSessionTurnStarted = z.infer<typeof ClientSessionTurnStartedSc
  * Emitted when an adapter observes that an assistant turn has finished inside
  * an ongoing client session.
  */
-export const ClientSessionTurnCompletedSchema = ClientSessionObservedBaseSchema.extend({});
+export const ClientSessionTurnCompletedSchema = ClientSessionObservedBaseSchema.extend({
+  /**
+   * Absolute path to the client's transcript/log file at turn completion
+   * (Stop hook); the import trigger for observed sessions.
+   */
+  transcriptPath: z.string().optional(),
+});
 
 export type ClientSessionTurnCompleted = z.infer<typeof ClientSessionTurnCompletedSchema>;
 

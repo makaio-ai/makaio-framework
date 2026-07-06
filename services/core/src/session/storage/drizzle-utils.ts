@@ -126,6 +126,7 @@ export function mapToSession(sessionRow: SessionRow, agentRows: AgentRow[]): IMa
     logFilePath: toOptionalValue(sessionRow.logFilePath),
     discoveredAt: toOptionalValue(sessionRow.discoveredAt),
     importStatus: toOptionalValue(sessionRow.importStatus),
+    isSidechain: toOptionalValue(sessionRow.isSidechain),
   };
 }
 

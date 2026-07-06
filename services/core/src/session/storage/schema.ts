@@ -236,6 +236,12 @@ export const sessionsDual = defineDualTable(
     importStatus: c.textEnum('import_status', {
       enum: ['discovered', 'imported', 'tracking'] as const,
     }),
+
+    /**
+     * Whether the external tool marked this session as a sidechain/subagent
+     * perspective. NULL = unknown/live session; only imports populate it.
+     */
+    isSidechain: c.bool('is_sidechain'),
   }),
   {
     sqlite: (t) => [

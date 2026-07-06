@@ -8,6 +8,16 @@ import {
 import { toSessionLineage } from '@makaio/services-core/session';
 import type { ImportSegment, NormalizedEvent } from '@makaio/ai-adapters-core';
 
+/**
+ * Return a one-property object when a storage enrichment value is defined.
+ * @param key - Property name to include.
+ * @param value - Value to include when defined.
+ * @returns Object containing the property, or an empty object.
+ */
+function definedProperty<K extends string, V>(key: K, value: V | undefined): Record<K, V> | Record<string, never> {
+  return value !== undefined ? ({ [key]: value } as Record<K, V>) : {};
+}
+
 const MetadataFromPayload = z.discriminatedUnion('kind', [
   z.object({
     adapterSessionId: z.string(),
@@ -71,6 +81,8 @@ export function extractSessionMetadata(sessionEvent: NormalizedEvent): SessionMe
  *   Pass `undefined` to omit; the storage handler defaults to `Date.now()`.
  * @param adapterId - Optional adapter instance ID for cursor resume resolution.
  * @param clientId - Optional client identity link.
+ * @param isSidechain - Optional sidechain flag from the segment's own log records
+ *   (e.g. a subagent transcript). Pass `undefined` to leave the stored flag untouched.
  * @returns Strictly typed request payload for `storage:session.importUpsert`.
  */
 export function toImportUpsertPayload(
@@ -81,16 +93,18 @@ export function toImportUpsertPayload(
   startedAt?: number,
   adapterId?: string,
   clientId?: string,
+  isSidechain?: boolean,
 ) {
   const lineage = toSessionLineage(metadata);
   return {
     externalSessionId: metadata.adapterSessionId,
     source,
     cwd,
-    ...(logFilePath !== undefined ? { logFilePath } : {}),
-    ...(startedAt !== undefined ? { startedAt } : {}),
-    ...(adapterId !== undefined ? { adapterId } : {}),
-    ...(clientId !== undefined ? { clientId } : {}),
+    ...definedProperty('logFilePath', logFilePath),
+    ...definedProperty('startedAt', startedAt),
+    ...definedProperty('adapterId', adapterId),
+    ...definedProperty('clientId', clientId),
+    ...definedProperty('isSidechain', isSidechain),
     ...lineage,
   };
 }

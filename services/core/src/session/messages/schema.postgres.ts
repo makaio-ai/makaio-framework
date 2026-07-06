@@ -18,7 +18,7 @@
  * at the Postgres faces of the dual `sessions` / `turns` tables, so the twin
  * stays wired to the single-definition tables it depends on.
  */
-import { pgTable, text, index, customType, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { pgTable, text, index, uniqueIndex, customType, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { epochMs } from '@makaio/storage-drizzle/columns/postgres';
 import { sessionsDual } from '../storage/schema.js';
@@ -125,8 +125,13 @@ export const messages = pgTable(
     /** Index for agent-scoped queries in multi-agent sessions. */
     index('idx_messages_agent').on(table.agentId, table.timestamp),
 
-    /** Index for adapter message ID queries (fork detection). */
-    index('idx_messages_adapter_message_id').on(table.adapterMessageId),
+    /**
+     * Unique per-session adapter message identity (twin of the canonical
+     * schema's index): the idempotency backstop for
+     * `storage:message.upsertByAdapterMessageId` under concurrent imports.
+     * NULLs are distinct, so rows without an adapterMessageId are unconstrained.
+     */
+    uniqueIndex('uniq_messages_adapter_message_id_session').on(table.adapterMessageId, table.sessionId),
 
     /**
      * GIN index on the stored tsvector column for efficient full-text search.

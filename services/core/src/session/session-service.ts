@@ -2,6 +2,7 @@
 import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
+import { appendSessionLifecycleEvent, registerSessionLifecycleEventWriters } from './session-lifecycle-events.js';
 import { registerCoreSessionServiceHandlers } from './session-service-handlers-core.js';
 import { TurnStorageSubjects } from './turns/index.js';
 
@@ -21,10 +22,11 @@ import { TurnStorageSubjects } from './turns/index.js';
  * `SessionStorageSubjects.*` subjects. Register appropriate storage handlers
  * (memory or drizzle) before creating this service.
  *
- * `SessionLogger` is intentionally NOT a dependency here: it persists session
- * lifecycle events consumed only by recovery context assembly, fork, merge,
- * compress, and purge — all host features. Host services declare
- * `SessionLogger` in their own dependency chain.
+ * Session lifecycle rows in `session_events` (agent.added, branch.created)
+ * are written by the subscription writers registered during init
+ * (see `registerSessionLifecycleEventWriters`); turn lifecycle rows are
+ * persisted inline at their emit sites. No separate logger component needs
+ * to be wired by hosts.
  * @example
  * ```typescript
  * import { MakaioBus } from '@makaio/bus-core';
@@ -74,6 +76,9 @@ export class MakaioSessionService extends BaseService {
     for (const cleanup of registerCoreSessionServiceHandlers({ bus: this.bus })) {
       this.addCleanup(cleanup);
     }
+    // Persist agent.added / branch.created lifecycle rows in every host that
+    // composes the session service (turn lifecycle rows persist at emit sites).
+    this.addCleanup(registerSessionLifecycleEventWriters(this.bus));
     await this.reconcileOrphanedTurns();
   }
 
@@ -103,13 +108,25 @@ export class MakaioSessionService extends BaseService {
         });
 
         if (transitioned) {
-          await this.bus.emit(SessionSubjects.turn.completed, {
+          const completedPayload = {
             sessionId: turn.sessionId,
             turnId: turn.turnId,
             turnNumber: turn.turnNumber,
             success: false,
             error: 'process-restart',
+            // Restart-reconcile closes a managed live turn: stamp 'live'
+            // explicitly so every `session.turn.completed` emit site carries
+            // a marker (uniform with SessionTurnManager and the ingestion seam).
+            ingestionMarker: 'live' as const,
+          };
+          // Lifecycle row persists before consumers see the event
+          // (persist-before-emit, same discipline as SessionTurnManager).
+          await appendSessionLifecycleEvent(this.bus, {
+            type: 'turn.completed',
+            sessionId: turn.sessionId,
+            payload: completedPayload,
           });
+          await this.bus.emit(SessionSubjects.turn.completed, completedPayload);
         }
       } catch (error) {
         console.error(`[MakaioSessionService] Failed to reconcile orphaned turn ${turn.turnId}:`, error);

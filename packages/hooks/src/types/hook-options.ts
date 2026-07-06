@@ -38,6 +38,14 @@ export type PreTurnHookOptions = BaseHookOptions;
 export interface PostTurnHookOptions extends BaseHookOptions {
   /** Hook name for error attribution (default: 'anonymous') */
   name?: string;
+  /**
+   * When true, the handler also runs for turns ingested from historical
+   * imports (`session.turn.completed` with ingestionMarker `'backfill'`).
+   * Default false: backfill emissions are filtered so LLM-driven consumers do
+   * not stampede over historical imports. Live turns (marker `'live'` or
+   * absent) always run.
+   */
+  includeBackfill?: boolean;
 }
 
 /**

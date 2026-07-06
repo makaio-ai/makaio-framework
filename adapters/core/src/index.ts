@@ -193,6 +193,7 @@ export type {
   ProcessLogFileResult,
   ImportSegment,
   ImportSegmentLineage,
+  ImportSegmentTurn,
   CompactionMetadata,
   LogImportConfig,
   LogImportOrchestrator,

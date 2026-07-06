@@ -199,6 +199,16 @@ export function createHook<K extends HookName, S extends SubjectDefinition = Sub
     const unsubscribe = MakaioBus.intercept(
       SessionSubjects.turn.completed,
       async (rawCtx: InterceptorContext<SessionTurnCompleted>) => {
+        // Backfill filter BEFORE context enrichment: skipped events must not
+        // trigger the session/turn storage queries. Strict === 'backfill' is
+        // load-bearing — managed-path events stamped 'live' and legacy events
+        // with the field absent both pass; the filter can only suppress
+        // explicitly-marked backfill emissions.
+        if (postTurnOptions.includeBackfill !== true && rawCtx.payload.ingestionMarker === 'backfill') {
+          await rawCtx.next();
+          return;
+        }
+
         await runHookWithErrorHandling(
           'PostTurn',
           hookName,

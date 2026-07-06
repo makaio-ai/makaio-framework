@@ -5,7 +5,6 @@ import { BranchKindSchema, SessionContextInheritanceSchema } from './primitives.
 import { ForkTransformsSchema } from './lifecycle-events.js';
 import { MakaioSessionSchema, SessionRecordMetadataSchema, SessionWithPreviewSchema } from './session.js';
 import { ApprovalPolicySchema } from '../../harness/schemas.js';
-import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
 
 const RestartAgentsResultSchema = z.discriminatedUnion('success', [
   z.object({
@@ -29,11 +28,11 @@ const RestartAgentsResultSchema = z.discriminatedUnion('success', [
 ]);
 
 /**
- * Caller-facing fields shared by `session.create` and `session.registerExternal`.
+ * Caller-facing fields of `session.create`.
  *
- * Extracted so that both subjects stay in sync — changes here are automatically
- * reflected in both schemas. Both subjects apply {@link refineSpawningToolCallId}
- * over this shape for the `spawningToolCallId` invariant.
+ * Kept as a named base shape so subjects that create sessions share one
+ * contract; {@link refineSpawningToolCallId} enforces the
+ * `spawningToolCallId` invariant over this shape.
  */
 export const SessionCreateBaseSchema = z.object({
   /** Optional client-provided session ID (server generates if omitted) */
@@ -451,81 +450,6 @@ export const CrudSchemas = {
       archived: z.number(),
       /** Count of discovered (stub) sessions not yet fully imported */
       discovered: z.number(),
-    }),
-  },
-
-  /**
-   * Register a session for an externally-running adapter session.
-   *
-   * Subject: `session.registerExternal`
-   * Type: Request (RPC)
-   *
-   * This is the **only** public path that accepts adapter identity (`adapterName`,
-   * `adapterSessionId`, `lastClientIdentityObservation`) at session-creation time.
-   * It exists exclusively for hosts that front an externally-running agent — for
-   * example a CLI command that exposes the framework as an MCP server, or an HTTP
-   * endpoint that creates a session on behalf of a token-authenticated external
-   * client — where the normal `session.agent.attach` pipeline never runs.
-   *
-   * **The attach pipeline remains authoritative for all in-runtime sessions.**
-   * Do not use this subject for sessions that will be managed by an adapter
-   * running inside this process; use `session.agent.attach` instead, which
-   * stamps adapter identity through the canonical path.
-   *
-   * Registration is idempotent and keyed by (`adapterName`, `adapterSessionId`).
-   * If a session with that adapter identity already exists, the existing session
-   * is returned with `created: false`. Hosts that restart (e.g., a CLI that
-   * re-exposes the same external session) can therefore call this subject on
-   * every startup without creating duplicate records.
-   *
-   * `adapterId` is intentionally absent from this RPC. That field identifies an
-   * in-runtime adapter instance; external sessions have no such instance.
-   * @example
-   * ```typescript
-   * const { sessionId, created } = await bus.request(SessionSubjects.registerExternal, {
-   *   adapterName: 'my-mcp-adapter',
-   *   adapterSessionId: 'ext-session-abc-123',
-   *   title: 'External chat session',
-   * });
-   *
-   * if (created) {
-   *   console.debug(`Registered new external session: ${sessionId}`);
-   * } else {
-   *   console.debug(`Resumed existing external session: ${sessionId}`);
-   * }
-   * ```
-   */
-  registerExternal: {
-    request: SessionCreateBaseSchema.extend({
-      /**
-       * Adapter type name identifying the external agent (e.g., `'my-mcp-adapter'`).
-       * Together with `adapterSessionId`, forms the idempotency key for
-       * duplicate-registration detection.
-       */
-      adapterName: z.string(),
-      /**
-       * The external adapter's own session identifier.
-       * Together with `adapterName`, forms the idempotency key.
-       */
-      adapterSessionId: z.string(),
-      /**
-       * Initial client identity observation, if known at registration time.
-       * Forwarded to the session record when provided. May be updated later
-       * via the client account linking path.
-       */
-      lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
-    }).superRefine(refineSpawningToolCallId),
-    response: z.object({
-      /** ID of the created or pre-existing session. */
-      sessionId: z.string(),
-      /**
-       * Whether a new session record was created.
-       *
-       * `true`  — first registration for this (`adapterName`, `adapterSessionId`) pair.
-       * `false` — a session with that adapter identity already existed; the caller
-       *           received the existing session ID.
-       */
-      created: z.boolean(),
     }),
   },
 } satisfies SchemaRecord;

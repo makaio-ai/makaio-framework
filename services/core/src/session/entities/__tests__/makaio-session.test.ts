@@ -6,6 +6,7 @@ import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioSession, type MakaioSessionConfig } from '../makaio-session.js';
 import { Turn } from '../turn.js';
+import { SessionEventStorageSubjects } from '../../session-events/index.js';
 
 // Register a test namespace for emit helper tests
 const { subjects: TestSubjects } = MakaioBus.registerNamespace(
@@ -161,6 +162,40 @@ describe('MakaioSession', () => {
   });
 
   describe('completeTurn', () => {
+    it('persists turn.completed before emitting the completion event', async () => {
+      const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
+      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const sequence: string[] = [];
+
+      const storageCleanup = MakaioBus.on(SessionEventStorageSubjects.append, (ctx) => {
+        if (ctx.payload.event.type === 'turn.completed') {
+          sequence.push('stored');
+          expect(ctx.payload.event).toMatchObject({
+            sessionId: 'sess-123',
+            type: 'turn.completed',
+            payload: {
+              sessionId: 'sess-123',
+              turnId: turn.turnId,
+              turnNumber: 1,
+              success: true,
+            },
+          });
+        }
+        ctx.setResult({ success: true });
+      });
+      const eventCleanup = MakaioBus.on(SessionSubjects.turn.completed, () => {
+        sequence.push('emitted');
+      });
+
+      turn.markAgentCompleted('agent-1');
+      await session.completeTurn(turn);
+
+      expect(sequence).toEqual(['stored', 'emitted']);
+
+      storageCleanup();
+      eventCleanup();
+    });
+
     it('emits turn.completed with success result', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
       const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });

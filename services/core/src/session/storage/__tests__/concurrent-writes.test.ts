@@ -32,7 +32,9 @@ const CREATE_TURNS_TABLE_SQL = sql`
     error TEXT,
     usage TEXT,
     initiator TEXT,
-    UNIQUE(session_id, turn_number)
+    turn_anchor_id TEXT,
+    UNIQUE(session_id, turn_number),
+    UNIQUE(session_id, turn_anchor_id)
   )
 `;
 

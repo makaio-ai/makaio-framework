@@ -129,7 +129,7 @@ export type {
   TurnUsage,
   UsageMetrics,
 } from './schemas/message.js';
-export { OrchestratorSchemas } from './schemas/orchestrator.js';
+export { OrchestratorSchemas, TurnIngestionMarkerSchema } from './schemas/orchestrator.js';
 export type {
   AgentAttachRequest,
   AgentAttachResolvedRequest,
@@ -142,6 +142,7 @@ export type {
   TurnAwaitRequest,
   TurnAwaitResponse,
   TurnCompleted,
+  TurnIngestionMarker,
   TurnStarted,
   UserMessageAcknowledged,
   UserMessageCompleted,

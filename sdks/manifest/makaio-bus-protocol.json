@@ -7482,6 +7482,10 @@
               "error": {
                 "type": "string"
               },
+              "ingestionMarker": {
+                "enum": ["live", "backfill"],
+                "type": "string"
+              },
               "initiator": {
                 "additionalProperties": false,
                 "properties": {
@@ -7577,6 +7581,10 @@
           "error": {
             "type": "string"
           },
+          "ingestionMarker": {
+            "enum": ["live", "backfill"],
+            "type": "string"
+          },
           "initiator": {
             "additionalProperties": false,
             "properties": {
@@ -7670,6 +7678,10 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "ingestionMarker": {
+            "enum": ["live", "backfill"],
+            "type": "string"
           },
           "initiator": {
             "additionalProperties": false,

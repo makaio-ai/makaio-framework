@@ -10,6 +10,7 @@ import { CapabilityService } from './capability/capability-service.js';
 import { canonicalModelPackage } from './canonical-model/package.js';
 import type { IModelRegistryFetcher } from './model-registry/types.js';
 import { ModelRegistryService } from './model-registry/model-registry-service.js';
+import { ObservedSessionIngestionService } from './session/observed-session-ingestion.js';
 import { SessionBridge } from './session/session-bridge.js';
 import { SessionOrchestrator } from './session/session-orchestrator.js';
 import type { ISessionOrchestrator } from './session/session-orchestrator.js';
@@ -48,6 +49,9 @@ export const SessionBridgeToken = extensionToken<SessionBridge>('session-bridge'
 export const SessionToken = extensionToken<MakaioSessionService>('session');
 /** Token for the session orchestrator selected by the runtime composition. */
 export const SessionOrchestratorToken = extensionToken<ISessionOrchestrator>('session-orchestrator');
+/** Token for the observed-session ingestion service. */
+export const ObservedSessionIngestionToken =
+  extensionToken<ObservedSessionIngestionService>('observed-session-ingestion');
 /** Token for the framework tool registry. */
 export const ToolRegistryToken = extensionToken<ToolRegistry>('tool-registry');
 /** Token for the framework tool approval service. */
@@ -195,6 +199,26 @@ export const sessionOrchestratorPackage: MakaioNodeExtension<IMakaioBus> = {
   create: (ctx) => new SessionOrchestrator(ctx.bus, ctx.machineId),
 };
 
+/**
+ * Package that starts the observed-session ingestion bridge.
+ *
+ * Non-critical by design: the framework must boot without observed-session
+ * ingestion in degraded scenarios (no client hooks wired, no importers). The
+ * dependency on the session bridge transitively guarantees that the session
+ * storage handlers are registered before this service subscribes. There is
+ * deliberately NO dependency on the log-import service: its `requestOptional`
+ * calls degrade gracefully during the boot window and in framework-only
+ * hosts, and a hard dependency would invert the package layering.
+ */
+export const observedSessionIngestionPackage: MakaioNodeExtension<IMakaioBus> = {
+  name: ObservedSessionIngestionToken.name,
+  displayName: 'Observed-Session Ingestion',
+  version: '0.1.0',
+  dependencies: [dep(SessionBridgeToken.name)],
+  critical: false,
+  create: (ctx) => new ObservedSessionIngestionService(ctx.bus),
+};
+
 /** Package that starts the framework tool registry. */
 export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
   name: ToolRegistryToken.name,
@@ -295,6 +319,7 @@ export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus
   sessionClientAccountLinkingPackage,
   sessionPackage,
   sessionOrchestratorPackage,
+  observedSessionIngestionPackage,
   subagentServicePackage,
   toolRegistryPackage,
   toolApprovalPackage,

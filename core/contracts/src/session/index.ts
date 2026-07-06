@@ -128,7 +128,12 @@ export type { BranchBehavior } from './utils/index.js';
 export type {
   SendMessageRequest as SessionSendMessageRequest,
   SendMessageResponse as SessionSendMessageResponse,
+  TurnCompleted,
+  TurnStarted,
 } from './schemas/orchestrator.js';
+
+// Ingestion marker for session.turn.* emissions (live vs backfill)
+export { TurnIngestionMarkerSchema, type TurnIngestionMarker } from './schemas/orchestrator.js';
 
 // Compression mode (framework-owned, used by session/agent and agent-resolution schemas)
 export { CompressionModeSchema, type CompressionMode } from './schemas/compression.js';
@@ -136,7 +141,7 @@ export { CompressionModeSchema, type CompressionMode } from './schemas/compressi
 // Session enrichment RPC schemas
 export { SessionEnrichmentSchemas } from './schemas/enrichment.js';
 
-// Note: Turn, SessionBridge, SessionLogger, SessionOrchestrator live in @makaio/services-core/session
+// Note: Turn, SessionBridge, SessionOrchestrator live in @makaio/services-core/session
 
 // Storage bus subjects — for service-to-storage communication via the bus.
 // Handlers are registered by @makaio/services-core/session; these subjects allow
@@ -167,7 +172,7 @@ export {
   type ImportStatus,
 } from './session-storage-namespace.js';
 
-// Register-external RPC (adapter identity at session level, external-session path only)
+// Shared caller-facing shape of session-creation subjects (`session.create` and friends)
 export {
   SessionCreateBaseSchema,
   type SessionCreateBase,
