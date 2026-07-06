@@ -57,7 +57,7 @@ major domains:
 
 | Sub-path | Domain | Key exports |
 |----------|--------|-------------|
-| `./session` | Session lifecycle | `MakaioSessionService`, `SessionOrchestrator`, `SessionBridge`, `SessionLogger`, sessions/agents/turns/messages tables |
+| `./session` | Session lifecycle | `MakaioSessionService`, `SessionOrchestrator`, `SessionBridge`, sessions/agents/turns/messages tables |
 | `./session/storage/namespace` | Session storage bus | `SessionStorageNamespace`, `SessionStorageSubjects` |
 | `./session/turns/namespace` | Turn storage | `TurnStorageNamespace`, `TurnStorageSubjects` |
 | `./session/messages/namespace` | Message storage | `MessageStorageNamespace`, `MessageStorageSubjects` |

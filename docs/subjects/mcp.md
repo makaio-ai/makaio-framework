@@ -100,7 +100,7 @@ port the singleton HTTP MCP server is listening on.
 | `adapterName` | `string` | yes |
 | `adapterSessionId` | `string` | yes |
 | `agentId` | `string` | yes |
-| `contextOverrides` | `{ cwd?: string \| undefined; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; agentId?: string \| undefined; adapterId?: string \| undefined; adapterName?: string \| undefined; turnId?: string \| undefined; turnContext?: Record<string, unknown> \| undefined; reasoning?: string \| undefined; toolCallId?: string \| undefined; constraints?: Record<string, unknown> \| undefined; }` | yes |
+| `contextOverrides` | `{ cwd?: string \| undefined; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; agentId?: string \| undefined; adapterId?: string \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; turnId?: string \| undefined; turnContext?: Record<string, unknown> \| undefined; reasoning?: string \| undefined; toolCallId?: string \| undefined; constraints?: Record<string, unknown> \| undefined; }` | yes |
 | `pinned` | `boolean \| undefined` | no |
 | `sessionId` | `string` | yes |
 

@@ -102,7 +102,7 @@ describe('createLogImportContributionProcessor', () => {
 
   it('registers and unregisters a package log importer', async () => {
     const processor = createLogImportContributionProcessor();
-    const pkg = makePkg('my-extension');
+    const pkg = makePkg('my-extension', { clientId: 'my-client' });
 
     await processor.processActivated('my-extension', pkg, makeContext(registry));
 
@@ -110,6 +110,7 @@ describe('createLogImportContributionProcessor', () => {
     expect(importers).toHaveLength(1);
     expect(importers[0]?.id).toBe('package:my-extension');
     expect(importers[0]?.adapterName).toBe('my-extension-adapter');
+    expect(importers[0]?.clientId).toBe('my-client');
 
     await processor.processStopped?.('my-extension');
 

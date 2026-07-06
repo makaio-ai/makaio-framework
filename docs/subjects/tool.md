@@ -78,7 +78,7 @@ Purpose: Execute a tool with given input and return the result.
 |-------|------|----------|
 | `adapterId` | `string \| undefined` | no |
 | `adapterName` | `string \| undefined` | no |
-| `contextOverrides` | `{ cwd?: string \| undefined; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; agentId?: string \| undefined; adapterId?: string \| undefined; adapterName?: string \| undefined; turnId?: string \| undefined; turnContext?: Record<string, unknown> \| undefined; reasoning?: string \| undefined; toolCallId?: string \| undefined; constraints?: Record<string, unknown> \| undefined; } \| undefined` | no |
+| `contextOverrides` | `{ cwd?: string \| undefined; env?: Record<string, string> \| undefined; sessionId?: string \| undefined; agentId?: string \| undefined; adapterId?: string \| undefined; adapterName?: string \| undefined; adapterSessionId?: string \| undefined; turnId?: string \| undefined; turnContext?: Record<string, unknown> \| undefined; reasoning?: string \| undefined; toolCallId?: string \| undefined; constraints?: Record<string, unknown> \| undefined; } \| undefined` | no |
 | `input` | `unknown` | yes |
 | `toolName` | `string` | yes |
 

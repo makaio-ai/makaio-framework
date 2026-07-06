@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { BranchKindSchema } from './primitives.js';
-import { OrchestratorSchemas, type TurnInitiator } from './orchestrator.js';
+import { OrchestratorSchemas, type TurnIngestionMarker, type TurnInitiator } from './orchestrator.js';
 import type { TurnUsage } from './message.js';
 
 /**
@@ -245,9 +245,11 @@ export interface SessionEventTypeMap {
   'turn.started': {
     sessionId: string;
     turnId: string;
+    turnNumber: number;
     messageId: string;
     agentIds: string[];
     initiator?: TurnInitiator;
+    ingestionMarker?: TurnIngestionMarker;
   };
 
   /**
@@ -261,6 +263,7 @@ export interface SessionEventTypeMap {
     error?: string;
     usage?: TurnUsage;
     initiator?: TurnInitiator;
+    ingestionMarker?: TurnIngestionMarker;
   };
 
   /**

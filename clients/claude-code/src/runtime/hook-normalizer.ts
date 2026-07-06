@@ -5,13 +5,17 @@
  * ## Design principles
  *
  * - **Pure function**: `normalizeClaudeCodeHook` takes a single
- * {@link RawClientHookPayload} and returns a normalized result or `null`.  It
+ * {@link RawClientHookPayload} and returns an array of normalized results.  It
  * has no bus or service dependencies — tests exercise it directly without any
  * bus setup.
  *
  * - **No ingress filtering**: the normalizer is called *after* the raw event
  * has been received on `client:claude-code.hook.received`.  Unknown events
- * return `null`; the caller decides whether to act on the result.
+ * return an empty array; the caller decides whether to act on the result.
+ *
+ * - **One hook may map to multiple events**: `UserPromptSubmit` produces both
+ * `client.session.turn.started` and `client.session.userPrompt.submitted`, in
+ * that order.  All other known hooks produce exactly one event.
  *
  * - **Claude-specific extras stay raw**: `SubagentStop`, `Notification`,
  * `MCPServerStart`, and `MCPServerStop` are not normalizable — they do not
@@ -25,6 +29,7 @@ import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import type {
   ClientSessionStarted,
   ClientSessionUserPromptSubmitted,
+  ClientSessionTurnStarted,
   ClientSessionTurnCompleted,
   ClientSessionToolPre,
   ClientSessionToolPost,
@@ -52,6 +57,7 @@ const SOURCE = 'native-hook';
 export type ClaudeCodeNormalizedSubject =
   | typeof ClientSubjects.session.started
   | typeof ClientSubjects.session.userPrompt.submitted
+  | typeof ClientSubjects.session.turn.started
   | typeof ClientSubjects.session.turn.completed
   | typeof ClientSubjects.session.tool.pre
   | typeof ClientSubjects.session.tool.post;
@@ -62,9 +68,6 @@ export type ClaudeCodeNormalizedSubject =
  * Each variant pairs a specific `client.session.*` subject definition with its
  * corresponding strongly-typed payload.  The caller switches on `subject` to
  * obtain a narrowed payload type and call `bus.emit` without casts.
- *
- * When the event name is unknown, {@link normalizeClaudeCodeHook} returns
- * `null` to signal that the event must stay raw-only.
  */
 export type ClaudeCodeNormalizedEvent =
   | { readonly subject: typeof ClientSubjects.session.started; readonly payload: ClientSessionStarted }
@@ -72,44 +75,28 @@ export type ClaudeCodeNormalizedEvent =
       readonly subject: typeof ClientSubjects.session.userPrompt.submitted;
       readonly payload: ClientSessionUserPromptSubmitted;
     }
+  | { readonly subject: typeof ClientSubjects.session.turn.started; readonly payload: ClientSessionTurnStarted }
   | { readonly subject: typeof ClientSubjects.session.turn.completed; readonly payload: ClientSessionTurnCompleted }
   | { readonly subject: typeof ClientSubjects.session.tool.pre; readonly payload: ClientSessionToolPre }
   | { readonly subject: typeof ClientSubjects.session.tool.post; readonly payload: ClientSessionToolPost };
 
 /**
- * Static map from Claude Code-native hook event name to the matching global
- * subject definition.
+ * Normalize a raw Claude Code hook payload into `client.session.*` events.
  *
- * Checked before base construction so unknown events exit early without any
- * allocation overhead. Update this map when the Claude Code CLI exposes new
- * hook names that correspond to global session lifecycle events.
- */
-const CLAUDE_CODE_EVENT_MAP = new Map<string, ClaudeCodeNormalizedSubject>([
-  [CLAUDE_CODE_HOOK_SESSION_START, ClientSubjects.session.started],
-  [CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT, ClientSubjects.session.userPrompt.submitted],
-  [CLAUDE_CODE_HOOK_PRE_TOOL_USE, ClientSubjects.session.tool.pre],
-  [CLAUDE_CODE_HOOK_POST_TOOL_USE, ClientSubjects.session.tool.post],
-  [CLAUDE_CODE_HOOK_STOP, ClientSubjects.session.turn.completed],
-]);
-
-/**
- * Normalize a raw Claude Code hook payload into a `client.session.*` event.
- *
- * Returns `null` for unknown or not-yet-modeled event names so the caller
- * skips global emission and keeps the event raw-only in `client:claude-code.*`.
+ * Returns an empty array for unknown or not-yet-modeled event names so the
+ * caller skips global emission and keeps the event raw-only in
+ * `client:claude-code.*`.  A single hook may map to more than one normalized
+ * event: `UserPromptSubmit` yields `turn.started` followed by
+ * `userPrompt.submitted`.  Emission order within the array is significant and
+ * must be preserved by the caller.
  *
  * The `receivedAt` timestamp from the raw hook payload is used as `observedAt`
  * to preserve the original wall-clock time of the observation.
  * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
- * @returns Normalized event with subject and typed payload, or `null` when the
- *   event name is unknown
+ * @returns Normalized events with subject and typed payload, in emission
+ *   order; empty when the event name is unknown (raw-only)
  */
-export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNormalizedEvent | null {
-  const subject = CLAUDE_CODE_EVENT_MAP.get(raw.eventName);
-  if (subject === undefined) {
-    return null;
-  }
-
+export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNormalizedEvent[] {
   const base = {
     clientId: CLIENT_ID,
     source: SOURCE,
@@ -118,48 +105,81 @@ export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNo
     metadata: raw.metadata,
   };
 
-  switch (subject) {
-    case ClientSubjects.session.started:
-      return { subject, payload: { ...base } };
-
-    case ClientSubjects.session.userPrompt.submitted:
-      return { subject, payload: { ...base, prompt: resolvePrompt(raw.payload) } };
-
-    case ClientSubjects.session.tool.pre: {
-      const toolName = resolveToolName(raw.payload);
-      const toolCallId = resolveToolCallId(raw.payload);
-      return {
-        subject,
-        payload: {
-          ...base,
-          ...(toolName !== undefined && { toolName }),
-          ...(toolCallId !== undefined && { toolCallId }),
+  switch (raw.eventName) {
+    case CLAUDE_CODE_HOOK_SESSION_START: {
+      const transcriptPath = resolveTranscriptPath(raw.payload);
+      const cwd = resolveCwd(raw.payload);
+      return [
+        {
+          subject: ClientSubjects.session.started,
+          payload: {
+            ...base,
+            ...(transcriptPath !== undefined && { transcriptPath }),
+            ...(cwd !== undefined && { cwd }),
+          },
         },
-      };
+      ];
     }
 
-    case ClientSubjects.session.tool.post: {
+    // UserPromptSubmit marks the beginning of an assistant turn; emitting
+    // turn.started here gives observed sessions start-of-turn cadence (the
+    // Stop hook remains the sole import trigger).
+    case CLAUDE_CODE_HOOK_USER_PROMPT_SUBMIT:
+      return [
+        { subject: ClientSubjects.session.turn.started, payload: { ...base } },
+        {
+          subject: ClientSubjects.session.userPrompt.submitted,
+          payload: { ...base, prompt: resolvePrompt(raw.payload) },
+        },
+      ];
+
+    case CLAUDE_CODE_HOOK_PRE_TOOL_USE: {
+      const toolName = resolveToolName(raw.payload);
+      const toolCallId = resolveToolCallId(raw.payload);
+      return [
+        {
+          subject: ClientSubjects.session.tool.pre,
+          payload: {
+            ...base,
+            ...(toolName !== undefined && { toolName }),
+            ...(toolCallId !== undefined && { toolCallId }),
+          },
+        },
+      ];
+    }
+
+    case CLAUDE_CODE_HOOK_POST_TOOL_USE: {
       const toolName = resolveToolName(raw.payload);
       const toolCallId = resolveToolCallId(raw.payload);
       const success = resolveToolSuccess(raw.payload);
-      return {
-        subject,
-        payload: {
-          ...base,
-          ...(toolName !== undefined && { toolName }),
-          ...(toolCallId !== undefined && { toolCallId }),
-          ...(success !== undefined && { success }),
+      return [
+        {
+          subject: ClientSubjects.session.tool.post,
+          payload: {
+            ...base,
+            ...(toolName !== undefined && { toolName }),
+            ...(toolCallId !== undefined && { toolCallId }),
+            ...(success !== undefined && { success }),
+          },
         },
-      };
+      ];
     }
 
-    case ClientSubjects.session.turn.completed:
-      return { subject, payload: { ...base } };
+    case CLAUDE_CODE_HOOK_STOP: {
+      const transcriptPath = resolveTranscriptPath(raw.payload);
+      return [
+        {
+          subject: ClientSubjects.session.turn.completed,
+          payload: { ...base, ...(transcriptPath !== undefined && { transcriptPath }) },
+        },
+      ];
+    }
 
     default:
-      // Guard against future ClaudeCodeNormalizedSubject additions that are
-      // not yet handled in this switch — keeps the map and the switch in sync.
-      return null;
+      // Unknown / Claude-specific event names stay raw-only.  Update this
+      // switch when the Claude Code CLI exposes new hook names that map to
+      // global session lifecycle events.
+      return [];
   }
 }
 
@@ -173,6 +193,31 @@ export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNo
  */
 function resolveSessionId(payload: Record<string, unknown>): string | undefined {
   return pickNonEmptyString(payload, 'session_id');
+}
+
+/**
+ * Extract the transcript file path from the raw hook payload.
+ *
+ * Claude Code includes `session_id`, `transcript_path`, and `cwd` in every
+ * hook input; the transcript path points at the JSONL log for the session and
+ * lets consumers trigger targeted imports without a discovery scan.
+ * @param payload - Raw hook payload object
+ * @returns Absolute transcript path, or `undefined` when absent or empty
+ */
+function resolveTranscriptPath(payload: Record<string, unknown>): string | undefined {
+  return pickNonEmptyString(payload, 'transcript_path');
+}
+
+/**
+ * Extract the working directory from the raw hook payload.
+ *
+ * Claude Code includes `session_id`, `transcript_path`, and `cwd` in every
+ * hook input; the working directory enriches session registration.
+ * @param payload - Raw hook payload object
+ * @returns Working directory path, or `undefined` when absent or empty
+ */
+function resolveCwd(payload: Record<string, unknown>): string | undefined {
+  return pickNonEmptyString(payload, 'cwd');
 }
 
 /**

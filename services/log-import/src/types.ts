@@ -69,6 +69,16 @@ export interface LogImporterRegistration {
   supportsManualImport?: boolean;
 
   /**
+   * Stable client application id (e.g., `'claude-code'`) whose native hooks
+   * observe the sessions this importer ingests.
+   *
+   * Enables client-agnostic framework components to resolve the importer for
+   * a `client.session.*` event without hard-coding importer names. Any string
+   * is valid — framework logic never hard-codes specific client ids.
+   */
+  clientId?: string;
+
+  /**
    * Factory for creating orchestrators for this importer.
    *
    * When present, the registry can swap orchestrators on mode change via

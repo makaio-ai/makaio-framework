@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { TimeoutError, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects, type IMakaioSession } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turn/namespace.js';
@@ -24,7 +23,7 @@ interface CoreSessionServiceHandlerDeps {
  * Registers the framework-core session service handlers:
  * `session.create`, `session.get`, `session.list`, `session.turn.await`,
  * `session.close`, `session.restartAgents`, `session.update`,
- * `session.archive`, `session.purge`, `session.registerExternal`,
+ * `session.archive`, `session.purge`,
  * `session.agent.added`, and `session.agent.removed`.
  *
  * These handlers cover the minimal, load-bearing session contract for the
@@ -48,7 +47,6 @@ export function registerCoreSessionServiceHandlers(deps: CoreSessionServiceHandl
     registerCoreUpdateHandler(deps),
     registerCoreArchiveHandler(deps),
     registerCorePurgeHandler(deps),
-    registerRegisterExternalHandler(deps),
     registerAgentAddedHandler(deps.bus),
     registerAgentRemovedHandler(deps.bus),
   ];
@@ -433,184 +431,5 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
     await bus.requestOptional(SessionStorageSubjects.delete, { sessionId });
     await bus.emit(SessionSubjects.purged, { sessionId });
     ctx.setResult({ success: true, eventsDeleted });
-  });
-}
-
-/**
- * Derive a deterministic session ID from an external adapter identity.
- *
- * The ID is a UUID-shaped digest of the (`adapterName`, `adapterSessionId`)
- * idempotency key. Deriving it deterministically is what makes concurrent
- * registrations of the same identity collide on the session primary key, so
- * the storage layer's `ifAbsent` insert rejects the loser and the conflict
- * path can return the winning session. Random IDs would make both inserts
- * succeed (the sessions table has no unique constraint covering external
- * adapter identity) and silently create duplicates.
- * @param adapterName - Adapter type name (idempotency key, first component)
- * @param adapterSessionId - External session identifier (idempotency key, second component)
- * @returns UUID-formatted (RFC 9562 version 8) digest of the identity pair
- */
-function deterministicExternalSessionId(adapterName: string, adapterSessionId: string): string {
-  const digest = createHash('sha256').update(`${adapterName}\u0000${adapterSessionId}`).digest('hex');
-  // Format as a UUID with version nibble 8 (custom) and variant nibble 9 (RFC 4122 variant).
-  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-9${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
-}
-
-/**
- * Resolve an `ifAbsent` insert conflict during external session registration.
- *
- * A conflict means a session with the attempted ID already exists — either a
- * concurrent registration of the same identity won the race (deterministic
- * IDs make those collide on the primary key), or a caller-provided
- * `sessionId` collided with an unrelated session.
- * @param bus - Bus used for storage lookups
- * @param sessionId - Session ID whose insert was rejected
- * @param adapterName - Adapter identity, first component
- * @param adapterSessionId - Adapter identity, second component
- * @returns The winning session's registration response (`created: false`)
- * @throws When the conflicting session does not carry the adapter identity —
- *   claiming `created: true` would hand out a session ID with the wrong
- *   identity, so the registration fails loudly instead.
- */
-async function resolveRegistrationConflict(
-  bus: IMakaioBus,
-  sessionId: string,
-  adapterName: string,
-  adapterSessionId: string,
-): Promise<{ sessionId: string; created: false }> {
-  const conflictLookup = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
-    adapterSessionId,
-    adapterName,
-  });
-  if (conflictLookup.handled && conflictLookup.data.session !== null) {
-    const winner = conflictLookup.data.session;
-    if (winner.adapterName === adapterName) {
-      return { sessionId: winner.sessionId, created: false };
-    }
-  }
-  // The adapterSessionId lookup is ambiguous when several adapters share one
-  // external session ID string (it returns null for multiple matches).
-  // Resolve via our own session ID: if that row carries our identity, this is
-  // an idempotent re-registration.
-  const byId = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
-  const existing = byId.handled ? byId.data.session : null;
-  if (existing !== null && existing.adapterName === adapterName && existing.adapterSessionId === adapterSessionId) {
-    return { sessionId: existing.sessionId, created: false };
-  }
-  throw new Error(
-    `session.registerExternal: session ID "${sessionId}" already exists but does not carry ` +
-      `adapter identity (${adapterName}, ${adapterSessionId}); refusing to mis-attribute it`,
-  );
-}
-
-/**
- * Handle external session registration requests.
- *
- * Creates a new session stamped with adapter identity fields
- * (`adapterName`, `adapterSessionId`, `lastClientIdentityObservation`).
- * This is the only public path that accepts adapter identity at session level.
- * It exists for externally-running adapter sessions where the normal
- * `session.agent.attach` pipeline cannot run (e.g. an MCP-server host or an
- * HTTP endpoint that creates sessions on behalf of external clients).
- *
- * Registration is idempotent and keyed by (`adapterName`, `adapterSessionId`).
- * If a session with that identity already exists it is returned with
- * `created: false`.
- *
- * Concurrency: when the caller omits `sessionId`, the session ID is derived
- * deterministically from the identity pair, so two concurrent registrations
- * of the same identity collide on the primary key — exactly one `ifAbsent`
- * insert succeeds and the loser resolves the winner via re-lookup. A
- * caller-provided `sessionId` that collides with an unrelated session is an
- * error (the request rejects) rather than a silently mis-attributed identity.
- * @param deps - Core handler dependencies
- * @returns Cleanup function
- */
-function registerRegisterExternalHandler(deps: CoreSessionServiceHandlerDeps): () => void {
-  const { bus } = deps;
-
-  return bus.on(SessionSubjects.registerExternal, async (ctx) => {
-    const {
-      adapterName,
-      adapterSessionId,
-      lastClientIdentityObservation,
-      sessionId: providedSessionId,
-      parentSessionId,
-      contextInheritance,
-      forkPointMessageId,
-      branchKind,
-      forkTransforms,
-      title,
-      targetWorkingDirectory,
-      executionTargetId,
-      metadata,
-      spawningToolCallId,
-      originWindowId,
-    } = ctx.payload;
-
-    // Idempotency: look up by adapterSessionId first.
-    // No `source` filter — externally-registered sessions do not carry the
-    // import-provenance `source` field; `adapterName` is used instead.
-    const lookupResult = await bus.requestOptional(SessionStorageSubjects.getByAdapterSessionId, {
-      adapterSessionId,
-      adapterName,
-    });
-
-    if (lookupResult.handled && lookupResult.data.session !== null) {
-      const existing = lookupResult.data.session;
-      // Guard: verify the returned session belongs to the same adapter.
-      // A different adapter may use the same external session ID string.
-      if (existing.adapterName === adapterName) {
-        ctx.setResult({ sessionId: existing.sessionId, created: false });
-        return;
-      }
-    }
-
-    // Create a new session stamped with adapter identity. The deterministic
-    // ID is the concurrency anchor — see deterministicExternalSessionId.
-    const sessionId = providedSessionId ?? deterministicExternalSessionId(adapterName, adapterSessionId);
-    const createdAt = Date.now();
-    const session: IMakaioSession = {
-      sessionId,
-      createdAt,
-      lastActivityAt: createdAt,
-      agents: [],
-      status: 'active',
-      adapterName,
-      adapterSessionId,
-      lastClientIdentityObservation,
-      title,
-      parentSessionId,
-      contextInheritance,
-      forkPointMessageId,
-      branchKind,
-      forkTransforms,
-      targetWorkingDirectory,
-      executionTargetId,
-      metadata,
-      spawningToolCallId,
-    };
-
-    const setResult = await bus.requestOptional(SessionStorageSubjects.set, {
-      sessionId,
-      session,
-      ifAbsent: true,
-    });
-
-    if (setResult.handled && !setResult.data.success) {
-      const winner = await resolveRegistrationConflict(bus, sessionId, adapterName, adapterSessionId);
-      ctx.setResult(winner);
-      return;
-    }
-
-    await bus.emit(SessionSubjects.created, {
-      sessionId,
-      createdAt: session.createdAt,
-      parentSessionId: parentSessionId ?? null,
-      branchKind: branchKind ?? null,
-      originWindowId: originWindowId ?? 'server',
-    });
-
-    ctx.setResult({ sessionId, created: true });
   });
 }

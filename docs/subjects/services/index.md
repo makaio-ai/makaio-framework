@@ -7,7 +7,7 @@ next: false
 
 # services
 
-32 namespaces, 220 subjects (35 events, 185 RPCs).
+32 namespaces, 222 subjects (35 events, 187 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
@@ -26,7 +26,7 @@ next: false
 | [`git`](./git.md) | bus | 44 | 6E / 38R |
 | [`host:tray`](./host-tray.md) | bus | 7 | 2E / 5R |
 | [`local-notification`](./local-notification.md) | bus | 2 | 0E / 2R |
-| [`log-import`](./log-import.md) | bus | 12 | 0E / 12R |
+| [`log-import`](./log-import.md) | bus | 13 | 0E / 13R |
 | [`modelRegistry`](./modelregistry.md) | bus | 6 | 1E / 5R |
 | [`packages`](./packages.md) | bus | 8 | 2E / 6R |
 | [`preferences`](./preferences.md) | bus | 4 | 0E / 4R |
@@ -41,7 +41,7 @@ next: false
 | [`storage:harness`](./storage-harness.md) | storage | 4 | 0E / 4R |
 | [`storage:messageRouting`](./storage-messagerouting.md) | storage | 4 | 0E / 4R |
 | [`storage:provider`](./storage-provider.md) | storage | 3 | 0E / 3R |
-| [`storage:turn`](./storage-turn.md) | storage | 7 | 0E / 7R |
+| [`storage:turn`](./storage-turn.md) | storage | 8 | 0E / 8R |
 | [`subagentTemplate`](./subagenttemplate.md) | bus | 6 | 2E / 4R |
 
 ---

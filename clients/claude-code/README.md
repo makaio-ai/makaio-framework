@@ -140,7 +140,7 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 | `claudeCodeClientRuntimePackage` | `MakaioExtension` | Registers `claude-code.runtime` namespace and creates the client service |
 | `ClaudeCodeClientService` | class | Bridges raw hook events into normalized `client.session.*` observations |
 | `ClaudeCodeClientSubjects` | namespace subjects | Typed bus subjects for `client:claude-code.*` |
-| `normalizeClaudeCodeHook` | function | Normalizes a raw hook payload into a `ClaudeCodeNormalizedEvent` |
+| `normalizeClaudeCodeHook` | function | Normalizes a raw hook payload into an array of `ClaudeCodeNormalizedEvent`s (empty for unknown events) |
 | `resolveClaudeCodeSettingsPaths` | function | Resolves settings file paths from environment + options |
 | `CLAUDE_CODE_HOOK_SESSION_START` … `CLAUDE_CODE_HOOK_MCP_SERVER_STOP` | string constants | Hook event name constants |
 

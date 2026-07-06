@@ -1,9 +1,42 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects, type TurnInitiator } from '@makaio/contracts';
 import { TurnStorageSubjects } from './turns/index.js';
+import { MessageStorageSubjects } from './messages/namespace.js';
 import { Turn } from './entities/turn.js';
 import { TurnUsageAccumulator, type AgentUsageEvent } from './turn-usage-accumulator.js';
 import { findTurnByAgent } from './session-orchestrator-helpers.js';
+import { appendSessionLifecycleEvent } from './session-lifecycle-events.js';
+
+/**
+ * Upper bound (ms) for the persist-before-emit barrier in {@link SessionTurnManager.completeTurn}.
+ *
+ * The barrier waits for `storage:message.stored` confirmations of the turn's
+ * assistant messages before emitting `session.turn.completed`. The timeout is
+ * mandatory — the barrier must never hang: SessionBridge legitimately persists
+ * nothing when an agent produced zero blocks and no error, and it swallows
+ * write errors, so a `storage:message.stored` event may never fire for an
+ * agent. After this bound the event is emitted regardless.
+ */
+export const TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS = 1500;
+
+/**
+ * Maximum number of turns tracked in the assistant-persistence counter.
+ *
+ * Bounds memory for `storage:message.stored` events that arrive for turns this
+ * manager never completes (e.g. import-path persistence): the oldest entry is
+ * evicted FIFO once the cap is reached.
+ */
+const ASSISTANT_PERSISTENCE_COUNTER_CAP = 1024;
+
+/**
+ * Pending barrier waiter for a completing turn.
+ */
+interface AssistantPersistenceWaiter {
+  /** Number of stored assistant messages that resolves the barrier. */
+  expected: number;
+  /** Settle the barrier: clears the timeout, removes the waiter, resolves the promise. */
+  settle: () => void;
+}
 
 /**
  * Result of a completed turn.
@@ -35,6 +68,16 @@ export type TurnCompleteCallback = (turn: Turn, result: TurnCompletionResult) =>
  * `TurnStorageSubjects.create` is unhandled, synthetic IDs are generated
  * locally. When `TurnStorageSubjects.complete` is unhandled, the turn is
  * still cleared from memory and `session.turn.completed` is emitted.
+ *
+ * **Persist-before-emit barrier:** `session.turn.completed` promises the
+ * four-point consumer contract, including messages being queryable via
+ * `storage:message.getByTurn`. Message persistence (SessionBridge) and turn
+ * completion both react to `agent.complete`, and the bus runs event handlers
+ * in parallel — so before emitting, `completeTurn` awaits
+ * `storage:message.stored` confirmations for the turn's assistant messages
+ * (bus-mediated: the manager holds no reference to SessionBridge). The wait
+ * is bounded by {@link TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS} and skipped
+ * entirely in ephemeral mode.
  */
 export class SessionTurnManager {
   /** Active turns keyed by sessionId (one turn per session). */
@@ -59,13 +102,29 @@ export class SessionTurnManager {
    */
   private readonly syntheticTurnCounters = new Map<string, number>();
 
+  /**
+   * Stored assistant messages per turnId, counted from `storage:message.stored`.
+   *
+   * Populated continuously (from construction) so messages persisted before
+   * `completeTurn` runs are counted. FIFO-capped at
+   * {@link ASSISTANT_PERSISTENCE_COUNTER_CAP}; a turn's entry is deleted when
+   * its completion emits, so late `stored` events for an already-emitted turn
+   * merely recreate a short-lived entry that the cap eventually evicts.
+   */
+  private readonly assistantStoredCounts = new Map<string, number>();
+
+  /** Pending persist-before-emit barrier waiters, keyed by turnId. */
+  private readonly assistantPersistenceWaiters = new Map<string, AssistantPersistenceWaiter>();
+
   /** Bus subscription cleanup functions. */
   private readonly cleanups: Array<() => void> = [];
 
   /**
    * @param bus - Event bus used for storage RPCs and event emission
    */
-  public constructor(private readonly bus: IMakaioBus) {}
+  public constructor(private readonly bus: IMakaioBus) {
+    this.registerAssistantPersistenceCounter();
+  }
 
   // ---------------------------------------------------------------------------
   // Turn creation
@@ -121,6 +180,24 @@ export class SessionTurnManager {
     this.usageAccumulators.set(sessionId, new TurnUsageAccumulator());
 
     return turn;
+  }
+
+  /**
+   * Discard active in-memory state for a turn that failed before routing began.
+   *
+   * The storage contract has no turn-delete operation, so this only rolls back
+   * the active manager state that would otherwise make the next user message
+   * reuse a turn whose first message was never persisted.
+   * @param turn - Newly created active turn to discard
+   */
+  public discardActiveTurn(turn: Turn): void {
+    const active = this.activeTurns.get(turn.sessionId);
+    if (active?.turnId !== turn.turnId) {
+      return;
+    }
+    this.activeTurns.delete(turn.sessionId);
+    this.usageAccumulators.delete(turn.sessionId);
+    this.assistantStoredCounts.delete(turn.turnId);
   }
 
   // ---------------------------------------------------------------------------
@@ -211,6 +288,12 @@ export class SessionTurnManager {
    * `TurnStorageSubjects.complete` call. State is cleared only after durable
    * persistence succeeds; if persistence fails, the state remains intact so
    * completion can be retried.
+   *
+   * Before the event fires, the persist-before-emit barrier waits for the
+   * turn's assistant messages to be stored (see class docs), then a
+   * `turn.completed` lifecycle row is appended to `session_events` — so both
+   * message rows and the lifecycle row are durable before consumers observe
+   * `session.turn.completed`.
    * @param turn - The turn to complete
    * @param result - Turn result (success status and error messages)
    */
@@ -223,13 +306,15 @@ export class SessionTurnManager {
     const usageAccumulator = this.usageAccumulators.get(turn.sessionId);
     let completedUsage = usageAccumulator?.snapshot();
 
+    let turnStorageHandled = false;
     try {
-      await this.bus.requestOptional(TurnStorageSubjects.complete, {
+      const completeResult = await this.bus.requestOptional(TurnStorageSubjects.complete, {
         turnId: turn.turnId,
         status: result.success ? 'completed' : 'error',
         error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
         ...(completedUsage !== undefined && { usage: completedUsage }),
       });
+      turnStorageHandled = completeResult.handled;
 
       const bufferedUsage = this.bufferedUsageDuringCompletion.get(turn.sessionId) ?? [];
       if (bufferedUsage.length > 0) {
@@ -255,23 +340,47 @@ export class SessionTurnManager {
       throw error;
     }
 
-    // Clear in-memory turn state only after durable completion succeeds.
-    // The completing guard is cleared last so that any late usage events
-    // arriving after state cleanup are not buffered into a now-gone accumulator.
+    try {
+      // Persist-before-emit barrier. Skipped entirely in ephemeral mode: turn
+      // and message storage are registered together (sessionStoragePackage), so
+      // unhandled turn storage implies unhandled message storage and there is
+      // nothing to wait for (zero added latency).
+      if (turnStorageHandled) {
+        await this.awaitAssistantPersistence(turn);
+      }
+      this.assistantStoredCounts.delete(turn.turnId);
+
+      const completedPayload = {
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        turnNumber: turn.turnNumber,
+        success: result.success,
+        error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+        ...(completedUsage !== undefined && { usage: completedUsage }),
+        initiator: turn.initiator,
+        ingestionMarker: 'live' as const,
+      };
+
+      // Lifecycle row persists before consumers see the event (persist-before-emit).
+      await appendSessionLifecycleEvent(this.bus, {
+        type: 'turn.completed',
+        sessionId: turn.sessionId,
+        payload: completedPayload,
+      });
+
+      await this.bus.emit(SessionSubjects.turn.completed, completedPayload);
+    } catch (error) {
+      this.completingSessions.delete(turn.sessionId);
+      throw error;
+    }
+
+    // Clear in-memory turn state only after durable completion and emission succeed.
+    // The completing guard is cleared last so that late usage events after state
+    // cleanup are not buffered into a now-gone accumulator.
     usageAccumulator?.clear();
     this.activeTurns.delete(turn.sessionId);
     this.usageAccumulators.delete(turn.sessionId);
     this.completingSessions.delete(turn.sessionId);
-
-    await this.bus.emit(SessionSubjects.turn.completed, {
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-      turnNumber: turn.turnNumber,
-      success: result.success,
-      error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
-      ...(completedUsage !== undefined && { usage: completedUsage }),
-      initiator: turn.initiator,
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -335,6 +444,12 @@ export class SessionTurnManager {
     this.completingSessions.clear();
     this.bufferedUsageDuringCompletion.clear();
     this.syntheticTurnCounters.clear();
+    // Settle pending barrier waiters so in-flight completeTurn calls resolve.
+    for (const waiter of [...this.assistantPersistenceWaiters.values()]) {
+      waiter.settle();
+    }
+    this.assistantPersistenceWaiters.clear();
+    this.assistantStoredCounts.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -391,5 +506,102 @@ export class SessionTurnManager {
     const buffered = this.bufferedUsageDuringCompletion.get(sessionId) ?? [];
     buffered.push(usageEvent);
     this.bufferedUsageDuringCompletion.set(sessionId, buffered);
+  }
+
+  /**
+   * Subscribe to `storage:message.stored` and count stored assistant messages
+   * per turnId, resolving any pending barrier waiter on each increment.
+   *
+   * Registered from the constructor (not `registerCompletionHandlers`) so the
+   * barrier also works for callers that drive `completeTurn` directly without
+   * wiring the agent-event handlers.
+   */
+  private registerAssistantPersistenceCounter(): void {
+    this.cleanups.push(
+      this.bus.on(
+        MessageStorageSubjects.stored,
+        /**
+         * Count a persisted assistant message for its turn.
+         * @param ctx - Event context carrying the fully persisted message
+         */
+        (ctx) => {
+          const { message } = ctx.payload;
+          if (message.role !== 'assistant' || !message.turnId) {
+            return;
+          }
+          const turnId = message.turnId;
+          if (
+            !this.assistantStoredCounts.has(turnId) &&
+            this.assistantStoredCounts.size >= ASSISTANT_PERSISTENCE_COUNTER_CAP
+          ) {
+            // FIFO eviction: Map iteration order is insertion order.
+            const oldest = this.assistantStoredCounts.keys().next().value;
+            if (oldest !== undefined) {
+              this.assistantStoredCounts.delete(oldest);
+            }
+          }
+          const count = (this.assistantStoredCounts.get(turnId) ?? 0) + 1;
+          this.assistantStoredCounts.set(turnId, count);
+
+          const waiter = this.assistantPersistenceWaiters.get(turnId);
+          if (waiter && count >= waiter.expected) {
+            waiter.settle();
+          }
+        },
+      ),
+    );
+  }
+
+  /**
+   * Persist-before-emit barrier: wait until the turn's assistant messages are
+   * durably stored (one per agent) or the bounded timeout elapses.
+   *
+   * Resolution paths, in order:
+   * 1. The continuous `storage:message.stored` counter already reached the
+   *    expected count (messages stored before `completeTurn` ran).
+   * 2. `storage:message.getByTurn` is unhandled — no message storage exists,
+   *    nothing can be waited for (skip).
+   * 3. A queryable-state probe already shows the expected assistant messages
+   *    (covers messages persisted before this manager was constructed).
+   * 4. A waiter resolved by the counter reaching the expected count, bounded
+   *    by {@link TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS} — the timeout is
+   *    mandatory because SessionBridge persists nothing for agents with zero
+   *    blocks and no error, and swallows write errors.
+   * @param turn - The completing turn (expected count = its agent count)
+   */
+  private async awaitAssistantPersistence(turn: Turn): Promise<void> {
+    const expected = turn.agentIds.length;
+    if (expected <= 0) {
+      return;
+    }
+    if ((this.assistantStoredCounts.get(turn.turnId) ?? 0) >= expected) {
+      return;
+    }
+
+    const probe = await this.bus.requestOptional(MessageStorageSubjects.getByTurn, { turnId: turn.turnId });
+    if (!probe.handled) {
+      return;
+    }
+    const persisted = probe.data.messages.filter((message) => message.role === 'assistant').length;
+    if (persisted >= expected) {
+      return;
+    }
+    // Re-check the counter: a stored event may have arrived during the probe.
+    if ((this.assistantStoredCounts.get(turn.turnId) ?? 0) >= expected) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const settle = (): void => {
+        clearTimeout(timer);
+        this.assistantPersistenceWaiters.delete(turn.turnId);
+        resolve();
+      };
+      const timer = setTimeout(settle, TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS);
+      this.assistantPersistenceWaiters.set(turn.turnId, { expected, settle });
+      if ((this.assistantStoredCounts.get(turn.turnId) ?? 0) >= expected) {
+        settle();
+      }
+    });
   }
 }

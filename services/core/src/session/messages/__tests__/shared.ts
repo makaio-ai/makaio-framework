@@ -46,6 +46,15 @@ const CREATE_MESSAGES_TABLE_SQL = sql`
   )
 `;
 
+/**
+ * Unique per-session adapter message identity index.
+ * Mirrors `uniq_messages_adapter_message_id_session` from schema.ts.
+ */
+const CREATE_MESSAGES_UNIQUE_INDEX_SQL = sql`
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_messages_adapter_message_id_session
+  ON messages(adapter_message_id, session_id)
+`;
+
 export type { TestDbContextWithCleanup as TestDbContext };
 
 /**
@@ -63,6 +72,7 @@ export async function createTestMessageDb(): Promise<TestDbContextWithCleanup> {
   await exec(CREATE_SESSIONS_TABLE_SQL);
   await exec(CREATE_TURNS_TABLE_SQL);
   await exec(CREATE_MESSAGES_TABLE_SQL);
+  await exec(CREATE_MESSAGES_UNIQUE_INDEX_SQL);
 
   // Insert a test session for FK
   await exec(sql`INSERT INTO sessions (session_id) VALUES ('session-1')`);

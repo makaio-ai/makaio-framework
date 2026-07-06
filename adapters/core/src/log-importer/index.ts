@@ -23,6 +23,7 @@ export type {
   ProcessLogFileResult,
   ImportSegment,
   ImportSegmentLineage,
+  ImportSegmentTurn,
   CompactionMetadata,
 } from './types.js';
 

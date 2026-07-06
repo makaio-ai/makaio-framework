@@ -134,6 +134,7 @@ class SessionTurnAwaitResponseCompletion:
     turn_id: str
     turn_number: int
     error: str | None = None
+    ingestion_marker: Literal["live", "backfill"] | None = None
     initiator: SessionTurnAwaitResponseCompletionInitiator | None = None
     usage: SessionTurnAwaitResponseCompletionUsage | None = None
 
@@ -169,6 +170,7 @@ class SessionTurnCompletedPayload:
     turn_id: str
     turn_number: int
     error: str | None = None
+    ingestion_marker: Literal["live", "backfill"] | None = None
     initiator: SessionTurnCompletedPayloadInitiator | None = None
     usage: SessionTurnCompletedPayloadUsage | None = None
 
@@ -186,6 +188,7 @@ class SessionTurnStartedPayload:
     session_id: str
     turn_id: str
     turn_number: int
+    ingestion_marker: Literal["live", "backfill"] | None = None
     initiator: SessionTurnStartedPayloadInitiator | None = None
 
 

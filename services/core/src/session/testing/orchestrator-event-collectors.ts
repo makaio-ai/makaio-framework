@@ -4,7 +4,7 @@
  */
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
-import type { MessageInput, MessageOutcome, TurnInitiator } from '@makaio/contracts';
+import type { MessageInput, MessageOutcome, TurnIngestionMarker, TurnInitiator } from '@makaio/contracts';
 import type { SubjectDefinition, ExtractSubjectPayload, HandlerForSubjectDefinition } from '@makaio/core';
 
 /** Collected event payloads for test assertions. */
@@ -15,13 +15,22 @@ export interface EventCollector<T> {
 export type UnsubscribeFunction = () => void;
 
 // Event payload types
-type TurnStartedPayload = { sessionId: string; turnId: string; messageId: string; agentIds: string[] };
+type TurnStartedPayload = {
+  sessionId: string;
+  turnId: string;
+  turnNumber: number;
+  messageId: string;
+  agentIds: string[];
+  ingestionMarker?: TurnIngestionMarker;
+};
 type TurnCompletedPayload = {
   sessionId: string;
   turnId: string;
+  turnNumber: number;
   success: boolean;
   error?: string;
   initiator?: TurnInitiator;
+  ingestionMarker?: TurnIngestionMarker;
 };
 type TurnStartedWithInitiatorPayload = TurnStartedPayload & { initiator?: TurnCompletedPayload['initiator'] };
 type UserMessageSentPayload = {
@@ -72,7 +81,8 @@ function collectEvents<TSubject extends SubjectDefinition, T>(
 }
 
 /**
- * Collect session.turn.started events including initiator metadata.
+ * Collect session.turn.started events including turnNumber, initiator, and
+ * ingestion-marker metadata.
  * @param unsubs - Array to register the cleanup function into
  * @returns Event collector for turn started payloads
  */
@@ -84,16 +94,19 @@ export function collectTurnStartedEvents(
     (p) => ({
       sessionId: p.sessionId,
       turnId: p.turnId,
+      turnNumber: p.turnNumber,
       messageId: p.messageId,
       agentIds: [...p.agentIds],
       initiator: p.initiator,
+      ingestionMarker: p.ingestionMarker,
     }),
     unsubs,
   );
 }
 
 /**
- * Collect session.turn.completed events.
+ * Collect session.turn.completed events including turnNumber and
+ * ingestion-marker metadata.
  * @param unsubs - Array to register the cleanup function into
  * @returns Event collector for turn completed payloads
  */
@@ -103,9 +116,11 @@ export function collectTurnCompletedEvents(unsubs: UnsubscribeFunction[]): Event
     (p) => ({
       sessionId: p.sessionId,
       turnId: p.turnId,
+      turnNumber: p.turnNumber,
       success: p.success,
       error: p.error,
       initiator: p.initiator,
+      ingestionMarker: p.ingestionMarker,
     }),
     unsubs,
   );

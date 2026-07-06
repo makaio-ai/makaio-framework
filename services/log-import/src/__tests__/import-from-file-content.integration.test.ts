@@ -10,12 +10,15 @@
  * - importSegmentTree derives startedAt from the first message timestamp (Path B)
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { basename } from 'node:path';
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   ImportCursorStorageSubjects,
   type ProcessLogFileResult,
   type StorageMessagePayload,
+  type NormalizedEvent,
 } from '@makaio/ai-adapters-core';
 import { getOpenCodeFixtureDir } from '@makaio/extension-opencode/testing';
 import { type MakaioSessionEvent } from '@makaio/contracts';
@@ -73,6 +76,7 @@ interface CapturedSessionUpdate {
 describe('importFromFileContent (integration)', () => {
   const cleanups: Array<() => void> = [];
   const fixtureCleanups: Array<() => Promise<void>> = [];
+  const tempDirs: string[] = [];
 
   afterEach(async () => {
     while (cleanups.length > 0) {
@@ -83,6 +87,12 @@ describe('importFromFileContent (integration)', () => {
   afterEach(async () => {
     while (fixtureCleanups.length > 0) {
       await fixtureCleanups.pop()?.();
+    }
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop();
+      if (dir) {
+        await rm(dir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -334,17 +344,120 @@ describe('importFromFileContent (integration)', () => {
       persistedLogFilePath: fixture.sessionFilePath,
     });
 
-    // Cursor should be written for the absolute file path
+    // Cursor should be written for the absolute file path. bytesRead derives
+    // from the parsed content snapshot — never from a later stat of the file.
     expect(cursorSets).toHaveLength(1);
     const cursor = cursorSets[0];
     expect(cursor.filePath).toBe(fixture.sessionFilePath);
-    expect(cursor.bytesRead).toBeGreaterThan(0);
+    expect(cursor.bytesRead).toBe(Buffer.byteLength(fixture.sessionContent, 'utf8'));
     expect(cursor.lastModified).toBeTruthy();
+    expect(new Date(cursor.lastModified).getTime()).toBeGreaterThan(0);
     expect(cursor.sessionContext).toBeDefined();
     expect(cursor.sessionContext?.adapterSessionId).toBe(fixture.adapterSessionId);
     expect(cursor.sessionContext?.sessionEvent).toBeDefined();
     expect(cursor.sessionContext?.startedEvent).toBeDefined();
     expect(cursor.sessionContext?.state).toBeDefined();
+  });
+
+  it('writes full-import cursor state after record processing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'import-cursor-state-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'cursor-state.jsonl');
+    const content = '{"type":"session"}\n{"type":"message"}\n';
+    await writeFile(filePath, content, 'utf8');
+
+    const importer = createMockImporter({
+      parseRecord: (line) => JSON.parse(String(line)),
+      extractSessionContext: () => ({
+        adapterSessionId: 'cursor-state-session',
+        model: null,
+        cwd: null,
+        sessionEvent: {
+          subject: {} as never,
+          payload: {
+            adapterSessionId: 'cursor-state-session',
+            kind: 'root' as const,
+            parentAdapterSessionId: null,
+            forkPointMessageId: null,
+            model: null,
+            cwd: null,
+          },
+        },
+        startedEvent: { subject: {} as never, payload: {} },
+        state: { phase: 'initial', recordCount: 0 },
+      }),
+      processRecords: (records, context): NormalizedEvent[] => {
+        const state = context.state as { phase: string; recordCount: number };
+        state.phase = 'processed';
+        state.recordCount = records.length;
+        return [];
+      },
+      processLogFile: () => ({
+        adapterSessionId: 'cursor-state-session',
+        sessionEvent: {
+          subject: {} as never,
+          payload: {
+            adapterSessionId: 'cursor-state-session',
+            kind: 'root' as const,
+            parentAdapterSessionId: null,
+            forkPointMessageId: null,
+            model: null,
+            cwd: null,
+          },
+        },
+        messageEvents: [],
+        messagePayloads: [],
+        lineage: { kind: 'root' as const, parentAdapterSessionId: null, forkPointMessageId: null },
+      }),
+    });
+    const { cursorSets } = registerStorageHandlers();
+
+    await importFromFileContent({
+      bus: MakaioBus,
+      importer,
+      content,
+      isJsonl: true,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'cursor-state-adapter',
+      sourceFilePath: filePath,
+      persistedLogFilePath: filePath,
+    });
+
+    expect(cursorSets).toHaveLength(1);
+    expect(cursorSets[0].sessionContext?.state).toEqual({ phase: 'processed', recordCount: 2 });
+  });
+
+  it('never advances the cursor past the parsed snapshot when the file grew during import', async () => {
+    const fixture = await createOpenCodeFixtureSession({
+      fixtureDir: OPENCODE_FIXTURE_DIR,
+      adapterId: 'opencode-grow-test',
+      adapterName: ADAPTER_NAME,
+    });
+    fixtureCleanups.push(fixture.cleanup);
+    const { cursorSets } = registerStorageHandlers();
+
+    // Simulate the transcript growing between the caller's readFile snapshot
+    // and the cursor write: the on-disk file carries extra unparsed bytes.
+    await appendFile(fixture.sessionFilePath, '\n{"unparsed":"growth"}');
+
+    await importFromFileContent({
+      bus: MakaioBus,
+      importer: fixture.importer,
+      content: fixture.sessionContent,
+      isJsonl: false,
+      adapterName: ADAPTER_NAME,
+      adapterId: 'opencode-grow-test',
+      sourceFilePath: fixture.sessionFilePath,
+      persistedLogFilePath: fixture.sessionFilePath,
+    });
+
+    expect(cursorSets).toHaveLength(1);
+    const cursor = cursorSets[0];
+    // bytesRead points at the end of the parsed snapshot, not the grown file.
+    expect(cursor.bytesRead).toBe(Buffer.byteLength(fixture.sessionContent, 'utf8'));
+    // The snapshot is stale relative to the file, so the epoch sentinel is
+    // stored: it can never satisfy the orchestrator's mtime skip check.
+    expect(cursor.lastModified).toBe(new Date(0).toISOString());
   });
 
   it('normalizes persisted relative log paths before upsert and cursor persistence', async () => {

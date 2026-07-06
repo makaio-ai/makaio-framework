@@ -17,6 +17,7 @@ import { MessageStorageSubjects } from './messages/index.js';
 import { MessageRoutingSubjects } from './message-routing/index.js';
 import { AgentStorageSubjects } from './storage/agent-namespace.js';
 import { SessionTurnManager, type TurnCompletionResult } from './session-turn-manager.js';
+import { emitSessionTurnStarted } from './session-lifecycle-events.js';
 import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
 
 /**
@@ -62,8 +63,8 @@ import { activateProviderContext, buildProviderContext } from '../provider-conte
  * 4. Verify agent liveness and build recovery context for dead agents
  *    (requestOptional `AdapterSubjects.getAgent` + `buildRecoveryContext`)
  * 5. Get or create turn (via `SessionTurnManager`)
- * 6. Generate message ID and store user message + routing records
- *    (requestOptional, fire-and-forget)
+ * 6. Generate message ID and store user message (awaited, persist-before-route)
+ *    + routing records (fire-and-forget)
  * 7. Emit `session.turn.started` + `session.user_message.sent`
  * 8. Route to agents (via `routeToAgentsCore`, single shared context)
  * 9. Return result with `messageId`, `turnId`, `sessionId`
@@ -120,7 +121,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
    * 3. Resolve target agents
    * 4. Verify agent liveness and build recovery context for dead agents
    * 5. Get or create turn (via SessionTurnManager)
-   * 6. Generate message ID and store user message + routing records (fire-and-forget)
+   * 6. Generate message ID and store user message (awaited) + routing records (fire-and-forget)
    * 7. Emit turn.started + user_message.sent
    * 8. Route to agents (routeToAgentsCore, single shared context)
    * 9. Return result with messageId, turnId, sessionId
@@ -280,14 +281,20 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           );
         }
 
-        // 6. Generate message ID and store user message (fire-and-forget)
+        // 6. Generate message ID and store user message (persist-before-route).
+        // The append is awaited so the user message row is durable before the
+        // turn events fire and before routing starts: `session.turn.completed`
+        // promises the full turn is queryable via `storage:message.getByTurn`
+        // (four-point consumer contract), and the completion barrier only
+        // covers assistant messages — ordering here is what guarantees the
+        // user side. A handled storage failure aborts routing so completion
+        // cannot advertise a turn whose user message is not queryable.
         const messageId = crypto.randomUUID();
-        turn.addMessage(messageId);
 
         const normalizedBlocks = normalizeToBlocks(message);
 
-        void this.bus
-          .requestOptional(MessageStorageSubjects.append, {
+        try {
+          await this.bus.requestOptional(MessageStorageSubjects.append, {
             message: {
               messageId,
               turnId: turn.turnId,
@@ -298,14 +305,19 @@ export class SessionOrchestrator implements ISessionOrchestrator {
               timestamp: Date.now(),
               ...(origin !== undefined && { origin }),
             },
-          })
-          .catch((error: unknown) => {
-            console.warn('[SessionOrchestrator] Failed to store user message', {
-              sessionId: resolvedSessionId,
-              messageId,
-              error: error instanceof Error ? error.message : String(error),
-            });
           });
+        } catch (error: unknown) {
+          console.warn('[SessionOrchestrator] Failed to store user message', {
+            sessionId: resolvedSessionId,
+            messageId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          if (isNewTurn) {
+            this.turnManager.discardActiveTurn(turn);
+          }
+          throw error;
+        }
+        turn.addMessage(messageId);
 
         for (const agent of targetAgents) {
           void this.bus
@@ -327,13 +339,14 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         // 7. Emit turn.started (only on new turn) and user_message.sent
         if (isNewTurn) {
-          await this.bus.emit(SessionSubjects.turn.started, {
+          await emitSessionTurnStarted(this.bus, {
             sessionId: resolvedSessionId,
             turnId: turn.turnId,
             turnNumber: turn.turnNumber,
             messageId,
             agentIds: [...turn.agentIds],
             initiator: turn.initiator,
+            ingestionMarker: 'live',
           });
         }
 

@@ -131,6 +131,43 @@ const ImportUpsertBaseSchema = z.object({
   startedAt: z.number().finite().optional(),
   /** Session title if known from logs. */
   title: z.string().nullable().optional(),
+  /**
+   * Opaque, JSON-safe consumer-owned metadata attached at registration time.
+   *
+   * Merge contract (implemented by the storage handlers): on first insert the
+   * value is stored as-is; on conflict/enrichment the stored value and the
+   * incoming value are shallow-merged at the top-level key level with EXISTING
+   * keys winning. Metadata supplied at hook-first registration is therefore
+   * preserved — later import enrichment merges in new keys and never
+   * overwrites existing ones.
+   */
+  metadata: SessionRecordMetadataSchema.optional(),
+  /**
+   * Initial client identity observation captured at hook-first registration.
+   *
+   * On enrichment, storage prefers a non-null incoming value over the stored
+   * one so later observations can refine identity evidence.
+   */
+  lastClientIdentityObservation: ClientIdentityObservationSchema.optional(),
+  /**
+   * Creation-time import lifecycle status.
+   *
+   * - `'tracking'`: live-followed observed session (hook-first registration).
+   * - `'discovered'`: watcher discovery (the default when omitted).
+   *
+   * On enrichment the stored importStatus is never downgraded — handlers keep
+   * COALESCE(existing, incoming) semantics. `'imported'` is intentionally
+   * excluded here: that transition is owned by `updateImportStatus`.
+   */
+  importStatus: z.enum(['discovered', 'tracking']).optional(),
+  /**
+   * Whether the external tool marked this session as a sidechain/subagent
+   * perspective (e.g. Claude Code's per-record `isSidechain` flag).
+   *
+   * Absent means unknown or a live session. On enrichment, storage prefers a
+   * defined incoming value over the stored one.
+   */
+  isSidechain: z.boolean().optional(),
 });
 
 const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [

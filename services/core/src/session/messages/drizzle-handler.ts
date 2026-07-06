@@ -266,6 +266,15 @@ function registerGetByAdapterMessageIdHandler(deps: MessageHandlerDeps): () => v
 
 /**
  * Register handler for storage:message.upsertByAdapterMessageId.
+ *
+ * Idempotency semantics:
+ * - Per-session first-import-wins pre-check: an existing row with the same
+ *   adapterMessageId in the same session short-circuits.
+ * - Hard per-session backstop: the insert targets the unique
+ *   `(adapter_message_id, session_id)` index with `ON CONFLICT DO NOTHING`,
+ *   so two concurrent imports of the same transcript record (hook trigger
+ *   racing the watcher) can never produce duplicate rows — the loser reads
+ *   the winner's row back and reports `created: false`.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
@@ -287,35 +296,58 @@ function registerUpsertByAdapterMessageId(deps: MessageHandlerDeps): () => void 
       origin,
     } = ctx.payload;
 
-    // Check if message already exists by adapterMessageId
+    // Per-session pre-check: first import wins within a session.
     const [existing] = await db
-      .select({ messageId: messages.messageId })
+      .select({ messageId: messages.messageId, turnId: messages.turnId })
       .from(messages)
-      .where(eq(messages.adapterMessageId, adapterMessageId))
+      .where(and(eq(messages.adapterMessageId, adapterMessageId), eq(messages.sessionId, sessionId)))
       .limit(1);
 
     if (existing) {
-      // First import wins - return existing message ID
+      if (existing.turnId === null && turnId !== null) {
+        await db.update(messages).set({ turnId }).where(eq(messages.messageId, existing.messageId));
+      }
       ctx.setResult({ messageId: existing.messageId, created: false });
       return;
     }
 
-    // Insert new message
+    // Atomic insert-if-absent on the per-session unique index.
     const messageId = crypto.randomUUID();
-    await db.insert(messages).values({
-      messageId,
-      turnId,
-      sessionId,
-      role,
-      contentText,
-      blocks: JSON.stringify(blocks),
-      agentId: agentId ?? null,
-      adapterSessionId: adapterSessionId ?? null,
-      adapterMessageId,
-      timestamp,
-      editOf: null,
-      origin: origin ?? null,
-    });
+    const inserted = await db
+      .insert(messages)
+      .values({
+        messageId,
+        turnId,
+        sessionId,
+        role,
+        contentText,
+        blocks: JSON.stringify(blocks),
+        agentId: agentId ?? null,
+        adapterSessionId: adapterSessionId ?? null,
+        adapterMessageId,
+        timestamp,
+        editOf: null,
+        origin: origin ?? null,
+      })
+      .onConflictDoNothing({ target: [messages.adapterMessageId, messages.sessionId] })
+      .returning({ messageId: messages.messageId });
+
+    if (inserted.length === 0) {
+      // A concurrent upsert won the race between the pre-check and the insert.
+      const [winner] = await db
+        .select({ messageId: messages.messageId, turnId: messages.turnId })
+        .from(messages)
+        .where(and(eq(messages.adapterMessageId, adapterMessageId), eq(messages.sessionId, sessionId)))
+        .limit(1);
+      if (winner === undefined) {
+        throw new Error('Message upsert conflict winner disappeared before reread completed');
+      }
+      if (winner.turnId === null && turnId !== null) {
+        await db.update(messages).set({ turnId }).where(eq(messages.messageId, winner.messageId));
+      }
+      ctx.setResult({ messageId: winner.messageId, created: false });
+      return;
+    }
 
     ctx.setResult({ messageId, created: true });
 

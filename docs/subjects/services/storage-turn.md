@@ -27,6 +27,7 @@ next: false
 | `get` | [`storage:turn.get`](#storage:turn.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 | `getActive` | [`storage:turn.getActive`](#storage:turn.getActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 | `getBySession` | [`storage:turn.getBySession`](#storage:turn.getBySession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
+| `ingestCompleted` | [`storage:turn.ingestCompleted`](#storage:turn.ingestCompleted) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 | `listActive` | [`storage:turn.listActive`](#storage:turn.listActive) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 | `set` | [`storage:turn.set`](#storage:turn.set) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/core/src/turn/schemas.ts) |
 
@@ -54,7 +55,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `transitioned` | `boolean` | yes |
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 ### <a id="storage:turn.create"></a>`storage:turn.create` (rpc)
 
@@ -67,6 +68,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `initiator` | `{ source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined` | no |
 | `sessionId` | `string` | yes |
 | `turnId` | `string \| undefined` | no |
 
@@ -74,7 +76,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 ### <a id="storage:turn.get"></a>`storage:turn.get` (rpc)
 
@@ -93,7 +95,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; } \| null` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; } \| null` | yes |
 
 ### <a id="storage:turn.getActive"></a>`storage:turn.getActive` (rpc)
 
@@ -112,7 +114,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; } \| null` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; } \| null` | yes |
 
 ### <a id="storage:turn.getBySession"></a>`storage:turn.getBySession` (rpc)
 
@@ -133,7 +135,48 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turns` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }[]` | yes |
+| `turns` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }[]` | yes |
+
+### <a id="storage:turn.ingestCompleted"></a>`storage:turn.ingestCompleted` (rpc)
+
+Idempotent upsert of an externally-completed turn, keyed on
+`(sessionId, turnAnchorId)`.
+
+The anchor is a content-derived idempotency key (the adapterMessageId of
+the turn-start user message in an imported transcript). The first insert
+assigns `turnNumber` atomically (MAX+1 per session); a conflicting
+re-ingestion of the same anchor updates completion fields only and NEVER
+changes `turnId`, `turnNumber`, or `startedAt` — `(sessionId, turnNumber)`
+is a stable downstream watermark, so re-parsing the same transcript
+(including compaction re-reads from byte 0) must never renumber or
+duplicate existing turns.
+
+`created` in the response distinguishes first ingestion (`true`) from an
+anchor-conflicting re-ingestion (`false`), letting callers gate
+exactly-once side effects (event emission) on it.
+
+Subject: `storage:turn.ingestCompleted`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `completedAt` | `number` | yes |
+| `error` | `string \| undefined` | no |
+| `initiator` | `{ source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined` | no |
+| `sessionId` | `string` | yes |
+| `startedAt` | `number` | yes |
+| `status` | `"error" \| "completed"` | yes |
+| `turnAnchorId` | `string` | yes |
+| `usage` | `{ total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `created` | `boolean` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 ### <a id="storage:turn.listActive"></a>`storage:turn.listActive` (rpc)
 
@@ -153,7 +196,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turns` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }[]` | yes |
+| `turns` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }[]` | yes |
 
 ### <a id="storage:turn.set"></a>`storage:turn.set` (rpc)
 
@@ -168,13 +211,13 @@ Used for imports and backfills that need to preserve timestamps/usage.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; }` | yes |
+| `turn` | `{ turnId: string; sessionId: string; turnNumber: number; startedAt: number; status: "error" \| "active" \| "completed"; completedAt?: number \| undefined; error?: string \| undefined; usage?: { total: { inputTokens: number; outputTokens: number; cost?: number \| undefined; }; byAgent?: Record<string, { inputTokens: number; outputTokens: number; cost?: number \| undefined; }> \| undefined; } \| undefined; initiator?: { source: "user" \| "system" \| "extension"; sourceId?: string \| undefined; } \| undefined; }` | yes |
 
 ---
 

@@ -15,8 +15,11 @@ export function registerMemoryTurnStorage(bus: IMakaioBus): () => void {
   const maxTurnNumberBySession = new Map<string, number>();
   const indexTurn = createTurnIndexer(turnsById, turnIdsBySession, maxTurnNumberBySession);
 
+  const turnIdsBySessionAnchor = new Map<string, Map<string, string>>();
+
   const unsubs = [
     registerCreateHandler(bus, indexTurn, maxTurnNumberBySession),
+    registerIngestCompletedHandler(bus, turnsById, indexTurn, maxTurnNumberBySession, turnIdsBySessionAnchor),
     registerCompleteHandler(bus, turnsById, indexTurn),
     registerSetHandler(bus, indexTurn),
     registerGetHandler(bus, turnsById),
@@ -93,6 +96,71 @@ function registerCreateHandler(
 
     indexTurn(turn);
     ctx.setResult({ turn });
+  });
+}
+
+/**
+ * Register handler for storage:turn.ingestCompleted.
+ *
+ * Mirrors the Drizzle anchor-upsert semantics in memory: turns are keyed by
+ * `(sessionId, turnAnchorId)`. A miss creates the turn with the next per-session
+ * ordinal; a hit updates completion fields only (`completedAt`, `status`,
+ * `error`, `usage`) and never changes `turnId`, `turnNumber`, `startedAt`, or
+ * `initiator` — `(sessionId, turnNumber)` is a stable downstream watermark.
+ * @param bus - The bus instance to register handlers on
+ * @param turnsById - Turn lookup map
+ * @param indexTurn - Indexer function for turns
+ * @param maxTurnNumberBySession - Tracks highest assigned turnNumber per session
+ * @param turnIdsBySessionAnchor - Nested session/anchor index for completed-turn ingestion
+ * @returns Cleanup function to unregister the handler
+ */
+function registerIngestCompletedHandler(
+  bus: IMakaioBus,
+  turnsById: Map<string, Turn>,
+  indexTurn: (turn: Turn) => void,
+  maxTurnNumberBySession: Map<string, number>,
+  turnIdsBySessionAnchor: Map<string, Map<string, string>>,
+): () => void {
+  return bus.on(TurnStorageSubjects.ingestCompleted, (ctx) => {
+    const { sessionId, turnAnchorId, startedAt, completedAt, status, error, usage, initiator } = ctx.payload;
+    const sessionAnchors = turnIdsBySessionAnchor.get(sessionId) ?? new Map<string, string>();
+
+    const existingTurnId = sessionAnchors.get(turnAnchorId);
+    if (existingTurnId !== undefined) {
+      const existing = turnsById.get(existingTurnId);
+      if (!existing) {
+        throw new Error(`Turn not found for anchor in session: ${sessionId}`);
+      }
+
+      // Re-ingestion: update completion fields only; identity and ordinal stay.
+      const updated: Turn = {
+        ...existing,
+        completedAt,
+        status,
+        error: error ?? undefined,
+        usage: usage ?? undefined,
+      };
+      indexTurn(updated);
+      ctx.setResult({ turn: updated, created: false });
+      return;
+    }
+
+    const turn: Turn = {
+      turnId: crypto.randomUUID(),
+      sessionId,
+      turnNumber: (maxTurnNumberBySession.get(sessionId) ?? 0) + 1,
+      startedAt,
+      completedAt,
+      status,
+      error: error ?? undefined,
+      usage: usage ?? undefined,
+      ...(initiator !== undefined && { initiator }),
+    };
+
+    indexTurn(turn);
+    sessionAnchors.set(turnAnchorId, turn.turnId);
+    turnIdsBySessionAnchor.set(sessionId, sessionAnchors);
+    ctx.setResult({ turn, created: true });
   });
 }
 

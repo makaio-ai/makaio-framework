@@ -189,7 +189,11 @@ export async function connectOnce(deps: ConnectionDeps): Promise<void> {
   // so the correlation resolves correctly rather than being rejected.
   // Then reject any remaining (unresolved) correlations from the previous session —
   // their responses were truly lost when the old socket closed.
-  await drainAndRejectPendingCorrelations(deps);
+  if (deps.inFlightMessages.size > 0) {
+    await drainAndRejectPendingCorrelations(deps);
+  } else {
+    deps.correlations.rejectAll(new ConnectionLostError(deps.name));
+  }
 
   // Clear the in-flight set for the new socket session. All previous promises
   // are already settled (the drain above awaited them), so clearing is safe.
@@ -423,15 +427,15 @@ export function installNoReconnectCloseListener(
   clearReconnectAbort: () => void,
 ): void {
   const onClose = async (): Promise<void> => {
-    await drainAndRejectPendingCorrelations(deps);
-    deps.auth?.cleanup();
     removeSocketListeners(ws, deps);
+    deps.auth?.cleanup();
     deps.setAuthComplete(false);
     deps.setSocket(null);
     clearReconnectAbort();
     deps.resolveReady();
-    deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
     deps.notifyDisconnected();
+    await drainAndRejectPendingCorrelations(deps);
+    deps.rejectPendingSubscriptionAcks(new Error('WebSocketClientTransport: disconnected before subscription ack'));
   };
   deps.setCloseListener(onClose);
   ws.addEventListener('close', onClose);

@@ -81,14 +81,15 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     //   - source === 'extension':  extension-supplied content
     //   - source absent:        unknown trust when summary is provided;
     //                            auto-generated fallback when summary is absent
-    // The bypass below is correct regardless: SessionLogger's transform scope
-    // covers conversation messages (turn payloads), not structural branch-lifecycle
-    // records. If future redaction needs extend to merge summaries, the transform
-    // must be applied to `handoff` before resultJson is built.
+    // The bypass below is correct regardless: the lifecycle-event transform
+    // scope (see session-lifecycle-events.ts) covers conversation messages
+    // (turn payloads), not structural branch-lifecycle records. If future
+    // redaction needs extend to merge summaries, the transform must be
+    // applied to `handoff` before resultJson is built.
     const resultJson = JSON.stringify({ handoff });
 
     // 7. Persist branch.merged event directly before the bus emit.
-    // Owning persistence here (rather than delegating to a SessionLogger subscriber)
+    // Owning persistence here (rather than delegating to a lifecycle-event subscriber)
     // means: (a) the deterministic eventId prevents duplicate branch.merged rows
     // while still allowing append-time metadata backfill on conflict, and (b) a
     // subscriber throw can no longer duplicate the audit record.

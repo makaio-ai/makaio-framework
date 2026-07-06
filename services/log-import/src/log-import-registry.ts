@@ -21,6 +21,7 @@ import type {
 import { registerGenericScanHandler } from './generic-import-handlers.js';
 import { registerGenericUploadFilesHandler } from './upload-handler.js';
 import { registerImportSessionHandler } from './import-session-handler.js';
+import { registerImportFileHandler } from './import-file-handler.js';
 import { registerCapabilitySubscription, type CapabilityProviderRegistrar } from './capability-provider.js';
 import { stopAndDisposeOrchestrator, startOrchestratorOrCleanup } from './orchestrator-lifecycle.js';
 
@@ -75,6 +76,7 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
    * - scan: Scan log directory for sessions (generic handler)
    * - uploadFiles: Process uploaded files (generic handler)
    * - importSession: Lazy-load pick-up for discovered sessions
+   * - importFile: File-path-addressable import trigger (graceful-absence contract)
    * - capability register: Auto-register adapters that publish log-import capabilities
    *
    * Must be called before using the registry.
@@ -102,6 +104,11 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
       this.getImporterByAdapterName(adapterName),
     );
     this.cleanupHandlers.push(importSessionCleanup);
+
+    const importFileCleanup = registerImportFileHandler(this.bus, (adapterName) =>
+      this.getImporterByAdapterName(adapterName),
+    );
+    this.cleanupHandlers.push(importFileCleanup);
 
     const capabilityCleanup = await registerCapabilitySubscription(this.bus, this.capabilityService, this);
     this.cleanupHandlers.push(capabilityCleanup);
@@ -285,6 +292,7 @@ export class LogImportRegistry implements CapabilityProviderRegistrar {
         logFilePattern: registration.logFilePattern,
         isRunning,
         supportsManualImport: registration.supportsManualImport ?? true,
+        ...(registration.clientId !== undefined && { clientId: registration.clientId }),
       });
     }
 

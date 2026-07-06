@@ -25,6 +25,18 @@ interface ImportStatusCounts {
 const nextDiscoveredAt = createMonotonicClock();
 
 /**
+ * Resolve import-status conflicts without downgrading richer states.
+ * @param existing - Currently stored import status
+ * @param incoming - Incoming import status from the upsert payload
+ * @returns Merged import status
+ */
+function mergeImportStatus(existing: ImportStatus | undefined, incoming: ImportStatus | undefined): ImportStatus {
+  if (existing === 'imported' || incoming === 'imported') return 'imported';
+  if (existing === 'tracking' || incoming === 'tracking') return 'tracking';
+  return existing ?? incoming ?? 'discovered';
+}
+
+/**
  * Assign a session field when the provided value is defined.
  * @param session - Session being mutated
  * @param key - Field to update
@@ -69,8 +81,13 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
     parentExternalSessionId: payload.parentAdapterSessionId ?? undefined,
     logFilePath: payload.logFilePath ?? undefined,
     discoveredAt,
-    importStatus: 'discovered',
+    // Hook-first registration may open the row directly in 'tracking';
+    // lifecycle `status` stays 'discovered' either way (parity with Drizzle).
+    importStatus: payload.importStatus ?? 'discovered',
     forkPointMessageId: payload.forkPointMessageId ?? undefined,
+    metadata: payload.metadata,
+    lastClientIdentityObservation: payload.lastClientIdentityObservation,
+    isSidechain: payload.isSidechain,
   };
 }
 
@@ -81,7 +98,9 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
  * @param discoveredAt - Discovery timestamp for initializing missing provenance
  */
 function convergeImportIdentity(session: IMakaioSession, payload: ImportUpsertRequest, discoveredAt: number): void {
-  const nextImportStatus = session.importStatus ?? 'discovered';
+  // Status precedence is monotonic: watcher discovery can upgrade to hook
+  // tracking, but later discovery enrichment cannot downgrade tracking/imported.
+  const nextImportStatus = mergeImportStatus(session.importStatus, payload.importStatus);
   if (nextImportStatus === 'discovered') {
     session.status = 'discovered';
   }
@@ -120,6 +139,15 @@ function convergeImportMetadata(session: IMakaioSession, payload: ImportUpsertRe
   }
   assignDefinedSessionField(session, 'adapterId', payload.adapterId);
   assignDefinedSessionField(session, 'clientId', payload.clientId);
+  // Hook-first metadata is preserved; import enrichment merges, never
+  // overwrites (AC14): top-level key merge with EXISTING keys winning.
+  if (payload.metadata !== undefined) {
+    session.metadata = { ...payload.metadata, ...(session.metadata ?? {}) };
+  }
+  // Enrichment prefers a defined incoming sidechain flag over the stored one.
+  assignDefinedSessionField(session, 'isSidechain', payload.isSidechain);
+  // Newer identity observation wins when supplied.
+  assignDefinedSessionField(session, 'lastClientIdentityObservation', payload.lastClientIdentityObservation);
 }
 
 /**

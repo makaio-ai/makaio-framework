@@ -25,6 +25,57 @@ function sortByTimestampDesc(a: SessionMessage, b: SessionMessage): number {
   return compareMessageCursorDesc(messageToCursor(a), messageToCursor(b));
 }
 
+type MessageIdsBySessionAdapterMessageId = Map<string, Map<string, string>>;
+
+/**
+ * Get or create the adapter-message index for a session.
+ * @param index - Session-scoped adapter-message index.
+ * @param sessionId - Session identifier for the nested index.
+ * @returns Mutable adapter-message map for the session.
+ */
+function getOrCreateSessionAdapterIndex(
+  index: MessageIdsBySessionAdapterMessageId,
+  sessionId: string,
+): Map<string, string> {
+  const existing = index.get(sessionId);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = new Map<string, string>();
+  index.set(sessionId, created);
+  return created;
+}
+
+/**
+ * Attach an existing adapter-message row to a turn once a completed import
+ * observes the turn boundary.
+ * @param messagesById - Message lookup map.
+ * @param messageIdsByTurn - Turn-to-message index.
+ * @param messageId - Existing message row to update.
+ * @param turnId - Turn to attach, or null when no turn is known.
+ */
+function attachExistingMessageToTurn(
+  messagesById: Map<string, SessionMessage>,
+  messageIdsByTurn: Map<string, string[]>,
+  messageId: string,
+  turnId: string | null,
+): void {
+  if (turnId === null) {
+    return;
+  }
+  const message = messagesById.get(messageId);
+  if (message === undefined || message.turnId !== null) {
+    return;
+  }
+
+  message.turnId = turnId;
+  const turnList = messageIdsByTurn.get(turnId) ?? [];
+  if (!turnList.includes(messageId)) {
+    turnList.push(messageId);
+    messageIdsByTurn.set(turnId, turnList);
+  }
+}
+
 /* eslint max-lines-per-function: ["error", { "max": 170 }] */
 /**
  * Register in-memory message storage handlers.
@@ -38,12 +89,12 @@ export function registerMemoryMessageStorage(bus: IMakaioBus): () => void {
   const messagesById = new Map<string, SessionMessage>();
   const messageIdsBySession = new Map<string, string[]>();
   const messageIdsByTurn = new Map<string, string[]>();
-  const messageIdByAdapterMessageId = new Map<string, string>();
+  const messageIdsBySessionAdapterMessageId: MessageIdsBySessionAdapterMessageId = new Map();
   const indexMessage = createMessageIndexer(
     messagesById,
     messageIdsBySession,
     messageIdsByTurn,
-    messageIdByAdapterMessageId,
+    messageIdsBySessionAdapterMessageId,
   );
 
   const unsubs = [
@@ -52,8 +103,20 @@ export function registerMemoryMessageStorage(bus: IMakaioBus): () => void {
     registerGetByTurnHandler(bus, messagesById, messageIdsByTurn),
     registerGetHandler(bus, messagesById),
     registerSearchHandler(bus, messagesById),
-    registerUpsertByAdapterMessageIdHandler(bus, messageIdByAdapterMessageId, indexMessage),
-    registerCascadeDeleteHandler(bus, messagesById, messageIdsBySession, messageIdsByTurn, messageIdByAdapterMessageId),
+    registerUpsertByAdapterMessageIdHandler(
+      bus,
+      messagesById,
+      messageIdsByTurn,
+      messageIdsBySessionAdapterMessageId,
+      indexMessage,
+    ),
+    registerCascadeDeleteHandler(
+      bus,
+      messagesById,
+      messageIdsBySession,
+      messageIdsByTurn,
+      messageIdsBySessionAdapterMessageId,
+    ),
   ];
 
   return () => unsubs.forEach((fn) => fn());
@@ -64,14 +127,14 @@ export function registerMemoryMessageStorage(bus: IMakaioBus): () => void {
  * @param messagesById - Message lookup map
  * @param messageIdsBySession - Session-to-message index
  * @param messageIdsByTurn - Turn-to-message index
- * @param messageIdByAdapterMessageId - Adapter message lookup map
+ * @param messageIdsBySessionAdapterMessageId - Session-scoped adapter message lookup map
  * @returns Indexer function
  */
 function createMessageIndexer(
   messagesById: Map<string, SessionMessage>,
   messageIdsBySession: Map<string, string[]>,
   messageIdsByTurn: Map<string, string[]>,
-  messageIdByAdapterMessageId: Map<string, string>,
+  messageIdsBySessionAdapterMessageId: MessageIdsBySessionAdapterMessageId,
 ): (msg: SessionMessage) => void {
   return (msg) => {
     messagesById.set(msg.messageId, msg);
@@ -87,7 +150,10 @@ function createMessageIndexer(
     }
 
     if (msg.adapterMessageId) {
-      messageIdByAdapterMessageId.set(msg.adapterMessageId, msg.messageId);
+      getOrCreateSessionAdapterIndex(messageIdsBySessionAdapterMessageId, msg.sessionId).set(
+        msg.adapterMessageId,
+        msg.messageId,
+      );
     }
   };
 }
@@ -229,13 +295,17 @@ function registerSearchHandler(bus: IMakaioBus, messagesById: Map<string, Sessio
 /**
  * Register handler for storage:message.upsertByAdapterMessageId.
  * @param bus - The bus instance to register handlers on
- * @param messageIdByAdapterMessageId - Adapter message lookup map
+ * @param messagesById - Message lookup map
+ * @param messageIdsByTurn - Turn-to-message index
+ * @param messageIdsBySessionAdapterMessageId - Session-scoped adapter message lookup map
  * @param indexMessage - Indexer function for messages
  * @returns Cleanup function to unregister the handler
  */
 function registerUpsertByAdapterMessageIdHandler(
   bus: IMakaioBus,
-  messageIdByAdapterMessageId: Map<string, string>,
+  messagesById: Map<string, SessionMessage>,
+  messageIdsByTurn: Map<string, string[]>,
+  messageIdsBySessionAdapterMessageId: MessageIdsBySessionAdapterMessageId,
   indexMessage: (msg: SessionMessage) => void,
 ): () => void {
   return bus.on(MessageStorageSubjects.upsertByAdapterMessageId, async (ctx) => {
@@ -252,8 +322,9 @@ function registerUpsertByAdapterMessageIdHandler(
       origin,
     } = ctx.payload;
 
-    const existing = messageIdByAdapterMessageId.get(adapterMessageId);
+    const existing = messageIdsBySessionAdapterMessageId.get(sessionId)?.get(adapterMessageId);
     if (existing) {
+      attachExistingMessageToTurn(messagesById, messageIdsByTurn, existing, turnId);
       ctx.setResult({ messageId: existing, created: false });
       return;
     }
@@ -287,7 +358,7 @@ function registerUpsertByAdapterMessageIdHandler(
  * @param messagesById - Message lookup map
  * @param messageIdsBySession - Session-to-message index
  * @param messageIdsByTurn - Turn-to-message index
- * @param messageIdByAdapterMessageId - Adapter message lookup map
+ * @param messageIdsBySessionAdapterMessageId - Session-scoped adapter message lookup map
  * @returns Cleanup function to unregister the handler
  */
 function registerCascadeDeleteHandler(
@@ -295,7 +366,7 @@ function registerCascadeDeleteHandler(
   messagesById: Map<string, SessionMessage>,
   messageIdsBySession: Map<string, string[]>,
   messageIdsByTurn: Map<string, string[]>,
-  messageIdByAdapterMessageId: Map<string, string>,
+  messageIdsBySessionAdapterMessageId: MessageIdsBySessionAdapterMessageId,
 ): () => void {
   return bus.on(SessionStorageSubjects.delete, (ctx) => {
     const { sessionId } = ctx.payload;
@@ -320,7 +391,11 @@ function registerCascadeDeleteHandler(
       }
 
       if (message.adapterMessageId) {
-        messageIdByAdapterMessageId.delete(message.adapterMessageId);
+        const adapterIndex = messageIdsBySessionAdapterMessageId.get(message.sessionId);
+        adapterIndex?.delete(message.adapterMessageId);
+        if (adapterIndex?.size === 0) {
+          messageIdsBySessionAdapterMessageId.delete(message.sessionId);
+        }
       }
     }
 

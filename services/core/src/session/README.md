@@ -24,9 +24,9 @@ Session lifecycle management, orchestration, and event persistence.
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
-│                     SessionLogger                             │
-│  Lifecycle events → storage:sessionEvent.append              │
-│  (agent.added, turn.started, turn.completed)                 │
+│              Session lifecycle event helpers                  │
+│  Lifecycle rows → storage:sessionEvent.append                │
+│  (inline at emit sites + agent.added/branch.created writers) │
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
@@ -57,9 +57,9 @@ Resolves `adapterName` to `adapterId` via bus requests and `adapter.initialized`
 
 Persists agent responses. Maintains `agentId` to `sessionId`/`turnId` mapping, accumulates message blocks from `agent.*` events, and stores them as assistant messages on `agent.complete`.
 
-### SessionLogger
+### Session lifecycle event helpers (`session-lifecycle-events.ts`)
 
-Bridges lifecycle events to the session event storage layer. Supports an optional `EventTransform` for PII redaction (return `null` to skip storage).
+Single write path for lifecycle rows in `session_events`. Turn lifecycle rows persist inline at their emit sites (persist-before-emit); `registerSessionLifecycleEventWriters` (wired by `MakaioSessionService`) covers `agent.added` and `branch.created`. Supports an optional `EventTransform` for PII redaction (return `null` to skip storage).
 
 ### TurnContextEnricher
 
@@ -158,7 +158,7 @@ session/
 ├── session-service-handlers-core.ts  # Core bus handler registration
 ├── session-service-agent-handlers.ts
 ├── session-bridge.ts                 # Agent message persistence
-├── session-logger.ts                 # Lifecycle event → storage bridge
+├── session-lifecycle-events.ts       # Lifecycle row persistence helpers
 ├── session-turn-manager.ts           # Turn lifecycle manager
 ├── turn-context-enricher.ts          # Turn-so-far context loading
 ├── turn-usage-accumulator.ts         # Per-turn usage aggregation

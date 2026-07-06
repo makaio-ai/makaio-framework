@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 560 }] */
+/* eslint max-lines: ["error", { "max": 640 }] */
 import type { SubjectDefinition } from '@makaio/core';
 import type { SessionLineageKind, SessionMessageBlock, SessionMetadata } from '@makaio/contracts';
 import type { JsonObject } from 'type-fest';
@@ -206,6 +206,47 @@ export interface ImportSegmentLineage {
 }
 
 /**
+ * Reconstructed conversation turn within an import segment.
+ *
+ * Importers derive this structure from their turn reconstruction (see
+ * `TurnTracker`) during {@link LogImporter.processLogFile}. The persistence
+ * layer uses it to create real turn rows and link message `turnId`s, so
+ * imported messages participate in the same turn model as live sessions.
+ * @remarks
+ * The `turnAnchorId` is the idempotency anchor for turn upserts: re-parsing
+ * the same file (e.g., after compaction forces a re-read from byte 0) must
+ * yield the same anchor for the same turn, so existing turn rows are matched
+ * instead of duplicated or renumbered. This requirement implies that every
+ * synthesized message an importer emits must carry a DETERMINISTIC
+ * `adapterMessageId` — random IDs would break anchor stability across
+ * re-parses.
+ * @see {@link ImportSegment.turns} - Where these turns are carried
+ * @see {@link ProcessLogFileResult.turns} - Importer output containing turns
+ */
+export interface ImportSegmentTurn {
+  /**
+   * `adapterMessageId` (external record uuid) of the turn-start user message —
+   * the idempotency anchor. MUST be stable across re-parses of the same file.
+   */
+  turnAnchorId: string;
+
+  /**
+   * `adapterMessageId`s of ALL messages belonging to this turn, in transcript
+   * order (user + assistant).
+   */
+  adapterMessageIds: string[];
+
+  /** Unix ms timestamp of the turn-start record. */
+  startedAt: number;
+
+  /** Unix ms timestamp of the turn-complete record. */
+  completedAt: number;
+
+  /** Turn outcome. Defaults to `'completed'` when omitted. */
+  status?: 'completed' | 'error';
+}
+
+/**
  * Compaction boundary metadata from the external tool's log.
  */
 export interface CompactionMetadata {
@@ -236,6 +277,18 @@ export interface ImportSegment {
   messages: StorageMessagePayload[];
   /** Compaction metadata from the boundary record (absent if not a compress child). */
   compaction?: CompactionMetadata;
+  /**
+   * Reconstructed turns for this segment, in transcript order.
+   * Absent when the importer performs no turn reconstruction.
+   * @see {@link ImportSegmentTurn}
+   */
+  turns?: ImportSegmentTurn[];
+  /**
+   * Per-segment sidechain flag extracted from the tool's log records.
+   * `true` when this segment is a sidechain (e.g., a subagent transcript)
+   * rather than the main conversation thread.
+   */
+  isSidechain?: boolean;
   /** Child segments (compress children, nested compactions). */
   children?: ImportSegment[];
 }
@@ -262,13 +315,27 @@ export interface ProcessLogFileResult {
   compressChildren?: ProcessLogFileResult[];
   /** Compaction metadata from the boundary record. */
   compactionMetadata?: CompactionMetadata;
+  /**
+   * Reconstructed turns for this file/segment, in transcript order.
+   * Absent when the importer performs no turn reconstruction.
+   * @see {@link ImportSegmentTurn}
+   */
+  turns?: ImportSegmentTurn[];
+  /**
+   * Per-file/segment sidechain flag extracted from the tool's log records.
+   * `true` when the transcript is a sidechain (e.g., a subagent transcript)
+   * rather than the main conversation thread.
+   */
+  isSidechain?: boolean;
 }
 
 /**
  * Converts a {@link ProcessLogFileResult} to a canonical {@link ImportSegment}.
  *
  * Strips bus-emission fields (sessionEvent, messageEvents) and recursively
- * converts children, producing the clean structural tree.
+ * converts children, producing the clean structural tree. Structural fields
+ * (`turns`, `isSidechain`) are not bus-emission data and survive the
+ * conversion.
  * @param result - The full import result from an adapter
  * @returns A canonical import segment tree
  */
@@ -280,6 +347,12 @@ export function toImportSegment(result: ProcessLogFileResult): ImportSegment {
   };
   if (result.compactionMetadata) {
     segment.compaction = result.compactionMetadata;
+  }
+  if (result.turns) {
+    segment.turns = result.turns;
+  }
+  if (result.isSidechain !== undefined) {
+    segment.isSidechain = result.isSidechain;
   }
   if (result.compressChildren?.length) {
     segment.children = result.compressChildren.map(toImportSegment);
@@ -319,6 +392,12 @@ export interface DiscoveryMetadata {
   kind?: SessionLineageKind;
   /** Unix ms timestamp of when the session started in the external tool. */
   startedAt?: number;
+  /**
+   * Whether the discovered transcript is a sidechain (e.g., a subagent
+   * transcript) rather than the main conversation thread. Extracted from
+   * the tool's log records; `undefined` when the format has no such flag.
+   */
+  isSidechain?: boolean;
 }
 
 /**

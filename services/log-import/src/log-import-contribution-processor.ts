@@ -38,6 +38,8 @@ interface LogImportContributionConfig {
   ) => LogImportOrchestrator;
   /** Glob pattern for matching log files. */
   readonly logFilePattern?: string;
+  /** Stable client id whose observed sessions this importer can ingest. */
+  readonly clientId?: string;
   /** Optional runtime log-import configuration for orchestrator setup. */
   readonly logImportConfig?: LogImportConfig;
   /** Whether manual scan/import operations are supported. */
@@ -152,6 +154,7 @@ export function createLogImportContributionProcessor(): ContributionProcessor {
         source,
         importer: importer as Parameters<typeof registry.register>[0]['importer'],
         logFilePattern: contributionConfig.logFilePattern ?? '',
+        clientId: contributionConfig.clientId,
         supportsManualImport: contributionConfig.supportsManualImport,
       });
 

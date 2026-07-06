@@ -5,8 +5,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
+import { MessageStorageSubjects } from '../messages/namespace.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
+import { TurnStorageSubjects } from '../turns/index.js';
 import {
   createMockSession,
   createMockAgent,
@@ -54,6 +56,63 @@ describe('SessionOrchestrator - Turns', () => {
 
       const result = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Hi' });
       expect(result.turnId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    });
+
+    it('discards a newly created active turn when user-message append fails', async () => {
+      resetBusHandlers();
+      unsubscribers = [];
+      sessions = new Map();
+      setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
+      unsubscribers.push(registerGetSessionHandler(sessions));
+      unsubscribers.push(registerGetAgentHandler(sessions));
+
+      const createdTurnIds: string[] = [];
+      let shouldFailAppend = true;
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
+          const turnId = ctx.payload.turnId ?? crypto.randomUUID();
+          createdTurnIds.push(turnId);
+          ctx.setResult({
+            turn: {
+              turnId,
+              sessionId: ctx.payload.sessionId,
+              turnNumber: createdTurnIds.length,
+              startedAt: Date.now(),
+              status: 'active',
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(MessageStorageSubjects.append, (ctx) => {
+          if (shouldFailAppend) {
+            throw new Error('append unavailable');
+          }
+          ctx.setResult({
+            message: {
+              ...ctx.payload.message,
+              messageId: ctx.payload.message.messageId ?? crypto.randomUUID(),
+              editOf: undefined,
+            },
+          });
+        }),
+      );
+      unsubscribers.push(registerSendMessageHandler());
+      const startedEvents = collectTurnStartedEvents(unsubscribers);
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+
+      await expect(
+        MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'First' }),
+      ).rejects.toThrow('append unavailable');
+      shouldFailAppend = false;
+
+      const retry = await MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Retry' });
+      await waitForAsync();
+
+      expect(createdTurnIds).toHaveLength(2);
+      expect(retry.turnId).toBe(createdTurnIds[1]);
+      expect(startedEvents.received).toHaveLength(1);
+      expect(startedEvents.received[0].turnId).toBe(retry.turnId);
     });
   });
 

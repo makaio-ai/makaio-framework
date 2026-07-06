@@ -1,7 +1,7 @@
-import { eq, desc, and, inArray, isNull, or, sql } from 'drizzle-orm';
-import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import { eq, desc, and, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { getRawSqlExecutor, resolveSchema, type MakaioDatabase, type StorageDialect } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type BranchKind } from '@makaio/contracts';
+import { SessionSubjects, type BranchKind, type IMakaioSession } from '@makaio/contracts';
 import { SessionStorageSubjects } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
 import { mapAgentsBySession, mapToSession } from './drizzle-utils.js';
@@ -13,6 +13,94 @@ const nextDiscoveredAt = createMonotonicClock();
 
 /** Canonical column shape of the sessions table, resolved through the dialect seam. */
 type SessionsTable = typeof sessionStorageSchema.sqlite.sessions;
+
+type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
+
+/**
+ * Serialize a client identity observation for persistence.
+ *
+ * Mirrors the `storage:session.set` handler's serialization of the
+ * `last_client_identity_observation` JSON-string column so both write paths
+ * stay byte-compatible.
+ * @param observation - Latest observed client identity payload, if any
+ * @returns JSON string for storage, or null when no observation is present
+ */
+function serializeClientIdentityObservation(observation: ClientIdentityObservation | undefined): string | null {
+  return observation ? JSON.stringify(observation) : null;
+}
+
+/**
+ * Build the SELECT branch that re-encodes one metadata source's top-level
+ * entries as `(key, vjson)` rows, where `vjson` is the value's JSON text.
+ *
+ * `json_each`'s `value` column loses JSON fidelity for three type classes
+ * (nested object/array values arrive as plain SQL text, booleans as 0/1
+ * integers, JSON nulls as SQL NULL), so the CASE re-derives canonical JSON
+ * text per `type` — the only lossless way to rebuild an object with
+ * `json_group_object(key, json(vjson))`.
+ * @param source - SQL expression yielding the JSON object to expand
+ * @param alias - Row alias for this `json_each` expansion (raw identifier)
+ * @returns SELECT producing `key` / `vjson` columns for the merge subquery
+ */
+function buildMetadataEntriesSelect(source: SQL, alias: SQL): SQL {
+  return sql`
+    SELECT ${alias}.key AS key,
+      CASE ${alias}.type
+        WHEN 'object' THEN ${alias}.value
+        WHEN 'array' THEN ${alias}.value
+        WHEN 'true' THEN 'true'
+        WHEN 'false' THEN 'false'
+        WHEN 'null' THEN 'null'
+        WHEN 'text' THEN json_quote(${alias}.value)
+        ELSE CAST(${alias}.value AS TEXT)
+      END AS vjson
+    FROM json_each(${source}) AS ${alias}
+  `;
+}
+
+/**
+ * Build the conflict-merge expression for the `metadata` JSON column.
+ *
+ * Semantic: hook-first metadata is preserved; import enrichment merges, never
+ * overwrites (AC14). The merge is a top-level key merge where EXISTING keys
+ * win over incoming ones — including keys whose stored value is JSON `null`
+ * (`SessionRecordMetadataSchema` values are `JsonValue`, so `null` is a legal
+ * stored value, not a deletion sentinel). NULL stays NULL when neither side
+ * carries metadata (no empty-object materialization on plain enrichment).
+ *
+ * The physical expression is dialect-specific because the `jsonCol` column
+ * type maps to `text` (JSON string) on SQLite and `jsonb` on Postgres:
+ * - Postgres: `incoming || existing` — jsonb concatenation where the right
+ *   operand (existing) wins on key collisions and null-valued keys survive.
+ * - SQLite: a `json_group_object` reassembly over the union of existing
+ *   entries plus incoming-only entries. Deliberately NOT `json_patch`: RFC
+ *   7386 treats a top-level `null` in the patch argument as a key DELETION,
+ *   which would silently drop legally stored `{ key: null }` metadata on
+ *   SQLite while Postgres and the memory backend preserve it.
+ * @param sessions - Dialect-resolved sessions table object.
+ * @param dialect - Storage dialect of the target database.
+ * @returns SQL expression for the conflict SET clause
+ */
+function buildMetadataMergeExpression(sessions: SessionsTable, dialect: StorageDialect): SQL {
+  const merged =
+    dialect === 'postgres'
+      ? sql`excluded.metadata || ${sessions.metadata}`
+      : sql`(
+          SELECT json_group_object(mk.key, json(mk.vjson)) FROM (
+            ${buildMetadataEntriesSelect(sql`excluded.metadata`, sql`inc`)}
+            WHERE inc.key NOT IN (SELECT ex2.key FROM json_each(${sessions.metadata}) AS ex2)
+            UNION ALL
+            ${buildMetadataEntriesSelect(sql`${sessions.metadata}`, sql`ex`)}
+          ) AS mk
+        )`;
+  return sql`
+    CASE
+      WHEN ${sessions.metadata} IS NULL THEN excluded.metadata
+      WHEN excluded.metadata IS NULL THEN ${sessions.metadata}
+      ELSE ${merged}
+    END
+  `;
+}
 
 /**
  * Build a SQL CASE clause that corrects an unstarted discovery-stub timestamp on re-import.
@@ -46,10 +134,15 @@ function timestampConflictClause(
  * max-lines-per-function lint threshold.
  * @param sessions - Dialect-resolved sessions table object.
  * @param startedAt - The real start timestamp from the import, or undefined to keep existing
+ * @param dialect - Storage dialect of the target database (branches only the metadata merge expression).
  * @returns Drizzle `set` object for `onConflictDoUpdate`
  */
-function buildImportConflictSet(sessions: SessionsTable, startedAt: number | undefined) {
+function buildImportConflictSet(sessions: SessionsTable, startedAt: number | undefined, dialect: StorageDialect) {
   return {
+    // Lifecycle status is only converged while the row is still a plain
+    // discovery stub. A hook-first 'tracking' row resolves the COALESCE to
+    // 'tracking', so later watcher enrichment (excluded 'discovered') keeps
+    // the existing status untouched — no downgrade, no re-stubbing.
     status: sql`
       CASE
         WHEN COALESCE(${sessions.importStatus}, excluded.import_status) = 'discovered' THEN excluded.status
@@ -57,7 +150,15 @@ function buildImportConflictSet(sessions: SessionsTable, startedAt: number | und
       END
     `,
     isImported: true,
-    importStatus: sql`COALESCE(${sessions.importStatus}, excluded.import_status)`,
+    // Status precedence is monotonic: watcher discovery can upgrade to hook
+    // tracking, but later discovery enrichment cannot downgrade tracking/imported.
+    importStatus: sql`
+      CASE
+        WHEN ${sessions.importStatus} = 'imported' OR excluded.import_status = 'imported' THEN 'imported'
+        WHEN ${sessions.importStatus} = 'tracking' OR excluded.import_status = 'tracking' THEN 'tracking'
+        ELSE COALESCE(${sessions.importStatus}, excluded.import_status, 'discovered')
+      END
+    `,
     adapterName: sql`COALESCE(${sessions.adapterName}, excluded.adapter_name)`,
     discoveredAt: sql`COALESCE(${sessions.discoveredAt}, excluded.discovered_at)`,
     // Immutable identity fields: keep existing value, fall back to new.
@@ -72,6 +173,13 @@ function buildImportConflictSet(sessions: SessionsTable, startedAt: number | und
     branchKind: sql`COALESCE(excluded.branch_kind, ${sessions.branchKind})`,
     adapterId: sql`COALESCE(excluded.adapter_id, ${sessions.adapterId})`,
     clientId: sql`COALESCE(excluded.client_id, ${sessions.clientId})`,
+    // Enrichment prefers a defined incoming sidechain flag over the stored one
+    // (later scans can flip unknown → known; absent input keeps the stored value).
+    isSidechain: sql`COALESCE(excluded.is_sidechain, ${sessions.isSidechain})`,
+    // Newer identity observation wins when supplied; absent input keeps the stored one.
+    lastClientIdentityObservation: sql`COALESCE(excluded.last_client_identity_observation, ${sessions.lastClientIdentityObservation})`,
+    // Hook-first metadata is preserved; import enrichment merges, never overwrites (AC14).
+    metadata: buildMetadataMergeExpression(sessions, dialect),
     createdAt: timestampConflictClause(sessions.createdAt, startedAt, sessions),
     lastActivityAt: timestampConflictClause(sessions.lastActivityAt, startedAt, sessions),
   };
@@ -86,6 +194,12 @@ function buildImportConflictSet(sessions: SessionsTable, startedAt: number | und
  * On conflict (same `source` + `adapterSessionId`): converges existing rows
  * into the canonical imported-session shape and merges enrichment fields so
  * that later scans can supply previously-unknown values.
+ *
+ * This subject is also the hook-first registration seam for live-followed
+ * observed sessions: callers may supply `importStatus: 'tracking'`, opaque
+ * `metadata`, a `lastClientIdentityObservation`, and `isSidechain` at
+ * registration time. Enrichment never downgrades `importStatus` and merges
+ * `metadata` with existing keys winning (AC14).
  *
  * Created-detection compares the returned row ID against the generated insert
  * ID, so existing rows whose missing `discoveredAt` is initialized on conflict
@@ -102,6 +216,7 @@ function buildImportConflictSet(sessions: SessionsTable, startedAt: number | und
 function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
   const { bus, db } = deps;
   const { sessions } = resolveSchema(db, sessionStorageSchema);
+  const { dialect } = getRawSqlExecutor(db);
 
   return bus.on(SessionStorageSubjects.importUpsert, async (ctx) => {
     const {
@@ -116,6 +231,10 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
       kind,
       parentAdapterSessionId,
       forkPointMessageId,
+      metadata,
+      lastClientIdentityObservation,
+      importStatus,
+      isSidechain,
     } = ctx.payload;
 
     const nowMs = nextDiscoveredAt();
@@ -135,7 +254,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         sessionId,
         status: 'discovered',
         isImported: true,
-        importStatus: 'discovered',
+        importStatus: importStatus ?? 'discovered',
         adapterName: source,
         adapterSessionId: externalSessionId,
         source: source ?? null,
@@ -148,6 +267,9 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         parentExternalSessionId,
         discoveredAt: nowMs,
         title: title ?? null,
+        metadata: metadata ?? null,
+        lastClientIdentityObservation: serializeClientIdentityObservation(lastClientIdentityObservation),
+        isSidechain: isSidechain ?? null,
         createdAt,
         lastActivityAt: createdAt,
       })
@@ -156,7 +278,7 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
         // cannot participate in the `(source, adapterSessionId)` invariant, so
         // this handler does not merge them into a sourced import.
         target: [sessions.source, sessions.adapterSessionId],
-        set: buildImportConflictSet(sessions, startedAt),
+        set: buildImportConflictSet(sessions, startedAt, dialect),
       })
       .returning({
         sessionId: sessions.sessionId,

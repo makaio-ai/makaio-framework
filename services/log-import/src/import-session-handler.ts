@@ -33,7 +33,7 @@ export function registerImportSessionHandler(
   getRegistration: (adapterName: string) => LogImporterRegistration | undefined,
 ): () => void {
   return bus.on(LogImportSubjects.importSession, async (ctx) => {
-    const { adapterSessionId, adapterName } = ctx.payload;
+    const { adapterSessionId, adapterName, ingestionMarker } = ctx.payload;
 
     // Step 1: Look up the source-scoped session row by its adapter session ID to get logFilePath
     const { session } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
@@ -78,6 +78,9 @@ export function registerImportSessionHandler(
       adapterId,
       sourceFilePath: session.logFilePath,
       persistedLogFilePath: session.logFilePath,
+      // On-demand historical import defaults to backfill; observed hook
+      // fallback preserves the live marker.
+      ingestionMarker: ingestionMarker ?? 'backfill',
     });
 
     ctx.setResult({ sessionId, messageCount });

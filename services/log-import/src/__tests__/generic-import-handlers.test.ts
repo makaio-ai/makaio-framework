@@ -4,9 +4,14 @@ import { join } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { LogImportSubjects } from '../namespace.js';
-import { SessionStorageSubjects, registerMemorySessionStorage } from '@makaio/services-core/session';
+import {
+  MessageStorageSubjects,
+  SessionStorageSubjects,
+  registerMemoryMessageStorage,
+  registerMemorySessionStorage,
+} from '@makaio/services-core/session';
 import type { LogImporterRegistration } from '../types.js';
-import { registerGenericScanHandler } from '../generic-import-handlers.js';
+import { importFromFileContent, registerGenericScanHandler } from '../generic-import-handlers.js';
 import { createMockImporter } from './test-helpers.js';
 
 describe('generic-import-handlers', () => {
@@ -83,5 +88,104 @@ describe('generic-import-handlers', () => {
     expect(stored.session?.adapterSessionId).toBe('session-1');
     expect(stored.session?.source).toBe(testAdapterName);
     expect(stored.session?.importStatus).toBe('discovered');
+  });
+
+  it('does not persist content for observed sessions registered as policy-discovered', async () => {
+    cleanups.push(registerMemorySessionStorage(MakaioBus));
+    cleanups.push(registerMemoryMessageStorage(MakaioBus));
+
+    const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      kind: 'root',
+      parentAdapterSessionId: null,
+      forkPointMessageId: null,
+      externalSessionId: 'private-session',
+      source: testAdapterName,
+      clientId: 'claude-code',
+      cwd: '/private',
+      logFilePath: '/logs/private-session.jsonl',
+      importStatus: 'discovered',
+    });
+
+    const importer = createMockImporter({
+      parseRecord: () => ({ parsed: true }),
+      extractSessionContext: () => ({
+        adapterSessionId: 'private-session',
+        model: 'claude',
+        cwd: '/private',
+        sessionEvent: {
+          subject: {} as never,
+          payload: {
+            adapterSessionId: 'private-session',
+            kind: 'root',
+            parentAdapterSessionId: null,
+            forkPointMessageId: null,
+            model: 'claude',
+            cwd: '/private',
+          },
+        },
+        startedEvent: { subject: {} as never, payload: {} },
+        state: {},
+      }),
+      processLogFile: () => ({
+        adapterSessionId: 'private-session',
+        sessionEvent: {
+          subject: {} as never,
+          payload: {
+            adapterSessionId: 'private-session',
+            kind: 'root' as const,
+            parentAdapterSessionId: null,
+            forkPointMessageId: null,
+            model: 'claude',
+            cwd: '/private',
+          },
+        },
+        messageEvents: [],
+        messagePayloads: [
+          {
+            adapterMessageId: 'msg-private-user',
+            role: 'user' as const,
+            contentText: 'private prompt',
+            blocks: [{ type: 'text' as const, content: 'private prompt' }],
+            agentId: 'main',
+            adapterSessionId: 'private-session',
+            timestamp: 1_000,
+          },
+          {
+            adapterMessageId: 'msg-private-assistant',
+            role: 'assistant' as const,
+            contentText: 'private answer',
+            blocks: [{ type: 'text' as const, content: 'private answer' }],
+            agentId: 'main',
+            adapterSessionId: 'private-session',
+            timestamp: 2_000,
+          },
+        ],
+        lineage: {
+          kind: 'root' as const,
+          parentAdapterSessionId: null,
+          forkPointMessageId: null,
+        },
+      }),
+    });
+
+    const result = await importFromFileContent({
+      bus: MakaioBus,
+      importer,
+      content: '{"type":"user"}\n{"type":"assistant"}\n',
+      isJsonl: true,
+      adapterName: testAdapterName,
+      adapterId: 'adapter-private',
+      persistedLogFilePath: '/logs/private-session.jsonl',
+    });
+
+    expect(result).toEqual({ sessionId, messageCount: 0, turnCount: 0 });
+    const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'private-session',
+      source: testAdapterName,
+    });
+    expect(session?.importStatus).toBe('discovered');
+
+    const { messages } = await MakaioBus.request(MessageStorageSubjects.getBySession, { sessionId });
+    expect(messages).toEqual([]);
   });
 });

@@ -75,6 +75,43 @@ export const TurnStorageSchemas = {
   },
 
   /**
+   * Idempotent upsert of an externally-completed turn, keyed on
+   * `(sessionId, turnAnchorId)`.
+   *
+   * The anchor is a content-derived idempotency key (the adapterMessageId of
+   * the turn-start user message in an imported transcript). The first insert
+   * assigns `turnNumber` atomically (MAX+1 per session); a conflicting
+   * re-ingestion of the same anchor updates completion fields only and NEVER
+   * changes `turnId`, `turnNumber`, or `startedAt` — `(sessionId, turnNumber)`
+   * is a stable downstream watermark, so re-parsing the same transcript
+   * (including compaction re-reads from byte 0) must never renumber or
+   * duplicate existing turns.
+   *
+   * `created` in the response distinguishes first ingestion (`true`) from an
+   * anchor-conflicting re-ingestion (`false`), letting callers gate
+   * exactly-once side effects (event emission) on it.
+   *
+   * Subject: `storage:turn.ingestCompleted`
+   * Type: Request (RPC)
+   */
+  ingestCompleted: {
+    request: z.object({
+      sessionId: z.string(),
+      turnAnchorId: z.string().min(1),
+      startedAt: z.number(),
+      completedAt: z.number(),
+      status: z.enum(['completed', 'error']),
+      error: z.string().optional(),
+      usage: TurnUsageSchema.optional(),
+      initiator: TurnInitiatorSchema.optional(),
+    }),
+    response: z.object({
+      turn: TurnSchema,
+      created: z.boolean(),
+    }),
+  },
+
+  /**
    * Get a turn by ID.
    *
    * Subject: `storage:turn.get`

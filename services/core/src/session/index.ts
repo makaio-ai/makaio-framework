@@ -111,8 +111,41 @@ export {
 } from './session-events/index.js';
 export type { InsertSessionEvent, SelectSessionEvent } from './session-events/index.js';
 
-// Loggers
-export { SessionLogger, type EventTransform, type SessionLoggerOptions } from './session-logger.js';
+// Session lifecycle event persistence (single write path for session_events lifecycle rows)
+export {
+  appendSessionLifecycleEvent,
+  emitSessionTurnStarted,
+  registerSessionLifecycleEventWriters,
+  type EventTransform,
+  type SessionLifecycleEventArgs,
+  type SessionTurnStartedPayload,
+} from './session-lifecycle-events.js';
+
+// Turn lifecycle ingestion seam (externally-completed turns → canonical session.turn.* events)
+export {
+  ingestCompletedTurn,
+  type IngestTurnMessage,
+  type IngestCompletedTurnParams,
+  type IngestCompletedTurnResult,
+} from './turn-ingest.js';
+
+// Internal mirror of the log-import trigger subjects (type carriers only —
+// canonical schemas live with the log-import service). Exported so the
+// owning service's conformance tests can pin the mirror against the
+// canonical schemas; not part of the supported public session API.
+export { LogImportTriggerSubjects } from './observed-session-ingestion.js';
+export { isPolicyDiscoveredObservedSession } from './observed-session-ingestion.js';
+export {
+  OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
+  registerObservedSessionIngestionPolicyProvider,
+  unregisterObservedSessionIngestionPolicyProvider,
+} from './observed-session-ingestion-policy.js';
+export type {
+  IObservedSessionIngestionPolicyProvider,
+  ObservedSessionIngestionPolicyDecision,
+  ObservedSessionIngestionPolicyImportStatus,
+  ObservedSessionIngestionPolicyInput,
+} from './observed-session-ingestion-policy.js';
 
 // Import cursor storage handlers (for log import)
 export { registerDrizzleImportCursorStorage } from './import-cursors/index.js';

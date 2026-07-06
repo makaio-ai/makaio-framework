@@ -27,6 +27,7 @@ next: false
 | `getMode` | [`log-import.getMode`](#log-import.getMode) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
 | `getStats` | [`log-import.getStats`](#log-import.getStats) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
 | `importAll` | [`log-import.importAll`](#log-import.importAll) | rpc | [`stats.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/stats.ts) |
+| `importFile` | [`log-import.importFile`](#log-import.importFile) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
 | `importSession` | [`log-import.importSession`](#log-import.importSession) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
 | `listImporters` | [`log-import.listImporters`](#log-import.listImporters) | rpc | [`list-importers.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas/list-importers.ts) |
 | `listSettings` | [`log-import.listSettings`](#log-import.listSettings) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/services/log-import/src/schemas.ts) |
@@ -154,6 +155,42 @@ Purpose: Imports all sessions that haven't been imported yet.
 | `imported` | `number` | yes |
 | `skipped` | `number` | yes |
 
+### <a id="log-import.importFile"></a>`log-import.importFile` (rpc)
+
+Import a transcript file by path, addressable without prior discovery.
+
+Subject: `log-import.importFile`
+Type: Request (RPC)
+Purpose: Parses the given transcript file with the named importer and
+persists the resulting segment tree (messages + turns).
+
+**Graceful-absence contract:** unlike `importSession`, this subject NEVER
+throws for a missing importer registration — framework-only hosts (no
+product importers contributed) receive a `skipped` status with reason
+`no-importer`. It is addressable by file path directly (no prior
+discovery stub required) and performs a full re-parse from byte 0,
+relying on message/turn idempotency (import cursors do not persist parser
+state across restarts). Concurrent calls for the same `filePath` are
+serialized by the handler.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterName` | `string` | yes |
+| `filePath` | `string` | yes |
+| `ingestionMarker` | `"live" \| "backfill" \| undefined` | no |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `messageCount` | `number \| undefined` | no |
+| `reason` | `string \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `status` | `"imported" \| "skipped"` | yes |
+| `turnCount` | `number \| undefined` | no |
+
 ### <a id="log-import.importSession"></a>`log-import.importSession` (rpc)
 
 Lazy-load a single discovered session — fetch its full message history on demand.
@@ -192,7 +229,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `importers` | `{ id: string; adapterName: string; displayName: string; source: "adapter" \| "extension"; logFilePattern: string; isRunning: boolean; supportsManualImport: boolean; }[]` | yes |
+| `importers` | `{ id: string; adapterName: string; displayName: string; source: "adapter" \| "extension"; logFilePattern: string; isRunning: boolean; supportsManualImport: boolean; clientId?: string \| undefined; }[]` | yes |
 
 ### <a id="log-import.listSettings"></a>`log-import.listSettings` (rpc)
 

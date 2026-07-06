@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import { TurnIngestionMarkerSchema } from '@makaio/contracts';
 
 import {
   GetLogImportStatsSchema,
@@ -55,6 +56,8 @@ export const LogImportSchemas = {
       adapterSessionId: z.string(),
       /** Adapter type name (e.g., 'claude-code'). */
       adapterName: z.string(),
+      /** Marker stamped on emitted `session.turn.*` events. */
+      ingestionMarker: TurnIngestionMarkerSchema.optional(),
     }),
     response: z.object({
       /** Makaio session ID that was populated. */
@@ -62,6 +65,55 @@ export const LogImportSchemas = {
       /** Number of messages imported into the session. */
       messageCount: z.number(),
     }),
+  },
+
+  /**
+   * Import a transcript file by path, addressable without prior discovery.
+   *
+   * Subject: `log-import.importFile`
+   * Type: Request (RPC)
+   * Purpose: Parses the given transcript file with the named importer and
+   * persists the resulting segment tree (messages + turns).
+   *
+   * **Graceful-absence contract:** unlike `importSession`, this subject NEVER
+   * throws for a missing importer registration — framework-only hosts (no
+   * product importers contributed) receive a `skipped` status with reason
+   * `no-importer`. It is addressable by file path directly (no prior
+   * discovery stub required) and performs a full re-parse from byte 0,
+   * relying on message/turn idempotency (import cursors do not persist parser
+   * state across restarts). Concurrent calls for the same `filePath` are
+   * serialized by the handler.
+   */
+  importFile: {
+    request: z.object({
+      /** Absolute path to the transcript file on disk. */
+      filePath: z.string(),
+      /** Registered importer adapter name (e.g., from `listImporters`). */
+      adapterName: z.string(),
+      /**
+       * Marker stamped on emitted `session.turn.*` events.
+       * Defaults to `'live'` (hook-triggered ingestion).
+       */
+      ingestionMarker: TurnIngestionMarkerSchema.optional(),
+    }),
+    response: z.discriminatedUnion('status', [
+      z.object({
+        /** File was imported and persisted. */
+        status: z.literal('imported'),
+        /** Makaio session ID that was populated. */
+        sessionId: z.string(),
+        /** Number of messages persisted. */
+        messageCount: z.number(),
+        /** Number of turns persisted. */
+        turnCount: z.number(),
+      }),
+      z.object({
+        /** Request was gracefully skipped. */
+        status: z.literal('skipped'),
+        /** Machine-readable skip reason. */
+        reason: z.enum(['no-importer', 'file-missing']),
+      }),
+    ]),
   },
 
   /**
