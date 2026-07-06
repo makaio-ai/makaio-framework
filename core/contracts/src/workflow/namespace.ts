@@ -1,3 +1,4 @@
+/* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }] */
 import { z } from 'zod';
 import { createBusNamespace, observability, type SchemaRecord } from '@makaio/core';
 import {
@@ -332,6 +333,103 @@ export const WorkflowSchemas = {
       scope: WorkflowExecutionScopeSchema.optional(),
     }),
     response: z.object({ executionId: z.string() }),
+  },
+
+  /**
+   * Register an external execution that is not driven by the workflow engine.
+   *
+   * Creates a minimal `workflow_executions` row so that subsequent lifecycle
+   * events (`execution.started`, `frame.*`, `execution.completed/failed`)
+   * satisfy the foreign-key constraints on WorkLog projection tables.
+   *
+   * External executions are not associated with a persisted workflow definition
+   * and do not create coordinator sessions, run-context snapshots, or
+   * runtime state. They exist solely to provide a legitimate parent row for
+   * telemetry projections.
+   *
+   * After registration the caller is responsible for emitting the standard
+   * execution and frame lifecycle events on the bus. The WorkLog projection
+   * consumes them exactly as it does for engine-driven executions.
+   */
+  registerExternalExecution: {
+    request: z.object({
+      /** Human-readable label for the external execution (stored as `workflowId`). */
+      name: z.string().min(1),
+      /** Scope for the execution. Defaults to `{ type: 'global' }` when omitted. */
+      scope: WorkflowExecutionScopeSchema.optional(),
+      /** Optional artifact binding reference. */
+      artifactRef: WorkflowArtifactRefSchema.optional(),
+      /** Optional bound input value for the execution. */
+      input: JsonValueSchema.optional(),
+      /** Optional trigger payload metadata. */
+      triggerPayload: JsonObjectContractSchema.optional(),
+    }),
+    response: z.object({
+      /** Generated execution identifier for the registered execution. */
+      executionId: z.string(),
+    }),
+  },
+
+  /**
+   * Complete an external execution by updating its terminal status.
+   *
+   * Callers should also emit the corresponding lifecycle event
+   * (`execution.completed`, `execution.failed`, or `execution.cancelled`)
+   * so that WorkLog projections update the summary row.
+   *
+   * Cross-field invariants (enforced by schema refinement):
+   * - `'failed'` requires a non-empty `error` string.
+   * - `'cancelled'` requires a non-empty `reason` string.
+   * - `'completed'` must not carry `error` or `reason`.
+   */
+  completeExternalExecution: {
+    request: z
+      .object({
+        /** Execution identifier returned by `registerExternalExecution`. */
+        executionId: z.string().min(1),
+        /** Terminal status. */
+        status: z.enum(['completed', 'failed', 'cancelled']),
+        /** Error message. Required when `status` is `'failed'`. */
+        error: z.string().min(1).optional(),
+        /** Cancellation reason. Required when `status` is `'cancelled'`. */
+        reason: z.string().min(1).optional(),
+        /** Completion timestamp (epoch ms). Defaults to `Date.now()`. */
+        completedAt: z.number().nonnegative().optional(),
+      })
+      .superRefine((payload, ctx) => {
+        if (payload.status === 'failed' && payload.error === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "status 'failed' requires a non-empty 'error' message",
+            path: ['error'],
+          });
+        }
+        if (payload.status === 'cancelled' && payload.reason === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "status 'cancelled' requires a non-empty 'reason' string",
+            path: ['reason'],
+          });
+        }
+        if (payload.status === 'completed' && payload.error !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "status 'completed' must not carry an 'error'",
+            path: ['error'],
+          });
+        }
+        if (payload.status === 'completed' && payload.reason !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "status 'completed' must not carry a 'reason'",
+            path: ['reason'],
+          });
+        }
+      }),
+    response: z.object({
+      /** Whether the execution was successfully updated. */
+      success: z.boolean(),
+    }),
   },
 
   /**

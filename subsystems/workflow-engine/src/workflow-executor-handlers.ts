@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { BaseMessageContext } from '@makaio/core';
 import {
@@ -5,10 +6,84 @@ import {
   type IWorkflowTriggerTypeRegistry,
   type JsonValue,
   type WorkflowDefinition,
+  type WorkflowExecution,
 } from '@makaio/contracts';
-import { WorkflowSubjects } from './namespace.js';
+import { WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { assertWorkflowStateValueMatchesSchema } from './workflow-state-validation.js';
+import { generateId } from './executor-helpers.js';
+
+type RegisterExternalExecutionRequest = z.infer<typeof WorkflowSchemas.registerExternalExecution.request>;
+type CompleteExternalExecutionRequest = z.infer<typeof WorkflowSchemas.completeExternalExecution.request>;
+
+/**
+ * ID prefix that marks externally-registered executions.
+ *
+ * All IDs produced by `registerExternalExecution` start with this prefix.
+ * Engine-driven executions use the `wfx-` prefix (without `-ext`), so the
+ * two sets are disjoint and prefix-checking is a reliable discriminant.
+ *
+ * This constant is the single source of truth — the register handler and the
+ * `completeExternalExecution` guard both reference it so they cannot drift.
+ */
+const EXTERNAL_EXECUTION_ID_PREFIX = 'wfx-ext-';
+
+/**
+ * Return `true` when `executionId` was produced by `registerExternalExecution`.
+ *
+ * The prefix check is the primary discriminant. It covers all engine-internal
+ * paths including `persistPreRuntimeTerminalExecution`, which writes an
+ * engine-owned row via `setExecution` (not `setExecutionStart`) when the
+ * worker signal is already aborted before the runtime starts — a path that
+ * would pass a run-context-only guard because run-context rows may be absent
+ * in that abort window.
+ * @param executionId - Execution identifier to classify.
+ * @returns `true` when the execution was externally registered.
+ */
+function isExternalExecutionId(executionId: string): boolean {
+  return executionId.startsWith(EXTERNAL_EXECUTION_ID_PREFIX);
+}
+
+/**
+ * Build optional execution fields for externally registered rows.
+ * @param payload - Parsed external registration request.
+ * @returns Execution fields that should be persisted only when provided.
+ */
+function buildExternalExecutionOptionals(
+  payload: Pick<RegisterExternalExecutionRequest, 'artifactRef' | 'triggerPayload'>,
+): Partial<Pick<WorkflowExecution, 'artifactRef' | 'triggerPayload'>> {
+  const optionals: Partial<Pick<WorkflowExecution, 'artifactRef' | 'triggerPayload'>> = {};
+  if (payload.artifactRef !== undefined) {
+    optionals.artifactRef = payload.artifactRef;
+  }
+  if (payload.triggerPayload !== undefined) {
+    optionals.triggerPayload = payload.triggerPayload;
+  }
+  return optionals;
+}
+
+/**
+ * Build terminal metadata that matches the requested external completion status.
+ * @param payload - Parsed external completion request.
+ * @returns Error or cancellation metadata for the storage update.
+ */
+function buildExternalCompletionMetadata(
+  payload: Pick<CompleteExternalExecutionRequest, 'status' | 'error' | 'reason'>,
+): Partial<Pick<WorkflowExecution, 'error' | 'reason'>> {
+  if (payload.status === 'failed') {
+    if (payload.error === undefined) {
+      throw new Error("status 'failed' requires a non-empty 'error' message");
+    }
+    return { error: payload.error };
+  }
+  if (payload.status === 'cancelled') {
+    if (payload.reason === undefined) {
+      throw new Error("status 'cancelled' requires a non-empty 'reason' string");
+    }
+    return { reason: payload.reason };
+  }
+  return {};
+}
 
 /**
  * Enforce the trust-boundary rules for execution-bound public RPC subjects.
@@ -132,6 +207,74 @@ export function registerWorkflowStorageDelegationHandlers(bus: IMakaioBus): Arra
         throw new Error(`Run context not found for execution: ${executionId}`);
       }
       ctx.setResult(runContext);
+    }),
+    ...registerExternalExecutionHandlers(bus),
+  ];
+}
+
+/**
+ * Register handlers for external (engine-bypass) execution lifecycle.
+ *
+ * External executions create a minimal `workflow_executions` row so that
+ * standard lifecycle events can flow through the WorkLog projection without
+ * FK violations. No coordinator session, run-context snapshot, or runtime
+ * state is created.
+ * @param bus - Message bus
+ * @returns Cleanup functions for the registered handlers
+ */
+function registerExternalExecutionHandlers(bus: IMakaioBus): Array<() => void> {
+  return [
+    bus.on(WorkflowSubjects.registerExternalExecution, async (ctx) => {
+      const payload = WorkflowSchemas.registerExternalExecution.request.parse(ctx.payload);
+      const { name, scope, input } = payload;
+      // `generateId('wfx-ext')` produces `wfx-ext-<timestamp>-<random>`, which
+      // satisfies EXTERNAL_EXECUTION_ID_PREFIX and is disjoint from engine IDs.
+      const executionId = generateId('wfx-ext');
+      const execution: WorkflowExecution = {
+        id: executionId,
+        workflowId: name,
+        status: 'running',
+        // Preserve explicit null: `undefined` means no input provided (default to {}),
+        // but `null` is a valid JSON value that must round-trip unchanged.
+        inputs: input === undefined ? {} : input,
+        startedAt: Date.now(),
+        scope: scope ?? { type: 'global' },
+        ...buildExternalExecutionOptionals(payload),
+      };
+      await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+      ctx.setResult({ executionId });
+    }),
+    bus.on(WorkflowSubjects.completeExternalExecution, async (ctx) => {
+      // Bus schema validation is disabled in production; parse here because the
+      // terminal metadata rules are storage invariants, not just dev-time checks.
+      const payload = WorkflowSchemas.completeExternalExecution.request.parse(ctx.payload);
+      const { executionId, status, completedAt } = payload;
+      // Primary guard: only executions registered through registerExternalExecution
+      // carry the EXTERNAL_EXECUTION_ID_PREFIX. Engine IDs use the plain `wfx-` prefix.
+      // This covers all engine paths including persistPreRuntimeTerminalExecution,
+      // which writes an engine-owned terminal row via setExecution (without creating
+      // a run-context) when the worker signal aborts before the runtime starts.
+      if (!isExternalExecutionId(executionId)) {
+        throw new Error(
+          `completeExternalExecution: execution "${executionId}" is engine-owned and must be completed through the engine finalizer, not this API`,
+        );
+      }
+      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      if (execution === null) {
+        throw new Error(`completeExternalExecution: execution "${executionId}" was not registered`);
+      }
+      if (execution.status !== 'running') {
+        throw new Error(
+          `completeExternalExecution: execution "${executionId}" cannot transition from status "${execution.status}"`,
+        );
+      }
+      const result = await bus.request(WorkflowStorageSubjects.updateExecution, {
+        executionId,
+        status,
+        ...buildExternalCompletionMetadata(payload),
+        completedAt: completedAt ?? Date.now(),
+      });
+      ctx.setResult({ success: result.success });
     }),
   ];
 }
