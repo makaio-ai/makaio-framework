@@ -858,6 +858,331 @@ describe('resolveArtifactContext', () => {
     );
   });
 
+  it('keeps depth-exceeded over resolved back-edges for the same pathless relation', async () => {
+    const a = artifact('repo', 'a', 'rev-a', [{ type: 'contains', target: ref('repo', 'c', 'rev-c') }]);
+    const b = artifact('repo', 'b', 'rev-b', [{ type: 'contains', target: ref('repo', 'c', 'rev-c') }]);
+    const c = artifact('repo', 'c', 'rev-c', [{ type: 'contains', target: ref('repo', 'a', 'rev-a') }]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: ref('repo', 'a', 'rev-a') },
+      { type: 'contains', target: ref('repo', 'b', 'rev-b') },
+    ]);
+    const artifacts = new Map([system, a, b, c].map((e) => [`${e.kind}:${e.id}:${e.revision}`, e]));
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const t = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${t.kind}:${t.id}:${t.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      maxDepth: 2,
+      selectors: {
+        contains: {
+          kinds: ['repo'],
+          hint: 'inline',
+          nested: {
+            contains: {
+              kinds: ['repo'],
+              hint: 'inline',
+              nested: {
+                contains: { kinds: ['repo'], hint: 'inline' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(context.refs).toContainEqual(
+      expect.objectContaining({
+        sourceRef: ref('repo', 'c', 'rev-c'),
+        target: ref('repo', 'a', 'rev-a'),
+        status: 'unresolved',
+        reason: 'depth-exceeded',
+      }),
+    );
+  });
+
+  it('keeps normally resolved refs when the same source relation is later depth-exceeded', async () => {
+    const sharedRef = ref('repo', 'shared', 'rev-shared');
+    const parentRef = ref('repo', 'parent', 'rev-parent');
+    const targetRef = ref('contributor', 'target', 'rev-target');
+    const target = artifact('contributor', 'target', 'rev-target');
+    const shared = artifact('repo', 'shared', 'rev-shared', [{ type: 'contains', target: targetRef }]);
+    const parent = artifact('repo', 'parent', 'rev-parent', [{ type: 'contains', target: sharedRef }]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: sharedRef },
+      { type: 'contains', target: parentRef },
+    ]);
+    const artifacts = new Map([system, parent, shared, target].map((e) => [`${e.kind}:${e.id}:${e.revision}`, e]));
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const t = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${t.kind}:${t.id}:${t.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      maxDepth: 2,
+      selectors: {
+        contains: { depth: 3, kinds: ['repo', 'contributor'], hint: 'inline' },
+      },
+    });
+
+    expect(context.refs).toContainEqual(
+      expect.objectContaining({
+        sourceRef: sharedRef,
+        target: targetRef,
+        status: 'resolved',
+      }),
+    );
+  });
+
+  it('lets later shallow resolutions replace depth-exceeded refs for the same source relation', async () => {
+    const sharedRef = ref('repo', 'shared', 'rev-shared');
+    const parentRef = ref('repo', 'parent', 'rev-parent');
+    const targetRef = ref('contributor', 'target', 'rev-target');
+    const target = artifact('contributor', 'target', 'rev-target');
+    const shared = artifact('repo', 'shared', 'rev-shared', [{ type: 'contains', target: targetRef }]);
+    const parent = artifact('repo', 'parent', 'rev-parent', [{ type: 'contains', target: sharedRef }]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: parentRef },
+      { type: 'contains', target: sharedRef },
+    ]);
+    const artifacts = new Map([system, parent, shared, target].map((e) => [`${e.kind}:${e.id}:${e.revision}`, e]));
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const t = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${t.kind}:${t.id}:${t.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      maxDepth: 2,
+      selectors: {
+        contains: { depth: 3, kinds: ['repo', 'contributor'], hint: 'inline' },
+      },
+    });
+
+    expect(context.refs).toContainEqual(
+      expect.objectContaining({
+        sourceRef: sharedRef,
+        target: targetRef,
+        status: 'resolved',
+      }),
+    );
+  });
+
+  it('keeps precise unresolved refs when the same source relation is later depth-exceeded', async () => {
+    const sharedRef = ref('repo', 'shared', 'rev-shared');
+    const parentRef = ref('repo', 'parent', 'rev-parent');
+    const missingRef = ref('contributor', 'missing', 'rev-missing');
+    const shared = artifact('repo', 'shared', 'rev-shared', [{ type: 'contains', target: missingRef }]);
+    const parent = artifact('repo', 'parent', 'rev-parent', [{ type: 'contains', target: sharedRef }]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: sharedRef },
+      { type: 'contains', target: parentRef },
+    ]);
+    const artifacts = new Map([system, parent, shared].map((e) => [`${e.kind}:${e.id}:${e.revision}`, e]));
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const t = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${t.kind}:${t.id}:${t.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      maxDepth: 2,
+      selectors: {
+        contains: { depth: 3, kinds: ['repo', 'contributor'], hint: 'inline' },
+      },
+    });
+
+    const sharedMissingRefs = context.refs.filter(
+      (entry) =>
+        refKey(entry.sourceRef) === refKey(sharedRef) &&
+        entry.relationType === 'contains' &&
+        entry.target.refClass === 'artifact' &&
+        refKey(entry.target) === refKey(missingRef),
+    );
+    expect(sharedMissingRefs).toHaveLength(1);
+    expect(sharedMissingRefs[0]).toEqual(
+      expect.objectContaining({
+        status: 'unresolved',
+        reason: 'not-found',
+      }),
+    );
+  });
+
+  it('lets selected precise unresolved refs replace earlier not-selected refs', async () => {
+    const sharedRef = ref('repo', 'shared', 'rev-shared');
+    const firstParentRef = ref('repo', 'first-parent', 'rev-first-parent');
+    const secondParentRef = ref('repo', 'second-parent', 'rev-second-parent');
+    const missingRef = ref('contributor', 'missing', 'rev-missing');
+    const shared = artifact('repo', 'shared', 'rev-shared', [{ type: 'contains', target: missingRef }]);
+    const firstParent = artifact('repo', 'first-parent', 'rev-first-parent', [{ type: 'contains', target: sharedRef }]);
+    const secondParent = artifact('repo', 'second-parent', 'rev-second-parent', [
+      { type: 'contains', target: sharedRef },
+    ]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'first_path', target: firstParentRef },
+      { type: 'second_path', target: secondParentRef },
+    ]);
+    const artifacts = new Map(
+      [system, firstParent, secondParent, shared].map((entry) => [
+        `${entry.kind}:${entry.id}:${entry.revision}`,
+        entry,
+      ]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const target = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${target.kind}:${target.id}:${target.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      selectors: {
+        first_path: {
+          depth: 2,
+          kinds: ['repo'],
+          nested: {
+            contains: { depth: 2, kinds: ['repo'], hint: 'summary' },
+          },
+        },
+        second_path: {
+          depth: 2,
+          kinds: ['repo'],
+          nested: {
+            contains: {
+              depth: 2,
+              kinds: ['repo'],
+              hint: 'inline',
+              nested: {
+                contains: { kinds: ['contributor'], hint: 'inline' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const sharedMissingRefs = context.refs.filter(
+      (entry) =>
+        refKey(entry.sourceRef) === refKey(sharedRef) &&
+        entry.relationType === 'contains' &&
+        entry.target.refClass === 'artifact' &&
+        refKey(entry.target) === refKey(missingRef),
+    );
+    expect(sharedMissingRefs).toHaveLength(1);
+    expect(sharedMissingRefs[0]).toEqual(
+      expect.objectContaining({
+        status: 'unresolved',
+        reason: 'not-found',
+      }),
+    );
+  });
+
+  it('keeps depth-exceeded refs when the same source relation is later not-selected', async () => {
+    const sharedRef = ref('repo', 'shared', 'rev-shared');
+    const firstParentRef = ref('repo', 'first-parent', 'rev-first-parent');
+    const secondParentRef = ref('repo', 'second-parent', 'rev-second-parent');
+    const missingRef = ref('contributor', 'missing', 'rev-missing');
+    const shared = artifact('repo', 'shared', 'rev-shared', [{ type: 'contains', target: missingRef }]);
+    const firstParent = artifact('repo', 'first-parent', 'rev-first-parent', [{ type: 'contains', target: sharedRef }]);
+    const secondParent = artifact('repo', 'second-parent', 'rev-second-parent', [
+      { type: 'contains', target: sharedRef },
+    ]);
+    const system = artifact('system', 'system-1', 'rev-system', [
+      { type: 'first_path', target: firstParentRef },
+      { type: 'second_path', target: secondParentRef },
+    ]);
+    const artifacts = new Map(
+      [system, firstParent, secondParent, shared].map((entry) => [
+        `${entry.kind}:${entry.id}:${entry.revision}`,
+        entry,
+      ]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const target = ctx.payload.ref;
+        ctx.setResult({
+          artifact: artifacts.get(`${target.kind}:${target.id}:${target.revision}`) ?? null,
+        });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      kindRegistry: registry,
+      ref: ref('system', 'system-1', 'rev-system'),
+      maxDepth: 2,
+      selectors: {
+        first_path: {
+          depth: 2,
+          kinds: ['repo'],
+          nested: {
+            contains: {
+              depth: 2,
+              kinds: ['repo'],
+              hint: 'inline',
+              nested: {
+                contains: { kinds: ['contributor'], hint: 'inline' },
+              },
+            },
+          },
+        },
+        second_path: {
+          depth: 2,
+          kinds: ['repo'],
+          nested: {
+            contains: { depth: 2, kinds: ['repo'], hint: 'summary' },
+          },
+        },
+      },
+    });
+
+    const sharedMissingRefs = context.refs.filter(
+      (entry) =>
+        refKey(entry.sourceRef) === refKey(sharedRef) &&
+        entry.relationType === 'contains' &&
+        entry.target.refClass === 'artifact' &&
+        refKey(entry.target) === refKey(missingRef),
+    );
+    expect(sharedMissingRefs).toHaveLength(1);
+    expect(sharedMissingRefs[0]).toEqual(
+      expect.objectContaining({
+        status: 'unresolved',
+        reason: 'depth-exceeded',
+      }),
+    );
+  });
+
   it('marks child artifacts as not-found when resolution returns null', async () => {
     const system = artifact('system', 'system-1', 'rev-system', [
       {

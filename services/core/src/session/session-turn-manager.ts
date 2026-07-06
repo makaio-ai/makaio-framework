@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, SessionSubjects, type TurnInitiator } from '@makaio/contracts';
+import { AgentSubjects, SessionSubjects, type TurnInitiator, type TurnUsage } from '@makaio/contracts';
 import { TurnStorageSubjects } from './turns/index.js';
 import { MessageStorageSubjects } from './messages/namespace.js';
 import { Turn } from './entities/turn.js';
@@ -27,6 +27,9 @@ export const TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS = 1500;
  * evicted FIFO once the cap is reached.
  */
 const ASSISTANT_PERSISTENCE_COUNTER_CAP = 1024;
+
+/** Durable error code for a new turn whose first user message could not be stored. */
+export const USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR = 'user-message-persistence-failed';
 
 /**
  * Pending barrier waiter for a completing turn.
@@ -83,11 +86,17 @@ export class SessionTurnManager {
   /** Active turns keyed by sessionId (one turn per session). */
   private readonly activeTurns = new Map<string, Turn>();
 
-  /** Per-session usage accumulators, parallel to activeTurns. */
+  /** Per-turn usage accumulators, keyed by turnId. */
   private readonly usageAccumulators = new Map<string, TurnUsageAccumulator>();
 
-  /** Sessions currently persisting turn completion (prevents concurrent writes). */
-  private readonly completingSessions = new Set<string>();
+  /** Turns currently persisting completion (prevents concurrent writes). */
+  private readonly completingTurnIds = new Set<string>();
+
+  /** Completing turns retained for usage correlation after active routing is cleared. */
+  private readonly completingTurns = new Map<string, Turn>();
+
+  /** Pending terminal completions keyed by turnId; value records whether turn storage handled the transition. */
+  private readonly pendingTerminalCompletions = new Map<string, boolean>();
 
   /** Usage events received while completion persistence is in-flight. */
   private readonly bufferedUsageDuringCompletion = new Map<string, AgentUsageEvent[]>();
@@ -177,7 +186,7 @@ export class SessionTurnManager {
     });
 
     this.activeTurns.set(sessionId, turn);
-    this.usageAccumulators.set(sessionId, new TurnUsageAccumulator());
+    this.usageAccumulators.set(turn.turnId, new TurnUsageAccumulator());
 
     return turn;
   }
@@ -185,19 +194,60 @@ export class SessionTurnManager {
   /**
    * Discard active in-memory state for a turn that failed before routing began.
    *
-   * The storage contract has no turn-delete operation, so this only rolls back
-   * the active manager state that would otherwise make the next user message
-   * reuse a turn whose first message was never persisted.
+   * Use when no durable turn row needs a terminal status transition.
    * @param turn - Newly created active turn to discard
    */
   public discardActiveTurn(turn: Turn): void {
+    if (!this.clearActiveRoutingTurn(turn)) {
+      return;
+    }
+    this.usageAccumulators.delete(turn.turnId);
+    this.assistantStoredCounts.delete(turn.turnId);
+  }
+
+  /**
+   * Mark an unclaimed newly created turn as failed and discard its active in-memory state.
+   *
+   * This preserves the durable turn lifecycle invariant when setup fails after
+   * `storage:turn.create` has already assigned a turn number.
+   * @param turn - Newly created active turn whose setup failed before any message claimed it
+   * @param error - Durable error code to store on the terminal turn
+   */
+  public async failActiveTurnSetup(turn: Turn, error: string): Promise<void> {
     const active = this.activeTurns.get(turn.sessionId);
     if (active?.turnId !== turn.turnId) {
       return;
     }
+    if (turn.messageIds.length > 0 || turn.hasPendingMessageAppends) {
+      return;
+    }
+
+    try {
+      await this.bus.requestOptional(TurnStorageSubjects.complete, {
+        turnId: turn.turnId,
+        status: 'error',
+        expectedStatus: 'active',
+        error,
+      });
+    } catch (completionError) {
+      console.error(`[SessionTurnManager] Failed to mark setup-failed turn ${turn.turnId} as error:`, completionError);
+    }
+
+    this.discardActiveTurn(turn);
+  }
+
+  /**
+   * Remove a turn from the active routing index when it is no longer routable.
+   * @param turn - Turn to remove when it still owns the session slot
+   * @returns Whether the turn owned and cleared the active routing slot
+   */
+  private clearActiveRoutingTurn(turn: Turn): boolean {
+    const active = this.activeTurns.get(turn.sessionId);
+    if (active?.turnId !== turn.turnId) {
+      return false;
+    }
     this.activeTurns.delete(turn.sessionId);
-    this.usageAccumulators.delete(turn.sessionId);
-    this.assistantStoredCounts.delete(turn.turnId);
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -232,7 +282,7 @@ export class SessionTurnManager {
             return;
           }
 
-          const turn = this.findActiveTurnByTurnId(usageTurnId);
+          const turn = this.findTurnForUsage(usageTurnId);
           if (!turn) {
             console.warn(`[SessionTurnManager] Dropping usage for inactive turn ${usageTurnId} (agentId=${agentId}).`);
             return;
@@ -244,12 +294,12 @@ export class SessionTurnManager {
             return;
           }
 
-          if (this.completingSessions.has(turn.sessionId)) {
-            this.bufferUsageDuringCompletion(turn.sessionId, { agentId, inputTokens, outputTokens });
+          if (this.completingTurnIds.has(turn.turnId)) {
+            this.bufferUsageDuringCompletion(turn.turnId, { agentId, inputTokens, outputTokens });
             return;
           }
 
-          this.usageAccumulators.get(turn.sessionId)?.add({ agentId, inputTokens, outputTokens });
+          this.usageAccumulators.get(turn.turnId)?.add({ agentId, inputTokens, outputTokens });
         },
       ),
     );
@@ -263,11 +313,11 @@ export class SessionTurnManager {
          * @param ctx - Event context containing agentId, outcome, and optional error
          */
         async (ctx) => {
-          const { agentId, outcome, error } = ctx.payload;
+          const { agentId, outcome, error, turnId } = ctx.payload;
           // All non-error terminal outcomes count as successful completion at the
           // orchestration level. This includes omitted/legacy outcome values.
           const success = outcome !== 'error';
-          await this.handleAgentCompletion(agentId, success, success ? undefined : error, onTurnComplete);
+          await this.handleAgentCompletion(agentId, success, success ? undefined : error, onTurnComplete, turnId);
         },
       ),
     );
@@ -298,48 +348,42 @@ export class SessionTurnManager {
    * @param result - Turn result (success status and error messages)
    */
   public async completeTurn(turn: Turn, result: TurnCompletionResult): Promise<void> {
-    if (this.completingSessions.has(turn.sessionId)) {
+    if (this.completingTurnIds.has(turn.turnId)) {
       return;
     }
-    this.completingSessions.add(turn.sessionId);
+    this.completingTurnIds.add(turn.turnId);
+    this.completingTurns.set(turn.turnId, turn);
 
-    const usageAccumulator = this.usageAccumulators.get(turn.sessionId);
+    const usageAccumulator = this.usageAccumulators.get(turn.turnId);
     let completedUsage = usageAccumulator?.snapshot();
 
-    let turnStorageHandled = false;
+    let turnStorageHandled = this.pendingTerminalCompletions.get(turn.turnId) ?? false;
     try {
-      const completeResult = await this.bus.requestOptional(TurnStorageSubjects.complete, {
-        turnId: turn.turnId,
-        status: result.success ? 'completed' : 'error',
-        error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
-        ...(completedUsage !== undefined && { usage: completedUsage }),
-      });
-      turnStorageHandled = completeResult.handled;
-
-      const bufferedUsage = this.bufferedUsageDuringCompletion.get(turn.sessionId) ?? [];
-      if (bufferedUsage.length > 0) {
-        for (const usageEvent of bufferedUsage) {
-          usageAccumulator?.add(usageEvent);
+      if (!this.pendingTerminalCompletions.has(turn.turnId)) {
+        const completion = await this.persistTurnCompletion(turn, result, completedUsage, 'active');
+        turnStorageHandled = completion.handled;
+        if (!completion.transitioned) {
+          this.clearActiveRoutingTurn(turn);
+          this.clearCompletionState(turn, usageAccumulator);
+          return;
         }
-        this.bufferedUsageDuringCompletion.delete(turn.sessionId);
-
-        const mergedUsage = usageAccumulator?.snapshot();
-        completedUsage = mergedUsage;
-        await this.bus.requestOptional(TurnStorageSubjects.complete, {
-          turnId: turn.turnId,
-          status: result.success ? 'completed' : 'error',
-          error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
-          ...(mergedUsage !== undefined && { usage: mergedUsage }),
-        });
+        this.pendingTerminalCompletions.set(turn.turnId, turnStorageHandled);
+        completedUsage = await this.flushBufferedUsageDuringCompletion(turn, result, usageAccumulator, completedUsage);
       }
     } catch (error) {
       // Keep active turn + accumulator state intact so completion can be retried.
       // Remove the completing guard so a retry can re-enter.
-      this.completingSessions.delete(turn.sessionId);
+      this.completingTurnIds.delete(turn.turnId);
+      this.completingTurns.delete(turn.turnId);
       console.error(`[SessionTurnManager] Failed to persist completion for turn ${turn.turnId}:`, error);
       throw error;
     }
 
+    // At this point the durable turn row is terminal. It must no longer be
+    // returned as active routing state while assistant-message persistence and
+    // lifecycle emission finish.
+    this.clearActiveRoutingTurn(turn);
+    let lifecycleAppended = false;
     try {
       // Persist-before-emit barrier. Skipped entirely in ephemeral mode: turn
       // and message storage are registered together (sessionStoragePackage), so
@@ -348,8 +392,7 @@ export class SessionTurnManager {
       if (turnStorageHandled) {
         await this.awaitAssistantPersistence(turn);
       }
-      this.assistantStoredCounts.delete(turn.turnId);
-
+      completedUsage = await this.flushBufferedUsageDuringCompletion(turn, result, usageAccumulator, completedUsage);
       const completedPayload = {
         sessionId: turn.sessionId,
         turnId: turn.turnId,
@@ -365,22 +408,41 @@ export class SessionTurnManager {
       await appendSessionLifecycleEvent(this.bus, {
         type: 'turn.completed',
         sessionId: turn.sessionId,
+        eventId: `turn.completed:${turn.turnId}`,
         payload: completedPayload,
       });
+      lifecycleAppended = true;
 
       await this.bus.emit(SessionSubjects.turn.completed, completedPayload);
     } catch (error) {
-      this.completingSessions.delete(turn.sessionId);
+      if (lifecycleAppended) {
+        this.clearCompletionState(turn, usageAccumulator);
+      } else {
+        this.completingTurnIds.delete(turn.turnId);
+      }
       throw error;
     }
 
-    // Clear in-memory turn state only after durable completion and emission succeed.
+    // Clear remaining in-memory completion state only after durable completion
+    // and emission succeed.
     // The completing guard is cleared last so that late usage events after state
     // cleanup are not buffered into a now-gone accumulator.
+    this.clearCompletionState(turn, usageAccumulator);
+  }
+
+  /**
+   * Clear in-memory state retained only while a turn completion is in progress.
+   * @param turn - Turn whose completion state should be removed
+   * @param usageAccumulator - Optional accumulator retained for late usage merges
+   */
+  private clearCompletionState(turn: Turn, usageAccumulator: TurnUsageAccumulator | undefined): void {
     usageAccumulator?.clear();
-    this.activeTurns.delete(turn.sessionId);
-    this.usageAccumulators.delete(turn.sessionId);
-    this.completingSessions.delete(turn.sessionId);
+    this.usageAccumulators.delete(turn.turnId);
+    this.bufferedUsageDuringCompletion.delete(turn.turnId);
+    this.assistantStoredCounts.delete(turn.turnId);
+    this.completingTurns.delete(turn.turnId);
+    this.completingTurnIds.delete(turn.turnId);
+    this.pendingTerminalCompletions.delete(turn.turnId);
   }
 
   // ---------------------------------------------------------------------------
@@ -441,7 +503,9 @@ export class SessionTurnManager {
     this.cleanups.length = 0;
     this.activeTurns.clear();
     this.usageAccumulators.clear();
-    this.completingSessions.clear();
+    this.completingTurnIds.clear();
+    this.completingTurns.clear();
+    this.pendingTerminalCompletions.clear();
     this.bufferedUsageDuringCompletion.clear();
     this.syntheticTurnCounters.clear();
     // Settle pending barrier waiters so in-flight completeTurn calls resolve.
@@ -465,15 +529,21 @@ export class SessionTurnManager {
    * @param success - Whether the agent completed successfully
    * @param error - Error message if the agent failed
    * @param onTurnComplete - Callback to invoke when the turn is complete
+   * @param completionTurnId - Turn identifier supplied by the adapter completion event
    */
   private async handleAgentCompletion(
     agentId: string,
     success: boolean,
     error: string | undefined,
     onTurnComplete: TurnCompleteCallback,
+    completionTurnId: string | undefined,
   ): Promise<void> {
-    const turn = findTurnByAgent(this.activeTurns, agentId);
+    const turn = completionTurnId
+      ? this.findTurnForCompletion(completionTurnId)
+      : this.findTurnForUncorrelatedCompletion(agentId);
     if (!turn) return; // Agent not part of any active turn.
+    if (!turn.hasAgent(agentId)) return;
+    if (this.hasTerminalOutcome(turn, agentId)) return;
 
     const stateChange = success
       ? turn.markAgentCompleted(agentId)
@@ -499,13 +569,118 @@ export class SessionTurnManager {
 
   /**
    * Buffer a usage event that arrived while turn completion persistence is in-flight.
-   * @param sessionId - Session whose turn is currently completing
+   * @param turnId - Turn whose completion is currently being persisted
    * @param usageEvent - Usage event to defer until after persistence
    */
-  private bufferUsageDuringCompletion(sessionId: string, usageEvent: AgentUsageEvent): void {
-    const buffered = this.bufferedUsageDuringCompletion.get(sessionId) ?? [];
+  private bufferUsageDuringCompletion(turnId: string, usageEvent: AgentUsageEvent): void {
+    const buffered = this.bufferedUsageDuringCompletion.get(turnId) ?? [];
     buffered.push(usageEvent);
-    this.bufferedUsageDuringCompletion.set(sessionId, buffered);
+    this.bufferedUsageDuringCompletion.set(turnId, buffered);
+  }
+
+  /**
+   * Find a turn that may still accept usage by turnId.
+   * @param turnId - Turn identifier from an agent usage event
+   * @returns Active or completing turn, if usage can still be recorded
+   */
+  private findTurnForUsage(turnId: string): Turn | undefined {
+    return this.findActiveTurnByTurnId(turnId) ?? this.completingTurns.get(turnId);
+  }
+
+  /**
+   * Find a turn that may still accept agent completion by turnId.
+   * @param turnId - Turn identifier from an agent completion event
+   * @returns Active or completing turn, if completion can still be correlated
+   */
+  private findTurnForCompletion(turnId: string): Turn | undefined {
+    return this.findActiveTurnByTurnId(turnId) ?? this.completingTurns.get(turnId);
+  }
+
+  /**
+   * Find the active turn for a legacy completion event without turnId.
+   * @param agentId - Agent ID from the completion event.
+   * @returns Active turn to mutate, or undefined when the event is ambiguous.
+   */
+  private findTurnForUncorrelatedCompletion(agentId: string): Turn | undefined {
+    for (const turn of this.completingTurns.values()) {
+      if (turn.hasAgent(agentId)) {
+        // Managed agents emit turnId on terminal events. If a legacy event lacks
+        // turnId while an older turn for the same agent is still completing, the
+        // event cannot be attributed safely to the new active turn.
+        return undefined;
+      }
+    }
+    return findTurnByAgent(this.activeTurns, agentId);
+  }
+
+  /**
+   * Check whether a terminal outcome has already been recorded for an agent.
+   * @param turn - Turn being completed.
+   * @param agentId - Agent ID from the terminal event.
+   * @returns Whether the agent already has a terminal outcome on the turn.
+   */
+  private hasTerminalOutcome(turn: Turn, agentId: string): boolean {
+    return turn.completedAgents.has(agentId) || turn.erroredAgents.has(agentId);
+  }
+
+  /**
+   * Persist a turn's terminal status and optional usage snapshot.
+   * @param turn - Turn being completed
+   * @param result - Completion result to persist
+   * @param usage - Usage snapshot to include, when available
+   * @param expectedStatus - Optional status guard for the first terminal transition
+   * @returns Whether turn storage handled the request and terminalized the turn
+   */
+  private async persistTurnCompletion(
+    turn: Turn,
+    result: TurnCompletionResult,
+    usage: TurnUsage | undefined,
+    expectedStatus?: 'active',
+  ): Promise<{ handled: boolean; transitioned: boolean }> {
+    const completeResult = await this.bus.requestOptional(TurnStorageSubjects.complete, {
+      turnId: turn.turnId,
+      status: result.success ? 'completed' : 'error',
+      ...(expectedStatus !== undefined && { expectedStatus }),
+      error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+      ...(usage !== undefined && { usage }),
+    });
+    return {
+      handled: completeResult.handled,
+      transitioned: completeResult.handled ? completeResult.data.transitioned : true,
+    };
+  }
+
+  /**
+   * Merge buffered usage and persist the updated snapshot.
+   * @param turn - Turn whose buffered usage should be merged
+   * @param result - Completion result for the turn
+   * @param usageAccumulator - Usage accumulator captured by the completing turn
+   * @param currentUsage - Current completed usage snapshot
+   * @returns Updated usage snapshot
+   */
+  private async flushBufferedUsageDuringCompletion(
+    turn: Turn,
+    result: TurnCompletionResult,
+    usageAccumulator: TurnUsageAccumulator | undefined,
+    currentUsage: TurnUsage | undefined,
+  ): Promise<TurnUsage | undefined> {
+    const bufferedUsage = this.bufferedUsageDuringCompletion.get(turn.turnId) ?? [];
+    if (bufferedUsage.length === 0) {
+      return currentUsage;
+    }
+
+    for (const usageEvent of bufferedUsage) {
+      usageAccumulator?.add(usageEvent);
+    }
+    this.bufferedUsageDuringCompletion.delete(turn.turnId);
+
+    const mergedUsage = usageAccumulator?.snapshot() ?? currentUsage;
+    try {
+      await this.persistTurnCompletion(turn, result, mergedUsage);
+    } catch (error) {
+      console.warn(`[SessionTurnManager] Failed to persist buffered usage for turn ${turn.turnId}:`, error);
+    }
+    return mergedUsage;
   }
 
   /**

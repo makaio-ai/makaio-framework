@@ -23,6 +23,17 @@ import type { AvailableAdapter } from '@makaio/services-core/settings';
 import type { LoadedAdapter, AdapterInstance, AdapterInitOptions } from './adapter-runtime-types.js';
 import { resolveDefaultClientId } from './adapter-client-refs.js';
 
+/** Maximum time to wait for an adapter instance close hook before continuing shutdown. */
+export const ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS = 5_000;
+
+type AdapterCloseHook = () => void | Promise<void>;
+
+interface CloseableAdapterInstance extends AdapterInstance {
+  readonly shutdown?: AdapterCloseHook;
+  readonly closeAsync?: AdapterCloseHook;
+  readonly close?: AdapterCloseHook;
+}
+
 // ---------------------------------------------------------------------------
 // Re-exported public types
 // ---------------------------------------------------------------------------
@@ -84,18 +95,48 @@ export function toAvailableAdapter(adapter: LoadedAdapter): AvailableAdapter {
 }
 
 /**
+ * Close one adapter instance through its supported lifecycle hook.
+ * @param adapterId - Runtime adapter ID used for diagnostics.
+ * @param instance - Adapter instance to close.
+ * @param timeoutMs - Maximum time to wait for the close hook.
+ */
+export async function closeAdapterInstance(
+  adapterId: string,
+  instance: AdapterInstance,
+  timeoutMs = ADAPTER_INSTANCE_CLOSE_TIMEOUT_MS,
+): Promise<void> {
+  const closeHook = resolveAdapterCloseHook(instance);
+  if (!closeHook) {
+    return;
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(closeHook),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`Timed out closing adapter ${adapterId} after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+/**
  * Best-effort shutdown of all adapter instances and clear the map.
  * @param instances - Mutable map of adapter instances to shut down.
  */
 export async function shutdownAdapterInstances(instances: Map<string, AdapterInstance>): Promise<void> {
   for (const [adapterId, instance] of instances) {
-    const shuttable = instance as AdapterInstance & { shutdown?: () => Promise<void> };
-    if (typeof shuttable.shutdown === 'function') {
-      try {
-        await shuttable.shutdown();
-      } catch (shutdownError) {
-        console.error(`[adapter-runtime] Error shutting down adapter ${adapterId}:`, shutdownError);
-      }
+    try {
+      await closeAdapterInstance(adapterId, instance);
+    } catch (shutdownError) {
+      console.error(`[adapter-runtime] Error shutting down adapter ${adapterId}:`, shutdownError);
     }
   }
   instances.clear();
@@ -114,10 +155,7 @@ async function rollbackInitializedAdapterInstance(
   instances: Map<string, AdapterInstance>,
 ): Promise<void> {
   try {
-    const shuttable = instance as AdapterInstance & { shutdown?: () => Promise<void> };
-    if (typeof shuttable.shutdown === 'function') {
-      await shuttable.shutdown();
-    }
+    await closeAdapterInstance(adapterId, instance);
   } finally {
     instances.delete(adapterId);
   }
@@ -140,8 +178,27 @@ async function isAdapterEnabled(bus: IMakaioBus, adapterName: string): Promise<b
  * @param machineId - Current machine identifier.
  * @returns Explicit adapter ID or deterministic runtime ID.
  */
-function resolveLoadedAdapterId(adapter: LoadedAdapter, machineId: string): string {
+export function resolveLoadedAdapterId(adapter: LoadedAdapter, machineId: string): string {
   return adapter.options.adapterId ?? buildDeterministicAdapterId(machineId, adapter.name);
+}
+
+/**
+ * Pick the lifecycle hook used to close an adapter instance.
+ * @param instance - Adapter instance returned by a factory.
+ * @returns Close hook, or undefined when the instance exposes none.
+ */
+function resolveAdapterCloseHook(instance: AdapterInstance): AdapterCloseHook | undefined {
+  const closeable = instance as CloseableAdapterInstance;
+  if (typeof closeable.shutdown === 'function') {
+    return closeable.shutdown.bind(instance);
+  }
+  if (typeof closeable.closeAsync === 'function') {
+    return closeable.closeAsync.bind(instance);
+  }
+  if (typeof closeable.close === 'function') {
+    return closeable.close.bind(instance);
+  }
+  return undefined;
 }
 
 /**
@@ -180,9 +237,15 @@ export async function initializeEnabledAdapters(
       } as AdapterInitOptions);
 
       if (instance.adapterId !== expectedAdapterId) {
-        throw new Error(
+        const mismatchError = new Error(
           `Adapter '${adapter.name}' initialized with mismatched adapterId (expected '${expectedAdapterId}', got '${instance.adapterId}')`,
         );
+        try {
+          await closeAdapterInstance(expectedAdapterId, instance);
+        } catch (rollbackError) {
+          console.error(`[adapter-runtime] Error rolling back adapter ${adapter.name}:`, rollbackError);
+        }
+        throw mismatchError;
       }
 
       adapterInstances.set(expectedAdapterId, instance);

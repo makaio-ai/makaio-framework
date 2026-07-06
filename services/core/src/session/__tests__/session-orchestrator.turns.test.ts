@@ -7,6 +7,7 @@ import { SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
 import { MessageStorageSubjects } from '../messages/namespace.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
+import { USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR } from '../session-turn-manager.js';
 import { registerMockStorageHandlers } from '../testing/index.js';
 import { TurnStorageSubjects } from '../turns/index.js';
 import {
@@ -67,11 +68,25 @@ describe('SessionOrchestrator - Turns', () => {
       unsubscribers.push(registerGetAgentHandler(sessions));
 
       const createdTurnIds: string[] = [];
+      const turnStatuses = new Map<string, { status: 'active' | 'completed' | 'error'; error?: string }>();
+      const buildCompletedTurnResult = (turnId: string) => {
+        const stored = turnStatuses.get(turnId);
+        if (!stored) throw new Error(`turn ${turnId} not created`);
+        return {
+          turnId,
+          sessionId: 's1',
+          turnNumber: createdTurnIds.indexOf(turnId) + 1,
+          startedAt: Date.now(),
+          status: stored.status,
+          error: stored.error,
+        };
+      };
       let shouldFailAppend = true;
       unsubscribers.push(
         MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
           const turnId = ctx.payload.turnId ?? crypto.randomUUID();
           createdTurnIds.push(turnId);
+          turnStatuses.set(turnId, { status: 'active' });
           ctx.setResult({
             turn: {
               turnId,
@@ -80,6 +95,27 @@ describe('SessionOrchestrator - Turns', () => {
               startedAt: Date.now(),
               status: 'active',
             },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.complete, (ctx) => {
+          const stored = turnStatuses.get(ctx.payload.turnId);
+          if (!stored) throw new Error(`turn ${ctx.payload.turnId} not created`);
+          if (ctx.payload.expectedStatus && stored.status !== ctx.payload.expectedStatus) {
+            ctx.setResult({
+              turn: buildCompletedTurnResult(ctx.payload.turnId),
+              transitioned: false,
+            });
+            return;
+          }
+          turnStatuses.set(ctx.payload.turnId, { status: ctx.payload.status, error: ctx.payload.error });
+          ctx.setResult({
+            turn: {
+              ...buildCompletedTurnResult(ctx.payload.turnId),
+              completedAt: Date.now(),
+            },
+            transitioned: true,
           });
         }),
       );
@@ -110,9 +146,209 @@ describe('SessionOrchestrator - Turns', () => {
       await waitForAsync();
 
       expect(createdTurnIds).toHaveLength(2);
+      expect(turnStatuses.get(createdTurnIds[0])).toEqual({
+        status: 'error',
+        error: USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR,
+      });
       expect(retry.turnId).toBe(createdTurnIds[1]);
       expect(startedEvents.received).toHaveLength(1);
       expect(startedEvents.received[0].turnId).toBe(retry.turnId);
+    });
+
+    it('fails setup when user-message append storage is unhandled', async () => {
+      resetBusHandlers();
+      unsubscribers = [];
+      sessions = new Map();
+      setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
+      unsubscribers.push(registerGetSessionHandler(sessions));
+      unsubscribers.push(registerGetAgentHandler(sessions));
+
+      let createdTurnId = '';
+      let completedStatus: { status: 'completed' | 'error'; error?: string } | undefined;
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
+          createdTurnId = ctx.payload.turnId ?? crypto.randomUUID();
+          ctx.setResult({
+            turn: {
+              turnId: createdTurnId,
+              sessionId: ctx.payload.sessionId,
+              turnNumber: 1,
+              startedAt: Date.now(),
+              status: 'active',
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.complete, (ctx) => {
+          completedStatus = { status: ctx.payload.status, error: ctx.payload.error };
+          ctx.setResult({
+            turn: {
+              turnId: ctx.payload.turnId,
+              sessionId: 's1',
+              turnNumber: 1,
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+              status: ctx.payload.status,
+              error: ctx.payload.error,
+            },
+            transitioned: true,
+          });
+        }),
+      );
+      unsubscribers.push(registerSendMessageHandler());
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+
+      await expect(
+        MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'First' }),
+      ).rejects.toThrow('Message storage append handler is not registered');
+
+      expect(createdTurnId).not.toBe('');
+      expect(completedStatus).toEqual({
+        status: 'error',
+        error: USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR,
+      });
+    });
+
+    it('does not terminalize a setup turn claimed by another pending append', async () => {
+      resetBusHandlers();
+      unsubscribers = [];
+      sessions = new Map();
+      setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
+      unsubscribers.push(registerGetSessionHandler(sessions));
+      unsubscribers.push(registerGetAgentHandler(sessions));
+
+      const createdTurnIds: string[] = [];
+      const completeCalls: string[] = [];
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
+          const turnId = ctx.payload.turnId ?? crypto.randomUUID();
+          createdTurnIds.push(turnId);
+          ctx.setResult({
+            turn: {
+              turnId,
+              sessionId: ctx.payload.sessionId,
+              turnNumber: createdTurnIds.length,
+              startedAt: Date.now(),
+              status: 'active',
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.complete, (ctx) => {
+          completeCalls.push(ctx.payload.turnId);
+          ctx.setResult({
+            turn: {
+              turnId: ctx.payload.turnId,
+              sessionId: 's1',
+              turnNumber: createdTurnIds.indexOf(ctx.payload.turnId) + 1,
+              startedAt: Date.now(),
+              completedAt: Date.now(),
+              status: ctx.payload.status,
+              error: ctx.payload.error,
+            },
+            transitioned: true,
+          });
+        }),
+      );
+
+      let markFirstAppendStarted!: () => void;
+      const firstAppendStarted = new Promise<void>((resolve) => {
+        markFirstAppendStarted = resolve;
+      });
+      let failFirstAppend!: () => void;
+      const firstAppendGate = new Promise<void>((_, reject) => {
+        failFirstAppend = () => reject(new Error('first append unavailable'));
+      });
+      let markSecondAppendStarted!: () => void;
+      const secondAppendStarted = new Promise<void>((resolve) => {
+        markSecondAppendStarted = resolve;
+      });
+      let resolveSecondAppend!: () => void;
+      const secondAppendGate = new Promise<void>((resolve) => {
+        resolveSecondAppend = resolve;
+      });
+
+      unsubscribers.push(
+        MakaioBus.on(MessageStorageSubjects.append, async (ctx) => {
+          if (ctx.payload.message.contentText === 'First') {
+            markFirstAppendStarted();
+            await firstAppendGate;
+          }
+          if (ctx.payload.message.contentText === 'Second') {
+            markSecondAppendStarted();
+            await secondAppendGate;
+          }
+          ctx.setResult({
+            message: {
+              ...ctx.payload.message,
+              messageId: ctx.payload.message.messageId ?? crypto.randomUUID(),
+              editOf: undefined,
+            },
+          });
+        }),
+      );
+      unsubscribers.push(registerSendMessageHandler());
+      const startedEvents = collectTurnStartedEvents(unsubscribers);
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+
+      const firstSend = MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'First' });
+      await firstAppendStarted;
+      const secondSend = MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'Second' });
+      await secondAppendStarted;
+
+      failFirstAppend();
+      await expect(firstSend).rejects.toThrow('first append unavailable');
+      expect(completeCalls).toHaveLength(0);
+
+      resolveSecondAppend();
+      const secondResult = await secondSend;
+      await waitForAsync();
+
+      expect(createdTurnIds).toHaveLength(1);
+      expect(secondResult.turnId).toBe(createdTurnIds[0]);
+      expect(startedEvents.received).toHaveLength(1);
+      expect(startedEvents.received[0].messageId).toBe(secondResult.messageId);
+    });
+
+    it('preserves the user-message append error when failed-turn cleanup also fails', async () => {
+      resetBusHandlers();
+      unsubscribers = [];
+      sessions = new Map();
+      setupSession('s1', [createMockAgent('a1', { role: 'lead' })], 'a1');
+      unsubscribers.push(registerGetSessionHandler(sessions));
+      unsubscribers.push(registerGetAgentHandler(sessions));
+
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.create, (ctx) => {
+          ctx.setResult({
+            turn: {
+              turnId: ctx.payload.turnId ?? crypto.randomUUID(),
+              sessionId: ctx.payload.sessionId,
+              turnNumber: 1,
+              startedAt: Date.now(),
+              status: 'active',
+            },
+          });
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(MessageStorageSubjects.append, () => {
+          throw new Error('append unavailable');
+        }),
+      );
+      unsubscribers.push(
+        MakaioBus.on(TurnStorageSubjects.complete, () => {
+          throw new Error('turn completion unavailable');
+        }),
+      );
+      unsubscribers.push(registerSendMessageHandler());
+      orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
+
+      await expect(
+        MakaioBus.request(SessionSubjects.sendMessage, { sessionId: 's1', message: 'First' }),
+      ).rejects.toThrow('append unavailable');
     });
   });
 

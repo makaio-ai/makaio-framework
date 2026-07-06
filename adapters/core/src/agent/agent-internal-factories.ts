@@ -106,7 +106,7 @@ export function createAgentTurnExecutor(config: {
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
   shouldUseNativeResume: (sessionContext?: StartAgentOptions['sessionContext']) => boolean;
-  onMessageHandle: (messageHandle: MessageHandle) => Promise<void>;
+  onMessageHandle: (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
   ephemeral?: boolean;
 }): AgentTurnExecutor {

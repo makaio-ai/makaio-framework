@@ -16,7 +16,11 @@ import { AdapterRegistry } from './adapter-registry.js';
 import { MessageStorageSubjects } from './messages/index.js';
 import { MessageRoutingSubjects } from './message-routing/index.js';
 import { AgentStorageSubjects } from './storage/agent-namespace.js';
-import { SessionTurnManager, type TurnCompletionResult } from './session-turn-manager.js';
+import {
+  SessionTurnManager,
+  USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR,
+  type TurnCompletionResult,
+} from './session-turn-manager.js';
 import { emitSessionTurnStarted } from './session-lifecycle-events.js';
 import { normalizeSelectionString, resolveAdapterNameById } from './selection-utils.js';
 
@@ -270,8 +274,6 @@ export class SessionOrchestrator implements ISessionOrchestrator {
 
         // 5. Get or create turn
         let turn = this.turnManager.getActiveTurn(resolvedSessionId);
-        const isNewTurn = !turn;
-
         if (!turn) {
           turn = await this.turnManager.createTurn(
             resolvedSessionId,
@@ -287,14 +289,15 @@ export class SessionOrchestrator implements ISessionOrchestrator {
         // promises the full turn is queryable via `storage:message.getByTurn`
         // (four-point consumer contract), and the completion barrier only
         // covers assistant messages — ordering here is what guarantees the
-        // user side. A handled storage failure aborts routing so completion
-        // cannot advertise a turn whose user message is not queryable.
+        // user side. A missing or failed storage append aborts routing so
+        // completion cannot advertise a turn whose user message is not queryable.
         const messageId = crypto.randomUUID();
 
         const normalizedBlocks = normalizeToBlocks(message);
+        turn.claimMessageAppend(messageId);
 
         try {
-          await this.bus.requestOptional(MessageStorageSubjects.append, {
+          const appendResult = await this.bus.requestOptional(MessageStorageSubjects.append, {
             message: {
               messageId,
               turnId: turn.turnId,
@@ -306,17 +309,23 @@ export class SessionOrchestrator implements ISessionOrchestrator {
               ...(origin !== undefined && { origin }),
             },
           });
+          if (!appendResult.handled) {
+            throw new Error('Message storage append handler is not registered');
+          }
         } catch (error: unknown) {
           console.warn('[SessionOrchestrator] Failed to store user message', {
             sessionId: resolvedSessionId,
             messageId,
             error: error instanceof Error ? error.message : String(error),
           });
-          if (isNewTurn) {
-            this.turnManager.discardActiveTurn(turn);
-          }
+          turn.releaseMessageAppend(messageId);
+          // failActiveTurnSetup terminalizes only a still-unclaimed setup turn.
+          // Concurrent sends that already claimed or appended a message keep the
+          // live turn active; this branch still preserves the append error.
+          await this.turnManager.failActiveTurnSetup(turn, USER_MESSAGE_PERSISTENCE_FAILED_TURN_ERROR);
           throw error;
         }
+        const shouldEmitTurnStarted = turn.messageIds.length === 0;
         turn.addMessage(messageId);
 
         for (const agent of targetAgents) {
@@ -337,8 +346,8 @@ export class SessionOrchestrator implements ISessionOrchestrator {
             });
         }
 
-        // 7. Emit turn.started (only on new turn) and user_message.sent
-        if (isNewTurn) {
+        // 7. Emit turn.started for the first durably appended message, then user_message.sent.
+        if (shouldEmitTurnStarted) {
           await emitSessionTurnStarted(this.bus, {
             sessionId: resolvedSessionId,
             turnId: turn.turnId,

@@ -211,14 +211,18 @@ export class AdapterContributionProcessor {
         completed.push(loadedAdapter);
       }
     } catch (err) {
+      let rollbackFailed = false;
       for (const adapterName of activated.reverse()) {
         try {
           await this.registry.deregisterAdapter(adapterName);
         } catch (rollbackErr) {
+          rollbackFailed = true;
           console.error(`[AdapterContributionProcessor] Rollback error for adapter "${adapterName}":`, rollbackErr);
         }
       }
-      this.registry.removePackageTracking(packageName);
+      if (!rollbackFailed) {
+        this.registry.removePackageTracking(packageName);
+      }
       throw err;
     }
 
@@ -353,8 +357,8 @@ export class AdapterContributionProcessor {
   ): Promise<LoadedAdapter[]> {
     const initialized: LoadedAdapter[] = [];
     for (const adapter of this.registry.getLoadedAdapters()) {
+      let refreshedForPublication: LoadedAdapter | undefined;
       try {
-        if (this.registry.hasAdapterInstance(adapter)) continue;
         if (!this.configStore.isAdapterEnabled(adapter.name)) continue;
 
         let refreshed = adapter;
@@ -368,9 +372,15 @@ export class AdapterContributionProcessor {
           const updated = this.registry.updateAdapterProviders(adapter.name, providers);
           if (!updated || this.getMissingProviderDefinitionIds(updated, loadedProviderIds).length > 0) continue;
           refreshed = updated;
+          refreshedForPublication = updated;
         }
 
-        await this.registry.initializeAdapter(refreshed, this.platformDefaults);
+        if (this.registry.hasAdapterInstance(refreshed)) {
+          if (refreshed === adapter) continue;
+          await this.registry.restartAdapterInstance(refreshed, this.platformDefaults);
+        } else {
+          await this.registry.initializeAdapter(refreshed, this.platformDefaults);
+        }
         console.info(
           `[AdapterContributionProcessor] Initialized adapter: ${refreshed.name} (${refreshed.packageName}) after provider activation`,
         );
@@ -380,6 +390,9 @@ export class AdapterContributionProcessor {
           `[AdapterContributionProcessor] Deferred initialization failed for adapter "${adapter.name}".`,
           error,
         );
+        if (refreshedForPublication) {
+          initialized.push(refreshedForPublication);
+        }
       }
     }
     return initialized;
@@ -526,7 +539,8 @@ export class AdapterContributionProcessor {
    */
   public async onPackageStopped(packageName: string): Promise<void> {
     await this.registry.deregisterPackage(packageName);
-    this.registry.removeProviderPackage(packageName);
+    const updatedAdapters = await this.registry.removeProviderPackage(packageName, this.platformDefaults);
+    await this.publishActivatedAdapters(updatedAdapters);
   }
 
   /**
@@ -537,7 +551,7 @@ export class AdapterContributionProcessor {
    */
   private publishAdapterRegistered(adapter: LoadedAdapter): Promise<void> {
     const enabled = this.configStore.isAdapterEnabled(adapter.name);
-    const adapterId = adapter.options.adapterId ?? buildDeterministicAdapterId(this.machineId, adapter.name);
+    const adapterId = this.registry.resolveLoadedAdapterId(adapter);
 
     return this.registry.publishAdapterRegistered({
       adapterName: adapter.name,

@@ -16,6 +16,7 @@ import { ExecutionTargetSubjects } from '@makaio/services-core';
 import {
   registerMemorySessionStorage,
   registerMemorySessionEventStorage,
+  registerMemoryMessageStorage,
   registerMemoryAgentStorage,
   AgentStorageSubjects,
   MakaioSessionService,
@@ -207,6 +208,7 @@ export async function setupWorkflowExecutorTest(
 
   cleanupFns.push(registerMemorySessionStorage(MakaioBus));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
+  cleanupFns.push(registerMemoryMessageStorage(MakaioBus));
   cleanupFns.push(registerMemoryAgentStorage(MakaioBus));
 
   const sessionService = new MakaioSessionService(MakaioBus);
@@ -294,6 +296,7 @@ export async function setupWorkflowExecutorWithSubagentServiceTest(): Promise<Wo
 
   cleanupFns.push(registerMemorySessionStorage(MakaioBus));
   cleanupFns.push(registerMemorySessionEventStorage(MakaioBus));
+  cleanupFns.push(registerMemoryMessageStorage(MakaioBus));
 
   const sessionService = new MakaioSessionService(MakaioBus);
   await sessionService.init();

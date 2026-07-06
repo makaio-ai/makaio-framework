@@ -23,6 +23,25 @@ describe('Turn (moved to entities)', () => {
     }
   });
 
+  it('does not count duplicate mixed terminal outcomes for one agent twice', () => {
+    const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1', 'agent-2'], turnNumber: 1 });
+
+    const completed = turn.markAgentCompleted('agent-1');
+    expect(completed.turnComplete).toBe(false);
+
+    const duplicateError = turn.markAgentErrored('agent-1', 'late failure');
+    expect(duplicateError.turnComplete).toBe(false);
+    expect(turn.isComplete()).toBe(false);
+    expect(turn.completedAgents.has('agent-1')).toBe(true);
+    expect(turn.erroredAgents.has('agent-1')).toBe(false);
+
+    const final = turn.markAgentCompleted('agent-2');
+    expect(final.turnComplete).toBe(true);
+    if (final.turnComplete) {
+      expect(final.result).toEqual({ success: true, errors: [] });
+    }
+  });
+
   it('adds messages to turn', () => {
     const turn = new Turn({ sessionId: 'sess-1', agentIds: ['agent-1'], turnNumber: 1 });
 

@@ -9,7 +9,7 @@ import type { AgentContext } from './types.js';
  */
 type EmitGlobalFn = <S extends SubjectDefinition>(
   subject: S,
-  payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext>,
+  payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { turnId?: string },
 ) => Promise<void>;
 
 /**
@@ -18,6 +18,12 @@ type EmitGlobalFn = <S extends SubjectDefinition>(
 export interface MessageLifecycleTrackerConfig {
   /** Function to emit events to global bus with auto-enrichment */
   emitGlobal: EmitGlobalFn;
+}
+
+/** Options for tracking a connector message handle. */
+export interface MessageLifecycleTrackOptions {
+  /** Turn ID captured before connector dispatch, if the request belongs to a session turn. */
+  turnId: string | undefined;
 }
 
 /**
@@ -86,8 +92,9 @@ export class MessageLifecycleTracker {
    * - user_message.acknowledged
    * - agent.turn.started
    * @param handle - The message handle being acknowledged
+   * @param turnId - Turn ID captured when the handle was registered
    */
-  public acknowledge(handle: MessageHandle): void {
+  public acknowledge(handle: MessageHandle, turnId?: string): void {
     const { messageId, message, mergedFrom } = handle;
 
     this.currentMessageId = messageId;
@@ -96,6 +103,7 @@ export class MessageLifecycleTracker {
     void this.emitGlobal(AgentSubjects.user_message.acknowledged, {
       messageId,
       mergedFrom,
+      ...(turnId !== undefined && { turnId }),
     });
 
     // Emit agent.turn.started (higher-level abstraction)
@@ -103,6 +111,7 @@ export class MessageLifecycleTracker {
       messageId,
       content: message,
       mergedFrom,
+      ...(turnId !== undefined && { turnId }),
     });
   }
 
@@ -114,13 +123,16 @@ export class MessageLifecycleTracker {
    * - user_message.completed (always, with outcome)
    * @param handle - The message handle being completed
    * @param result - The completion result with outcome
+   * @param turnId - Turn ID captured when the handle was registered
    */
-  public complete(handle: MessageHandle, result: MessageResult): void {
+  public complete(handle: MessageHandle, result: MessageResult, turnId?: string): void {
     const { messageId } = handle;
 
     // Clear currentMessageId only if still current (might have been superseded)
     if (this.currentMessageId === messageId) {
       this.currentMessageId = undefined;
+    }
+    if (this.currentTurnId === turnId) {
       this.currentTurnId = undefined;
     }
 
@@ -138,6 +150,7 @@ export class MessageLifecycleTracker {
       ...(result.structuredOutputValidation !== undefined
         ? { structuredOutputValidation: result.structuredOutputValidation }
         : {}),
+      ...(turnId !== undefined && { turnId }),
     });
 
     // Emit user_message.completed (always, with outcome details)
@@ -146,6 +159,7 @@ export class MessageLifecycleTracker {
       outcome: result.outcome,
       supersededBy: result.supersededBy,
       mergedInto: result.mergedInto,
+      ...(turnId !== undefined && { turnId }),
     });
   }
 
@@ -159,12 +173,16 @@ export class MessageLifecycleTracker {
    * @param handle - The message handle to track
    * @param onTerminal - Optional callback for any terminal outcome (emits agent.complete)
    * @param transformTerminal - Optional async transform applied before public completion resolves
+   * @param options - Optional tracking metadata captured before connector dispatch
    */
   public track(
     handle: MessageHandle,
-    onTerminal?: (messageId: string, result: MessageResult) => void,
+    onTerminal?: (messageId: string, result: MessageResult, turnId: string | undefined) => void,
     transformTerminal?: (result: MessageResult) => Promise<MessageResult>,
+    options?: MessageLifecycleTrackOptions,
   ): void {
+    const trackedTurnId = options ? options.turnId : this.currentTurnId;
+
     if (transformTerminal !== undefined) {
       handle.addCompletionTransform(async (result) => {
         try {
@@ -189,14 +207,14 @@ export class MessageLifecycleTracker {
     }
 
     handle.waitForAcknowledgment().then(() => {
-      this.acknowledge(handle);
+      this.acknowledge(handle, trackedTurnId);
     });
 
     handle.waitForCompletion().then((finalResult) => {
-      this.complete(handle, finalResult);
+      this.complete(handle, finalResult, trackedTurnId);
 
       if (onTerminal) {
-        onTerminal(handle.messageId, finalResult);
+        onTerminal(handle.messageId, finalResult, trackedTurnId);
       }
     });
   }

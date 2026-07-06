@@ -188,16 +188,22 @@ function registerCompleteHandler(
       return;
     }
 
-    const updated: Turn = {
-      ...existing,
-      completedAt: Date.now(),
-      status,
-      error: error ?? undefined,
-      usage: usage ?? existing.usage,
-    };
+    const isTerminal = existing.status === 'completed' || existing.status === 'error';
+    const updated: Turn = isTerminal
+      ? {
+          ...existing,
+          usage: usage ?? existing.usage,
+        }
+      : {
+          ...existing,
+          completedAt: Date.now(),
+          status,
+          error: error ?? undefined,
+          usage: usage ?? existing.usage,
+        };
 
     indexTurn(updated);
-    ctx.setResult({ turn: updated, transitioned: true });
+    ctx.setResult({ turn: updated, transitioned: !isTerminal });
   });
 }
 

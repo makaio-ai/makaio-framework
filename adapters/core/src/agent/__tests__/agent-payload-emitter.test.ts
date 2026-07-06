@@ -52,6 +52,44 @@ describe('AgentPayloadEmitter', () => {
     ]);
   });
 
+  it('prefers caller-provided turnId over live lifecycle state', async () => {
+    const emittedPayloads: unknown[] = [];
+    const emitter = new AgentPayloadEmitter({
+      globalBus: {
+        emit: async (_subject: unknown, payload: unknown) => {
+          emittedPayloads.push(payload);
+        },
+      } as never,
+      getAgentContextBase: () => ({
+        agentId: 'agent-1',
+        adapterId: 'adapter-1',
+        adapterName: 'test-adapter',
+        sessionId: 'session-1',
+      }),
+      getCurrentMessageId: () => 'current-message-id',
+      getCurrentTurnId: () => 'live-turn-id',
+      getConnectorAdapterSessionId: () => 'adapter-session-1',
+      getLastKnownAdapterSessionId: () => undefined,
+      setLastKnownAdapterSessionId: () => {},
+      getAdapterSessionId: async () => 'adapter-session-1',
+      getEventMetadataDefaults: () => ({}),
+    });
+
+    await emitter.emitGlobal(AgentSubjects.turn.completed, {
+      messageId: 'message-a',
+      outcome: 'completed',
+      turnId: 'captured-turn-id',
+    });
+
+    expect(emittedPayloads).toEqual([
+      expect.objectContaining({
+        messageId: 'message-a',
+        outcome: 'completed',
+        turnId: 'captured-turn-id',
+      }),
+    ]);
+  });
+
   it('preserves caller-provided analytics metadata over live defaults', async () => {
     const emittedPayloads: unknown[] = [];
     const emitter = new AgentPayloadEmitter({
