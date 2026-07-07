@@ -103,6 +103,10 @@ export async function handleInfer<TBus extends ScopedBus<string>, TConnector ext
     adapterId: deps.adapterId,
     adapterName: deps.adapterName,
     providerContext: effectiveProviderContext,
+    // Infer connectors are one-shot by design: never registered, never
+    // resumable, closed immediately. Declare that so connectors skip
+    // session persistence (no orphaned provider transcripts).
+    ephemeral: true,
     ...(model !== undefined && { model }),
     // Use platform defaults for cwd/env
     ...(deps.platformDefaults?.cwd !== undefined && { cwd: deps.platformDefaults.cwd }),

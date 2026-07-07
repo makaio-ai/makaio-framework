@@ -132,6 +132,57 @@ describe('buildQueryOptions — native fork behaviour', () => {
   });
 });
 
+describe('buildQueryOptions — persistSession behaviour', () => {
+  it('defaults persistSession to true when not configured', () => {
+    const config = makeMinimalConfig();
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+
+    expect(options.persistSession).toBe(true);
+  });
+
+  it('disables persistSession for ephemeral agents regardless of providerConfig override', () => {
+    const config = makeMinimalConfig({
+      ephemeral: true,
+      providerConfig: {
+        queryOptions: {
+          persistSession: true,
+        },
+      },
+    });
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+
+    expect(options.persistSession).toBe(false);
+  });
+
+  it('respects an explicit persistSession: false override for non-ephemeral agents', () => {
+    const config = makeMinimalConfig({
+      providerConfig: {
+        queryOptions: {
+          persistSession: false,
+        },
+      },
+    });
+    const options = buildQueryOptions({
+      config,
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+
+    expect(options.persistSession).toBe(false);
+  });
+});
+
 describe('buildQueryOptions — maxThinkingTokens behaviour', () => {
   it('omits maxThinkingTokens when reasoningEffort is not configured', () => {
     const config = makeMinimalConfig(); // no reasoningEffort

@@ -779,6 +779,7 @@ export abstract class AIAgent<
       mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
       toolLedger: cfg.toolLedger,
       ...(cfg.nativeFork !== undefined && { nativeFork: cfg.nativeFork }),
+      ephemeral: cfg.ephemeral,
       clientId: cfg.clientId,
       clientProfileName: cfg.clientProfileName,
       harnessId: cfg.harnessId,

@@ -180,6 +180,15 @@ export interface BaseAgentConnectorConfig<
    * When present, the connector records tool events into this ledger.
    */
   toolLedger?: ISessionToolLedger;
+
+  /**
+   * When true, the connector is handling an ephemeral one-shot agent.
+   *
+   * Ephemeral agents are by contract never resume or fork targets. Connectors
+   * that support session persistence should disable it for ephemeral agents so
+   * no transcript is written to the provider's session store.
+   */
+  ephemeral?: boolean;
 }
 
 /**

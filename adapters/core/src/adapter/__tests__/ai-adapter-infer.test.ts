@@ -250,6 +250,9 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.configFactoryInputs).toHaveLength(1);
     expect(capture.configFactoryInputs[0]?.model).toBe('override-model');
     expect(capture.configFactoryInputs[0]?.providerContext).toEqual(providerContext);
+    // Infer connectors are one-shot: they must declare ephemeral so
+    // persistence-capable connectors never write orphaned transcripts.
+    expect(capture.configFactoryInputs[0]?.ephemeral).toBe(true);
     expect(capture.connectors).toHaveLength(1);
     expect(capture.connectors[0]?.initializeCalls).toBe(1);
     expect(capture.connectors[0]?.capturedInitializeSystemPrompt).toBe('classification-system-prompt');
