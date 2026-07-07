@@ -452,4 +452,158 @@ describe('Drizzle session import storage handlers', () => {
       cleanup();
     }
   });
+
+  // -------------------------------------------------------------------------
+  // Fork lineage fill-once / existing-wins semantics
+  // -------------------------------------------------------------------------
+
+  it('registers a fork child with null forkPointMessageId (hook-first)', async () => {
+    const result = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-child-hook-first',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-session-ext',
+      forkPointMessageId: null,
+      startedAt: 10_000,
+    });
+
+    expect(result.created).toBe(true);
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: result.sessionId,
+    });
+    expect(stored.session).toMatchObject({
+      branchKind: 'fork',
+      parentExternalSessionId: 'parent-session-ext',
+      forkPointMessageId: undefined,
+    });
+  });
+
+  it('enriches forkPointMessageId via fill-once on second importUpsert', async () => {
+    // Step 1: hook-first registration with null forkPointMessageId
+    const hookResult = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-fill-once',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-ext-fill',
+      forkPointMessageId: null,
+      startedAt: 11_000,
+    });
+
+    // Step 2: transcript import fills the fork point
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-fill-once',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-ext-fill',
+      forkPointMessageId: 'msg-fork-point',
+      startedAt: 11_000,
+    });
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: hookResult.sessionId,
+    });
+    expect(stored.session).toMatchObject({
+      branchKind: 'fork',
+      parentExternalSessionId: 'parent-ext-fill',
+      forkPointMessageId: 'msg-fork-point',
+    });
+  });
+
+  it('does not overwrite an existing forkPointMessageId (fill-once guard)', async () => {
+    // Step 1: first import sets the fork point
+    const first = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-no-overwrite',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-ext-no-overwrite',
+      forkPointMessageId: 'msg-first',
+      startedAt: 12_000,
+    });
+
+    // Step 2: second import tries to change the fork point
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-no-overwrite',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-ext-different',
+      forkPointMessageId: 'msg-second-attempt',
+      startedAt: 12_000,
+    });
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: first.sessionId,
+    });
+    // Existing values win — both fork point and parent stay from the first write
+    expect(stored.session?.forkPointMessageId).toBe('msg-first');
+    expect(stored.session?.parentExternalSessionId).toBe('parent-ext-no-overwrite');
+    expect(stored.session?.branchKind).toBe('fork');
+  });
+
+  it('keeps branchKind existing-wins: root enrichment does not overwrite fork', async () => {
+    // Step 1: hook-first fork registration
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-kind-sticky',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-ext-kind',
+      forkPointMessageId: null,
+      startedAt: 13_000,
+    });
+
+    // Step 2: a hypothetical root enrichment arrives
+    await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'fork-kind-sticky',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'root',
+      parentAdapterSessionId: null,
+      forkPointMessageId: null,
+      startedAt: 13_000,
+    });
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'fork-kind-sticky',
+      source: 'claude-code',
+    });
+    // branchKind stays 'fork' from hook-first registration
+    expect(stored.session?.branchKind).toBe('fork');
+    expect(stored.session?.parentExternalSessionId).toBe('parent-ext-kind');
+  });
+
+  it('resolves parentSessionId+rootSessionId when parent exists (hook-first fork)', async () => {
+    // Insert the parent session first
+    const parent = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'parent-for-resolve',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'root',
+      parentAdapterSessionId: null,
+      forkPointMessageId: null,
+      startedAt: 14_000,
+    });
+
+    // Now create the fork child referencing the parent
+    const child = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+      externalSessionId: 'child-for-resolve',
+      source: 'claude-code',
+      cwd: '/repo',
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-for-resolve',
+      forkPointMessageId: null,
+      startedAt: 14_100,
+    });
+
+    const stored = await MakaioBus.request(SessionStorageSubjects.get, {
+      sessionId: child.sessionId,
+    });
+    expect(stored.session?.parentSessionId).toBe(parent.sessionId);
+    expect(stored.session?.rootSessionId).toBe(parent.sessionId);
+  });
 });

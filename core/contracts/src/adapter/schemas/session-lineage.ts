@@ -33,8 +33,15 @@ export const ForkSessionLineageSchema = z.object({
   kind: z.literal(FORK_SESSION_LINEAGE_KIND),
   /** Forks must reference a parent adapter session. */
   parentAdapterSessionId: z.string(),
-  /** Forks must declare the divergence message id. */
-  forkPointMessageId: z.string(),
+  /**
+   * Message id at the fork divergence point.
+   *
+   * Nullable because hook-first fork registration precedes transcript
+   * analysis: the SessionStart hook knows the parent but cannot yet
+   * identify the fork point message. The transcript import fills this
+   * value exactly once via fill-once enrichment semantics.
+   */
+  forkPointMessageId: z.string().nullable(),
 });
 
 export const SubagentSessionLineageSchema = z.object({

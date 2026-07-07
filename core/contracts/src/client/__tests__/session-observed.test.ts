@@ -47,6 +47,47 @@ describe('ClientSessionStartedSchema', () => {
   it('rejects a non-string machineId', () => {
     expect(() => ClientSessionStartedSchema.parse({ ...basePayload, machineId: 42 })).toThrow();
   });
+
+  it('accepts a payload with fork startMode and parentAdapterSessionId', () => {
+    const payload = {
+      ...basePayload,
+      adapterSessionId: 'fork-child-123',
+      startMode: 'fork' as const,
+      parentAdapterSessionId: 'parent-session-456',
+    };
+    const parsed = ClientSessionStartedSchema.parse(payload);
+    expect(parsed).toEqual(payload);
+    expect(parsed.startMode).toBe('fork');
+    expect(parsed.parentAdapterSessionId).toBe('parent-session-456');
+  });
+
+  it('accepts a payload with fresh startMode and no parent', () => {
+    const payload = {
+      ...basePayload,
+      adapterSessionId: 'fresh-session-789',
+      startMode: 'fresh' as const,
+    };
+    expect(ClientSessionStartedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('accepts a payload without startMode (hook-only, no fork signal)', () => {
+    const payload = {
+      ...basePayload,
+      adapterSessionId: 'observed-session-000',
+    };
+    const parsed = ClientSessionStartedSchema.parse(payload);
+    expect(parsed.startMode).toBeUndefined();
+    expect(parsed.parentAdapterSessionId).toBeUndefined();
+  });
+
+  it('rejects an invalid startMode value', () => {
+    expect(() =>
+      ClientSessionStartedSchema.parse({
+        ...basePayload,
+        startMode: 'rotation',
+      }),
+    ).toThrow();
+  });
 });
 
 describe('ClientSessionTurnCompletedSchema', () => {

@@ -12,7 +12,7 @@ describe('SessionLineageSchema', () => {
     expect(parsed.kind).toBe('root');
   });
 
-  it('accepts a valid fork lineage', () => {
+  it('accepts a valid fork lineage with fork point', () => {
     const parsed = SessionLineageSchema.parse({
       kind: 'fork',
       parentAdapterSessionId: 'parent-session',
@@ -20,6 +20,19 @@ describe('SessionLineageSchema', () => {
     });
 
     expect(parsed.kind).toBe('fork');
+    expect(parsed.forkPointMessageId).toBe('msg-123');
+  });
+
+  it('accepts a fork lineage with null forkPointMessageId (hook-first registration)', () => {
+    const parsed = SessionLineageSchema.parse({
+      kind: 'fork',
+      parentAdapterSessionId: 'parent-session',
+      forkPointMessageId: null,
+    });
+
+    expect(parsed.kind).toBe('fork');
+    expect(parsed.parentAdapterSessionId).toBe('parent-session');
+    expect(parsed.forkPointMessageId).toBeNull();
   });
 
   it('accepts a valid subagent lineage', () => {
@@ -42,12 +55,12 @@ describe('SessionLineageSchema', () => {
     ).toThrow();
   });
 
-  it('rejects invalid fork lineage missing fork point', () => {
+  it('rejects fork lineage missing parentAdapterSessionId', () => {
     expect(() =>
       SessionLineageSchema.parse({
         kind: 'fork',
-        parentAdapterSessionId: 'parent-session',
-        forkPointMessageId: null,
+        parentAdapterSessionId: null,
+        forkPointMessageId: 'msg-123',
       }),
     ).toThrow();
   });

@@ -128,14 +128,18 @@ function convergeImportMetadata(session: IMakaioSession, payload: ImportUpsertRe
   if (payload.title !== undefined && payload.title !== null) {
     session.title = payload.title;
   }
-  if (payload.forkPointMessageId !== null) {
+  // Fork lineage identity fields use existing-wins (strict): once set
+  // by hook-first fork registration, later imports cannot overwrite them.
+  // forkPointMessageId is fill-once: null at hook time, enriched exactly
+  // once by the transcript import.
+  if (session.forkPointMessageId === undefined && payload.forkPointMessageId !== null) {
     session.forkPointMessageId = payload.forkPointMessageId;
   }
-  if (payload.parentAdapterSessionId !== null) {
+  if (session.parentExternalSessionId === undefined && payload.parentAdapterSessionId !== null) {
     session.parentExternalSessionId = payload.parentAdapterSessionId;
   }
   const branchKind = kindToBranchKind(payload.kind);
-  if (branchKind !== undefined) {
+  if (branchKind !== undefined && session.branchKind === undefined) {
     session.branchKind = branchKind;
   }
   assignDefinedSessionField(session, 'adapterId', payload.adapterId);
