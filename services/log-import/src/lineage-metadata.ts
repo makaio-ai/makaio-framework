@@ -70,31 +70,52 @@ export function extractSessionMetadata(sessionEvent: NormalizedEvent): SessionMe
 }
 
 /**
+ * Options for building an import-upsert payload.
+ */
+export interface ImportUpsertPayloadOptions {
+  /** Parsed session metadata from discovery/import. */
+  metadata: SessionMetadataFromEvent;
+  /** Source tool identity (e.g., 'claude-code', 'codex'). */
+  source: string;
+  /** Working directory metadata (nullable). */
+  cwd: string | null;
+  /**
+   * Source log path. Pass `undefined` to omit (no-op for log path),
+   * `null` to explicitly store as NULL (compress children that share the
+   * parent file), or a string for the parent session's absolute file path.
+   */
+  logFilePath?: string | null;
+  /**
+   * Unix ms timestamp of when the session started in the external tool.
+   * Pass `undefined` to omit; the storage handler defaults to `Date.now()`.
+   */
+  startedAt?: number;
+  /** Optional adapter instance ID for cursor resume resolution. */
+  adapterId?: string;
+  /** Optional client identity link. */
+  clientId?: string;
+  /**
+   * Optional sidechain flag from the segment's own log records
+   * (e.g. a subagent transcript). Pass `undefined` to leave the stored flag
+   * untouched.
+   */
+  isSidechain?: boolean;
+  /**
+   * Optional machine identifier of the machine that owns the session.
+   * Always caller-supplied; never derived here. Pass `undefined` to omit
+   * (no-op for stored value), `null` to explicitly store NULL, or a string
+   * for the machine ID.
+   */
+  machineId?: string | null;
+}
+
+/**
  * Build an import-upsert payload for `storage:session.importUpsert`.
- * @param metadata - Parsed session metadata from discovery/import.
- * @param source - Source tool identity (e.g., 'claude-code', 'codex').
- * @param cwd - Working directory metadata (nullable).
- * @param logFilePath - Source log path. Pass `undefined` to omit (no-op for log path),
- *   `null` to explicitly store as NULL (compress children that share the parent file),
- *   or a string for the parent session's absolute file path.
- * @param startedAt - Unix ms timestamp of when the session started in the external tool.
- *   Pass `undefined` to omit; the storage handler defaults to `Date.now()`.
- * @param adapterId - Optional adapter instance ID for cursor resume resolution.
- * @param clientId - Optional client identity link.
- * @param isSidechain - Optional sidechain flag from the segment's own log records
- *   (e.g. a subagent transcript). Pass `undefined` to leave the stored flag untouched.
+ * @param options - All fields for the upsert payload.
  * @returns Strictly typed request payload for `storage:session.importUpsert`.
  */
-export function toImportUpsertPayload(
-  metadata: SessionMetadataFromEvent,
-  source: string,
-  cwd: string | null,
-  logFilePath?: string | null,
-  startedAt?: number,
-  adapterId?: string,
-  clientId?: string,
-  isSidechain?: boolean,
-) {
+export function toImportUpsertPayload(options: ImportUpsertPayloadOptions) {
+  const { metadata, source, cwd, logFilePath, startedAt, adapterId, clientId, isSidechain, machineId } = options;
   const lineage = toSessionLineage(metadata);
   return {
     externalSessionId: metadata.adapterSessionId,
@@ -105,6 +126,7 @@ export function toImportUpsertPayload(
     ...definedProperty('adapterId', adapterId),
     ...definedProperty('clientId', clientId),
     ...definedProperty('isSidechain', isSidechain),
+    ...definedProperty('machineId', machineId),
     ...lineage,
   };
 }

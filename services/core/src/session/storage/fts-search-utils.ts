@@ -51,6 +51,7 @@ export type SearchSessionRow = {
   fork_transforms: string | null;
   target_working_directory: string | null;
   metadata: Record<string, JsonValue> | string | null;
+  machine_id: string | null;
 };
 
 /**
@@ -212,6 +213,7 @@ export function mapRowToSession(
     forkTransforms: parseForkTransforms(row.fork_transforms),
     targetWorkingDirectory: row.target_working_directory ?? undefined,
     metadata: parseSessionMetadata(row.metadata),
+    machineId: row.machine_id ?? undefined,
     agents: sessionAgents.map((agent) => ({
       agentId: agent.agentId,
       adapterId: agent.adapterId,

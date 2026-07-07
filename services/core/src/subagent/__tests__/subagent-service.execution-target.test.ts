@@ -166,7 +166,8 @@ describe('SubagentService - execution target inheritance', () => {
     expect(childSession.executionTargetId).toBe('target-parent');
   });
 
-  it('uses explicit executionTargetId without requiring parent storage fallback', async () => {
+  it('uses explicit executionTargetId without inheriting the parent target fallback', async () => {
+    await createParentSession();
     let resolvePayload: { executionTargetId?: string } | undefined;
     MakaioBus.on(ExecutionTargetSubjects.resolve, (ctx) => {
       resolvePayload = ctx.payload;

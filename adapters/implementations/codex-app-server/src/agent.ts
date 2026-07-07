@@ -87,6 +87,25 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
    */
   private clientSessionObservationsWired = false;
 
+  /**
+   * Codex owns the conversation thread natively — resume reuses the existing thread
+   * via `thread/resume` rather than replaying history into a fresh one.
+   * @returns true — Codex supports native session resume
+   */
+  protected override supportsNativeResume(): boolean {
+    return true;
+  }
+
+  /**
+   * Codex supports provider-native session branching via `thread/fork`.
+   * When the orchestrator supplies a `NativeForkDirective`, the connector
+   * sends `thread/fork` instead of `thread/start`, avoiding history replay.
+   * @returns true — Codex supports native session fork
+   */
+  protected override supportsNativeFork(): boolean {
+    return true;
+  }
+
   protected wireEvents(connector: CodexAppServerConnector): void {
     // Wire connector events to global agent.* subjects
     this.wireConnectorEvents(connector);

@@ -12,9 +12,7 @@ import { BaseAgentEventSchema } from './base-event.js';
  * Handler: AIAgent re-resolves credentials, rebuilds connector if SDK-based
  */
 export const CredentialChangeSchema = {
-  request: BaseAgentEventSchema.omit({ adapterSessionId: true }).extend({
-    /** Provider's native session ID is optional for persisted agents during credential fan-out. */
-    adapterSessionId: z.string().optional(),
+  request: BaseAgentEventSchema.extend({
     /** Provider config UUID whose credentials changed. */
     providerConfigId: z.string(),
     /** Provider definition ID (e.g., `'anthropic'`). */

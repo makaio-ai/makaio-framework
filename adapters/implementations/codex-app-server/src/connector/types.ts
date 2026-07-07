@@ -5,7 +5,7 @@
 
 import type { ISessionToolLedger, MessageHandle } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AIReasoningLevel, ProviderContext } from '@makaio/contracts';
+import type { AIReasoningLevel, NativeForkDirective, ProviderContext } from '@makaio/contracts';
 import type { StdioTransport } from '../utils/createStdioTransport.js';
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import type { CodexAppServerBus } from '../namespaces/index.js';
@@ -75,4 +75,20 @@ export interface CodexAppServerConfig {
   transport?: StdioTransport;
   /** Optional JSON-RPC client for dependency injection (e.g., testing). If provided, transport is ignored. */
   jsonRpcClient?: JsonRpcClient;
+  /**
+   * Previous adapter session ID for native resume.
+   *
+   * When present the connector sends `thread/resume` instead of `thread/start`.
+   * Ignored when {@link nativeFork} is also set (fork takes precedence).
+   */
+  resumeAdapterSessionId?: string;
+  /**
+   * Native fork directive from the session orchestrator.
+   *
+   * When present without `forkPointMessageId`, the connector sends
+   * `thread/fork` instead of `thread/start`. Codex app-server only supports
+   * tip forks; midpoint directives are rejected before `thread/fork`.
+   * Takes precedence over {@link resumeAdapterSessionId}.
+   */
+  nativeFork?: NativeForkDirective;
 }

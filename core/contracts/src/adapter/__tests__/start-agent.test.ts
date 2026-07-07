@@ -48,6 +48,7 @@ describe('StartAgentSchema', () => {
         mode: 'fork',
         sessionId: 'session-1',
         sourceSessionId: 'source-session-1',
+        sourceAdapterSessionId: 'adapter-source',
         initialMessage: 'hello',
         ephemeral: true,
       }).success,
@@ -104,5 +105,21 @@ describe('StartAgentSchema', () => {
     });
 
     expect(parsed.success).toBe(false);
+  });
+
+  it('accepts a native fork start request with source adapter session identity', () => {
+    const parsed = StartAgentSchema.request.parse({
+      mode: 'fork',
+      adapterId: 'adapter-1',
+      sessionId: 'child-session',
+      sourceSessionId: 'source-session',
+      sourceAdapterSessionId: 'adapter-source',
+      role: 'lead',
+      initialMessage: 'continue on the fork',
+    });
+
+    // Narrow to fork variant to access fork-specific fields
+    expect(parsed.mode).toBe('fork');
+    expect((parsed as { sourceAdapterSessionId: string }).sourceAdapterSessionId).toBe('adapter-source');
   });
 });

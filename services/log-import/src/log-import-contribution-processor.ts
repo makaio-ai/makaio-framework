@@ -51,12 +51,14 @@ interface LogImportContributionConfig {
  * @param importerId - Unique registry ID for this importer.
  * @param adapterName - Stable adapter name for the orchestrator config.
  * @param logImportConfig - Optional runtime log-import configuration.
+ * @param machineId - Machine identifier from the extension context.
  * @returns Normalized orchestrator configuration.
  */
 function buildOrchestratorConfig(
   importerId: string,
   adapterName: string,
   logImportConfig?: LogImportConfig,
+  machineId?: string,
 ): LogOrchestratorConfig {
   return {
     enabled: logImportConfig?.enabled ?? true,
@@ -65,6 +67,7 @@ function buildOrchestratorConfig(
     adapterId: importerId,
     adapterName,
     checkMakaioManaged: logImportConfig?.checkMakaioManaged,
+    machineId,
   };
 }
 
@@ -76,17 +79,19 @@ function buildOrchestratorConfig(
  * @param importerId - Unique registry ID for this importer.
  * @param adapterName - Stable adapter name for the orchestrator config.
  * @param config - Narrowed log import config from the extension's `logImport.config`.
+ * @param machineId - Machine identifier from the extension context.
  * @returns Mode-dispatching factory, or `null` when no orchestrator is available.
  */
 function buildOrchestratorFactory(
   importerId: string,
   adapterName: string,
   config: LogImportContributionConfig,
+  machineId?: string,
 ): OrchestratorFactory | null {
   if (!config.LogOrchestratorClass && !config.LogDiscoveryOrchestratorClass) {
     return null;
   }
-  const orchestratorConfig = buildOrchestratorConfig(importerId, adapterName, config.logImportConfig);
+  const orchestratorConfig = buildOrchestratorConfig(importerId, adapterName, config.logImportConfig, machineId);
   return (mode) => {
     if (!orchestratorConfig.enabled) {
       return null;
@@ -156,10 +161,11 @@ export function createLogImportContributionProcessor(): ContributionProcessor {
         logFilePattern: contributionConfig.logFilePattern ?? '',
         clientId: contributionConfig.clientId,
         supportsManualImport: contributionConfig.supportsManualImport,
+        machineId: ctx.machineId,
       });
 
       try {
-        const factory = buildOrchestratorFactory(importerId, adapterName, contributionConfig);
+        const factory = buildOrchestratorFactory(importerId, adapterName, contributionConfig, ctx.machineId);
         if (factory) {
           registry.setOrchestratorFactory(importerId, factory);
         }

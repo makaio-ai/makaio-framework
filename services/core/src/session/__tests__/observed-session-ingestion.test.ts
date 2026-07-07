@@ -195,6 +195,20 @@ describe('ObservedSessionIngestionService', () => {
     expect(sessions[0]?.sessionId).toBe(session?.sessionId);
   });
 
+  it('persists caller-supplied machineId on the observed session registration', async () => {
+    stubLogImportSeams();
+
+    await emitSessionStarted({
+      transcriptPath: '/logs/ext-1.jsonl',
+      cwd: '/repo',
+      machineId: 'machine-abc-123',
+    });
+
+    const session = await getObservedSession('ext-1');
+    expect(session).not.toBeNull();
+    expect(session?.machineId).toBe('machine-abc-123');
+  });
+
   it("triggers log-import.importFile with the importer adapter name and 'live' marker on turn.completed", async () => {
     const { importFileRequests, importSessionRequests } = stubLogImportSeams();
 

@@ -18,6 +18,14 @@ class TestAgent extends AIAgent {
   }
 
   /**
+   * Expose protected supportsNativeFork for testing.
+   * @returns Whether this agent supports native fork
+   */
+  public testSupportsNativeFork(): boolean {
+    return this.supportsNativeFork();
+  }
+
+  /**
    * Required abstract implementation - returns minimal stub.
    */
   protected wireEvents(): void {
@@ -27,6 +35,12 @@ class TestAgent extends AIAgent {
 
 class ResumeCapableTestAgent extends TestAgent {
   protected override supportsNativeResume(): boolean {
+    return true;
+  }
+}
+
+class ForkCapableTestAgent extends TestAgent {
+  protected override supportsNativeFork(): boolean {
     return true;
   }
 }
@@ -89,6 +103,7 @@ describe('AIAgent.shouldUseNativeResume', () => {
   it('returns true when adapter supports native resume and no signals force fresh', () => {
     expect(
       resumeCapableAgent.testShouldUseNativeResume({
+        nativeLocality: { kind: 'native' },
         isFirstTurn: false,
         hasCompression: false,
         hasNewTransforms: false,
@@ -106,11 +121,54 @@ describe('AIAgent.shouldUseNativeResume', () => {
     ).toBe(false);
   });
 
-  it('returns true with empty object when adapter supports native resume', () => {
-    expect(resumeCapableAgent.testShouldUseNativeResume({})).toBe(true);
+  it('returns false when sessionContext does not confirm native locality', () => {
+    expect(resumeCapableAgent.testShouldUseNativeResume({})).toBe(false);
+  });
+
+  it('returns false when native locality is degraded', () => {
+    expect(
+      resumeCapableAgent.testShouldUseNativeResume({
+        nativeLocality: { kind: 'degrade', reason: 'missing-machine-id' },
+      }),
+    ).toBe(false);
+  });
+
+  it('returns false when native locality is foreign', () => {
+    expect(
+      resumeCapableAgent.testShouldUseNativeResume({
+        nativeLocality: { kind: 'foreign', machineId: 'remote-machine' },
+      }),
+    ).toBe(false);
   });
 
   it('returns false when adapter does not support native resume', () => {
     expect(agent.testShouldUseNativeResume()).toBe(false);
+  });
+});
+
+describe('AIAgent.supportsNativeFork', () => {
+  let agent: TestAgent;
+  let forkCapableAgent: ForkCapableTestAgent;
+
+  beforeEach(() => {
+    agent = createTestAgent();
+    forkCapableAgent = createTestAgent(ForkCapableTestAgent) as ForkCapableTestAgent;
+  });
+
+  it('returns false by default on the base class', () => {
+    expect(agent.testSupportsNativeFork()).toBe(false);
+  });
+
+  it('returns true when subclass overrides supportsNativeFork', () => {
+    expect(forkCapableAgent.testSupportsNativeFork()).toBe(true);
+  });
+
+  it('does not re-derive fork capability from sessionContext signals', () => {
+    // The fork decision belongs to the sessionContext.nativeFork directive
+    // assembled by the orchestrator, not re-evaluated here.
+    // supportsNativeFork() is a static capability declaration — it must
+    // return the same value regardless of the runtime context.
+    expect(forkCapableAgent.testSupportsNativeFork()).toBe(true);
+    expect(agent.testSupportsNativeFork()).toBe(false);
   });
 });

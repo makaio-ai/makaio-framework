@@ -34,6 +34,19 @@ describe('ClientSessionStartedSchema', () => {
   it('rejects a non-string cwd', () => {
     expect(() => ClientSessionStartedSchema.parse({ ...basePayload, cwd: 42 })).toThrow();
   });
+
+  it('accepts a payload with machineId', () => {
+    const payload = {
+      ...basePayload,
+      adapterSessionId: 'abc-123',
+      machineId: 'machine-abc-def',
+    };
+    expect(ClientSessionStartedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('rejects a non-string machineId', () => {
+    expect(() => ClientSessionStartedSchema.parse({ ...basePayload, machineId: 42 })).toThrow();
+  });
 });
 
 describe('ClientSessionTurnCompletedSchema', () => {

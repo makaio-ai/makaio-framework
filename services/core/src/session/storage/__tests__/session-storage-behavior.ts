@@ -339,6 +339,180 @@ export function describeSessionStorageBehavior(): void {
     });
   });
 
+  describe('machineId', () => {
+    it('persists caller-supplied machineId on session set and update', async () => {
+      await MakaioBus.request(SessionStorageSubjects.set, {
+        sessionId: 'session-machine',
+        session: createSession({
+          sessionId: 'session-machine',
+          createdAt: 1,
+          lastActivityAt: 1,
+          agents: [],
+          status: 'active',
+          machineId: 'machine-a',
+        }),
+      });
+
+      expect(
+        (await MakaioBus.request(SessionStorageSubjects.get, { sessionId: 'session-machine' })).session?.machineId,
+      ).toBe('machine-a');
+
+      await MakaioBus.request(SessionStorageSubjects.update, { sessionId: 'session-machine', machineId: 'machine-b' });
+      expect(
+        (await MakaioBus.request(SessionStorageSubjects.get, { sessionId: 'session-machine' })).session?.machineId,
+      ).toBe('machine-b');
+    });
+
+    it('persists importUpsert machineId exactly as supplied by the caller', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine',
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'owner-machine',
+      );
+    });
+
+    it('fills missing importUpsert machineId from a later caller-supplied owner', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-fill',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+      });
+
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-fill',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine-filled',
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'owner-machine-filled',
+      );
+    });
+
+    it('does not overwrite an existing importUpsert machineId', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-preserve',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine-original',
+      });
+
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-preserve',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine-new',
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'owner-machine-original',
+      );
+    });
+
+    it('clears machineId when re-upsert supplies explicit null', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-null-clear',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine-to-clear',
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'owner-machine-to-clear',
+      );
+
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-null-clear',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: null,
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBeUndefined();
+    });
+
+    it('preserves machineId when re-upsert omits the field (undefined)', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-undef-keep',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'owner-machine-kept',
+      });
+
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-undef-keep',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        // machineId intentionally omitted (undefined)
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'owner-machine-kept',
+      );
+    });
+
+    it('overwrites machineId with a new string when re-upserting a session without one', async () => {
+      const { sessionId } = await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-string-fill',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        // No machineId on first insert
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBeUndefined();
+
+      await MakaioBus.request(SessionStorageSubjects.importUpsert, {
+        kind: 'root',
+        externalSessionId: 'external-machine-string-fill',
+        source: 'claude-code',
+        parentAdapterSessionId: null,
+        forkPointMessageId: null,
+        cwd: '/repo',
+        machineId: 'late-owner',
+      });
+
+      expect((await MakaioBus.request(SessionStorageSubjects.get, { sessionId })).session?.machineId).toBe(
+        'late-owner',
+      );
+    });
+  });
+
   describe('spawningToolCallId updates', () => {
     it('should fill missing spawn provenance without overwriting existing provenance', async () => {
       const session = createSession({

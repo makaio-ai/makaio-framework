@@ -22,6 +22,15 @@ export interface RecoveryConfig {
   cwd?: string;
   /** Model identifier (e.g., 'claude-sonnet-4-20250514', 'gpt-4o') */
   model?: string;
+  /**
+   * Provider-native session ID to resume.
+   *
+   * When set, the adapter creates the connector in native-resume mode so the
+   * provider session continues from where it left off. The caller is responsible
+   * for evaluating locality (machine identity, adapter capability, CWD match)
+   * before setting this field.
+   */
+  resumeAdapterSessionId?: string;
 }
 
 /**
@@ -209,6 +218,9 @@ export async function recoverAgent(
     cwd: recoveryConfig.cwd,
     model: recoveryConfig.model ?? deadAgent.model,
     ...(deadAgent.adapterSessionId !== undefined && { adapterSessionId: deadAgent.adapterSessionId }),
+    ...(recoveryConfig.resumeAdapterSessionId !== undefined && {
+      resumeAdapterSessionId: recoveryConfig.resumeAdapterSessionId,
+    }),
   });
 
   deadAgent.adapterId = resolvedAdapterId;

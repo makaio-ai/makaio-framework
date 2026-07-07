@@ -236,13 +236,14 @@ function registerUpdateRuntimeHandler(deps: AgentHandlerDeps): () => void {
   const { agents } = resolveSchema(db, sessionStorageSchema);
 
   return bus.on(AgentStorageSubjects.updateRuntime, async (ctx) => {
-    const { agentId, adapterId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
+    const { agentId, adapterId, adapterSessionId, cwd, model, allowedDirectories, providerConfigId } = ctx.payload;
     const now = Date.now();
     const updateFields: Partial<AgentsTable['$inferInsert']> = {
       lastActivityAt: now,
     };
 
     if (adapterId !== undefined) updateFields.adapterId = adapterId;
+    if (adapterSessionId !== undefined) updateFields.adapterSessionId = adapterSessionId;
     if (cwd !== undefined) updateFields.cwd = cwd;
     if (model !== undefined) updateFields.model = model;
     if (allowedDirectories !== undefined) updateFields.allowedDirectories = allowedDirectories;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MessageSchema, JsonValueSchema } from '../shared/index.js';
+import { NativeLocalityVerdictSchema, NativeForkDirectiveSchema } from './native-locality.js';
 
 export const CACHE_STRATEGIES = ['auto', 'systemPrompt', 'fullPrefix'] as const;
 export type CacheStrategy = (typeof CACHE_STRATEGIES)[number];
@@ -62,6 +63,24 @@ export const SessionContextSchema = z.object({
    * LLM-facing message using serializeTurnContext().
    */
   turnContext: z.record(z.string(), JsonValueSchema).optional(),
+
+  /**
+   * Pre-evaluated locality verdict for the current session.
+   *
+   * Set by the session orchestrator before dispatching to adapters.
+   * Adapters use this to decide whether native resume or fork is possible
+   * without re-evaluating machine identity themselves.
+   */
+  nativeLocality: NativeLocalityVerdictSchema.optional(),
+
+  /**
+   * Orchestrator-computed fork directive from start-agent request parameters.
+   *
+   * Present only when the session orchestrator has determined that a native
+   * fork is feasible and the adapter should use the provider's branching API
+   * instead of replaying history into a fresh session.
+   */
+  nativeFork: NativeForkDirectiveSchema.optional(),
 });
 
 export type SessionContext = z.infer<typeof SessionContextSchema>;

@@ -10,7 +10,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ISessionToolLedger } from '@makaio/ai-adapters-core';
-import type { AIReasoningLevel } from '@makaio/contracts';
+import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import type { JsonRpcClient, ServerRequestHandler, NotificationHandler } from '../utils/jsonRpcClient.js';
@@ -54,6 +54,9 @@ export class MockJsonRpcClient implements JsonRpcClient {
 
   async request<T>(method: string, params: unknown): Promise<T> {
     this.sentRequests.push({ method, params });
+    if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
+      return { thread: createMockThread() } as T;
+    }
     return {} as T;
   }
 
@@ -144,6 +147,10 @@ export interface CreateConnectorTestContextOptions {
   approvalPolicy?: 'untrusted' | 'on-failure' | 'on-request' | 'never';
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
   toolLedger?: ISessionToolLedger;
+  /** Previous adapter session ID for native resume. */
+  resumeAdapterSessionId?: string;
+  /** Native fork directive — when present, connector uses thread/fork instead of thread/start. */
+  nativeFork?: NativeForkDirective;
 }
 
 /**
@@ -167,7 +174,13 @@ export async function createConnectorTestContext(
     cwd: tempCwd,
     env: {},
     jsonRpcClient: mockJsonRpcClient,
-    ...options,
+    ...(options.reasoningEffort !== undefined && { reasoningEffort: options.reasoningEffort }),
+    ...(options.approvalPolicy !== undefined && { approvalPolicy: options.approvalPolicy }),
+    ...(options.sandboxMode !== undefined && { sandboxMode: options.sandboxMode }),
+    ...(options.toolLedger !== undefined && { toolLedger: options.toolLedger }),
+    ...(options.globalBus !== undefined && { globalBus: options.globalBus }),
+    ...(options.resumeAdapterSessionId !== undefined && { resumeAdapterSessionId: options.resumeAdapterSessionId }),
+    ...(options.nativeFork !== undefined && { nativeFork: options.nativeFork }),
   });
 
   return { mockBus, mockJsonRpcClient, connector, tempCwd };

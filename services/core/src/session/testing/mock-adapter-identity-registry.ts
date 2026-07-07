@@ -32,6 +32,9 @@ export function createMockAdapterIdentityRegistry(currentMachineId?: string): Mo
           const adapterId = registry.resolveId(context.payload);
           context.setResult({ adapterId });
         }),
+        MakaioBus.on(AdapterRuntimeSubjects.getMachineId, (context) => {
+          context.setResult({ machineId: currentMachineId });
+        }),
         MakaioBus.on(AdapterRuntimeSubjects.resolveName, (context) => {
           const adapterName = registry.resolveAdapterName(context.payload.adapterId);
           if (!adapterName) {

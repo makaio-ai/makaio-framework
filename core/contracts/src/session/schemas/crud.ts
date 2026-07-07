@@ -64,6 +64,14 @@ export const SessionCreateBaseSchema = z.object({
    * non-web clients (CLI, backend) can omit (defaults to 'server').
    */
   originWindowId: z.string().optional(),
+  /**
+   * Stable runtime machine identity that owns the provider-native session store.
+   *
+   * Caller-supplied by the owning runtime or host. The framework create handler
+   * passes this through to storage; it never derives it from the writer process.
+   * Omit for sessions that are not locality-bound (e.g. headless or test sessions).
+   */
+  machineId: z.string().nullable().optional(),
 });
 
 /** Parsed type for {@link SessionCreateBaseSchema}. */
@@ -276,11 +284,27 @@ export const CrudSchemas = {
    * session. It intentionally does not change `session.resume` status
    * semantics; closed-session status and runtime rehydration remain separate
    * seams.
+   *
+   * The handler resolves the local machine identity from the adapter-runtime
+   * identity registry (`adapterRuntime.getMachineId`) and evaluates native
+   * locality per agent. Agents whose provider-native session lives on this
+   * machine are rehydrated with `resumeAdapterSessionId` so the provider
+   * session continues. Agents with degraded, foreign, or unknown locality
+   * are deferred to lazy recovery on first send (which injects history
+   * automatically, avoiding empty-provider-context rehydration).
    */
   restartAgents: {
     request: z.object({
       /** Session whose persisted agents should be rehydrated */
       sessionId: z.string(),
+      /**
+       * Explicit machine identity override for testing and operational tooling.
+       *
+       * Production callers should omit this field so the handler resolves the
+       * runtime identity from the adapter-runtime identity registry. When
+       * supplied, this value takes precedence over runtime resolution.
+       */
+      machineId: z.string().optional(),
     }),
     response: z.object({
       /** Session whose agents were targeted */

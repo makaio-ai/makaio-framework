@@ -39,9 +39,10 @@ export type { LogOrchestratorConfig, ParseFileResult } from './orchestrator-conf
  * @typeParam TState - The adapter's resumable state type (default: unknown)
  */
 export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
-  protected readonly config: Required<Omit<LogOrchestratorConfig, 'checkMakaioManaged' | 'directory'>> & {
+  protected readonly config: Required<Omit<LogOrchestratorConfig, 'checkMakaioManaged' | 'directory' | 'machineId'>> & {
     checkMakaioManaged?: LogOrchestratorConfig['checkMakaioManaged'];
     directory?: string;
+    machineId?: string | null;
   };
 
   protected readonly watcher: LogImportWatcher;
@@ -74,6 +75,7 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
       adapterId: config.adapterId,
       adapterName: config.adapterName,
       checkMakaioManaged: config.checkMakaioManaged,
+      machineId: config.machineId,
     };
 
     this.watcher = new LogImportWatcher({

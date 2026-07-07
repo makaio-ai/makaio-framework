@@ -77,6 +77,7 @@ async function executeImportFile(
     isJsonl,
     adapterName: registration.adapterName,
     adapterId: registration.id,
+    machineId: registration.machineId,
     sourceFilePath: filePath,
     persistedLogFilePath: filePath,
     // Default 'live': importFile is the hook-triggered ingestion entry point;

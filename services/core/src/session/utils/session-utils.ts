@@ -8,6 +8,7 @@ import { Turn } from '../entities/turn.js';
  * @param providedSessionId - Session ID to look up
  * @param _sessionContext - Optional session context (scope fields removed in W1-A)
  * @param originWindowId - Window ID that initiated the session creation
+ * @param machineId - Machine identity to stamp on the session at creation time
  * @returns Session ID and session object
  */
 export async function getOrCreateSession(
@@ -15,6 +16,7 @@ export async function getOrCreateSession(
   providedSessionId: string,
   _sessionContext?: SessionContext,
   originWindowId?: string,
+  machineId?: string,
 ): Promise<{ sessionId: string; session: IMakaioSession }> {
   const { session } = await bus.request(SessionSubjects.get, { sessionId: providedSessionId });
   if (session) {
@@ -27,6 +29,7 @@ export async function getOrCreateSession(
   await bus.request(SessionSubjects.create, {
     sessionId: providedSessionId,
     originWindowId,
+    ...(machineId !== undefined && { machineId }),
   });
   const { session: created } = await bus.request(SessionSubjects.get, { sessionId: providedSessionId });
   if (!created) {

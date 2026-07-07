@@ -10,13 +10,13 @@ import type {
   AgentRole,
   AgentSelectionBase,
   CompressionMode,
+  IMakaioSession,
   MessageInput,
   ProviderContext,
   ResolvedAgentConfig,
-  StartAgentRequest,
+  SessionContext,
 } from '@makaio/contracts';
 import { Turn } from '../entities/turn.js';
-import { activateProviderContext } from '../../provider-context/index.js';
 import { extractTextContent, resolveAdapterId } from '../session-orchestrator-helpers.js';
 import { normalizeSelectionString, resolveAdapterNameById } from '../selection-utils.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -24,9 +24,12 @@ import { resolveAttachProviderSelection } from './attach-provider-selection.js';
 import { setupTurnTrackingOrRollbackAgent, stopStartedAgentAfterFailure } from './attach-turn-tracking.js';
 import {
   extractRuntimeOptions,
+  launchAttachAgent,
   mergeRuntimeOptions,
-  type ExtractableRuntimeOptions,
+  resolveEffectiveAttachCwd,
 } from './attach-runtime-options.js';
+import { evaluateNativeLocality } from '../native-locality.js';
+import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 
 /**
  * Registers the session.agent.attach RPC handler.
@@ -80,6 +83,147 @@ interface AdapterCandidate {
   readonly adapterId: string | undefined;
 }
 
+/** Locality resolution result for an attach operation. */
+interface AttachLocalityResult {
+  /** Adapter session ID to use for native resume mode, or undefined for fresh create. */
+  resumeAdapterSessionId: string | undefined;
+  /** Session context carrying the locality verdict for non-native paths. */
+  attachSessionContext: SessionContext | undefined;
+}
+
+/**
+ * Safely evaluate a boolean predicate against an optional bus RPC.
+ *
+ * Wraps the common try / requestOptional / unhandled→false / catch→false
+ * pattern used by adapter capability and liveness probes. The caller
+ * supplies a `query` thunk that calls `bus.requestOptional(...)` and an
+ * `evaluate` predicate that interprets a successful response.
+ * @param query - Thunk returning the `requestOptional` promise
+ * @param evaluate - Predicate applied when the request is handled
+ * @returns Result of `evaluate` on success, `false` on missing handler or error
+ */
+async function probeOptionalCapability<T>(
+  query: () => Promise<{ handled: true; data: T } | { handled: false }>,
+  evaluate: (data: T) => boolean,
+): Promise<boolean> {
+  try {
+    const result = await query();
+    if (!result.handled) return false;
+    return evaluate(result.data);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Queries the target adapter's declared capabilities via bus and checks
+ * whether `session:resume` is present.
+ *
+ * Uses `requestOptional` so adapters that have not registered a
+ * `getCapabilities` handler are treated as non-resume-capable rather than
+ * causing a bus timeout.
+ * @param bus - Bus instance for the capability query
+ * @param adapterId - Resolved adapter instance ID
+ * @returns `true` when the adapter declares `session:resume`
+ */
+async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promise<boolean> {
+  return probeOptionalCapability(
+    () => bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId }),
+    (data) => new Set(data.capabilities).has('session:resume'),
+  );
+}
+
+/**
+ * Checks whether any live agent in the adapter registry is already using the
+ * given provider-native session ID.
+ *
+ * A provider-native session has exactly one live writer. When a second agent
+ * attempts to resume the same `adapterSessionId`, it would mutate the first
+ * agent's conversation. This guard ensures attach degrades to
+ * fresh-with-history instead.
+ *
+ * This is a best-effort guard: the definitive serialization happens in the
+ * adapter's `startAgent` handler via `registry.claimAdapterSession()`, which
+ * atomically rejects a second concurrent resume for the same provider session.
+ *
+ * Uses `requestOptional` so adapters that have not registered a `listAgents`
+ * handler are treated as having no live writer (safe default: the adapter
+ * cannot confirm liveness, so the resume attempt proceeds).
+ * @param bus - Bus instance for the agent query
+ * @param adapterId - Resolved adapter instance ID
+ * @param adapterSessionId - Provider-native session ID to check
+ * @returns `true` when a live agent already holds the adapter session
+ */
+async function adapterSessionHasLiveWriter(
+  bus: IMakaioBus,
+  adapterId: string,
+  adapterSessionId: string,
+): Promise<boolean> {
+  return probeOptionalCapability(
+    () => bus.requestOptional(AdapterSubjects.listAgents, { adapterId }),
+    (data) => data.agents.some((a) => a.adapterSessionId === adapterSessionId),
+  );
+}
+
+/**
+ * Resolves the native locality verdict for a resume attach and returns both
+ * the resume adapter session ID (present only for native) and the session
+ * context to forward (present only for non-native).
+ *
+ * Queries the target adapter's `session:resume` capability via bus so that
+ * adapters without native resume produce a `degrade('adapter-unsupported')`
+ * verdict upfront, rather than relying solely on the downstream
+ * `AIAgent.supportsNativeResume()` fallback.
+ *
+ * When the structural locality check passes (`native`), an additional
+ * live-writer guard verifies no existing agent in the adapter registry is
+ * already using the same `adapterSessionId`. Resuming into an occupied
+ * provider session would share/mutate another agent's conversation, so the
+ * attach degrades to `agent-already-started` fresh-with-history instead.
+ * @param input - Bus for the capability lookup, resolved adapter instance ID,
+ *   stable adapter type name, validated session record, local machine identity,
+ *   and effective working directory for the locality evaluator
+ * @returns Resolved resume adapter session ID and optional non-native session context
+ */
+async function resolveAttachLocality(input: {
+  bus: IMakaioBus;
+  adapterId: string;
+  adapterName: string;
+  session: IMakaioSession;
+  machineId: string | undefined;
+  effectiveCwd: string | undefined;
+}): Promise<AttachLocalityResult> {
+  const { bus, adapterId, adapterName, session, machineId, effectiveCwd } = input;
+  const adapterCanResume = await adapterSupportsResume(bus, adapterId);
+  const verdict = evaluateNativeLocality({
+    intent: 'resume',
+    session,
+    localMachineId: machineId,
+    adapterSupportsNative: adapterCanResume,
+    targetAdapterName: adapterName,
+    currentCwd: session.targetWorkingDirectory,
+    targetCwd: effectiveCwd,
+  });
+
+  // A native verdict implies the evaluator saw a non-empty adapterSessionId,
+  // so the explicit narrow here can only pass — it replaces a non-null assertion.
+  if (verdict.kind === 'native' && session.adapterSessionId !== undefined) {
+    const hasLiveWriter = await adapterSessionHasLiveWriter(bus, adapterId, session.adapterSessionId);
+    if (hasLiveWriter) {
+      const degraded = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
+      return {
+        resumeAdapterSessionId: undefined,
+        attachSessionContext: { nativeLocality: degraded },
+      };
+    }
+  }
+
+  return {
+    resumeAdapterSessionId: verdict.kind === 'native' ? session.adapterSessionId : undefined,
+    attachSessionContext: verdict.kind !== 'native' ? { nativeLocality: verdict } : undefined,
+  };
+}
+
 /**
  * Attach an agent to a session.
  * @param bus - Bus instance for storage, resolution, and adapter startup
@@ -115,26 +259,30 @@ async function attachAgent(
     resolvedProviderContext,
   );
   const { runtimeOptions, mergedModel, mergedCwd } = mergeRuntimeOptions(explicitRuntime, resolved, providerContext);
+  const { effectiveCwd, effectiveRuntimeOptions } = resolveEffectiveAttachCwd(
+    mergedCwd,
+    session.targetWorkingDirectory,
+    runtimeOptions,
+  );
   const role = determineRole(session, requestedRole);
-  const resumeAdapterSessionId = resolveResumeAdapterSessionId(session);
+  const locality = await resolveAttachLocality({ bus, adapterId, adapterName, session, machineId, effectiveCwd });
+  const { resumeAdapterSessionId } = locality;
+  // Seed non-native paths with existing history so the fresh provider context is populated.
+  const attachSessionContext = locality.attachSessionContext
+    ? await seedAttachContextWithHistory(bus, sessionId, locality.attachSessionContext)
+    : undefined;
 
-  const startAgentRequest = buildStartAgentRequest(
+  const startResult = await launchAttachAgent(bus, {
     adapterId,
     sessionId,
     initialMessage,
     role,
-    runtimeOptions,
+    effectiveRuntimeOptions,
     resumeAdapterSessionId,
-    resolved?.harnessId,
-  );
-  if (providerContext !== undefined) {
-    await activateProviderContext(bus, providerContext);
-  }
-  const startResult = await bus.request(AdapterSubjects.startAgent, startAgentRequest);
-
-  if (!startResult.success) {
-    throw new Error(`[attach-handler] Failed to start agent: ${startResult.message}`);
-  }
+    harnessId: resolved?.harnessId,
+    attachSessionContext,
+    providerContext,
+  });
 
   const now = Date.now();
   await persistIdentityOrRollback(bus, startResult, {
@@ -148,7 +296,7 @@ async function attachAgent(
     providerConfigId: mergedProviderConfigId,
     compressionMode: resolved?.compressionMode,
     model: mergedModel,
-    cwd: mergedCwd,
+    cwd: effectiveCwd,
   });
 
   const turnInfo =
@@ -283,21 +431,13 @@ async function resolveAttachSelection(
   });
 }
 
-/** Fields from the session record needed by the attach handler. */
-interface ValidatedSession {
-  agents: unknown[];
-  isImported?: boolean;
-  isOrchestrated?: boolean;
-  adapterSessionId?: string;
-}
-
 /**
  * Validates session exists and is active.
  * @param bus - Bus instance for session lookup
  * @param sessionId - Target session ID
- * @returns Session fields needed by the attach handler
+ * @returns The full session record
  */
-async function validateSession(bus: IMakaioBus, sessionId: string): Promise<ValidatedSession> {
+async function validateSession(bus: IMakaioBus, sessionId: string): Promise<IMakaioSession> {
   const { session } = await bus.request(SessionSubjects.get, { sessionId });
   if (!session) throw new Error(`[attach-handler] Session not found: ${sessionId}`);
   if (session.status !== 'active') throw new Error(`[attach-handler] Session is not active: ${sessionId}`);
@@ -313,76 +453,6 @@ async function validateSession(bus: IMakaioBus, sessionId: string): Promise<Vali
 function determineRole(session: { agents: unknown[] }, requestedRole?: AgentRole): AgentRole {
   const isFirstAgent = session.agents.length === 0;
   return requestedRole ?? (isFirstAgent ? 'lead' : 'member');
-}
-
-/**
- * Resolves the adapter session ID to use for native resume.
- *
- * Native resume is attempted only when:
- * - The session was imported from an external adapter (`isImported`)
- * - Makaio has explicitly marked the session as not orchestrated (`isOrchestrated === false`)
- * - The adapter session ID is known (`adapterSessionId`)
- *
- * When `isOrchestrated` is true, the adapter's history was modified by Makaio
- * and native resume would produce an inconsistent state.
- * @param session - Validated session fields
- * @returns The adapter session ID for resume mode, or undefined for fresh create
- */
-function resolveResumeAdapterSessionId(session: ValidatedSession): string | undefined {
-  if (session.isImported && session.isOrchestrated === false && session.adapterSessionId) {
-    return session.adapterSessionId;
-  }
-  return undefined;
-}
-
-/**
- * Builds the startAgent request payload.
- *
- * When `resumeAdapterSessionId` is provided the request uses `mode: 'resume'`
- * so the adapter can attempt native session continuation rather than starting
- * a fresh context. If the adapter cannot honour the resume it falls back to
- * its default behaviour internally.
- *
- * For branching conversations, use session.fork to create a new session with
- * copied history, then attach agents to the new session.
- * @param adapterId - Target adapter ID
- * @param sessionId - Target session ID
- * @param initialMessage - Initial message content
- * @param role - Agent role
- * @param runtimeOptions - Runtime configuration options (may include model, providerContext, reasoningEffort)
- * @param resumeAdapterSessionId - Adapter session ID to resume (enables resume mode)
- * @param harnessId - Resolved harness ID for tool policy lookup
- * @returns StartAgentRequest payload
- */
-function buildStartAgentRequest(
-  adapterId: string,
-  sessionId: string,
-  initialMessage: MessageInput | undefined,
-  role: AgentRole,
-  runtimeOptions: ExtractableRuntimeOptions,
-  resumeAdapterSessionId?: string,
-  harnessId?: string,
-): StartAgentRequest {
-  if (resumeAdapterSessionId) {
-    return {
-      mode: 'resume',
-      adapterId,
-      sessionId,
-      adapterSessionId: resumeAdapterSessionId,
-      role,
-      ...runtimeOptions,
-      ...(initialMessage !== undefined && { initialMessage }),
-      ...(harnessId !== undefined && { harnessId }),
-    };
-  }
-  return {
-    adapterId,
-    sessionId,
-    role,
-    ...runtimeOptions,
-    ...(initialMessage !== undefined && { initialMessage }),
-    ...(harnessId !== undefined && { harnessId }),
-  };
 }
 
 /**

@@ -52,6 +52,8 @@ export const createTestConfig = async (
     capabilities: {
       supportsReplace: true,
       supportsInterrupt: true,
+      nativeResume: true,
+      nativeFork: true,
     },
     options: {
       defaultTimeout: 45_000,

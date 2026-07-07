@@ -92,21 +92,28 @@ import { activateProviderContext, buildProviderContext } from '../provider-conte
 export class SessionOrchestrator implements ISessionOrchestrator {
   private readonly turnManager: SessionTurnManager;
   private readonly adapterRegistry: AdapterRegistry;
+  private readonly machineId: string;
 
   /** Cleanup functions for bus subscriptions. */
   private readonly cleanups: Array<() => void> = [];
 
   /**
    * @param bus - Event bus used for handler registration and message routing
-   * @param _machineId - Machine identifier (reserved for future routing use)
+   * @param machineId - Stable machine identity forwarded to the attach handler
+   *   to drive native-locality decisions (resume locality evaluation, adapter
+   *   instance resolution).
    */
   public constructor(
+    // Defaulted `bus` before required `machineId` looks inverted, but every
+    // call site passes both explicitly; TypeScript still enforces machineId.
+    // Reordering would churn all construction sites for no behavioral gain.
     private readonly bus: IMakaioBus = MakaioBus,
-    _machineId: string,
+    machineId: string,
   ) {
+    this.machineId = machineId;
     this.turnManager = new SessionTurnManager(bus);
     this.adapterRegistry = new AdapterRegistry(bus);
-    this.cleanups.push(registerAttachHandler(this.bus, this.turnManager.getActiveTurnsMap(), _machineId));
+    this.cleanups.push(registerAttachHandler(this.bus, this.turnManager.getActiveTurnsMap(), machineId));
     this.registerSendMessageHandler();
     this.turnManager.registerCompletionHandlers(this.completeTurn.bind(this));
   }
@@ -157,6 +164,7 @@ export class SessionOrchestrator implements ISessionOrchestrator {
           sessionId,
           sessionContext,
           ctx.payload.originWindowId,
+          this.machineId,
         );
 
         // 2. Start agent if session has no agents

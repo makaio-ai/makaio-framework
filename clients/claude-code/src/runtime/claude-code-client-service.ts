@@ -189,12 +189,24 @@ export class ClaudeCodeClientService extends BaseService {
   private cachedConfigDir: Promise<string | undefined> | undefined;
 
   /**
+   * Stable runtime identity of the machine that owns the client sessions
+   * observed by this service.  Stamped onto `client.session.started` payloads
+   * so downstream storage receives the owning machine's identity without
+   * deriving it from the writer process.
+   */
+  private readonly machineId: string | undefined;
+
+  /**
    * Creates a new Claude Code client service.
    * @param bus - Bus instance used for hook subscription and semantic emission.
    *   Defaults to the global {@link MakaioBus} singleton.
+   * @param machineId - Stable runtime identity of the observing machine,
+   *   caller-supplied from the extension context. Omit in tests or when the
+   *   identity is unavailable.
    */
-  public constructor(bus: IMakaioBus = MakaioBus) {
+  public constructor(bus: IMakaioBus = MakaioBus, machineId?: string) {
     super(bus);
+    this.machineId = machineId;
   }
 
   /**
@@ -630,7 +642,7 @@ export class ClaudeCodeClientService extends BaseService {
    * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeClaudeCodeHook>[0]): Promise<void> {
-    for (const normalized of normalizeClaudeCodeHook(raw)) {
+    for (const normalized of normalizeClaudeCodeHook(raw, this.machineId)) {
       await this.emitNormalizedEvent(normalized);
     }
   }

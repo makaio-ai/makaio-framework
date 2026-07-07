@@ -59,6 +59,34 @@ export type ResolveNameRequest = z.infer<typeof ResolveNameRequestSchema>;
 export type ResolveNameResponse = z.infer<typeof ResolveNameResponseSchema>;
 
 /**
+ * Request payload for querying the runtime machine identity.
+ *
+ * Intentionally empty — the handler resolves the identity from the
+ * `AdapterIdentityRegistry` that was configured at startup.
+ */
+export const GetMachineIdRequestSchema = z.object({}).strict();
+
+/**
+ * Response payload for the runtime machine identity query.
+ */
+export const GetMachineIdResponseSchema = z
+  .object({
+    /** Runtime machine identifier, absent when no identity was configured. */
+    machineId: z.string().optional(),
+  })
+  .strict();
+
+/**
+ * Inferred request payload for machine identity query.
+ */
+export type GetMachineIdRequest = z.infer<typeof GetMachineIdRequestSchema>;
+
+/**
+ * Inferred response payload for machine identity query.
+ */
+export type GetMachineIdResponse = z.infer<typeof GetMachineIdResponseSchema>;
+
+/**
  * Schemas for the `adapterRuntime` namespace.
  *
  * This runtime seam owns live adapter identity. Canonical config and bindings
@@ -75,5 +103,10 @@ export const AdapterRuntimeSchemas = {
   resolveName: {
     request: ResolveNameRequestSchema,
     response: ResolveNameResponseSchema,
+  },
+
+  getMachineId: {
+    request: GetMachineIdRequestSchema,
+    response: GetMachineIdResponseSchema,
   },
 } satisfies SchemaRecord;

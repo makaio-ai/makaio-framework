@@ -88,6 +88,7 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
     metadata: payload.metadata,
     lastClientIdentityObservation: payload.lastClientIdentityObservation,
     isSidechain: payload.isSidechain,
+    machineId: payload.machineId ?? undefined,
   };
 }
 
@@ -148,6 +149,13 @@ function convergeImportMetadata(session: IMakaioSession, payload: ImportUpsertRe
   assignDefinedSessionField(session, 'isSidechain', payload.isSidechain);
   // Newer identity observation wins when supplied.
   assignDefinedSessionField(session, 'lastClientIdentityObservation', payload.lastClientIdentityObservation);
+  // Tri-state machineId: undefined preserves existing, null explicitly clears
+  // ownership, non-null string fills if absent (existing wins).
+  if (payload.machineId === null) {
+    session.machineId = undefined;
+  } else if (payload.machineId !== undefined) {
+    session.machineId ??= payload.machineId;
+  }
 }
 
 /**

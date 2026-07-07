@@ -1,5 +1,11 @@
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import {
+  AdapterSubjects,
+  AgentSubjects,
+  SessionEventStorageSubjects,
+  SessionStorageSubjects,
+  SessionSubjects,
+} from '@makaio/contracts';
 import type { IMakaioSession, StartAgentResponse } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { Turn } from '../../entities/turn.js';
@@ -102,6 +108,54 @@ export type StartAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubje
 export type SessionCreateRequestPayload = ExtractSubjectPayload<typeof SessionSubjects.create>;
 
 /**
+ * Registers the default conversation storage stubs required by non-native
+ * attach paths that call `seedAttachContextWithHistory`.
+ *
+ * Both subjects return an empty conversation:
+ * - `SessionStorageSubjects.get` — minimal root session (no `parentSessionId`)
+ *   so the chain walk terminates immediately.
+ * - `SessionEventStorageSubjects.getEvents` — empty event list with no cursor.
+ *
+ * Used by {@link createAttachHandlerContext} (at priority -100 so test-specific
+ * handlers take precedence) and by tests that call `resetBusHandlers()` and
+ * need to restore the stubs afterwards (at default priority).
+ * @param trackUnsubscribe - Callback that records each unsubscribe handle for cleanup
+ * @param options - Optional bus registration options (e.g. `{ priority: -100 }`)
+ */
+export function registerDefaultConversationStubs(
+  trackUnsubscribe: (unsub: () => void) => void,
+  options?: { priority?: number },
+): void {
+  trackUnsubscribe(
+    MakaioBus.on(
+      SessionStorageSubjects.get,
+      (context) => {
+        // Return a minimal root session (no parentSessionId) so chain walk terminates.
+        context.setResult({
+          session: {
+            sessionId: context.payload.sessionId,
+            createdAt: Date.now(),
+            lastActivityAt: Date.now(),
+            status: 'active',
+            agents: [],
+          },
+        });
+      },
+      options,
+    ),
+  );
+  trackUnsubscribe(
+    MakaioBus.on(
+      SessionEventStorageSubjects.getEvents,
+      (context) => {
+        context.setResult({ events: [], nextCursor: null });
+      },
+      options,
+    ),
+  );
+}
+
+/**
  * Creates a test context for registerAttachHandler tests.
  * Encapsulates the repeated setup: resetBusHandlers, activeTurns, unsubscribers,
  * mock adapter resolver, and common mock registrations.
@@ -151,6 +205,34 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
     }),
   );
 
+  // Mock adapter.getCapabilities handler. By default every adapter declares
+  // 'session:resume' so existing tests that expect native resume continue to
+  // pass. Tests that need a non-resume adapter call `setDefaultAdapterCapabilities`
+  // before the attach request to change what all adapters declare.
+  let defaultAdapterCapabilities: string[] = ['session:resume'];
+  unsubscribers.push(
+    MakaioBus.on(AdapterSubjects.getCapabilities, (context) => {
+      context.setResult({ capabilities: defaultAdapterCapabilities, nativeTools: [] });
+    }),
+  );
+
+  // Default conversation storage stubs for getFullConversation chain walk.
+  // Non-native attach paths call seedAttachContextWithHistory which reads the
+  // session chain via SessionStorageSubjects.get and events via
+  // SessionEventStorageSubjects.getEvents. These defaults return an empty
+  // conversation so existing tests that don't seed history pass unchanged.
+  // Registered at low priority so test-specific handlers take precedence.
+  registerDefaultConversationStubs((unsub) => unsubscribers.push(unsub), { priority: -100 });
+  unsubscribers.push(
+    MakaioBus.on(
+      MessageStorageSubjects.get,
+      (context) => {
+        context.setResult({ message: null });
+      },
+      { priority: -100 },
+    ),
+  );
+
   const ids = ATTACH_TEST_IDS;
 
   return {
@@ -162,6 +244,15 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
      */
     trackUnsubscribe(unsub: () => void): void {
       unsubscribers.push(unsub);
+    },
+
+    /**
+     * Overrides the default capabilities returned by the mock
+     * `getCapabilities` handler for all adapters.
+     * @param capabilities - Capability tokens to declare
+     */
+    setDefaultAdapterCapabilities(capabilities: string[]): void {
+      defaultAdapterCapabilities = capabilities;
     },
 
     /**
@@ -249,6 +340,7 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
       }
       unsubscribers.length = 0;
       nextTurnNumberBySession.clear();
+      defaultAdapterCapabilities = ['session:resume'];
       activeTurns.clear();
     },
   };
@@ -258,6 +350,7 @@ export function createAttachHandlerContext(currentMachineId?: string | null): At
 export interface AttachHandlerTestContext {
   activeTurns: Map<string, Turn>;
   trackUnsubscribe: (unsub: () => void) => void;
+  setDefaultAdapterCapabilities: (capabilities: string[]) => void;
   createMockSession: (overrides?: Partial<IMakaioSession>) => IMakaioSession;
   registerSessionGetHandler: (session: IMakaioSession | null) => () => void;
   registerStartAgentHandler: (overrides?: Partial<Extract<StartAgentResponse, { success: true }>>) => {
@@ -304,6 +397,9 @@ export function createForkHandlerContext(): ForkHandlerTestContext {
           busCtx.setResult({
             message: {
               messageId: busCtx.payload.messageId,
+              // Provider-native ID so mid-history fork points resolve instead
+              // of degrading with 'fork-point-unresolvable'.
+              adapterMessageId: `adapter-${String(busCtx.payload.messageId)}`,
               turnId: null,
               sessionId: sourceSessionId,
               role: 'user',

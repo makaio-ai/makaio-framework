@@ -53,10 +53,11 @@ describe('parseAIAdapterCapabilities', () => {
     });
 
     it('should parse session nested capabilities', () => {
-      const caps = parseAIAdapterCapabilities(['session:resume', 'session:fork']);
+      const caps = parseAIAdapterCapabilities(['session:resume', 'session:fork', 'session:forkAtMessage']);
 
       expect(caps.sessionResume).toBe(true);
       expect(caps.sessionFork).toBe(true);
+      expect(caps.sessionForkAtMessage).toBe(true);
       expect(caps.session).toBeUndefined();
     });
 
@@ -99,6 +100,7 @@ describe('parseAIAdapterCapabilities', () => {
         'session',
         'session:resume',
         'session:fork',
+        'session:forkAtMessage',
         'chat:inTurnMessages',
       ]);
 
@@ -111,6 +113,7 @@ describe('parseAIAdapterCapabilities', () => {
       expect(caps.session).toBe(true);
       expect(caps.sessionResume).toBe(true);
       expect(caps.sessionFork).toBe(true);
+      expect(caps.sessionForkAtMessage).toBe(true);
       expect(caps).toHaveProperty(chatCapabilityProperty, true);
     });
   });

@@ -9,7 +9,8 @@ import { BaseAdapterEventSchema } from './base-event.js';
  * Emitted when: SDK session is created (Anthropic, OpenAI, etc.)
  */
 export const SessionCreatedSchema = BaseAdapterEventSchema.extend({
-  adapterSessionId: z.string(),
+  /** Provider session ID. May be undefined for idle fork starts until provider confirms. */
+  adapterSessionId: z.string().optional(),
   sessionId: z.string(),
   model: z.string(),
 });

@@ -109,8 +109,8 @@ const AgentAttachResolvedRequestSchema = z.object({
 const AgentAttachResolvedResponseSchema = z.object({
   /** Created agent ID */
   agentId: z.string(),
-  /** Adapter's own session ID */
-  adapterSessionId: z.string(),
+  /** Adapter's own session ID; `undefined` for idle fork starts pending confirmation. */
+  adapterSessionId: z.string().optional(),
   /** Assigned role */
   role: z.enum(['lead', 'member']),
   /** Message ID if initialMessage was provided */
@@ -303,8 +303,8 @@ export const OrchestratorSchemas = {
     response: z.object({
       /** Created agent ID */
       agentId: z.string(),
-      /** Adapter's own session ID */
-      adapterSessionId: z.string(),
+      /** Adapter's own session ID; `undefined` for idle fork starts pending confirmation. */
+      adapterSessionId: z.string().optional(),
       /** Assigned role */
       role: z.enum(['lead', 'member']),
       /** Message ID if initialMessage was provided */

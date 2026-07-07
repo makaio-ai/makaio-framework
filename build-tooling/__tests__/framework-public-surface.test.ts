@@ -46,6 +46,13 @@ describe('FRAMEWORK_DIST_SUBPATHS', () => {
     expect(entry?.packageName).toBe('@makaio/subsystem-git');
     expect(entry?.sourceDist).toBe('subsystems/git/dist');
   });
+
+  it('includes the node machine-identity subpath for downstream hooks', () => {
+    const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'node/machine-identity');
+    expect(entry).toBeDefined();
+    expect(entry?.packageName).toBe('@makaio/machine-identity');
+    expect(entry?.sourceDist).toBe('packages/machine-identity/dist');
+  });
 });
 
 describe('FRAMEWORK_BUILD_PACKAGE_NAMES', () => {
@@ -201,5 +208,11 @@ describe('getFrameworkPublicPackageByName', () => {
     const entry = getFrameworkPublicPackageByName('@makaio/subsystem-workflow-engine');
     expect(entry?.frameworkSubpath).toBe('workflow-engine');
     expect(entry?.packageRoot).toBe('subsystems/workflow-engine');
+  });
+
+  it('resolves @makaio/machine-identity to the node machine-identity facade subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/machine-identity');
+    expect(entry?.frameworkSubpath).toBe('node/machine-identity');
+    expect(entry?.packageRoot).toBe('packages/machine-identity');
   });
 });

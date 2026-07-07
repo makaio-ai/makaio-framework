@@ -66,15 +66,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
   private readonly commandInfoWaiters = new Map<string, (info: { command: string; cwd: string }) => void>();
   private disabledNativeTools: ReadonlySet<string> = new Set();
 
-  /**
-   * Stable context object passed to connection-manager module functions.
-   * All state access is via closures over `this` so the object is never stale.
-   */
+  /** Stable contexts passed to connection-manager and turn-flow-handlers; state accessed via closures. */
   private readonly connCtx: ConnectionManagerContext;
-  /**
-   * Stable context object passed to turn-flow-handlers module functions.
-   * All state access is via closures over `this` so the object is never stale.
-   */
   private readonly turnCtx: TurnFlowContext;
 
   public constructor(config: CodexAppServerConfig) {
@@ -115,7 +108,11 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     }
 
     this.connCtx = this.buildConnectionContext();
-    this.turnCtx = this.buildTurnFlowContext();
+    // buildTurnFlowContext reads some values from `config` directly (resumeAdapterSessionId,
+    // nativeFork) and others from `this` (cwd, model via getters). This mixed sourcing is
+    // intentional: getter-backed fields (model, approvalPolicy, reasoningEffort) must be
+    // live-read per turn, while immutable fork/resume directives are snapshot from config.
+    this.turnCtx = this.buildTurnFlowContext(config);
   }
 
   private buildConnectionContext(): ConnectionManagerContext {
@@ -153,7 +150,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     };
   }
 
-  private buildTurnFlowContext(): TurnFlowContext {
+  private buildTurnFlowContext(config: CodexAppServerConfig): TurnFlowContext {
     return {
       getCurrentTurn: () => this.currentTurn,
       setCurrentTurn: (turn) => {
@@ -199,6 +196,8 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       cwd: this.cwd,
       allowedTools: this.config.allowedTools,
       disallowedTools: this.config.disallowedTools,
+      resumeAdapterSessionId: config.resumeAdapterSessionId,
+      nativeFork: config.nativeFork,
     };
   }
 

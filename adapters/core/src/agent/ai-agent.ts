@@ -1,9 +1,10 @@
-/* eslint max-lines: ["error", { "max": 1100 }] */
+/* eslint max-lines: ["error", { "max": 1110 }] */
 import type { IMakaioBus, OnOptions, ScopedBus } from '@makaio/bus-core';
 import { MakaioBus } from '@makaio/bus-core';
 import type { SetRequired } from 'type-fest';
 import type {
   AgentContext,
+  AgentIdentity,
   AgentStartResult,
   AgentCredentialChangeRequestPayload,
   AgentCredentialChangeResponsePayload,
@@ -181,12 +182,11 @@ export abstract class AIAgent<
         sessionId: this.sessionId,
       }),
       lifecycleTracker: this.lifecycleTracker,
-      getConnectorAdapterSessionId: () => this.connector?.adapterSessionId,
+      getConnectorAdapterSessionId: () => this.connector?.getConfirmedAdapterSessionId(),
       getLastKnownAdapterSessionId: () => this.lastKnownAdapterSessionId,
       setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => {
         this.lastKnownAdapterSessionId = adapterSessionId;
       },
-      getAdapterSessionId: this.getAdapterSessionId.bind(this),
       getEventMetadataDefaults: this.getEventMetadataDefaults.bind(this),
     });
     this.eventBridge = createAgentEventBridge({
@@ -340,6 +340,12 @@ export abstract class AIAgent<
       onMessageSent: this.createOnMessageSent(),
     });
 
+    // One-shot consumption: the fork directive has been captured by the
+    // connector's config.  Clear the agent-level copy so subsequent
+    // buildConfigInput() calls (connector swaps, MCP server changes,
+    // credential rotations) never re-fork the source session.
+    this.config.nativeFork = undefined;
+
     this.busHandlerCleanups.push(
       ...registerAgentBusHandlers({
         globalBus: this.globalBus,
@@ -375,9 +381,9 @@ export abstract class AIAgent<
       ...this.structuredOutputManager.registerDefaultHandlers(),
     );
 
-    // Step 4b: Subscribe to MCP tool change events so connectors can refresh at the next
-    // turn boundary. These go into busHandlerCleanups (not connectorWiringCleanups) because
-    // MCP subscriptions are agent-lifetime — they must survive connector swaps.
+    // Step 4b: Subscribe to MCP tool change events so connectors can refresh at the next turn
+    // boundary. Goes into busHandlerCleanups (not connectorWiringCleanups): MCP subscriptions
+    // are agent-lifetime — they must survive connector swaps.
     if (this.sessionId) {
       this.busHandlerCleanups.push(
         this.globalBus.on(
@@ -449,7 +455,7 @@ export abstract class AIAgent<
    * @param payload - The base payload to enrich
    * @returns Payload with AgentContext fields and optional messageId added
    */
-  protected async enrichPayload<T extends object>(payload: T): Promise<T & AgentContext & { messageId?: string }> {
+  protected async enrichPayload<T extends object>(payload: T): Promise<T & AgentIdentity & { messageId?: string }> {
     return this.payloadEmitter.enrichPayload(payload);
   }
 
@@ -590,9 +596,8 @@ export abstract class AIAgent<
       const result = await this.turnExecutor.executeSendMessage(ctx.payload);
       ctx.setResult(result);
     } catch (error) {
-      // On success, lifecycleTracker.complete() clears turnId when the message
-      // handle finishes. This catch-only path handles errors that occur before
-      // a handle is tracked — no terminal lifecycle event would clear it.
+      // On success, lifecycleTracker.complete() clears turnId when the handle finishes. This
+      // catch-only path covers errors before a handle is tracked — nothing else would clear it.
       this.lifecycleTracker.clearCurrentTurnId();
       throw error;
     }
@@ -736,6 +741,7 @@ export abstract class AIAgent<
       providerConfig: cfg.adapterConfig,
       mcpSessionContext: overrides?.mcpSessionContext ?? cfg.mcpSessionContext,
       toolLedger: cfg.toolLedger,
+      ...(cfg.nativeFork !== undefined && { nativeFork: cfg.nativeFork }),
       clientId: cfg.clientId,
       clientProfileName: cfg.clientProfileName,
       harnessId: cfg.harnessId,
@@ -862,7 +868,6 @@ export abstract class AIAgent<
   /**
    * Ensure the connector is initialized, throwing if not.
    * @returns The initialized connector instance
-   * @throws Error if connector is not initialized
    */
   private ensureConnector(): TConnector {
     if (!this.connector) {
@@ -872,12 +877,8 @@ export abstract class AIAgent<
   }
 
   /**
-   * Determine whether to use native session resume or fresh with history.
-   *
-   * Native resume: SDK manages history, don't inject messageHistory, preserve cache.
-   * Fresh with history: Create new session, inject messageHistory.
-   *
-   * Override in adapter-specific agents if needed.
+   * Determine whether to use native session resume (SDK manages history) or
+   * fresh-with-history (new session, injected messageHistory).
    * @param sessionContext - Context signals from SessionOrchestrator
    * @returns true if native resume should be used
    */
@@ -886,6 +887,7 @@ export abstract class AIAgent<
       return false;
     }
     if (!sessionContext) return true;
+    if (sessionContext.nativeLocality?.kind !== 'native') return false;
     if (sessionContext.isFirstTurn) return false;
     if (sessionContext.hasCompression) return false;
     if (sessionContext.hasNewTransforms) return false;
@@ -894,21 +896,30 @@ export abstract class AIAgent<
   }
 
   /**
-   * Whether this adapter supports native session resume.
-   * Override in adapter-specific agents that can resume SDK sessions.
+   * Whether this adapter supports native session resume. Override in concrete agents.
    * @returns true if native resume is supported
    */
   protected supportsNativeResume(): boolean {
-    return false; // Default: no native resume support
+    return false;
+  }
+  /**
+   * Whether this adapter supports provider-native session fork. Override in
+   * concrete agents that can branch from an existing provider session.
+   * Declaration half of the capability-honesty contract: the runtime gate is
+   * the orchestrator's `session:fork` token query, so a directive never
+   * reaches an incapable agent; conformance asserts token ⇔ self-report.
+   * @returns true if native fork is supported
+   */
+  protected supportsNativeFork(): boolean {
+    return false;
   }
 
   /**
    * Start the agent with an initial message.
    *
-   * Ensures the agent is initialized (idempotent) before delegating to the connector.
-   * Runs PreUserMessage hooks before sending the message.
-   * Uses sessionContext signals to decide between native resume and fresh with history.
-   * HookAbortError propagates to caller.
+   * Ensures the agent is initialized (idempotent), runs PreUserMessage hooks,
+   * and uses sessionContext signals to decide between native resume and fresh
+   * with history. HookAbortError propagates to caller.
    * @param message - User message (normalized or unnormalized)
    * @param options - Optional start options (e.g., delivery mode, sessionContext)
    * @returns Session ID, agent ID, and message handle for tracking
@@ -929,26 +940,26 @@ export abstract class AIAgent<
   }
 
   /**
-   * Initialize the agent without sending a message (idle creation).
-   * Ensures init() is called, then delegates to connector.initialize().
+   * Initialize idle (no message). Returns confirmed adapter session ID or `undefined`
+   * when the provider has not yet confirmed (idle fork sessions).
    * @param options - Optional initialization options (system prompt, sessionContext)
+   * @returns Confirmed adapter session ID, or `undefined` for unconfirmed fork sessions.
    */
-  public async initialize(options?: StartAgentOptions): Promise<void> {
-    // Capture systemPrompt for reuse across connector swaps
+  public async initialize(options?: StartAgentOptions): Promise<string | undefined> {
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
     if (!this.initialized) {
       await this.init();
     }
-    await this.ensureConnector().initialize(options);
+    const connector = this.ensureConnector();
+    await connector.initialize(options);
+    return connector.getConfirmedAdapterSessionId();
   }
 
   protected async onBeforeEmitCompletion() {}
-
   protected async onMessageHandle(messageHandle: MessageHandle, turnId?: string) {
-    // Reset per-turn dedup so adapters that don't emit agent.started per turn
-    // (e.g., codex emits thread_started once) can still fire agent.complete.
+    // Reset per-turn dedup so adapters without per-turn agent.started (codex emits thread_started once) still fire agent.complete.
     this.lifecycleEmitter.resetTurnState();
     this.latestMessageCompletion = messageHandle.waitForCompletion();
     const responseSchema = messageHandle.responseSchema;

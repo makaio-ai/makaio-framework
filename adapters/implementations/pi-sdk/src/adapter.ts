@@ -47,7 +47,14 @@ export class PiAdapter extends AIAdapter<PiSdkBus, PiConnector, PiAgent> {
     super({
       ...config,
       name: PiSdkAdapterName,
-      capabilities: ['tools', 'streaming', 'systemPrompt:override', 'systemPrompt:append', 'modelSwitchInSession'],
+      capabilities: [
+        'tools',
+        'streaming',
+        'systemPrompt:override',
+        'systemPrompt:append',
+        'modelSwitchInSession',
+        'session:resume',
+      ],
       nativeTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
       namespace: PiSdkNamespace,
       agentFactory: (agentConfig) => new PiAgent(agentConfig),

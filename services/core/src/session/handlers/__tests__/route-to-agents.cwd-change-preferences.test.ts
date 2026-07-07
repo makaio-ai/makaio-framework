@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { PreferencesSubjects } from '../../../preferences/storage-namespace.js';
 import { routeToAgents } from '../route-to-agents.js';
 import { Turn } from '../../entities/turn.js';
@@ -31,8 +31,33 @@ function getCwdChangeMessage(sessionContext: unknown): string | undefined {
   return typeof record.message === 'string' ? record.message : undefined;
 }
 
+/**
+ * Invoke routeToAgents with the standard cwd-swap fixtures used across all
+ * preference tests.  Only test-specific knobs (agent, session, turn) are
+ * required; everything else is shared boilerplate.
+ * @param agent - Agent instance participating in the turn
+ * @param session - Session owning the turn
+ * @param turn - Current turn being processed
+ */
+async function routeToAgentsWithCwdSwap(agent: MakaioSessionAgent, session: IMakaioSession, turn: Turn): Promise<void> {
+  const { messageId, testMessage } = ROUTE_TEST_IDS;
+  await routeToAgents({
+    bus: MakaioBus,
+    session,
+    agents: [agent],
+    message: testMessage,
+    messageId,
+    turn,
+    deliveryMode: undefined,
+    onTurnComplete: vi.fn(),
+    swappedAgentIds: new Set([agent.agentId]),
+    swappedAgentCwd: new Map([[agent.agentId, { previousCwd: '/old', newCwd: '/new' }]]),
+    freshMessageHistory: [],
+  });
+}
+
 describe('routeToAgents - cwd change notification preferences', () => {
-  const { sessionId, messageId, turnId, testMessage } = ROUTE_TEST_IDS;
+  const { sessionId, turnId } = ROUTE_TEST_IDS;
   let ctx: RouteTestContext;
 
   beforeEach(() => {
@@ -53,8 +78,6 @@ describe('routeToAgents - cwd change notification preferences', () => {
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
-    const swappedAgentIds = new Set(['agent-1']);
-    const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
     let cwdChangeMessage: string | undefined;
 
     trackUnsubscribe(
@@ -75,24 +98,7 @@ describe('routeToAgents - cwd change notification preferences', () => {
       }),
     );
 
-    await routeToAgents(
-      MakaioBus,
-      session,
-      [agent],
-      testMessage,
-      messageId,
-      turn,
-      undefined,
-      vi.fn(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      swappedAgentIds,
-      swappedAgentCwd,
-      [],
-    );
+    await routeToAgentsWithCwdSwap(agent, session, turn);
 
     expect(cwdChangeMessage).toBe('/old -> /new; again /old -> /new');
   });
@@ -101,8 +107,6 @@ describe('routeToAgents - cwd change notification preferences', () => {
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
-    const swappedAgentIds = new Set(['agent-1']);
-    const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
     let hasCwdChange = false;
 
     trackUnsubscribe(
@@ -123,24 +127,7 @@ describe('routeToAgents - cwd change notification preferences', () => {
       }),
     );
 
-    await routeToAgents(
-      MakaioBus,
-      session,
-      [agent],
-      testMessage,
-      messageId,
-      turn,
-      undefined,
-      vi.fn(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      swappedAgentIds,
-      swappedAgentCwd,
-      [],
-    );
+    await routeToAgentsWithCwdSwap(agent, session, turn);
 
     expect(hasCwdChange).toBe(false);
   });
@@ -149,8 +136,6 @@ describe('routeToAgents - cwd change notification preferences', () => {
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
-    const swappedAgentIds = new Set(['agent-1']);
-    const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
     let cwdChangeMessage: string | undefined;
 
     trackUnsubscribe(
@@ -166,24 +151,7 @@ describe('routeToAgents - cwd change notification preferences', () => {
       }),
     );
 
-    await routeToAgents(
-      MakaioBus,
-      session,
-      [agent],
-      testMessage,
-      messageId,
-      turn,
-      undefined,
-      vi.fn(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      swappedAgentIds,
-      swappedAgentCwd,
-      [],
-    );
+    await routeToAgentsWithCwdSwap(agent, session, turn);
 
     expect(cwdChangeMessage).toBe('User changed working directory from /old to /new');
   });
@@ -192,8 +160,6 @@ describe('routeToAgents - cwd change notification preferences', () => {
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
-    const swappedAgentIds = new Set(['agent-1']);
-    const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
     let cwdChangeMessage: string | undefined;
 
     trackUnsubscribe(
@@ -214,24 +180,7 @@ describe('routeToAgents - cwd change notification preferences', () => {
       }),
     );
 
-    await routeToAgents(
-      MakaioBus,
-      session,
-      [agent],
-      testMessage,
-      messageId,
-      turn,
-      undefined,
-      vi.fn(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      swappedAgentIds,
-      swappedAgentCwd,
-      [],
-    );
+    await routeToAgentsWithCwdSwap(agent, session, turn);
 
     expect(cwdChangeMessage).toBe('User changed working directory from /old to /new');
   });
@@ -240,8 +189,6 @@ describe('routeToAgents - cwd change notification preferences', () => {
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
-    const swappedAgentIds = new Set(['agent-1']);
-    const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
     let cwdChangeMessage: string | undefined;
 
     trackUnsubscribe(
@@ -257,24 +204,7 @@ describe('routeToAgents - cwd change notification preferences', () => {
       }),
     );
 
-    await routeToAgents(
-      MakaioBus,
-      session,
-      [agent],
-      testMessage,
-      messageId,
-      turn,
-      undefined,
-      vi.fn(),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      swappedAgentIds,
-      swappedAgentCwd,
-      [],
-    );
+    await routeToAgentsWithCwdSwap(agent, session, turn);
 
     expect(cwdChangeMessage).toBe('User changed working directory from /old to /new');
   });

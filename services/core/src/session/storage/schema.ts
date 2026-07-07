@@ -242,6 +242,15 @@ export const sessionsDual = defineDualTable(
      * perspective. NULL = unknown/live session; only imports populate it.
      */
     isSidechain: c.bool('is_sidechain'),
+
+    /**
+     * Stable runtime machine identity that owns the provider-native session store.
+     *
+     * Caller-supplied by the owning hook/runtime — never derived from the writer
+     * process so that central or downstream servers can import foreign sessions
+     * without stamping their own machine ID.
+     */
+    machineId: c.text('machine_id'),
   }),
   {
     sqlite: (t) => [

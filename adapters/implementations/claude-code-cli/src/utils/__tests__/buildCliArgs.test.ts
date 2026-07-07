@@ -139,6 +139,65 @@ describe('buildCliArgs', () => {
     });
   });
 
+  describe('nativeFork', () => {
+    it('tip fork: emits --resume <sourceId> --fork-session, no --session-id', () => {
+      const args = buildCliArgs({
+        config: makeConfig({
+          nativeFork: {
+            sourceSessionId: 'makaio-source',
+            sourceAdapterSessionId: 'provider-source',
+          },
+        }),
+        prompt: 'hi',
+        sessionId: 'new-sid',
+      });
+
+      const resumeIdx = args.indexOf('--resume');
+      expect(resumeIdx).toBeGreaterThan(-1);
+      expect(args[resumeIdx + 1]).toBe('provider-source');
+      expect(args).toContain('--fork-session');
+      expect(args).not.toContain('--session-id');
+    });
+
+    it('mid-history fork: throws an error (not supported by CLI adapter)', () => {
+      expect(() =>
+        buildCliArgs({
+          config: makeConfig({
+            nativeFork: {
+              sourceSessionId: 'makaio-source',
+              sourceAdapterSessionId: 'provider-source',
+              forkPointMessageId: 'msg-checkpoint',
+            },
+          }),
+          prompt: 'hi',
+          sessionId: 'new-sid',
+        }),
+      ).toThrow('[claude-code-cli] Native mid-history fork is not supported by the CLI adapter');
+    });
+
+    it('resumeAdapterSessionId takes priority over nativeFork (subsequent turns resume the fork child)', () => {
+      // After the first fork turn confirms a child session ID, subsequent turns pass
+      // resumeAdapterSessionId = <child session ID> to resume that child — not re-fork the source.
+      const args = buildCliArgs({
+        config: makeConfig({
+          resumeAdapterSessionId: 'fork-child-session',
+          nativeFork: {
+            sourceSessionId: 'makaio-source',
+            sourceAdapterSessionId: 'provider-source',
+          },
+        }),
+        prompt: 'hi',
+        sessionId: 'new-sid',
+      });
+
+      const resumeIdx = args.indexOf('--resume');
+      expect(resumeIdx).toBeGreaterThan(-1);
+      expect(args[resumeIdx + 1]).toBe('fork-child-session');
+      expect(args).not.toContain('--fork-session');
+      expect(args).not.toContain('--session-id');
+    });
+  });
+
   describe('reasoningEffort', () => {
     it('emits --effort low for level "low"', () => {
       const args = buildCliArgs({ config: makeConfig({ reasoningEffort: 'low' }), prompt: 'hi', sessionId: 'sid' });

@@ -32,9 +32,9 @@ class AgentCompletePayloadStructuredOutputValidationVariantC:
 class AgentCompletePayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     message_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     error: str | None = None
     error_category: Literal["rate_limit", "auth", "model_unavailable", "quota_exceeded"] | None = None
@@ -51,12 +51,12 @@ class AgentCompletePayload:
 class AgentContextWindowUpdatedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     current_tokens: float
     level: Literal["ok", "warn", "critical"]
     max_tokens: float
     percentage: float
+    adapter_session_id: str | None = None
     cached_tokens: float | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -99,9 +99,9 @@ class AgentCredentialChangeResponseVariantB:
 class AgentCwdChangeRequest:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     new_cwd: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -122,10 +122,10 @@ class AgentCwdChangeResponse:
 class AgentCwdChangedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     new_cwd: str
     previous_cwd: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -150,8 +150,8 @@ class AgentGetCapabilitiesResponse:
 class AgentIdlePayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -164,8 +164,8 @@ class AgentIdlePayload:
 class AgentInterruptRequest:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -271,9 +271,9 @@ class AgentMcpServersSetRequestMcpSessionContext:
 class AgentMcpServersSetRequest:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     mcp_session_context: AgentMcpServersSetRequestMcpSessionContext
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -295,9 +295,9 @@ class AgentMcpServersSetResponse:
 class AgentMessagePayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     content: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -310,9 +310,9 @@ class AgentMessagePayload:
 class AgentMessageDeltaPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     text: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -342,8 +342,8 @@ class AgentModelChangeRequestProviderContext:
 class AgentModelChangeRequest:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     new_model: str | None = None
@@ -372,10 +372,10 @@ class AgentModelChangeResponse:
 class AgentModelChangedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     new_model: str
     previous_model: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     new_reasoning_effort: Literal["none", "low", "medium", "high", "extra-high"] | None = None
@@ -390,9 +390,9 @@ class AgentModelChangedPayload:
 class AgentReasoningPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     content: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -405,9 +405,9 @@ class AgentReasoningPayload:
 class AgentReasoningDeltaPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     content: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -430,6 +430,31 @@ class AgentSendMessageRequestSessionContextMessageHistoryItem:
 
 
 @dataclass(frozen=True)
+class AgentSendMessageRequestSessionContextNativeFork:
+    source_adapter_session_id: str
+    source_session_id: str
+    fork_point_message_id: str | None = None
+    target_working_directory: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentSendMessageRequestSessionContextNativeLocalityVariantA:
+    kind: Literal["native"]
+
+
+@dataclass(frozen=True)
+class AgentSendMessageRequestSessionContextNativeLocalityVariantB:
+    kind: Literal["degrade"]
+    reason: Literal["adapter-unsupported", "adapter-mismatch", "no-adapter-session", "missing-machine-id", "machine-mismatch", "cwd-mismatch", "transforms-present", "compression-present", "connector-swap", "mid-history-unsupported", "hybrid-imported-orchestrated", "native-attempt-failed", "agent-already-started", "fork-point-unresolvable"]
+
+
+@dataclass(frozen=True)
+class AgentSendMessageRequestSessionContextNativeLocalityVariantC:
+    kind: Literal["foreign"]
+    machine_id: str
+
+
+@dataclass(frozen=True)
 class AgentSendMessageRequestSessionContext:
     cache_strategy: Literal["auto", "systemPrompt", "fullPrefix"] | None = None
     extracted_context: Any | None = None
@@ -438,6 +463,8 @@ class AgentSendMessageRequestSessionContext:
     has_new_transforms: bool | None = None
     is_first_turn: bool | None = None
     message_history: list[AgentSendMessageRequestSessionContextMessageHistoryItem] | None = None
+    native_fork: AgentSendMessageRequestSessionContextNativeFork | None = None
+    native_locality: Union[AgentSendMessageRequestSessionContextNativeLocalityVariantA, AgentSendMessageRequestSessionContextNativeLocalityVariantB, AgentSendMessageRequestSessionContextNativeLocalityVariantC] | None = None
     turn_context: dict[str, Any] | None = None
 
 
@@ -463,8 +490,8 @@ class AgentSendMessageResponse:
 class AgentSessionClosedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -478,10 +505,10 @@ class AgentSessionClosedPayload:
 class AgentStartedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     cwd: str | None
     model: str | None
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -587,11 +614,11 @@ class AgentStepFinishedPayloadContentVariantG:
 class AgentStepFinishedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     block_index: float
     content: Union[AgentStepFinishedPayloadContentVariantA, AgentStepFinishedPayloadContentVariantB, AgentStepFinishedPayloadContentVariantC, AgentStepFinishedPayloadContentVariantD, AgentStepFinishedPayloadContentVariantE, AgentStepFinishedPayloadContentVariantF, AgentStepFinishedPayloadContentVariantG]
     step_type: Literal["reasoning", "tool_use", "text"]
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -714,10 +741,10 @@ class AgentStepStartedPayloadContentVariantG:
 class AgentStepStartedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     block_index: float
     step_type: Literal["reasoning", "tool_use", "text"]
+    adapter_session_id: str | None = None
     block_data: Union[AgentStepStartedPayloadBlockDataVariantA, AgentStepStartedPayloadBlockDataVariantB, AgentStepStartedPayloadBlockDataVariantC] | None = None
     client_id: str | None = None
     content: Union[AgentStepStartedPayloadContentVariantA, AgentStepStartedPayloadContentVariantB, AgentStepStartedPayloadContentVariantC, AgentStepStartedPayloadContentVariantD, AgentStepStartedPayloadContentVariantE, AgentStepStartedPayloadContentVariantF, AgentStepStartedPayloadContentVariantG] | None = None
@@ -793,11 +820,11 @@ class AgentStructuredOutputRetryPolicyResponse:
 class AgentToolCompletedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     result: dict[str, Any]
     tool_call_id: str
     tool_name: str
+    adapter_session_id: str | None = None
     args: dict[str, Any] | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -812,10 +839,10 @@ class AgentToolCompletedPayload:
 class AgentToolOutputPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     output: str
     tool_call_id: str
+    adapter_session_id: str | None = None
     args: dict[str, Any] | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -830,10 +857,10 @@ class AgentToolOutputPayload:
 class AgentToolStartedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     tool_call_id: str
     tool_name: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     message_id: str | None = None
     occurred_at: float | None = None
@@ -846,10 +873,10 @@ class AgentToolStartedPayload:
 class AgentToolUsePayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     tool_call_id: str
     tool_name: str
+    adapter_session_id: str | None = None
     args: dict[str, Any] | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -863,10 +890,10 @@ class AgentToolUsePayload:
 class AgentToolApproveRequest:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     session_id: str
     tool_call_id: str
+    adapter_session_id: str | None = None
     args: dict[str, Any] | None = None
     client_id: str | None = None
     message_id: str | None = None
@@ -918,10 +945,10 @@ class AgentTurnCompletedPayloadStructuredOutputValidationVariantC:
 class AgentTurnCompletedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     message_id: str
     outcome: Literal["completed", "superseded", "merged", "cancelled", "error", "rejected"]
+    adapter_session_id: str | None = None
     client_id: str | None = None
     error: str | None = None
     message: str | None = None
@@ -1036,10 +1063,10 @@ class AgentTurnStartedPayloadContent:
 class AgentTurnStartedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     content: AgentTurnStartedPayloadContent
     message_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     merged_from: list[str] | None = None
     occurred_at: float | None = None
@@ -1061,7 +1088,6 @@ class AgentUsagePayloadQuota:
 class AgentUsagePayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     cost_unit_type: Literal["requests", "tokens"]
     cost_units: float
@@ -1072,6 +1098,7 @@ class AgentUsagePayload:
     provider: str
     reasoning_tokens: float
     total_tokens: float
+    adapter_session_id: str | None = None
     audio_input_tokens: float | None = None
     audio_output_tokens: float | None = None
     cache_write_tokens: float | None = None
@@ -1093,9 +1120,9 @@ class AgentUsagePayload:
 class AgentUserMessageAcknowledgedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     message_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     merged_from: list[str] | None = None
     occurred_at: float | None = None
@@ -1108,10 +1135,10 @@ class AgentUserMessageAcknowledgedPayload:
 class AgentUserMessageCompletedPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     message_id: str
     outcome: Literal["completed", "superseded", "merged", "cancelled", "error", "rejected"]
+    adapter_session_id: str | None = None
     client_id: str | None = None
     error: str | None = None
     merged_into: str | None = None
@@ -1226,11 +1253,11 @@ class AgentUserMessageSentPayloadContent:
 class AgentUserMessageSentPayload:
     adapter_id: str
     adapter_name: str
-    adapter_session_id: str
     agent_id: str
     content: AgentUserMessageSentPayloadContent
     delivery_mode: Literal["enqueue", "immediate", "replace"]
     message_id: str
+    adapter_session_id: str | None = None
     client_id: str | None = None
     occurred_at: float | None = None
     provider_config_id: str | None = None

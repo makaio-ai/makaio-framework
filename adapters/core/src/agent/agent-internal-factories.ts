@@ -46,7 +46,6 @@ export function createAgentPayloadEmitter(config: CreatePayloadEmitterInput): Ag
     getConnectorAdapterSessionId: config.getConnectorAdapterSessionId,
     getLastKnownAdapterSessionId: config.getLastKnownAdapterSessionId,
     setLastKnownAdapterSessionId: config.setLastKnownAdapterSessionId,
-    getAdapterSessionId: config.getAdapterSessionId,
     getEventMetadataDefaults: config.getEventMetadataDefaults,
   });
 }

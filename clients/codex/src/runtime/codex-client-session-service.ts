@@ -90,6 +90,14 @@ export class CodexClientSessionService extends BaseService {
   private cachedConfigDir: Promise<string | undefined> | undefined;
 
   /**
+   * Stable runtime identity of the machine that owns the client sessions
+   * observed by this service.  Stamped onto `client.session.started` payloads
+   * so downstream storage receives the owning machine's identity without
+   * deriving it from the writer process.
+   */
+  private readonly machineId: string | undefined;
+
+  /**
    * Set of `adapterSessionId` values known to be owned by an adapter-managed
    * Codex runtime.  Populated by {@link handleRuntimeStarted} when a
    * `client.runtime.started` event arrives with `clientId === CLIENT_ID` and
@@ -109,10 +117,14 @@ export class CodexClientSessionService extends BaseService {
    * @param settings - Optional {@link CodexClientSettings} instance for tests
    *   that need exact filesystem paths. Production callers should omit it so
    *   the service can resolve the active managed config dir via the bus.
+   * @param machineId - Stable runtime identity of the observing machine,
+   *   caller-supplied from the extension context. Omit in tests or when the
+   *   identity is unavailable.
    */
-  public constructor(bus: IMakaioBus = MakaioBus, settings?: CodexClientSettings) {
+  public constructor(bus: IMakaioBus = MakaioBus, settings?: CodexClientSettings, machineId?: string) {
     super(bus);
     this.settingsOverride = settings;
+    this.machineId = machineId;
   }
 
   /**
@@ -300,7 +312,7 @@ export class CodexClientSessionService extends BaseService {
    * @param raw - Raw hook payload delivered on `client:codex.hook.received`
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeCodexHook>[0]): Promise<void> {
-    const normalized = normalizeCodexHook(raw);
+    const normalized = normalizeCodexHook(raw, this.machineId);
     if (normalized === null) return;
 
     if (this.isAdapterManagedSession(normalized.payload.adapterSessionId)) {

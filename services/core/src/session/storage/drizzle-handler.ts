@@ -92,6 +92,7 @@ function toDbValues(session: IMakaioSession) {
     logFilePath: toNullableDbValue(session.logFilePath),
     discoveredAt: toNullableDbValue(session.discoveredAt),
     importStatus: toNullableDbValue(session.importStatus),
+    machineId: toNullableDbValue(session.machineId),
   };
 }
 
@@ -159,6 +160,7 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
   assignDefinedField(updateFields, 'targetWorkingDirectory', payload.targetWorkingDirectory);
   assignDefinedField(updateFields, 'createdAt', payload.createdAt);
   assignDefinedField(updateFields, 'lastActivityAt', payload.lastActivityAt);
+  assignDefinedField(updateFields, 'machineId', payload.machineId);
 
   assignNullableField(updateFields, 'executionTargetId', payload.executionTargetId);
   assignNullableField(updateFields, 'approvalPolicyOverride', payload.approvalPolicyOverride);

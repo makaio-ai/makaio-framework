@@ -27,6 +27,7 @@ export interface AIAdapterCapabilityRegistry {
   session: {
     resume: boolean;
     fork: boolean;
+    forkAtMessage: boolean;
   };
   chat: {
     inTurnMessages: boolean;

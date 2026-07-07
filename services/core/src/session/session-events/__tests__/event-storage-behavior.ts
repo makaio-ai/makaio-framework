@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import type { MakaioSessionEvent } from '@makaio/contracts';
 import { SessionEventStorageSubjects } from '../namespace.js';
 import { createEvent } from './shared.js';
 
@@ -31,6 +32,42 @@ export interface EventStorageBehaviorHooks {
  */
 export function describeEventStorageBehavior(hooks: EventStorageBehaviorHooks = {}): void {
   const ensureSession = hooks.ensureSession ?? (() => Promise.resolve());
+
+  describe('append', () => {
+    it('round-trips agent.added without adapterSessionId (idle fork start)', async () => {
+      await ensureSession('session-idle');
+
+      // Construct the event manually to omit adapterSessionId — the persisted schema
+      // must accept this shape ever since adapterSessionId was made optional to support
+      // unconfirmed idle fork starts.
+      const event: MakaioSessionEvent = {
+        sessionId: 'session-idle',
+        eventId: 'evt-idle-fork',
+        timestamp: 1,
+        type: 'agent.added',
+        payload: {
+          sessionId: 'session-idle',
+          agentId: 'agent-1',
+          adapterId: 'test-adapter',
+          adapterName: 'Test Adapter',
+          // adapterSessionId intentionally absent
+        },
+      };
+
+      const appendResult = await MakaioBus.request(SessionEventStorageSubjects.append, { event });
+      expect(appendResult.success).toBe(true);
+
+      const { events } = await MakaioBus.request(SessionEventStorageSubjects.getEvents, {
+        sessionId: 'session-idle',
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('agent.added');
+      expect(events[0].eventId).toBe('evt-idle-fork');
+      const payload = events[0].payload as { adapterSessionId?: string };
+      expect(payload.adapterSessionId).toBeUndefined();
+    });
+  });
 
   describe('getEvents', () => {
     it('should support cursor-based pagination', async () => {

@@ -37,7 +37,16 @@ describe('routeToAgents - error handling', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       expect(turn.erroredAgents.has('agent-1')).toBe(true);
       // Bus wraps request errors with prefix, so we check the message contains our error
@@ -74,7 +83,16 @@ describe('routeToAgents - error handling', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       await waitForAsync();
 
@@ -106,7 +124,16 @@ describe('routeToAgents - error handling', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       await waitForAsync();
 
@@ -128,7 +155,16 @@ describe('routeToAgents - error handling', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       // agent-1 and agent-3 should be errored
       expect(turn.erroredAgents.has('agent-1')).toBe(true);
@@ -148,7 +184,16 @@ describe('routeToAgents - error handling', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn<OnTurnCompleteCallback>().mockResolvedValue(undefined);
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(onTurnComplete).toHaveBeenCalledWith(
@@ -190,17 +235,17 @@ describe('routeToAgents - error handling', () => {
 
       const onTurnComplete = vi.fn<OnTurnCompleteCallback>().mockResolvedValue(undefined);
 
-      await routeToAgents(
-        MakaioBus,
+      await routeToAgents({
+        bus: MakaioBus,
         session,
         // Only route to agent-2 (agent-1 already done)
-        [agents[1]],
-        testMessage,
+        agents: [agents[1]],
+        message: testMessage,
         messageId,
         turn,
-        undefined,
+        deliveryMode: undefined,
         onTurnComplete,
-      );
+      });
 
       // Turn should complete because agent-1 was already completed and agent-2 errored
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
@@ -221,7 +266,16 @@ describe('routeToAgents - error handling', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       // Turn should NOT complete because agent-2 succeeded but isn't marked complete
       // (that happens via agent.complete event, not routing)
@@ -242,7 +296,16 @@ describe('routeToAgents - error handling', () => {
       });
       const onTurnComplete = vi.fn<OnTurnCompleteCallback>().mockResolvedValue(undefined);
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       // onTurnComplete could be called once or twice depending on timing
       // (each error checks for turn completion)

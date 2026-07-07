@@ -260,6 +260,9 @@ export function registerAdapterRuntimeIdentityHandlers(
     bus.on(AdapterRuntimeSubjects.resolveId, (ctx) => {
       ctx.setResult({ adapterId: registry.resolveId(ctx.payload) });
     }),
+    bus.on(AdapterRuntimeSubjects.getMachineId, (ctx) => {
+      ctx.setResult({ machineId: options.currentMachineId });
+    }),
     bus.on(AdapterRuntimeSubjects.resolveName, async (ctx) => {
       const adapterName =
         registry.resolveAdapterName(ctx.payload.adapterId) ??

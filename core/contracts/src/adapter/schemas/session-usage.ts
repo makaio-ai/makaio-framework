@@ -13,7 +13,7 @@ import { BaseAdapterEventSchema } from './base-event.js';
  */
 export const SessionUsageSchema = BaseAdapterEventSchema.extend({
   sessionId: z.string(),
-  adapterSessionId: z.string(),
+  adapterSessionId: z.string().optional(),
   totalInputTokens: z.number(),
   totalOutputTokens: z.number(),
   totalCalls: z.number(),

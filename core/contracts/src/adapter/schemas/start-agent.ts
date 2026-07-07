@@ -112,6 +112,28 @@ export const StartAgentSchema = {
 
         /** Makaio session ID to fork from */
         sourceSessionId: z.string(),
+
+        /**
+         * Provider-native source session ID to fork from.
+         * Caller-supplied input evaluated by the orchestrator; when feasible, reflected
+         * as {@link SessionContext.nativeFork} for the adapter to act on.
+         */
+        sourceAdapterSessionId: z.string(),
+
+        /**
+         * Optional provider-native fork point message ID.
+         * Caller-supplied input evaluated by the orchestrator; when feasible, reflected
+         * as {@link SessionContext.nativeFork} for the adapter to act on.
+         * Only adapters that support checkpoint forking may use this.
+         */
+        forkPointMessageId: z.string().optional(),
+
+        /**
+         * Optional child working directory override when supported by the adapter.
+         * Caller-supplied input evaluated by the orchestrator; when feasible, reflected
+         * as {@link SessionContext.nativeFork} for the adapter to act on.
+         */
+        targetWorkingDirectory: z.string().optional(),
       }),
 
       // Resume: continue from a previous provider session
@@ -159,8 +181,8 @@ export const StartAgentSchema = {
       /** Adapter instance that owns this agent */
       adapterId: z.string(),
 
-      /** Adapter's own session ID (from provider SDK) */
-      adapterSessionId: z.string(),
+      /** Adapter's own session ID (from provider SDK). May be undefined for idle fork starts. */
+      adapterSessionId: z.string().optional(),
 
       /** Makaio session ID (generated for 'create' mode, echoed for others) */
       sessionId: z.string(),

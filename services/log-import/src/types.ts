@@ -79,6 +79,18 @@ export interface LogImporterRegistration {
   clientId?: string;
 
   /**
+   * Machine identifier of the machine that owns the sessions this importer
+   * discovers and imports. Always caller-supplied by product code at
+   * registration time; never derived inside framework import handlers.
+   *
+   * When present, it is stamped on every `storage:session.importUpsert`
+   * payload emitted by the scan and full-import paths for this registration.
+   * Pass `undefined` (or omit the field) to leave the stored `machineId`
+   * untouched; pass `null` to explicitly store NULL.
+   */
+  machineId?: string | null;
+
+  /**
    * Factory for creating orchestrators for this importer.
    *
    * When present, the registry can swap orchestrators on mode change via

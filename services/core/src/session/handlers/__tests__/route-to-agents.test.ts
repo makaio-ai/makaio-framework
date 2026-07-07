@@ -45,7 +45,16 @@ describe('routeToAgents', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       expect(capturedSessionId).toBe(sessionId);
     });
@@ -74,7 +83,16 @@ describe('routeToAgents', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       expect(receivedRequests).toHaveLength(1);
       expect(receivedRequests[0]).toEqual({
@@ -99,7 +117,16 @@ describe('routeToAgents', () => {
       const turn = new Turn({ sessionId, agentIds: [agent.agentId], turnId, turnNumber: 1 });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, [agent], testMessage, messageId, turn, 'enqueue', onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents: [agent],
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: 'enqueue',
+        onTurnComplete,
+      });
 
       expect(receivedDeliveryMode).toBe('enqueue');
     });
@@ -134,7 +161,16 @@ describe('routeToAgents', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       // All agents should receive requests
       expect(receivedAgentIds).toHaveLength(3);
@@ -175,7 +211,16 @@ describe('routeToAgents', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       // Fast agent should complete well before slow agent
       const fastAgent = completionTimes.find((c) => c.agentId === 'agent-2');
@@ -217,7 +262,16 @@ describe('routeToAgents', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       await waitForAsync();
 
@@ -256,7 +310,16 @@ describe('routeToAgents', () => {
       });
       const onTurnComplete = vi.fn();
 
-      await routeToAgents(MakaioBus, session, agents, testMessage, messageId, turn, undefined, onTurnComplete);
+      await routeToAgents({
+        bus: MakaioBus,
+        session,
+        agents,
+        message: testMessage,
+        messageId,
+        turn,
+        deliveryMode: undefined,
+        onTurnComplete,
+      });
 
       await waitForAsync();
 
@@ -289,21 +352,18 @@ describe('routeToAgents', () => {
       const recoveryContext = { isFirstTurn: true, messageHistory: [] };
       const recoveredAgentIds = new Set(['agent-1']);
 
-      await routeToAgents(
-        MakaioBus,
+      await routeToAgents({
+        bus: MakaioBus,
         session,
-        [agent1, agent2],
-        testMessage,
+        agents: [agent1, agent2],
+        message: testMessage,
         messageId,
         turn,
-        undefined,
+        deliveryMode: undefined,
         onTurnComplete,
-        undefined, // sessionContext
-        undefined, // turnContextEnricher
-        undefined, // isNewTurn
         recoveryContext,
         recoveredAgentIds,
-      );
+      });
 
       expect(capturedContexts).toHaveLength(2);
       // agent-1 was recovered, should get recovery context with isFirstTurn: true
@@ -342,24 +402,19 @@ describe('routeToAgents', () => {
       const swappedAgentIds = new Set(['agent-1']);
       const swappedAgentCwd = new Map([['agent-1', { previousCwd: '/old', newCwd: '/new' }]]);
 
-      await routeToAgents(
-        MakaioBus,
+      await routeToAgents({
+        bus: MakaioBus,
         session,
-        [agent1, agent2],
-        testMessage,
+        agents: [agent1, agent2],
+        message: testMessage,
         messageId,
         turn,
-        undefined,
+        deliveryMode: undefined,
         onTurnComplete,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
         swappedAgentIds,
         swappedAgentCwd,
-        [],
-      );
+        freshMessageHistory: [],
+      });
 
       expect(capturedContexts).toHaveLength(2);
       expect(capturedContexts.find((context) => context.agentId === 'agent-1')).toMatchObject({

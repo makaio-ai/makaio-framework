@@ -148,7 +148,12 @@ export class ToolApprovalService extends BaseService {
       () => {
         controller.abort();
       },
-      { filter: { agentId: enriched.agentId, adapterSessionId: payload.adapterSessionId } },
+      {
+        filter: {
+          agentId: enriched.agentId,
+          ...(payload.adapterSessionId !== undefined && { adapterSessionId: payload.adapterSessionId }),
+        },
+      },
     );
 
     try {

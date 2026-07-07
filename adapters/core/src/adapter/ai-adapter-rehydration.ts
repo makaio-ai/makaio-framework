@@ -10,7 +10,7 @@ import type { AIAgent } from '../agent/ai-agent.js';
 import type { AIAgentConnector } from '../agent/index.js';
 import type { ActiveAgentEntry, ActiveAgentRegistry } from './agent-registry.js';
 import type { AgentCreationOptions } from './types.js';
-import type { McpSessionContext } from '@makaio/contracts';
+import type { McpSessionContext, MakaioSessionAgent, NativeLocalityVerdict } from '@makaio/contracts';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import { AdapterSubjects, McpSubjects, SessionSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
@@ -20,6 +20,32 @@ import { restoreAgentUsageFromTurns } from './restore-agent-usage.js';
 
 type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
 type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
+type NativeLocalityKind = NativeLocalityVerdict['kind'];
+
+/**
+ * Extract a pre-evaluated native locality kind from an agent record.
+ *
+ * `MakaioSessionAgent` does not own machine-locality fields. The cold
+ * rehydrate path cannot re-evaluate machine identity from storage, so this
+ * helper only reads an already-computed verdict if a host-tier caller has
+ * attached one to the POJO before it reaches the adapter.
+ *
+ * Absence is not proof of locality. Callers must treat `undefined` the same
+ * as a non-native verdict and fall back to fresh-with-history rehydration.
+ * @param persisted - Persisted agent record (may predate locality stamping)
+ * @returns The locality verdict kind, or undefined when locality is not confirmed
+ */
+function resolveNativeLocalityKind(persisted: MakaioSessionAgent): NativeLocalityKind | undefined {
+  const raw = persisted as Record<string, unknown>;
+  const locality = raw['nativeLocality'];
+  if (typeof locality === 'object' && locality !== null && 'kind' in locality) {
+    const kind = (locality as { kind: unknown })['kind'];
+    if (kind === 'native' || kind === 'degrade' || kind === 'foreign') {
+      return kind;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Configuration for AgentRehydrationManager construction.
@@ -77,7 +103,7 @@ export class AgentRehydrationManager<
   public handleRehydrateAgent = async (
     ctx: RequestContext<RehydrateAgentRequestPayload, RehydrateAgentResponsePayload>,
   ): Promise<void> => {
-    const { agentId, cwd, model, adapterSessionId } = ctx.payload;
+    const { agentId, cwd, model, adapterSessionId, resumeAdapterSessionId: rpcResumeId } = ctx.payload;
     const existing = this.inFlight.get(agentId);
     if (existing) {
       await existing;
@@ -91,62 +117,7 @@ export class AgentRehydrationManager<
         await this.rehydrateRegisteredAgent(agentId, entry, { adapterSessionId, cwd, model });
         return;
       }
-      const result = await this.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
-      if (!result.handled || !result.data.agent) {
-        throw new Error(`Agent ${agentId} not found in storage`);
-      }
-      const persisted = result.data.agent;
-      if (persisted.status === 'disposed') {
-        throw new Error(`Agent ${agentId} is disposed and cannot be rehydrated`);
-      }
-      // Re-resolve MCP session context from persisted keys so the rehydrated agent
-      // regains tool ledger and native passthrough. Best-effort: resolves to
-      // undefined if the MCP service is unavailable on this process start.
-      const mcpSessionContext = await this.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
-      const providerContext =
-        persisted.providerConfigId !== undefined
-          ? await buildProviderContext(this.globalBus, persisted.providerConfigId).catch(createSentinelProviderContext)
-          : undefined;
-      const agentCreationRequest: AgentCreationOptions = {
-        model: model ?? persisted.model,
-        cwd: cwd ?? persisted.cwd,
-        allowedDirectories: persisted.allowedDirectories,
-        adapterSessionId: adapterSessionId ?? persisted.adapterSessionId,
-        resumeAdapterSessionId: adapterSessionId ?? persisted.adapterSessionId,
-        ...(providerContext !== undefined && { providerContext }),
-        ...(mcpSessionContext !== undefined && { mcpSessionContext }),
-      };
-      const newAgent = await this.createAgentFn(agentId, persisted.sessionId, agentCreationRequest);
-      // Re-resolve the system prompt via the host-tier RPC so the rehydrated
-      // agent retains its identity after a process restart. Resolution is
-      // best-effort: if the host handler is unavailable the agent still
-      // initialises, just without its runtime system prompt.
-      const systemPrompt = await this.resolvePersistedSystemPrompt(
-        persisted.sessionId,
-        persisted.personaId,
-        persisted.profileId,
-      );
-      await newAgent.initialize({ ...(systemPrompt !== undefined && { systemPrompt }) });
-      if (cwd !== undefined || model !== undefined) {
-        await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
-      }
-      // Prefer the live connector session id. Persisted values can be stale after restart/swap.
-      const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId()) || persisted.adapterSessionId;
-      if (!recoveredAdapterSessionId) {
-        throw new Error(`Recovered agent ${agentId} has no adapterSessionId`);
-      }
-      // Restore cumulative usage baseline from persisted turn history.
-      // Without this, the adapter's in-memory totals would restart from zero
-      // after every process restart, making session-level usage unreliable.
-      const restoredUsage = await restoreAgentUsageFromTurns(this.globalBus, persisted.sessionId, agentId);
-
-      this.registry.set(agentId, {
-        agent: newAgent,
-        sessionId: persisted.sessionId,
-        adapterSessionId: recoveredAdapterSessionId,
-        usage: restoredUsage,
-      });
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      await this.rehydrateFromStorage(agentId, { adapterSessionId, rpcResumeId, cwd, model });
     })().catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to recover agent ${agentId}: ${message}`);
@@ -162,6 +133,154 @@ export class AgentRehydrationManager<
 
     ctx.setResult({});
   };
+
+  /**
+   * Cold-path rehydration: resurrect an agent from storage.
+   *
+   * Resolves MCP context, provider credentials, system prompt, and usage
+   * baseline before creating a new agent instance and registering it.
+   * @param agentId - Agent identifier to rehydrate
+   * @param runtime - Runtime overrides from the rehydrate RPC payload
+   */
+  private async rehydrateFromStorage(
+    agentId: string,
+    runtime: {
+      adapterSessionId?: string;
+      rpcResumeId?: string;
+      cwd?: string;
+      model?: string;
+    },
+  ): Promise<void> {
+    const { adapterSessionId, rpcResumeId, cwd, model } = runtime;
+    const result = await this.globalBus.requestOptional(AgentStorageSubjects.get, { agentId });
+    if (!result.handled || !result.data.agent) {
+      throw new Error(`Agent ${agentId} not found in storage`);
+    }
+    const persisted = result.data.agent;
+    if (persisted.status === 'disposed') {
+      throw new Error(`Agent ${agentId} is disposed and cannot be rehydrated`);
+    }
+    // Re-resolve MCP session context from persisted keys so the rehydrated agent
+    // regains tool ledger and native passthrough. Best-effort: resolves to
+    // undefined if the MCP service is unavailable on this process start.
+    const mcpSessionContext = await this.resolveMcpSessionContext(persisted.sessionId, persisted.profileId);
+    const providerContext =
+      persisted.providerConfigId !== undefined
+        ? await buildProviderContext(this.globalBus, persisted.providerConfigId).catch(createSentinelProviderContext)
+        : undefined;
+    // Determine whether to native-resume the provider session.
+    //
+    // Priority:
+    // 1. Explicit `resumeAdapterSessionId` from the RPC caller (service
+    //    layer evaluated locality and decided native resume is safe).
+    // 2. A pre-evaluated locality verdict stamped onto the persisted agent
+    //    record by a host-tier caller (fallback for callers that cannot
+    //    pass the field via the RPC payload).
+    //
+    // When neither source confirms native locality the adapter creates a
+    // fresh connector. The service layer is then responsible for ensuring
+    // the first send carries injected history (typically via the
+    // orchestrator's dead-agent recovery path).
+    const resolvedAdapterSessionId = adapterSessionId ?? persisted.adapterSessionId;
+    const callerResumeId = rpcResumeId ?? undefined;
+    const persistedLocalityKind = resolveNativeLocalityKind(persisted);
+    const allowNativeResume = callerResumeId !== undefined || persistedLocalityKind === 'native';
+    const effectiveResumeId = callerResumeId ?? (allowNativeResume ? resolvedAdapterSessionId : undefined);
+
+    const agentCreationRequest: AgentCreationOptions = {
+      model: model ?? persisted.model,
+      cwd: cwd ?? persisted.cwd,
+      allowedDirectories: persisted.allowedDirectories,
+      adapterSessionId: resolvedAdapterSessionId,
+      ...(effectiveResumeId !== undefined && { resumeAdapterSessionId: effectiveResumeId }),
+      ...(providerContext !== undefined && { providerContext }),
+      ...(mcpSessionContext !== undefined && { mcpSessionContext }),
+    };
+
+    const newAgent = await this.claimAndCreateAgent(agentId, persisted, agentCreationRequest, effectiveResumeId);
+
+    if (cwd !== undefined || model !== undefined) {
+      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, { agentId, cwd, model });
+    }
+    // Prefer the live connector session id. Persisted values can be stale after restart/swap.
+    const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId()) || persisted.adapterSessionId;
+    if (!recoveredAdapterSessionId) {
+      if (effectiveResumeId !== undefined) {
+        this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+      }
+      throw new Error(`Recovered agent ${agentId} has no adapterSessionId`);
+    }
+    // Restore cumulative usage baseline from persisted turn history.
+    // Without this, the adapter's in-memory totals would restart from zero
+    // after every process restart, making session-level usage unreliable.
+    const restoredUsage = await restoreAgentUsageFromTurns(this.globalBus, persisted.sessionId, agentId);
+
+    // registry.set() auto-clears the pending claim for effectiveResumeId.
+    this.registry.set(agentId, {
+      agent: newAgent,
+      sessionId: persisted.sessionId,
+      adapterSessionId: recoveredAdapterSessionId,
+      usage: restoredUsage,
+    });
+    await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+  }
+
+  /**
+   * Claim the provider session (if resuming), create a new agent, and
+   * initialize its connector.
+   *
+   * Mirrors the start-handler discipline (R10):
+   * - Claim before connector creation to close the TOCTOU window where the
+   *   registry has no entry and no pending claim for the provider session.
+   * - Release the claim on any failure so a subsequent retry can re-enter.
+   * - `registry.set()` (called by the caller) auto-clears the claim on
+   *   success.
+   *
+   * Hard failure on a denied claim is intentional: the session is already
+   * owned by another in-flight operation. Degrading silently to fresh-without-
+   * resume would produce two agents writing to different provider conversations
+   * under the same logical agent ID, which is a harder-to-diagnose corruption.
+   * @param agentId - Agent identifier being rehydrated
+   * @param persisted - Persisted agent record
+   * @param creationRequest - Agent creation options (includes resumeAdapterSessionId when resuming)
+   * @param effectiveResumeId - Provider session being claimed, or `undefined` for fresh-start
+   * @returns Newly created and initialized agent
+   */
+  private async claimAndCreateAgent(
+    agentId: string,
+    persisted: MakaioSessionAgent,
+    creationRequest: AgentCreationOptions,
+    effectiveResumeId: string | undefined,
+  ): Promise<TAgent> {
+    if (effectiveResumeId !== undefined) {
+      const claimed = this.registry.claimAdapterSession(effectiveResumeId);
+      if (!claimed) {
+        throw new Error(
+          `Provider session ${effectiveResumeId} is already claimed by another in-flight rehydrate or start`,
+        );
+      }
+    }
+
+    try {
+      const newAgent = await this.createAgentFn(agentId, persisted.sessionId, creationRequest);
+      // Re-resolve the system prompt via the host-tier RPC so the rehydrated
+      // agent retains its identity after a process restart. Resolution is
+      // best-effort: if the host handler is unavailable the agent still
+      // initialises, just without its runtime system prompt.
+      const systemPrompt = await this.resolvePersistedSystemPrompt(
+        persisted.sessionId,
+        persisted.personaId,
+        persisted.profileId,
+      );
+      await newAgent.initialize({ ...(systemPrompt !== undefined && { systemPrompt }) });
+      return newAgent;
+    } catch (error) {
+      if (effectiveResumeId !== undefined) {
+        this.registry.releaseAdapterSessionClaim(effectiveResumeId);
+      }
+      throw error;
+    }
+  }
 
   /**
    * Rehydrate an agent that is still present in the in-memory registry.

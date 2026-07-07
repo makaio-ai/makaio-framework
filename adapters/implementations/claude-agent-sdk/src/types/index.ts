@@ -8,7 +8,13 @@ import {
   MessageHandle,
   MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { McpResolvedServer, McpRuntimeSessionContext, McpSessionContext, SystemPrompt } from '@makaio/contracts';
+import type {
+  McpResolvedServer,
+  McpRuntimeSessionContext,
+  McpSessionContext,
+  NativeForkDirective,
+  SystemPrompt,
+} from '@makaio/contracts';
 
 /**
  * Result returned after SDK stream consumption completes.
@@ -76,6 +82,12 @@ export type ClaudeAgentConfig = Omit<
    * The SDK manages transport and tool routing for these servers natively.
    */
   mcpUpstreamServers?: McpResolvedServer[];
+  /**
+   * Native fork directive from the session orchestrator.
+   * Forwarded from the agent config into the connector so the session can use
+   * the provider's branching API instead of replaying history.
+   */
+  nativeFork?: NativeForkDirective;
 };
 
 /** Factory type for creating tool approval handlers */
@@ -126,6 +138,21 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   resumeAdapterSessionId?: string;
   /** Predetermined session ID for new connectors (from swapConnector). Different from resume. */
   predeterminedSessionId?: string;
+  /**
+   * Native fork directive from the session orchestrator.
+   *
+   * When set, the initial query uses the provider's branching API instead of
+   * replaying history into a fresh session. On the initial query, nativeFork
+   * takes precedence over `resumeAdapterSessionId` (see `resolveSessionIdentityOptions`).
+   *
+   * Consumed (set to `undefined`) after `system.init` confirms the child session.
+   * Subsequent query rotations resume the confirmed child via `resumeAdapterSessionId`
+   * and never re-apply the fork directive. This makes the one-shot invariant structural.
+   *
+   * - Tip fork (no `forkPointMessageId`): maps to SDK `forkSession`.
+   * - Mid-history fork (with `forkPointMessageId`): maps to SDK `resumeSessionAt`.
+   */
+  nativeFork?: NativeForkDirective;
   /**
    * Port of the in-process HTTP MCP server.
    * Populated from the `mcp.session.register` bus RPC response; `undefined` when

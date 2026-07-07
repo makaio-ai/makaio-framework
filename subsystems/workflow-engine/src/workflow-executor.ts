@@ -209,8 +209,13 @@ export class WorkflowExecutor extends BaseService {
    *
    * Coordinator sessions are created with this target working directory so
    * in-process shell steps and workflow-level workers share the same workspace.
+   *
+   * Throws when a `parentSessionId` is supplied but the session does not exist.
+   * The session create handler enforces the same invariant, but throwing here
+   * provides a cleaner error before any coordinator session is created.
    * @param parentSessionId - Optional parent session identifier.
    * @returns Parent session working directory, or the executor default cwd.
+   * @throws When `parentSessionId` is provided but the session is not found.
    */
   private async resolveExecutionWorkspaceRoot(parentSessionId?: string): Promise<string> {
     if (!parentSessionId) {
@@ -218,7 +223,10 @@ export class WorkflowExecutor extends BaseService {
     }
 
     const { session } = await this.bus.request(SessionSubjects.get, { sessionId: parentSessionId });
-    return session?.targetWorkingDirectory ?? this.config.platformDefaults.cwd;
+    if (session === null) {
+      throw new Error(`[WorkflowExecutor] Parent session not found: ${parentSessionId}`);
+    }
+    return session.targetWorkingDirectory ?? this.config.platformDefaults.cwd;
   }
 
   /**

@@ -33,5 +33,5 @@ export const codexClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
    * @param ctx - Runtime package context
    * @returns Uninitialized Codex client session service
    */
-  create: (ctx) => new CodexClientSessionService(ctx.bus),
+  create: (ctx) => new CodexClientSessionService(ctx.bus, undefined, ctx.machineId),
 };

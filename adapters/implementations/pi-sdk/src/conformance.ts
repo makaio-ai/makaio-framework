@@ -45,6 +45,7 @@ export const createTestConfig = async (
       supportsReplace: true,
       supportsInterrupt: true,
       supportsUsageMetrics: true,
+      nativeResume: true,
     },
     options: {
       defaultTimeout: DEFAULT_TIMEOUTS.acknowledgement,

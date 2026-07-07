@@ -71,7 +71,11 @@ interface PersistEmitDeps {
 
 /** Result from starting or idly initializing an agent. */
 interface StartAgentExecutionResult {
-  readonly adapterSessionId: string;
+  /**
+   * Provider session ID. `undefined` for idle fork starts where the provider
+   * has not yet confirmed the session (confirmation arrives on first dispatch).
+   */
+  readonly adapterSessionId: string | undefined;
   readonly messageId?: string;
   readonly messageHandle?: MessageHandle;
 }
@@ -82,14 +86,14 @@ interface StartAgentExecutionResult {
  * Ensures persistence completes before events fire to avoid race conditions.
  * @param agentId - Agent identifier
  * @param sessionId - Makaio session ID
- * @param adapterSessionId - Provider session ID
+ * @param adapterSessionId - Provider session ID, or `undefined` for unconfirmed idle fork starts
  * @param payload - Start agent request payload with resolved providerContext
  * @param deps - Adapter identity and bus deps
  */
 async function persistAndEmitAgent(
   agentId: string,
   sessionId: string,
-  adapterSessionId: string,
+  adapterSessionId: string | undefined,
   payload: StartAgentRequestPayload & { providerContext: ProviderContext },
   deps: PersistEmitDeps,
 ): Promise<void> {
@@ -218,12 +222,12 @@ async function startOrInitializeAgent<TBus extends ScopedBus<string>, TConnector
       };
     }
 
-    await agent.initialize({
+    const adapterSessionId = await agent.initialize({
       systemPrompt: payload.systemPrompt,
       sessionContext,
       responseSchema: payload.responseSchema,
     });
-    return { adapterSessionId: await agent.getAdapterSessionId() };
+    return { adapterSessionId };
   } catch (error) {
     try {
       await agent.close({ emitSessionClosed: !payload.ephemeral });
@@ -269,10 +273,140 @@ function assertValidEphemeralStartPayload(payload: StartAgentRequestPayload): vo
 }
 
 /**
+ * Build typed agent creation options from the raw start payload.
+ *
+ * Replaces the wire-shape `sessionContext` with the already-parsed value so
+ * the typed `AgentCreationOptions.sessionContext` field never carries an
+ * unvalidated payload.
+ * @param payload - Validated startAgent request payload
+ * @param providerContext - Brand-restored provider context
+ * @param sessionContext - Parsed session context, when supplied
+ * @returns Options for the adapter's agent factory
+ */
+function buildCreationOptions(
+  payload: StartAgentRequestPayload,
+  providerContext: ProviderContext,
+  sessionContext: SessionContext | undefined,
+): AgentCreationOptions {
+  const { sessionContext: _rawSessionContext, ...creationPayload } = payload;
+  return {
+    ...creationPayload,
+    providerContext,
+    ...(sessionContext !== undefined ? { sessionContext } : {}),
+  };
+}
+
+/**
+ * Resolve the Makaio session ID for a startAgent request.
+ *
+ * Ephemeral agents use a caller-supplied or local UUID. Create-mode agents
+ * ask the session service to create/confirm. Resume and fork modes require
+ * an explicit `sessionId` on the payload.
+ * @param payload - Start-agent request payload
+ * @param globalBus - Global bus for session-service RPC
+ * @returns Resolved session ID
+ */
+async function resolveSessionId(payload: StartAgentRequestPayload, globalBus: IMakaioBus): Promise<string> {
+  if (payload.ephemeral) {
+    return payload.sessionId ?? crypto.randomUUID();
+  }
+  if ((payload.mode ?? 'create') === 'create') {
+    const createResult = await globalBus.requestOptional(SessionSubjects.create, {
+      ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
+    });
+    return createResult.handled ? createResult.data.sessionId : (payload.sessionId ?? crypto.randomUUID());
+  }
+  if (payload.sessionId) {
+    return payload.sessionId;
+  }
+  throw new Error(`startAgent ${payload.mode} mode requires sessionId`);
+}
+
+/**
+ * Extract the provider-native session ID to claim for resume-mode requests.
+ *
+ * Returns the `adapterSessionId` from the payload when mode is `'resume'`,
+ * or `undefined` for other modes where no claim is needed.
+ * @param payload - Start-agent request payload
+ * @returns Provider session ID to claim, or `undefined`
+ */
+function getResumeAdapterSessionId(payload: StartAgentRequestPayload): string | undefined {
+  if (payload.mode === 'resume' && 'adapterSessionId' in payload) {
+    return payload.adapterSessionId as string;
+  }
+  return undefined;
+}
+
+/**
+ * Create and start an agent, releasing the adapter-session claim on failure.
+ *
+ * Wraps `createAgent` and `startOrInitializeAgent` with claim-aware error
+ * handling so the claim is always released when the agent cannot be started.
+ * @param params - Agent creation and start parameters
+ * @returns Created agent and start execution result
+ */
+async function createAndStartAgentWithClaim<
+  TBus extends ScopedBus<string>,
+  TConnector extends AIAgentConnector<TBus>,
+  TAgent extends AIAgent<TBus, TConnector>,
+>(params: {
+  agentId: string;
+  sessionId: string;
+  payload: StartAgentRequestPayload;
+  providerContext: ProviderContext;
+  sessionContext: SessionContext | undefined;
+  adapterName: string;
+  resumeAdapterSessionId: string | undefined;
+  registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
+  createAgent: (agentId: string, sessionId: string, options: AgentCreationOptions) => Promise<TAgent>;
+}): Promise<{ agent: TAgent; startResult: StartAgentExecutionResult }> {
+  const {
+    agentId,
+    sessionId,
+    payload,
+    providerContext,
+    sessionContext,
+    adapterName,
+    resumeAdapterSessionId,
+    registry,
+  } = params;
+  let agent: TAgent;
+  try {
+    agent = await params.createAgent(
+      agentId,
+      sessionId,
+      buildCreationOptions(payload, providerContext, sessionContext),
+    );
+  } catch (error) {
+    if (resumeAdapterSessionId !== undefined) {
+      registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
+    }
+    throw error;
+  }
+
+  let startResult: StartAgentExecutionResult;
+  try {
+    startResult = await startOrInitializeAgent(agent, payload, sessionContext, adapterName);
+  } catch (error) {
+    if (resumeAdapterSessionId !== undefined) {
+      registry.releaseAdapterSessionClaim(resumeAdapterSessionId);
+    }
+    throw error;
+  }
+
+  return { agent, startResult };
+}
+
+/**
  * Create the `adapter.startAgent` RPC handler.
  *
  * Returns a handler function that creates an agent, starts or initializes it,
  * registers it in the registry, persists its identity, and emits lifecycle events.
+ *
+ * For resume-mode requests, atomically claims the provider-native session ID
+ * before creating the agent to prevent TOCTOU races where two concurrent
+ * attach-resume requests for the same `adapterSessionId` both pass the
+ * attach-handler's live-writer guard before either agent registers.
  * @param deps - Adapter-provided dependencies
  * @returns Handler bound to the supplied dependencies
  */
@@ -302,40 +436,39 @@ export function createStartAgentHandler<
     const providerContext = (payload.providerContext ?? createSentinelProviderContext()) as ProviderContext;
 
     assertValidEphemeralStartPayload(payload);
+    const sessionId = await resolveSessionId(payload, globalBus);
 
-    // Determine makaio sessionId:
-    // - ephemeral agents preserve a caller-supplied sessionId or use a local UUID (no session service round-trip)
-    // - create-mode agents ask the session service to create/confirm the session
-    // - resume/fork agents attach to the session resolved by the orchestration layer
-    let sessionId: string;
-    if (payload.ephemeral) {
-      sessionId = payload.sessionId ?? crypto.randomUUID();
-    } else if ((payload.mode ?? 'create') === 'create') {
-      const createResult = await globalBus.requestOptional(SessionSubjects.create, {
-        ...(payload.sessionId ? { sessionId: payload.sessionId } : {}),
-      });
-      sessionId = createResult.handled ? createResult.data.sessionId : (payload.sessionId ?? crypto.randomUUID());
-    } else if (payload.sessionId) {
-      sessionId = payload.sessionId;
-    } else {
-      throw new Error(`startAgent ${payload.mode} mode requires sessionId`);
+    // For resume mode, claim the provider-native session ID before creating
+    // the agent. The atomic claim ensures exactly one concurrent request
+    // proceeds; the loser receives a failure response.
+    const resumeAdapterSessionId = getResumeAdapterSessionId(payload);
+    if (resumeAdapterSessionId !== undefined) {
+      const claimed = registry.claimAdapterSession(resumeAdapterSessionId);
+      if (!claimed) {
+        ctx.setResult({
+          success: false,
+          message: `Provider session ${resumeAdapterSessionId} is already claimed by another in-flight start`,
+        });
+        return;
+      }
     }
 
-    const agent = await createAgent(agentId, sessionId, {
-      ...payload,
-      providerContext,
-    });
-
     const sessionContext = payload.sessionContext ? SessionContextSchema.parse(payload.sessionContext) : undefined;
-
-    const { adapterSessionId, messageId, messageHandle } = await startOrInitializeAgent(
-      agent,
+    const { agent, startResult } = await createAndStartAgentWithClaim({
+      agentId,
+      sessionId,
       payload,
+      providerContext,
       sessionContext,
-      name,
-    );
+      adapterName: name,
+      resumeAdapterSessionId,
+      registry,
+      createAgent,
+    });
+    const { adapterSessionId, messageId, messageHandle } = startResult;
 
-    // Store agent and session info in registry
+    // Store agent and session info in registry (auto-clears any pending claim
+    // for this adapterSessionId).
     registry.set(agentId, {
       agent,
       sessionId,
@@ -345,19 +478,12 @@ export function createStartAgentHandler<
 
     if (!payload.ephemeral) {
       try {
-        // Persist agent record and emit lifecycle events
         await persistAndEmitAgent(
           agentId,
           sessionId,
           adapterSessionId,
           { ...payload, providerContext },
-          {
-            adapterId,
-            name,
-            clientId,
-            getPlatformDefaults,
-            globalBus,
-          },
+          { adapterId, name, clientId, getPlatformDefaults, globalBus },
         );
       } catch (error) {
         await rollbackRegisteredAgent(registry, agentId, name, error);

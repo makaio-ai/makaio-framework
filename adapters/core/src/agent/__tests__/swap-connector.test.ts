@@ -5,6 +5,8 @@ import { asAgentConnector, MockConnector } from './helpers/mock-agent.js';
 import { AIAgent } from '../ai-agent.js';
 import type { AIAgentConfig } from '../types.js';
 import type { AIAgentConnector } from '../../connector/agent-connector.js';
+import type { NativeForkDirective } from '@makaio/contracts';
+import type { ConfigFactoryInput } from '../../adapter/ai-adapter-config.js';
 
 /**
  * Extended test agent for swap-connector tests.
@@ -246,5 +248,65 @@ describe('AIAgent.swapConnector', () => {
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
+  });
+
+  it('does not forward nativeFork to swapped connector (one-shot consumption)', async () => {
+    const capturedInputs: Array<ConfigFactoryInput & { nativeFork?: NativeForkDirective }> = [];
+    const mockFactory = vi.fn((config: { model: string; cwd: string }) => {
+      const connector = new MockConnector(config.model, config.cwd);
+      createdConnectors.push(connector);
+      return connector;
+    });
+
+    const { bus: mockBus } = createMockScopedBus();
+    const forkDirective: NativeForkDirective = {
+      sourceSessionId: 'makaio-source',
+      sourceAdapterSessionId: 'provider-source',
+    };
+
+    const config: AIAgentConfig = {
+      agentId: 'test-agent-fork-swap',
+      adapterId: 'test-adapter',
+      adapterName: 'test',
+      capabilities: [],
+      nativeTools: [],
+      adapterBus: mockBus,
+      globalBus: MakaioBus,
+      model: 'test-model-1',
+      cwd: '/test/cwd1',
+      nativeFork: forkDirective,
+      configFactory: async (input) => {
+        capturedInputs.push(input as ConfigFactoryInput & { nativeFork?: NativeForkDirective });
+        return {
+          bus: mockBus,
+          agentId: 'test-agent-fork-swap',
+          adapterId: 'test-adapter',
+          adapterName: 'test',
+          model: input.model ?? 'test-model-1',
+          cwd: input.cwd ?? '/test/cwd1',
+        };
+      },
+      connectorFactory: async (factoryConfig) => {
+        return asAgentConnector(
+          mockFactory({
+            model: factoryConfig.model,
+            cwd: factoryConfig.cwd,
+          }),
+        );
+      },
+    };
+
+    agent = new SwapTestAgent(config, mockFactory);
+    await agent.init();
+
+    // init() must have forwarded the fork directive to the first connector
+    expect(capturedInputs).toHaveLength(1);
+    expect(capturedInputs[0].nativeFork).toEqual(forkDirective);
+
+    // Swap: the fork directive must NOT be forwarded to the replacement
+    await agent.testSwapConnector({ model: 'test-model-2' });
+
+    expect(capturedInputs).toHaveLength(2);
+    expect(capturedInputs[1].nativeFork).toBeUndefined();
   });
 });

@@ -354,17 +354,17 @@ export async function importSegmentTree(
 
   const { sessionId } = await bus.request(
     SessionStorageSubjects.importUpsert,
-    toImportUpsertPayload(
+    toImportUpsertPayload({
       metadata,
-      ctx.adapterName,
-      ctx.cwd,
-      ctx.logFilePath,
+      source: ctx.adapterName,
+      cwd: ctx.cwd,
+      logFilePath: ctx.logFilePath,
       startedAt,
-      ctx.adapterId,
-      /* clientId */ undefined,
+      adapterId: ctx.adapterId,
       // Each segment carries its own sidechain flag — children never inherit the parent's.
-      segment.isSidechain,
-    ),
+      isSidechain: segment.isSidechain,
+      machineId: ctx.machineId,
+    }),
   );
 
   // Phase: ImportPhase.persisted — store messages; parent compaction event fires before children's.
@@ -404,6 +404,7 @@ export async function importSegmentTree(
     cwd: ctx.cwd,
     // Children never own the log file — explicit null stores NULL, not omitted
     logFilePath: null,
+    machineId: ctx.machineId,
     ingestionMarker: resolvedMarker,
   };
 
@@ -447,6 +448,7 @@ export async function persistImportResultTree(
     model: metadata.model,
     cwd: metadata.cwd,
     logFilePath: ctx.logFilePath,
+    machineId: ctx.machineId,
     ingestionMarker: ctx.ingestionMarker,
   });
 }
@@ -473,6 +475,12 @@ export async function importFromFileContent(params: {
   adapterId: string;
   sourceFilePath?: string;
   persistedLogFilePath?: string;
+  /**
+   * Machine identifier of the machine that owns the imported sessions.
+   * Always caller-supplied; never derived here. Pass `undefined` to omit
+   * (leaves stored value untouched), `null` to explicitly store NULL.
+   */
+  machineId?: string | null;
   /**
    * Marker stamped on `session.turn.*` events emitted for ingested turns.
    * Defaults to `'backfill'` (applied at the {@link importSegmentTree} boundary).
@@ -505,6 +513,7 @@ export async function importFromFileContent(params: {
     adapterId,
     adapterName,
     logFilePath: normalizedPersistedLogFilePath,
+    machineId: params.machineId,
     ingestionMarker: params.ingestionMarker,
   });
 

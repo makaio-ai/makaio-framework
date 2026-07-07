@@ -93,10 +93,14 @@ export type ClaudeCodeNormalizedEvent =
  * The `receivedAt` timestamp from the raw hook payload is used as `observedAt`
  * to preserve the original wall-clock time of the observation.
  * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
+ * @param machineId - Stable runtime identity of the observing machine,
+ *   caller-supplied by the owning client runtime. Stamped onto
+ *   `client.session.started` so downstream storage receives the owning
+ *   machine's identity without deriving it from the writer process.
  * @returns Normalized events with subject and typed payload, in emission
  *   order; empty when the event name is unknown (raw-only)
  */
-export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNormalizedEvent[] {
+export function normalizeClaudeCodeHook(raw: RawClientHookPayload, machineId?: string): ClaudeCodeNormalizedEvent[] {
   const base = {
     clientId: CLIENT_ID,
     source: SOURCE,
@@ -116,6 +120,7 @@ export function normalizeClaudeCodeHook(raw: RawClientHookPayload): ClaudeCodeNo
             ...base,
             ...(transcriptPath !== undefined && { transcriptPath }),
             ...(cwd !== undefined && { cwd }),
+            ...(machineId !== undefined && { machineId }),
           },
         },
       ];

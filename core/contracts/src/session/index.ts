@@ -167,6 +167,7 @@ export {
   SessionStorageSetSessionSchema,
   SessionStorageSubjects,
   SessionStorageUpdateSchema,
+  ImportUpsertRequestSchema,
   type ImportUpsertRequest,
   ImportStatusSchema,
   type ImportStatus,
@@ -177,3 +178,13 @@ export {
   SessionCreateBaseSchema,
   type SessionCreateBase,
 } from './schemas/crud.js';
+
+// Native session locality contracts
+export {
+  NativeForkDirectiveSchema,
+  NativeLocalityReasonSchema,
+  NativeLocalityVerdictSchema,
+  type NativeForkDirective,
+  type NativeLocalityReason,
+  type NativeLocalityVerdict,
+} from './native-locality.js';

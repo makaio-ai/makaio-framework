@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 650 }] */
+/* eslint max-lines: ["error", { "max": 685 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage, SDKMessage } from '@makaio/client-claude-code';
@@ -53,6 +53,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private readonly lifecycle: SessionLifecycle;
   private deferredSessionId = new DeferredPromise<string>();
   private confirmedSessionId = false;
+  /** True while a fork directive was consumed but `system.init` has not yet confirmed the child session ID. */
+  private awaitingForkConfirmation = false;
   private consumptionStarted = false;
   /** Factory for creating tool approval handlers - stored for fresh query creation */
   private createToolApprovalHandler?: CreateToolApprovalHandler;
@@ -89,9 +91,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     this.createToolApprovalHandler = createToolApprovalHandler;
     await this.createQuery(this.config.resumeAdapterSessionId, responseSchema);
 
-    // Register MCP context after query creation so the session ID is known.
-    // If registration returns a port, patch the live query's MCP servers so the
-    // initial query includes the Makaio MCP proxy (createQuery was built without it).
+    // Register MCP context after query creation so the session ID is known. If
+    // registration returns a port, patch the live query's MCP servers accordingly.
     await this.refreshMcpContext();
 
     // Resolve with local session ID for idle initialization (system.init arrives only when SDK processes
@@ -246,9 +247,16 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     this.confirmedSessionId = false;
     this.deferredSessionId = new DeferredPromise<string>();
 
+    // One-shot: consume fork directive on first read so a schema rotation
+    // before system.init cannot re-fork the source session.
+    const forkDirective = resumeSessionId === undefined ? this.config.nativeFork : undefined;
+    if (forkDirective) this.config.nativeFork = undefined;
+    this.awaitingForkConfirmation = forkDirective !== undefined;
+
     const queryOptions = buildQueryOptions({
       sessionId: this.sessionId,
       resumeAdapterSessionId: resumeSessionId,
+      nativeFork: forkDirective,
       config: this.config,
       lifecycle: this.lifecycle,
       createToolApprovalHandler: this.createToolApprovalHandler,
@@ -277,11 +285,9 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Ensure the active SDK query was created with the response schema required
-   * by the turn about to start.
-   * Claude Agent SDK accepts `outputFormat` only as a `query()` option, while
-   * Makaio response schemas are turn-scoped, so schema changes are query
-   * boundaries. Resume only after `system.init` confirms a provider session ID.
+   * Ensure the active SDK query matches the required response schema.
+   * Schema changes are query boundaries (SDK accepts `outputFormat` only at
+   * `query()` time). Resumes only after `system.init` confirms a session ID.
    * @param responseSchema - Optional per-turn response schema descriptor.
    * @returns True when a new SDK query was created.
    */
@@ -304,8 +310,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Process messages from the queue (new turn or immediate injection).
-   * Serializes concurrent invocations via a re-run flag so calls that arrive
-   * while the current run is in progress are not silently dropped.
+   * Serializes via a re-run flag so concurrent calls are not silently dropped.
    * @param queue - User message queue to process
    */
   public async processQueue(queue: UserMessageQueue): Promise<void> {
@@ -457,15 +462,20 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     }
     const sdkMessage = msg;
 
-    // Extract session ID from system.init
     if (sdkMessage.type === 'system' && sdkMessage.subtype === 'init' && !this.confirmedSessionId) {
       this.confirmedSessionId = true;
+      this.awaitingForkConfirmation = false;
       this.sessionId = sdkMessage.session_id;
+      // Defense-in-depth: already consumed at first read in createQuery, but
+      // clear again so the invariant holds even if the read path changes.
+      this.config.nativeFork = undefined;
+      // Replace the deferred so any cached promise reference resolves to the
+      // confirmed ID, not the preliminary local UUID (mirrors CLI session).
+      this.deferredSessionId = new DeferredPromise<string>();
       this.deferredSessionId.resolve(sdkMessage.session_id);
     }
 
-    // Ignore messages from old/stale SDK sessions after the active query has
-    // confirmed its provider session ID.
+    // Ignore stale-session messages once the provider session ID is confirmed.
     const msgSessionId = (sdkMessage as { session_id?: string }).session_id;
     if (msgSessionId && msgSessionId !== this.sessionId) {
       return;
@@ -616,6 +626,24 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   public async getAdapterSessionId(): Promise<string> {
     if (this.confirmedSessionId) return this.sessionId!;
     return this.deferredSessionId.getPromise();
+  }
+
+  /**
+   * Return the provider-confirmed session ID, or `undefined` when unconfirmed.
+   *
+   * For non-fork sessions the locally-generated ID is authoritative (the SDK
+   * will echo it back in `system.init`) so it is returned immediately.
+   * For fork sessions the provider assigns a new child ID, so this returns
+   * `undefined` until `system.init` confirms it.
+   *
+   * Unlike {@link getAdapterSessionId} this never blocks — it reflects the
+   * current confirmation state synchronously.
+   * @returns Confirmed session ID or `undefined`
+   */
+  public getConfirmedSessionId(): string | undefined {
+    if (this.confirmedSessionId) return this.sessionId;
+    // Non-fork: local ID is authoritative; fork: wait for system.init.
+    return this.awaitingForkConfirmation ? undefined : this.sessionId;
   }
 
   public getCurrentTurn(): ClaudeConnectorTurn | undefined {

@@ -159,6 +159,14 @@ export const MakaioSessionSchema = z.object({
    * Undefined means unknown or a live session.
    */
   isSidechain: z.boolean().optional(),
+  /**
+   * Stable runtime machine identity that owns the provider-native session store.
+   *
+   * Caller-supplied by the owning hook/runtime. Storage handlers must never
+   * derive this from the writer process because imports may be performed by
+   * central or downstream servers.
+   */
+  machineId: z.string().nullable().optional(),
 });
 
 export type MakaioSession = z.infer<typeof MakaioSessionSchema>;

@@ -73,7 +73,16 @@ export class ClaudeCodeAdapter extends AIAdapter<ClaudeCodeConnectorBus, ClaudeS
     const globalBus = config?.globalBus ?? MakaioBus;
     super({
       name: ClaudeCodeAdapterName,
-      capabilities: ['tools', 'vision', 'structuredOutput', 'chat:inTurnMessages', 'systemPrompt:override'],
+      capabilities: [
+        'tools',
+        'vision',
+        'structuredOutput',
+        'chat:inTurnMessages',
+        'systemPrompt:override',
+        'session:resume',
+        'session:fork',
+        'session:forkAtMessage',
+      ],
       ...config,
       globalBus,
       namespace: ClaudeCodeConnectorNamespace,

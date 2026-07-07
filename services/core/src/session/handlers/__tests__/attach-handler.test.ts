@@ -5,7 +5,12 @@ import { buildDeterministicAdapterId } from '../../../adapter-runtime/index.js';
 import { AdapterRuntimeSubjects } from '../../../adapter-runtime/namespace.js';
 import { AdapterSubsystemSubjects } from '../../../adapter-subsystem/namespace.js';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
-import { ATTACH_TEST_IDS, createAttachHandlerContext, type AttachHandlerTestContext } from './shared.js';
+import {
+  ATTACH_TEST_IDS,
+  createAttachHandlerContext,
+  registerDefaultConversationStubs,
+  type AttachHandlerTestContext,
+} from './shared.js';
 import { resetBusHandlers } from '../../__tests__/shared.js';
 import { Turn } from '../../entities/turn.js';
 
@@ -91,6 +96,11 @@ describe('registerAttachHandler', () => {
     it('passes machineId to adapter resolution when provided', async () => {
       resetBusHandlers();
       const activeTurns = new Map<string, Turn>();
+
+      // Conversation storage stubs: resetBusHandlers() cleared the defaults
+      // registered by createAttachHandlerContext. Non-native attach paths now
+      // call seedAttachContextWithHistory which reads the conversation chain.
+      registerDefaultConversationStubs(ctx.trackUnsubscribe);
 
       let resolvePayload: { adapterName?: string; machineId?: string } | undefined;
       ctx.trackUnsubscribe(

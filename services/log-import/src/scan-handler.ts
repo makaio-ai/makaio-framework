@@ -135,7 +135,7 @@ export function registerGenericScanHandler(
       return;
     }
 
-    const { importer, logFilePattern, adapterName: canonicalAdapterName } = registration;
+    const { importer, logFilePattern, adapterName: canonicalAdapterName, machineId } = registration;
     const logDirectory = importer.getLogDirectory();
 
     // Check if directory exists
@@ -171,7 +171,14 @@ export function registerGenericScanHandler(
         // Upsert to sessions (discover-only, no message import)
         const { created } = await bus.request(
           SessionStorageSubjects.importUpsert,
-          toImportUpsertPayload(metadata, canonicalAdapterName, metadata.cwd, filePath, metadata.startedAt),
+          toImportUpsertPayload({
+            metadata,
+            source: canonicalAdapterName,
+            cwd: metadata.cwd,
+            logFilePath: filePath,
+            startedAt: metadata.startedAt,
+            machineId,
+          }),
         );
 
         if (created) {

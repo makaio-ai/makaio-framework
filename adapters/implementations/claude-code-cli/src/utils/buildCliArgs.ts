@@ -1,4 +1,5 @@
 import type { AIReasoningLevel } from '@makaio/ai-adapters-core';
+import type { NativeForkDirective } from '@makaio/contracts';
 import type { ClaudeCliSessionConfig } from '../types.js';
 
 /**
@@ -22,6 +23,19 @@ function toCliEffortValue(level: AIReasoningLevel): string | undefined {
  */
 function toCliToolPolicyValue(tools: string[]): string {
   return tools.join(',');
+}
+
+/**
+ * Assert that the active native fork directive can be represented by Claude Code CLI flags.
+ *
+ * The CLI exposes tip forks via `--resume <source> --fork-session`, but has no
+ * equivalent for the SDK's `resumeSessionAt` mid-history branch point.
+ * @param nativeFork - Native fork directive that would be applied to this turn.
+ */
+export function assertCliNativeForkSupported(nativeFork: NativeForkDirective | undefined): void {
+  if (nativeFork?.forkPointMessageId !== undefined) {
+    throw new Error('[claude-code-cli] Native mid-history fork is not supported by the CLI adapter');
+  }
 }
 
 /**
@@ -57,6 +71,8 @@ interface BuildCliArgsOptions {
  * - `--dangerously-skip-permissions` — auto-approve all tool use (opt-in via providerConfig.skipPermissions)
  * - `--session-id` — pin the session ID for new sessions (mutually exclusive with --resume)
  * - `--resume` — resume a previous session by ID (replaces --session-id for subsequent turns)
+ * - `--fork-session` — when combined with `--resume`, branch at the tip of the source session
+ *   instead of continuing it (requires a `nativeFork` directive without `forkPointMessageId`)
  * - `--model` — the model to use
  * - `--system-prompt` — optional runtime system prompt (plain string)
  * - `--append-system-prompt` — optional runtime system prompt (append mode)
@@ -83,12 +99,18 @@ export function buildCliArgs({
     args.push('--dangerously-skip-permissions');
   }
 
-  if (config.resumeAdapterSessionId) {
-    // When resuming an existing session, pass --resume only.
-    // The CLI v2.1.50+ disallows combining --session-id with --resume/--continue
-    // unless --fork-session is also specified. Since we're continuing the same
-    // session (not forking), --resume alone is sufficient.
+  if (config.resumeAdapterSessionId !== undefined) {
+    // Resuming the fork child (or any existing session) takes priority over the
+    // native fork directive: once the first turn has confirmed a child session ID,
+    // subsequent turns resume that child via --resume, not re-fork the source.
     args.push('--resume', config.resumeAdapterSessionId);
+  } else if (config.nativeFork !== undefined) {
+    // Native fork: the CLI supports tip-only fork via --resume + --fork-session.
+    // Defense-in-depth: session.startTurn() already calls assertCliNativeForkSupported
+    // before reaching buildCliArgs, but this secondary check guards against future
+    // callers that invoke buildCliArgs without the session lifecycle gate.
+    assertCliNativeForkSupported(config.nativeFork);
+    args.push('--resume', config.nativeFork.sourceAdapterSessionId, '--fork-session');
   } else {
     // For new sessions, pin the session ID so we know it before system.init arrives.
     args.push('--session-id', sessionId);
