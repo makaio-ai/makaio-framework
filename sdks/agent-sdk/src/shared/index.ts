@@ -70,6 +70,9 @@ export {
 export { accountInfo, mcpServerStatus, supportedCommands, supportedModels } from './introspection.js';
 
 export { registerHooks } from './hooks.js';
-export type { HookEvent, HookEventData, HookCallback, HookConfig } from './hooks.js';
+export type { HookEvent, HookEventData, HookCallback, HookConfig, RegisterHooksOptions } from './hooks.js';
+
+export { START_MODES } from '@makaio/contracts';
+export type { StartMode } from '@makaio/contracts';
 
 export { buildMcpSessionContext, createSdkMcpServer } from './mcp.js';

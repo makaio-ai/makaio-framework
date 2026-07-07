@@ -273,6 +273,7 @@ export class OpenCodeLogImporter implements LogImporter<OpenCodeSessionLog, Open
         adapterSessionId,
         model,
         cwd,
+        startMode: 'fresh' as const,
         _import: importMetadata,
       },
     };

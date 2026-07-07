@@ -99,6 +99,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
       ...BASE_FIELDS,
       model: 'claude-sonnet-4-5',
       cwd: '/workspace',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     const result = await pullPromise;
@@ -225,6 +226,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
       ...BASE_FIELDS,
       model: 'claude-sonnet-4-5',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await MakaioBus.emit(AgentSubjects.message_delta, { ...BASE_FIELDS, text: 'chunk one ' });
@@ -315,12 +317,14 @@ describe('bus simulation — full pipeline (always runs)', () => {
       agentId: AGENT_B,
       model: 'model-b',
       cwd: '/b',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await MakaioBus.emit(AgentSubjects.started, {
       ...BASE_FIELDS,
       model: 'model-a',
       cwd: '/a',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     const resA = await pullA;
@@ -370,6 +374,7 @@ describe('bus simulation — full pipeline (always runs)', () => {
       ...BASE_FIELDS,
       model: 'ghost-model',
       cwd: '/ghost',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     const result = await gen.next();

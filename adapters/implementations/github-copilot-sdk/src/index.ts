@@ -61,4 +61,5 @@ export type {
   NormalizeOptions,
   RawGitHubCopilotLogRecord,
   ToolNameResolver,
+  TurnStartMode,
 } from './event-normalizers.js';

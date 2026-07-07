@@ -1,5 +1,11 @@
 import { runPreUserMessageHooks, runPostUserMessageHooks } from '@makaio/hooks';
-import { SessionContextSchema, type MessageInput, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import {
+  SessionContextSchema,
+  type MessageInput,
+  type ResponseSchemaDescriptor,
+  type SessionContext,
+  type StartMode,
+} from '@makaio/contracts';
 import { normalizeMessageInput, type NormalizedMessageInput } from '../utils/index.js';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -27,6 +33,24 @@ export interface AgentTurnExecutorConfig {
   getConnector: () => AIAgentConnector;
   /** Native resume decision function. */
   shouldUseNativeResume: ShouldUseNativeResumeFn;
+  /**
+   * Whether the agent config carries a concrete resume target
+   * (`resumeAdapterSessionId`).
+   *
+   * Used by {@link AgentTurnExecutor.deriveStartMode} to distinguish
+   * native-attach starts (resume target, no sessionContext) from
+   * truly sessionless/ephemeral starts (no resume target, no context).
+   */
+  hasResumeTarget: () => boolean;
+  /**
+   * Set the start mode on the owning agent before connector dispatch.
+   *
+   * The turn executor computes the mode from session context signals and
+   * calls this so `emitStart()` can include it in the `agent.started`
+   * payload when the connector fires its lifecycle event.
+   * @param mode - Derived start mode for this turn
+   */
+  setPendingStartMode: (mode: StartMode) => void;
   /** Completion/lifecycle tracker hook. */
   onMessageHandle: AgentMessageHandleCallback;
   /** Side-effect callback to mark agent status active before dispatch. */
@@ -61,6 +85,8 @@ export class AgentTurnExecutor {
   private readonly globalBus: IMakaioBus;
   private readonly getConnector: () => AIAgentConnector;
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
+  private readonly hasResumeTarget: () => boolean;
+  private readonly setPendingStartMode: (mode: StartMode) => void;
   private readonly onMessageHandle: AgentMessageHandleCallback;
   private readonly onBeforeDispatch?: () => void | Promise<void>;
   private readonly ephemeral: boolean;
@@ -73,9 +99,67 @@ export class AgentTurnExecutor {
     this.globalBus = config.globalBus;
     this.getConnector = config.getConnector;
     this.shouldUseNativeResume = config.shouldUseNativeResume;
+    this.hasResumeTarget = config.hasResumeTarget;
+    this.setPendingStartMode = config.setPendingStartMode;
     this.onMessageHandle = config.onMessageHandle;
     this.onBeforeDispatch = config.onBeforeDispatch;
     this.ephemeral = config.ephemeral ?? false;
+  }
+
+  /**
+   * Derive the {@link StartMode} from session context, resume decision, and
+   * resume-target presence.
+   *
+   * Decision table (evaluated top-to-bottom, first match wins):
+   *
+   * | sessionContext | nativeFork | hasResumeTarget | useNativeResume | isFirstTurn | Mode       |
+   * |----------------|------------|-----------------|-----------------|-------------|------------|
+   * | present        | yes        | —               | —               | —           | `fork`     |
+   * | absent         | —          | yes             | —               | —           | `resume`   |
+   * | absent         | —          | no              | —               | —           | `fresh`    |
+   * | present        | no         | —               | true            | —           | `resume`   |
+   * | present        | no         | —               | false           | true        | `fresh`    |
+   * | present        | no         | —               | false           | false       | `rotation` |
+   *
+   * The `hasResumeTarget` rule distinguishes native-attach starts (concrete
+   * provider session to reconnect to, but no orchestrator session context) from
+   * truly sessionless/ephemeral starts. Without this signal, both cases
+   * collapsed to `'fresh'` — causing SDK SessionStart hooks to run
+   * initialization logic on a resumed conversation.
+   *
+   * `hasResumeTarget` fires only when sessionContext is absent. Once the
+   * orchestrator supplies context (turn 2+), rules 4-6 take over and the
+   * resume target on the config has no further effect on mode derivation.
+   * @param sessionContext - Session context signals from the orchestrator
+   * @param useNativeResume - Whether native resume was selected for this turn
+   * @param hasResumeTarget - Whether a concrete resume target
+   *   (`resumeAdapterSessionId`) exists on the agent config
+   * @returns The derived start mode
+   */
+  public static deriveStartMode(
+    sessionContext: SessionContext | undefined,
+    useNativeResume: boolean,
+    hasResumeTarget = false,
+  ): StartMode {
+    if (sessionContext?.nativeFork) return 'fork';
+    if (!sessionContext) return hasResumeTarget ? 'resume' : 'fresh';
+    if (useNativeResume) return 'resume';
+    if (sessionContext.isFirstTurn) return 'fresh';
+    return 'rotation';
+  }
+
+  /**
+   * Derive the start mode for the given resolved session context, stash it
+   * as the pending mode for the next lifecycle start emission, and return
+   * the native-resume decision shared by the dispatch that follows.
+   * @param sessionContext - Session context after pre-user-message hooks
+   * @returns Whether the connector should rely on native resume
+   */
+  private deriveAndSetPendingStartMode(sessionContext: SessionContext | undefined): boolean {
+    const useNativeResume = this.shouldUseNativeResume(sessionContext);
+    const startMode = AgentTurnExecutor.deriveStartMode(sessionContext, useNativeResume, this.hasResumeTarget());
+    this.setPendingStartMode(startMode);
+    return useNativeResume;
   }
 
   /**
@@ -97,7 +181,8 @@ export class AgentTurnExecutor {
       messageId: payload.messageId,
     });
 
-    const useNativeResume = this.shouldUseNativeResume(hookResult.sessionContext);
+    const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+
     const normalizedMessage = normalizeMessageInput(hookResult.message);
 
     const handle = await connector.sendMessage(normalizedMessage, {
@@ -145,7 +230,8 @@ export class AgentTurnExecutor {
       cwd: connector.cwd,
     });
 
-    const useNativeResume = this.shouldUseNativeResume(hookResult.sessionContext);
+    const useNativeResume = this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+
     const normalizedMessage = normalizeMessageInput(hookResult.message);
 
     const connectorOptions: ConnectorStartOptions = {

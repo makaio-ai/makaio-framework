@@ -841,6 +841,16 @@ pub struct AgentMessagePayload {
     pub turn_id: Option<String>,
 }
 
+/// Agent start mode carried in `agent.started` events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentStartMode {
+    Fresh,
+    Resume,
+    Fork,
+    Rotation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStartedPayload {
@@ -850,6 +860,7 @@ pub struct AgentStartedPayload {
     pub adapter_session_id: String,
     pub model: Option<String>,
     pub cwd: Option<String>,
+    pub start_mode: AgentStartMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

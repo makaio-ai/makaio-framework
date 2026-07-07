@@ -33,7 +33,7 @@ describe('AgentLifecycleEmitter', () => {
     const { emitter, emittedCompletePayloads } = createTestEmitter('agent-1');
 
     emitter.emitError({ error: 'rate limited', errorCategory: 'rate_limit' });
-    await emitter.emitStart({ model: 'test-model', cwd: '/tmp' });
+    await emitter.emitStart({ model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
     await emitter.emitCompletion({ messageId: 'm-1' });
 
     expect(emittedCompletePayloads).toEqual([{ messageId: 'm-1' }]);
@@ -47,7 +47,7 @@ describe('AgentLifecycleEmitter', () => {
       },
     });
 
-    await emitter.emitStart({ model: 'test-model', cwd: '/tmp' });
+    await emitter.emitStart({ model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
     await emitter.emitCompletion({ messageId: 'm-1' });
     await emitter.emitCompletion({ messageId: 'm-2' });
 
@@ -59,7 +59,7 @@ describe('AgentLifecycleEmitter', () => {
     const { emitter, emittedCompletePayloads } = createTestEmitter('agent-1');
 
     // First turn via emitStart (normal path)
-    await emitter.emitStart({ model: 'test-model', cwd: '/tmp' });
+    await emitter.emitStart({ model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
     await emitter.emitCompletion({ messageId: 'm-1' });
 
     // Second turn: only resetTurnState, no emitStart (codex pattern)
@@ -72,7 +72,7 @@ describe('AgentLifecycleEmitter', () => {
   it('resetTurnState clears pending error category', async () => {
     const { emitter, emittedCompletePayloads } = createTestEmitter('agent-1');
 
-    await emitter.emitStart({ model: 'test-model', cwd: '/tmp' });
+    await emitter.emitStart({ model: 'test-model', cwd: '/tmp', startMode: 'fresh' });
     emitter.emitError({ error: 'failed', errorCategory: 'rate_limit' });
     emitter.resetTurnState();
     await emitter.emitCompletion({ messageId: 'm-1' });

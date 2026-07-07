@@ -287,6 +287,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       sessionId: 'framework-session-retry',
       model: 'claude-sonnet-4-20250514',
       cwd: os.tmpdir(),
+      startMode: 'fresh',
     });
 
     await vi.waitFor(() => expect(requests).toHaveLength(1));
@@ -326,6 +327,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       sessionId: 'framework-session-in-flight',
       model: 'claude-sonnet-4-20250514',
       cwd: os.tmpdir(),
+      startMode: 'fresh',
     });
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

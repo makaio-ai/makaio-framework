@@ -299,6 +299,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
             agent_id="agent-1",
             cwd=None,
             model=None,
+            start_mode="fresh",
         )
         await self.client.emit(agent.started, payload)
 
@@ -313,6 +314,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                 "adapterName": "test",
                 "adapterSessionId": "adapter-session-1",
                 "agentId": "agent-1",
+                "startMode": "fresh",
             },
         )
 
@@ -329,6 +331,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                     "agentId": "agent-2",
                     "cwd": "/tmp/project",
                     "model": "test-model",
+                    "startMode": "fresh",
                 },
                 "messageId": "message-typed",
             },
@@ -344,6 +347,7 @@ class BusClientTest(unittest.IsolatedAsyncioTestCase):
                 agent_id="agent-2",
                 cwd="/tmp/project",
                 model="test-model",
+                start_mode="fresh",
             ),
         )
 

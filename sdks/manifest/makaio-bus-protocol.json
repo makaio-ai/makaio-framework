@@ -2711,11 +2711,15 @@
           "sessionId": {
             "type": "string"
           },
+          "startMode": {
+            "enum": ["fresh", "resume", "fork", "rotation"],
+            "type": "string"
+          },
           "turnId": {
             "type": "string"
           }
         },
-        "required": ["agentId", "adapterId", "adapterName", "model", "cwd"],
+        "required": ["agentId", "adapterId", "adapterName", "model", "cwd", "startMode"],
         "type": "object"
       }
     },

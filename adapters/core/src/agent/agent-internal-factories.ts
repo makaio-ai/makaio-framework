@@ -7,6 +7,7 @@ import {
   type McpSessionContext,
   type ReasoningLevelMap,
   type ProviderContext,
+  type StartMode,
   type SystemPrompt,
 } from '@makaio/contracts';
 import type { LedgerSessionContext } from './session-tool-ledger.js';
@@ -105,6 +106,13 @@ export function createAgentTurnExecutor(config: {
   globalBus: IMakaioBus;
   getConnector: () => AIAgentConnector;
   shouldUseNativeResume: (sessionContext?: StartAgentOptions['sessionContext']) => boolean;
+  /**
+   * Whether the agent config carries a concrete resume target.
+   * @see AgentTurnExecutorConfig.hasResumeTarget
+   */
+  hasResumeTarget: () => boolean;
+  /** Set the start mode on the owning agent before connector dispatch. */
+  setPendingStartMode: (mode: StartMode) => void;
   onMessageHandle: (messageHandle: MessageHandle, turnId: string | undefined) => Promise<void>;
   onBeforeDispatch?: () => void | Promise<void>;
   ephemeral?: boolean;

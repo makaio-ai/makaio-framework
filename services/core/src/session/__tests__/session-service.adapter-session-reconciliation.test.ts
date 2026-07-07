@@ -124,6 +124,7 @@ describe('adapter-session-ID reconciliation', () => {
       sessionId,
       model: opts?.model ?? 'test-model',
       cwd: opts?.cwd ?? '/tmp',
+      startMode: 'fresh',
     });
     await waitForAsync();
   }

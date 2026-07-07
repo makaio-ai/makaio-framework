@@ -43,7 +43,7 @@ function simulateToolCallTurn(): SDKMessage[] {
   const messages: SDKMessage[] = [];
 
   const events: [string, Record<string, unknown>][] = [
-    ['agent.started', { ...BASE, model: 'sonnet', cwd: '/workspace' }],
+    ['agent.started', { ...BASE, model: 'sonnet', cwd: '/workspace', startMode: 'fresh' }],
     ['agent.turn.started', { ...BASE, messageId: 'turn-1', content: 'Read README.md' }],
     [
       'agent.tool.use',

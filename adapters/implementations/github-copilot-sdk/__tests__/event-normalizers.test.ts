@@ -34,13 +34,23 @@ describe('event-normalizers', () => {
 
   describe('normalizeAssistantTurnStart', () => {
     it('normalizes to agent.started with model and cwd', () => {
-      const result = normalizeAssistantTurnStart({}, baseContext, 'gpt-4o', '/home/user');
+      const result = normalizeAssistantTurnStart({}, baseContext, 'rotation', 'gpt-4o', '/home/user');
       expect(result.subject).toBe(AgentSubjects.started);
-      expect(result.payload).toMatchObject({ model: 'gpt-4o', cwd: '/home/user', adapterId: 'test-adapter' });
+      expect(result.payload).toMatchObject({
+        model: 'gpt-4o',
+        cwd: '/home/user',
+        adapterId: 'test-adapter',
+        startMode: 'rotation',
+      });
+    });
+
+    it('emits the provided startMode for the first turn start', () => {
+      const result = normalizeAssistantTurnStart({}, baseContext, 'fresh');
+      expect(result.payload).toMatchObject({ startMode: 'fresh' });
     });
 
     it('handles missing model and cwd', () => {
-      const result = normalizeAssistantTurnStart({}, baseContext);
+      const result = normalizeAssistantTurnStart({}, baseContext, 'rotation');
       expect(result.payload).toMatchObject({ model: null, cwd: null });
     });
   });
@@ -224,6 +234,26 @@ describe('event-normalizers', () => {
         });
         expect(result).toHaveLength(1);
         expect(result[0].subject).toBe(AgentSubjects.started);
+      });
+
+      it('labels the first assistant.turn_start as fresh when isFirstTurnStart is set', () => {
+        const result = normalizeGitHubCopilotLogRecord(createRecord('assistant.turn_start', {}), baseContext, {
+          isFirstTurnStart: true,
+        });
+        expect(result[0].payload).toMatchObject({ startMode: 'fresh' });
+      });
+
+      it('labels subsequent assistant.turn_start events as rotation', () => {
+        const first = normalizeGitHubCopilotLogRecord(createRecord('assistant.turn_start', {}), baseContext, {
+          isFirstTurnStart: true,
+        });
+        const second = normalizeGitHubCopilotLogRecord(createRecord('assistant.turn_start', {}), baseContext, {
+          isFirstTurnStart: false,
+        });
+        const withoutOption = normalizeGitHubCopilotLogRecord(createRecord('assistant.turn_start', {}), baseContext);
+        expect(first[0].payload).toMatchObject({ startMode: 'fresh' });
+        expect(second[0].payload).toMatchObject({ startMode: 'rotation' });
+        expect(withoutOption[0].payload).toMatchObject({ startMode: 'rotation' });
       });
 
       it('routes assistant.message to agent.message', () => {

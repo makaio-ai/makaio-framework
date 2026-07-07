@@ -4,8 +4,11 @@ export { type Message as AgentMessage } from './schemas/index.js';
 export { CompleteSchema, type AgentComplete } from './schemas/index.js';
 export {
   SessionMetadataSchema,
+  StartModeSchema,
+  START_MODES,
   type SessionMetadata,
   type AgentStarted,
+  type StartMode,
   type BaseAgentEvent,
 } from './schemas/index.js';
 export {

@@ -116,6 +116,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await expect(query.accountInfo()).resolves.toEqual({ provider: 'anthropic-sdk' });
@@ -139,6 +140,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await expect(
@@ -176,6 +178,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'claude-sonnet',
       cwd: '/home',
+      startMode: 'fresh',
     } satisfies AgentStarted);
     const result = await nextPromise;
 
@@ -282,6 +285,7 @@ describe('createQueryGenerator', () => {
       sessionId: 'other-session',
       model: 'wrong-model',
       cwd: '/',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     // Now emit for the correct session.
@@ -289,6 +293,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'target-model',
       cwd: '/',
+      startMode: 'fresh',
     } satisfies AgentStarted);
     const result = await nextPromise;
 
@@ -319,7 +324,7 @@ describe('createQueryGenerator', () => {
     cleanups.push(() => query.close());
 
     // Emit three events before pulling any.
-    await MakaioBus.emit(AgentSubjects.started, { ...BASE_FIELDS, model: 'sonnet', cwd: '/tmp' });
+    await MakaioBus.emit(AgentSubjects.started, { ...BASE_FIELDS, model: 'sonnet', cwd: '/tmp', startMode: 'fresh' });
     await MakaioBus.emit(AgentSubjects.message_delta, { ...BASE_FIELDS, text: 'chunk1' });
     await MakaioBus.emit(AgentSubjects.complete, { ...BASE_FIELDS, message: 'done', outcome: 'completed' });
 
@@ -356,6 +361,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await query.setModel('opus');
@@ -395,6 +401,7 @@ describe('createQueryGenerator', () => {
       agentId: '   ',
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await query.setModel('opus');
@@ -422,6 +429,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await query.interrupt();
@@ -452,6 +460,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await expect(query.interrupt()).rejects.toThrow('Failed to interrupt query: not active');
@@ -475,6 +484,7 @@ describe('createQueryGenerator', () => {
       ...BASE_FIELDS,
       model: 'sonnet',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await expect(query.setModel('opus')).rejects.toThrow('Failed to change model: provider_mismatch');

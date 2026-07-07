@@ -293,6 +293,7 @@ describe('query()', () => {
       ...BASE_AGENT_FIELDS,
       model: 'claude-sonnet-4',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
     const result = await nextPromise;
 
@@ -344,6 +345,7 @@ describe('query()', () => {
       ...BASE_AGENT_FIELDS,
       model: 'claude-sonnet-4',
       cwd: '/tmp',
+      startMode: 'fresh',
     } satisfies AgentStarted);
 
     await expect(
@@ -391,6 +393,7 @@ describe('query()', () => {
       sessionId: 'other-session',
       model: 'wrong-model',
       cwd: '/',
+      startMode: 'fresh',
     });
 
     // Emit for the correct session.
@@ -398,6 +401,7 @@ describe('query()', () => {
       ...BASE_AGENT_FIELDS,
       model: 'correct-model',
       cwd: '/',
+      startMode: 'fresh',
     } satisfies AgentStarted);
     const result = await nextPromise;
 

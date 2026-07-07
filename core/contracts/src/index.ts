@@ -191,7 +191,15 @@ export type {
   CanonicalModelSelection,
   ResolvableCanonicalModel,
 } from './canonical-model/index.js';
-export { AgentNamespace, AgentSchemas, AgentSubjects, AgentToolApproveSchema, StepTypeSchema } from './agent/index.js';
+export {
+  AgentNamespace,
+  AgentSchemas,
+  AgentSubjects,
+  AgentToolApproveSchema,
+  START_MODES,
+  StartModeSchema,
+  StepTypeSchema,
+} from './agent/index.js';
 export type {
   AgentComplete,
   AgentMessage,
@@ -202,6 +210,7 @@ export type {
   SendMessageRequest,
   SendMessageResponse,
   SessionMetadata,
+  StartMode,
   StepFinished,
   StepStarted,
   StepType,

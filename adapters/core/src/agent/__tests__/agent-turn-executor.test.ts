@@ -54,6 +54,8 @@ describe('AgentTurnExecutor', () => {
       globalBus: {} as IMakaioBus,
       getConnector: () => connector as AIAgentConnector,
       shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
       onMessageHandle: async () => {},
     });
 
@@ -102,6 +104,8 @@ describe('AgentTurnExecutor', () => {
       globalBus: {} as IMakaioBus,
       getConnector: () => connector as AIAgentConnector,
       shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
       onMessageHandle: async () => {},
     });
 
@@ -146,6 +150,8 @@ describe('AgentTurnExecutor', () => {
       globalBus: {} as IMakaioBus,
       getConnector: () => connector as AIAgentConnector,
       shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
       onMessageHandle: async () => {},
     });
 
@@ -185,6 +191,8 @@ describe('AgentTurnExecutor', () => {
       globalBus: {} as IMakaioBus,
       getConnector: () => connector as AIAgentConnector,
       shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
       onMessageHandle: async () => {},
       ephemeral: true,
     });
@@ -242,6 +250,8 @@ describe('AgentTurnExecutor', () => {
       globalBus: {} as IMakaioBus,
       getConnector: () => connector as AIAgentConnector,
       shouldUseNativeResume: () => false,
+      hasResumeTarget: () => false,
+      setPendingStartMode: vi.fn(),
       onMessageHandle: async (handle, turnId) => {
         handled.push({ messageId: handle.messageId, turnId });
       },
