@@ -6,6 +6,7 @@ import { MessageStorageSubjects } from '../messages/namespace.js';
 import { getFullConversation } from './get-full-conversation.js';
 import { convertSessionMessage } from './convert-session-message.js';
 import { evaluateNativeLocality } from '../native-locality.js';
+import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 
 /**
  * Resolve the effective adapter name for the fork locality check.
@@ -48,6 +49,10 @@ async function buildFreshWithHistory(
   session: IMakaioSession,
   verdict: NativeLocalityVerdict,
 ): Promise<SessionContext> {
+  // Emit the degrade event at the converging fork-degrade path.
+  // Both evaluator-determined degrades and fork-point-unresolvable flow here.
+  void emitLocalityDegradeEvent(bus, { sessionId, intent: 'fork', verdict });
+
   const contextResult = await getFullConversation(bus, sessionId);
   const messageHistory = contextResult.messages.map(convertSessionMessage);
   return {

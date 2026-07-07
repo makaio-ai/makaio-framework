@@ -30,6 +30,7 @@ import {
 } from './attach-runtime-options.js';
 import { evaluateNativeLocality } from '../native-locality.js';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
+import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 
 /**
  * Registers the session.agent.attach RPC handler.
@@ -211,11 +212,27 @@ async function resolveAttachLocality(input: {
     const hasLiveWriter = await adapterSessionHasLiveWriter(bus, adapterId, session.adapterSessionId);
     if (hasLiveWriter) {
       const degraded = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
+      void emitLocalityDegradeEvent(bus, {
+        sessionId: session.sessionId,
+        intent: 'resume',
+        verdict: degraded,
+        adapterId,
+      });
       return {
         resumeAdapterSessionId: undefined,
         attachSessionContext: { nativeLocality: degraded },
       };
     }
+  }
+
+  // Emit for non-native evaluator verdicts (degrade or foreign).
+  if (verdict.kind !== 'native') {
+    void emitLocalityDegradeEvent(bus, {
+      sessionId: session.sessionId,
+      intent: 'resume',
+      verdict,
+      adapterId,
+    });
   }
 
   return {

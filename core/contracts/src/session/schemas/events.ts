@@ -3,6 +3,7 @@ import type { SchemaRecord } from '@makaio/core';
 import { AgentRoleSchema, ImportStatusSchema } from './primitives.js';
 import { MakaioSessionEventSchema } from './event.js';
 import { ClientIdentityObservationSchema } from '../../client/account-identity.js';
+import { NativeLocalityReasonSchema } from '../native-locality.js';
 
 /**
  * Session client-account linkage changed event payload.
@@ -212,6 +213,66 @@ export const EventSchemas = {
     /** New model (for model swaps) */
     newModel: z.string().optional(),
   }),
+
+  /**
+   * Native locality degradation event.
+   *
+   * Subject: `session.locality.degraded`
+   * Type: Event (fire-and-forget)
+   * Emitted when: A native resume or fork falls back to history injection
+   * because of a structural constraint or foreign machine verdict.
+   *
+   * Emitted exactly once at the decision point; the event is also persisted
+   * as a `locality.degraded` row in `session_events` for offline inspection.
+   * @example
+   * ```typescript
+   * bus.on(SessionSubjects.locality.degraded, (ctx) => {
+   *   console.debug(
+   *     `Locality degraded for session ${ctx.payload.sessionId}: ${ctx.payload.verdictKind}`,
+   *   );
+   * });
+   * ```
+   */
+  'locality.degraded': z.intersection(
+    z.object({
+      /** Session the degradation belongs to. */
+      sessionId: z.string(),
+      /** Stable event identifier (same value persisted in the session_events row). */
+      eventId: z.string(),
+      /** Unix epoch ms when the event was recorded (same value persisted in the session_events row). */
+      timestamp: z.number(),
+    }),
+    z.discriminatedUnion('verdictKind', [
+      z.object({
+        /** Whether the degradation occurred during a resume (attach) or fork. */
+        intent: z.enum(['resume', 'fork']),
+        /** Structural constraint preventing native operation. */
+        verdictKind: z.literal('degrade'),
+        /** Why native operation was degraded. */
+        reason: NativeLocalityReasonSchema,
+        /** Agent ID involved, when cheaply available. */
+        agentId: z.string().optional(),
+        /** Adapter instance ID, when cheaply available. */
+        adapterId: z.string().optional(),
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId: z.string().optional(),
+      }),
+      z.object({
+        /** Whether the degradation occurred during a resume (attach) or fork. */
+        intent: z.enum(['resume', 'fork']),
+        /** Session's provider-native store lives on another machine. */
+        verdictKind: z.literal('foreign'),
+        /** Machine ID that owns the provider-native session store. */
+        foreignMachineId: z.string(),
+        /** Agent ID involved, when cheaply available. */
+        agentId: z.string().optional(),
+        /** Adapter instance ID, when cheaply available. */
+        adapterId: z.string().optional(),
+        /** Turn ID when available (attach-time degrades have no turn yet). */
+        turnId: z.string().optional(),
+      }),
+    ]),
+  ),
 
   /**
    * Get context window state for a session.

@@ -25,6 +25,7 @@ import { assembleForkContext } from '../context/assemble-fork-context.js';
 import type { AssembleForkContextCapabilities } from '../context/assemble-fork-context.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
+import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 
 /**
  * Interface for turn context enrichment.
@@ -297,11 +298,20 @@ async function attemptNativeSendOrDegrade(
       throw error;
     }
     // Native send failed — build degraded context so the caller can retry.
+    const degradeVerdict = { kind: 'degrade' as const, reason: 'native-attempt-failed' as const };
+    void emitLocalityDegradeEvent(bus, {
+      sessionId,
+      intent: nativeContext.nativeFork ? 'fork' : 'resume',
+      verdict: degradeVerdict,
+      agentId,
+      adapterId,
+      turnId,
+    });
     const freshContext = await buildNativeFallbackContext(bus, session, messageId);
     return {
       ...nativeContext,
       ...freshContext,
-      nativeLocality: { kind: 'degrade', reason: 'native-attempt-failed' },
+      nativeLocality: degradeVerdict,
       nativeFork: undefined,
     };
   }
@@ -443,6 +453,31 @@ export interface RouteToAgentsOptions {
 }
 
 /**
+ * Degrade a native fork directive for the sendMessage path.
+ *
+ * `nativeFork` is only consumable on the startAgent path. This function
+ * dispatches exclusively via sendMessage (agents are already running), so
+ * a native fork directive can never reach the provider. Degrade to
+ * fresh-with-history so the child session starts with the projected parent
+ * conversation instead of an empty context.
+ * @param bus - Bus for storage lookups and degrade event emission
+ * @param session - Session being routed
+ * @param context - Fork-enriched context carrying the nativeFork directive
+ * @returns Context with nativeFork removed and history injected
+ */
+async function degradeNativeForkForSendMessage(
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  context: SessionContext,
+): Promise<SessionContext> {
+  const verdict = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
+  void emitLocalityDegradeEvent(bus, { sessionId: session.sessionId, intent: 'fork', verdict });
+  const contextResult = await getFullConversation(bus, session.sessionId);
+  const messageHistory = contextResult.messages.map(convertSessionMessage);
+  return { ...context, messageHistory, nativeFork: undefined, nativeLocality: verdict };
+}
+
+/**
  * Route a message to target agents via agent.sendMessage.
  *
  * Fans out to all agents in parallel. On routing failure, marks agent as errored
@@ -483,20 +518,9 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
     forkContextCapabilities,
   );
 
-  // Invariant: nativeFork is only consumable on the startAgent path. This
-  // function dispatches exclusively via sendMessage (agents are already
-  // running), so a native fork directive can never reach the provider. Degrade
-  // to fresh-with-history so the child session starts with the projected
-  // parent conversation instead of an empty context.
+  // nativeFork is only consumable on the startAgent path — degrade it for sendMessage.
   if (forkEnrichedContext?.nativeFork) {
-    const contextResult = await getFullConversation(bus, session.sessionId);
-    const messageHistory = contextResult.messages.map(convertSessionMessage);
-    forkEnrichedContext = {
-      ...forkEnrichedContext,
-      messageHistory,
-      nativeFork: undefined,
-      nativeLocality: { kind: 'degrade', reason: 'agent-already-started' },
-    };
+    forkEnrichedContext = await degradeNativeForkForSendMessage(bus, session, forkEnrichedContext);
   }
 
   const enrichedMessageHistory = turnContextEnricher

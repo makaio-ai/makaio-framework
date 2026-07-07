@@ -201,7 +201,8 @@ export function createEvent(
         | Partial<SessionEventTypeMap['fork-summary.generated']>
         | Partial<SessionEventTypeMap['skill.catalog.built']>
         | Partial<SessionEventTypeMap['skill.activated']>
-        | Partial<SessionEventTypeMap['skill.deactivated']>;
+        | Partial<SessionEventTypeMap['skill.deactivated']>
+        | Partial<SessionEventTypeMap['locality.degraded']>;
     }>,
 ): MakaioSessionEvent {
   const base = {
@@ -528,6 +529,45 @@ export function createEvent(
           agentId: overrides.agentId ?? sdPayload?.agentId ?? `agent-${Math.random().toString(36).slice(2)}`,
           skillName: sdPayload?.skillName ?? 'test-skill',
           reason: sdPayload?.reason ?? 'user',
+        },
+      };
+    }
+    case 'locality.degraded': {
+      const ldPayload = overrides.payload as Partial<SessionEventTypeMap['locality.degraded']> | undefined;
+      const verdictKind = ldPayload?.verdictKind ?? 'degrade';
+      // Build variant-specific fields matching the discriminated union:
+      // 'degrade' requires reason, 'foreign' requires foreignMachineId.
+      const variantFields =
+        verdictKind === 'foreign'
+          ? {
+              verdictKind: 'foreign' as const,
+              foreignMachineId:
+                (ldPayload as Partial<Extract<SessionEventTypeMap['locality.degraded'], { verdictKind: 'foreign' }>>)
+                  ?.foreignMachineId ?? 'remote-machine',
+            }
+          : {
+              verdictKind: 'degrade' as const,
+              reason:
+                (ldPayload as Partial<Extract<SessionEventTypeMap['locality.degraded'], { verdictKind: 'degrade' }>>)
+                  ?.reason ?? 'adapter-unsupported',
+            };
+      return {
+        ...base,
+        eventId: overrides.eventId ?? base.eventId,
+        timestamp: overrides.timestamp ?? base.timestamp,
+        type: 'locality.degraded',
+        payload: {
+          intent: ldPayload?.intent ?? 'resume',
+          ...variantFields,
+          ...((overrides.agentId ?? ldPayload?.agentId) !== undefined
+            ? { agentId: overrides.agentId ?? ldPayload?.agentId }
+            : {}),
+          ...((overrides.adapterId ?? ldPayload?.adapterId) !== undefined
+            ? { adapterId: overrides.adapterId ?? ldPayload?.adapterId }
+            : {}),
+          ...((overrides.turnId ?? ldPayload?.turnId) !== undefined
+            ? { turnId: overrides.turnId ?? ldPayload?.turnId }
+            : {}),
         },
       };
     }
