@@ -17,7 +17,8 @@
     "./symbol-extractor": "./src/symbol-extractor.ts",
     "./type-analysis": "./src/type-analysis.ts",
     "./tsci-analyzer": "./src/tsci-analyzer.ts",
-    "./storage/vector-math": "./src/storage/vector-math.ts"
+    "./storage/vector-math": "./src/storage/vector-math.ts",
+    "./enrichment-pass": "./src/enrichment-pass.ts"
   },
   "dependencies": {
     "quick-lru": "^7.3.0",
@@ -87,6 +88,10 @@
       "./storage/vector-math": {
         "types": "./dist/storage/vector-math.d.ts",
         "default": "./dist/storage/vector-math.mjs"
+      },
+      "./enrichment-pass": {
+        "types": "./dist/enrichment-pass.d.ts",
+        "default": "./dist/enrichment-pass.mjs"
       }
     }
   },

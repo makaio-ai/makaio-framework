@@ -1,12 +1,18 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
-import { createTypeviewChangeBatch, DEFAULT_CONTINUITY_CONFIG, IndexEngine } from './index.js';
-import type { ScopeIndexRecord, ScopeMeta } from './index-types.js';
-import type { IndexStoreOperations } from './index-engine.js';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import {
+  createBaseIndexStoreOperations,
+  createTypeviewChangeBatch,
+  DEFAULT_CONTINUITY_CONFIG,
+  IndexEngine,
+  TsciAnalyzer,
+} from './index.js';
+import type { ScopeMeta } from './index-types.js';
+import { ENRICHMENT_VERSION } from './schemas.js';
 import type { SymbolNode } from './schemas.js';
-import type { LanguageAnalyzer } from './types.js';
+import type { FileCallEdge, LanguageAnalyzer } from './types.js';
 
 function makeScopeMeta(scopePath: string): ScopeMeta {
   return {
@@ -17,49 +23,30 @@ function makeScopeMeta(scopePath: string): ScopeMeta {
   };
 }
 
-const store: IndexStoreOperations = {
-  createEmptyScopeIndex(scope): ScopeIndexRecord {
-    return {
-      scope,
-      indexedAt: Date.now(),
-      symbolsById: new Map(),
-      symbolIdsByFile: new Map(),
-      symbolIdByAliasHash: new Map(),
-      outgoing: new Map(),
-      incoming: new Map(),
-    };
-  },
-  cloneScopeIndex(scope, source): ScopeIndexRecord {
-    return {
-      scope,
-      indexedAt: source.indexedAt,
-      symbolsById: new Map(source.symbolsById),
-      symbolIdsByFile: new Map(source.symbolIdsByFile),
-      symbolIdByAliasHash: new Map(source.symbolIdByAliasHash),
-      outgoing: new Map(source.outgoing),
-      incoming: new Map(source.incoming),
-    };
-  },
-  removeFile(index, filePath): void {
-    const ids = index.symbolIdsByFile.get(filePath) ?? [];
-    for (const id of ids) {
-      const record = index.symbolsById.get(id);
-      if (record) index.symbolIdByAliasHash.delete(record.aliasHash);
-      index.symbolsById.delete(id);
-      index.outgoing.delete(id);
-      index.incoming.delete(id);
-    }
-    index.symbolIdsByFile.delete(filePath);
-  },
-  removeDirectory(index, directoryPath): void {
-    const normalized = path.resolve(directoryPath);
-    for (const filePath of [...index.symbolIdsByFile.keys()]) {
-      if (filePath === normalized || filePath.startsWith(`${normalized}${path.sep}`)) {
-        store.removeFile(index, filePath);
-      }
-    }
-  },
-};
+const store = createBaseIndexStoreOperations();
+
+class FailingAfterCallEdgesAnalyzer extends TsciAnalyzer {
+  public override async resolveFileCallEdges(file: string): Promise<FileCallEdge[]> {
+    return [
+      {
+        callerClassName: null,
+        callerName: 'caller',
+        callerDeclarationLine: 1,
+        callLine: 2,
+        target: {
+          file,
+          className: null,
+          methodName: 'target',
+          line: 5,
+        },
+      },
+    ];
+  }
+
+  public override getCompilerProgram(): ReturnType<TsciAnalyzer['getCompilerProgram']> {
+    throw new Error('fail after call edges mutate the enrichment scratch index');
+  }
+}
 
 describe('IndexEngine', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'typeview-core-index-engine-'));
@@ -109,6 +96,100 @@ describe('IndexEngine', () => {
       relativeFilePath: 'ok.ts',
       symbol: { name: 'Ok', kind: 'class' },
     });
+  });
+
+  it('returns the syntactic index when additive enrichment fails', async () => {
+    const filePath = path.join(tempDir, 'syntax-only.ts');
+    fs.writeFileSync(filePath, 'export class SyntaxOnly {}', 'utf8');
+
+    const analyzer: LanguageAnalyzer = {
+      language: 'typescript',
+      extensions: ['.ts'],
+      async parseFile(_filePath: string, relativeFilePath?: string): Promise<SymbolNode[]> {
+        return [
+          {
+            id: '',
+            name: 'SyntaxOnly',
+            kind: 'class',
+            file: relativeFilePath ?? 'syntax-only.ts',
+            line: 1,
+            isExported: true,
+            signature: 'class SyntaxOnly',
+          },
+        ];
+      },
+      async extractMembers() {
+        return [];
+      },
+      async extractDocSummary() {
+        return undefined;
+      },
+      async findSymbolPosition() {
+        return null;
+      },
+      dispose() {},
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const engine = new IndexEngine({ analyzer, continuityConfig: DEFAULT_CONTINUITY_CONFIG });
+      const scope = makeScopeMeta(tempDir);
+      const result = await engine.fullIndex(scope, [filePath], store, undefined, {
+        enrichment: { scopePath: tempDir },
+      });
+
+      expect(result.index.symbolIdsByFile.get(filePath)).toHaveLength(1);
+      expect([...result.index.symbolsById.values()][0].symbol.name).toBe('SyntaxOnly');
+      expect(result.index.enrichment).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[IndexEngine] Semantic enrichment failed; returning syntactic index',
+        expect.any(Error),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not leak partial enrichment mutations when enrichment fails after adding edges', async () => {
+    const scopeDir = path.join(tempDir, 'partial-enrichment');
+    fs.mkdirSync(scopeDir, { recursive: true });
+    const filePath = path.join(scopeDir, 'calls.ts');
+    fs.writeFileSync(
+      filePath,
+      `export function caller() {
+  target();
+}
+
+export function target() {}
+`,
+      'utf8',
+    );
+
+    const analyzer = new FailingAfterCallEdgesAnalyzer();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const engine = new IndexEngine({ analyzer, continuityConfig: DEFAULT_CONTINUITY_CONFIG });
+      const scope = makeScopeMeta(scopeDir);
+      const result = await engine.fullIndex(scope, [filePath], store, undefined, {
+        enrichment: { scopePath: scopeDir },
+      });
+
+      expect([...result.index.symbolsById.values()].map((record) => record.symbol.name).sort()).toEqual([
+        'caller',
+        'target',
+      ]);
+      expect(result.index.enrichment).toBeUndefined();
+      expect(result.index.outgoing.size).toBe(0);
+      expect(result.index.incoming.size).toBe(0);
+      for (const record of result.index.symbolsById.values()) {
+        expect(record.resolvedShape).toBeUndefined();
+        expect(record.embeddableUnit).toBeUndefined();
+      }
+    } finally {
+      warnSpy.mockRestore();
+      analyzer.dispose();
+    }
   });
 
   it('applies delete changes without parsing missing files', async () => {
@@ -161,6 +242,18 @@ describe('IndexEngine', () => {
     expect(result.index.symbolIdsByFile.has(filePath)).toBe(false);
   });
 
+  it('preserves enrichment metadata when cloning base scope indexes', () => {
+    const scope = makeScopeMeta(tempDir);
+    const baseStore = createBaseIndexStoreOperations();
+    const source = baseStore.createEmptyScopeIndex(scope);
+    source.enrichment = { version: ENRICHMENT_VERSION, enrichedAt: 123 };
+
+    const clone = baseStore.cloneScopeIndex(scope, source);
+
+    expect(clone.enrichment).toEqual(source.enrichment);
+    expect(clone.enrichment).not.toBe(source.enrichment);
+  });
+
   it('rejects incremental batches for a different scope than the existing index', async () => {
     const scope = makeScopeMeta(tempDir);
     const existing = store.createEmptyScopeIndex(scope);
@@ -189,5 +282,32 @@ describe('IndexEngine', () => {
     ]);
 
     await expect(engine.incrementalIndex(batch, store, existing)).rejects.toThrow(/Scope mismatch/);
+  });
+
+  it('runs enrichment when the option is provided and leaves incremental untouched', async () => {
+    const scopeDir = path.join(tempDir, 'enrich');
+    fs.mkdirSync(scopeDir, { recursive: true });
+    const filePath = path.join(scopeDir, 'svc.ts');
+    fs.writeFileSync(filePath, 'export class Svc {}', 'utf8');
+
+    const analyzer = new TsciAnalyzer();
+
+    const engine = new IndexEngine({ analyzer, continuityConfig: DEFAULT_CONTINUITY_CONFIG });
+    const scope = makeScopeMeta(scopeDir);
+    const files = [filePath];
+
+    try {
+      const { index } = await engine.fullIndex(scope, files, store, undefined, {
+        enrichment: { scopePath: scopeDir },
+      });
+      expect(index.enrichment?.version).toBe(ENRICHMENT_VERSION);
+
+      const batch = createTypeviewChangeBatch(scope, [{ absolutePath: filePath, kind: 'change' }]);
+      const { index: incremental } = await engine.incrementalIndex(batch, store, index);
+      // Incremental never re-enriches; stamp is cleared so consumers can detect staleness.
+      expect(incremental.enrichment).toBeUndefined();
+    } finally {
+      analyzer.dispose();
+    }
   });
 });

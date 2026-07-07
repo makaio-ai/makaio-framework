@@ -1,4 +1,4 @@
-import type { SymbolKind, SymbolNode } from './schemas.js';
+import type { EmbeddableUnit, ResolvedTypeShape, SymbolKind, SymbolNode } from './schemas.js';
 
 /** File extensions treated as TypeScript source files. */
 export const TS_EXTENSIONS = new Set(['.ts', '.tsx']);
@@ -30,8 +30,16 @@ export interface IndexMeta {
   symbolCount: number;
 }
 
+/**
+ * Canonical list of graph edge relation kinds.
+ *
+ * This is the single source of truth — the {@link EdgeRelation} union type is
+ * derived from it so that runtime guards and type-level checks stay in sync.
+ */
+export const EDGE_RELATIONS = ['extends', 'implements', 'calls'] as const;
+
 /** Edge relation subset used for graph edges. */
-export type EdgeRelation = 'extends' | 'implements';
+export type EdgeRelation = (typeof EDGE_RELATIONS)[number];
 
 /** Directed graph edge between two symbols. */
 export interface IndexEdgeRecord {
@@ -63,6 +71,10 @@ export interface IndexedSymbolRecord {
   nameLower: string;
   /** Lowercase signature for search. */
   signatureLower: string;
+  /** Checker-resolved shape, present only after semantic enrichment. */
+  resolvedShape?: ResolvedTypeShape;
+  /** Canonical embeddable text unit, present only after semantic enrichment. */
+  embeddableUnit?: EmbeddableUnit;
 }
 
 /** In-memory index for a single scope. */
@@ -81,6 +93,8 @@ export interface ScopeIndexRecord {
   outgoing: Map<string, IndexEdgeRecord[]>;
   /** Incoming graph edges by target symbol ID. */
   incoming: Map<string, IndexEdgeRecord[]>;
+  /** Present when the semantic enrichment pass has run over this index. */
+  enrichment?: { version: string; enrichedAt: number };
 }
 
 /** Result of a graph trace operation. */
@@ -114,7 +128,7 @@ export interface TraceEdge {
   /** Target symbol ID. */
   toSymbolId: string;
   /** Trace edge kind. */
-  kind: EdgeRelation | 'references' | 'calls' | 'imports';
+  kind: EdgeRelation | 'references' | 'imports';
 }
 
 /** Persisted lineage row recording a continuity decision between two symbols. */
